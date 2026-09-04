@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/features/answer_intake/answer_intake_page.dart';
@@ -298,4 +300,67 @@ void main() {
 
     expect(find.textContaining('登録済みのテストがありません'), findsOneWidget);
   });
+
+  testWidgets('the test picker is disabled while an upload is in flight', (
+    tester,
+  ) async {
+    final uploadStarted = Completer<void>();
+    final releaseUpload = Completer<SubmissionResponse>();
+    final dependencies = AppDependencies(
+      listTests: () async => [_test()],
+      listSubmissions: (testId) async => const [],
+      createSubmission:
+          ({required testId, required filePath, studentLabel}) async {
+            uploadStarted.complete();
+            return releaseUpload.future;
+          },
+    );
+
+    await tester.pumpWidget(
+      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('国語 第1回').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ファイルを選択'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('取り込む'));
+    await tester.pump();
+    await uploadStarted.future;
+    await tester.pump();
+
+    final picker = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const Key('test-picker')),
+    );
+    expect(picker.onChanged, isNull);
+
+    releaseUpload.complete(_submission());
+    await tester.pumpAndSettle();
+
+    final pickerAfter = tester.widget<DropdownButtonFormField<String>>(
+      find.byKey(const Key('test-picker')),
+    );
+    expect(pickerAfter.onChanged, isNotNull);
+  });
+
+  testWidgets(
+    'the default (unconnected) dependencies show an error instead of crashing on mount',
+    (tester) async {
+      // Regression test: AppDependencies()'s default listTests/listSubmissions
+      // /createSubmission must report failure as a rejected Future, not throw
+      // synchronously -- a synchronous throw during initState's
+      // `widget.dependencies.listTests()` call would crash while the widget
+      // is still mounting instead of reaching FutureBuilder's error branch.
+      await tester.pumpWidget(
+        _wrap(AnswerIntakePage(dependencies: const AppDependencies())),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('test-list-error')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

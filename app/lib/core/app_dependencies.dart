@@ -12,16 +12,25 @@ Never _unavailable() => throw SidecarApiException(
   'sidecar is not connected',
 );
 
-Future<List<TestSummary>> _unavailableListTests() => _unavailable();
+// Each wrapper is `async` on purpose, even though it just forwards to
+// `_unavailable()`: a plain `=>` body would let `_unavailable()`'s `throw`
+// escape *synchronously* from the call, before the function's Future is ever
+// created. `AnswerIntakePage.initState()` calls `listTests()` directly (not
+// inside a try/catch, expecting a Future it can hand to FutureBuilder), so a
+// synchronous throw here would crash while the widget is still mounting
+// instead of surfacing as the `snapshot.hasError` state FutureBuilder renders.
+// `async` makes Dart capture that throw into the returned Future instead.
+Future<List<TestSummary>> _unavailableListTests() async => _unavailable();
 
-Future<List<SubmissionResponse>> _unavailableListSubmissions(String testId) =>
-    _unavailable();
+Future<List<SubmissionResponse>> _unavailableListSubmissions(
+  String testId,
+) async => _unavailable();
 
 Future<SubmissionResponse> _unavailableCreateSubmission({
   required String testId,
   required String filePath,
   String? studentLabel,
-}) => _unavailable();
+}) async => _unavailable();
 
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).

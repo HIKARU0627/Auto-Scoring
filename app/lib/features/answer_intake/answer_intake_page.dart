@@ -131,7 +131,13 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
       );
       if (!mounted) return;
       setState(() {
-        _submissions = _withUpserted(_submissions, result);
+        // The test picker is disabled while `_isSubmitting`, so this should
+        // always still be true; kept as a defensive check (not just the
+        // disabled picker) against upserting testId's result into a
+        // different test's list that happens to be showing.
+        if (_selectedTestId == testId) {
+          _submissions = _withUpserted(_submissions, result);
+        }
         _pickedFilePath = null;
         _pickedFileName = null;
         _studentLabelController.clear();
@@ -235,7 +241,10 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
             for (final test in tests)
               DropdownMenuItem(value: test.id, child: Text(test.name)),
           ],
-          onChanged: _selectTest,
+          // Disabled while an upload is in flight: switching tests mid-upload
+          // would otherwise let that upload's result land in whichever test's
+          // list happens to be showing when it finishes.
+          onChanged: _isSubmitting ? null : _selectTest,
         );
       },
     );
