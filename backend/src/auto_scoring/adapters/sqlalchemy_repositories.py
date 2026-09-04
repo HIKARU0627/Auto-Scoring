@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 import auto_scoring.adapters._mappers as m
 from auto_scoring.db.orm import (
     AnnotationRow,
+    DependencyEdgeRow,
+    DependencyGraphRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -29,6 +31,11 @@ from auto_scoring.db.orm import (
     RubricRow,
     SubmissionRow,
     TestRow,
+)
+from auto_scoring.domain.dependency_graph import (
+    DependencyGraph,
+    DependencyGraphError,
+    DependencyGraphStatus,
 )
 from auto_scoring.domain.models import (
     Annotation,
@@ -273,3 +280,99 @@ class SqlAlchemyJobRepository:
             select(JobRow).where(JobRow.state == state).order_by(JobRow.created_at)
         )
         return [m.job_from_row(row) for row in rows]
+
+
+class SqlAlchemyDependencyGraphRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def save(self, graph: DependencyGraph) -> None:
+        """Upsert on ``(test_id, version)``.
+
+        Inserts a new row when this version has never been saved. When it
+        has, the existing row's edges are replaced and its status/unresolved
+        fields updated -- unless it is already CONFIRMED, in which case this
+        raises: a confirmed version is immutable (see `DependencyGraph.confirm`).
+        """
+        existing = self._session.scalars(
+            select(DependencyGraphRow).where(
+                DependencyGraphRow.test_id == graph.test_id,
+                DependencyGraphRow.version == graph.version,
+            )
+        ).one_or_none()
+
+        if existing is None:
+            parent, children = m.dependency_graph_rows(graph)
+            self._session.add(parent)
+            self._session.flush()  # graph row before its edges
+            self._session.add_all(children)
+            self._session.flush()
+            return
+
+        if DependencyGraphStatus(existing.status) is DependencyGraphStatus.CONFIRMED:
+            raise DependencyGraphError(
+                f"dependency graph {graph.test_id!r} v{graph.version} is already confirmed "
+                "and cannot be overwritten; save a new version instead"
+            )
+
+        for edge_row in self._session.scalars(
+            select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == existing.id)
+        ):
+            self._session.delete(edge_row)
+        self._session.flush()  # old edges gone before the new ones land
+
+        existing.status = graph.status
+        existing.question_ids = sorted(graph.question_ids)
+        existing.unresolved = [u.to_dict() for u in graph.unresolved]
+        existing.confirmed_at = graph.confirmed_at
+        _, children = m.dependency_graph_rows(graph)
+        for child in children:
+            child.graph_id = existing.id
+            child.id = f"{existing.id}:{child.from_question_id}:{child.to_question_id}"
+        self._session.add_all(children)
+        self._session.flush()
+
+    def get(self, graph_id: str) -> DependencyGraph | None:
+        row = self._session.get(DependencyGraphRow, graph_id)
+        if row is None:
+            return None
+        edges = list(
+            self._session.scalars(
+                select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
+            )
+        )
+        return m.dependency_graph_from_rows(row, edges)
+
+    def get_latest(self, test_id: str) -> DependencyGraph | None:
+        row = self._session.scalars(
+            select(DependencyGraphRow)
+            .where(DependencyGraphRow.test_id == test_id)
+            .order_by(DependencyGraphRow.version.desc())
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return None
+        edges = list(
+            self._session.scalars(
+                select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
+            )
+        )
+        return m.dependency_graph_from_rows(row, edges)
+
+    def list_versions(self, test_id: str) -> list[DependencyGraph]:
+        rows = list(
+            self._session.scalars(
+                select(DependencyGraphRow)
+                .where(DependencyGraphRow.test_id == test_id)
+                .order_by(DependencyGraphRow.version)
+            )
+        )
+        graphs = []
+        for row in rows:
+            edges = list(
+                self._session.scalars(
+                    select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
+                )
+            )
+            graphs.append(m.dependency_graph_from_rows(row, edges))
+        return graphs

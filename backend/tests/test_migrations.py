@@ -38,7 +38,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log"} <= _tables(db_url)
-    assert current_revision(db_url) == "0002"
+    assert current_revision(db_url) == "0003"
 
 
 def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
@@ -48,7 +48,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
-    assert current_revision(db_url) == "0002"
+    assert current_revision(db_url) == "0003"
 
 
 def test_downgrade_walks_back_to_base(db_url: str) -> None:
@@ -144,4 +144,8 @@ def test_state_check_constraints_reject_unknown_values(db_url: str, bad_insert: 
 def test_migration_file_paths_exist() -> None:
     versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
     names = {p.name for p in versions.glob("*.py")}
-    assert {"0001_initial_schema.py", "0002_operation_log.py"} <= names
+    assert {
+        "0001_initial_schema.py",
+        "0002_operation_log.py",
+        "0003_dependency_graph.py",
+    } <= names

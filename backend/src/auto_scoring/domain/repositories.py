@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from auto_scoring.domain.dependency_graph import DependencyGraph
 from auto_scoring.domain.models import (
     Annotation,
     GradeResult,
@@ -94,6 +95,21 @@ class JobRepository(Protocol):
     def list_by_state(self, state: JobState) -> list[Job]: ...
 
 
+class DependencyGraphRepository(Protocol):
+    """One test's dependency-graph versions (Issue #26).
+
+    ``save`` upserts on ``(test_id, version)``: a DRAFT row for that version is
+    replaced in place (new candidates, or the human's confirm), but a
+    CONFIRMED row is immutable -- ``save`` raises rather than overwrite one, so
+    changing a confirmed graph always means a new, higher version.
+    """
+
+    def save(self, graph: DependencyGraph) -> None: ...
+    def get(self, graph_id: str) -> DependencyGraph | None: ...
+    def get_latest(self, test_id: str) -> DependencyGraph | None: ...
+    def list_versions(self, test_id: str) -> list[DependencyGraph]: ...
+
+
 class UnitOfWork(Protocol):
     """One transaction boundary over every repository."""
 
@@ -106,6 +122,7 @@ class UnitOfWork(Protocol):
     annotations: AnnotationRepository
     reviews: ReviewRepository
     jobs: JobRepository
+    dependency_graphs: DependencyGraphRepository
 
     def __enter__(self) -> UnitOfWork: ...
     def __exit__(self, *exc_info: object) -> None: ...

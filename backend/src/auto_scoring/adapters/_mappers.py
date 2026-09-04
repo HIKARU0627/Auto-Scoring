@@ -10,6 +10,8 @@ from typing import Any
 
 from auto_scoring.db.orm import (
     AnnotationRow,
+    DependencyEdgeRow,
+    DependencyGraphRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -19,6 +21,13 @@ from auto_scoring.db.orm import (
     RubricRow,
     SubmissionRow,
     TestRow,
+)
+from auto_scoring.domain.dependency_graph import (
+    DependencyEdge,
+    DependencyGraph,
+    DependencyGraphStatus,
+    DependencyProvision,
+    UnresolvedQuestion,
 )
 from auto_scoring.domain.models import (
     Annotation,
@@ -353,4 +362,60 @@ def job_from_row(row: JobRow) -> Job:
         blocked_on_question_id=row.blocked_on_question_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# DependencyGraph
+# --------------------------------------------------------------------------- #
+def dependency_graph_rows(
+    graph: DependencyGraph,
+) -> tuple[DependencyGraphRow, list[DependencyEdgeRow]]:
+    parent = DependencyGraphRow(
+        id=graph.id,
+        test_id=graph.test_id,
+        version=graph.version,
+        status=graph.status,
+        question_ids=sorted(graph.question_ids),
+        unresolved=[u.to_dict() for u in graph.unresolved],
+        created_at=graph.created_at,
+        confirmed_at=graph.confirmed_at,
+    )
+    children = [
+        DependencyEdgeRow(
+            id=f"{graph.id}:{edge.from_question_id}:{edge.to_question_id}",
+            graph_id=graph.id,
+            from_question_id=edge.from_question_id,
+            to_question_id=edge.to_question_id,
+            provides=[p.value for p in edge.provides],
+            rationale=edge.rationale,
+            confidence=edge.confidence,
+        )
+        for edge in graph.edges
+    ]
+    return parent, children
+
+
+def dependency_graph_from_rows(
+    row: DependencyGraphRow, edge_rows: list[DependencyEdgeRow]
+) -> DependencyGraph:
+    return DependencyGraph(
+        id=row.id,
+        test_id=row.test_id,
+        version=row.version,
+        question_ids=frozenset(row.question_ids),
+        edges=tuple(
+            DependencyEdge(
+                from_question_id=edge.from_question_id,
+                to_question_id=edge.to_question_id,
+                provides=tuple(DependencyProvision(p) for p in edge.provides),
+                rationale=edge.rationale,
+                confidence=edge.confidence,
+            )
+            for edge in edge_rows
+        ),
+        unresolved=tuple(UnresolvedQuestion.from_dict(u) for u in row.unresolved),
+        status=DependencyGraphStatus(row.status),
+        created_at=row.created_at,
+        confirmed_at=row.confirmed_at,
     )

@@ -34,6 +34,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from auto_scoring.db.base import Base
+from auto_scoring.domain.dependency_graph import DependencyGraphStatus, DependencyProvision
 from auto_scoring.domain.models import (
     AnnotationKind,
     GradingSource,
@@ -270,6 +271,62 @@ class JobRow(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DependencyGraphRow(Base):
+    """One version of one test's dependency graph (Issue #26).
+
+    ``(test_id, version)`` is the real identity a repository upserts against:
+    a DRAFT row is replaced in place by later analysis/confirm calls for the
+    same version, but a CONFIRMED row is never updated again -- changing a
+    confirmed graph means inserting a new, higher version (see
+    ``domain.dependency_graph.DependencyGraph.confirm`` and
+    docs/dependency-graph.md).
+    """
+
+    __tablename__ = "dependency_graphs"
+    __table_args__ = (
+        UniqueConstraint("test_id", "version", name="uq_dependency_graphs_test_version"),
+        CheckConstraint("version >= 1", name="ck_dependency_graphs_version_positive"),
+        CheckConstraint(
+            "status IN ('draft', 'confirmed')", name="ck_dependency_graphs_status_valid"
+        ),
+        Index("ix_dependency_graphs_test_id", "test_id"),
+    )
+
+    id: Mapped[str] = _pk()
+    test_id: Mapped[str] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[DependencyGraphStatus] = mapped_column(
+        _enum(DependencyGraphStatus), nullable=False
+    )
+    question_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    unresolved: Mapped[list[dict[str, Any]]] = _json_list()
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DependencyEdgeRow(Base):
+    __tablename__ = "dependency_edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "graph_id",
+            "from_question_id",
+            "to_question_id",
+            name="uq_dependency_edges_pair",
+        ),
+        Index("ix_dependency_edges_graph_id", "graph_id"),
+    )
+
+    id: Mapped[str] = _pk()
+    graph_id: Mapped[str] = mapped_column(
+        ForeignKey("dependency_graphs.id", ondelete="CASCADE"), nullable=False
+    )
+    from_question_id: Mapped[str] = mapped_column(String, nullable=False)
+    to_question_id: Mapped[str] = mapped_column(String, nullable=False)
+    provides: Mapped[list[DependencyProvision]] = mapped_column(JSON, nullable=False, default=list)
+    rationale: Mapped[str] = mapped_column(String, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class OperationLogRow(Base):
