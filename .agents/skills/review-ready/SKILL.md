@@ -30,10 +30,12 @@ Step 4  Push
         ↓
 Step 5  change-explainer（PR Change Summary を GitHub App 経由で同期）
         ↓
-Ready for Human Review
+人間へ引き渡し（マージしない）
 ```
 
 各Stepは対応するSkillに委譲する。本Skillは順序・前提確認・最終報告のとりまとめを担う。
+GitHubの承認レビューは不要。PRのマージ・auto-mergeは、人間がそのPRを明示的に
+依頼したときだけ行う（`AGENTS.md` «Git workflow»）。
 
 ## 前提確認（開始前に必ず実施）
 
@@ -146,3 +148,4 @@ Step 5 change-explainer    : PR #<番号> のコメントを 作成/編集（URL
 - [ ] 必要な変更をpushした
 - [ ] `change-explainer` を利用してPR Change Summaryを同期した（またはPR未作成を報告した）
 - [ ] 各Stepの結果を最後にまとめて報告した
+- [ ] 人間が当該PRのマージを明示依頼していない限り、マージしていない

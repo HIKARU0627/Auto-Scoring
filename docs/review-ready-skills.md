@@ -9,11 +9,13 @@ AIエージェントが生成したコードを、人間が短時間かつ安全
 エージェントに担当させる。
 
 ```text
-AI実装 → 可読性改善 → Lint / Typecheck / Test / Build → Atomic Commitへ整理 → Push → PRの変更内容を説明 → Human Review
+AI実装 → 可読性改善 → Lint / Typecheck / Test / Build → Atomic Commitへ整理 → Push → PRの変更内容を説明 → 人間へ引き渡し
 ```
 
-レビュー担当者が「PRを開く → 最新のChange Summaryを読む → 影響範囲を把握 →
-Atomic Commit単位で確認 → 必要なdiffだけ詳しく読む」でレビューできる状態を目指す。
+人間が「PRを開く → 最新のChange Summaryを読む → 影響範囲を把握 →
+Atomic Commit単位で確認 → 必要なdiffだけ詳しく読む」できるようにする。
+GitHubの承認レビューは不要。エージェントは `AGENTS.md` に従い、明示依頼なしでは
+マージしない。`review-ready` は push と PR 説明までで止まる。
 
 ## Skill一覧
 

@@ -89,9 +89,9 @@
 - The tracked git hooks in `.githooks/` are canonical; `pnpm run bootstrap`
   points the current worktree at them. Hooks can be bypassed, so the same
   required checks run in GitHub Actions and the `main` branch ruleset.
-- Do not merge or enable auto-merge on a PR unless explicitly asked for that
-  specific PR. `review-ready` stops at push + PR + change summary; merging is a
-  human step.
+- Do not merge a PR, enable auto-merge, or bypass merge rules unless a human
+  explicitly asked to merge that specific PR. `review-ready` stops at push +
+  PR + change summary. Merging is a human step.
 
 ## GitHub App authentication
 

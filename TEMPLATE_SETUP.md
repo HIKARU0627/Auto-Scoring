@@ -28,7 +28,7 @@ Delete this file when you're done.
 - [ ] `.github/workflows/ci.yml` — pin actions to commit SHAs; add
       integration / e2e jobs if you have them.
 - [ ] After the first real run, make the `Quality` check **required** in the
-      `main` branch ruleset, and require 1 approving review.
+      `main` branch ruleset. Do not require an approving review.
 
 ## 4. MCP servers
 
