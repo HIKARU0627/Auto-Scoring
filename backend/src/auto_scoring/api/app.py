@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import atexit
 import tempfile
+import threading
+from asyncio import to_thread
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
+    SubmissionIntakeResult,
     SubmissionRetryConflictError,
     intake_submission,
 )
@@ -166,6 +169,40 @@ def create_app(
         max_bytes=limits.max_size_bytes + _MULTIPART_OVERHEAD_BYTES,
     )
 
+    # PDFium is not safe to call concurrently from multiple threads of the
+    # same process (pypdfium2's own multithreading guidance); this lock
+    # serializes actual intake runs so offloading them to a worker thread
+    # (below) frees the event loop without risking two renders touching
+    # PDFium at once. Every intake request was already fully serialized
+    # before this change too -- the event loop ran each one to completion
+    # with nothing else interleaved -- so this isn't a throughput regression,
+    # just the same serialization moved off the loop.
+    intake_lock = threading.Lock()
+
+    def _run_intake(
+        *,
+        test_id: str,
+        filename: str,
+        declared_mime: str | None,
+        data: bytes,
+        student_label: str | None,
+        now: datetime,
+    ) -> SubmissionIntakeResult:
+        with intake_lock, SqlAlchemyUnitOfWork(session_factory) as uow:
+            return intake_submission(
+                uow,
+                store,
+                engine,
+                preprocessor,
+                test_id=test_id,
+                filename=filename,
+                declared_mime=declared_mime,
+                data=data,
+                student_label=student_label,
+                limits=limits,
+                now=now,
+            )
+
     repository = InMemoryScoreRepository()
     protected = APIRouter(dependencies=[Depends(require_token)])
 
@@ -222,42 +259,43 @@ def create_app(
             raise HTTPException(
                 _PDF_INTAKE_ERROR_STATUS[PdfTooLargeError], detail=str(exc)
             ) from exc
-        with SqlAlchemyUnitOfWork(session_factory) as uow:
-            try:
-                result = intake_submission(
-                    uow,
-                    store,
-                    engine,
-                    preprocessor,
-                    test_id=test_id,
-                    filename=file.filename or "",
-                    declared_mime=file.content_type,
-                    data=data,
-                    student_label=student_label,
-                    limits=limits,
-                    now=datetime.now(UTC).replace(tzinfo=None),
-                )
-            except PdfIntakeError as exc:
-                status_code = _PDF_INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
-                raise HTTPException(status_code, detail=str(exc)) from exc
-            except LookupError as exc:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except DuplicateSubmissionError as exc:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "message": str(exc),
-                        "existing_submission_id": exc.existing_submission_id,
-                    },
-                ) from exc
-            except SubmissionRetryConflictError as exc:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "message": str(exc),
-                        "submission_id": exc.submission_id,
-                    },
-                ) from exc
+        try:
+            # Rendering every page and running OpenCV preprocessing is
+            # synchronous, CPU-bound work that can take minutes for a large
+            # submission; running it inline here would block this whole
+            # (single-worker) event loop, so even /healthz and unrelated
+            # list/get requests would stall until intake finished. Offload it
+            # to a worker thread instead.
+            result = await to_thread(
+                _run_intake,
+                test_id=test_id,
+                filename=file.filename or "",
+                declared_mime=file.content_type,
+                data=data,
+                student_label=student_label,
+                now=datetime.now(UTC).replace(tzinfo=None),
+            )
+        except PdfIntakeError as exc:
+            status_code = _PDF_INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
+            raise HTTPException(status_code, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except DuplicateSubmissionError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "message": str(exc),
+                    "existing_submission_id": exc.existing_submission_id,
+                },
+            ) from exc
+        except SubmissionRetryConflictError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "message": str(exc),
+                    "submission_id": exc.submission_id,
+                },
+            ) from exc
         return _submission_response(result.submission, is_retry=result.is_retry)
 
     app.include_router(protected)

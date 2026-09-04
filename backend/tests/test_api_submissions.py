@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Mapping, Sequence
 from io import BytesIO
 from pathlib import Path
 
@@ -10,10 +13,13 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.domain.models import NormalizedRect
+from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import IntakeLimits
 from tests.support import make_question, make_test
 
@@ -239,3 +245,83 @@ def test_create_submission_missing_answer_area_lands_in_needs_review(
 def test_get_submission_404_for_unknown_id(client: TestClient) -> None:
     response = client.get("/submissions/does-not-exist", headers=_auth())
     assert response.status_code == 404
+
+
+class _SlowPdfEngine:
+    """Delegates to a real ``PdfEngine`` but sleeps before every page render --
+    standing in for a submission whose rasterization genuinely takes a while.
+    """
+
+    def __init__(self, delegate: PdfEngine, *, delay_seconds: float) -> None:
+        self._delegate = delegate
+        self._delay_seconds = delay_seconds
+
+    def page_count(self, source: Path) -> int:
+        return self._delegate.page_count(source)
+
+    def is_encrypted(self, source: Path) -> bool:
+        return self._delegate.is_encrypted(source)
+
+    def page_geometry(self, source: Path, page_index: int) -> PageGeometry:
+        return self._delegate.page_geometry(source, page_index)
+
+    def render_page_png(self, source: Path, page_index: int, *, scale: float) -> bytes:
+        time.sleep(self._delay_seconds)
+        return self._delegate.render_page_png(source, page_index, scale=scale)
+
+    def stamp_markers(
+        self,
+        source: Path,
+        destination: Path,
+        markers: Mapping[int, Sequence[NormalizedPoint]],
+        *,
+        mark_size_pt: float = 8.0,
+    ) -> None:
+        self._delegate.stamp_markers(source, destination, markers, mark_size_pt=mark_size_pt)
+
+
+def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) -> None:
+    """Regression test: intake used to run inline in the async handler,
+    synchronously rasterizing every page -- for a submission that takes
+    minutes to render, that blocked the whole (single-worker) event loop, so
+    even an unrelated /healthz request would stall until intake finished.
+    api/app.py now offloads the intake pipeline to a worker thread
+    (``asyncio.to_thread``); this pins that behaviour against a real shared
+    event loop (``with TestClient(...) as client`` -- without the ``with``,
+    Starlette's TestClient gives each request its own throwaway event loop,
+    which would pass this test even without the fix).
+    """
+    app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+        pdf_engine=_SlowPdfEngine(PdfiumPypdfEngine(), delay_seconds=1.0),
+    )
+    _seed_test(data_root)
+
+    with TestClient(app) as client:
+        intake_done = threading.Event()
+
+        def _run_intake() -> None:
+            client.post(
+                "/tests/test-1/submissions",
+                headers=_auth(),
+                files={"file": ("student-a.pdf", _pdf_bytes(), "application/pdf")},
+            )
+            intake_done.set()
+
+        intake_thread = threading.Thread(target=_run_intake)
+        intake_thread.start()
+        time.sleep(0.2)  # let the slow render actually start
+        assert not intake_done.is_set()
+
+        start = time.monotonic()
+        response = client.get("/healthz")
+        elapsed = time.monotonic() - start
+
+        assert response.status_code == 200
+        # Far under the 1s render delay: the event loop answered this while
+        # intake was still running on its worker thread, not after it.
+        assert elapsed < 0.5
+        intake_thread.join(timeout=5)
+        assert intake_done.is_set()
