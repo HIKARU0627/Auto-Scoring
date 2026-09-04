@@ -3,18 +3,26 @@
     uv run python poc/issue_15_multi_layout_profile/report.py
 
 Builds the same fixtures as `backend/tests/test_profile_round_trip.py` (the
-authoritative pass/fail check), runs candidate generation -> a simulated
-human correction -> confirmation -> reapply to five jittered student copies
-per format, and writes:
+authoritative pass/fail check), runs candidate generation -> save (DRAFT) ->
+reload -> a simulated human correction -> confirm -> save (CONFIRMED) ->
+reload -> reapply to five jittered student copies per format, and writes:
 
 * ``docs/poc-4-multi-layout-profiles/samples/<format>.model.pdf``   -- source
 * ``docs/poc-4-multi-layout-profiles/samples/<format>.grading-manual.pdf``
 * ``docs/poc-4-multi-layout-profiles/samples/<format>.student-N.pdf``
+* ``docs/poc-4-multi-layout-profiles/app-data/tests/<format>/profile.json``
+  -- the saved profile (Issue #11's storage layout; see
+  `auto_scoring.adapters.local.ProfileStore`), left as the last-written
+  (CONFIRMED) content
 * ``docs/poc-4-multi-layout-profiles/round-trip-report.md``         -- table
+
+One fixture (format E) stores its page as A4 MediaBox with `/Rotate 90` and a
+CropBox inset, exercising `PageGeometry` rotation/crop handling (PoC 3 /
+Issue #12's adopted `PdfEngine` contract) rather than plain page width/height.
 
 Exits non-zero if any reapplied region drifts beyond tolerance, or if the
 hard-to-detect fixture's manual fallback misbehaves. Deterministic: re-running
-reproduces byte-identical numbers.
+reproduces byte-identical numbers (`app-data/` JSON included).
 """
 
 from __future__ import annotations
@@ -26,8 +34,9 @@ from pathlib import Path
 
 from pypdf import PdfWriter
 from pypdf.annotations import Rectangle
-from pypdf.generic import NameObject, TextStringObject
+from pypdf.generic import NameObject, NumberObject, RectangleObject, TextStringObject
 
+from auto_scoring.adapters.local import ProfileStore
 from auto_scoring.adapters.pdf import read_markers
 from auto_scoring.domain.profile import NormalizedBBox, PageFormat, Profile, Region, RegionKind
 from auto_scoring.domain.profile_apply import reapply_profile
@@ -48,21 +57,32 @@ _GRADING_MANUAL_TAGS = ("SCORE", "RUBRIC")
 
 
 @dataclass(frozen=True)
+class PageSpec:
+    """A page to build for a fixture PDF: MediaBox size plus optional `/Rotate` and `CropBox`."""
+
+    media_width: float
+    media_height: float
+    rotation: int = 0
+    crop: tuple[float, float, float, float] | None = None  # (left, bottom, right, top)
+
+
+@dataclass(frozen=True)
 class FixtureFormat:
     format_id: str
     description: str
-    pages: tuple[PageFormat, ...]
+    pages: tuple[PageSpec, ...]
     model_annotations: tuple[AnnotationSpec, ...]
 
 
-_A4_PORTRAIT = PageFormat(595.0, 842.0)
-_A4_LANDSCAPE = PageFormat(842.0, 595.0)
-_B5_PORTRAIT = PageFormat(498.0, 709.0)
+_A4_PORTRAIT = PageFormat(595.0, 842.0)  # plain PageFormat, for the freeform-fallback fixture
+_A4_PORTRAIT_SPEC = PageSpec(595.0, 842.0)
+_A4_LANDSCAPE_SPEC = PageSpec(842.0, 595.0)
+_B5_PORTRAIT_SPEC = PageSpec(498.0, 709.0)
 
 FORMAT_A = FixtureFormat(
     "format-a-single-page-stacked",
     "1 page / portrait / 2 questions stacked vertically / short boxed answer areas",
-    (_A4_PORTRAIT,),
+    (_A4_PORTRAIT_SPEC,),
     (
         (0, "Q1", (72, 760, 523, 790)),
         (0, "ANSWER_1", (72, 650, 450, 755)),
@@ -78,7 +98,7 @@ FORMAT_A = FixtureFormat(
 FORMAT_B = FixtureFormat(
     "format-b-two-page-landscape-2col",
     "2 pages / landscape / 2-column questions / large free-form answer areas",
-    (_A4_LANDSCAPE, _A4_LANDSCAPE),
+    (_A4_LANDSCAPE_SPEC, _A4_LANDSCAPE_SPEC),
     (
         (0, "Q1", (40, 500, 400, 560)),
         (0, "ANSWER_1", (40, 120, 400, 490)),
@@ -100,7 +120,7 @@ FORMAT_C = FixtureFormat(
         "3 pages / mixed sizes+orientation (A4 portrait, A4 landscape, B5 portrait) / "
         "1 sparse question per page / multi-part split answer boxes"
     ),
-    (_A4_PORTRAIT, _A4_LANDSCAPE, _B5_PORTRAIT),
+    (_A4_PORTRAIT_SPEC, _A4_LANDSCAPE_SPEC, _B5_PORTRAIT_SPEC),
     (
         (0, "Q1", (72, 700, 523, 760)),
         (0, "ANSWER_1", (72, 600, 290, 690)),
@@ -124,7 +144,7 @@ FORMAT_D = FixtureFormat(
     "format-d-single-page-2x2-grid",
     "1 page / portrait / 4 questions in a 2x2 grid / grid-cell answer areas / "
     "one small annotation strip per question instead of a shared margin",
-    (_A4_PORTRAIT,),
+    (_A4_PORTRAIT_SPEC,),
     (
         (0, "Q1", (40, 760, 280, 790)),
         (0, "ANSWER_1", (40, 660, 280, 745)),
@@ -144,17 +164,41 @@ FORMAT_D = FixtureFormat(
     ),
 )
 
-# docs/business-rules-and-evaluation-data.md §6.2: >=4 formats x >=5 answers each.
-FORMATS = (FORMAT_A, FORMAT_B, FORMAT_C, FORMAT_D)
+# A4 MediaBox, /Rotate 90 (displays landscape although stored portrait), and a
+# CropBox inset -- exercises the PageGeometry rotation + crop-offset path the
+# other formats never touch (their pages are unrotated with CropBox == MediaBox).
+FORMAT_E = FixtureFormat(
+    "format-e-rotated-cropbox",
+    "1 page / A4 MediaBox with /Rotate 90 + CropBox inset (displays landscape) / "
+    "single question / exercises PageGeometry rotation and crop-offset handling",
+    (PageSpec(595.0, 842.0, rotation=90, crop=(30.0, 40.0, 565.0, 800.0)),),
+    (
+        (0, "Q1", (60, 700, 500, 760)),
+        (0, "ANSWER_1", (60, 500, 500, 690)),
+        (0, "ANNOT", (60, 450, 500, 490)),
+        (0, "SCORE", (60, 400, 500, 440)),
+        (0, "RUBRIC", (60, 200, 500, 390)),
+        (0, "MODEL_ANSWER", (60, 60, 500, 190)),
+    ),
+)
+
+# docs/business-rules-and-evaluation-data.md §6.2: >=4 formats x >=5 answers each;
+# E is an extra fixture for rotation/CropBox coverage specifically.
+FORMATS = (FORMAT_A, FORMAT_B, FORMAT_C, FORMAT_D, FORMAT_E)
 _JITTERS = ((0.4, -0.3), (-0.4, 0.3), (0.3, 0.4), (-0.3, -0.4), (0.2, -0.2))
 
 
 def _write_pdf(
-    path: Path, pages: Sequence[PageFormat], annotations: Sequence[AnnotationSpec]
+    path: Path, pages: Sequence[PageSpec], annotations: Sequence[AnnotationSpec]
 ) -> None:
     writer = PdfWriter()
     for page in pages:
-        writer.add_blank_page(width=page.width_pt, height=page.height_pt)
+        writer.add_blank_page(width=page.media_width, height=page.media_height)
+    for index, page in enumerate(pages):
+        if page.rotation:
+            writer.pages[index][NameObject("/Rotate")] = NumberObject(page.rotation)
+        if page.crop is not None:
+            writer.pages[index][NameObject("/CropBox")] = RectangleObject(list(page.crop))
     for page_index, tag, rect in annotations:
         annotation = Rectangle(rect=rect)
         annotation[NameObject("/Contents")] = TextStringObject(tag)
@@ -187,28 +231,33 @@ def _shrink(bbox: NormalizedBBox, delta: float) -> tuple[float, float, float, fl
     return (bbox.x0, bbox.y0, bbox.x1 - delta, bbox.y1)
 
 
-def run_format(fixture: FixtureFormat, rows: list[str]) -> bool:
+def run_format(fixture: FixtureFormat, store: ProfileStore, rows: list[str]) -> bool:
     model_path = _SAMPLES_DIR / f"{fixture.format_id}.model.pdf"
     manual_path = _SAMPLES_DIR / f"{fixture.format_id}.grading-manual.pdf"
     _write_pdf(model_path, fixture.pages, _model_answer_markers(fixture.model_annotations))
     _write_pdf(manual_path, fixture.pages, _grading_manual_markers(fixture.model_annotations))
 
-    markers, signature = read_markers(model_path)
-    manual_markers, manual_signature = read_markers(manual_path)
+    markers, signature, page_geometries = read_markers(model_path)
+    manual_markers, manual_signature, _ = read_markers(manual_path)
     if not signature.matches(manual_signature):
         return False
     markers.extend(manual_markers)
-    draft = generate_candidates("profile-1", fixture.format_id, signature, markers)
+    draft = generate_candidates("profile-1", fixture.format_id, signature, page_geometries, markers)
 
-    corrected_region_id = draft.regions[0].region_id
-    corrected_bbox = NormalizedBBox(*_shrink(draft.regions[0].bbox, 0.01))
+    # Save the DRAFT, then reload it before review -- see docstring.
+    store.save(draft)
+    reloaded_draft = store.load(fixture.format_id)
+
+    corrected_region_id = reloaded_draft.regions[0].region_id
+    corrected_bbox = NormalizedBBox(*_shrink(reloaded_draft.regions[0].bbox, 0.01))
     reviewed = [
         replace(region, bbox=corrected_bbox, confirmed=True)
         if region.region_id == corrected_region_id
         else replace(region, confirmed=True)
-        for region in draft.regions
+        for region in reloaded_draft.regions
     ]
-    confirmed = draft.confirm(reviewed)
+    confirmed = reloaded_draft.confirm(reviewed)
+    store.save(confirmed)  # overwrites the DRAFT profile.json in place
 
     student_annotations = _student_markers(fixture.model_annotations)
     ok = True
@@ -216,10 +265,17 @@ def run_format(fixture: FixtureFormat, rows: list[str]) -> bool:
         student_path = _SAMPLES_DIR / f"{fixture.format_id}.student-{copy_index}.pdf"
         _write_pdf(student_path, fixture.pages, _jitter(student_annotations, dx, dy))
 
-        student_markers, student_signature = read_markers(student_path)
-        applied = reapply_profile(confirmed, fixture.format_id, student_signature)
+        student_markers, student_signature, student_geometries = read_markers(student_path)
+        # Reload for every student copy: reapply acts on a fresh deserialize
+        # of profile.json, not the in-memory `confirmed` object.
+        profile_for_reapply = store.load(fixture.format_id)
+        applied = reapply_profile(profile_for_reapply, fixture.format_id, student_signature)
         ground_truth = generate_candidates(
-            "ground-truth", fixture.format_id, student_signature, student_markers
+            "ground-truth",
+            fixture.format_id,
+            student_signature,
+            student_geometries,
+            student_markers,
         ).regions
         ground_truth_by_key = {(r.page_index, r.label): r for r in ground_truth}
 
@@ -243,16 +299,16 @@ def run_format(fixture: FixtureFormat, rows: list[str]) -> bool:
     return ok
 
 
-def run_hard_to_detect_fixture(rows: list[str]) -> bool:
-    pages = (_A4_PORTRAIT,)
+def run_hard_to_detect_fixture(store: ProfileStore, rows: list[str]) -> bool:
+    pages = (_A4_PORTRAIT_SPEC,)
     freeform_annotation: tuple[AnnotationSpec, ...] = ((0, "NOTES", (40, 40, 555, 800)),)
     model_path = _SAMPLES_DIR / "format-freeform-essay.model.pdf"
     _write_pdf(model_path, pages, freeform_annotation)
-    markers, signature = read_markers(model_path)
+    markers, signature, page_geometries = read_markers(model_path)
 
     tags = unrecognized_tags(markers)
     auto_profile = generate_candidates(
-        "profile-freeform", "format-freeform-essay", signature, markers
+        "profile-freeform", "format-freeform-essay", signature, page_geometries, markers
     )
     detection_failed = tags == ["NOTES"] and auto_profile.regions == ()
 
@@ -278,11 +334,13 @@ def run_hard_to_detect_fixture(rows: list[str]) -> bool:
     confirmed = manual_draft.confirm(
         [replace(region, confirmed=True) for region in manual_draft.regions]
     )
+    store.save(confirmed)
+    reloaded = store.load("format-freeform-essay")
 
     student_path = _SAMPLES_DIR / "format-freeform-essay.student-0.pdf"
     _write_pdf(student_path, pages, freeform_annotation)
-    _, student_signature = read_markers(student_path)
-    applied = reapply_profile(confirmed, "format-freeform-essay", student_signature)
+    _, student_signature, _ = read_markers(student_path)
+    applied = reapply_profile(reloaded, "format-freeform-essay", student_signature)
     fallback_ok = requires_manual_fallback(markers, auto_profile) and len(applied.regions) == 2
 
     verdict = "PASS" if detection_failed and fallback_ok else "FAIL"
@@ -299,9 +357,10 @@ def run_hard_to_detect_fixture(rows: list[str]) -> bool:
 def main() -> int:
     rows: list[str] = []
     ok = True
+    store = ProfileStore(_OUT_DIR / "app-data")
     for fixture in FORMATS:
-        ok = run_format(fixture, rows) and ok
-    ok = run_hard_to_detect_fixture(rows) and ok
+        ok = run_format(fixture, store, rows) and ok
+    ok = run_hard_to_detect_fixture(store, rows) and ok
 
     header = (
         "| format | student copy | region | page | drift (normalized) | verdict | note |\n"

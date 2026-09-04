@@ -249,4 +249,34 @@ Tolerance: 0.01 normalized units. Regenerate with `uv run python poc/issue_15_mu
 | format-d-single-page-2x2-grid | student-4 | MODEL_ANSWER | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
 | format-d-single-page-2x2-grid | student-4 | SCORE | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
 | format-d-single-page-2x2-grid | student-4 | RUBRIC | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-0 | Q1 | p0 | 0.0000 | PASS | human correction persisted |
+| format-e-rotated-cropbox | student-0 | ANSWER_1 | p0 | 0.0007 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-0 | ANNOT | p0 | 0.0007 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-0 | MODEL_ANSWER | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-0 | SCORE | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-0 | RUBRIC | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-1 | Q1 | p0 | 0.0000 | PASS | human correction persisted |
+| format-e-rotated-cropbox | student-1 | ANSWER_1 | p0 | 0.0007 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-1 | ANNOT | p0 | 0.0007 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-1 | MODEL_ANSWER | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-1 | SCORE | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-1 | RUBRIC | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-2 | Q1 | p0 | 0.0000 | PASS | human correction persisted |
+| format-e-rotated-cropbox | student-2 | ANSWER_1 | p0 | 0.0006 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-2 | ANNOT | p0 | 0.0006 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-2 | MODEL_ANSWER | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-2 | SCORE | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-2 | RUBRIC | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-3 | Q1 | p0 | 0.0000 | PASS | human correction persisted |
+| format-e-rotated-cropbox | student-3 | ANSWER_1 | p0 | 0.0006 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-3 | ANNOT | p0 | 0.0006 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-3 | MODEL_ANSWER | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-3 | SCORE | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-3 | RUBRIC | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-4 | Q1 | p0 | 0.0000 | PASS | human correction persisted |
+| format-e-rotated-cropbox | student-4 | ANSWER_1 | p0 | 0.0004 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-4 | ANNOT | p0 | 0.0004 | PASS | vs. student sheet's own marker |
+| format-e-rotated-cropbox | student-4 | MODEL_ANSWER | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-4 | SCORE | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
+| format-e-rotated-cropbox | student-4 | RUBRIC | p0 | 0.0000 | PASS | profile-only (not printed on student sheet) |
 | format-freeform-essay | (manual fallback) | unrecognized tag: True; 0 auto candidates: True; manual profile reapplies: True | -- | -- | PASS | manual fallback path |

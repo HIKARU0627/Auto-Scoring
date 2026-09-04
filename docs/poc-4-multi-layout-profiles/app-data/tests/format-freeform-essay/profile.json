@@ -1,0 +1,41 @@
+{
+  "profile_id": "profile-freeform",
+  "format_id": "format-freeform-essay",
+  "status": "confirmed",
+  "signature": {
+    "pages": [
+      {
+        "width_pt": 595.0,
+        "height_pt": 842.0
+      }
+    ]
+  },
+  "regions": [
+    {
+      "region_id": "manual-q1",
+      "kind": "question",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.07,
+        "y0": 0.05,
+        "x1": 0.93,
+        "y1": 0.12
+      },
+      "label": "manual:question",
+      "confirmed": true
+    },
+    {
+      "region_id": "manual-answer",
+      "kind": "answer_area",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.07,
+        "y0": 0.13,
+        "x1": 0.93,
+        "y1": 0.95
+      },
+      "label": "manual:answer_area",
+      "confirmed": true
+    }
+  ]
+}
