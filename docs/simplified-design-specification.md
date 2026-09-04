@@ -145,6 +145,12 @@ Windows向けデスクトップアプリを基本とする。
 
 座標については可能な限り0〜1の正規化座標で保持する。
 
+> PoC 4（Issue #15）でこのスキーマの往復（生成→人間確認→再適用）を検証した。
+> ドメインモデルは `RegionKind`（問題文領域／回答欄領域／○×等の候補領域／配点／
+> 採点ルール／模範解答）ごとに `Region` を持ち、`Profile.status` が
+> `DRAFT`（未確認）→`CONFIRMED`（確認済み）の一方向で遷移する。詳細は
+> [`poc-4-multi-layout-profiles.md`](./poc-4-multi-layout-profiles.md)。
+
 例：
 
 ```json
@@ -962,6 +968,11 @@ PDF上の特定位置へ、
 ↓
 各答案への適用
 ```
+
+> PoC 4（Issue #15）で「生成 → 人間確認 → 再適用」の往復が成立することを検証した。
+> プロファイルは常に未確認（DRAFT）で保存され、人間確認（`Profile.confirm`）を経て
+> はじめて答案へ再適用できる。詳細・fixture・実測値は
+> [`poc-4-multi-layout-profiles.md`](./poc-4-multi-layout-profiles.md)。
 
 が機能するか確認する。
 
