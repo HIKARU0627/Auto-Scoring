@@ -1,0 +1,506 @@
+"""PoC 4 (Issue #15) repro command: profile generation -> save -> reload -> reapply.
+
+    uv run pytest tests/test_profile_round_trip.py
+
+Five fixture *formats* (A-E below) vary page count, orientation, question
+layout, answer-area shape, and (format E) `/Rotate` + a CropBox inset -- the
+dimensions Issue #15 asks to cover, meeting the >=4 formats x >=5 answers
+evaluation-data target in `docs/business-rules-and-evaluation-data.md` §6.2
+with one to spare. For each format:
+
+1. A "model answer" PDF carries question, answer area, annotation area, and
+   model answer markers; a separate grading-manual PDF carries score and rubric
+   markers. Tagged PDF annotations stand in for a real text/vision extraction
+   layer (see `auto_scoring.domain.profile_detection`). Marker rectangles are
+   converted to normalized coordinates via `PageGeometry` and
+   `user_space_to_normalized` -- PoC 3 (Issue #12)'s adopted `PdfEngine`
+   contract, applied to all four corners of each rectangle, so a rotated or
+   CropBox-inset page still lands correctly.
+2. `generate_candidates` turns those markers into an unconfirmed (DRAFT)
+   profile, which is saved via `ProfileStore` to a temp `app-data/` tree
+   (Issue #11's `app-data/tests/<test-id>/profile.json` layout). The draft is
+   then *reloaded* -- not reused from memory -- before a simulated human
+   correction nudges one region and confirms the rest; the confirmed profile
+   is saved back to the same path.
+3. Five "student answer" PDFs of the *same format* carry only the
+   question/answer-area/annotation-area markers (a blank answer sheet has no
+   printed score/rubric/model-answer), each with a small positional jitter
+   (print/scan tolerance). For each one, the confirmed profile is *reloaded
+   from disk again* (a fresh deserialize, standing in for a separate process
+   opening the saved profile) and `reapply_profile` binds it to that student
+   document; the reapplied question/answer/annotation regions are checked
+   against that document's own markers within tolerance, and the
+   score/rubric/model-answer regions -- which the student sheet cannot
+   supply -- are checked to still be present, verbatim from the profile.
+
+A sixth, separate fixture (a free-form essay sheet with no recognizable
+markers at all) exercises the manual-fallback path instead of the round trip.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+import pytest
+from pypdf import PdfWriter
+from pypdf.annotations import Rectangle, Text
+from pypdf.generic import NameObject, NumberObject, RectangleObject, TextStringObject
+
+from auto_scoring.adapters.local import ProfileStore
+from auto_scoring.adapters.pdf import read_markers
+from auto_scoring.domain.pdf_geometry import PageGeometry
+from auto_scoring.domain.profile import (
+    FormatSignature,
+    NormalizedBBox,
+    PageFormat,
+    Profile,
+    ProfileStatus,
+    Region,
+    RegionKind,
+)
+from auto_scoring.domain.profile_apply import FormatMismatchError, reapply_profile
+from auto_scoring.domain.profile_detection import (
+    Marker,
+    RectPt,
+    generate_candidates,
+    requires_manual_fallback,
+    unrecognized_tags,
+)
+
+# Normalized-bbox tolerance for "did the reapplied region land on the right
+# content": jitter below is <=0.4pt against pages 498-842pt wide/tall, i.e.
+# <=0.0008 normalized. 0.01 leaves ample margin while still catching an
+# axis mix-up (which would be off by ~0.5).
+_BBOX_TOLERANCE = 0.01
+
+# 5 answer sheets per format, simulating small print/scan positional variance
+# (docs/business-rules-and-evaluation-data.md §6.2: >=5 answers per format).
+_STUDENT_JITTERS = ((0.4, -0.3), (-0.4, 0.3), (0.3, 0.4), (-0.3, -0.4), (0.2, -0.2))
+
+AnnotationSpec = tuple[int, str, RectPt]  # (page_index, tag, rect_pt)
+
+
+@dataclass(frozen=True)
+class PageSpec:
+    """A page to build for a fixture PDF: MediaBox size plus optional `/Rotate` and `CropBox`."""
+
+    media_width: float
+    media_height: float
+    rotation: int = 0
+    crop: tuple[float, float, float, float] | None = None  # (left, bottom, right, top)
+
+
+def _write_pdf(
+    path: Path, pages: Sequence[PageSpec], annotations: Sequence[AnnotationSpec]
+) -> None:
+    writer = PdfWriter()
+    for page in pages:
+        writer.add_blank_page(width=page.media_width, height=page.media_height)
+    for index, page in enumerate(pages):
+        if page.rotation:
+            writer.pages[index][NameObject("/Rotate")] = NumberObject(page.rotation)
+        if page.crop is not None:
+            writer.pages[index][NameObject("/CropBox")] = RectangleObject(list(page.crop))
+    for page_index, tag, rect in annotations:
+        annotation = Rectangle(rect=rect)
+        annotation[NameObject("/Contents")] = TextStringObject(tag)
+        writer.add_annotation(page_number=page_index, annotation=annotation)
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+
+def _jitter(annotations: Sequence[AnnotationSpec], dx: float, dy: float) -> list[AnnotationSpec]:
+    return [
+        (page, tag, (x0 + dx, y0 + dy, x1 + dx, y1 + dy))
+        for page, tag, (x0, y0, x1, y1) in annotations
+    ]
+
+
+# Marker kinds a printed answer sheet cannot carry: they only exist on the
+# model-answer / grading-manual PDF the profile was generated from.
+_MODEL_ONLY_TAGS = ("SCORE", "RUBRIC", "MODEL_ANSWER")
+_GRADING_MANUAL_TAGS = ("SCORE", "RUBRIC")
+
+
+def _student_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] not in _MODEL_ONLY_TAGS]
+
+
+def _model_answer_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] not in _GRADING_MANUAL_TAGS]
+
+
+def _grading_manual_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] in _GRADING_MANUAL_TAGS]
+
+
+@dataclass(frozen=True)
+class FixtureFormat:
+    format_id: str
+    description: str
+    pages: tuple[PageSpec, ...]
+    model_annotations: tuple[AnnotationSpec, ...]
+
+
+# Plain PageFormat, for tests that build a FormatSignature directly rather
+# than going through a written-and-reread PDF.
+_A4_PORTRAIT = PageFormat(595.0, 842.0)
+
+# PageSpec, for building fixture PDFs (_write_pdf needs MediaBox dims, not the
+# displayed dims PageFormat/FormatSignature use).
+_A4_PORTRAIT_SPEC = PageSpec(595.0, 842.0)
+_A4_LANDSCAPE_SPEC = PageSpec(842.0, 595.0)
+_B5_PORTRAIT_SPEC = PageSpec(498.0, 709.0)
+
+FORMAT_A = FixtureFormat(
+    format_id="format-a-single-page-stacked",
+    description="1 page / portrait / 2 questions stacked vertically / short boxed answer areas",
+    pages=(_A4_PORTRAIT_SPEC,),
+    model_annotations=(
+        (0, "Q1", (72, 760, 523, 790)),
+        (0, "ANSWER_1", (72, 650, 450, 755)),
+        (0, "Q2", (72, 560, 523, 590)),
+        (0, "ANSWER_2", (72, 450, 450, 555)),
+        (0, "ANNOT", (460, 400, 565, 800)),
+        (0, "SCORE", (460, 780, 565, 800)),
+        (0, "RUBRIC", (72, 300, 523, 430)),
+        (0, "MODEL_ANSWER", (72, 150, 523, 290)),
+    ),
+)
+
+FORMAT_B = FixtureFormat(
+    format_id="format-b-two-page-landscape-2col",
+    description="2 pages / landscape / 2-column questions / large free-form answer areas",
+    pages=(_A4_LANDSCAPE_SPEC, _A4_LANDSCAPE_SPEC),
+    model_annotations=(
+        (0, "Q1", (40, 500, 400, 560)),
+        (0, "ANSWER_1", (40, 120, 400, 490)),
+        (0, "Q2", (440, 500, 800, 560)),
+        (0, "ANSWER_2", (440, 120, 800, 490)),
+        (0, "ANNOT", (40, 20, 800, 90)),
+        (1, "Q3", (40, 520, 400, 560)),
+        (1, "ANSWER_3", (40, 300, 400, 510)),
+        (1, "RUBRIC", (40, 120, 400, 290)),
+        (1, "SCORE", (440, 520, 800, 560)),
+        (1, "MODEL_ANSWER", (440, 120, 800, 510)),
+        (1, "ANNOT", (40, 20, 800, 90)),
+    ),
+)
+
+FORMAT_C = FixtureFormat(
+    format_id="format-c-three-page-mixed-split-answers",
+    description=(
+        "3 pages / mixed sizes+orientation (A4 portrait, A4 landscape, B5 portrait) / "
+        "1 sparse question per page / multi-part split answer boxes"
+    ),
+    pages=(_A4_PORTRAIT_SPEC, _A4_LANDSCAPE_SPEC, _B5_PORTRAIT_SPEC),
+    model_annotations=(
+        (0, "Q1", (72, 700, 523, 760)),
+        (0, "ANSWER_1", (72, 600, 290, 690)),
+        (0, "ANSWER_2", (305, 600, 523, 690)),
+        (0, "ANNOT", (72, 500, 523, 560)),
+        (0, "SCORE", (72, 420, 523, 480)),
+        (0, "RUBRIC", (72, 300, 523, 400)),
+        (0, "MODEL_ANSWER", (72, 150, 523, 280)),
+        (1, "Q2", (40, 500, 800, 560)),
+        (1, "ANSWER_3", (40, 300, 260, 480)),
+        (1, "ANSWER_4", (291, 300, 511, 480)),
+        (1, "ANSWER_5", (542, 300, 800, 480)),
+        (1, "ANNOT", (40, 120, 800, 270)),
+        (2, "Q3", (40, 620, 458, 670)),
+        (2, "ANSWER_6", (40, 300, 458, 600)),
+        (2, "ANNOT", (40, 120, 458, 270)),
+    ),
+)
+
+FORMAT_D = FixtureFormat(
+    format_id="format-d-single-page-2x2-grid",
+    description=(
+        "1 page / portrait / 4 questions in a 2x2 grid / grid-cell answer areas / "
+        "one small annotation strip per question instead of a shared margin"
+    ),
+    pages=(_A4_PORTRAIT_SPEC,),
+    model_annotations=(
+        (0, "Q1", (40, 760, 280, 790)),
+        (0, "ANSWER_1", (40, 660, 280, 745)),
+        (0, "ANNOT_1", (40, 635, 280, 655)),
+        (0, "Q2", (315, 760, 555, 790)),
+        (0, "ANSWER_2", (315, 660, 555, 745)),
+        (0, "ANNOT_2", (315, 635, 555, 655)),
+        (0, "Q3", (40, 560, 280, 590)),
+        (0, "ANSWER_3", (40, 460, 280, 545)),
+        (0, "ANNOT_3", (40, 435, 280, 455)),
+        (0, "Q4", (315, 560, 555, 590)),
+        (0, "ANSWER_4", (315, 460, 555, 545)),
+        (0, "ANNOT_4", (315, 435, 555, 455)),
+        (0, "SCORE", (40, 380, 555, 420)),
+        (0, "RUBRIC", (40, 260, 555, 370)),
+        (0, "MODEL_ANSWER", (40, 100, 555, 250)),
+    ),
+)
+
+# A4 MediaBox, /Rotate 90 (so it *displays* landscape although stored
+# portrait), and a CropBox inset (matching PoC 3's own fixture inset) --
+# exercises the PageGeometry rotation + crop-offset path the other formats
+# never touch (their pages are unrotated with CropBox == MediaBox).
+FORMAT_E = FixtureFormat(
+    format_id="format-e-rotated-cropbox",
+    description=(
+        "1 page / A4 MediaBox with /Rotate 90 + CropBox inset (displays landscape) / "
+        "single question / exercises PageGeometry rotation and crop-offset handling"
+    ),
+    pages=(PageSpec(595.0, 842.0, rotation=90, crop=(30.0, 40.0, 565.0, 800.0)),),
+    model_annotations=(
+        (0, "Q1", (60, 700, 500, 760)),
+        (0, "ANSWER_1", (60, 500, 500, 690)),
+        (0, "ANNOT", (60, 450, 500, 490)),
+        (0, "SCORE", (60, 400, 500, 440)),
+        (0, "RUBRIC", (60, 200, 500, 390)),
+        (0, "MODEL_ANSWER", (60, 60, 500, 190)),
+    ),
+)
+
+# The evaluation-data decision (docs/business-rules-and-evaluation-data.md §6.2)
+# targets 4 formats x >=5 answer sheets each for PoC 4; E is an extra fixture
+# for rotation/CropBox coverage specifically.
+FORMATS = (FORMAT_A, FORMAT_B, FORMAT_C, FORMAT_D, FORMAT_E)
+
+
+def test_rotated_cropbox_fixture_uses_pdf_engine_geometry(tmp_path: Path) -> None:
+    path = tmp_path / "rotated-cropbox.pdf"
+    _write_pdf(path, FORMAT_E.pages, FORMAT_E.model_annotations[:1])
+
+    markers, signature, geometries = read_markers(path)
+    geometry = geometries[0]
+    assert signature.pages[0] == PageFormat(width_pt=760.0, height_pt=535.0)
+    assert geometry == PageGeometry(
+        crop_width=535.0,
+        crop_height=760.0,
+        crop_offset_x=30.0,
+        crop_offset_y=40.0,
+        rotation=90,
+    )
+
+    profile = generate_candidates("profile-e", FORMAT_E.format_id, signature, geometries, markers)
+    bbox = profile.regions[0].bbox
+    assert (bbox.x0, bbox.y0, bbox.x1, bbox.y1) == pytest.approx(
+        (0.8684210526, 0.0560747664, 0.9473684211, 0.8785046729)
+    )
+
+
+@pytest.mark.parametrize("fixture", FORMATS, ids=lambda f: f.format_id)
+def test_profile_round_trip_reapplies_within_tolerance(
+    fixture: FixtureFormat, tmp_path: Path
+) -> None:
+    model_path = tmp_path / "model.pdf"
+    manual_path = tmp_path / "grading-manual.pdf"
+    _write_pdf(model_path, fixture.pages, _model_answer_markers(fixture.model_annotations))
+    _write_pdf(manual_path, fixture.pages, _grading_manual_markers(fixture.model_annotations))
+
+    markers, signature, page_geometries = read_markers(model_path)
+    manual_markers, manual_signature, _ = read_markers(manual_path)
+    assert signature.matches(manual_signature)
+    markers.extend(manual_markers)
+    assert not unrecognized_tags(markers), "fixture uses only tags this PoC's detector recognizes"
+
+    draft = generate_candidates("profile-1", fixture.format_id, signature, page_geometries, markers)
+    # every candidate must start unconfirmed, whatever the marker says
+    assert all(not region.confirmed for region in draft.regions)
+    assert len(draft.regions) == len(fixture.model_annotations)
+    assert {region.kind for region in draft.regions} == set(RegionKind)
+
+    # Persist the draft (app-data/tests/<format_id>/profile.json, Issue #11's
+    # layout) and reload it -- the human review below acts on a profile read
+    # back from disk, not the in-memory `draft` object.
+    store = ProfileStore(tmp_path / "app-data")
+    store.save(draft)
+    reloaded_draft = store.load(fixture.format_id)
+    assert reloaded_draft.status is ProfileStatus.DRAFT
+    assert reloaded_draft == draft, "reload must reproduce the saved draft exactly"
+
+    # Simulate a human correction: nudge the first question's right edge, then confirm everything.
+    # The correction is deliberately larger than _BBOX_TOLERANCE and must persist verbatim through
+    # reapply -- it is excluded from the ground-truth comparison below for that reason.
+    corrected_region_id = reloaded_draft.regions[0].region_id
+    corrected_bbox = NormalizedBBox(*_shrink(reloaded_draft.regions[0].bbox, 0.01))
+    reviewed = []
+    for index, region in enumerate(reloaded_draft.regions):
+        if index == 0:
+            region = replace(region, bbox=corrected_bbox)
+        reviewed.append(replace(region, confirmed=True))
+    confirmed = reloaded_draft.confirm(reviewed)
+    store.save(confirmed)  # overwrites the DRAFT profile.json in place
+
+    student_annotations = _student_markers(fixture.model_annotations)
+    for copy_index, (dx, dy) in enumerate(_STUDENT_JITTERS):
+        student_path = tmp_path / f"student-{copy_index}.pdf"
+        _write_pdf(student_path, fixture.pages, _jitter(student_annotations, dx, dy))
+
+        student_markers, student_signature, student_geometries = read_markers(student_path)
+        # Reload for every student copy: each reapply acts on a fresh
+        # deserialize of the confirmed profile.json, not the `confirmed`
+        # object still sitting in this test's memory.
+        profile_for_reapply = store.load(fixture.format_id)
+        assert profile_for_reapply == confirmed
+        applied = reapply_profile(profile_for_reapply, fixture.format_id, student_signature)
+        assert len(applied.regions) == len(confirmed.regions), "reapply must not drop any region"
+
+        ground_truth = generate_candidates(
+            "ground-truth",
+            fixture.format_id,
+            student_signature,
+            student_geometries,
+            student_markers,
+        ).regions
+        # tags such as "ANNOT" repeat across pages, so key ground truth by
+        # (page, tag) rather than tag alone.
+        ground_truth_by_key = {(region.page_index, region.label): region for region in ground_truth}
+
+        for region in applied.regions:
+            key = (region.page_index, region.label)
+            if region.region_id == corrected_region_id:
+                # the human correction must survive reapply unchanged, not get
+                # overwritten by re-detecting the (uncorrected) printed marker.
+                assert region.bbox == corrected_bbox
+            elif key in ground_truth_by_key:
+                truth = ground_truth_by_key[key]
+                distance = region.bbox.max_corner_distance(truth.bbox)
+                assert distance <= _BBOX_TOLERANCE, (
+                    f"{fixture.format_id}/{region.label}: reapplied bbox drifted "
+                    f"{distance:.4f} from the student sheet's own markers"
+                )
+            else:
+                # score/rubric/model_answer: the student sheet has none of these
+                # printed -- the profile is the only source for them.
+                assert region.label in _MODEL_ONLY_TAGS
+
+
+def test_reapply_rejects_mismatched_format(tmp_path: Path) -> None:
+    a_path = tmp_path / "format-a.pdf"
+    _write_pdf(a_path, FORMAT_A.pages, FORMAT_A.model_annotations)
+    a_markers, a_signature, a_geometries = read_markers(a_path)
+    a_profile = generate_candidates(
+        "profile-a", FORMAT_A.format_id, a_signature, a_geometries, a_markers
+    )
+    a_reviewed = [replace(region, confirmed=True) for region in a_profile.regions]
+    a_confirmed = a_profile.confirm(a_reviewed)
+
+    b_path = tmp_path / "format-b.pdf"
+    _write_pdf(b_path, FORMAT_B.pages, FORMAT_B.model_annotations)
+    _, b_signature, _ = read_markers(b_path)
+
+    with pytest.raises(FormatMismatchError):
+        reapply_profile(a_confirmed, FORMAT_B.format_id, b_signature)
+
+
+def test_hard_to_detect_format_falls_back_to_manual_region(tmp_path: Path) -> None:
+    """A free-form essay sheet has no recognizable markers at all.
+
+    Detection condition for "give up and ask a human": `unrecognized_tags`
+    is non-empty and/or no QUESTION/ANSWER_AREA candidate was produced.
+    Manual fallback: a human supplies the missing regions directly (not from
+    detection) and confirms them; the resulting profile still reapplies to
+    other documents of the same (page-size) format normally.
+    """
+    pages = (_A4_PORTRAIT_SPEC,)
+    freeform_annotation: tuple[AnnotationSpec, ...] = ((0, "NOTES", (40, 40, 555, 800)),)
+
+    model_path = tmp_path / "freeform-model.pdf"
+    _write_pdf(model_path, pages, freeform_annotation)
+    markers, signature, page_geometries = read_markers(model_path)
+
+    assert unrecognized_tags(markers) == ["NOTES"]
+    auto_profile = generate_candidates(
+        "profile-freeform", "format-freeform-essay", signature, page_geometries, markers
+    )
+    assert auto_profile.regions == (), "no marker on this format matches a known region kind"
+
+    # Manual fallback: a human draws the regions directly, bypassing detection.
+    manual_regions = (
+        Region(
+            region_id="manual-q1",
+            kind=RegionKind.QUESTION,
+            page_index=0,
+            bbox=NormalizedBBox(0.07, 0.05, 0.93, 0.12),
+            label="manual:question",
+        ),
+        Region(
+            region_id="manual-answer",
+            kind=RegionKind.ANSWER_AREA,
+            page_index=0,
+            bbox=NormalizedBBox(0.07, 0.13, 0.93, 0.95),
+            label="manual:answer_area",
+        ),
+    )
+    manual_draft = Profile.from_candidates(
+        "profile-freeform", "format-freeform-essay", signature, manual_regions
+    )
+    manual_reviewed = [replace(region, confirmed=True) for region in manual_draft.regions]
+    confirmed = manual_draft.confirm(manual_reviewed)
+
+    # Persist and reload here too: the manual-fallback profile reapplies the
+    # same way a detected one does once it's saved.
+    store = ProfileStore(tmp_path / "app-data")
+    store.save(confirmed)
+    reloaded = store.load("format-freeform-essay")
+
+    student_path = tmp_path / "freeform-student.pdf"
+    _write_pdf(student_path, pages, freeform_annotation)
+    _, student_signature, _ = read_markers(student_path)
+
+    assert requires_manual_fallback(markers, auto_profile)
+    applied = reapply_profile(reloaded, "format-freeform-essay", student_signature)
+    assert len(applied.regions) == 2
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        (("Q1", "ANSWER_1"), False),
+        (("Q1", "ANSWER_1", "NOTES"), True),
+        (("Q1",), True),
+        (("ANSWER_1",), True),
+    ],
+)
+def test_manual_fallback_condition_is_explicit(tags: tuple[str, ...], expected: bool) -> None:
+    signature = FormatSignature(pages=(_A4_PORTRAIT,))
+    geometries = (PageGeometry(crop_width=595.0, crop_height=842.0),)
+    markers = [Marker(0, tag, (10.0, 10.0, 20.0, 20.0)) for tag in tags]
+    profile = generate_candidates("profile", "format", signature, geometries, markers)
+    assert requires_manual_fallback(markers, profile) is expected
+
+
+def test_candidate_generation_rejects_marker_outside_page_range() -> None:
+    signature = FormatSignature(pages=(_A4_PORTRAIT,))
+    geometries = (PageGeometry(crop_width=595.0, crop_height=842.0),)
+    with pytest.raises(ValueError, match="invalid page -1"):
+        generate_candidates(
+            "profile", "format", signature, geometries, [Marker(-1, "Q1", (10, 10, 20, 20))]
+        )
+
+
+def test_generate_candidates_rejects_geometry_count_mismatch() -> None:
+    signature = FormatSignature(pages=(_A4_PORTRAIT, _A4_PORTRAIT))
+    geometries = (PageGeometry(crop_width=595.0, crop_height=842.0),)  # only 1, signature has 2
+    with pytest.raises(ValueError, match="one entry per page"):
+        generate_candidates(
+            "profile", "format", signature, geometries, [Marker(0, "Q1", (10, 10, 20, 20))]
+        )
+
+
+def test_marker_reader_ignores_non_square_annotations(tmp_path: Path) -> None:
+    path = tmp_path / "text-annotation.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    writer.add_annotation(page_number=0, annotation=Text(rect=(10, 10, 20, 20), text="Q1"))
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    markers, _, _ = read_markers(path)
+    assert markers == []
+
+
+def _shrink(bbox: NormalizedBBox, delta: float) -> tuple[float, float, float, float]:
+    return (bbox.x0, bbox.y0, bbox.x1 - delta, bbox.y1)
