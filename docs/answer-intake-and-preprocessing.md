@@ -393,3 +393,63 @@ app-data/
   伝播していた。`AnswerIntakePage.initState()` は `listTests()` を
   try/catch 無しで呼ぶため、マウント中にクラッシュしていた。`async` を付けて
   Dart に throw を Future のエラーとして捕捉させる。
+
+## 15. 3回目のレビュー指摘への対応
+
+- **ページジオメトリ検証前のラスタライズ（重大）**: `submission_intake.py` は
+  ページ数チェック後、`pdf_engine.render_page_png` で実際に PNG へ描画する前に
+  そのページの `page_geometry()`（`displayed_width`/`displayed_height`、回転を
+  考慮した表示寸法）を取得し、`domain/pdf_intake.py::validate_render_dimensions`
+  へ通す。悪意ある/破損した `MediaBox`/`CropBox` が極端に大きい寸法を宣言する
+  PDF は、実際に高解像度ラスタライズしてメモリを枯渇させる前に
+  `PdfPageTooLargeError` として拒否される。`IntakeLimits` に
+  `max_render_dimension_px`（既定 20,000px、片辺の上限）と
+  `max_render_pixels`（既定 40,000,000px、面積の上限）を追加し、
+  `RENDER_SCALE` 適用後の実ラスタライズ寸法で判定する。
+  `test_page_with_an_absurd_declared_size_is_rejected_before_rendering`
+  （縦横 1,000,000pt の宣言を含む 439 バイトの PDF）で検証する。
+- **multipart フレーミング分のマージンを ASGI 層に確保**: `MaxBodySizeMiddleware`
+  に渡す上限は `IntakeLimits.max_size_bytes` そのままではなく、
+  `_MULTIPART_OVERHEAD_BYTES`（64KiB、boundary・各パートのヘッダ・
+  `student_label` フィールドなどの分）を上乗せした値にする。ファイル本体は
+  `max_size_bytes` ちょうどでも、multipart のフレーミングを含めたリクエスト
+  総量はそれよりわずかに大きくなるため、上乗せが無いと正当なアップロードが
+  ASGI 層で 413 として弾かれていた（ファイル本体側の上限は
+  `_read_upload_within_limit` が別途 `max_size_bytes` で厳密に見る）。
+  `test_create_submission_tolerates_multipart_overhead_near_the_limit` で、
+  上限ぎりぎりのファイルパートを含むリクエストが 413 にならないことを固定する。
+- **リトライのアトミックな claim**: 同じエラー状態の submission に対する
+  再取込は、`find_by_content_hash` で「既存あり・エラー状態」と判定した後、
+  実際に処理を始めるまでの間に別のリクエストが先に同じ submission を
+  掴んでいる可能性がある（読んでから書く、ではレースに勝てない）。
+  `SubmissionRepository.claim_for_retry` を追加し、
+  `UPDATE ... WHERE state = 'error'` の単一の条件付き UPDATE で
+  `error → unprocessed` を移す。`_write_submission` はこの呼び出しが
+  `False`（＝他のリクエストが先に掴んだ）を返したら
+  `SubmissionRetryConflictError` を送出し、`transactional_operation` の
+  ロールバックでこのリクエストが加えたステージ済みファイル・状態変更を
+  破棄する。API 層では `409 Conflict`（`DuplicateSubmissionError` と同様の
+  扱い）にマップする。`SqlAlchemySubmissionRepository.claim_for_retry` は
+  生 SQL の `UPDATE` がセッションの identity map を更新しないため、
+  呼び出し後に対象行を明示的に `session.refresh()` して以降の
+  `session.get()` が古い状態を返さないようにする。
+  リポジトリ層で成功/失敗/2 者競合の 3 パターン、統合テストで
+  `intake_submission()` 越しの競合を検証する
+  （`test_claim_for_retry_*`、`test_concurrent_retry_is_reported_as_a_race_loss`）。
+- **暗黙の一時データルートを確実に片付ける**: `create_app()` に `data_root` を
+  渡さない呼び出し（テスト/簡易起動）は、以前は `tempfile.mkdtemp()` 相当の
+  ディレクトリを作りっぱなしにしていた。`tempfile.TemporaryDirectory` を使い、
+  `atexit.register(scratch.cleanup)` でプロセス終了時に確実に削除する。
+- **アップロード中は入力全体を固定**: `AnswerIntakePage` は 2 回目の対応で
+  テストピッカーのみアップロード中に無効化していたが、ファイル選択ボタンと
+  生徒ラベルの `TextField` は操作可能なままだった。両方とも `_isSubmitting`
+  の間は無効化する
+  （`test: 'the file picker button and student-label field are disabled
+while an upload is in flight'`）。
+- **file picker 完了後の `mounted` チェック**: `_pickFile()` は
+  `await widget.pickFile()` の直後、`picked == null` を見る前に
+  `if (!mounted) return;` を追加した。ネイティブのファイル選択ダイアログが
+  開いている間に画面を離れると、その後の `setState` が破棄済みウィジェットに
+  対して呼ばれてクラッシュしていた
+  （`test: 'disposing the page while a file pick is still pending does not
+throw'`）。
