@@ -7,7 +7,8 @@ GitHub Issue [#12](https://github.com/HIKARU0627/Auto-Scoring/issues/12)（親
 
 ## 結論（先に）
 
-- **座標往復は一致する。** 縦横・回転（0/90/180/270）・ページサイズ差・CropBox イン
+- **座標往復は一致する。** 縦横・回転（0/90/180/270）・ページサイズ差・非ゼロ原点の
+  MediaBox・CropBox イン
   セットを含む全 fixture で、正規化座標の往復誤差は最大 **0.0005**（合意許容誤差
   0.004 の 1/8）。render scale（DPI/zoom）には依存しない。
 - **PDF エンジンは pypdfium2 + pypdf を採用**する。PyMuPDF はライセンス判断者の承認
@@ -46,14 +47,15 @@ uv run python poc/issue_12_pdf_coordinates/report.py
 
 ## fixture と test point
 
-| fixture                    | MediaBox pt | /Rotate        | CropBox              |
-| -------------------------- | ----------- | -------------- | -------------------- |
-| a4-portrait                | 595×842     | 0              | full page            |
-| a4-rotate-90 / -180 / -270 | 595×842     | 90 / 180 / 270 | full page            |
-| a4-landscape               | 842×595     | 0              | full page            |
-| letter-portrait            | 612×792     | 0              | full page            |
-| a4-cropbox-inset           | 595×842     | 0              | `[30, 40, 565, 800]` |
-| a4-cropbox-inset-rotate-90 | 595×842     | 90             | `[30, 40, 565, 800]` |
+| fixture                    | MediaBox pt             | /Rotate        | CropBox              |
+| -------------------------- | ----------------------- | -------------- | -------------------- |
+| a4-portrait                | `[0, 0, 595, 842]`      | 0              | full page            |
+| a4-rotate-90 / -180 / -270 | `[0, 0, 595, 842]`      | 90 / 180 / 270 | full page            |
+| a4-landscape               | `[0, 0, 842, 595]`      | 0              | full page            |
+| letter-portrait            | `[0, 0, 612, 792]`      | 0              | full page            |
+| a4-mediabox-offset         | `[100, 200, 695, 1042]` | 0              | full page            |
+| a4-cropbox-inset           | `[0, 0, 595, 842]`      | 0              | `[30, 40, 565, 800]` |
+| a4-cropbox-inset-rotate-90 | `[0, 0, 595, 842]`      | 90             | `[30, 40, 565, 800]` |
 
 各 fixture に正規化座標 `(0.12,0.15) (0.50,0.50) (0.90,0.25) (0.25,0.88)
 (0.82,0.80)` を打つ。四隅の非対称な点で、軸の取り違え・回転漏れ・鏡像化を検出できる。
@@ -67,12 +69,13 @@ uv run python poc/issue_12_pdf_coordinates/report.py
   ラスタライズと中心丸めの実誤差は約 5e-4。軸取り違えなら約 0.5 ずれるため、両者の
   間に十分収まる閾値。回帰テスト `_TOLERANCE` と `report.py` で共有。
 
-実測サマリ（全 40 ケース、全 PASS）:
+実測サマリ（全 45 ケース、全 PASS）:
 
 | 観点                                      | 最大絶対誤差（正規化）                                  |
 | ----------------------------------------- | ------------------------------------------------------- |
 | 回転なし（portrait / landscape / letter） | 0.0004                                                  |
 | 回転 90 / 180 / 270                       | 0.0005                                                  |
+| 非ゼロ原点の MediaBox                     | 0.0004                                                  |
 | CropBox インセット（回転あり・なし）      | 0.0005                                                  |
 | render scale 1.0 / 2.0 / 3.5 の相互差     | < 0.004（`test_result_is_independent_of_render_scale`） |
 
@@ -129,7 +132,7 @@ PoC 固有で残すもの（回帰テストに不要な比較コードは書い�
 - **`pdfrx` ウィジェットオーバーレイ**の配置（パン／ズームジェスチャ、ヒットテスト）は
   UI レイヤの課題で本 PoC の対象外。`pdfrx` はオーバーレイを pdfium のページ寸法・
   左上原点で配置するため、本 PoC が検証した raster 座標と同一基準になる。
-- 依存 `pillow` / `pypdf` / `pypdfium2` は現状 `backend` の dev 依存グループ。MVP の
-  PDF 機能 Issue で `project.dependencies` へ昇格する。
-- 本 fixture は合成 PDF。実答案 PDF 特有の構造（注釈レイヤ、UserUnit、非ゼロ原点
-  MediaBox）は PoC 4／実装時に確認する。
+- 採用adapterが実行時に使う `pypdf` / `pypdfium2` は `backend` の project 依存、証跡生成
+  だけに使う `pillow` は dev 依存に分離した。
+- 本 fixture は合成 PDF。実答案 PDF 特有の構造（注釈レイヤ、UserUnit）は PoC 4／実装時に
+  確認する。
