@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
-from tests.support import make_question, make_test
+from auto_scoring.domain.models import JobState
+from tests.support import make_job, make_question, make_submission, make_test
 
 _TOKEN = "dag-test-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
@@ -211,6 +212,40 @@ def test_reanalyzing_after_confirm_starts_a_new_version(
     assert versions[1]["status"] == "draft"
 
 
+def test_reanalyzing_a_pending_draft_starts_a_new_version_and_leaves_it_intact(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """A concurrent /analyze must never mutate a draft another client is reviewing."""
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+
+    first = _analyze(
+        client, overrides=[{"question_id": "q2", "prompt_text": "問1を参照して答えよ。"}]
+    )
+    assert first["version"] == 1
+    first_pairs = {(e["from_question_id"], e["to_question_id"]) for e in first["edges"]}
+    assert first_pairs == {("q1", "q2")}
+
+    # A different client re-analyzes (e.g. with corrected input) before anyone
+    # confirmed v1. This must land as a new version, not overwrite v1.
+    second = _analyze(client, overrides=[])
+    assert second["version"] == 2
+    assert second["edges"] == []
+
+    versions = client.get("/tests/test-1/dependency-graph/versions", headers=_AUTH).json()
+    v1 = next(v for v in versions if v["version"] == 1)
+    v1_pairs = {(e["from_question_id"], e["to_question_id"]) for e in v1["edges"]}
+    assert v1_pairs == {("q1", "q2")}, "v1 must still be exactly what the first analyze produced"
+
+    # Confirming v1 as originally reviewed still works, unaffected by v2.
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": first["edges"]},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+    assert confirm_response.json()["status"] == "confirmed"
+
+
 def test_stale_confirm_after_reanalyze_does_not_touch_the_new_version(
     client: TestClient, make_uow: UowFactory
 ) -> None:
@@ -235,6 +270,81 @@ def test_stale_confirm_after_reanalyze_does_not_touch_the_new_version(
         v2 = uow.dependency_graphs.get("test-1:v2")
     assert v2 is not None
     assert v2.status.value == "draft"
+
+
+# --------------------------------------------------------------------------- #
+# Job invalidation on a superseded confirmed version (Issue #26 acceptance:
+# "確定graphを変更した場合はversionを更新し、古いgraphで未完了の採点jobを
+# 無効化・再作成できるようにする")
+# --------------------------------------------------------------------------- #
+def test_confirming_a_new_version_cancels_and_requeues_stale_incomplete_jobs(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    # A job was queued for a submission against the just-confirmed v1.
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(
+                id="job-v1-blocked",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="q1",
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    # The test's questions change; a human re-analyzes and confirms v2.
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        # The stale v1 job is cancelled -- never left dangling as "still
+        # incomplete" against a graph version nobody can act on anymore.
+        old_job = uow.jobs.get("job-v1-blocked")
+        assert old_job is not None
+        assert old_job.state is JobState.CANCELLED
+
+        assert uow.jobs.list_incomplete_for_stale_versions("test-1", current_version=2) == []
+
+        # A fresh replacement was queued against the new version, in the same
+        # transaction as the confirmation.
+        queued = uow.jobs.list_by_state(JobState.QUEUED)
+        replacement = next(job for job in queued if job.id != old_job.id)
+        assert replacement.dependency_graph_version == 2
+        assert replacement.submission_id == old_job.submission_id
+        assert replacement.kind == old_job.kind
+        assert replacement.attempts == 0
+        assert replacement.blocked_on_question_id is None
+
+
+def test_confirming_when_nothing_is_stale_creates_no_extra_jobs(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert response.status_code == 200
+
+    with make_uow() as uow:
+        assert uow.jobs.list_by_state(JobState.QUEUED) == []
+        assert uow.jobs.list_by_state(JobState.CANCELLED) == []
 
 
 def test_confirming_unknown_version_is_not_found(client: TestClient, make_uow: UowFactory) -> None:

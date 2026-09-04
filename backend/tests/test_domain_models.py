@@ -20,6 +20,7 @@ from auto_scoring.domain.models import (
     SubmissionState,
     ensure_job_transition,
     ensure_submission_transition,
+    reissue_job_for_graph_version,
 )
 from tests.support import (
     at,
@@ -88,6 +89,56 @@ def test_job_transition_counts_a_run_attempt() -> None:
 def test_job_terminal_state_is_final() -> None:
     with pytest.raises(InvalidStateTransition):
         ensure_job_transition(JobState.SUCCEEDED, JobState.QUEUED)
+
+
+def test_job_rejects_non_positive_dependency_graph_version() -> None:
+    with pytest.raises(DomainError):
+        make_job(dependency_graph_version=0)
+
+
+def test_reissue_job_for_graph_version_cancels_and_recreates() -> None:
+    """Issue #26: an incomplete job tied to a superseded confirmed graph
+    version is cancelled and replaced with a fresh one queued against the
+    new version.
+    """
+    stale = make_job(
+        state=JobState.BLOCKED,
+        blocked_on_question_id="q-1",
+        dependency_graph_version=1,
+        attempts=2,
+        last_error="waiting",
+    )
+
+    cancelled, replacement = reissue_job_for_graph_version(
+        stale, new_version=2, new_id="job-2", at=at(10)
+    )
+
+    assert cancelled.id == stale.id
+    assert cancelled.state is JobState.CANCELLED
+    assert cancelled.last_error is not None and "version 2" in cancelled.last_error
+    assert cancelled.updated_at == at(10)
+
+    assert replacement.id == "job-2"
+    assert replacement.state is JobState.QUEUED
+    assert replacement.attempts == 0
+    assert replacement.last_error is None
+    assert replacement.blocked_on_question_id is None
+    assert replacement.dependency_graph_version == 2
+    assert replacement.kind == stale.kind
+    assert replacement.submission_id == stale.submission_id
+    assert replacement.question_id == stale.question_id
+    assert replacement.created_at == at(10)
+
+
+@pytest.mark.parametrize("running_state", [JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED])
+def test_reissue_job_for_graph_version_accepts_every_incomplete_state(
+    running_state: JobState,
+) -> None:
+    stale = make_job(state=running_state, dependency_graph_version=1)
+    cancelled, _replacement = reissue_job_for_graph_version(
+        stale, new_version=2, new_id="job-2", at=at(1)
+    )
+    assert cancelled.state is JobState.CANCELLED
 
 
 def test_grade_result_has_no_mutating_api() -> None:

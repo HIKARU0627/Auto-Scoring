@@ -55,6 +55,17 @@ class ReferenceHeuristicDependencyAnalyzer:
                 if part
             )
             if not text:
+                # No prompt/model-answer/rubric text to analyze at all. This
+                # is not "no dependency" -- it is "cannot tell" -- so it must
+                # surface as unresolved, or a human could confirm an
+                # unreviewed "independent" verdict that was never actually
+                # analyzed (Issue #26: 分析不能を「依存なし」と推測しない).
+                unresolved.append(
+                    UnresolvedQuestion(
+                        question_id=question.question_id,
+                        reason="問題文/模範解答/採点基準のテキストが無く、依存関係を分析できません",
+                    )
+                )
                 continue
 
             matched_signal = next((phrase for phrase in _SIGNAL_PHRASES if phrase in text), None)

@@ -70,13 +70,18 @@ def test_saving_the_same_version_twice_replaces_the_draft_in_place(seeded: UowFa
         uow.commit()
 
     with seeded() as uow:
-        uow.dependency_graphs.save(_draft(edges=[]))  # regenerated candidates: no edges this time
+        uow.dependency_graphs.save(
+            _draft(edges=[], created_at=at(5))
+        )  # regenerated candidates: no edges this time
         uow.commit()
 
     with seeded() as uow:
         loaded = uow.dependency_graphs.get("test-1:v1")
         assert loaded is not None
         assert loaded.edges == ()
+        # The row's own timestamp moves with the content it now holds -- a
+        # GET right after this save must not report the first save's time.
+        assert loaded.created_at == at(5)
         assert len(uow.dependency_graphs.list_versions("test-1")) == 1
 
 

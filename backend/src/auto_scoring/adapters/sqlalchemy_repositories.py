@@ -281,6 +281,20 @@ class SqlAlchemyJobRepository:
         )
         return [m.job_from_row(row) for row in rows]
 
+    def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
+        rows = self._session.scalars(
+            select(JobRow)
+            .join(SubmissionRow, JobRow.submission_id == SubmissionRow.id)
+            .where(
+                SubmissionRow.test_id == test_id,
+                JobRow.dependency_graph_version.is_not(None),
+                JobRow.dependency_graph_version != current_version,
+                JobRow.state.in_([JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED]),
+            )
+            .order_by(JobRow.created_at)
+        )
+        return [m.job_from_row(row) for row in rows]
+
 
 class SqlAlchemyDependencyGraphRepository:
     def __init__(self, session: Session) -> None:
@@ -324,6 +338,7 @@ class SqlAlchemyDependencyGraphRepository:
         existing.status = graph.status
         existing.question_ids = sorted(graph.question_ids)
         existing.unresolved = [u.to_dict() for u in graph.unresolved]
+        existing.created_at = graph.created_at
         existing.confirmed_at = graph.confirmed_at
         _, children = m.dependency_graph_rows(graph)
         for child in children:

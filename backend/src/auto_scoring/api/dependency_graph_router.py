@@ -10,22 +10,25 @@ settings screen) will call to show/edit/confirm a test's dependency graph.
 Endpoints (mounted under `/tests/{test_id}/dependency-graph`, all behind the
 sidecar's bearer-token auth):
 
-* ``POST /analyze`` -- (re)generate candidates for the current version. If the
-  latest saved version is still DRAFT it is replaced in place; if it is
-  CONFIRMED (or there is none yet) a new version is started.
+* ``POST /analyze`` -- generate candidates as a brand-new version, always.
+  Never updates an existing (even still-DRAFT) version in place: a client
+  reviewing an older draft must keep seeing exactly what it fetched, so a
+  concurrent re-analysis cannot silently change what that client's `/confirm`
+  would apply (see `confirm` below).
 * ``GET  ``          -- the latest version, with its parallel-execution layers.
 * ``GET  /versions``  -- every version, oldest first (Issue #26: 古いgraphの
   参照を保つ -- see docs/dependency-graph.md).
 * ``POST /confirm``   -- human review step: replace the reviewed version's
   edges with the human-reviewed set and lock it. The request pins the exact
   version it reviewed; 404/409 if that version does not exist or is already
-  confirmed (e.g. a concurrent confirm + re-analyze moved past it).
+  confirmed.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -42,6 +45,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
     UnresolvedQuestion,
 )
+from auto_scoring.domain.models import reissue_job_for_graph_version
 
 
 def _now() -> datetime:
@@ -229,12 +233,17 @@ def build_dependency_graph_router(
         return infos
 
     def _next_version(uow: SqlAlchemyUnitOfWork, test_id: str) -> int:
+        """Always the next integer -- analyze() never reuses an existing version.
+
+        Reusing the latest version while it was still DRAFT used to let a
+        concurrent `/analyze` silently rewrite the exact draft another client
+        was reviewing, so that client's later `/confirm` (pinned to that
+        version) would apply its stale-reviewed edges to content it never
+        saw. Every analysis is its own immutable version instead; an older
+        draft nobody confirmed is simply superseded, never mutated.
+        """
         latest = uow.dependency_graphs.get_latest(test_id)
-        if latest is None:
-            return 1
-        if latest.status is DependencyGraphStatus.DRAFT:
-            return latest.version
-        return latest.version + 1
+        return latest.version + 1 if latest is not None else 1
 
     @router.post("/analyze", response_model=DependencyGraphResponse)
     def analyze(
@@ -321,6 +330,17 @@ def build_dependency_graph_router(
             raise HTTPException(422, detail=str(error)) from error
 
         uow.dependency_graphs.save(confirmed)
+
+        # Issue #26 acceptance: confirming a new version must invalidate and
+        # recreate any still-incomplete job left over from a superseded one,
+        # in the same transaction as the confirmation itself.
+        for stale_job in uow.jobs.list_incomplete_for_stale_versions(test_id, confirmed.version):
+            cancelled, replacement = reissue_job_for_graph_version(
+                stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
+            )
+            uow.jobs.save(cancelled)
+            uow.jobs.add(replacement)
+
         uow.commit()
         return DependencyGraphResponse.from_domain(confirmed)
 

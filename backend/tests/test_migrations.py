@@ -38,7 +38,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log"} <= _tables(db_url)
-    assert current_revision(db_url) == "0003"
+    assert current_revision(db_url) == "0004"
 
 
 def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
@@ -48,7 +48,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
-    assert current_revision(db_url) == "0003"
+    assert current_revision(db_url) == "0004"
 
 
 def test_downgrade_walks_back_to_base(db_url: str) -> None:
@@ -141,6 +141,66 @@ def test_state_check_constraints_reject_unknown_values(db_url: str, bad_insert: 
         engine.dispose()
 
 
+def test_confirmed_dependency_graph_row_requires_empty_unresolved(db_url: str) -> None:
+    """DB-level mirror of `DependencyGraph.__post_init__`'s CONFIRMED invariant."""
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        bad_graph = text(
+            "INSERT INTO dependency_graphs "
+            "(id, test_id, version, status, question_ids, unresolved, created_at, confirmed_at) "
+            "VALUES ('t:v1', 't', 1, 'confirmed', '[\"q1\"]', "
+            '\'[{"question_id": "q1", "reason": "x"}]\', \'2026-01-01\', \'2026-01-01\')'
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(bad_graph)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_job_dependency_graph_version_must_be_positive(db_url: str) -> None:
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO submissions "
+                "(id, test_id, source_pdf_path, state, created_at) "
+                "VALUES ('sub', 't', 'submissions/sub/source.pdf', 'unprocessed', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        bad_job = text(
+            "INSERT INTO jobs "
+            "(id, kind, submission_id, state, attempts, max_attempts, "
+            "dependency_graph_version, created_at, updated_at) "
+            "VALUES ('job', 'grading', 'sub', 'queued', 0, 3, 0, '2026-01-01', '2026-01-01')"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(bad_job)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
 def test_migration_file_paths_exist() -> None:
     versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
     names = {p.name for p in versions.glob("*.py")}
@@ -148,4 +208,5 @@ def test_migration_file_paths_exist() -> None:
         "0001_initial_schema.py",
         "0002_operation_log.py",
         "0003_dependency_graph.py",
+        "0004_job_dependency_graph_version.py",
     } <= names

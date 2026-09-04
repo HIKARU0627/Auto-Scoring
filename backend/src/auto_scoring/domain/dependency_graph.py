@@ -164,6 +164,61 @@ def _duplicate_pairs(edges: Sequence[DependencyEdge]) -> list[tuple[str, str]]:
     return dupes
 
 
+def _strongly_connected_components(
+    nodes: Sequence[str], adjacency: Mapping[str, Sequence[str]]
+) -> list[list[str]]:
+    """Tarjan's SCC algorithm, restricted to `nodes` (edges leaving `nodes` are ignored)."""
+    allowed = set(nodes)
+    index_of: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    components: list[list[str]] = []
+    counter = 0
+
+    for start in nodes:
+        if start in index_of:
+            continue
+        # Iterative DFS (explicit work stack) so a long chain can't blow the
+        # Python call stack.
+        work: list[tuple[str, int]] = [(start, 0)]
+        while work:
+            node, next_edge = work[-1]
+            if next_edge == 0:
+                index_of[node] = counter
+                lowlink[node] = counter
+                counter += 1
+                stack.append(node)
+                on_stack.add(node)
+
+            neighbors = [n for n in adjacency.get(node, ()) if n in allowed]
+            if next_edge < len(neighbors):
+                work[-1] = (node, next_edge + 1)
+                neighbor = neighbors[next_edge]
+                if neighbor not in index_of:
+                    work.append((neighbor, 0))
+                elif neighbor in on_stack:
+                    lowlink[node] = min(lowlink[node], index_of[neighbor])
+                continue
+
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                lowlink[parent] = min(lowlink[parent], lowlink[node])
+
+            if lowlink[node] == index_of[node]:
+                component: list[str] = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    component.append(member)
+                    if member == node:
+                        break
+                components.append(component)
+
+    return components
+
+
 def _kahn_layers(
     question_ids: frozenset[str], edges: Sequence[DependencyEdge]
 ) -> tuple[tuple[str, ...], ...]:
@@ -172,8 +227,7 @@ def _kahn_layers(
     Each layer holds every question whose prerequisites are all in an earlier
     layer, so independent questions always land in the same layer (Issue #26:
     "依存なしの全設問は同じ実行層となり、不要な直列化を行わない"). Raises
-    :class:`CycleDetectedError` -- naming the leftover ids -- if the edge set is
-    not a DAG.
+    :class:`CycleDetectedError` if the edge set is not a DAG.
     """
     adjacency: dict[str, list[str]] = {qid: [] for qid in question_ids}
     remaining_in_degree: dict[str, int] = dict.fromkeys(question_ids, 0)
@@ -188,8 +242,20 @@ def _kahn_layers(
             qid for qid in question_ids if qid not in placed and remaining_in_degree[qid] == 0
         )
         if not layer:
-            cycle_nodes = tuple(sorted(qid for qid in question_ids if qid not in placed))
-            raise CycleDetectedError(cycle_nodes)
+            # Kahn's algorithm getting stuck means some remaining node is on a
+            # cycle -- but not every remaining node necessarily is: a node
+            # merely *downstream* of a cycle (e.g. q3 after q1<->q2, with
+            # q2 -> q3) never reaches in-degree 0 either, yet it is not itself
+            # part of the loop. Report only the nodes actually in a cycle
+            # (SCCs of size > 1 within the stuck subgraph).
+            stuck = sorted(qid for qid in question_ids if qid not in placed)
+            cyclic = {
+                qid
+                for component in _strongly_connected_components(stuck, adjacency)
+                if len(component) > 1
+                for qid in component
+            }
+            raise CycleDetectedError(tuple(sorted(cyclic)) or tuple(stuck))
         placed.update(layer)
         for qid in layer:
             for neighbor in adjacency[qid]:
@@ -252,6 +318,12 @@ class DependencyGraph:
         if self.status is DependencyGraphStatus.CONFIRMED:
             if self.confirmed_at is None:
                 raise DependencyGraphError("a confirmed graph must record confirmed_at")
+            if self.unresolved:
+                raise DependencyGraphError(
+                    "a confirmed graph cannot have unresolved questions -- "
+                    "every ambiguity must be resolved (as an edge or explicitly not) "
+                    "before confirming"
+                )
         elif self.confirmed_at is not None:
             raise DependencyGraphError("a draft graph cannot have confirmed_at set")
 

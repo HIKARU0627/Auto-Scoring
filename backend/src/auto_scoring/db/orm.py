@@ -250,8 +250,13 @@ class JobRow(Base):
         ),
         CheckConstraint("attempts >= 0", name="ck_jobs_attempts_non_negative"),
         CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
+        CheckConstraint(
+            "dependency_graph_version IS NULL OR dependency_graph_version >= 1",
+            name="ck_jobs_dependency_graph_version_positive",
+        ),
         Index("ix_jobs_state", "state"),
         Index("ix_jobs_submission_id", "submission_id"),
+        Index("ix_jobs_dependency_graph_version", "dependency_graph_version"),
     )
 
     id: Mapped[str] = _pk()
@@ -269,6 +274,11 @@ class JobRow(Base):
     blocked_on_question_id: Mapped[str | None] = mapped_column(
         ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
     )
+    #: The confirmed DependencyGraph version this job was queued against
+    #: (Issue #26). No FK: dependency_graphs is keyed by (test_id, version),
+    #: not by version alone, so this stays a plain int matched against
+    #: DependencyGraphRepository.list_incomplete_for_stale_versions.
+    dependency_graph_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
@@ -290,6 +300,13 @@ class DependencyGraphRow(Base):
         CheckConstraint("version >= 1", name="ck_dependency_graphs_version_positive"),
         CheckConstraint(
             "status IN ('draft', 'confirmed')", name="ck_dependency_graphs_status_valid"
+        ),
+        # Mirrors DependencyGraph.__post_init__: a confirmed graph can never
+        # carry unresolved questions, checked here too so a row written
+        # outside the domain layer (repair, import) can't slip past it.
+        CheckConstraint(
+            "status != 'confirmed' OR json_array_length(unresolved) = 0",
+            name="ck_dependency_graphs_confirmed_has_no_unresolved",
         ),
         Index("ix_dependency_graphs_test_id", "test_id"),
     )

@@ -177,6 +177,62 @@ def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
         uow.jobs.save(make_job(state=JobState.SUCCEEDED))
 
 
+def test_list_incomplete_for_stale_versions_filters_correctly(seeded: UowFactory) -> None:
+    """Only QUEUED/RUNNING/BLOCKED jobs tagged with a *different* graph
+    version count as stale (Issue #26); untagged and up-to-date/terminal jobs
+    do not.
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(id="job-stale-queued", state=JobState.QUEUED, dependency_graph_version=1)
+        )
+        uow.jobs.add(
+            make_job(id="job-stale-blocked", state=JobState.BLOCKED, dependency_graph_version=1)
+        )
+        uow.jobs.add(make_job(id="job-current", state=JobState.QUEUED, dependency_graph_version=2))
+        uow.jobs.add(
+            make_job(id="job-no-version", state=JobState.QUEUED, dependency_graph_version=None)
+        )
+        uow.jobs.add(make_job(id="job-done", state=JobState.SUCCEEDED, dependency_graph_version=1))
+        uow.commit()
+
+    with seeded() as uow:
+        stale = uow.jobs.list_incomplete_for_stale_versions("test-1", current_version=2)
+    assert {job.id for job in stale} == {"job-stale-queued", "job-stale-blocked"}
+
+
+def test_list_incomplete_for_stale_versions_is_scoped_to_the_test(make_uow: UowFactory) -> None:
+    with make_uow() as uow:
+        uow.tests.add(make_test(id="test-1"))
+        uow.tests.add(make_test(id="test-2", name="別テスト"))
+        uow.questions.add(make_question(id="q-1", test_id="test-1"))
+        uow.questions.add(make_question(id="q-2", test_id="test-2"))
+        uow.submissions.add(make_submission(id="sub-1", test_id="test-1"))
+        uow.submissions.add(make_submission(id="sub-2", test_id="test-2"))
+        uow.jobs.add(
+            make_job(
+                id="job-test-1",
+                submission_id="sub-1",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.jobs.add(
+            make_job(
+                id="job-test-2",
+                submission_id="sub-2",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    with make_uow() as uow:
+        stale = uow.jobs.list_incomplete_for_stale_versions("test-1", current_version=2)
+    assert {job.id for job in stale} == {"job-test-1"}
+
+
 def test_orphan_row_is_rejected_by_foreign_key(make_uow: UowFactory) -> None:
     with pytest.raises(IntegrityError), make_uow() as uow:
         uow.questions.add(make_question(test_id="does-not-exist"))

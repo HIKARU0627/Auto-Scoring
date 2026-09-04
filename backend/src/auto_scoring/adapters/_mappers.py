@@ -344,6 +344,7 @@ def job_to_row(job: Job) -> JobRow:
         max_attempts=job.max_attempts,
         last_error=job.last_error,
         blocked_on_question_id=job.blocked_on_question_id,
+        dependency_graph_version=job.dependency_graph_version,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -360,6 +361,7 @@ def job_from_row(row: JobRow) -> Job:
         max_attempts=row.max_attempts,
         last_error=row.last_error,
         blocked_on_question_id=row.blocked_on_question_id,
+        dependency_graph_version=row.dependency_graph_version,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

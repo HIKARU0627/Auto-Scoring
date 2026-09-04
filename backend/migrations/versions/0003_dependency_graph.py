@@ -46,6 +46,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status IN ('draft', 'confirmed')", name="ck_dependency_graphs_status_valid"
         ),
+        sa.CheckConstraint(
+            "status != 'confirmed' OR json_array_length(unresolved) = 0",
+            name="ck_dependency_graphs_confirmed_has_no_unresolved",
+        ),
     )
     op.create_index("ix_dependency_graphs_test_id", "dependency_graphs", ["test_id"])
 

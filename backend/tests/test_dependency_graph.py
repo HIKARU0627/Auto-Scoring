@@ -114,6 +114,16 @@ def test_cycle_is_rejected_and_names_the_offending_questions() -> None:
     assert set(excinfo.value.cycle_question_ids) == {"q1", "q2", "q3"}
 
 
+def test_cycle_report_excludes_nodes_merely_downstream_of_it() -> None:
+    """q1 <-> q2 is the cycle; q3 only depends on q2 and is not part of it."""
+    with pytest.raises(CycleDetectedError) as excinfo:
+        _draft(
+            ["q1", "q2", "q3"],
+            edges=[_edge("q1", "q2"), _edge("q2", "q1"), _edge("q2", "q3")],
+        )
+    assert set(excinfo.value.cycle_question_ids) == {"q1", "q2"}
+
+
 def test_duplicate_edge_is_rejected() -> None:
     with pytest.raises(DuplicateEdgeError) as excinfo:
         _draft(["q1", "q2"], edges=[_edge("q1", "q2"), _edge("q1", "q2", rationale="別の根拠")])
@@ -168,6 +178,28 @@ def test_confirmed_graph_that_still_has_a_cycle_is_rejected() -> None:
     draft = _draft(["q1", "q2"])
     with pytest.raises(CycleDetectedError):
         draft.confirm(edges=[_edge("q1", "q2"), _edge("q2", "q1")], confirmed_at=CONFIRMED_AT)
+
+
+def test_confirmed_graph_cannot_carry_unresolved_questions() -> None:
+    """Even built directly (not via `confirm`), CONFIRMED + unresolved is invalid.
+
+    `confirm()` itself always clears `unresolved`, so this guards the
+    constructor/`from_dict` path against a corrupted or hand-built row that
+    would let `can_start_submission_processing` see a CONFIRMED graph whose
+    ambiguity was never actually resolved.
+    """
+    with pytest.raises(DependencyGraphError):
+        DependencyGraph(
+            id="dg-1",
+            test_id="test-1",
+            version=1,
+            question_ids=frozenset({"q1", "q2"}),
+            edges=(),
+            unresolved=(UnresolvedQuestion(question_id="q2", reason="根拠不足"),),
+            status=DependencyGraphStatus.CONFIRMED,
+            created_at=CREATED_AT,
+            confirmed_at=CONFIRMED_AT,
+        )
 
 
 # --------------------------------------------------------------------------- #

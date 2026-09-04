@@ -33,20 +33,54 @@ Issue本文は「graphはテストプロファイル単位で分析・確認・v
 ### バージョンと不変性
 
 - `DependencyGraph.version` はテストごとに1から始まる整数。
-- 同じバージョンがDRAFTの間は、再分析・人間の修正で **上書き**できる
-  （`DependencyGraphRepository.save` が `(test_id, version)` でupsertする）。
+- `POST /analyze` は呼ぶたびに必ず新しいバージョンを作る（`_next_version` は
+  常に `latest.version + 1`）。以前は「latestがDRAFTなら同じバージョンへ上書き」
+  していたが、これだとクライアントAがv1をレビュー中に別クライアントが
+  `/analyze` を呼ぶとv1の中身が黙って書き換わり、Aが一度も見ていない内容を
+  `POST /confirm {version: 1}` が確定させてしまうレースがあった（レビュー
+  指摘）。分析のたびに独立した不変のバージョンを作ることで、誰かがレビュー
+  中のバージョンは後続の `/analyze` から絶対に影響を受けない。
+  `DependencyGraphRepository.save` 自体は引き続き `(test_id, version)` で
+  upsertできる（同一バージョンへの再書き込みも技術的には可能）が、この
+  upsert能力を使うのは repository 層のテストのみで、API層はもう使わない。
 - CONFIRMEDになったバージョンは不変。`save` は既存のCONFIRMED行を上書きしよう
   とすると `DependencyGraphError` を送出する。確定後にグラフを変更したい場合は
   新しい（より大きい）バージョンをDRAFTから始める。
+- `POST /confirm` はリクエストに `version` を必須で含み、その正確なバージョン
+  だけを対象にする（`latest` を暗黙に対象にしない）。指定バージョンが存在し
+  ないか既にCONFIRMEDなら404/409を返す -- 「latestを対象にする」実装だと、
+  別クライアントの確定後に始まった新しいDRAFTへ、レビュー済みでない古い
+  レビューが誤って適用されてしまうため。
 - 受入条件「確定graphを変更した場合はversionを更新し、古いgraphで未完了の採点
-  jobを無効化・再作成できるようにする」のうち、**実装した範囲**: バージョン履歴
-  は `list_versions` で全件保持・参照でき、各バージョンは不変なので「どのバー
-  ジョンで生成されたjobか」を後から判別する土台になる。**未実装（次のスコープ）**:
-  `Job`（`auto_scoring.domain.models.Job`）はまだどの依存グラフ・バージョンから
-  生成されたかを保持しておらず、`JobRepository` もテスト単位の検索を持たない
-  ため、「古いバージョンに紐づくjobを自動的に無効化・再作成する」処理は未実装。
-  これはジョブキュー実装Issue（simplified-design-specification.md §29）で
-  `Job` にグラフバージョンの参照を追加してから対応する。
+  jobを無効化・再作成できるようにする」は実装済み: `Job` に
+  `dependency_graph_version`（そのjobがどの確定バージョンに対して発行された
+  か）を追加し、`JobRepository.list_incomplete_for_stale_versions(test_id,
+current_version)` で「今の確定バージョンと異なるバージョンに紐づく、まだ
+  QUEUED/RUNNING/BLOCKEDのjob」を検索できるようにした。`POST /confirm` は
+  グラフを保存した同じトランザクション内でこの一覧を取得し、各jobを
+  `reissue_job_for_graph_version`（`auto_scoring.domain.models`）で
+  CANCELLEDへ遷移させつつ、新バージョン向けの新しいQUEUED jobを作成して
+  `uow.commit()` する。実際のjob生成（confirmed graphから初回のjobを作る
+  スケジューラ）はこのIssueの対象外のまま（後続のジョブキューIssue）だが、
+  「既存jobがある場合に無効化・再作成する」動作自体は完全にテスト済み
+  （`test_dependency_graph_api.py` の「Job invalidation」節）。
+
+### 追加の不変条件（レビュー指摘で強化）
+
+- `DependencyGraph.__post_init__` は「CONFIRMEDなのに `unresolved` が空でな
+  い」状態も拒否する。`confirm()` は常に `unresolved=()` にして遷移するため
+  通常経路では起きないが、`from_dict`/直接構築で壊れた行を読み込んだ場合に
+  `can_start_submission_processing` が誤って `True` を返さないようDBレベル
+  （`ck_dependency_graphs_confirmed_has_no_unresolved`、SQLiteの
+  `json_array_length`使用）でも二重に保護する。
+- cycle検出はKahnのアルゴリズムが行き詰まった残りノード全部ではなく、
+  Tarjanの強連結成分（SCC）でサイクルに実際に参加しているノードだけを
+  `CycleDetectedError.cycle_question_ids` に含める。例えば `q1<->q2` の
+  サイクルに `q2 -> q3` が伸びている場合、Kahnだけでは `q3` も未配置のまま
+  残るが、`q3` はサイクルの下流に過ぎないため報告対象から除く。
+- ヒューリスティックanalyzerは、問題文・模範解答・採点基準のいずれも無い
+  設問を「独立」と黙って判定せず、`unresolved` として報告する（分析材料が
+  無いこと自体を「分析できていない」として扱う）。
 
 ### Submission処理のゲート
 
@@ -97,13 +131,27 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
 ## 検証
 
 - `backend/tests/test_dependency_graph.py`: validation（self-loop / 不明ID /
-  cycle / 重複edge）、topological layer計算、confirmライフサイクル、
+  cycle / 重複edge / CONFIRMED+unresolvedの拒否）、topological layer計算、
+  cycle報告がサイクル本体だけに絞られること、confirmライフサイクル、
   `can_start_submission_processing` のunit test。
 - `backend/tests/test_heuristic_dependency_analyzer.py`: ヒューリスティック
-  analyzerのunit test（参照検出、要確認判定）。
+  analyzerのunit test（参照検出、要確認判定、テキスト無し設問の要確認化、
+  「問1」が「問10」に誤マッチしないこと）。
+- `backend/tests/test_domain_models.py`: `Job.dependency_graph_version` の
+  検証、`reissue_job_for_graph_version`（cancel + 再作成）のunit test。
 - `backend/tests/test_dependency_graph_repository.py`: 実SQLiteに対する
-  upsert・バージョン不変性・`get_latest`/`list_versions` のintegration test。
+  upsert・バージョン不変性（`created_at` を含む）・`get_latest`/`list_versions`
+  のintegration test。
+- `backend/tests/test_sqlalchemy_repositories.py`:
+  `JobRepository.list_incomplete_for_stale_versions` がテスト単位・状態・
+  バージョンで正しく絞り込むことのintegration test。
+- `backend/tests/test_migrations.py`: 新しいCHECK制約（confirmed graphの
+  unresolved空検証、jobのdependency_graph_version正値検証）をDBレベルで
+  拒否できることの確認。
 - `backend/tests/test_dependency_graph_api.py`: 全独立・完全直列（複数ページ
   またぎ含む）・分岐/合流・cycle拒否の4fixtureをAPI経由（実SQLite）で検証、
-  および「AI候補の誤りを人間がconfirmで修正し、確定graphだけが
-  `can_start_submission_processing` を満たす」シナリオ。
+  「AI候補の誤りを人間がconfirmで修正し、確定graphだけが
+  `can_start_submission_processing` を満たす」シナリオ、レビュー中の draft を
+  別クライアントの再analyzeが書き換えないこと、**確定graphのバージョンが進んだ
+  ときに古いバージョンの未完了jobがCANCELLEDへ遷移し、新バージョン向けの
+  jobが同一トランザクションで作られること**（Issue #26 受入条件そのもの）。

@@ -498,6 +498,11 @@ class Job:
     max_attempts: int = 3
     last_error: str | None = None
     blocked_on_question_id: str | None = None
+    #: The confirmed `DependencyGraph` version this job was queued against, if
+    #: any (Issue #26). Lets a later confirm supersede a still-incomplete job
+    #: whose dependency structure has since changed -- see
+    #: `reissue_job_for_graph_version`.
+    dependency_graph_version: int | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("Job.id", self.id)
@@ -506,6 +511,8 @@ class Job:
             raise DomainError("Job.max_attempts must be >= 1")
         if self.attempts < 0:
             raise DomainError("Job.attempts must be >= 0")
+        if self.dependency_graph_version is not None and self.dependency_graph_version < 1:
+            raise DomainError("Job.dependency_graph_version must be >= 1")
 
     def transitioned_to(
         self,
@@ -529,3 +536,38 @@ class Job:
             blocked_on_question_id=blocked_on_question_id,
             updated_at=updated_at,
         )
+
+
+def reissue_job_for_graph_version(
+    job: Job, *, new_version: int, new_id: str, at: datetime
+) -> tuple[Job, Job]:
+    """Cancel a job that was queued against a now-superseded dependency-graph
+    version, and return a fresh replacement queued against ``new_version``
+    (Issue #26 acceptance: "確定graphを変更した場合は…古いgraphで未完了の採点
+    jobを無効化・再作成できるようにする").
+
+    The replacement keeps the same ``kind``/``submission_id``/``question_id``
+    but resets attempts and ``blocked_on_question_id`` -- the new graph's
+    dependency structure may place it differently, so nothing about *how* it
+    was blocked before is assumed to still hold. The caller is expected to
+    persist both returned jobs in the same transaction as the graph
+    confirmation that triggered this (see
+    ``auto_scoring.api.dependency_graph_router``).
+    """
+    cancelled = job.transitioned_to(
+        JobState.CANCELLED,
+        updated_at=at,
+        error=f"stale: dependency graph advanced to version {new_version}",
+    )
+    replacement = replace(
+        job,
+        id=new_id,
+        state=JobState.QUEUED,
+        attempts=0,
+        last_error=None,
+        blocked_on_question_id=None,
+        dependency_graph_version=new_version,
+        created_at=at,
+        updated_at=at,
+    )
+    return cancelled, replacement

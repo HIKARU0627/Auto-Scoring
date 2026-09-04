@@ -20,6 +20,15 @@ def test_independent_questions_produce_no_edges_or_unresolved() -> None:
     assert result.unresolved == ()
 
 
+def test_a_question_with_no_text_at_all_is_unresolved_not_silently_independent() -> None:
+    """No prompt/model-answer/rubric text means "cannot tell", not "no dependency"."""
+    questions = [QuestionInfo(question_id="q1", number="問1", page=1)]
+    result = _ANALYZER.analyze(questions)
+    assert result.edges == ()
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].question_id == "q1"
+
+
 def test_explicit_reference_with_signal_phrase_becomes_a_high_confidence_edge() -> None:
     questions = [
         QuestionInfo(

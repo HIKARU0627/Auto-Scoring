@@ -94,6 +94,15 @@ class JobRepository(Protocol):
     def save(self, job: Job) -> None: ...
     def list_by_state(self, state: JobState) -> list[Job]: ...
 
+    def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
+        """Jobs for ``test_id`` still QUEUED/RUNNING/BLOCKED against a
+        `dependency_graph_version` other than ``current_version`` (Issue #26:
+        superseded-graph job invalidation). Jobs never tagged with a graph
+        version (``dependency_graph_version is None``) are not "stale" by
+        this definition and are excluded.
+        """
+        ...
+
 
 class DependencyGraphRepository(Protocol):
     """One test's dependency-graph versions (Issue #26).
