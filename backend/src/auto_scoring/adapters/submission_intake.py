@@ -30,6 +30,8 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
+
 from auto_scoring.adapters.atomic import StagedFiles, transactional_operation
 from auto_scoring.adapters.image.opencv_preprocessor import crop_normalized_rect
 from auto_scoring.adapters.local_storage import LocalFileStore
@@ -150,95 +152,163 @@ def intake_submission(
             for question in questions:
                 questions_by_page.setdefault(question.page, []).append(question)
 
-        with transactional_operation(uow, store) as staged:
-            # One page's raw raster lives at a time -- not the whole PDF's worth --
-            # so a large page count doesn't multiply the sidecar's memory use.
-            answer_images: list[AnswerImage] = []
-            for page in range(1, page_count + 1):
-                raw_png = pdf_engine.render_page_png(scratch_path, page - 1, scale=RENDER_SCALE)
-                preview = image_preprocessor.preprocess_page(raw_png)
-                staged.add(store.submission_page_image_path(submission_id, page), preview.png_bytes)
-                for question in questions_by_page.get(page, ()):
-                    answer_images.append(
-                        _build_answer_image(
-                            question=question,
-                            raw_png=raw_png,
-                            submission_id=submission_id,
-                            store=store,
-                            staged=staged,
-                            id_factory=id_factory,
-                            now=now,
-                        )
-                    )
-
-            if not questions:
-                submission_state = SubmissionState.NEEDS_REVIEW
-                submission_review_reason = "no_questions_registered"
-            elif coverage_issue is not None:
-                submission_state = SubmissionState.NEEDS_REVIEW
-                submission_review_reason = coverage_issue
-            else:
-                any_needs_review = any(
-                    image.status is AnswerImageStatus.NEEDS_REVIEW for image in answer_images
-                )
-                if any_needs_review:
-                    submission_state = SubmissionState.NEEDS_REVIEW
-                    flagged = ",".join(
-                        image.question_id
-                        for image in answer_images
-                        if image.status is AnswerImageStatus.NEEDS_REVIEW
-                    )
-                    submission_review_reason = f"answer_area_undefined:{flagged}"
-                else:
-                    submission_state = SubmissionState.AI_PROCESSED
-                    submission_review_reason = None
-
-            source_pdf_full_path = store.submission_source_pdf_path(submission_id)
-            source_pdf_path = str(source_pdf_full_path.relative_to(store.root)).replace("\\", "/")
-            # A retry reuses the exact bytes already on disk for this submission (the
-            # reintake decision only allows RETRY_EXISTING for an identical content
-            # hash) -- Issue #17's reintake policy never rewrites the source PDF, so
-            # only a brand-new submission stages one.
-            if not is_retry:
-                staged.add(source_pdf_full_path, data)
-
+        try:
+            final, answer_images = _write_submission(
+                uow=uow,
+                store=store,
+                pdf_engine=pdf_engine,
+                image_preprocessor=image_preprocessor,
+                scratch_path=scratch_path,
+                submission_id=submission_id,
+                test_id=test_id,
+                content_hash=content_hash,
+                page_count=page_count,
+                data=data,
+                student_label=student_label,
+                filename=filename,
+                is_retry=is_retry,
+                questions=questions,
+                questions_by_page=questions_by_page,
+                coverage_issue=coverage_issue,
+                id_factory=id_factory,
+                now=now,
+            )
+        except IntegrityError as exc:
+            # Two concurrent requests can both see "no existing submission for
+            # this hash" from find_by_content_hash above and both reach this
+            # insert; the DB's own uq_submissions_test_content_hash constraint
+            # (not just that earlier lookup) is what actually prevents two
+            # rows, so the loser here reports the winner as a normal duplicate
+            # rather than a raw DB error.
             if is_retry:
-                uow.submissions.mark_intake_outcome(
-                    submission_id, SubmissionState.UNPROCESSED, None
-                )
-            else:
-                new_submission = Submission(
-                    id=submission_id,
-                    test_id=test_id,
-                    source_pdf_path=source_pdf_path,
-                    source_pdf_sha256=content_hash,
-                    page_count=page_count,
-                    created_at=now,
-                    state=SubmissionState.UNPROCESSED,
-                    student_label=student_label,
-                    original_filename=filename,
-                )
-                uow.submissions.add(new_submission)
-
-            # UNPROCESSED -> AI_PROCESSING -> AI_PROCESSED: image preprocessing/answer-area
-            # extraction *is* the "AI_PROCESSING" phase of the state machine (§25) -- OCR/AI
-            # grading (a later issue) continues from AI_PROCESSED. Only then can the state
-            # machine reach NEEDS_REVIEW, so a coverage/extraction problem takes one more hop.
-            uow.submissions.mark_intake_outcome(submission_id, SubmissionState.AI_PROCESSING, None)
-            uow.submissions.mark_intake_outcome(submission_id, SubmissionState.AI_PROCESSED, None)
-            if submission_state is SubmissionState.NEEDS_REVIEW:
-                uow.submissions.mark_intake_outcome(
-                    submission_id, SubmissionState.NEEDS_REVIEW, submission_review_reason
-                )
-
-            uow.answer_images.replace_for_submission(submission_id, answer_images)
-
-            final = uow.submissions.get(submission_id)
-            assert final is not None
+                raise
+            winner = uow.submissions.find_by_content_hash(test_id, content_hash)
+            if winner is None:
+                raise
+            raise DuplicateSubmissionError(winner.id) from exc
 
         return SubmissionIntakeResult(
             submission=final, answer_images=tuple(answer_images), is_retry=is_retry
         )
+
+
+def _write_submission(
+    *,
+    uow: SqlAlchemyUnitOfWork,
+    store: LocalFileStore,
+    pdf_engine: PdfEngine,
+    image_preprocessor: ImagePreprocessor,
+    scratch_path: Path,
+    submission_id: str,
+    test_id: str,
+    content_hash: str,
+    page_count: int,
+    data: bytes,
+    student_label: str | None,
+    filename: str,
+    is_retry: bool,
+    questions: list[Question],
+    questions_by_page: dict[int, list[Question]],
+    coverage_issue: str | None,
+    id_factory: Callable[[], str],
+    now: datetime,
+) -> tuple[Submission, list[AnswerImage]]:
+    """Render every page, extract answer images, and commit the submission row.
+
+    Split out of :func:`intake_submission` so its caller can wrap exactly this
+    (the part that touches the DB and staged files) in one try/except for the
+    concurrent-insert race -- see the ``IntegrityError`` handling there.
+    """
+    with transactional_operation(uow, store) as staged:
+        # One page's raw raster lives at a time -- not the whole PDF's worth --
+        # so a large page count doesn't multiply the sidecar's memory use.
+        answer_images: list[AnswerImage] = []
+        for page in range(1, page_count + 1):
+            raw_png = pdf_engine.render_page_png(scratch_path, page - 1, scale=RENDER_SCALE)
+            preview = image_preprocessor.preprocess_page(raw_png)
+            staged.add(store.submission_page_image_path(submission_id, page), preview.png_bytes)
+            for question in questions_by_page.get(page, ()):
+                answer_images.append(
+                    _build_answer_image(
+                        question=question,
+                        raw_png=raw_png,
+                        submission_id=submission_id,
+                        store=store,
+                        staged=staged,
+                        id_factory=id_factory,
+                        now=now,
+                    )
+                )
+
+        if not questions:
+            submission_state = SubmissionState.NEEDS_REVIEW
+            submission_review_reason = "no_questions_registered"
+        elif coverage_issue is not None:
+            submission_state = SubmissionState.NEEDS_REVIEW
+            submission_review_reason = coverage_issue
+        else:
+            any_needs_review = any(
+                image.status is AnswerImageStatus.NEEDS_REVIEW for image in answer_images
+            )
+            if any_needs_review:
+                submission_state = SubmissionState.NEEDS_REVIEW
+                flagged = ",".join(
+                    image.question_id
+                    for image in answer_images
+                    if image.status is AnswerImageStatus.NEEDS_REVIEW
+                )
+                submission_review_reason = f"answer_area_undefined:{flagged}"
+            else:
+                submission_state = SubmissionState.AI_PROCESSED
+                submission_review_reason = None
+
+        source_pdf_full_path = store.submission_source_pdf_path(submission_id)
+        source_pdf_path = str(source_pdf_full_path.relative_to(store.root)).replace("\\", "/")
+        # A retry reuses the exact bytes already on disk for this submission (the
+        # reintake decision only allows RETRY_EXISTING for an identical content
+        # hash) -- Issue #17's reintake policy never rewrites the source PDF, so
+        # only a brand-new submission stages one.
+        if not is_retry:
+            staged.add(source_pdf_full_path, data)
+
+        if is_retry:
+            uow.submissions.mark_intake_outcome(submission_id, SubmissionState.UNPROCESSED, None)
+        else:
+            new_submission = Submission(
+                id=submission_id,
+                test_id=test_id,
+                source_pdf_path=source_pdf_path,
+                source_pdf_sha256=content_hash,
+                page_count=page_count,
+                created_at=now,
+                state=SubmissionState.UNPROCESSED,
+                student_label=student_label,
+                original_filename=filename,
+            )
+            # This is the statement a concurrent duplicate insert fails on --
+            # SqlAlchemySubmissionRepository.add() flushes immediately, so the
+            # uq_submissions_test_content_hash violation surfaces here, still
+            # inside transactional_operation's try/except (which rolls back and
+            # discards any staged files before re-raising).
+            uow.submissions.add(new_submission)
+
+        # UNPROCESSED -> AI_PROCESSING -> AI_PROCESSED: image preprocessing/answer-area
+        # extraction *is* the "AI_PROCESSING" phase of the state machine (§25) -- OCR/AI
+        # grading (a later issue) continues from AI_PROCESSED. Only then can the state
+        # machine reach NEEDS_REVIEW, so a coverage/extraction problem takes one more hop.
+        uow.submissions.mark_intake_outcome(submission_id, SubmissionState.AI_PROCESSING, None)
+        uow.submissions.mark_intake_outcome(submission_id, SubmissionState.AI_PROCESSED, None)
+        if submission_state is SubmissionState.NEEDS_REVIEW:
+            uow.submissions.mark_intake_outcome(
+                submission_id, SubmissionState.NEEDS_REVIEW, submission_review_reason
+            )
+
+        uow.answer_images.replace_for_submission(submission_id, answer_images)
+
+        final = uow.submissions.get(submission_id)
+        assert final is not None
+
+    return final, answer_images
 
 
 def _build_answer_image(

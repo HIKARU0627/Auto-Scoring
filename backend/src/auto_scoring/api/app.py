@@ -20,6 +20,7 @@ from auto_scoring.adapters.submission_intake import (
 )
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
+from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
@@ -133,6 +134,10 @@ def create_app(
     engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()
     limits = intake_limits or IntakeLimits()
+
+    # Rejects an over-limit request body at the ASGI stream boundary, before
+    # FastAPI's multipart parser buffers/spools it -- api/body_size_limit.py.
+    app.add_middleware(MaxBodySizeMiddleware, max_bytes=limits.max_size_bytes)
 
     repository = InMemoryScoreRepository()
     protected = APIRouter(dependencies=[Depends(require_token)])

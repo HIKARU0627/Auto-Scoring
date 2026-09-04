@@ -17,6 +17,7 @@ from pypdf import PdfWriter
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf import PdfiumPypdfEngine
+from auto_scoring.adapters.sqlalchemy_repositories import SqlAlchemySubmissionRepository
 from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
     intake_submission,
@@ -242,6 +243,71 @@ def test_duplicate_submission_is_rejected(
             data=data,
             limits=_LIMITS,
             now=at(seconds=1),
+        )
+    assert excinfo.value.existing_submission_id == first.submission.id
+
+    with make_uow() as uow:
+        assert len(uow.submissions.list_for_test("test-1")) == 1
+
+
+def test_concurrent_duplicate_insert_is_reported_as_a_race_loss(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two requests can both call find_by_content_hash before either commits
+    and both see "nothing here yet"; only the DB's own
+    uq_submissions_test_content_hash constraint (not that pre-check) actually
+    stops the second insert. Simulate the race by making exactly the first
+    find_by_content_hash call lie (report None even though a matching
+    submission already exists), forcing intake_submission down the
+    ACCEPT_NEW path until the real INSERT hits the unique constraint.
+    """
+    q1 = make_question(id="q-1", page=1, answer_area=NormalizedRect(x=0, y=0, width=1, height=1))
+    _seed_test_with_questions(make_uow, questions=[q1])
+    data = _pdf_bytes(pages=1)
+
+    with make_uow() as uow:
+        first = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    real_find = SqlAlchemySubmissionRepository.find_by_content_hash
+    call_count = {"n": 0}
+
+    def lying_once_then_real(
+        self: SqlAlchemySubmissionRepository, test_id: str, source_pdf_sha256: str
+    ) -> object:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return None
+        return real_find(self, test_id, source_pdf_sha256)
+
+    monkeypatch.setattr(
+        SqlAlchemySubmissionRepository, "find_by_content_hash", lying_once_then_real
+    )
+
+    with make_uow() as uow, pytest.raises(DuplicateSubmissionError) as excinfo:
+        intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a-race.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(seconds=5),
         )
     assert excinfo.value.existing_submission_id == first.submission.id
 
