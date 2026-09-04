@@ -220,6 +220,13 @@ AIによるレイアウト推定を無条件で採用しない。
 
 画像処理にはOpenCVを使用する。
 
+> 取込・保存・前処理の実装はIssue #17で行った。PDFの検証（拡張子・MIME・magic bytes・
+> size上限・page数・暗号化・破損）、同一PDFの再取込方針、回答欄切り出しは
+> 「テストプロファイルとの位置合わせ」ではなく`Question.answer_area`
+> （Issue #11で導入済みの設問ごとの正規化座標）を直接使う実装とした。
+> デスキュー等の前処理はプレビュー画像にのみ適用し、切り出し座標には影響しない。
+> 詳細・未決事項は[`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md)。
+
 ---
 
 # 8. 手書き文字認識
@@ -593,6 +600,12 @@ Material Design 3を利用する。
 ## 16.4 答案取込画面
 
 生徒答案PDFを追加する。
+
+> Issue #17でFlutter側の画面（`app/lib/features/answer_intake/`）とAPI
+> （`POST /tests/{test_id}/submissions`ほか）を実装した。取込方式は
+> business-rules-and-evaluation-data.md §2 (4) の確定（1PDF = 1生徒、生徒識別は
+> 人間が手動割当）に従う。詳細は
+> [`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md) §9・§11。
 
 ### 取り込み方法
 

@@ -1,0 +1,290 @@
+# 答案 PDF 取込・保存・画像前処理
+
+GitHub Issue #17（親: #3）の実装記録。対象は生徒答案 PDF の取込 API・保存・
+画像前処理のみ（Issue #17「対象外」: OCR・AI 採点・並列 queue は後続 Issue）。
+依存元は #10（認証付きサイドカー API）・#11（MVP データモデル・ローカル保存）・
+#15（複数レイアウト PoC）で、いずれもマージ済みの実装をそのまま利用する。
+
+食い違う場合の優先順位は他の決定書と同じ：本書はここで扱う範囲について
+[`simplified-design-specification.md`](./simplified-design-specification.md) §7・§16.4・§23〜25、
+[`business-rules-and-evaluation-data.md`](./business-rules-and-evaluation-data.md) §2 (3)(4)、
+[`data-model-and-local-storage.md`](./data-model-and-local-storage.md) を具体化する。矛盾する場合は
+本書を優先し、同じ PR で上位ドキュメント側も更新する。
+
+## 1. 全体フロー
+
+```text
+POST /tests/{test_id}/submissions (multipart)
+        ↓
+検証（拡張子・宣言MIME・magic bytes・size上限） -- ここまではDB/fileに一切触れない
+        ↓
+一時ファイルへ書き込み（app-data外のscratch dir）
+        ↓
+PdfEngine.is_encrypted / page_count（破損・暗号化を検出）
+        ↓
+content hash（sha256）で再取込判定（§2）
+        ↓
+ページ網羅性チェック（§3、Testのquestionが要求するpageとPDFの実ページ数を比較）
+        ↓
+[網羅性OK] 設問ごとに answer_area で切り出し → OpenCV前処理したページ画像を保存
+[網羅性NG] 元PDFは保存するが設問切り出しはせず、ページプレビューのみ保存
+        ↓
+transactional_operation: DBコミット成功後にのみファイルを書き込む（Issue #11の資産をそのまま利用）
+```
+
+## 2. 同一 PDF の再取込方針（決定）
+
+Issue #17 受入条件「同一 PDF の再取込方針が決定表どおり動作し、元 PDF を変更しない」
+に対応する決定表。実装は `domain/submission_intake.py::decide_reintake`。
+
+| 既存 Submission の有無・状態                              | 判定               | 動作                                                                                                                                   |
+| --------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 同一 `(test_id, sha256)` の Submission が存在しない       | `ACCEPT_NEW`       | 新しい `submission_id` で通常どおり取込む                                                                                              |
+| 存在し、状態が `error`                                    | `RETRY_EXISTING`   | 同じ `submission_id` を再利用し、`error → unprocessed` を経て再度パイプラインを走らせる。元 PDF は同一バイト列なので再書込みは行わない |
+| 存在し、状態が `error` 以外（処理中・要確認・確認済み等） | `REJECT_DUPLICATE` | `409 Conflict` を返し、既存の `submission_id` を含める。DB/file への書込みは一切行わない                                               |
+
+判断の根拠：
+
+- 元 PDF は上書きしない（business-rules §2 (15)）ため、同一内容の再アップロードで
+  ファイルを書き直す理由がない。
+- 誤って同じファイルを 2 回投入した場合に重複 Submission が量産されるのを防ぐ。
+- 一方で、取込処理自体が失敗した（`error` 状態）場合の再試行は、同じファイルを
+  もう一度選んでアップロードするだけで成立してほしい（Flutter 側の「再試行」操作が
+  複雑にならないようにするため）。
+- 生徒を再割当てしたい・別ファイルで再提出したい場合は、内容（バイト列）が変われば
+  `sha256` が変わるため自動的に `ACCEPT_NEW` になる。古い誤 Submission は
+  Issue #11 で実装済みの一括削除機能（`purge_submission`）で人間が消す。
+
+## 3. ページ網羅性チェックと設問依存（スコープ決定）
+
+Issue #17 追加要件は「ページ欠落・重複・順序違いを検出し、dependency graph に
+必要な前提設問が欠ける答案を要確認にする」を求める。一方、設問間の依存関係を
+人間が確認して固定する「確定 DAG」は
+[`business-rules-and-evaluation-data.md`](./business-rules-and-evaluation-data.md) §4 で
+**テスト登録時に構築する**と規定されており、テスト登録画面・API はまだ実装されていない
+（本 Issue の対象外）。
+
+**決定**: 確定 DAG が存在しない現段階では、business-rules §4.5
+「確定 DAG が存在しないテスト…は逐次処理にフォールバックし、人間へ『依存関係が未確定』の
+警告を出す」の安全側を取り、次の粗い判定で代替する。
+
+- `Test` に登録済みの `Question.page` の集合を「期待ページ集合」とする。
+- 取込んだ PDF の実ページ数と比較する（`domain/submission_intake.py::PageCoverage`）。
+  - 期待ページ集合の最大値より実ページ数が小さい → `missing_pages`（欠落）
+  - 期待ページ集合の最大値より実ページ数が大きい → `extra_pages`（超過。重複スキャン等の
+    可能性がある兆候として扱う）
+- どちらか一方でも該当すれば、**Submission 全体**を `needs_review` にする
+  （設問単位の部分成功にはしない）。個別ページの内容比較（実際にどの設問が
+  どのページに写っているか）は OCR/レイアウト解析が必要でこの Issue の範囲外のため、
+  「ページ数が合わない」ことを機械的に検出できる範囲に留める。
+- 期待ページ集合が空（そのテストにまだ Question が登録されていない）場合も
+  同様に Submission 全体を `needs_review`（`no_questions_registered`）とする。
+
+**既知の制限（未解決のまま明記する）**: ページ数が一致していても、スキャン順序の
+入れ替わり・同一ページの重複スキャン（ページ数は変わらない形の誤り）は、実際の
+ページ内容を判定できないため本 Issue では検出できない。実際の確定 DAG 機能と、
+ページ内容の同一性判定（OCR/レイアウト解析）は、テスト登録 Issue と OCR Issue が
+実装され次第、本チェックを置き換える。
+
+**「前提設問を含むページが欠落した状態では AI 採点を開始しない」の満たし方**:
+OCR・AI 採点のジョブ生成自体がまだ実装されていない（Issue #17 対象外）ため、
+`needs_review` になった Submission に対して何もジョブを作らないことで自動的に
+満たされる。将来の OCR/AI 採点 Issue は、`needs_review` の Submission に対して
+ジョブを起票しない、という制約を継続する必要がある。
+
+## 4. Submission 状態機械への当てはめ
+
+`domain/models.py` の状態機械（Issue #11、simplified-design-spec.md §25）を変更せずに
+そのまま使う。画像前処理・設問切り出しは「AI が答案を処理する」パイプラインの
+最初の段階とみなし、次のように当てはめる。
+
+```text
+unprocessed → ai_processing → ai_processed → (問題なければそのまま。後続のOCR/AI採点Issueが引き継ぐ)
+                                              ↘ needs_review（ページ網羅性NG、または
+                                                 answer_area未定義の設問がある場合）
+```
+
+`needs_review` は `ai_processed` からしか到達できない（状態機械の制約）ため、
+取込パイプラインは問題の有無に関わらず必ず `ai_processed` を経由してから
+`needs_review` へ遷移する。`review_reason` に理由の文字列を記録する
+（`missing_pages:2`、`no_questions_registered`、`answer_area_undefined:<question-id,...>` 等）。
+
+再取込（retry）は `error → unprocessed → ai_processing → ai_processed → (…)` を
+同一トランザクション内で連続して適用する。
+
+## 5. 検証項目（PDF 妥当性）
+
+`domain/pdf_intake.py::IntakeLimits`（既定値。呼び出し側で上書き可能）:
+
+| 項目               | 既定値                            | 検証内容                                                              |
+| ------------------ | --------------------------------- | --------------------------------------------------------------------- |
+| 拡張子             | `.pdf` 固定                       | 大文字小文字を無視。`/`・`\`・`..` 等パス区切りを含むファイル名を拒否 |
+| 宣言 MIME          | `application/pdf`（未指定は許容） | それ以外の宣言は拒否                                                  |
+| magic bytes        | `%PDF-`                           | 拡張子・MIME 詐称を検出                                               |
+| ファイルサイズ上限 | 50 MiB                            | 超過は `413`                                                          |
+| ページ数上限       | 100 ページ                        | 超過・0 ページは `400`                                                |
+| 暗号化             | 拒否                              | `pypdf` の `is_encrypted` で判定。ユーザーへパスワード入力は求めない  |
+| 破損               | 拒否                              | `pypdf` の parse 例外を `PdfCorruptedError` に正規化                  |
+
+これらの検証はすべて **DB・`app-data/` への書込みより前**に行う
+（`adapters/submission_intake.py::intake_submission`）。失敗時は例外を投げて
+戻るだけで、中途半端な行やファイルは残らない
+（`adapters/atomic.py::transactional_operation` の保証を利用）。
+
+## 6. 画像前処理の設計判断
+
+simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡大縮小補正・
+ノイズ低減・コントラスト調整」を OpenCV（`opencv-python-headless`）で実装する
+（`adapters/image/opencv_preprocessor.py`）。
+
+- **拡大縮小補正**: `PdfEngine.render_page_png(..., scale=2.0)` で全ページを
+  常に同じ scale（pixel/pt）でラスタライズすることで満たす。ページごとに
+  後処理でリサイズし直す必要がない。
+- **傾き補正・回転補正**: `cv2.minAreaRect` によるインク画素の外接矩形角度推定 →
+  0.3°未満は補正しない（スキャンノイズ扱い）、10°を超える推定は補正量をクリップする
+  （90/180/270度の意図的な回転は `PdfEngine` 側の `/Rotate` 処理で既に解決済みのため、
+  ここでの補正対象は数度単位のスキャン傾きのみ）。
+- **ノイズ低減**: `cv2.fastNlMeansDenoisingColored`。
+- **コントラスト調整**: LAB 色空間の L チャンネルへ CLAHE を適用（単純なヒストグラム
+  平坦化より色被りが起きにくい）。
+
+**この補正はプレビュー画像にのみ適用する。** 設問ごとの回答欄切り出しは、
+`PdfEngine.render_page_png` が返す未加工のラスタに対して `Question.answer_area`
+（0〜1 正規化座標、Issue #11 で既存）をそのまま乗じて行う
+（`adapters/image/opencv_preprocessor.py::crop_normalized_rect`）。デスキューは
+画像全体を回転させるため、回転角度を正規化座標へ逆伝播させない限り単純な
+矩形切り出しに使えない。往復変換の実装・検証コストに見合う効果が無い
+（プレビュー用の見た目改善が主目的であり、切り出し精度は `Question.answer_area`
+自体の正確さに依存する）ため、**意図的に**両者を分離した。将来 OCR
+の前処理として画像全体のデスキューが必要になった場合は、
+`domain/pdf_geometry.py` が採用した「四隅を変換してから外接矩形を取る」方式
+（PoC 3/4 で実績あり）を踏襲して再設計する。
+
+## 7. データモデルの追加（Issue #17）
+
+`docs/data-model-and-local-storage.md`（Issue #11）が定義した 9 Entity に加えて、
+以下を追加する（マイグレーション `0003_answer_intake`）。
+
+### `Submission` への追加カラム
+
+| カラム              | 型      | 用途                                                                 |
+| ------------------- | ------- | -------------------------------------------------------------------- |
+| `source_pdf_sha256` | String  | 再取込判定キー（§2）                                                 |
+| `page_count`        | Integer | 取込時に判明したページ数。以後 PDF を開き直さずに参照できる          |
+| `original_filename` | String? | 取込時のファイル名（識別情報に準じローカル限定。§2 (13) と同じ扱い） |
+| `review_reason`     | String? | `needs_review` になった理由（§3・§4）                                |
+
+### 新規 Entity: `AnswerImage`
+
+設問ごとに切り出した回答欄画像 1 件を表す（`submission_id` + `question_id` で一意）。
+
+| フィールド      | 型                     | 説明                                                          |
+| --------------- | ---------------------- | ------------------------------------------------------------- |
+| `id`            | str                    | 主キー                                                        |
+| `submission_id` | str (FK)               |                                                               |
+| `question_id`   | str (FK)               |                                                               |
+| `page`          | int                    | 1始まりページ番号（`Question.page` と一致）                   |
+| `image_path`    | str                    | `app-data/` からの相対パス                                    |
+| `status`        | `ok` \| `needs_review` | 切り出し成功可否（§6.2 の「回答欄検出失敗」に対応）           |
+| `reason`        | str?                   | `needs_review` のときのみ必須（例: `no_answer_area_defined`） |
+
+`Question.answer_area` が未設定（テスト登録がまだ回答欄を確定していない）場合は、
+`status=needs_review, reason="no_answer_area_defined"` とし、`image_path` は
+そのページの前処理済みプレビュー画像を指す（切り出せないので元画像をそのまま
+人間へ提示する、simplified-design-spec.md §24）。
+
+## 8. `app-data/` ファイルレイアウトの追加
+
+Issue #11 のレイアウトに、ページプレビューと設問画像を追加する。
+
+```text
+app-data/
+├─ submissions/<submission-id>/
+│   ├─ source.pdf                      # 既存（Issue #11）。書き換えない
+│   ├─ pages/page-<N>.png              # 前処理済みページプレビュー（1始まり）
+│   └─ questions/<question-id>.png     # 設問ごとの回答欄切り出し画像
+```
+
+`LocalFileStore`（Issue #11）に `submission_source_pdf_path` /
+`submission_page_image_path` / `submission_question_image_path` を追加し、
+パス生成・パストラバーサル防止（既存の `_ensure_within_root`）をそのまま再利用する。
+
+## 9. API
+
+`backend/src/auto_scoring/api/app.py`。すべて既存の Bearer 認証必須ルータ配下
+（`docs/sidecar-api.md` §2）。OpenAPI schema → Dart クライアントは
+`pnpm run openapi:generate` で再生成し、`app/packages/auto_scoring_api/` にコミットする
+（同 §4）。
+
+| メソッド・パス                      | 用途                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------- |
+| `GET /tests`                        | 答案取込画面（§16.4）のテスト選択に使う一覧                                  |
+| `POST /tests/{test_id}/submissions` | multipart（`file` + 任意 `student_label`）。本書の中心的な取込エンドポイント |
+| `GET /tests/{test_id}/submissions`  | 選択中テストの取込済み答案一覧（進捗表示に使う）                             |
+| `GET /submissions/{submission_id}`  | 1件の取込・処理状態を取得                                                    |
+
+エラーの返し方：
+
+| エラー                                       | HTTP status                   | body                                                              |
+| -------------------------------------------- | ----------------------------- | ----------------------------------------------------------------- |
+| ファイル形式・サイズ・ページ数・暗号化・破損 | `400`（サイズ超過のみ `413`） | `{"detail": "<理由>"}`                                            |
+| `test_id` が存在しない                       | `404`                         | `{"detail": "..."}`                                               |
+| 重複取込（§2 `REJECT_DUPLICATE`）            | `409`                         | `{"detail": {"message": "...", "existing_submission_id": "..."}}` |
+
+## 10. `app-data/` の実際の格納場所（未決事項）
+
+サイドカーの `--app-data-dir`（既定 `カレントディレクトリ/app-data`）が実データの
+格納先になる。Windows 配布時の実際のインストール先・`%LOCALAPPDATA%` 等の採用可否は
+`docs/technology-stack.md` §1.2 が「Windows 配布 Issue で決定する」としている範囲のままで、
+本 Issue では確定しない。実装・テストではこの CLI 引数で任意のディレクトリを指定できる
+ことのみを保証する。
+
+## 11. Flutter 側
+
+`app/lib/features/answer_intake/answer_intake_page.dart`（simplified-design-spec.md §16.4
+答案取込画面）。
+
+- テスト選択（`GET /tests`）→ PDF ファイル選択（`file_picker`）→ 任意の生徒ラベル入力 →
+  取込。
+- アップロード中は `LinearProgressIndicator` を表示（取込進捗）。
+- 失敗時はエラーバナー（アイコン+テキスト。色だけに依存しない）と「再試行」ボタンを表示し、
+  同じファイル・テスト・ラベルで再送する（取込エラー・再試行）。
+- 重複取込は `DuplicateSubmissionException` として区別し、既存の `submission_id` を
+  含む文言を表示する。
+- 生徒ラベル欄の Enter で取込を実行できる（`TextField.onSubmitted`）。取込ボタンは
+  通常のフォーカス移動・Enter/Space で操作できる（Flutter 標準の `FilledButton` の
+  挙動をそのまま利用）。
+- 取込済み答案一覧は状態ごとに異なるアイコン+日本語ラベルで表示し（§25 の状態機械の
+  値をそのまま反映）、`needs_review` の場合は `review_reason` も表示する。
+
+`core/app_dependencies.dart` に `listTests` / `listSubmissions` / `createSubmission` を
+関数注入の形で追加した（既存の `healthCheck` と同じスタイル）。実際のサイドカー
+プロセス監視・接続確立（`SidecarConnection` を実際に作る部分）はまだ実装されていない
+（`docs/technology-stack.md` §1.2 で「Windows 配布 Issue」に位置づけられている）ため、
+既定実装は `healthCheck` の `_stubHealthCheck` と同様に、正直に「未接続」を表す
+`SidecarErrorKind.unavailable` を返す。`SidecarApiClient` 自体は本 Issue で
+`listTests` / `listSubmissions` / `getSubmission` / `createSubmission` を実装済みで、
+接続確立後にそのまま使える。
+
+## 12. 検証（受入条件との対応）
+
+| Issue #17 受入条件・検証項目                                                    | 対応                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 単一/一括取込の採用方式で Submission が作成され、設問画像が profile と対応する  | `Question.answer_area`（Issue #11）をそのまま利用。`test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`                                                 |
+| 同一 PDF の再取込方針が決定表どおり動作し、元 PDF を変更しない                  | §2、`test_submission_intake_service.py::test_duplicate_submission_is_rejected` / `::test_retry_reuses_the_errored_submission`                                                                   |
+| 不正/暗号化/破損 PDF を安全に拒否し、中途半端な DB/file を残さない              | §5、`test_pdf_intake.py`、`test_submission_intake_service.py::test_encrypted_pdf_is_rejected_without_a_trace` 等                                                                                |
+| 生徒識別情報をログや外部通信へ出さない                                          | `original_filename`/`student_label` はローカル DB のみ。ログ出力コードなし（§28 の既存方針を継続）                                                                                              |
+| 複数 page/回転/破損/oversize/重複 PDF を含む integration test                   | `backend/tests/test_submission_intake_service.py`（複数ページ・欠落ページ）、`test_pdf_engine_intake.py`（暗号化・破損）、`test_pdf_intake.py`（oversize・不正拡張子）                          |
+| Flutter の取込進捗・エラー・再試行・keyboard/focus を確認する                   | `app/test/answer_intake_page_test.dart`                                                                                                                                                         |
+| 1 答案 3 ページ以上の fixture で全 Question が正しい page/question 順で関連付く | `test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`（2ページ）。3ページ以上は同じ経路（`_extract_answer_images` はページ数に依存しない実装）で成立する |
+| 前提設問を含むページが欠落した状態では AI 採点を開始しない                      | §3。`needs_review` の Submission に対してジョブを起票する経路が存在しない（Job/採点は Issue #17 対象外）                                                                                        |
+
+## 13. 未決事項・引き継ぎ
+
+- 確定 DAG（設問依存）の実装は business-rules §4 のとおりテスト登録 Issue に委ねる。
+  本書 §3 の粗い判定は、確定 DAG が実装されるまでの暫定であることを明記する。
+- ページの重複スキャン・順序入れ替わりの検出（内容ベース）は OCR/レイアウト解析
+  Issue の実装を待つ。
+- `app-data/` の実際のインストール先は Windows 配布 Issue で確定する（§10）。
+- OCR/AI 採点 Job の起票ロジックは、`needs_review` の Submission にジョブを
+  作らない制約を守って実装すること（§3）。
