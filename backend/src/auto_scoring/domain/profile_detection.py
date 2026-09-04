@@ -59,6 +59,13 @@ def unrecognized_tags(markers: Sequence[Marker]) -> list[str]:
     return sorted({marker.tag for marker in markers if classify_tag(marker.tag) is None})
 
 
+def requires_manual_fallback(markers: Sequence[Marker], profile: Profile) -> bool:
+    """Whether detection is incomplete enough that registration must stop for manual input."""
+    detected_kinds = {region.kind for region in profile.regions}
+    required_kinds = {RegionKind.QUESTION, RegionKind.ANSWER_AREA}
+    return bool(unrecognized_tags(markers)) or not required_kinds <= detected_kinds
+
+
 def _rect_to_bbox(rect_pt: RectPt, page: PageFormat) -> NormalizedBBox:
     x0, y0, x1, y1 = rect_pt
     left, right = sorted((x0, x1))
@@ -88,6 +95,8 @@ def generate_candidates(
         kind = classify_tag(marker.tag)
         if kind is None:
             continue
+        if not 0 <= marker.page_index < len(signature.pages):
+            raise ValueError(f"marker {marker.tag!r} references invalid page {marker.page_index}")
         page = signature.pages[marker.page_index]
         regions.append(
             Region(

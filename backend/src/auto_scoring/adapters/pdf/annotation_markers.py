@@ -1,10 +1,7 @@
-"""Reads tagged annotation rectangles from a PDF as `Marker`s.
+"""PoC-only reader for tagged square annotation rectangles.
 
-Stands in for a real text/vision extraction layer for this PoC (see
-`auto_scoring.domain.profile_detection`): each marker's tag and rectangle come
-straight from a PDF Square annotation's `/Contents` and `/Rect`, rather than
-from OCR or layout analysis. Only this module imports `pypdf` -- the domain
-layer stays library-free (see `AGENTS.md` "Architecture").
+This deterministic stand-in must be replaced by the real extraction adapter;
+see docs/poc-4-multi-layout-profiles.md.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from auto_scoring.domain.profile_detection import Marker
 
 
 def read_markers(pdf_path: Path) -> tuple[list[Marker], FormatSignature]:
-    """Return every tagged annotation in `pdf_path`, plus the document's format signature."""
+    """Return tagged square annotations and the document's simple format signature."""
     reader = PdfReader(pdf_path)
     pages = tuple(
         PageFormat(width_pt=float(page.mediabox.width), height_pt=float(page.mediabox.height))
@@ -29,6 +26,8 @@ def read_markers(pdf_path: Path) -> tuple[list[Marker], FormatSignature]:
     for page_index, page in enumerate(reader.pages):
         for annotation in page.get("/Annots", []):
             obj = annotation.get_object()
+            if obj.get("/Subtype") != "/Square":
+                continue
             tag = str(obj.get("/Contents", "")).strip()
             if not tag:
                 continue

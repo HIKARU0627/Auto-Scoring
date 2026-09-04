@@ -7,10 +7,10 @@ layout, and answer-area shape -- the dimensions Issue #15 asks to cover, and
 match the >=4 formats x >=5 answers evaluation-data target in
 `docs/business-rules-and-evaluation-data.md` §6.2. For each format:
 
-1. A "model answer" PDF carries all six marker kinds (question, answer area,
-   annotation area, score, rubric, model answer) as tagged PDF annotations --
-   this PoC's stand-in for a real text/vision extraction layer (see
-   `auto_scoring.domain.profile_detection`).
+1. A "model answer" PDF carries question, answer area, annotation area, and
+   model answer markers; a separate grading-manual PDF carries score and rubric
+   markers. Tagged PDF annotations stand in for a real text/vision extraction
+   layer (see `auto_scoring.domain.profile_detection`).
 2. `generate_candidates` turns those markers into an unconfirmed (DRAFT)
    profile. A simulated human correction nudges one region and confirms the
    rest, producing the CONFIRMED profile that alone may be reapplied.
@@ -35,15 +35,24 @@ from pathlib import Path
 
 import pytest
 from pypdf import PdfWriter
-from pypdf.annotations import Rectangle
+from pypdf.annotations import Rectangle, Text
 from pypdf.generic import NameObject, TextStringObject
 
 from auto_scoring.adapters.pdf import read_markers
-from auto_scoring.domain.profile import NormalizedBBox, PageFormat, Profile, Region, RegionKind
+from auto_scoring.domain.profile import (
+    FormatSignature,
+    NormalizedBBox,
+    PageFormat,
+    Profile,
+    Region,
+    RegionKind,
+)
 from auto_scoring.domain.profile_apply import FormatMismatchError, reapply_profile
 from auto_scoring.domain.profile_detection import (
+    Marker,
     RectPt,
     generate_candidates,
+    requires_manual_fallback,
     unrecognized_tags,
 )
 
@@ -84,10 +93,19 @@ def _jitter(annotations: Sequence[AnnotationSpec], dx: float, dy: float) -> list
 # Marker kinds a printed answer sheet cannot carry: they only exist on the
 # model-answer / grading-manual PDF the profile was generated from.
 _MODEL_ONLY_TAGS = ("SCORE", "RUBRIC", "MODEL_ANSWER")
+_GRADING_MANUAL_TAGS = ("SCORE", "RUBRIC")
 
 
 def _student_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
     return [item for item in annotations if item[1] not in _MODEL_ONLY_TAGS]
+
+
+def _model_answer_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] not in _GRADING_MANUAL_TAGS]
+
+
+def _grading_manual_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] in _GRADING_MANUAL_TAGS]
 
 
 @dataclass(frozen=True)
@@ -199,15 +217,21 @@ def test_profile_round_trip_reapplies_within_tolerance(
     fixture: FixtureFormat, tmp_path: Path
 ) -> None:
     model_path = tmp_path / "model.pdf"
-    _write_pdf(model_path, fixture.pages, fixture.model_annotations)
+    manual_path = tmp_path / "grading-manual.pdf"
+    _write_pdf(model_path, fixture.pages, _model_answer_markers(fixture.model_annotations))
+    _write_pdf(manual_path, fixture.pages, _grading_manual_markers(fixture.model_annotations))
 
     markers, signature = read_markers(model_path)
+    manual_markers, manual_signature = read_markers(manual_path)
+    assert signature.matches(manual_signature)
+    markers.extend(manual_markers)
     assert not unrecognized_tags(markers), "fixture uses only tags this PoC's detector recognizes"
 
     draft = generate_candidates("profile-1", fixture.format_id, signature, markers)
     # every candidate must start unconfirmed, whatever the marker says
     assert all(not region.confirmed for region in draft.regions)
     assert len(draft.regions) == len(fixture.model_annotations)
+    assert {region.kind for region in draft.regions} == set(RegionKind)
 
     # Simulate a human correction: nudge the first question's right edge, then confirm everything.
     # The correction is deliberately larger than _BBOX_TOLERANCE and must persist verbatim through
@@ -227,9 +251,7 @@ def test_profile_round_trip_reapplies_within_tolerance(
         _write_pdf(student_path, fixture.pages, _jitter(student_annotations, dx, dy))
 
         student_markers, student_signature = read_markers(student_path)
-        applied = reapply_profile(
-            confirmed, f"{fixture.format_id}-student-{copy_index}", student_signature
-        )
+        applied = reapply_profile(confirmed, fixture.format_id, student_signature)
         assert len(applied.regions) == len(confirmed.regions), "reapply must not drop any region"
 
         ground_truth = generate_candidates(
@@ -323,8 +345,43 @@ def test_hard_to_detect_format_falls_back_to_manual_region(tmp_path: Path) -> No
     _write_pdf(student_path, pages, freeform_annotation)
     _, student_signature = read_markers(student_path)
 
-    applied = reapply_profile(confirmed, "format-freeform-essay-student", student_signature)
+    assert requires_manual_fallback(markers, auto_profile)
+    applied = reapply_profile(confirmed, "format-freeform-essay", student_signature)
     assert len(applied.regions) == 2
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        (("Q1", "ANSWER_1"), False),
+        (("Q1", "ANSWER_1", "NOTES"), True),
+        (("Q1",), True),
+        (("ANSWER_1",), True),
+    ],
+)
+def test_manual_fallback_condition_is_explicit(tags: tuple[str, ...], expected: bool) -> None:
+    signature = FormatSignature(pages=(_A4_PORTRAIT,))
+    markers = [Marker(0, tag, (10.0, 10.0, 20.0, 20.0)) for tag in tags]
+    profile = generate_candidates("profile", "format", signature, markers)
+    assert requires_manual_fallback(markers, profile) is expected
+
+
+def test_candidate_generation_rejects_marker_outside_page_range() -> None:
+    signature = FormatSignature(pages=(_A4_PORTRAIT,))
+    with pytest.raises(ValueError, match="invalid page -1"):
+        generate_candidates("profile", "format", signature, [Marker(-1, "Q1", (10, 10, 20, 20))])
+
+
+def test_marker_reader_ignores_non_square_annotations(tmp_path: Path) -> None:
+    path = tmp_path / "text-annotation.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    writer.add_annotation(page_number=0, annotation=Text(rect=(10, 10, 20, 20), text="Q1"))
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+    markers, _ = read_markers(path)
+    assert markers == []
 
 
 def _shrink(bbox: NormalizedBBox, delta: float) -> tuple[float, float, float, float]:

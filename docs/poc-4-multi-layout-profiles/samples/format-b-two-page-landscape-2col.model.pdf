@@ -35,7 +35,7 @@ endobj
 >>
 /MediaBox [ 0.0 0.0 842 595 ]
 /Parent 2 0 R
-/Annots [ 11 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R ]
+/Annots [ 11 0 R 12 0 R 13 0 R 14 0 R ]
 >>
 endobj
 6 0 obj
@@ -105,30 +105,12 @@ endobj
 <<
 /Type /Annot
 /Subtype /Square
-/Rect [ 40 120 400 290 ]
-/Contents (RUBRIC)
-/P 5 0 R
->>
-endobj
-14 0 obj
-<<
-/Type /Annot
-/Subtype /Square
-/Rect [ 440 520 800 560 ]
-/Contents (SCORE)
-/P 5 0 R
->>
-endobj
-15 0 obj
-<<
-/Type /Annot
-/Subtype /Square
 /Rect [ 440 120 800 510 ]
 /Contents (MODEL\137ANSWER)
 /P 5 0 R
 >>
 endobj
-16 0 obj
+14 0 obj
 <<
 /Type /Annot
 /Subtype /Square
@@ -138,30 +120,28 @@ endobj
 >>
 endobj
 xref
-0 17
+0 15
 0000000000 65535 f 
 0000000015 00000 n 
 0000000054 00000 n 
 0000000119 00000 n 
 0000000168 00000 n 
 0000000305 00000 n 
-0000000453 00000 n 
-0000000553 00000 n 
-0000000662 00000 n 
-0000000763 00000 n 
-0000000873 00000 n 
-0000000975 00000 n 
-0000001076 00000 n 
-0000001186 00000 n 
-0000001291 00000 n 
-0000001396 00000 n 
-0000001511 00000 n 
+0000000439 00000 n 
+0000000539 00000 n 
+0000000648 00000 n 
+0000000749 00000 n 
+0000000859 00000 n 
+0000000961 00000 n 
+0000001062 00000 n 
+0000001172 00000 n 
+0000001287 00000 n 
 trailer
 <<
-/Size 17
+/Size 15
 /Root 3 0 R
 /Info 1 0 R
 >>
 startxref
-1613
+1389
 %%EOF

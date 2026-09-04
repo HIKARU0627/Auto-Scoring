@@ -45,13 +45,20 @@ def test_reapply_rejects_format_mismatch() -> None:
     draft = _draft_profile()
     confirmed = draft.confirm([replace(region, confirmed=True) for region in draft.regions])
     with pytest.raises(FormatMismatchError):
-        reapply_profile(confirmed, "target-1", _SIGNATURE_B)
+        reapply_profile(confirmed, "format-a", _SIGNATURE_B)
+
+
+def test_reapply_rejects_different_layout_with_same_page_dimensions() -> None:
+    draft = _draft_profile()
+    confirmed = draft.confirm([replace(region, confirmed=True) for region in draft.regions])
+    with pytest.raises(FormatMismatchError):
+        reapply_profile(confirmed, "format-d", _SIGNATURE_A)
 
 
 def test_reapply_succeeds_for_matching_confirmed_profile() -> None:
     draft = _draft_profile()
     confirmed = draft.confirm([replace(region, confirmed=True) for region in draft.regions])
-    applied = reapply_profile(confirmed, "target-1", _SIGNATURE_A)
+    applied = reapply_profile(confirmed, "format-a", _SIGNATURE_A)
     assert applied.source_profile_id == "p1"
-    assert applied.target_format_id == "target-1"
+    assert applied.target_format_id == "format-a"
     assert applied.regions == confirmed.regions

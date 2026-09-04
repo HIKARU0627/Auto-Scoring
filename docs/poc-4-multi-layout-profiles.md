@@ -17,10 +17,13 @@ GitHub Issue [#15](https://github.com/HIKARU0627/Auto-Scoring/issues/15)（親
 ## 結論（先に）
 
 - **プロファイルの往復再適用は成立する。** ページ数・向き・設問配置・回答欄形状が
-  異なる4形式（A/B/C/D、各形式 × 学生答案5部 = 20 fixture）で、保存した正規化座標は
-  許容誤差 **0.01**（実測最大 **0.0008**）内で答案へ再適用された
+  異なる4形式（A/B/C/D、各形式 × 学生答案5部 = 20 fixture）で、確認済みProfileの
+  正規化座標は許容誤差 **0.01**（実測最大 **0.0008**）内で答案へ再適用された
   （`docs/business-rules-and-evaluation-data.md` §6.2 の「4形式 × 各5答案以上」を
   満たす）。
+- **模範解答PDFと採点マニュアルPDFを別入力として候補生成できる。** 前者から
+  question / answer_area / annotation_area / model_answer、後者から score / rubric の
+  markerを読み、統合した候補を4形式で検証した。
 - **候補は必ず未確認（DRAFT）で保存され、人間の確認（`Profile.confirm`）を経ないと
   `reapply_profile` の対象にならない。** `Profile.from_candidates` は渡された
   region の `confirmed` を強制的に `False` にする（不正な入力でも候補が誤って
@@ -55,7 +58,8 @@ GitHub Issue [#15](https://github.com/HIKARU0627/Auto-Scoring/issues/15)（親
 
 - `reapply_profile(profile, target_format_id, target_signature, tolerance_pt)`
   - `profile.status != CONFIRMED` → `ProfileNotConfirmedError`
-  - `signature` 不一致（ページ数 or サイズが `tolerance_pt` 超） →
+  - `format_id` 不一致、または `signature` 不一致（ページ数 or サイズが
+    `tolerance_pt` 超） →
     `FormatMismatchError`
   - 一致すれば `AppliedProfile`（regionをそのまま束縛）を返す。
 
@@ -79,6 +83,9 @@ class Marker:
 `/Rect`（矩形）を `Marker` として読み出す — 実際のテキスト/画像検出エンジンが
 供給するはずの入力を、決定的で検証しやすい形で代替している。タグが既知パターンに
 一致しない場合、`unrecognized_tags` がそれを返す。
+`requires_manual_fallback` は未知タグが1件でもある場合、または question / answer_area
+のどちらかが欠ける場合に `True` を返し、登録処理を止めて手動指定へ進む判断を一箇所に
+固定する。
 
 ## repro command
 
@@ -102,16 +109,17 @@ uv run python poc/issue_15_multi_layout_profile/report.py
 | format-d-single-page-2x2-grid           | 1 (A4)                      | 縦   | 4問を2×2グリッド配置               | グリッドセルの回答欄＋設問ごとの小さな注釈欄 |
 | format-freeform-essay（手動fallback用） | 1 (A4)                      | 縦   | マーカーなし（自由記述の答案用紙） | 未定義（人間が指定）                         |
 
-A/B/C/D の各 model fixture は question / answer_area / annotation_area / score /
-rubric / model_answer の6タグすべてを含む（Dは設問ごとに複数の answer_area /
-annotation_area を持つ）。学生答案 fixture（各形式5部）は score / rubric /
-model_answer を含まない（白紙の答案用紙にそれらは印刷されない）うえ、印刷・スキャン
-の位置ずれを模した最大 ±0.4pt のジッターを与えている。
+A/B/C/D は形式ごとに model fixture と grading-manual fixture を1部ずつ持つ。model は
+question / answer_area / annotation_area / model_answer、grading-manual は score / rubric
+を含み、統合後の候補が6種すべてを持つことを確認する（Dは設問ごとに複数の
+answer_area / annotation_area を持つ）。学生答案 fixture（各形式5部）は score /
+rubric / model_answer を含まない（白紙の答案用紙にそれらは印刷されない）うえ、
+印刷・スキャンの位置ずれを模した最大 ±0.4pt のジッターを与えている。
 
 ## 期待値・実測値・許容誤差
 
-- **期待値**: 確定済みプロファイルの region を、学生答案の signature が一致すれば
-  そのまま再適用できる（`reapply_profile` は region を変更しない）。
+- **期待値**: 確定済みプロファイルの region を、学生答案の `format_id` と signature が
+  一致すればそのまま再適用できる（`reapply_profile` は region を変更しない）。
 - **実測値**: 再適用された region の bbox と、学生答案そのものから独立に再検出した
   region の bbox との最大コーナー差（`NormalizedBBox.max_corner_distance`）。
 - **許容誤差**: **0.01 正規化単位**（498〜842ptのページ幅高さに対し ±0.4pt の
@@ -141,14 +149,14 @@ model_answer を含まない（白紙の答案用紙にそれらは印刷され�
 **検出条件**（このいずれかで「自動検出に失敗した」と判定し、登録を止める）:
 
 1. `unrecognized_tags(markers)` が空でない（未知のタグがある）。
-2. `generate_candidates(...).regions` に `question` または `answer_area` が
-   1件も含まれない。
+2. `generate_candidates(...).regions` に `question` / `answer_area` のどちらかがない。
 
-format-freeform-essay で両方を確認した（`NOTES` タグは未認識、自動候補は0件）。
+この判定は `requires_manual_fallback` に実装し、各条件を個別に回帰testで確認した。
+format-freeform-essay では両方が成立する（`NOTES` タグは未認識、自動候補は0件）。
 
 **手動fallback**: 人間が `Region` を直接作成し（検出結果を経由しない）、
 `Profile.from_candidates` → `Profile.confirm` で確定させる。確定後の再適用は
-`FormatSignature`（ページ数・サイズ）だけを見るため、対象の答案が
+同じ `format_id` と `FormatSignature`（ページ数・サイズ）を見るため、対象の答案が
 format-freeform-essayのようにマーカーを持たない自由記述用紙であっても、以降ずっと
 自動検出に依存せず動作する（`test_hard_to_detect_format_falls_back_to_manual_region`
 で検証）。
@@ -158,7 +166,7 @@ format-freeform-essayのようにマーカーを持たない自由記述用紙�
 | Issue #15 受入条件                                                          | 対応                                                                                                                                                                                                             |
 | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | repro command・期待結果・実測値・成功/失敗判定・形式別の差が `docs/` にある | 本ファイル＋`poc-4-multi-layout-profiles/round-trip-report.md`                                                                                                                                                   |
-| 正規化座標で保存したプロファイルが同一形式の答案へ許容誤差内で再適用される  | `test_profile_round_trip_reapplies_within_tolerance`（4形式・全PASS）                                                                                                                                            |
+| 正規化座標で保存したプロファイルが同一形式の答案へ許容誤差内で再適用される  | **一部達成**: メモリ上の確認済みProfileは4形式で全PASS。永続化・再読込は未実装（下記残存リスク）                                                                                                                 |
 | 生成候補は必ず未確認状態で保存され、人間確認なしに登録完了にならない        | `Profile.from_candidates` が `confirmed` を強制 `False`、`reapply_profile` は `status != CONFIRMED` を拒否（`test_from_candidates_is_always_draft_and_unconfirmed`、`test_reapply_rejects_unconfirmed_profile`） |
 | 自動化困難な形式は検出条件と手動fallbackを具体化する                        | [§ 自動検出困難な形式と手動fallback](#自動検出困難な形式と手動fallback)                                                                                                                                          |
 | PoC用UI/コードを削除するか、後続MVP Issueへ昇格する範囲を明記する           | [§ 昇格したもの／PoC限定のもの](#昇格したものpoc限定のもの)                                                                                                                                                      |
@@ -171,7 +179,6 @@ format-freeform-essayのようにマーカーを持たない自由記述用紙�
   `FormatSignature` / `ProfileStatus` / `Profile`）
 - `domain/profile_detection.py`（`Marker` 契約・タグ分類・候補生成）
 - `domain/profile_apply.py`（`reapply_profile` とそのエラー型）
-- `adapters/pdf/annotation_markers.py`（`Marker` を供給する現状唯一の実装）
 - `tests/test_profile.py` / `test_profile_apply.py` / `test_profile_round_trip.py`
 
 PoC限定（本PoCの検証にのみ必要。次のMVP Issueで置き換え/新規実装、または削除）:
@@ -193,6 +200,9 @@ PoC限定（本PoCの検証にのみ必要。次のMVP Issueで置き換え/新�
 - **座標変換の簡略化。** `_rect_to_bbox` はページ幅高さのみを使う（回転・CropBox
   非対応）。PR #31（PoC 3）がマージされたら `domain/pdf_geometry.py` の一般化された
   変換に差し替える。差し替えは `profile_detection.py` 内に閉じる想定。
+- **永続化の往復は未検証。** 現在のround-tripは確認済み`Profile`オブジェクトをメモリ上で
+  再利用しており、serialization・repository保存・再読込を通していない。永続化schemaと
+  保存先を後続MVP Issueで決定し、保存→再読込→再適用の回帰testを追加する必要がある。
 - **`backend/poc/issue_15_multi_layout_profile/report.py` はPoCのエビデンス生成
   専用。** アプリ本体からは参照しない。合否判定の正はpytestテスト側にある。
 - **`pypdf` は現状 dev 依存グループのまま。** PDF機能を実装するMVP Issueで project

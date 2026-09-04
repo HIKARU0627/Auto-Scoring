@@ -9,14 +9,13 @@ Supports GitHub issue #15. Not imported by the app.
 uv run python poc/issue_15_multi_layout_profile/report.py
 ```
 
-For each fixture format it builds a "model answer" PDF (all six marker kinds:
-question / answer area / annotation area / score / rubric / model answer, as
-tagged PDF annotations -- see `auto_scoring.domain.profile_detection`),
-generates unconfirmed candidates, simulates one human correction, confirms,
-then reapplies the confirmed profile to two jittered "student answer" PDFs of
-the same format and tabulates the drift between each reapplied region and
-that student document's own markers. It also runs the hard-to-detect
-(no-markers) fixture through the manual-fallback path.
+For each fixture format it builds separate model-answer and grading-manual
+PDFs. Together they contain all six marker kinds: question / answer area /
+annotation area / score / rubric / model answer (tagged PDF annotations; see
+`auto_scoring.domain.profile_detection`). It generates unconfirmed candidates,
+simulates one human correction, confirms, then reapplies the profile to five
+jittered student-answer PDFs of the same format and tabulates the drift. It
+also runs the hard-to-detect fixture through the manual-fallback path.
 
 The pass/fail check itself lives in
 `backend/tests/test_profile_round_trip.py` -- this script only produces the

@@ -69,6 +69,10 @@ class PageFormat:
     width_pt: float
     height_pt: float
 
+    def __post_init__(self) -> None:
+        if self.width_pt <= 0.0 or self.height_pt <= 0.0:
+            raise ValueError("page dimensions must be positive")
+
     @property
     def is_landscape(self) -> bool:
         return self.width_pt > self.height_pt
@@ -76,14 +80,17 @@ class PageFormat:
 
 @dataclass(frozen=True)
 class FormatSignature:
-    """Coarse identity of a document's layout: page count + per-page size.
+    """Coarse geometry check for a document layout: page count + per-page size.
 
-    Two documents that share a signature are treated as "the same test
-    format" -- the assumption under which a saved profile's normalized
-    regions may be reapplied verbatim.
+    Reapplication also requires the explicit ``format_id`` to match. Dimensions
+    alone cannot distinguish two layouts that use the same paper size.
     """
 
     pages: tuple[PageFormat, ...]
+
+    def __post_init__(self) -> None:
+        if not self.pages:
+            raise ValueError("format signature must contain at least one page")
 
     def matches(self, other: FormatSignature, tolerance_pt: float = 1.0) -> bool:
         if len(self.pages) != len(other.pages):
@@ -124,6 +131,15 @@ class Profile:
         人間確認なしに登録完了にならない" (Issue #15) -- enforced here, not left
         to callers to remember.
         """
+        invalid_pages = [
+            region.region_id
+            for region in regions
+            if not 0 <= region.page_index < len(signature.pages)
+        ]
+        if invalid_pages:
+            raise ValueError(
+                f"regions reference pages outside the format signature: {invalid_pages}"
+            )
         unconfirmed = tuple(replace(region, confirmed=False) for region in regions)
         return cls(profile_id, format_id, signature, unconfirmed, ProfileStatus.DRAFT)
 
@@ -138,6 +154,15 @@ class Profile:
         """
         if not reviewed_regions:
             raise ValueError("cannot confirm a profile with no regions")
+        invalid_pages = [
+            region.region_id
+            for region in reviewed_regions
+            if not 0 <= region.page_index < len(self.signature.pages)
+        ]
+        if invalid_pages:
+            raise ValueError(
+                f"regions reference pages outside the format signature: {invalid_pages}"
+            )
         unreviewed = [region.region_id for region in reviewed_regions if not region.confirmed]
         if unreviewed:
             raise ValueError(f"regions not confirmed: {unreviewed}")

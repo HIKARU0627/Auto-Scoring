@@ -4,10 +4,11 @@
 
 Builds the same fixtures as `backend/tests/test_profile_round_trip.py` (the
 authoritative pass/fail check), runs candidate generation -> a simulated
-human correction -> confirmation -> reapply to two jittered student copies
+human correction -> confirmation -> reapply to five jittered student copies
 per format, and writes:
 
 * ``docs/poc-4-multi-layout-profiles/samples/<format>.model.pdf``   -- source
+* ``docs/poc-4-multi-layout-profiles/samples/<format>.grading-manual.pdf``
 * ``docs/poc-4-multi-layout-profiles/samples/<format>.student-N.pdf``
 * ``docs/poc-4-multi-layout-profiles/round-trip-report.md``         -- table
 
@@ -30,7 +31,12 @@ from pypdf.generic import NameObject, TextStringObject
 from auto_scoring.adapters.pdf import read_markers
 from auto_scoring.domain.profile import NormalizedBBox, PageFormat, Profile, Region, RegionKind
 from auto_scoring.domain.profile_apply import reapply_profile
-from auto_scoring.domain.profile_detection import RectPt, generate_candidates, unrecognized_tags
+from auto_scoring.domain.profile_detection import (
+    RectPt,
+    generate_candidates,
+    requires_manual_fallback,
+    unrecognized_tags,
+)
 
 _BBOX_TOLERANCE = 0.01
 _OUT_DIR = Path(__file__).resolve().parents[3] / "docs" / "poc-4-multi-layout-profiles"
@@ -38,6 +44,7 @@ _SAMPLES_DIR = _OUT_DIR / "samples"
 
 AnnotationSpec = tuple[int, str, RectPt]
 _MODEL_ONLY_TAGS = ("SCORE", "RUBRIC", "MODEL_ANSWER")
+_GRADING_MANUAL_TAGS = ("SCORE", "RUBRIC")
 
 
 @dataclass(frozen=True)
@@ -168,15 +175,29 @@ def _student_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSp
     return [item for item in annotations if item[1] not in _MODEL_ONLY_TAGS]
 
 
+def _model_answer_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] not in _GRADING_MANUAL_TAGS]
+
+
+def _grading_manual_markers(annotations: Sequence[AnnotationSpec]) -> list[AnnotationSpec]:
+    return [item for item in annotations if item[1] in _GRADING_MANUAL_TAGS]
+
+
 def _shrink(bbox: NormalizedBBox, delta: float) -> tuple[float, float, float, float]:
     return (bbox.x0, bbox.y0, bbox.x1 - delta, bbox.y1)
 
 
 def run_format(fixture: FixtureFormat, rows: list[str]) -> bool:
     model_path = _SAMPLES_DIR / f"{fixture.format_id}.model.pdf"
-    _write_pdf(model_path, fixture.pages, fixture.model_annotations)
+    manual_path = _SAMPLES_DIR / f"{fixture.format_id}.grading-manual.pdf"
+    _write_pdf(model_path, fixture.pages, _model_answer_markers(fixture.model_annotations))
+    _write_pdf(manual_path, fixture.pages, _grading_manual_markers(fixture.model_annotations))
 
     markers, signature = read_markers(model_path)
+    manual_markers, manual_signature = read_markers(manual_path)
+    if not signature.matches(manual_signature):
+        return False
+    markers.extend(manual_markers)
     draft = generate_candidates("profile-1", fixture.format_id, signature, markers)
 
     corrected_region_id = draft.regions[0].region_id
@@ -196,9 +217,7 @@ def run_format(fixture: FixtureFormat, rows: list[str]) -> bool:
         _write_pdf(student_path, fixture.pages, _jitter(student_annotations, dx, dy))
 
         student_markers, student_signature = read_markers(student_path)
-        applied = reapply_profile(
-            confirmed, f"{fixture.format_id}-student-{copy_index}", student_signature
-        )
+        applied = reapply_profile(confirmed, fixture.format_id, student_signature)
         ground_truth = generate_candidates(
             "ground-truth", fixture.format_id, student_signature, student_markers
         ).regions
@@ -263,8 +282,8 @@ def run_hard_to_detect_fixture(rows: list[str]) -> bool:
     student_path = _SAMPLES_DIR / "format-freeform-essay.student-0.pdf"
     _write_pdf(student_path, pages, freeform_annotation)
     _, student_signature = read_markers(student_path)
-    applied = reapply_profile(confirmed, "format-freeform-essay-student", student_signature)
-    fallback_ok = len(applied.regions) == 2
+    applied = reapply_profile(confirmed, "format-freeform-essay", student_signature)
+    fallback_ok = requires_manual_fallback(markers, auto_profile) and len(applied.regions) == 2
 
     verdict = "PASS" if detection_failed and fallback_ok else "FAIL"
     unrecognized_ok = tags == ["NOTES"]

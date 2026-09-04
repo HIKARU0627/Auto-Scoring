@@ -33,17 +33,18 @@ def reapply_profile(
     """Bind `profile`'s regions to another document, once its format is verified to match.
 
     Raises `ProfileNotConfirmedError` for a DRAFT profile and
-    `FormatMismatchError` when the target's page count/sizes fall outside
-    `tolerance_pt` of the profile's own format -- Issue #15's requirement that
-    an unrecognized or mismatched format never silently gets the wrong
-    regions.
+    `FormatMismatchError` when the explicit format ID differs or the target's
+    page count/sizes fall outside `tolerance_pt` -- Issue #15's requirement
+    that a mismatched format never silently gets the wrong regions.
     """
     if profile.status is not ProfileStatus.CONFIRMED:
         raise ProfileNotConfirmedError(
             f"profile {profile.profile_id!r} is {profile.status.value}; "
             "only a confirmed profile can be reapplied"
         )
-    if not profile.signature.matches(target_signature, tolerance_pt=tolerance_pt):
+    if profile.format_id != target_format_id or not profile.signature.matches(
+        target_signature, tolerance_pt=tolerance_pt
+    ):
         raise FormatMismatchError(
             f"profile {profile.profile_id!r} format does not match target {target_format_id!r}"
         )

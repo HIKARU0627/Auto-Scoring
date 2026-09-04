@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from auto_scoring.domain.profile import (
@@ -84,3 +86,20 @@ def test_format_signature_matches_within_tolerance_only() -> None:
     assert a.matches(close, tolerance_pt=1.0)
     assert not a.matches(far, tolerance_pt=1.0)
     assert not a.matches(wrong_page_count, tolerance_pt=1.0)
+
+
+@pytest.mark.parametrize("dimensions", [(0.0, 842.0), (595.0, -1.0)])
+def test_page_format_requires_positive_dimensions(dimensions: tuple[float, float]) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        PageFormat(*dimensions)
+
+
+def test_format_signature_requires_a_page() -> None:
+    with pytest.raises(ValueError, match="at least one page"):
+        FormatSignature(pages=())
+
+
+def test_profile_rejects_region_outside_its_page_range() -> None:
+    invalid = replace(_region("q1"), page_index=-1)
+    with pytest.raises(ValueError, match="outside the format signature"):
+        Profile.from_candidates("p1", "format-a", _SIGNATURE, [invalid])
