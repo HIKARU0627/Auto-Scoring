@@ -1,0 +1,21 @@
+{
+  "ground_truth": {
+    "sample_id": "poc1-normal-01",
+    "reference_text": "植物は根から水を吸収する",
+    "keywords": ["根", "水", "吸収"],
+    "handwriting_quality": "normal",
+    "layout_type": "two_column"
+  },
+  "ocr_result": {
+    "text": "植物は根から水を吸引する",
+    "provider": "recorded-fixture",
+    "tokens": [
+      {
+        "text": "植物は根から水を吸引する",
+        "bounding_box": { "x": 0.1, "y": 0.35, "width": 0.42, "height": 0.06 },
+        "confidence": 0.83,
+        "band": "medium"
+      }
+    ]
+  }
+}

@@ -68,6 +68,10 @@
   将来の macOS/Linux はプロセスグループ）。
 - サイドカーが異常終了したら UI にエラーを出し、再起動ボタンを提供（簡易設計書 §24）。
 
+> 認証・動的ポート・OpenAPI → Dart 生成・接続情報の受け渡し（ハンドシェイク）の
+> 実装決定は [`sidecar-api.md`](./sidecar-api.md)（GitHub Issue #10）にまとめた。
+> 子プロセスの起動・kill とバンドルは Windows 配布 Issue で扱う。
+
 ---
 
 ## 2. フロントエンド（Flutter / Dart）

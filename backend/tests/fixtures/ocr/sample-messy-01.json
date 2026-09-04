@@ -1,0 +1,28 @@
+{
+  "ground_truth": {
+    "sample_id": "poc1-messy-01",
+    "reference_text": "細胞分裂により染色体が複製される",
+    "keywords": ["細胞分裂", "染色体", "複製"],
+    "handwriting_quality": "messy",
+    "layout_type": "single_sheet",
+    "expected_boxes": [{ "x": 0.2, "y": 0.5, "width": 0.15, "height": 0.05 }]
+  },
+  "ocr_result": {
+    "text": "細胞分列により染色休が複製される",
+    "provider": "recorded-fixture",
+    "tokens": [
+      {
+        "text": "細胞分列により染色休が複製される",
+        "bounding_box": { "x": 0.25, "y": 0.5, "width": 0.15, "height": 0.05 },
+        "confidence": 0.58,
+        "band": "medium"
+      },
+      {
+        "text": "休",
+        "bounding_box": { "x": 0.6, "y": 0.7, "width": 0.05, "height": 0.05 },
+        "confidence": 0.11,
+        "band": "low"
+      }
+    ]
+  }
+}

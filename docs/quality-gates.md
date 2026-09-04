@@ -3,15 +3,22 @@
 Local commands and GitHub Actions run the same checks. Each check is a `scripts`
 entry in `package.json`, invoked as `pnpm run <script>`.
 
-| Gate               | Command                 | CI step (`.github/workflows/ci.yml`) |
-| ------------------ | ----------------------- | ------------------------------------ |
-| Agent skill mirror | `pnpm run skills:check` | Check agent skill mirrors            |
-| Formatting         | `pnpm run format:check` | Check formatting                     |
-| Lint               | `pnpm run lint`         | Lint                                 |
-| Typecheck          | `pnpm run typecheck`    | Typecheck                            |
-| Test               | `pnpm run test`         | Test                                 |
-| Build              | `pnpm run build`        | Build                                |
-| Everything         | `pnpm run check`        | (all of the above)                   |
+| Gate               | Command                  | CI step (`.github/workflows/ci.yml`) |
+| ------------------ | ------------------------ | ------------------------------------ |
+| Agent skill mirror | `pnpm run skills:check`  | Check agent skill mirrors            |
+| Formatting         | `pnpm run format:check`  | Check formatting                     |
+| OpenAPI contract   | `pnpm run openapi:check` | OpenAPI contract                     |
+| Lint               | `pnpm run lint`          | Lint                                 |
+| Typecheck          | `pnpm run typecheck`     | Typecheck                            |
+| Test               | `pnpm run test`          | Test                                 |
+| Build              | `pnpm run build`         | Build                                |
+| Everything         | `pnpm run check`         | (all of the above)                   |
+
+`openapi:check` regenerates `backend/openapi/openapi.json` and the Dart client
+in `app/packages/auto_scoring_api/` and fails on any git diff. It needs `uv`,
+`dart`, and Java (openapi-generator) on PATH, so it stays out of the git hooks
+(`check:pre-commit` / `check:pre-push`) and runs only in `pnpm run check` and CI.
+See [`sidecar-api.md`](./sidecar-api.md) §4.
 
 `package.json` is a task runner over the two stacks. Each gate fans out to an
 `:app` (Flutter) and a `:backend` (Python) script:
