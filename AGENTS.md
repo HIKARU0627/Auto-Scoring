@@ -8,9 +8,11 @@
 
 ## Source of truth and scope
 
-- [Name your source of truth. e.g. requirements and acceptance criteria live in
-  `docs/`; reusable UI lives in `<design-system-path>`.] Implementation decisions
-  and operational procedures live in `docs/`.
+- Requirements and acceptance criteria live in GitHub Issues (parent Issue #3
+  tracks the MVP 0.2 base). Architecture and technology decisions live in
+  `docs/` — `docs/simplified-design-specification.md` and
+  `docs/technology-stack.md`. Implementation decisions and operational
+  procedures live in `docs/`.
 - One GitHub Issue → one worktree → one branch → one PR, all for a single change
   of purpose. Do not mix unrelated changes; split anything out of scope into its
   own Issue.
@@ -21,8 +23,16 @@
 ## Architecture
 
 - Keep a single, explicit dependency direction and do not create reverse
-  references. [State it for your project, e.g. `UI/HTTP → application → domain`;
-  `domain` must not import framework, DB, or external-service code.]
+  references:
+  - `app/` (Flutter): `features → core → api`. `api` is the backend client
+    (generated later from the OpenAPI schema) and imports neither `core` nor
+    `features`; `core` never imports `features`.
+  - `backend/` (Python): `api → domain ← adapters`. `domain` must not import
+    FastAPI, SQLAlchemy, HTTP clients, or any external-service SDK, nor the
+    `api` / `adapters` layers.
+  - Both directions are enforced by tests (`app/test/architecture_test.dart`,
+    `backend/tests/test_architecture.py`). Full picture:
+    `docs/technology-stack.md` §5.
 - Keep entry points (route handlers, CLI commands, UI event handlers) thin:
   input validation, auth, calling into the core, and transport translation only.
   Business rules live in the core.
@@ -38,9 +48,12 @@
 
 - Run the test closest to your change first. Before handing off for review, run
   `pnpm run check`.
-- `pnpm run check` runs: agent-skill mirror check, format check, lint, typecheck,
-  test, build. Anything not wired up for this project prints `not configured` —
-  wire it up (see `TEMPLATE_SETUP.md`) or state explicitly what was not verified.
+- `pnpm run check` runs: agent-skill mirror check, Prettier, then per stack —
+  Dart `format`/`analyze`, `flutter test`, `flutter build windows --debug`, and
+  Ruff (lint + format), `mypy --strict`, `pytest`, backend package import. It
+  needs the Flutter SDK (`app/.fvmrc`) and `uv` on PATH; restore deps with
+  `pnpm run bootstrap` (or `flutter pub get` in `app/` and `uv sync --locked`
+  in `backend/`). See `docs/quality-gates.md`.
 - UI changes: check desktop and mobile, keyboard, focus, and non-colour-dependent
   states. Data/schema changes: include migration, constraints, indexes, a
   recovery procedure, and integration tests in the same PR.

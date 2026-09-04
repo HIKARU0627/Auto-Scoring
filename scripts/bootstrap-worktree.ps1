@@ -42,6 +42,26 @@ else {
     pnpm install
 }
 
+# Restore the Flutter app packages from app/pubspec.lock.
+$appDir = Join-Path $repoRoot 'app'
+if ((Test-Path (Join-Path $appDir 'pubspec.yaml')) -and (Get-Command flutter -ErrorAction SilentlyContinue)) {
+    Push-Location $appDir
+    try { flutter pub get } finally { Pop-Location }
+}
+elseif (Test-Path (Join-Path $appDir 'pubspec.yaml')) {
+    Write-Host 'Skipping flutter pub get (flutter not on PATH). See app/.fvmrc for the pinned version.'
+}
+
+# Restore the Python sidecar environment from backend/uv.lock.
+$backendDir = Join-Path $repoRoot 'backend'
+if ((Test-Path (Join-Path $backendDir 'uv.lock')) -and (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Push-Location $backendDir
+    try { uv sync --locked } finally { Pop-Location }
+}
+elseif (Test-Path (Join-Path $backendDir 'uv.lock')) {
+    Write-Host 'Skipping uv sync (uv not on PATH). Install uv: https://docs.astral.sh/uv/'
+}
+
 # Point git at the tracked hooks. Prefer worktree-scoped config (Orca worktrees
 # enable extensions.worktreeConfig), but fall back to repo-scoped so a plain
 # `git clone` also works.

@@ -16,8 +16,10 @@ concurrency:
 jobs:
   quality:
     name: Quality
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Runs on Windows so `pnpm build` can produce the Flutter Windows debug
+    # build (needs Visual Studio, present on GitHub-hosted windows runners).
+    runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       # Template ships with tag refs for readability. Pin to a full commit SHA
       # before you rely on CI as a merge gate.
@@ -34,15 +36,29 @@ jobs:
       # depends on the npm registry. Must run after setup-node.
       - name: Enable pnpm
         run: corepack enable
-      - name: Install dependencies
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.4
+          channel: stable
+          cache: true
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.7"
+          enable-cache: true
+      - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
+      - name: Restore Flutter packages
+        run: flutter pub get
+        working-directory: app
+      - name: Restore Python environment
+        run: uv sync --locked
+        working-directory: backend
       - name: Check agent skill mirrors
         run: pnpm skills:check
       - name: Check formatting
         run: pnpm format:check
-      # The steps below are no-ops until you replace the matching scripts in
-      # package.json (see TEMPLATE_SETUP.md). Once real, make them required
-      # checks in the branch ruleset. Add integration / e2e jobs here as needed.
       - name: Lint
         run: pnpm lint
       - name: Typecheck

@@ -13,9 +13,18 @@ entry in `package.json`, invoked as `pnpm run <script>`.
 | Build              | `pnpm run build`        | Build                                |
 | Everything         | `pnpm run check`        | (all of the above)                   |
 
-`lint` / `typecheck` / `test` / `build` ship as no-ops that print
-`not configured`. Replace those scripts for your project — see
-`TEMPLATE_SETUP.md`.
+`package.json` is a task runner over the two stacks. Each gate fans out to an
+`:app` (Flutter) and a `:backend` (Python) script:
+
+| Gate        | `:app`                                                  | `:backend`                           |
+| ----------- | ------------------------------------------------------- | ------------------------------------ |
+| `lint`      | `dart format --set-exit-if-changed` + `flutter analyze` | `ruff check` + `ruff format --check` |
+| `typecheck` | `flutter analyze`                                       | `mypy` (`strict`)                    |
+| `test`      | `flutter test`                                          | `pytest`                             |
+| `build`     | `flutter build windows --debug`                         | `python -c "import auto_scoring"`    |
+
+`format` / `format:check` stay on Prettier for the repo-level files; `app/` and
+`backend/` are in `.prettierignore` because Dart and Ruff own their formatting.
 
 ## git hooks vs CI
 
@@ -45,11 +54,15 @@ When you add or remove a gate, update both, and this table.
 
 ## Toolchain
 
-Node version is pinned in `.node-version`; the package manager is pinned in
-`package.json` `packageManager`. CI reads the same files. Use
-`pnpm install --frozen-lockfile`.
+| Tool    | Pin                                                       | Restored by                                    |
+| ------- | --------------------------------------------------------- | ---------------------------------------------- |
+| Node    | `.node-version`                                           | `pnpm install --frozen-lockfile`               |
+| pnpm    | `package.json` `packageManager`                           | Corepack                                       |
+| Flutter | `app/.fvmrc` (3.41.4 stable) + `.github/workflows/ci.yml` | `flutter pub get` (uses `app/pubspec.lock`)    |
+| Python  | `backend/.python-version` (3.12)                          | `uv sync --locked` (downloads the interpreter) |
+| uv      | `.github/workflows/ci.yml` (`setup-uv` version)           | —                                              |
 
-Non-Node project: point the `lint` / `typecheck` / `test` / `build` scripts at
-your own tools (e.g. `"test": "cargo test"`) — `package.json` then acts purely as
-a task runner. Keep `skills:sync` and `format` on Node (template infrastructure).
-Adjust `.github/workflows/ci.yml` to install your toolchain.
+`pnpm run bootstrap` restores all four in one step. CI (`.github/workflows/ci.yml`)
+runs on `windows-latest` so the Flutter Windows debug build is exercised as a
+merge gate; it installs the Flutter SDK (`subosito/flutter-action`) and `uv`
+(`astral-sh/setup-uv`) before the gates.
