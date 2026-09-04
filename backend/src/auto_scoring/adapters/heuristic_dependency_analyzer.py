@@ -79,7 +79,16 @@ class ReferenceHeuristicDependencyAnalyzer:
                 if from_id != question.question_id and _contains_question_number(text, number)
             ]
 
-            if referenced:
+            if referenced and matched_signal:
+                # A question number *and* a dependency-signal phrase both
+                # present: this is the only case that becomes an edge. A bare
+                # label mention with no such phrase is common between
+                # genuinely independent questions (e.g. both discuss "問1"
+                # for unrelated reasons) and must not be promoted to a
+                # candidate edge -- doing so risked handing `from_candidates`
+                # a spurious cycle, which raises before any draft is saved
+                # and leaves nothing for a human to review/fix (Issue #26
+                # review; docs/dependency-graph.md "候補生成").
                 for number, from_id in referenced:
                     edges.append(
                         DependencyEdge(
@@ -93,9 +102,24 @@ class ReferenceHeuristicDependencyAnalyzer:
                                 f"{question.number}の設問文/模範解答/採点基準に"
                                 f"{number}への参照表現「{_snippet_for_number(text, number)}」を検出"
                             ),
-                            confidence=0.8 if matched_signal else 0.5,
+                            confidence=0.8,
                         )
                     )
+            elif referenced:
+                # Number(s) mentioned but no dependency-signal phrase: could
+                # be a real dependency stated plainly, or just an unrelated
+                # mention -- ambiguous either way, so it goes to `unresolved`
+                # rather than being silently dropped or guessed as an edge.
+                numbers = "、".join(number for number, _ in referenced)
+                unresolved.append(
+                    UnresolvedQuestion(
+                        question_id=question.question_id,
+                        reason=(
+                            f"{numbers}への言及はありますが、依存を示唆する表現が見つからず、"
+                            "実際に依存があるか判断できません"
+                        ),
+                    )
+                )
             elif matched_signal:
                 unresolved.append(
                     UnresolvedQuestion(

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
@@ -284,6 +284,11 @@ class SqlAlchemyJobRepository:
         return [m.job_from_row(row) for row in rows]
 
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
+        # FAILED is not terminal here: FAILED -> QUEUED is a valid retry
+        # transition (see `auto_scoring.domain.models._JOB_TRANSITIONS` and
+        # docs/data-model-and-local-storage.md), so a stale FAILED job left
+        # unlisted could still be retried later and run against the
+        # superseded graph version (Issue #26 review).
         rows = self._session.scalars(
             select(JobRow)
             .join(SubmissionRow, JobRow.submission_id == SubmissionRow.id)
@@ -291,7 +296,9 @@ class SqlAlchemyJobRepository:
                 SubmissionRow.test_id == test_id,
                 JobRow.dependency_graph_version.is_not(None),
                 JobRow.dependency_graph_version != current_version,
-                JobRow.state.in_([JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED]),
+                JobRow.state.in_(
+                    [JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED, JobState.FAILED]
+                ),
             )
             .order_by(JobRow.created_at)
         )
@@ -363,11 +370,15 @@ class SqlAlchemyDependencyGraphRepository:
         ``UPDATE`` only matches on primary key, not on the state it was read
         with).
 
-        Returns ``True`` (and replaces the edges) if the row was still DRAFT
-        *and* no higher version for the same test was already CONFIRMED at
-        the moment this statement executed. Returns ``False`` -- touching
-        nothing -- if either precondition had already stopped holding; the
-        caller reports a conflict for the loser to re-fetch and retry.
+        Returns ``True`` (and replaces the edges) if, at the moment this
+        statement executed: the row was still DRAFT; no higher version for
+        the same test was already CONFIRMED; and the test's *current*
+        questions are still exactly ``confirmed.question_ids`` (a question
+        added/removed between the application-level check and this write
+        would otherwise let a stale snapshot get CONFIRMED -- Issue #26
+        review). Returns ``False`` -- touching nothing -- if any precondition
+        had already stopped holding; the caller reports a conflict for the
+        loser to re-fetch and retry.
         """
         newer_confirmed_exists = (
             select(DependencyGraphRow.id)
@@ -375,6 +386,24 @@ class SqlAlchemyDependencyGraphRepository:
                 DependencyGraphRow.test_id == confirmed.test_id,
                 DependencyGraphRow.status == DependencyGraphStatus.CONFIRMED,
                 DependencyGraphRow.version > confirmed.version,
+            )
+            .exists()
+        )
+        # Set equality via cardinality + one-way containment: if the test's
+        # current question count equals len(confirmed.question_ids) *and*
+        # none of the test's current questions falls outside that set, the
+        # two sets are identical (both finite, no duplicates).
+        expected_question_ids = sorted(confirmed.question_ids)
+        current_question_count = (
+            select(func.count(QuestionRow.id))
+            .where(QuestionRow.test_id == confirmed.test_id)
+            .scalar_subquery()
+        )
+        question_outside_expected_exists = (
+            select(QuestionRow.id)
+            .where(
+                QuestionRow.test_id == confirmed.test_id,
+                QuestionRow.id.not_in(expected_question_ids),
             )
             .exists()
         )
@@ -386,6 +415,8 @@ class SqlAlchemyDependencyGraphRepository:
                     DependencyGraphRow.id == confirmed.id,
                     DependencyGraphRow.status == DependencyGraphStatus.DRAFT,
                     ~newer_confirmed_exists,
+                    current_question_count == len(expected_question_ids),
+                    ~question_outside_expected_exists,
                 )
                 .values(
                     status=DependencyGraphStatus.CONFIRMED,

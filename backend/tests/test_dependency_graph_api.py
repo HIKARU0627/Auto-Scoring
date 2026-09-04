@@ -366,6 +366,48 @@ def test_confirming_after_the_test_gained_a_question_requires_reanalysis(
     assert v1.status.value == "draft"
 
 
+def test_confirm_returns_409_when_a_question_is_added_in_the_toctou_window(
+    client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A question added strictly *after* this request's own application-level
+    pre-check (already passed) but *before* the atomic write must still be
+    caught -- by `try_confirm`'s own embedded check -- not silently
+    confirmed against a stale snapshot (Issue #26 review). Forced
+    deterministically by committing the new question from inside a
+    monkeypatched `try_confirm`, right before delegating to the real one.
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+
+    real_try_confirm = SqlAlchemyDependencyGraphRepository.try_confirm
+
+    def _sneak_in_a_question_then_try_confirm(
+        self: SqlAlchemyDependencyGraphRepository, confirmed: DependencyGraph
+    ) -> bool:
+        with make_uow() as sneaky_uow:
+            sneaky_uow.questions.add(make_question(id="q2", test_id="test-1", number="問2"))
+            sneaky_uow.commit()
+        return real_try_confirm(self, confirmed)
+
+    monkeypatch.setattr(
+        SqlAlchemyDependencyGraphRepository,
+        "try_confirm",
+        _sneak_in_a_question_then_try_confirm,
+    )
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert response.status_code == 409
+
+    with make_uow() as uow:
+        v1 = uow.dependency_graphs.get("test-1:v1")
+    assert v1 is not None
+    assert v1.status.value == "draft"
+
+
 # --------------------------------------------------------------------------- #
 # Concurrency: version allocation must not collide (Issue #26 review)
 # --------------------------------------------------------------------------- #
@@ -465,6 +507,51 @@ def test_confirming_a_new_version_cancels_and_requeues_stale_incomplete_jobs(
         assert replacement.kind == old_job.kind
         assert replacement.attempts == 0
         assert replacement.blocked_on_question_id is None
+
+
+def test_confirming_a_new_version_also_reissues_a_stale_failed_job(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """FAILED is not terminal: FAILED -> QUEUED is a valid retry, so a stale
+    FAILED job must be cancelled/replaced too, or a later retry would run it
+    against the superseded graph version (Issue #26 review).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(
+                id="job-v1-failed",
+                state=JobState.FAILED,
+                last_error="transient error",
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        old_job = uow.jobs.get("job-v1-failed")
+        assert old_job is not None
+        assert old_job.state is JobState.CANCELLED
+
+        queued = uow.jobs.list_by_state(JobState.QUEUED)
+        replacement = next(job for job in queued if job.id != old_job.id)
+        assert replacement.dependency_graph_version == 2
 
 
 def test_confirming_when_nothing_is_stale_creates_no_extra_jobs(

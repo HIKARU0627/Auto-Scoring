@@ -180,6 +180,35 @@ def test_try_confirm_rejects_when_a_newer_version_is_already_confirmed(
     assert stored_v1.status is DependencyGraphStatus.DRAFT
 
 
+def test_try_confirm_rejects_when_the_question_set_changed_since_the_snapshot(
+    seeded: UowFactory,
+) -> None:
+    """A question added after the graph was read (but before the atomic
+    write) must not let a stale question-set snapshot get CONFIRMED (Issue
+    #26 review: the check must be evaluated at write time, not read time).
+    """
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft())
+        uow.commit()
+
+    with seeded() as uow:
+        draft = uow.dependency_graphs.get("test-1:v1")
+        assert draft is not None
+        confirmed = draft.confirm(edges=[_edge("q-1", "q-2")], confirmed_at=at(5))
+
+        # As if a concurrent request added a question for this test in the
+        # window between this request's own read and its write.
+        uow.questions.add(make_question(id="q-3", number="問3"))
+
+        assert uow.dependency_graphs.try_confirm(confirmed) is False
+        uow.commit()
+
+    with seeded() as uow:
+        stored = uow.dependency_graphs.get("test-1:v1")
+    assert stored is not None
+    assert stored.status is DependencyGraphStatus.DRAFT
+
+
 def test_get_latest_returns_the_highest_version(seeded: UowFactory) -> None:
     with seeded() as uow:
         v1 = _draft()

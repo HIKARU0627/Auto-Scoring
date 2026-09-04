@@ -85,12 +85,26 @@ Issue本文は「graphはテストプロファイル単位で分析・確認・v
   い。テストでは同じ古いDRAFT読み取りから2つの `confirm()` 済みgraphを作り、
   `try_confirm` を連続で呼んで「後者は必ず負ける」ことを決定的に検証している
   （`test_dependency_graph_repository.py`）。
+- `try_confirm` の `WHERE` には設問集合の一致チェックも含める（`SELECT
+COUNT(*) FROM questions WHERE test_id=...` が期待件数と一致し、かつ期待
+  集合に無いidの設問が存在しないこと -- 両方成り立てば有限集合として一致と
+  等価）。アプリ層の事前チェック（「バージョンと不変性」節）は読み取り時点
+  の状態しか見ないため、その後・`try_confirm` 実行前に別トランザクションが
+  設問を追加/削除すると素通りしてしまう（レビュー指摘）。設問集合チェックを
+  atomic UPDATEの `WHERE` 自体に含めることで、この窓を閉じている。テストで
+  は同一トランザクション内で `try_confirm` 呼び出し直前に設問を追加して
+  `False` になることを検証し（repository層）、API層でも
+  `try_confirm` をモンキーパッチして「アプリ層チェック通過後・書き込み前」
+  の窓を強制的に再現し409になることを確認している。
 - 受入条件「確定graphを変更した場合はversionを更新し、古いgraphで未完了の採点
   jobを無効化・再作成できるようにする」は実装済み: `Job` に
   `dependency_graph_version`（そのjobがどの確定バージョンに対して発行された
   か）を追加し、`JobRepository.list_incomplete_for_stale_versions(test_id,
 current_version)` で「今の確定バージョンと異なるバージョンに紐づく、まだ
-  QUEUED/RUNNING/BLOCKEDのjob」を検索できるようにした。`POST /confirm` は
+  QUEUED/RUNNING/BLOCKED**/FAILED**のjob」を検索できるようにした。FAILEDは
+  終端状態ではない -- `_JOB_TRANSITIONS` はFAILED→QUEUEDを正当なリトライ遷移
+  として許しているため、対象から外すとstale FAILED jobが後で再試行され古い
+  グラフバージョンのまま実行されてしまう（レビュー指摘）。`POST /confirm` は
   グラフを保存した同じトランザクション内でこの一覧を取得し、各jobを
   `reissue_job_for_graph_version`（`auto_scoring.domain.models`）で
   CANCELLEDへ遷移させつつ、新バージョン向けの新しいQUEUED jobを作成して
@@ -141,7 +155,13 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   （例:「問1」）＋依存を示唆する表現
   （「を踏まえて」「に基づいて」等）が現れるかを検出するだけの決定的な処理。
   依存の示唆はあるが対象設問番号を特定できない場合は「依存なし」と推測せず
-  `unresolved` に積む。
+  `unresolved` に積む。逆に、**設問番号への言及があっても依存シグナルの表現
+  が無い場合もedgeにしない**（レビュー指摘）。単に互いの番号へ言及しただけの
+  独立設問（例: 両方が「問1と問2を比較」のように書いている）まで参照とみな
+  してedge化すると、confidence 0.5のedgeが両方向にでき、`from_candidates`
+  がサイクルとして拒否して**draftすら保存されない** -- 人間が直せる下書きが
+  一つも残らない。番号への言及とシグナル表現が**両方**揃った場合だけedgeに
+  し、番号のみの言及はunresolvedとして人間の判断に委ねる。
 - `POST /tests/{test_id}/dependency-graph/analyze` は、`Question.model_answer`
   と `Rubric` の基準説明を自動入力しつつ、問題文・採点基準のテキストを
   リクエストボディの `overrides`（`question_id` ごとの上書き）として受け取る。
@@ -177,17 +197,22 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   `can_start_submission_processing` のunit test。
 - `backend/tests/test_heuristic_dependency_analyzer.py`: ヒューリスティック
   analyzerのunit test（参照検出、要確認判定、テキスト無し設問の要確認化、
-  「問1」が「問10」に誤マッチしないこと）。
+  「問1」が「問10」に誤マッチしないこと、シグナル表現の無い番号言及だけでは
+  edgeにならないこと、互いの番号を言及し合うだけの独立設問がサイクル候補に
+  ならないこと）。
 - `backend/tests/test_domain_models.py`: `Job.dependency_graph_version` の
   検証、`reissue_job_for_graph_version`（cancel + 再作成）のunit test。
 - `backend/tests/test_dependency_graph_repository.py`: 実SQLiteに対する
   upsert・バージョン不変性（`created_at` を含む）・`get_latest`/`list_versions`
   のintegration test。`try_confirm` が同じ古いDRAFT読み取りから作った2つの
   confirmed graphのうち一方しか勝てないこと、既にCONFIRMEDな行やより新しい
-  CONFIRMED版がある場合に何も変更せず `False` を返すことのintegration test。
+  CONFIRMED版がある場合に何も変更せず `False` を返すこと、`try_confirm` 呼び
+  出し直前に設問が追加された場合に `False` を返し行を変更しないことの
+  integration test。
 - `backend/tests/test_sqlalchemy_repositories.py`:
   `JobRepository.list_incomplete_for_stale_versions` がテスト単位・状態・
-  バージョンで正しく絞り込むことのintegration test。
+  バージョンで正しく絞り込むこと（FAILEDも対象に含み、SUCCEEDED/CANCELLEDは
+  除外すること）のintegration test。
 - `backend/tests/test_migrations.py`: 新しいCHECK制約（confirmed graphの
   unresolved空検証、jobのdependency_graph_version正値検証）をDBレベルで
   拒否できることの確認。
@@ -200,7 +225,10 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   設問が増えた場合にconfirmが拒否されること、`save()` の
   `IntegrityError`（バージョン採番の衝突）から正しく再試行して回復すること
   （モックで決定的に再現）、`try_confirm` がレースに負けたときAPIが409を返す
-  こと（モックで決定的に再現）、明示的な空rubric override（`""`）が保存済み
+  こと（モックで決定的に再現）、アプリ層チェック通過後・`try_confirm` 実行前
+  の窓で設問が追加された場合も409になること（`try_confirm` をモンキーパッチ
+  してその窓を強制的に再現）、明示的な空rubric override（`""`）が保存済み
   rubric文言へfallbackせず尊重されること、**確定graphのバージョンが進んだと
-  きに古いバージョンの未完了jobがCANCELLEDへ遷移し、新バージョン向けのjobが
-  同一トランザクションで作られること**（Issue #26 受入条件そのもの）。
+  きに古いバージョンの未完了job（FAILEDを含む）がCANCELLEDへ遷移し、新バー
+  ジョン向けのjobが同一トランザクションで作られること**（Issue #26 受入条件
+  そのもの）。

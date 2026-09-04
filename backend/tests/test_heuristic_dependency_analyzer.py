@@ -79,6 +79,43 @@ def test_signal_phrase_without_a_resolvable_reference_is_unresolved_not_dropped(
     assert result.unresolved[0].question_id == "q2"
 
 
+def test_a_bare_number_mention_without_a_signal_phrase_is_unresolved_not_an_edge() -> None:
+    """A question number mentioned with no dependency-signal phrase nearby is
+    ambiguous -- it must not become a candidate edge (Issue #26 review: two
+    independent questions that merely both mention "問1" could otherwise
+    produce a spurious 2-cycle, which fails the whole /analyze with no draft
+    to review).
+    """
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問1と同じ形式で解答せよ。",  # mentions "問1", no signal phrase
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert result.edges == ()
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].question_id == "q2"
+
+
+def test_mutual_bare_number_mentions_do_not_produce_a_cycle() -> None:
+    """Two independent questions that both merely mention each other's number
+    (no signal phrase either way) must not become a 2-node cycle candidate.
+    """
+    questions = [
+        QuestionInfo(question_id="q1", number="問1", page=1, prompt_text="問2と比較して説明せよ。"),
+        QuestionInfo(question_id="q2", number="問2", page=1, prompt_text="問1と比較して説明せよ。"),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert result.edges == ()
+    assert {u.question_id for u in result.unresolved} == {"q1", "q2"}
+
+
 def test_question_number_match_does_not_bleed_into_a_longer_number() -> None:
     """ "問1" must not match inside "問10" -- they are different questions."""
     questions = [

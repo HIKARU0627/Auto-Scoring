@@ -178,9 +178,12 @@ def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
 
 
 def test_list_incomplete_for_stale_versions_filters_correctly(seeded: UowFactory) -> None:
-    """Only QUEUED/RUNNING/BLOCKED jobs tagged with a *different* graph
-    version count as stale (Issue #26); untagged and up-to-date/terminal jobs
-    do not.
+    """QUEUED/RUNNING/BLOCKED/FAILED jobs tagged with a *different* graph
+    version count as stale (Issue #26); untagged and truly-terminal
+    (SUCCEEDED/CANCELLED) jobs do not. FAILED counts as incomplete because
+    FAILED -> QUEUED is a valid retry transition -- a stale FAILED job left
+    out here could still be retried later against the superseded graph
+    version (Issue #26 review).
     """
     with seeded() as uow:
         uow.submissions.add(make_submission())
@@ -190,16 +193,26 @@ def test_list_incomplete_for_stale_versions_filters_correctly(seeded: UowFactory
         uow.jobs.add(
             make_job(id="job-stale-blocked", state=JobState.BLOCKED, dependency_graph_version=1)
         )
+        uow.jobs.add(
+            make_job(id="job-stale-failed", state=JobState.FAILED, dependency_graph_version=1)
+        )
         uow.jobs.add(make_job(id="job-current", state=JobState.QUEUED, dependency_graph_version=2))
         uow.jobs.add(
             make_job(id="job-no-version", state=JobState.QUEUED, dependency_graph_version=None)
         )
         uow.jobs.add(make_job(id="job-done", state=JobState.SUCCEEDED, dependency_graph_version=1))
+        uow.jobs.add(
+            make_job(id="job-cancelled", state=JobState.CANCELLED, dependency_graph_version=1)
+        )
         uow.commit()
 
     with seeded() as uow:
         stale = uow.jobs.list_incomplete_for_stale_versions("test-1", current_version=2)
-    assert {job.id for job in stale} == {"job-stale-queued", "job-stale-blocked"}
+    assert {job.id for job in stale} == {
+        "job-stale-queued",
+        "job-stale-blocked",
+        "job-stale-failed",
+    }
 
 
 def test_list_incomplete_for_stale_versions_is_scoped_to_the_test(make_uow: UowFactory) -> None:
