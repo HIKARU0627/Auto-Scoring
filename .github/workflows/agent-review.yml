@@ -1,0 +1,228 @@
+name: Agent review
+
+# Native rulesets cannot require reviews only for agent PRs. This job is the
+# merge gate: it passes for human-only PRs, and fails on agent PRs until a
+# human (non-bot) leaves an approving review of the current head.
+#
+# Detection is metadata-based (author, app, trailers). It is a process guard,
+# not a security boundary — a determined actor can forge commit identity.
+
+on:
+  pull_request:
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        ready_for_review,
+        edited,
+        labeled,
+        unlabeled,
+      ]
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: agent-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  BOT_EMAILS: cursoragent@cursor.com noreply@anthropic.com
+
+jobs:
+  agent-review:
+    name: Agent review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require human approval for agent PRs
+        uses: actions/github-script@v8
+        env:
+          BOT_EMAILS: ${{ env.BOT_EMAILS }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.info('No pull_request payload; nothing to gate.');
+              return;
+            }
+
+            const extraBotEmails = new Set(
+              (process.env.BOT_EMAILS ?? '')
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((s) => s.toLowerCase()),
+            );
+
+            const looksLikeBot = (name, email, ghType, ghLogin) => {
+              const n = (name ?? '').toLowerCase();
+              const e = (email ?? '').toLowerCase();
+              const l = (ghLogin ?? '').toLowerCase();
+              return (
+                ghType === 'Bot' ||
+                l.endsWith('[bot]') ||
+                n.endsWith('[bot]') ||
+                e.includes('[bot]') ||
+                extraBotEmails.has(e)
+              );
+            };
+
+            const agentCoauthor =
+              /co-authored-by:\s*(cursor|claude|copilot|codex|opencode|devin)\b/i;
+            const agentTrailer = /^ai-agent:\s*\S+/im;
+            const agentLabels = new Set(['ai-agent', 'ai-generated']);
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const reasons = [];
+            if (looksLikeBot(undefined, undefined, pr.user?.type, pr.user?.login)) {
+              reasons.push(`PR author is a bot (@${pr.user.login})`);
+            }
+            if (pr.performed_via_github_app?.name) {
+              reasons.push(
+                `opened via GitHub App "${pr.performed_via_github_app.name}"`,
+              );
+            }
+            if (agentTrailer.test(pr.body ?? '')) {
+              reasons.push('PR body contains an AI-Agent trailer');
+            }
+            const matchedLabels = (pr.labels ?? [])
+              .map((l) => l.name.toLowerCase())
+              .filter((n) => agentLabels.has(n));
+            if (matchedLabels.length) {
+              reasons.push(`labelled: ${matchedLabels.join(', ')}`);
+            }
+
+            const botAuthors = new Set();
+            for (const c of commits) {
+              if (
+                looksLikeBot(
+                  c.commit?.author?.name,
+                  c.commit?.author?.email,
+                  c.author?.type,
+                  c.author?.login,
+                )
+              ) {
+                botAuthors.add(
+                  c.commit?.author?.email ||
+                    c.commit?.author?.name ||
+                    c.author?.login,
+                );
+              }
+              const message = c.commit?.message ?? '';
+              if (agentCoauthor.test(message) || agentTrailer.test(message)) {
+                reasons.push(`agent trailer in commit ${c.sha.slice(0, 7)}`);
+              }
+            }
+            if (botAuthors.size) {
+              reasons.push(`bot-authored commits: ${[...botAuthors].join(', ')}`);
+            }
+
+            if (reasons.length === 0) {
+              core.info(
+                `Human-only PR (#${pr.number}); no approving review required.`,
+              );
+              return;
+            }
+
+            core.info(`Agent PR detected:\n- ${reasons.join('\n- ')}`);
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const timelineEvents = await github.paginate(
+              github.rest.issues.listEventsForTimeline,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                per_page: 100,
+              },
+            );
+            const dismissedReviewIDs = new Set(
+              timelineEvents
+                .filter((e) => e.event === 'review_dismissed')
+                .map((e) => e.dismissed_review?.review_id)
+                .filter((id) => typeof id === 'number'),
+            );
+
+            const latestByUser = new Map();
+            for (const review of reviews) {
+              const login = review.user?.login;
+              if (!login) continue;
+              if (!['APPROVED', 'CHANGES_REQUESTED'].includes(review.state)) {
+                continue;
+              }
+              if (dismissedReviewIDs.has(review.id)) continue;
+              const prev = latestByUser.get(login);
+              if (
+                !prev ||
+                new Date(review.submitted_at) > new Date(prev.submitted_at)
+              ) {
+                latestByUser.set(login, review);
+              }
+            }
+
+            const headSha = pr.head.sha;
+            const humanApprovers = [...latestByUser.values()]
+              .filter(
+                (review) =>
+                  review.state === 'APPROVED' &&
+                  review.commit_id === headSha &&
+                  !looksLikeBot(
+                    undefined,
+                    undefined,
+                    review.user?.type,
+                    review.user?.login,
+                  ),
+              )
+              .map((review) => review.user.login);
+
+            if (humanApprovers.length) {
+              core.info(
+                `Approved by human reviewer(s) on ${headSha.slice(0, 7)}: ${humanApprovers
+                  .map((l) => '@' + l)
+                  .join(', ')}.`,
+              );
+              return;
+            }
+
+            const staleApprovers = [...latestByUser.values()]
+              .filter(
+                (review) =>
+                  review.state === 'APPROVED' &&
+                  review.commit_id !== headSha &&
+                  !looksLikeBot(
+                    undefined,
+                    undefined,
+                    review.user?.type,
+                    review.user?.login,
+                  ),
+              )
+              .map((review) => review.user.login);
+
+            const staleNote = staleApprovers.length
+              ? ` Stale approval(s) on an older commit: ${staleApprovers
+                  .map((l) => '@' + l)
+                  .join(', ')}. Re-approve the current head.`
+              : '';
+
+            core.setFailed(
+              `This PR looks agent-authored and has no human approval of ` +
+                `${headSha.slice(0, 7)}, so it cannot be merged.${staleNote} ` +
+                `A human must Approve the latest commit.`,
+            );

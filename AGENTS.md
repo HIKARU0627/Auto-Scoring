@@ -92,6 +92,12 @@
 - Do not merge or enable auto-merge on a PR unless explicitly asked for that
   specific PR. `review-ready` stops at push + PR + change summary; merging is a
   human step.
+- Human-only PRs do not need an approving review. Agent PRs must pass the
+  `Agent review` check (a human Approve of the current head). Identify an
+  agent PR with GitHub App / bot authorship, an `AI-Agent: <tool>` trailer in
+  the PR body or commits, an agent `Co-authored-by`, or the `ai-agent` label.
+  Do not open an agent PR under a personal account without one of those
+  signals — the gate will treat it as human-only.
 
 ## GitHub App authentication
 

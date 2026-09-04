@@ -42,9 +42,14 @@ GitHub App帰属が設定済みならそれも適用する。
 個人開発でもmainへ直接pushせず、変更の根拠とCI結果をPRへ残す。
 
 - merge方式: squash mergeのみ / merge後branch自動削除: 有効
-- main ruleset: branch削除禁止、force-push禁止、PR必須、会話解決必須
-- required checks: `Quality`（`.github/workflows/ci.yml` の job 名）
-- approving review: 1件必須。AIエージェントの変更は人間のレビュー承認を経てからmerge
+- main ruleset: branch削除禁止、force-push禁止、PR必須、会話解決必須。ネイティブの
+  「全員に承認レビュー1件」は付けない（作者自身は自己承認できない）
+- required checks: `Quality`（`.github/workflows/ci.yml` の job 名）、
+  `Agent review`（`.github/workflows/agent-review.yml` の job 名）
+- 人間だけのPRは承認レビュー不要。AIエージェントのPRだけ、人間の Approve を
+  `Agent review` が必須にする。識別は GitHub App / bot 作者、`AI-Agent:` トレーラー、
+  エージェントの Co-authored-by、`ai-agent` ラベル。個人アカウントのまま出す場合は
+  本文に `AI-Agent: <ツール名>` を書く
 
 check名を変更するときは workflow、ruleset、[quality-gates.md](./quality-gates.md)
 を同じ変更で更新する。
@@ -76,8 +81,9 @@ setup hook（`orca.yaml` に宣言済み）は現在のworktreeへ依存導入�
 5. `pnpm run check` を実行し、`.agents/skills/review-ready/SKILL.md` に従って可読性
    確認 → Atomic Commit → push → Change Summary同期まで行う。
 6. PR本文に `Closes #<Issue番号>` を記載する。Sub-issueなら親Issueも参照する。
-7. CIが成功したらreview-readyとして人間へ引き渡す。mainへのmergeは人間の承認
-   レビュー1件を必須とし、AIエージェントは明示的な依頼がある場合だけsquash merge。
+7. CIが成功したらreview-readyとして人間へ引き渡す。人間だけのPRは Quality 通過後に
+   squash mergeできる。AIエージェントのPRは `Agent review` が人間の Approve を要求する。
+   エージェントは明示的な依頼がある場合だけsquash mergeする。
 8. レビュー指摘は同じworktreeで修正し、同じ検証とChange Summary同期を繰り返す。
 
 ## Repository Skillの最小セット

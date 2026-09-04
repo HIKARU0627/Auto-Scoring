@@ -12,6 +12,7 @@ entry in `package.json`, invoked as `pnpm run <script>`.
 | Test               | `pnpm run test`         | Test                                 |
 | Build              | `pnpm run build`        | Build                                |
 | Everything         | `pnpm run check`        | (all of the above)                   |
+| Agent PR review    | (CI only)               | `Agent review` in `agent-review.yml` |
 
 `lint` / `typecheck` / `test` / `build` ship as no-ops that print
 `not configured`. Replace those scripts for your project — see
@@ -23,7 +24,9 @@ entry in `package.json`, invoked as `pnpm run <script>`.
   formatting): fast, deterministic, non-destructive.
 - `.githooks/pre-push` runs `pnpm run check:pre-push` (lint + typecheck + test).
 - Hooks can be bypassed with `--no-verify`, so GitHub Actions runs the full set
-  as a merge gate. Make the real checks required in the branch ruleset.
+  as a merge gate. Make `Quality` and `Agent review` required in the branch
+  ruleset. `Agent review` is not in `pnpm run check`: it only applies to pull
+  requests and requires a human Approve when the PR is agent-authored.
 - `pnpm run bootstrap` points the current worktree at `.githooks/`
   (`git config core.hooksPath .githooks`).
 
@@ -40,6 +43,8 @@ The gate list is defined in two places that must stay in step:
 - `package.json` — the `check`, `check:pre-commit`, `check:pre-push` scripts.
 - `.github/workflows/ci.yml` — one step per gate (split out so a failure names
   itself in the CI UI).
+- `.github/workflows/agent-review.yml` — required check `Agent review`; not a
+  `package.json` script.
 
 When you add or remove a gate, update both, and this table.
 
