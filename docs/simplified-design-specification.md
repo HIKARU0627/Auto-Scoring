@@ -503,10 +503,14 @@ Annotation Overlay
 +
 確定Annotation
         ↓
-PyMuPDF
+pypdfium2 + pypdf
         ↓
 添削済みPDF
 ```
+
+> PDF ライブラリは PoC 3（Issue #12）で `pypdfium2` + `pypdf` に確定した。
+> 経緯は [`technology-stack.md`](./technology-stack.md) §3.1 /
+> [`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。
 
 として新しいPDFを生成する。
 
@@ -742,7 +746,8 @@ Flutterとlocalhost通信する。
 
 # 22. PDF処理
 
-Python側でPyMuPDFを利用する。
+Python側で `pypdfium2`（ラスタライズ）と `pypdf`（オーバーレイ・出力）を利用する
+（PoC 3 / Issue #12 で確定。旧記載は PyMuPDF）。
 
 用途：
 
@@ -1024,7 +1029,7 @@ Pydantic
 ## PDF
 
 ```text
-PyMuPDF
+pypdfium2 + pypdf
 ```
 
 ## Image Processing
