@@ -26,7 +26,8 @@ def schema() -> dict[str, Any]:
 def write_schema(path: Path = SCHEMA_PATH) -> None:
     """Write the schema to ``path`` with stable formatting."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(schema(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as output:
+        output.write(json.dumps(schema(), indent=2, sort_keys=True) + "\n")
 
 
 def main() -> None:

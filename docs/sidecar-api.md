@@ -64,9 +64,9 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 高速な git hook（`check:pre-commit` / `check:pre-push`）には含めない
 （`docs/quality-gates.md`「Adding heavier gates」）。
 
-生成パッケージの `pubspec.lock` はライブラリ慣例に従いコミットしない。`build_runner` /
-`built_value_generator` の出力は対象バージョン範囲内で安定。差分が出た場合は
-`pnpm run openapi:generate` で再生成してコミットする。
+生成パッケージの `pubspec.lock` は、公開ライブラリではなくリポジトリ内のコード生成ツールとして
+再現性を優先してコミットする。生成する JSON とマニフェストの改行も LF に固定する。
+差分が出た場合は `pnpm run openapi:generate` で再生成してコミットする。
 
 ## 5. テスト
 

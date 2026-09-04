@@ -9,6 +9,7 @@
 // PATH. See docs/sidecar-api.md and docs/quality-gates.md.
 
 import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -16,6 +17,11 @@ import { dirname, join } from "node:path";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const backendDir = join(repoRoot, "backend");
 const generatedDir = join(repoRoot, "app", "packages", "auto_scoring_api");
+const generatedFilesManifest = join(
+  generatedDir,
+  ".openapi-generator",
+  "FILES",
+);
 const tracked = ["backend/openapi", "app/packages/auto_scoring_api"];
 const require = createRequire(import.meta.url);
 const generatorCli =
@@ -35,6 +41,10 @@ function generate() {
     [generatorCli, "generate", "-c", "openapi-generator.yaml"],
     repoRoot,
   );
+  writeFileSync(
+    generatedFilesManifest,
+    readFileSync(generatedFilesManifest, "utf8").replaceAll("\r\n", "\n"),
+  );
   run("dart", ["pub", "get"], generatedDir);
   run("dart", ["run", "build_runner", "build"], generatedDir);
   run("dart", ["format", "."], generatedDir);
@@ -42,16 +52,17 @@ function generate() {
 
 function check() {
   generate();
-  const status = execFileSync(
+  const diff = execFileSync("git", ["diff", "--", ...tracked], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  const untracked = execFileSync(
     "git",
-    ["status", "--porcelain", "--", ...tracked],
-    {
-      cwd: repoRoot,
-      encoding: "utf8",
-    },
+    ["ls-files", "--others", "--exclude-standard", "--", ...tracked],
+    { cwd: repoRoot, encoding: "utf8" },
   );
-  if (status.trim()) {
-    console.error(status);
+  if (diff.trim() || untracked.trim()) {
+    console.error(diff + untracked);
     console.error(
       "OpenAPI artifacts are stale or untracked. Run `pnpm run openapi:generate` and commit the result.",
     );
