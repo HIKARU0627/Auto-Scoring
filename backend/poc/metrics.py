@@ -120,11 +120,10 @@ def aggregate(candidate: str, outcomes: Sequence[CaseOutcome], tolerance_points:
     for outcome in answered:
         assert outcome.ai is not None
         ai_by_id = {c.id: c.result for c in outcome.ai.criteria}
+        criterion_total += len(outcome.human.criteria)
         for cid, human_result in outcome.human.criteria.items():
-            if cid in ai_by_id:
-                criterion_total += 1
-                if ai_by_id[cid] == human_result:
-                    criterion_agree += 1
+            if ai_by_id.get(cid) == human_result:
+                criterion_agree += 1
 
     violations = sum(1 for o in cells if o.schema_violation)
 

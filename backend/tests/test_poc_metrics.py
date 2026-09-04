@@ -63,6 +63,18 @@ def test_schema_violation_counts_as_non_match_and_is_reported() -> None:
     assert m.discrepancies[0].note == "bad"
 
 
+def test_missing_criterion_counts_as_disagreement() -> None:
+    outcomes = [
+        CaseOutcome(
+            "a",
+            "clean",
+            _human(4, {"c1": "pass", "c2": "partial"}),
+            _ai(4, [("c1", "pass")]),
+        ),
+    ]
+    assert aggregate("synthetic-a", outcomes, tolerance_points=1.0).criterion_agreement_rate == 0.5
+
+
 def test_cost_estimate_uses_pricing_table() -> None:
     outcomes = [
         CaseOutcome(
