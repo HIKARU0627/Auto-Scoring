@@ -999,6 +999,10 @@ PDF上の特定位置へ、
 
 # 32. 技術スタック
 
+> 本章の暫定項目・抽象化（`AIProvider` / `OCRProvider` 等）の最終決定は
+> [`technology-stack.md`](./technology-stack.md)（技術スタック調査・決定書）にまとめた。
+> 食い違う場合はそちらを優先する。
+
 ## Desktop / UI
 
 ```text
@@ -1054,6 +1058,7 @@ OCRProvider abstraction
 # 33. 未決定事項
 
 実装前またはPoC後にユーザー判断が必要な項目。
+各項目の現時点の反映状況は [`technology-stack.md`](./technology-stack.md) §7 を参照。
 
 1. Windows専用とするか
 2. 使用するAIモデル
