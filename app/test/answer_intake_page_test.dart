@@ -448,6 +448,78 @@ void main() {
   );
 
   testWidgets(
+    'a submission created while the list is still loading is not lost when the stale list response lands',
+    (tester) async {
+      final listCompleter = Completer<List<SubmissionResponse>>();
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) => listCompleter.future,
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(id: 'sub-new'),
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      // listSubmissions() is now in flight, unresolved -- from here on use
+      // pump(duration), not pumpAndSettle(): the loading spinner's
+      // indeterminate animation never settles on its own and would hang it.
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text('student-a.pdf'), findsOneWidget);
+
+      await tester.tap(find.text('取り込む'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // The list fetch that started before this submission existed finally
+      // lands (empty, since it predates the submission); it must not wipe
+      // the freshly created submission back out of the list.
+      listCompleter.complete(const []);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ListTile), findsOneWidget);
+      expect(find.text('取込完了: 処理済み'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a short viewport does not overflow the intake form', (
+    tester,
+  ) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.physicalSize = const Size(400, 320);
+    tester.view.devicePixelRatio = 1.0;
+
+    final dependencies = AppDependencies(
+      listTests: () async => [_test()],
+      listSubmissions: (testId) async => [
+        _submission(state: 'needs_review', reviewReason: 'missing_pages:2'),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('国語 第1回').last);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
     'the default (unconnected) dependencies show an error instead of crashing on mount',
     (tester) async {
       // Regression test: AppDependencies()'s default listTests/listSubmissions

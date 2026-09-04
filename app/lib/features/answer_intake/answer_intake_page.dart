@@ -92,7 +92,9 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     try {
       final submissions = await widget.dependencies.listSubmissions(testId);
       if (!mounted || _selectedTestId != testId) return;
-      setState(() => _submissions = submissions);
+      setState(
+        () => _submissions = _withLocalOnlyPreserved(_submissions, submissions),
+      );
     } on SidecarApiException catch (error) {
       if (!mounted || _selectedTestId != testId) return;
       setState(() => _errorMessage = error.message);
@@ -172,42 +174,59 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
         padding: const EdgeInsets.all(24),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildTestPicker(),
-              const SizedBox(height: 16),
-              _buildFilePicker(),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _studentLabelController,
-                enabled: !_isSubmitting,
-                decoration: const InputDecoration(
-                  labelText: '生徒ラベル（任意）',
-                  border: OutlineInputBorder(),
+          // CustomScrollView, not a fixed Column+Expanded: on a short
+          // viewport -- a small window, a phone in landscape, or the
+          // student-label field's keyboard eating half the screen -- the
+          // form controls above the submission list no longer fit their
+          // non-flex space and would otherwise overflow (RenderFlex) and
+          // hide whatever's below the cut. Everything scrolls as one unit
+          // instead, and the submission list still fills any leftover space
+          // when there's room for it (SliverFillRemaining below).
+          child: CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildTestPicker(),
+                    const SizedBox(height: 16),
+                    _buildFilePicker(),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _studentLabelController,
+                      enabled: !_isSubmitting,
+                      decoration: const InputDecoration(
+                        labelText: '生徒ラベル（任意）',
+                        border: OutlineInputBorder(),
+                      ),
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _submit(),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_isSubmitting) const LinearProgressIndicator(),
+                    if (_errorMessage != null) ...[
+                      const SizedBox(height: 8),
+                      _buildErrorBanner(),
+                    ],
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      focusNode: _submitFocusNode,
+                      onPressed: _canSubmit ? _submit : null,
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('取り込む'),
+                    ),
+                    const SizedBox(height: 24),
+                    const Divider(),
+                    const SizedBox(height: 8),
+                    Text(
+                      '取込済み答案',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                 ),
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => _submit(),
               ),
-              const SizedBox(height: 16),
-              if (_isSubmitting) const LinearProgressIndicator(),
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 8),
-                _buildErrorBanner(),
-              ],
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                focusNode: _submitFocusNode,
-                onPressed: _canSubmit ? _submit : null,
-                icon: const Icon(Icons.upload_file),
-                label: const Text('取り込む'),
-              ),
-              const SizedBox(height: 24),
-              const Divider(),
-              const SizedBox(height: 8),
-              Text('取込済み答案', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Expanded(child: _buildSubmissionList()),
+              _buildSubmissionSliver(),
             ],
           ),
         ),
@@ -301,17 +320,26 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     );
   }
 
-  Widget _buildSubmissionList() {
+  Widget _buildSubmissionSliver() {
     if (_selectedTestId == null) {
-      return const Center(child: Text('テストを選択してください'));
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: Text('テストを選択してください')),
+      );
     }
     if (_loadingSubmissions) {
-      return const Center(child: CircularProgressIndicator());
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: CircularProgressIndicator()),
+      );
     }
     if (_submissions.isEmpty) {
-      return const Center(child: Text('まだ答案が取り込まれていません'));
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(child: Text('まだ答案が取り込まれていません')),
+      );
     }
-    return ListView.separated(
+    return SliverList.separated(
       itemCount: _submissions.length,
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
@@ -340,6 +368,24 @@ List<SubmissionResponse> _withUpserted(
   List<SubmissionResponse> submissions,
   SubmissionResponse result,
 ) => [result, ...submissions.where((s) => s.id != result.id)];
+
+/// Merge a fresh `listSubmissions` [fetched] result with whatever is still in
+/// [current] but missing from it. A submission created while that fetch was
+/// in flight (via [_withUpserted], right after `createSubmission` returns)
+/// can't be in [fetched] -- the fetch was already sent before that submission
+/// existed on the server -- so a plain replace would silently drop it from
+/// view until the page reopens. Anything in [fetched] is the source of truth
+/// for its own id (a re-fetch after a state change should win over a locally
+/// upserted copy that's now stale).
+List<SubmissionResponse> _withLocalOnlyPreserved(
+  List<SubmissionResponse> current,
+  List<SubmissionResponse> fetched,
+) {
+  final localOnly = current.where(
+    (local) => !fetched.any((f) => f.id == local.id),
+  );
+  return [...localOnly, ...fetched];
+}
 
 String _describeError(Object? error) =>
     error is SidecarApiException ? error.message : '$error';
