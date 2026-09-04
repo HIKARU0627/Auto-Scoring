@@ -78,6 +78,11 @@ def _seed_test_with_questions(
 def test_happy_path_creates_submission_and_ok_answer_images(
     make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
 ) -> None:
+    """Issue #17 acceptance: a 3+ page fixture with every Question correctly
+    associated to its own page, in page order -- not just a 2-page fixture
+    plus an assertion in prose that a 3rd page "would" follow the same path
+    (docs/answer-intake-and-preprocessing.md §12).
+    """
     q1 = make_question(
         id="q-1",
         page=1,
@@ -89,8 +94,14 @@ def test_happy_path_creates_submission_and_ok_answer_images(
         page=2,
         answer_area=NormalizedRect(x=0.2, y=0.3, width=0.4, height=0.3),
     )
-    _seed_test_with_questions(make_uow, questions=[q1, q2])
-    data = _pdf_bytes(pages=2)
+    q3 = make_question(
+        id="q-3",
+        number="問3",
+        page=3,
+        answer_area=NormalizedRect(x=0.15, y=0.2, width=0.3, height=0.25),
+    )
+    _seed_test_with_questions(make_uow, questions=[q1, q2, q3])
+    data = _pdf_bytes(pages=3)
 
     with make_uow() as uow:
         result = intake_submission(
@@ -110,19 +121,38 @@ def test_happy_path_creates_submission_and_ok_answer_images(
     assert result.is_retry is False
     assert result.submission.state is SubmissionState.AI_PROCESSED
     assert result.submission.review_reason is None
-    assert result.submission.page_count == 2
+    assert result.submission.page_count == 3
     assert result.submission.original_filename == "student-a.pdf"
     assert len(result.submission.source_pdf_sha256) == 64
 
-    assert len(result.answer_images) == 2
+    assert len(result.answer_images) == 3
     assert all(image.status is AnswerImageStatus.OK for image in result.answer_images)
+
+    # Every question landed on its own page, in page order -- not just "3
+    # images got created somewhere".
+    assert [image.page for image in result.answer_images] == [1, 2, 3]
+    images_by_question = {image.question_id: image for image in result.answer_images}
+    assert images_by_question.keys() == {"q-1", "q-2", "q-3"}
+    assert images_by_question["q-1"].page == 1
+    assert images_by_question["q-2"].page == 2
+    assert images_by_question["q-3"].page == 3
 
     source_path = store.root / result.submission.source_pdf_path
     assert source_path.read_bytes() == data
     for image in result.answer_images:
         assert (store.root / image.image_path).exists()
-    for page in (1, 2):
+    for page in (1, 2, 3):
         assert store.submission_page_image_path(result.submission.id, page).exists()
+
+    # And the persisted rows -- not just intake_submission's in-memory
+    # result -- carry the same page/question mapping back out.
+    with make_uow() as uow:
+        persisted = uow.answer_images.list_for_submission(result.submission.id)
+    assert {(image.question_id, image.page) for image in persisted} == {
+        ("q-1", 1),
+        ("q-2", 2),
+        ("q-3", 3),
+    }
 
 
 def test_missing_page_marks_submission_needs_review(
