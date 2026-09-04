@@ -8,12 +8,11 @@ GitHub Issue [#15](https://github.com/HIKARU0627/Auto-Scoring/issues/15)（親
 依存: [#12 PoC 3](https://github.com/HIKARU0627/Auto-Scoring/issues/12)（PDF座標
 往復とPDFエンジン）と
 [#11](https://github.com/HIKARU0627/Auto-Scoring/issues/11)（MVPデータモデル・
-`app-data/` ローカル保存基盤）。両方とも本PoC時点でPR
-（[#31](https://github.com/HIKARU0627/Auto-Scoring/pull/31) /
-Issue #11のPR）が未マージだが、座標変換と永続化はこのPoCの受入条件そのものなので、
-未確定のまま待たず、両ブランチの該当ファイルをこのブランチへ**コピー**して使用した
-（[§ 昇格したもの／PoC限定のもの](#昇格したものpoc限定のもの)に明記）。マージされ
-次第、コピーではなく共有モジュールへの依存に差し替える。
+`app-data/` ローカル保存基盤）。初回対応時は両PRが未マージだったため必要部分を
+一時的に実装したが、再レビュー時点で [#31](https://github.com/HIKARU0627/Auto-Scoring/pull/31) と
+[#33](https://github.com/HIKARU0627/Auto-Scoring/pull/33) がmainへマージ済みとなった。
+本ブランチもmainを取り込み、PDF契約はmainの実装をそのまま使用し、ProfileのJSON変換
+だけを `LocalFileStore` の上に置く構成へ統合した。
 
 ## 結論（先に）
 
@@ -96,18 +95,15 @@ Issue #11のPR）が未マージだが、座標変換と永続化はこのPoCの
 `user_space_to_normalized` を適用してから外接矩形を取る — 90/270度回転は軸を入れ替
 えるため、単純に幅・高さで割るだけでは正しく変換できない。
 
-**この3ファイルは `HIKARU0627/issue-12-pdf-coords-poc`（PR #31、本PoC時点で未マー
-ジ）からそのままコピーした。** PR #31 が別途blocking指摘を抱えたまま残っていたため、
-Issue #15 が「同一形式の答案への再適用が許容誤差内で成立する」ことを回転・CropBox
-込みで検証するには、未確定のまま待つのではなくコピーして検証する方を選んだ。PR #31
-がマージされたら、このコピー3ファイルを削除し `auto_scoring.domain.pdf_geometry` /
-`pdf_engine` / `auto_scoring.adapters.pdf.pdfium_pypdf_engine` への通常の依存に戻す
-（[§ 昇格したもの／PoC限定のもの](#昇格したものpoc限定のもの)）。
+この3ファイルはPR #31でmainへ昇格した共有実装であり、本PoC固有のコピーは残していない。
+`profile_detection.py` と `annotation_markers.py` がその公開契約をimportして使う。
 
 fixture `format-e-rotated-cropbox` は A4 の MediaBox に `/Rotate 90` と CropBox
 インセット `(30, 40, 565, 800)` を設定し（表示は横向き、`displayed_width=760` /
 `displayed_height=535`）、この変換が回転・クロップの両方で正しく機能することを
-往復テストで確認する。
+往復テストで確認する。さらにQ1の既知の変換結果
+`(0.868421, 0.056075, 0.947368, 0.878505)` を固定値でassertし、同じ変換を期待値側でも
+呼ぶだけの循環テストにならないようにする。
 
 ## 永続化: `ProfileStore`（Issue #11 の `app-data/` 規約）
 
@@ -118,26 +114,24 @@ fixture `format-e-rotated-cropbox` は A4 の MediaBox に `/Rotate 90` と Crop
   （`docs/data-model-and-local-storage.md` §5、Issue #11 が定義したレイアウト）。
   本PoCには実際の `Test` エンティティがまだ無いため、`Profile.format_id` を
   `test-id` の代わりに使う。
-- **atomic write**: 同じディレクトリに隠しテンポラリファイル
-  (`.<name>.<uuid>.part`) を作り、`flush` + `fsync` の後 `os.replace` で本番名へ
-  差し替える（Windows / POSIX いずれでもアトミック）。Issue #11 の
-  `LocalFileStore.write_atomic` と同じ技法。
+- **atomic write**: Issue #11でmainへ昇格した `LocalFileStore.write_atomic` に委譲する。
+  同じディレクトリのテンポラリファイルを `flush` + `fsync` した後、`os.replace` で
+  本番名へ差し替える。
 - **上書き**: `save()` は毎回同じパスへ書く。DRAFT保存の直後にCONFIRMED保存が
   同じファイルを上書きするのは、実際の「確認」操作が同じテストのプロファイルを
   更新する動きと一致する。
 
-**このファイルは `HIKARU0627/issue-11-data-model` ブランチ（PR未マージ）が定義した
-規約を単独で満たす最小実装であり、そのブランチの `LocalFileStore` クラスそのものの
-コピーではない**（`delete_test` / `sweep_temp` / SQLAlchemy 連携など本PoCに不要な
-機能は持たない）。Issue #11 がマージされたら、この `ProfileStore` を削除し
-`LocalFileStore` に統合する。
+`ProfileStore` はProfile固有のJSON serialize/deserializeだけを担当し、パス検証・atomic
+write・readは `LocalFileStore` に委譲する。これによりローカル保存の実装は重複しない。
+読込時は、確認状態がJSON booleanであること、CONFIRMEDなら全regionが確認済みであることも
+再検証し、破損・手編集されたファイルから人間確認を迂回できないようにする。
 
 `test_profile_round_trip.py` の往復テストは、確認済みProfileをメモリ上で使い回す
 のではなく、`store.save(draft)` → `store.load(...)`（人間確認の直前）→
 `store.save(confirmed)` → 学生答案ごとに `store.load(...)`（再適用の直前）という
 経路を通す。`test_profile_store.py` は `ProfileStore` 単体（atomic write が
 テンポラリファイルを残さないこと、DRAFT→CONFIRMEDの上書き、別インスタンスからの
-再読込、パスエスケープの拒否）を検証する。
+再読込、パスエスケープの拒否、破損JSONによる確認状態の偽装拒否）を検証する。
 
 ## 検出境界（この PoC がテキスト/画像検出そのものを扱わない理由）
 
@@ -258,29 +252,21 @@ format-freeform-essayのようにマーカーを持たない自由記述用紙�
 - `domain/profile_detection.py`（`Marker` 契約・タグ分類・候補生成。
   `PageGeometry` ベースの矩形→正規化変換を使う）
 - `domain/profile_apply.py`（`reapply_profile` とそのエラー型）
-- `adapters/local/profile_store.py`（`ProfileStore`。Issue #11 の
-  `app-data/tests/<id>/profile.json` 規約を単独で満たす最小実装）
+- `adapters/local/profile_store.py`（`ProfileStore`。ProfileのJSON変換を担当し、
+  Issue #11 の `LocalFileStore` にファイルI/Oを委譲）
 - `tests/test_profile.py` / `test_profile_apply.py` / `test_profile_round_trip.py` /
   `test_profile_store.py`
 
-PoC限定・要再確認（他Issueの未マージ成果からのコピー、または本PoCの検証にのみ
-必要。次のMVP Issueで統合/置き換え/新規実装、または削除）:
+共有依存（mainへ昇格済み）:
 
-- **`domain/pdf_geometry.py` / `domain/pdf_engine.py` /
-  `adapters/pdf/pdfium_pypdf_engine.py` は `HIKARU0627/issue-12-pdf-coords-poc`
-  （PR #31、未マージ）からのコピーである。** PR #31 がマージされたら、この3
-  ファイルを削除して通常のimport依存に戻す。PR #31 の側で内容が変わった場合は、
-  マージ後にこのブランチの `profile_detection.py`/`annotation_markers.py` が新しい
-  シグネチャ（例: メソッド名変更）と整合するか確認が要る。
-  - 削除条件: PR #31 マージ後、`git diff` でコピーと現行 `domain/pdf_geometry.py`
-    等が一致することを確認し、コピーを削除してimportを向け直す。
-- **`adapters/local/profile_store.py` は `HIKARU0627/issue-11-data-model`
-  （PR未マージ）が定義した規約の最小実装であり、そのブランチの
-  `LocalFileStore` そのものではない。** Issue #11 マージ後、`ProfileStore` を
-  削除し `LocalFileStore.write_atomic` / 将来の `test_dir`(またはこのPoCの
-  `format_id` に相当する概念) を使うよう統合する。
-  - 削除条件: `LocalFileStore` が使えるようになり、`test_profile_store.py` /
-    `test_profile_round_trip.py` の永続化部分がそちらを使うよう移行した時点。
+- `domain/pdf_geometry.py` / `domain/pdf_engine.py` /
+  `adapters/pdf/pdfium_pypdf_engine.py` はPR #31の共有実装を使う。本PoC固有の重複コードや
+  後続の共通化作業は残っていない。
+- `adapters/local_storage.py` の `LocalFileStore` はPR #33の共有実装を使う。
+
+PoC限定・要再確認（本PoCの検証にのみ必要。次のMVP Issueで置き換え/新規実装、または
+削除）:
+
 - **`adapters/pdf/annotation_markers.py` は実運用のテキスト/画像検出ではない。**
   実際の模範解答PDF・採点マニュアルPDFからOCR/レイアウト解析でタグ付きspanを
   作る層（Issue #13 PoC OCR、または新規MVP Issue）に置き換える必要がある。
@@ -297,15 +283,11 @@ PoC限定・要再確認（他Issueの未マージ成果からのコピー、ま
   再読込→再適用」を検証した。UI設計は本PoCのスコープ外。
 - **`backend/poc/issue_15_multi_layout_profile/report.py` はPoCのエビデンス生成
   専用。** アプリ本体からは参照しない。合否判定の正はpytestテスト側にある。
-- **`pypdf` / `pypdfium2` / `pillow` は現状 dev 依存グループのまま。** PDF機能を
-  実装するMVP Issueで project 依存へ昇格するか、PoC 3 の採用構成と統合して整理する。
 
 ## 依存関係の変更
 
-- `backend/pyproject.toml` の dev グループに `pypdf>=6.16.2` / `pypdfium2>=5.13` /
-  `pillow>=12.3` を追加（PoC 3 採用と同じライブラリ・同系統バージョン）。
-  `[[tool.mypy.overrides]]` に `pypdfium2.*` の型スタブ欠如を許容する設定を追加
-  （PoC 3 と同じ）。
-- `.gitattributes` に `*.pdf binary` を追加。
+- 本PoC固有のruntime依存追加はない。mainに昇格済みの `pypdf>=6.16` /
+  `pypdfium2>=5.13` と `pypdfium2.*` のmypy設定を利用する。`pillow` はPoCの
+  エビデンス生成だけが使うためdev依存のまま。
 - `.prettierignore` に生成物ディレクトリ `docs/poc-4-multi-layout-profiles/` を
   追加（`app-data/` の `profile.json` を含む）。
