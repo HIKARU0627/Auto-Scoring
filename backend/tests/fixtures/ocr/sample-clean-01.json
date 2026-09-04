@@ -1,0 +1,22 @@
+{
+  "ground_truth": {
+    "sample_id": "poc1-clean-01",
+    "reference_text": "光合成によって酸素が発生する",
+    "keywords": ["光合成", "酸素"],
+    "handwriting_quality": "clean",
+    "layout_type": "single_sheet",
+    "expected_boxes": [{ "x": 0.12, "y": 0.2, "width": 0.5, "height": 0.06 }]
+  },
+  "ocr_result": {
+    "text": "光合成によって酸素が発生する",
+    "provider": "recorded-fixture",
+    "tokens": [
+      {
+        "text": "光合成によって酸素が発生する",
+        "bounding_box": { "x": 0.12, "y": 0.2, "width": 0.5, "height": 0.06 },
+        "confidence": 0.97,
+        "band": "high"
+      }
+    ]
+  }
+}
