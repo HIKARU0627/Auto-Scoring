@@ -65,7 +65,8 @@ uv run python poc/issue_12_pdf_coordinates/report.py
 - **期待値**: 採用変換 `normalized_to_user_space` が返すユーザー空間 pt。
 - **実測値**: その pt に赤い矩形を pypdf で重ね、pdfium（`pdfrx` が包むのと同じエンジ
   ン）で scale 2.0 raster 化し、赤マークの bounding-box 中心を正規化し直した値。
-- **許容誤差**: **0.004 正規化単位**（A4 高さで約 3.4 pt / raster 2px 相当）。
+- **許容誤差**: **0.004 正規化単位**（A4 で横約 2.4 pt・縦約 3.4 pt、scale 2.0 の
+  raster で横約 4.8 px・縦約 6.7 px）。
   ラスタライズと中心丸めの実誤差は約 5e-4。軸取り違えなら約 0.5 ずれるため、両者の
   間に十分収まる閾値。回帰テスト `_TOLERANCE` と `report.py` で共有。
 
