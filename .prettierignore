@@ -3,3 +3,7 @@
 .claude/skills/
 skills-lock.json
 pnpm-lock.yaml
+
+# Flutter app and Python backend own their formatters (dart format / ruff format)
+app/
+backend/
