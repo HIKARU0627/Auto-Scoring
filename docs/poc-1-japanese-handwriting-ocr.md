@@ -232,7 +232,8 @@ samples: 4
 - latency: p50 ≤ 3s、p95 ≤ 8s（1 設問画像あたり）。
 - 概算 cost: ≤ 1.5 USD / 1,000 設問（第一候補）。
 - 低 Confidence の挙動: 認識不能を推測で埋めず `ConfidenceBand.LOW` として候補を
-  返す（§10。契約は `test_ocr_provider_contract.py` で検証済み）。
+  返す（§10）。LOW 指定と欠落防止は contract test で検証し、provider 生出力へ
+  推測を加えていないことは各 adapter のレビューで確認する。
 - Bounding Box 中心誤差の下限は、§1.3 で測る**人間同士のばらつき**を下回らなくてよい
   （人間ラベルより厳しくは求めない）。
 
@@ -291,8 +292,9 @@ samples: 4
 ## 10. 低 Confidence / 認識不能の方針
 
 - OCR は認識不能な範囲も**トークンとして返す**。`ConfidenceBand.LOW` を付け、
-  `text` には最良候補（例: `???` や部分推定）を入れる。**欠落させない・黙って
-  整形しない**（Issue #13 受入条件）。
+  `text` は provider の生出力をそのまま保持する。provider が文字を返さなければ
+  空文字とし、adapter 側の推測で埋めない。**欠落させない・黙って整形しない**
+  （Issue #13 受入条件）。
 - `OcrResult.has_low_confidence` が真の設問は、UI で「文字認識要確認」として提示し、
   自動確定フローに乗せない（簡易設計書 §8.2・§35-2）。
 - この契約は `backend/tests/test_ocr_provider_contract.py` の

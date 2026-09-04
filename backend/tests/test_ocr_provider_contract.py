@@ -65,7 +65,7 @@ class _StubOCRProvider:
                 text="",
                 tokens=(
                     OcrToken(
-                        text="???",
+                        text="",
                         bounding_box=BoundingBox(0.10, 0.40, 0.15, 0.05),
                         confidence=0.12,
                         band=ConfidenceBand.LOW,

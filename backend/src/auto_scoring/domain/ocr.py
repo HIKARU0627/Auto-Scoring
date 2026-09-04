@@ -6,8 +6,9 @@ module only pins the contract every provider must honour:
 
 * text, per-token bounding boxes, and a confidence value plus a coarse band come
   back together (simplified-design-specification.md section 8.1);
-* an unreadable span is still returned, flagged ``ConfidenceBand.LOW`` with a
-  best-guess ``text`` -- never dropped and never silently rewritten
+* an unreadable span is still returned and flagged ``ConfidenceBand.LOW``;
+  adapters preserve the provider's raw text (or an empty sentinel) instead of
+  filling the span with a post-processing guess
   (Issue #13 acceptance: do not fill unrecognisable spans with a guess);
 * bounding boxes are in normalised page coordinates (0.0 to 1.0) so the value
   survives the pdfium <-> Python round trip (design section 12.3).
@@ -92,9 +93,9 @@ class BoundingBox:
 class OcrToken:
     """One recognised text span with its box and confidence.
 
-    An unreadable span is still emitted -- with ``band == ConfidenceBand.LOW``
-    and a best-guess ``text`` -- so a downstream reviewer sees a "needs check"
-    candidate instead of a silent gap (Issue #13).
+    An unreadable span is still emitted with ``band == ConfidenceBand.LOW``.
+    ``text`` preserves the provider's raw output, or is empty when no text was
+    returned; adapters must not fill it with a post-processing guess.
     """
 
     text: str

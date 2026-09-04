@@ -40,4 +40,6 @@ Each `sample-*.json` is one question-region sample:
 ```
 
 Coordinates are normalised to `0.0..1.0`. An unreadable span is recorded as a
-`low`-band token with a best-guess `text`, never omitted.
+`low`-band token and is never omitted. Its `text` is the provider's raw output,
+or an empty string when the provider returned no text; the adapter must not add
+a post-processing guess.
