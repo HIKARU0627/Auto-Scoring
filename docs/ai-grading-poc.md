@@ -383,3 +383,5 @@ condition B: モデル固有のプロンプト／パース最適化を本実装�
 | 不採用 adapter を削除し `AIProvider` contract test を残す | ベンダー adapter は未作成（§7、モデル未確定のため）。contract test は昇格                                              |
 | secret と答案本文を出力しない                             | §2・§5.1。`test_report_contains_no_answer_text` / `test_provider_error_details_do_not_reach_report`                    |
 | 同じデータから集計結果を再生成できる                      | §2。`test_run_is_reproducible_from_the_same_fixtures` / `test_real_candidates_are_reproducible_from_recorded_fixtures` |
+
+> Issue #14 の未達成部分（§6.2 本番規模データセットでの実測、および §6 の provider/model 採用決定）は [Issue #35](https://github.com/HIKARU0627/Auto-Scoring/issues/35) へ引き継ぐ。

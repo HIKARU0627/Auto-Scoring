@@ -1,0 +1,218 @@
+{
+  "profile_id": "profile-1",
+  "format_id": "format-c-three-page-mixed-split-answers",
+  "status": "confirmed",
+  "signature": {
+    "pages": [
+      {
+        "width_pt": 595.0,
+        "height_pt": 842.0
+      },
+      {
+        "width_pt": 842.0,
+        "height_pt": 595.0
+      },
+      {
+        "width_pt": 498.0,
+        "height_pt": 709.0
+      }
+    ]
+  },
+  "regions": [
+    {
+      "region_id": "Q1-0",
+      "kind": "question",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.12100840336134454,
+        "y0": 0.09738717339667459,
+        "x1": 0.8689915966386554,
+        "y1": 0.16864608076009502
+      },
+      "label": "Q1",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_1-1",
+      "kind": "answer_area",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.12100840336134454,
+        "y0": 0.18052256532066507,
+        "x1": 0.48739495798319327,
+        "y1": 0.28741092636579574
+      },
+      "label": "ANSWER_1",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_2-2",
+      "kind": "answer_area",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.5126050420168067,
+        "y0": 0.18052256532066507,
+        "x1": 0.8789915966386554,
+        "y1": 0.28741092636579574
+      },
+      "label": "ANSWER_2",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANNOT-3",
+      "kind": "annotation_area",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.12100840336134454,
+        "y0": 0.334916864608076,
+        "x1": 0.8789915966386554,
+        "y1": 0.40617577197149646
+      },
+      "label": "ANNOT",
+      "confirmed": true
+    },
+    {
+      "region_id": "MODEL_ANSWER-4",
+      "kind": "model_answer",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.12100840336134454,
+        "y0": 0.667458432304038,
+        "x1": 0.8789915966386554,
+        "y1": 0.8218527315914489
+      },
+      "label": "MODEL_ANSWER",
+      "confirmed": true
+    },
+    {
+      "region_id": "Q2-5",
+      "kind": "question",
+      "page_index": 1,
+      "bbox": {
+        "x0": 0.047505938242280284,
+        "y0": 0.058823529411764705,
+        "x1": 0.9501187648456056,
+        "y1": 0.15966386554621848
+      },
+      "label": "Q2",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_3-6",
+      "kind": "answer_area",
+      "page_index": 1,
+      "bbox": {
+        "x0": 0.047505938242280284,
+        "y0": 0.19327731092436976,
+        "x1": 0.3087885985748218,
+        "y1": 0.4957983193277311
+      },
+      "label": "ANSWER_3",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_4-7",
+      "kind": "answer_area",
+      "page_index": 1,
+      "bbox": {
+        "x0": 0.34560570071258906,
+        "y0": 0.19327731092436976,
+        "x1": 0.6068883610451307,
+        "y1": 0.4957983193277311
+      },
+      "label": "ANSWER_4",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_5-8",
+      "kind": "answer_area",
+      "page_index": 1,
+      "bbox": {
+        "x0": 0.6437054631828979,
+        "y0": 0.19327731092436976,
+        "x1": 0.9501187648456056,
+        "y1": 0.4957983193277311
+      },
+      "label": "ANSWER_5",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANNOT-9",
+      "kind": "annotation_area",
+      "page_index": 1,
+      "bbox": {
+        "x0": 0.047505938242280284,
+        "y0": 0.5462184873949579,
+        "x1": 0.9501187648456056,
+        "y1": 0.7983193277310925
+      },
+      "label": "ANNOT",
+      "confirmed": true
+    },
+    {
+      "region_id": "Q3-10",
+      "kind": "question",
+      "page_index": 2,
+      "bbox": {
+        "x0": 0.08032128514056225,
+        "y0": 0.05500705218617771,
+        "x1": 0.9196787148594378,
+        "y1": 0.12552891396332863
+      },
+      "label": "Q3",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_6-11",
+      "kind": "answer_area",
+      "page_index": 2,
+      "bbox": {
+        "x0": 0.08032128514056225,
+        "y0": 0.153737658674189,
+        "x1": 0.9196787148594378,
+        "y1": 0.5768688293370945
+      },
+      "label": "ANSWER_6",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANNOT-12",
+      "kind": "annotation_area",
+      "page_index": 2,
+      "bbox": {
+        "x0": 0.08032128514056225,
+        "y0": 0.6191819464033851,
+        "x1": 0.9196787148594378,
+        "y1": 0.8307475317348378
+      },
+      "label": "ANNOT",
+      "confirmed": true
+    },
+    {
+      "region_id": "SCORE-13",
+      "kind": "score",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.12100840336134454,
+        "y0": 0.42992874109263657,
+        "x1": 0.8789915966386554,
+        "y1": 0.501187648456057
+      },
+      "label": "SCORE",
+      "confirmed": true
+    },
+    {
+      "region_id": "RUBRIC-14",
+      "kind": "rubric",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.12100840336134454,
+        "y0": 0.5249406175771971,
+        "x1": 0.8789915966386554,
+        "y1": 0.6437054631828979
+      },
+      "label": "RUBRIC",
+      "confirmed": true
+    }
+  ]
+}

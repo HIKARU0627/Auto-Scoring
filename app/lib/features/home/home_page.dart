@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:auto_scoring_app/api/api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 
 /// Landing screen. Confirms the app boots and can reach the (stubbed) backend.
@@ -16,12 +15,12 @@ class HomePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Auto-Scoring')),
       body: Center(
-        child: FutureBuilder<BackendHealth>(
-          future: dependencies.apiClient.health(),
+        child: FutureBuilder<bool>(
+          future: dependencies.healthCheck(),
           builder: (context, snapshot) {
             final label = switch (snapshot.data) {
-              BackendHealth.ok => 'backend: ok',
-              BackendHealth.unavailable => 'backend: unavailable',
+              true => 'backend: ok',
+              false => 'backend: unavailable',
               null => 'backend: checking…',
             };
             return Text(label, style: Theme.of(context).textTheme.titleLarge);

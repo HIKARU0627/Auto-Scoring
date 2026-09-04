@@ -1,0 +1,93 @@
+{
+  "profile_id": "profile-1",
+  "format_id": "format-e-rotated-cropbox",
+  "status": "confirmed",
+  "signature": {
+    "pages": [
+      {
+        "width_pt": 760.0,
+        "height_pt": 535.0
+      }
+    ]
+  },
+  "regions": [
+    {
+      "region_id": "Q1-0",
+      "kind": "question",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.868421052631579,
+        "y0": 0.056074766355140186,
+        "x1": 0.9373684210526315,
+        "y1": 0.8785046728971962
+      },
+      "label": "Q1",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANSWER_1-1",
+      "kind": "answer_area",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.6052631578947368,
+        "y0": 0.056074766355140186,
+        "x1": 0.8552631578947368,
+        "y1": 0.8785046728971962
+      },
+      "label": "ANSWER_1",
+      "confirmed": true
+    },
+    {
+      "region_id": "ANNOT-2",
+      "kind": "annotation_area",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.5394736842105263,
+        "y0": 0.056074766355140186,
+        "x1": 0.5921052631578947,
+        "y1": 0.8785046728971962
+      },
+      "label": "ANNOT",
+      "confirmed": true
+    },
+    {
+      "region_id": "MODEL_ANSWER-3",
+      "kind": "model_answer",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.02631578947368421,
+        "y0": 0.056074766355140186,
+        "x1": 0.19736842105263158,
+        "y1": 0.8785046728971962
+      },
+      "label": "MODEL_ANSWER",
+      "confirmed": true
+    },
+    {
+      "region_id": "SCORE-4",
+      "kind": "score",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.47368421052631576,
+        "y0": 0.056074766355140186,
+        "x1": 0.5263157894736842,
+        "y1": 0.8785046728971962
+      },
+      "label": "SCORE",
+      "confirmed": true
+    },
+    {
+      "region_id": "RUBRIC-5",
+      "kind": "rubric",
+      "page_index": 0,
+      "bbox": {
+        "x0": 0.21052631578947367,
+        "y0": 0.056074766355140186,
+        "x1": 0.4605263157894737,
+        "y1": 0.8785046728971962
+      },
+      "label": "RUBRIC",
+      "confirmed": true
+    }
+  ]
+}

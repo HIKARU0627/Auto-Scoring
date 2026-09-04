@@ -38,6 +38,15 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # HTTP client for the sidecar boundary (interceptor-based token injection,
+  # timeouts, cancellation). See docs/technology-stack.md §2.
+  dio: ^5.7.0
+
+  # OpenAPI-generated sidecar client (dio + built_value). Regenerate with
+  # `pnpm run openapi:generate`; never edit by hand. See docs/sidecar-api.md.
+  auto_scoring_api:
+    path: packages/auto_scoring_api
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -4,9 +4,17 @@ version = "0.1.0"
 description = "Auto-Scoring Python sidecar (MVP 0.2 base)"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.14,<2.0",
     "fastapi[standard]>=0.115,<1.0",
     "pydantic>=2.10,<3.0",
+    "pypdf>=6.16",
+    "pypdfium2>=5.13",
+    "sqlalchemy>=2.0,<3.0",
 ]
+
+[project.scripts]
+auto-scoring-sidecar = "auto_scoring.api.sidecar:main"
+auto-scoring-openapi = "auto_scoring.api.openapi_schema:main"
 
 [dependency-groups]
 dev = [
@@ -14,6 +22,8 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
+    # PoC 3 evidence measurement and sample generation.
+    "pillow>=12.3",
 ]
 
 [build-system]
@@ -37,6 +47,11 @@ known-first-party = ["auto_scoring", "poc"]
 python_version = "3.12"
 strict = true
 files = ["src", "tests", "poc"]
+
+[[tool.mypy.overrides]]
+# pypdfium2 ships only partial inline types; pin the boundary here.
+module = ["pypdfium2.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

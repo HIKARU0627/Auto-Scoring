@@ -10,6 +10,7 @@ from pathlib import Path
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "auto_scoring"
 _DOMAIN = _SRC / "domain"
+_DB = _SRC / "db"
 
 _FORBIDDEN_PREFIXES = (
     "fastapi",
@@ -19,6 +20,14 @@ _FORBIDDEN_PREFIXES = (
     "httpx",
     "requests",
     "uvicorn",
+    "auto_scoring.api",
+    "auto_scoring.adapters",
+    "auto_scoring.db",
+)
+
+# The db layer may use SQLAlchemy / Alembic but must not reach back up the stack.
+_DB_FORBIDDEN_PREFIXES = (
+    "fastapi",
     "auto_scoring.api",
     "auto_scoring.adapters",
 )
@@ -46,3 +55,13 @@ def test_domain_has_no_forbidden_imports() -> None:
 
 def test_domain_package_exists() -> None:
     assert (_DOMAIN / "__init__.py").is_file()
+
+
+def test_db_layer_does_not_import_api_or_adapters() -> None:
+    offenders = [
+        f"{path.relative_to(_SRC)}: imports {module}"
+        for path in sorted(_DB.rglob("*.py"))
+        for module in _imported_modules(path)
+        if module.startswith(_DB_FORBIDDEN_PREFIXES)
+    ]
+    assert not offenders, "db layer must not depend on outer layers:\n" + "\n".join(offenders)

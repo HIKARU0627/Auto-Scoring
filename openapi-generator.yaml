@@ -1,0 +1,10 @@
+# Config for `pnpm run openapi:generate` (openapi-generator-cli, dart-dio).
+# The input schema is produced by `pnpm run openapi:export` from the FastAPI app.
+generatorName: dart-dio
+inputSpec: backend/openapi/openapi.json
+outputDir: app/packages/auto_scoring_api
+additionalProperties:
+  pubName: auto_scoring_api
+  pubLibrary: auto_scoring_api.api
+  serializationLibrary: built_value
+  nullableFields: false
