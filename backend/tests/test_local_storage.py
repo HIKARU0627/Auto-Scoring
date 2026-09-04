@@ -53,6 +53,21 @@ def test_delete_submission_removes_the_subtree(store: LocalFileStore) -> None:
     assert not store.submission_dir("sub-9").exists()
 
 
+def test_delete_submission_reports_filesystem_failure(
+    store: LocalFileStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = store.submission_dir("sub-9")
+    store.write_atomic(target / "source.pdf", b"x")
+
+    def fail_delete(_path: object) -> None:
+        raise PermissionError("injected delete failure")
+
+    monkeypatch.setattr("auto_scoring.adapters.local_storage.shutil.rmtree", fail_delete)
+
+    with pytest.raises(PermissionError, match="injected delete failure"):
+        store.delete_submission("sub-9")
+
+
 def test_paths_cannot_escape_the_root(store: LocalFileStore) -> None:
     with pytest.raises(ValueError, match="escapes storage root"):
         store.write_atomic(store.root / ".." / "escape.pdf", b"x")

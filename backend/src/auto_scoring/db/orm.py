@@ -129,6 +129,11 @@ class RubricCriterionRow(Base):
 class SubmissionRow(Base):
     __tablename__ = "submissions"
     __table_args__ = (
+        CheckConstraint(
+            "state IN ('unprocessed', 'ai_processing', 'ai_processed', "
+            "'needs_review', 'reviewed', 'exported', 'error')",
+            name="ck_submissions_state_valid",
+        ),
         Index("ix_submissions_test_id", "test_id"),
         Index("ix_submissions_state", "state"),
     )
@@ -238,6 +243,10 @@ class ReviewRow(Base):
 class JobRow(Base):
     __tablename__ = "jobs"
     __table_args__ = (
+        CheckConstraint(
+            "state IN ('queued', 'running', 'blocked', 'succeeded', 'failed', 'cancelled')",
+            name="ck_jobs_state_valid",
+        ),
         CheckConstraint("attempts >= 0", name="ck_jobs_attempts_non_negative"),
         CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
         Index("ix_jobs_state", "state"),

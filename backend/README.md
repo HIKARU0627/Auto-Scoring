@@ -4,7 +4,8 @@ Python sidecar for Auto-Scoring: FastAPI over a framework-free domain core.
 
 - Toolchain: Python 3.12+ ([`.python-version`](./.python-version)) managed with
   [uv](https://docs.astral.sh/uv/); dependencies locked in [`uv.lock`](./uv.lock).
-- Layers (dependency direction `api → adapters → db ← domain`, enforced by
+- Layers (dependency direction `api → domain ← adapters`, with persistence
+  support flowing `adapters → db → domain`, enforced by
   `tests/test_architecture.py`):
   - `src/auto_scoring/domain/` — MVP entities, invariants, and repository
     ports. No FastAPI, SQLAlchemy, HTTP clients, or external SDKs.

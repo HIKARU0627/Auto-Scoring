@@ -1,12 +1,14 @@
-"""Commit the database and the filesystem together, or neither.
+"""Defer file writes until the database transaction commits successfully.
 
 ``transactional_operation`` yields a :class:`StagedFiles` buffer. File bytes
 handed to it are held in memory until *after* the Unit of Work commits; only
 then are they written (each one atomically, via
 :meth:`LocalFileStore.write_atomic`). If the body raises, or the commit fails,
 the Unit of Work is rolled back and nothing is written — so a failed
-transaction leaves neither half-inserted rows nor stray files (issue #11
-verification, fault injection).
+database transaction leaves neither half-inserted rows nor stray files (issue
+#11 verification, fault injection). SQLite and the filesystem do not share a
+transaction: a file-write failure after the commit is propagated for recovery,
+but cannot roll the committed database transaction back.
 """
 
 from __future__ import annotations

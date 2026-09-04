@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from auto_scoring.adapters.atomic import transactional_operation
 from auto_scoring.adapters.local_storage import LocalFileStore
@@ -62,20 +61,23 @@ def test_exception_in_body_rolls_back_and_writes_nothing(
         assert uow.submissions.get("sub-1") is None
 
 
-def test_commit_failure_writes_no_files(make_uow: UowFactory, store: LocalFileStore) -> None:
+def test_commit_failure_writes_no_files(
+    make_uow: UowFactory, store: LocalFileStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _seed_parents(make_uow)
-    pdf_path = store.submission_dir("orphan") / "source.pdf"
+    pdf_path = store.submission_dir("sub-1") / "source.pdf"
 
-    # submission points at a test that does not exist -> the write fails with
-    # IntegrityError inside the transactional_operation() block.
-    with (
-        pytest.raises(IntegrityError),
-        make_uow() as uow,
-        transactional_operation(uow, store) as files,
-    ):
-        uow.submissions.add(make_submission(id="orphan", test_id="ghost"))
-        files.add(pdf_path, b"%PDF-1.7")
+    with make_uow() as uow:
+
+        def fail_commit() -> None:
+            raise InjectedFailure("commit failed")
+
+        monkeypatch.setattr(uow, "commit", fail_commit)
+
+        with pytest.raises(InjectedFailure), transactional_operation(uow, store) as files:
+            uow.submissions.add(make_submission())
+            files.add(pdf_path, b"%PDF-1.7")
 
     assert not pdf_path.exists()
     with make_uow() as uow:
-        assert uow.submissions.get("orphan") is None
+        assert uow.submissions.get("sub-1") is None

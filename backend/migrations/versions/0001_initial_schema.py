@@ -138,6 +138,11 @@ def upgrade() -> None:
         sa.Column("state", _submission_state, nullable=False),
         sa.Column("student_label", sa.String(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.CheckConstraint(
+            "state IN ('unprocessed', 'ai_processing', 'ai_processed', "
+            "'needs_review', 'reviewed', 'exported', 'error')",
+            name="ck_submissions_state_valid",
+        ),
     )
     op.create_index("ix_submissions_test_id", "submissions", ["test_id"])
     op.create_index("ix_submissions_state", "submissions", ["state"])
@@ -298,6 +303,10 @@ def upgrade() -> None:
         ),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
+        sa.CheckConstraint(
+            "state IN ('queued', 'running', 'blocked', 'succeeded', 'failed', 'cancelled')",
+            name="ck_jobs_state_valid",
+        ),
         sa.CheckConstraint("attempts >= 0", name="ck_jobs_attempts_non_negative"),
         sa.CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
     )

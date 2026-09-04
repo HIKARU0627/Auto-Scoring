@@ -36,9 +36,10 @@ backend/migrations/                # Alembic migration（versions/0001, 0002, ..
 backend/alembic.ini
 ```
 
-依存方向は `AGENTS.md`「Architecture」のとおり `api → adapters → db ← domain`
-（`domain` は SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api`
-を import しない。`tests/test_architecture.py` で強制）。
+依存方向は `AGENTS.md`「Architecture」のとおり `api → domain ← adapters`。
+永続化の補助経路は `adapters → db → domain` とする（`domain` は
+SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を import
+しない。`tests/test_architecture.py` で強制）。
 
 ## 2. Entity 一覧
 
@@ -128,12 +129,15 @@ app-data/
   DB コミットが成功した後にだけファイルを書く。DB 側が失敗（例外 or commit 失敗）
   すればファイルは一切書かれない。個々のファイル書き込み自体も atomic write なので、
   複数ファイルの一部だけ書けた場合でも各ファイルは壊れていない。
+  ただし SQLite とファイルシステムは同一トランザクションではないため、DB commit 後の
+  ファイル書き込み失敗はDBを巻き戻せない。例外を呼び出し元へ返し、未作成ファイルを
+  同じ内容で再書き込みするか、対応するDB操作を取り消す復旧が必要になる。
 - **削除・復旧手順**: `adapters/purge.py` の `purge_test` / `purge_submission` が、
   監査ログ (`operation_log` テーブル) への記録 → DB 行削除（cascade）→ ファイル削除、
   の順で実行する（business-rules §2 (11)「削除操作自体は監査ログに残す」）。
-  ファイル削除が失敗して中断した場合、DB 行は既に削除済みなので再実行しても
-  安全（`shutil.rmtree(..., ignore_errors=True)`）。手動復旧が必要な場合は
-  `app-data/tests/<id>/` または `app-data/submissions/<id>/` を直接削除すればよい。
+  ファイル削除が失敗した場合は例外が呼び出し元へ返る。DB 行と監査ログは既にcommit済み
+  なので、`LocalFileStore.delete_test()` / `delete_submission()` を再実行するか、
+  `app-data/tests/<id>/` または `app-data/submissions/<id>/` を直接削除して復旧する。
   **元答案・添削済み答案・AI ログの自動削除は行わない**（business-rules §2 (11)。
   90 日で自動削除されるのは運用ログのみで、対象は別 Issue）。
 

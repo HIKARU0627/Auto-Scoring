@@ -103,6 +103,44 @@ def test_check_constraint_rejects_bad_row(db_url: str) -> None:
         engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "bad_insert",
+    [
+        "INSERT INTO submissions "
+        "(id, test_id, source_pdf_path, state, created_at) "
+        "VALUES ('bad-sub', 't', 'submissions/bad-sub/source.pdf', 'unknown', '2026-01-01')",
+        "INSERT INTO jobs "
+        "(id, kind, submission_id, state, attempts, max_attempts, created_at, updated_at) "
+        "VALUES ('job', 'grading', 'sub', 'unknown', 0, 3, '2026-01-01', '2026-01-01')",
+    ],
+)
+def test_state_check_constraints_reject_unknown_values(db_url: str, bad_insert: str) -> None:
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO submissions "
+                "(id, test_id, source_pdf_path, state, created_at) "
+                "VALUES ('sub', 't', 'submissions/sub/source.pdf', 'unprocessed', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        with pytest.raises(IntegrityError):
+            conn.execute(text(bad_insert))
+    finally:
+        conn.close()
+        engine.dispose()
+
+
 def test_migration_file_paths_exist() -> None:
     versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
     names = {p.name for p in versions.glob("*.py")}

@@ -85,10 +85,10 @@ class LocalFileStore:
         return self._ensure_within_root(path).read_bytes()
 
     def delete_test(self, test_id: str) -> None:
-        shutil.rmtree(self.test_dir(test_id), ignore_errors=True)
+        self._delete_tree(self.test_dir(test_id))
 
     def delete_submission(self, submission_id: str) -> None:
-        shutil.rmtree(self.submission_dir(submission_id), ignore_errors=True)
+        self._delete_tree(self.submission_dir(submission_id))
 
     def sweep_temp(self) -> list[Path]:
         """Delete leftover temp files from interrupted writes; return what was removed."""
@@ -108,3 +108,11 @@ class LocalFileStore:
         if resolved != self._root and self._root not in resolved.parents:
             raise ValueError(f"path {path} escapes storage root {self._root}")
         return resolved
+
+    @staticmethod
+    def _delete_tree(path: Path) -> None:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            if path.exists():
+                raise

@@ -11,12 +11,14 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import (
     GradingSource,
     InvalidStateTransition,
+    JobState,
     Score,
     SubmissionState,
 )
 from tests.support import (
     at,
     make_grade,
+    make_job,
     make_question,
     make_recognition,
     make_review,
@@ -163,6 +165,16 @@ def test_set_state_allows_a_legal_transition(seeded: UowFactory) -> None:
         submission = uow.submissions.get("sub-1")
     assert submission is not None
     assert submission.state is SubmissionState.AI_PROCESSING
+
+
+def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(make_job())
+        uow.commit()
+
+    with seeded() as uow, pytest.raises(InvalidStateTransition):
+        uow.jobs.save(make_job(state=JobState.SUCCEEDED))
 
 
 def test_orphan_row_is_rejected_by_foreign_key(make_uow: UowFactory) -> None:

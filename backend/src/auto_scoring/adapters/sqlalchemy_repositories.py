@@ -43,6 +43,7 @@ from auto_scoring.domain.models import (
     Submission,
     SubmissionState,
     Test,
+    ensure_job_transition,
     ensure_submission_transition,
 )
 
@@ -257,6 +258,9 @@ class SqlAlchemyJobRepository:
         row = self._session.get(JobRow, job.id)
         if row is None:
             raise LookupError(f"job {job.id!r} not found")
+        current_state = JobState(row.state)
+        if job.state is not current_state:
+            ensure_job_transition(current_state, job.state)
         row.state = job.state
         row.attempts = job.attempts
         row.max_attempts = job.max_attempts
