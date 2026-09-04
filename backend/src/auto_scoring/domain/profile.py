@@ -85,13 +85,16 @@ class Region:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Region:
+        confirmed = data["confirmed"]
+        if not isinstance(confirmed, bool):
+            raise ValueError("region confirmed must be a boolean")
         return cls(
             region_id=str(data["region_id"]),
             kind=RegionKind(data["kind"]),
             page_index=int(data["page_index"]),
             bbox=NormalizedBBox.from_dict(data["bbox"]),
             label=str(data["label"]),
-            confirmed=bool(data["confirmed"]),
+            confirmed=confirmed,
         )
 
 
@@ -168,6 +171,21 @@ class Profile:
     regions: tuple[Region, ...]
     status: ProfileStatus
 
+    def __post_init__(self) -> None:
+        invalid_pages = _pages_out_of_range(self.regions, self.signature)
+        if invalid_pages:
+            raise ValueError(
+                f"regions reference pages outside the format signature: {invalid_pages}"
+            )
+        if self.status is ProfileStatus.CONFIRMED:
+            if not self.regions:
+                raise ValueError("cannot confirm a profile with no regions")
+            unreviewed = [region.region_id for region in self.regions if not region.confirmed]
+            if unreviewed:
+                raise ValueError(f"regions not confirmed: {unreviewed}")
+        elif any(region.confirmed for region in self.regions):
+            raise ValueError("draft profile cannot contain confirmed regions")
+
     @classmethod
     def from_candidates(
         cls,
@@ -182,11 +200,6 @@ class Profile:
         人間確認なしに登録完了にならない" (Issue #15) -- enforced here, not left
         to callers to remember.
         """
-        invalid_pages = _pages_out_of_range(regions, signature)
-        if invalid_pages:
-            raise ValueError(
-                f"regions reference pages outside the format signature: {invalid_pages}"
-            )
         unconfirmed = tuple(replace(region, confirmed=False) for region in regions)
         return cls(profile_id, format_id, signature, unconfirmed, ProfileStatus.DRAFT)
 
@@ -225,17 +238,11 @@ class Profile:
     def from_dict(cls, data: Mapping[str, Any]) -> Profile:
         """Reconstruct a previously-saved profile verbatim, including its DRAFT/CONFIRMED status.
 
-        Re-validates the page-range invariant `from_candidates`/`confirm`
-        enforce at write time, so a hand-edited or corrupted file is rejected
-        on load rather than silently reapplied.
+        The constructor re-validates page ranges and lifecycle invariants, so
+        a hand-edited or corrupted file is rejected rather than reapplied.
         """
         signature = FormatSignature.from_dict(data["signature"])
         regions = tuple(Region.from_dict(region) for region in data["regions"])
-        invalid_pages = _pages_out_of_range(regions, signature)
-        if invalid_pages:
-            raise ValueError(
-                f"regions reference pages outside the format signature: {invalid_pages}"
-            )
         return cls(
             profile_id=str(data["profile_id"]),
             format_id=str(data["format_id"]),

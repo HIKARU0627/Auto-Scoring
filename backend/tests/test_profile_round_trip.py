@@ -268,6 +268,28 @@ FORMAT_E = FixtureFormat(
 FORMATS = (FORMAT_A, FORMAT_B, FORMAT_C, FORMAT_D, FORMAT_E)
 
 
+def test_rotated_cropbox_fixture_uses_pdf_engine_geometry(tmp_path: Path) -> None:
+    path = tmp_path / "rotated-cropbox.pdf"
+    _write_pdf(path, FORMAT_E.pages, FORMAT_E.model_annotations[:1])
+
+    markers, signature, geometries = read_markers(path)
+    geometry = geometries[0]
+    assert signature.pages[0] == PageFormat(width_pt=760.0, height_pt=535.0)
+    assert geometry == PageGeometry(
+        crop_width=535.0,
+        crop_height=760.0,
+        crop_offset_x=30.0,
+        crop_offset_y=40.0,
+        rotation=90,
+    )
+
+    profile = generate_candidates("profile-e", FORMAT_E.format_id, signature, geometries, markers)
+    bbox = profile.regions[0].bbox
+    assert (bbox.x0, bbox.y0, bbox.x1, bbox.y1) == pytest.approx(
+        (0.8684210526, 0.0560747664, 0.9473684211, 0.8785046729)
+    )
+
+
 @pytest.mark.parametrize("fixture", FORMATS, ids=lambda f: f.format_id)
 def test_profile_round_trip_reapplies_within_tolerance(
     fixture: FixtureFormat, tmp_path: Path

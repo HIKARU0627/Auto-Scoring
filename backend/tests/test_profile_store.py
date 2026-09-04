@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -104,3 +105,25 @@ def test_profile_path_rejects_escaping_the_storage_root(tmp_path: Path) -> None:
     store = ProfileStore(tmp_path / "app-data")
     with pytest.raises(ValueError, match="escapes storage root"):
         store.profile_path("../../outside")
+
+
+def test_load_rejects_confirmed_status_with_unconfirmed_regions(tmp_path: Path) -> None:
+    store = ProfileStore(tmp_path / "app-data")
+    path = store.save(_draft_profile())
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["status"] = "confirmed"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="regions not confirmed"):
+        store.load("format-a")
+
+
+def test_load_rejects_non_boolean_region_confirmation(tmp_path: Path) -> None:
+    store = ProfileStore(tmp_path / "app-data")
+    path = store.save(_draft_profile())
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["regions"][0]["confirmed"] = "false"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must be a boolean"):
+        store.load("format-a")
