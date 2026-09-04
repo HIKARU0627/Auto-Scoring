@@ -46,10 +46,27 @@ again and adds a ``UNIQUE(test_id, source_pdf_sha256)`` constraint:
 * This still doesn't protect against two *pre-existing* submissions in the
   same test that happen to have byte-identical PDFs -- nothing enforced that
   before this revision. If that's ever true of a real database, this
-  migration fails loudly on the constraint rather than silently dropping it
-  or picking a row to keep; that's judged safer than guessing which one a
-  human would have wanted removed. Resolve it by hand (decide which
-  submission to purge_submission) and re-run the upgrade.
+  migration fails loudly rather than silently dropping the constraint or
+  picking a row to keep; that's judged safer than guessing which one a human
+  would have wanted removed. Resolve it by hand (decide which submission to
+  purge_submission) and re-run the upgrade.
+
+  That check (``_reject_duplicate_content_hashes``) runs *before either batch
+  pass*, against hashes computed straight from each submission's still-present
+  ``source.pdf`` -- the same way the backfill above computes them, just not
+  written anywhere yet. Deferring the failure until the second batch pass
+  tried to add the unique constraint (an earlier version of this migration
+  did that) left a real trap: SQLite's batch mode recreates the table via a
+  temporary ``_alembic_tmp_submissions``, and pysqlite implicitly commits
+  before DDL, so a mid-batch failure can leave that temp table behind and the
+  *first* batch pass's column additions already durable on disk even though
+  ``alembic_version`` never advanced past ``0002`` -- "purge the duplicate and
+  re-run the upgrade" would then fail immediately with "table
+  _alembic_tmp_submissions already exists" instead of actually retrying.
+  Checking first means a database with a genuine duplicate is left completely
+  untouched by this revision -- no column added, no temp table created -- so
+  the documented recovery (purge, then re-run ``upgrade``) really does start
+  clean from ``0002``.
 """
 
 from __future__ import annotations
@@ -57,6 +74,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TypedDict
 
 import sqlalchemy as sa
 from alembic import op
@@ -66,6 +84,13 @@ revision: str = "0003"
 down_revision: str | None = "0002"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+
+class _SubmissionContentHash(TypedDict):
+    id: str
+    test_id: str
+    source_pdf_sha256: str
+    page_count: int
 
 
 def _app_data_root(connection: sa.engine.Connection) -> Path | None:
@@ -78,9 +103,19 @@ def _app_data_root(connection: sa.engine.Connection) -> Path | None:
     return Path(database).resolve().parent
 
 
-def _backfill_submission_metadata(connection: sa.engine.Connection) -> None:
+def _load_content_hashes(connection: sa.engine.Connection) -> list[_SubmissionContentHash]:
+    """Every existing submission's would-be ``source_pdf_sha256``/``page_count``,
+    computed from its still-present ``source.pdf`` -- *before* either batch
+    pass below touches ``submissions``. Read once and reused both to check for
+    a legacy duplicate (``_reject_duplicate_content_hashes``) and, if none is
+    found, to backfill the new columns -- so the check never has to guess at
+    values the backfill would compute differently.
+    """
     root = _app_data_root(connection)
-    rows = connection.execute(sa.text("SELECT id, source_pdf_path FROM submissions")).mappings()
+    rows = connection.execute(
+        sa.text("SELECT id, test_id, source_pdf_path FROM submissions")
+    ).mappings()
+    hashes: list[_SubmissionContentHash] = []
     for row in rows:
         sha256_value: str | None = None
         page_count_value: int | None = None
@@ -97,20 +132,63 @@ def _backfill_submission_metadata(connection: sa.engine.Connection) -> None:
             # clearly not a real content hash, rather than leaving "" (which
             # Submission.__post_init__ rejects outright).
             sha256_value = hashlib.sha256(f"legacy-submission:{row['id']}".encode()).hexdigest()
+        hashes.append(
+            {
+                "id": row["id"],
+                "test_id": row["test_id"],
+                "source_pdf_sha256": sha256_value,
+                "page_count": page_count_value or 1,
+            }
+        )
+    return hashes
+
+
+def _reject_duplicate_content_hashes(hashes: list[_SubmissionContentHash]) -> None:
+    """Raise -- before any DDL runs -- if two pre-existing submissions in the
+    same test would collide on ``uq_submissions_test_content_hash`` once it's
+    added below (see the module docstring for why this has to happen first).
+    """
+    ids_by_key: dict[tuple[str, str], list[str]] = {}
+    for row in hashes:
+        key = (row["test_id"], row["source_pdf_sha256"])
+        ids_by_key.setdefault(key, []).append(row["id"])
+    duplicates = {key: ids for key, ids in ids_by_key.items() if len(ids) > 1}
+    if not duplicates:
+        return
+    details = "; ".join(
+        f"test {test_id!r}: submissions {ids!r} share content hash {sha256!r}"
+        for (test_id, sha256), ids in duplicates.items()
+    )
+    raise RuntimeError(
+        "Revision 0003 cannot add uq_submissions_test_content_hash: pre-existing "
+        f"duplicate submission content found ({details}). Nothing enforced this "
+        "before this revision. Resolve by hand -- purge_submission every "
+        "duplicate but one in each group -- then re-run the upgrade; no schema "
+        "change has been applied yet, so it starts cleanly from revision 0002."
+    )
+
+
+def _backfill_submission_metadata(
+    connection: sa.engine.Connection, hashes: list[_SubmissionContentHash]
+) -> None:
+    for row in hashes:
         connection.execute(
             sa.text(
                 "UPDATE submissions SET source_pdf_sha256 = :sha256, "
                 "page_count = :page_count WHERE id = :id"
             ),
             {
-                "sha256": sha256_value,
-                "page_count": page_count_value or 1,
+                "sha256": row["source_pdf_sha256"],
+                "page_count": row["page_count"],
                 "id": row["id"],
             },
         )
 
 
 def upgrade() -> None:
+    hashes = _load_content_hashes(op.get_bind())
+    _reject_duplicate_content_hashes(hashes)
+
     with op.batch_alter_table("submissions", recreate="always") as batch_op:
         batch_op.add_column(
             sa.Column("source_pdf_sha256", sa.String(), nullable=False, server_default="")
@@ -122,7 +200,7 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("review_reason", sa.String(), nullable=True))
         batch_op.create_check_constraint("ck_submissions_page_count_positive", "page_count >= 1")
 
-    _backfill_submission_metadata(op.get_bind())
+    _backfill_submission_metadata(op.get_bind(), hashes)
 
     with op.batch_alter_table("submissions", recreate="always") as batch_op:
         # Migration-only scaffolding, no longer needed now every row has a real

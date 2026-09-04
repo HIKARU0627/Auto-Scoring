@@ -149,6 +149,72 @@ def test_backfills_pre_existing_submission_metadata_on_upgrade(db_url: str, db_p
     assert loaded["missing-file"].page_count == 1
 
 
+def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
+    db_url: str, db_path: Path
+) -> None:
+    """Two pre-0003 submissions in the same test with byte-identical PDFs
+    would violate the new uq_submissions_test_content_hash constraint. The
+    preflight check must raise before either batch pass touches
+    ``submissions`` -- leaving the DB exactly at revision 0002, with no new
+    column and no leftover ``_alembic_tmp_submissions`` -- so that purging the
+    duplicate and re-running ``upgrade`` is a clean retry, not a second
+    failure (0003's docstring: "resolve by hand ... and re-run the upgrade").
+    """
+    upgrade(db_url, "0002")
+    pdf_bytes = _pdf_bytes(pages=1)
+    for submission_id in ("dup-1", "dup-2"):
+        pdf_path = db_path.parent / "submissions" / submission_id / "source.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(pdf_bytes)
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                    "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                )
+            )
+            for submission_id in ("dup-1", "dup-2"):
+                conn.execute(
+                    text(
+                        "INSERT INTO submissions "
+                        "(id, test_id, source_pdf_path, state, created_at) "
+                        "VALUES (:id, 't', :path, 'unprocessed', '2026-01-01')"
+                    ),
+                    {"id": submission_id, "path": f"submissions/{submission_id}/source.pdf"},
+                )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="uq_submissions_test_content_hash"):
+        upgrade(db_url, "head")
+
+    # Untouched: still 0002, no new column, no leftover batch-mode temp table.
+    assert current_revision(db_url) == "0002"
+    engine = create_sqlite_engine(db_url)
+    try:
+        columns = {c["name"] for c in inspect(engine).get_columns("submissions")}
+        assert "source_pdf_sha256" not in columns
+        assert "_alembic_tmp_submissions" not in _tables(db_url)
+    finally:
+        engine.dispose()
+
+    # Resolve by hand: purge one of the two duplicates.
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM submissions WHERE id = 'dup-2'"))
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+    assert current_revision(db_url) == "0003"
+
+
 _CHILD_TABLES = (
     "recognition_results",
     "grade_results",
