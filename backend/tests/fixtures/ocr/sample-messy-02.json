@@ -1,0 +1,14 @@
+{
+  "ground_truth": {
+    "sample_id": "poc1-messy-02",
+    "reference_text": "遺伝子は染色体上にある",
+    "keywords": ["遺伝子", "染色体"],
+    "handwriting_quality": "messy",
+    "layout_type": "booklet"
+  },
+  "ocr_result": {
+    "text": "",
+    "provider": "recorded-fixture",
+    "tokens": []
+  }
+}
