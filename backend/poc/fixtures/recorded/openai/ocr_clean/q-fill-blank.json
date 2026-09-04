@@ -1,0 +1,30 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-fill-blank",
+    "recognition": {
+      "text": "蒸散",
+      "confidence": 1.0
+    },
+    "grading": {
+      "score": 3,
+      "maxScore": 3,
+      "confidence": 1.0,
+      "rationale": "模範解答と一致しているため、満点を付与。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 1.0,
+        "rationale": "解答が「蒸散」と一致しているため。"
+      }
+    ],
+    "comment": "素晴らしい解答です。正確に答えられています。"
+  },
+  "usage": {
+    "input_tokens": 478,
+    "output_tokens": 150
+  },
+  "latency_s": 2.422
+}

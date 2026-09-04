@@ -1,0 +1,31 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-fill-blank",
+    "recognition": {
+      "text": "蒸散",
+      "confidence": 0.98
+    },
+    "grading": {
+      "score": 3,
+      "maxScore": 3,
+      "confidence": 0.98,
+      "rationale": "「蒸散」と正しく回答できており、ルーブリックの基準を満たしています。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.98,
+        "rationale": "指定された漢字表記と完全に一致しています。"
+      }
+    ],
+    "comment": "正解です。植物の働きに関する用語を正確に漢字で答えることができています。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 427,
+    "output_tokens": 125
+  },
+  "latency_s": 3.485
+}

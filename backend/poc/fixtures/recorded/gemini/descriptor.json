@@ -1,0 +1,8 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.6-flash",
+  "version": "gemini-3.6-flash",
+  "temperature": 0.0,
+  "structured_output_mode": "json_mode",
+  "prompt_id": "poc2-grading-real-v1"
+}

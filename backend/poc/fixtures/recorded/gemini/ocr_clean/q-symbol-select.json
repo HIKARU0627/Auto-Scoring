@@ -1,0 +1,31 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-symbol-select",
+    "recognition": {
+      "text": "イ",
+      "confidence": 0.98
+    },
+    "grading": {
+      "score": 2,
+      "maxScore": 2,
+      "confidence": 0.98,
+      "rationale": "正解記号「イ」と一致しているため、満点です。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.98,
+        "rationale": "正解記号「イ」と正確に一致しています。"
+      }
+    ],
+    "comment": "正解です。正しく記号を選択できています。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 413,
+    "output_tokens": 190
+  },
+  "latency_s": 4.781
+}

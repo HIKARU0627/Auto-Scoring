@@ -1,0 +1,31 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-fill-blank",
+    "recognition": {
+      "text": "苦散",
+      "confidence": 0.9
+    },
+    "grading": {
+      "score": 0,
+      "maxScore": 3,
+      "confidence": 0.95,
+      "rationale": "模範解答の「蒸散」に対して、漢字の誤記（「苦散」）が見られるため不正解となります。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "fail",
+        "confidence": 0.95,
+        "rationale": "「蒸散」と一致しないため基準を満たしていません。"
+      }
+    ],
+    "comment": "漢字に誤りがありました。「蒸散」の「蒸」の漢字を正しく書けるように練習しましょう。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 431,
+    "output_tokens": 141
+  },
+  "latency_s": 3.891
+}

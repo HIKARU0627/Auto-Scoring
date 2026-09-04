@@ -1,0 +1,36 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-photosynthesis",
+    "recognition": {
+      "text": "光合成て゛は光工ネ儿ギ一を使い、酸素か発生する。",
+      "confidence": 0.9
+    },
+    "grading": {
+      "score": 4,
+      "maxScore": 5,
+      "confidence": 0.8,
+      "rationale": "酸素の発生については言及されているが、光エネルギーの利用についての説明が不十分であるため、満点には至らない。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.9,
+        "rationale": "酸素が発生することに言及しているため、基準を満たしている。"
+      },
+      {
+        "id": "c2",
+        "result": "fail",
+        "confidence": 0.7,
+        "rationale": "光エネルギーの利用についての具体的な説明が不足しているため、基準を満たしていない。"
+      }
+    ],
+    "comment": "光合成の過程で酸素が発生することをしっかりと捉えていますが、光エネルギーの利用についても詳しく説明するとさらに良くなります。"
+  },
+  "usage": {
+    "input_tokens": 560,
+    "output_tokens": 313
+  },
+  "latency_s": 2.39
+}

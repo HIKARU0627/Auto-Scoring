@@ -1,0 +1,37 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-photosynthesis",
+    "recognition": {
+      "text": "光合成では光エネルギーを使い、酸素が発生する。",
+      "confidence": 0.98
+    },
+    "grading": {
+      "score": 5,
+      "maxScore": 5,
+      "confidence": 0.95,
+      "rationale": "光エネルギーの利用および酸素の発生という両方のポイントを正しく記述できているため、満点と判定します。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.98,
+        "rationale": "「酸素が発生する」と明記されており、基準を満たしています。"
+      },
+      {
+        "id": "c2",
+        "result": "pass",
+        "confidence": 0.95,
+        "rationale": "「光エネルギーを使い」と明記されており、基準を満たしています。"
+      }
+    ],
+    "comment": "光エネルギーの利用と酸素の発生について、要点を捉えて簡潔に説明できています。大変素晴らしい解答です。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 471,
+    "output_tokens": 188
+  },
+  "latency_s": 4.453
+}

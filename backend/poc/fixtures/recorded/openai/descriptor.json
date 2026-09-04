@@ -1,0 +1,8 @@
+{
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "version": "gpt-4o-mini",
+  "temperature": 0.0,
+  "structured_output_mode": "json_mode",
+  "prompt_id": "poc2-grading-real-v1"
+}

@@ -2,11 +2,14 @@
 
     uv run python -m poc.evaluate --format md
     uv run python -m poc.evaluate --format json
+    uv run python -m poc.evaluate --candidates synthetic-a synthetic-b --format md
 
 Deterministic: inputs are static fixtures, so repeated runs produce identical
-output (受入条件, Issue #14). With no API keys configured this runs the
-``ReplayAIProvider`` over recorded synthetic responses; see ``docs/ai-grading-poc.md``
-for how to record real provider responses once credentials are set.
+output (受入条件, Issue #14). The default candidates (``gemini`` / ``openai``)
+replay real provider responses recorded once against this fixture set (see
+``docs/ai-grading-poc.md`` §4/§5); no API key is needed to run this command.
+``synthetic-a`` / ``synthetic-b`` remain available as an API-key-free harness
+smoke test with a deliberately malformed response.
 """
 
 from __future__ import annotations
@@ -184,8 +187,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--candidates",
         nargs="+",
-        default=["synthetic-a", "synthetic-b"],
-        help="candidate ids under fixtures/recorded/ (default: the two synthetic candidates)",
+        default=["gemini", "openai"],
+        help=(
+            "candidate ids under fixtures/recorded/ (default: the two recorded real-provider "
+            "candidates; pass --candidates synthetic-a synthetic-b for the API-key-free "
+            "synthetic dry run)"
+        ),
     )
     parser.add_argument("--fixtures", type=Path, default=_DEFAULT_FIXTURES)
     parser.add_argument("--format", choices=("md", "json"), default="md")

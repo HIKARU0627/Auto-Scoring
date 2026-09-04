@@ -1,0 +1,31 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-symbol-select",
+    "recognition": {
+      "text": "ィ",
+      "confidence": 0.9
+    },
+    "grading": {
+      "score": 0,
+      "maxScore": 2,
+      "confidence": 0.95,
+      "rationale": "正解の記号は「イ」ですが、答案には小文字の「ィ」と記述されており、正解記号と一致しないため不正解です。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "fail",
+        "confidence": 0.95,
+        "rationale": "正解の「イ」と一致せず、小文字の「ィ」と書かれているため不合格。"
+      }
+    ],
+    "comment": "記号を選択して答える問題では、文字の大きさに注意して正しい記号をはっきりと書きましょう。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 417,
+    "output_tokens": 231
+  },
+  "latency_s": 4.718
+}

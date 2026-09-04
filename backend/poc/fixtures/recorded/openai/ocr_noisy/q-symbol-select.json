@@ -1,0 +1,31 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-symbol-select",
+    "recognition": {
+      "text": "ィ",
+      "confidence": 0.8
+    },
+    "grading": {
+      "score": 0,
+      "maxScore": 2,
+      "confidence": 0.9,
+      "rationale": "正解記号「イ」と一致していないため、得点は0点です。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "fail",
+        "confidence": 0.9,
+        "rationale": "正解記号「イ」と一致していないため、基準を満たしていません。"
+      }
+    ],
+    "comment": "記号の選択が誤っていました。次回は正しい記号を選びましょう。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 466,
+    "output_tokens": 170
+  },
+  "latency_s": 3.625
+}

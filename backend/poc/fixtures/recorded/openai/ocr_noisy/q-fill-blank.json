@@ -1,0 +1,30 @@
+{
+  "_synthetic": false,
+  "raw_response": {
+    "questionId": "q-fill-blank",
+    "recognition": {
+      "text": "苦散",
+      "confidence": 0.7
+    },
+    "grading": {
+      "score": 0,
+      "maxScore": 3,
+      "confidence": 0.8,
+      "rationale": "模範解答と一致しないため、得点は0です。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "fail",
+        "confidence": 0.8,
+        "rationale": "解答が「蒸散」と一致しないため、基準を満たしていません。"
+      }
+    ],
+    "comment": "解答が異なっているため、正しい用語を確認しましょう。"
+  },
+  "usage": {
+    "input_tokens": 485,
+    "output_tokens": 159
+  },
+  "latency_s": 2.266
+}

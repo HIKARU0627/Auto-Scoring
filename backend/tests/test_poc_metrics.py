@@ -101,6 +101,18 @@ def test_candidate_order_is_stable_regardless_of_argument_order() -> None:
     assert list(run(["synthetic-b", "synthetic-a"], _FIXTURES)) == ["synthetic-a", "synthetic-b"]
 
 
+def test_real_candidates_are_reproducible_from_recorded_fixtures() -> None:
+    """gemini / openai replay real, previously-recorded responses (docs/ai-grading-poc.md
+    §4/§5) — no network call happens in this test, and the report must still be
+    byte-identical across runs."""
+    first = run(["gemini", "openai"], _FIXTURES)
+    second = run(["gemini", "openai"], _FIXTURES)
+    assert render_json(first) == render_json(second)
+    for candidate in ("gemini", "openai"):
+        assert first[candidate].n_cells == 6
+        assert first[candidate].schema_violation_rate == 0.0
+
+
 def test_report_contains_no_answer_text() -> None:
     rendered = render_json(run(["synthetic-a", "synthetic-b"], _FIXTURES))
     # OCR / answer bodies from cases.json must never reach the report.
