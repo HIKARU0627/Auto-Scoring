@@ -319,16 +319,16 @@ app-data/
 
 ## 12. 検証（受入条件との対応）
 
-| Issue #17 受入条件・検証項目                                                    | 対応                                                                                                                                                                                            |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 単一/一括取込の採用方式で Submission が作成され、設問画像が profile と対応する  | `Question.answer_area`（Issue #11）をそのまま利用。`test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`                                                 |
-| 同一 PDF の再取込方針が決定表どおり動作し、元 PDF を変更しない                  | §2、`test_submission_intake_service.py::test_duplicate_submission_is_rejected` / `::test_retry_reuses_the_errored_submission`                                                                   |
-| 不正/暗号化/破損 PDF を安全に拒否し、中途半端な DB/file を残さない              | §5、`test_pdf_intake.py`、`test_submission_intake_service.py::test_encrypted_pdf_is_rejected_without_a_trace` 等                                                                                |
-| 生徒識別情報をログや外部通信へ出さない                                          | `original_filename`/`student_label` はローカル DB のみ。ログ出力コードなし（§28 の既存方針を継続）                                                                                              |
-| 複数 page/回転/破損/oversize/重複 PDF を含む integration test                   | `backend/tests/test_submission_intake_service.py`（複数ページ・欠落ページ）、`test_pdf_engine_intake.py`（暗号化・破損）、`test_pdf_intake.py`（oversize・不正拡張子）                          |
-| Flutter の取込進捗・エラー・再試行・keyboard/focus を確認する                   | `app/test/answer_intake_page_test.dart`                                                                                                                                                         |
-| 1 答案 3 ページ以上の fixture で全 Question が正しい page/question 順で関連付く | `test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`（2ページ）。3ページ以上は同じ経路（`_extract_answer_images` はページ数に依存しない実装）で成立する |
-| 前提設問を含むページが欠落した状態では AI 採点を開始しない                      | §3。`needs_review` の Submission に対してジョブを起票する経路が存在しない（Job/採点は Issue #17 対象外）                                                                                        |
+| Issue #17 受入条件・検証項目                                                    | 対応                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 単一/一括取込の採用方式で Submission が作成され、設問画像が profile と対応する  | `Question.answer_area`（Issue #11）をそのまま利用。`test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`                                              |
+| 同一 PDF の再取込方針が決定表どおり動作し、元 PDF を変更しない                  | §2、`test_submission_intake_service.py::test_duplicate_submission_is_rejected` / `::test_retry_reuses_the_errored_submission`                                                                |
+| 不正/暗号化/破損 PDF を安全に拒否し、中途半端な DB/file を残さない              | §5、`test_pdf_intake.py`、`test_submission_intake_service.py::test_encrypted_pdf_is_rejected_without_a_trace` 等                                                                             |
+| 生徒識別情報をログや外部通信へ出さない                                          | `original_filename`/`student_label` はローカル DB のみ。ログ出力コードなし（§28 の既存方針を継続）                                                                                           |
+| 複数 page/回転/破損/oversize/重複 PDF を含む integration test                   | `backend/tests/test_submission_intake_service.py`（複数ページ・欠落ページ）、`test_pdf_engine_intake.py`（暗号化・破損）、`test_pdf_intake.py`（oversize・不正拡張子）                       |
+| Flutter の取込進捗・エラー・再試行・keyboard/focus を確認する                   | `app/test/answer_intake_page_test.dart`                                                                                                                                                      |
+| 1 答案 3 ページ以上の fixture で全 Question が正しい page/question 順で関連付く | `test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`（2ページ）。3ページ以上は同じ経路（`_build_answer_image` はページ数に依存しない実装）で成立する |
+| 前提設問を含むページが欠落した状態では AI 採点を開始しない                      | §3。`needs_review` の Submission に対してジョブを起票する経路が存在しない（Job/採点は Issue #17 対象外）                                                                                     |
 
 ## 13. 未決事項・引き継ぎ
 
@@ -339,3 +339,57 @@ app-data/
 - `app-data/` の実際のインストール先は Windows 配布 Issue で確定する（§10）。
 - OCR/AI 採点 Job の起票ロジックは、`needs_review` の Submission にジョブを
   作らない制約を守って実装すること（§3）。
+
+## 14. 2回目のレビュー指摘への対応
+
+- **migration が既存の子行を消していた（重大）**: SQLite は `foreign_keys=ON` の
+  接続で `DROP TABLE` すると、`ON DELETE CASCADE` の子行に対して暗黙の
+  `DELETE FROM` を実行する。Alembic の SQLite batch mode（`recreate="always"`）は
+  `ALTER TABLE` を「新テーブル作成 → コピー → 旧テーブル DROP → リネーム」で
+  表現するため、`submissions` を batch 変更するたびに
+  recognition_results/grade_results/annotations/reviews/jobs が消えていた。
+  `migrations/env.py` が migration 用の接続でだけ `foreign_keys=OFF`
+  （`db/engine.py::create_sqlite_engine(..., enforce_foreign_keys=False)`、
+  接続確立時に設定 -- トランザクション開始後に変更しても無効なため）にして防ぐ。
+  `test_upgrade_preserves_child_rows_of_a_recreated_submissions_table` で
+  5 テーブル全てが生き残ることを検証する。
+- **再取込キーを UNIQUE 制約にした**: `(test_id, source_pdf_sha256)` を
+  `uq_submissions_test_content_hash` として強制する。事前チェック
+  （`find_by_content_hash`）と実際の INSERT の間に競合が起きても、負けた側は
+  `IntegrityError` を `adapters/submission_intake.py::intake_submission` が
+  捕捉し、勝った側の `submission_id` を含む通常の `DuplicateSubmissionError`
+  として返す（`test_concurrent_duplicate_insert_is_reported_as_a_race_loss`）。
+  既存データに真の重複（同一テストへの同一バイト列の答案が複数存在）がある場合は
+  migration 自体が `IntegrityError` で失敗する（§7 の migration docstring参照）。
+- **migration 専用の一時デフォルトを削除**: バックフィル後に 2 回目の batch
+  recreate を行い、`source_pdf_sha256`/`page_count` の `server_default` を外す。
+  これらの列を省略した INSERT は `NOT NULL` 違反で失敗する
+  （`test_submission_metadata_columns_require_a_value_after_upgrade`）。
+- **アップロードのボディサイズを ASGI 層で強制**: `api/body_size_limit.py` の
+  `MaxBodySizeMiddleware` が `Content-Length` ヘッダで即座に拒否し（速い経路）、
+  ヘッダが無い/嘘の場合でもストリームのバイト数を数えて超過時点で打ち切る。
+  FastAPI の multipart parser が body 全体を `UploadFile` へ spool する前に働く。
+  既存の `_read_upload_within_limit`（handler 内のチャンク読込）はこの防御の
+  内側の層として残す。
+- **アップロードの Content-Type を明示**: Flutter 側 `MultipartFile.fromFile` は
+  既定で `application/octet-stream` を送るが、サイドカーは `application/pdf`
+  以外の宣言 MIME を拒否するため、これまで実際のアップロードは全て 400 で
+  弾かれていた。`contentType: MediaType('application', 'pdf')` を明示し、
+  `sidecar_api_client_test.dart` に実サイドカー越しの
+  `createSubmission` テストを追加して契約を固定した（未登録の `test_id` を
+  指定し、`400` ではなく `404` が返ることで content-type がサイドカー側の
+  検証を通過したことを確認する）。
+- **ローカルファイル読込失敗を変換**: 選択済み PDF が送信前に削除・切断された
+  場合、`MultipartFile.fromFile` は `DioException` ではない例外を投げる。
+  `createSubmission` はこれを捕捉し `SidecarApiException` に変換するので、
+  画面側の既存のエラーバナー・再試行導線がそのまま使える。
+- **アップロード中はテスト選択を無効化**: `AnswerIntakePage` はアップロード中
+  テストピッカーの `onChanged` を `null` にする。加えて、アップロード完了時に
+  結果を一覧へ反映する前に、送信開始時点でキャプチャした `test_id` が現在の
+  選択と一致するかを再確認する（防御的二重チェック）。
+- **未実装デフォルトが同期的に throw していた**: `core/app_dependencies.dart` の
+  既定実装（`_unavailableListTests` 等）が `=>` 本体で `_unavailable()` を
+  直接呼んでおり、`Never` を返す関数の `throw` が Future 化される前に同期的に
+  伝播していた。`AnswerIntakePage.initState()` は `listTests()` を
+  try/catch 無しで呼ぶため、マウント中にクラッシュしていた。`async` を付けて
+  Dart に throw を Future のエラーとして捕捉させる。
