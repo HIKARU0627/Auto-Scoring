@@ -10,7 +10,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "mypy>=1.14",
+    "pillow>=12.3",
     "pypdf>=6.16.2",
+    "pypdfium2>=5.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
@@ -34,6 +36,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# pypdfium2 ships only partial inline types; pin the boundary here.
+module = ["pypdfium2.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
