@@ -51,9 +51,9 @@ class AIProviderContract(abc.ABC):
     def test_descriptor_records_reproducibility_conditions(self) -> None:
         descriptor = self.make_provider().descriptor
         assert isinstance(descriptor, ProviderDescriptor)
-        assert descriptor.provider and descriptor.model
+        assert descriptor.provider and descriptor.model and descriptor.version
         assert descriptor.temperature >= 0.0
-        assert descriptor.structured_output_mode
+        assert descriptor.structured_output_mode and descriptor.prompt_id
 
     def test_grade_returns_schema_valid_result(self) -> None:
         response = self.make_provider().grade(self.make_request())

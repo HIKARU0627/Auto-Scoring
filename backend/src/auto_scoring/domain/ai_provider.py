@@ -76,12 +76,12 @@ class ProviderDescriptor(_Model):
 
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
-    version: str
+    version: str = Field(min_length=1)
     temperature: float = Field(ge=0.0)
-    structured_output_mode: str
+    structured_output_mode: str = Field(min_length=1)
     """e.g. ``"json_schema"``, ``"tool_call"``, ``"response_format"``."""
 
-    prompt_id: str
+    prompt_id: str = Field(min_length=1)
     """Stable identifier / hash of the prompt template used."""
 
 

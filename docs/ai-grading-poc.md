@@ -13,14 +13,14 @@ GitHub Issue #14（親 #3）。使用する AI モデル（§33-2）を選定す
 
 模範解答・採点マニュアル・答案を同一データ・同一 rubric で複数モデルに与え、次を測る。
 
-| 指標                | 定義                                                                   |
-| ------------------- | ---------------------------------------------------------------------- |
-| 完全一致率          | AI の設問スコア == 人間確定スコア のセル割合                           |
-| 許容点差内率        | AI スコアと人間スコアの差の絶対値 ≤ 許容点差（既定 ±1.0 点）のセル割合 |
-| criterion 別一致率  | 応答済みセルの criterion について `result` が一致した割合              |
-| schema violation 率 | Pydantic 検証に失敗した応答の割合（全セル基準）                        |
-| latency             | `grade()` 1 回の所要秒。p50 / p95                                      |
-| 概算 cost           | `poc/pricing.py` の単価 × トークン使用量。100 答案あたり USD           |
+| 指標                | 定義                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------ |
+| 完全一致率          | AI の設問スコア == 人間確定スコア のセル割合                                                     |
+| 許容点差内率        | AI スコアと人間スコアの差の絶対値 ≤ 許容点差（既定 ±1.0 点）のセル割合                           |
+| criterion 別一致率  | 応答済みセルの人間ラベル全 criterion について `result` が一致した割合。AI 応答からの欠落は不一致 |
+| schema violation 率 | Pydantic 検証に失敗した応答の割合（全セル基準）                                                  |
+| latency             | `grade()` 1 回の所要秒。p50 / p95                                                                |
+| 概算 cost           | `poc/pricing.py` の単価 × トークン使用量。100 答案あたり USD                                     |
 
 補助的に **Grading Confidence の較正**（低 Confidence 帯で不一致が増えるか）と、
 **OCR 品質による劣化**（`ocr_clean` と `ocr_noisy` の差）を不一致例から確認する。
@@ -56,11 +56,18 @@ uv run python -m poc.evaluate --format json    # 機械可読
 uv run pytest tests/test_ai_grading_schema.py tests/test_ai_provider_contract.py tests/test_poc_metrics.py
 ```
 
+### 期待結果
+
+- 集計・テストの 3 コマンドはいずれも終了コード 0 になる。
+- Markdown 出力は §4.2 の比較表・不一致例と一致し、JSON 出力は同じ集計値を機械可読形式で返す。
+- テストは schema 不適合の拒否、Confidence の分離、`AIProvider` 契約、集計の決定性を通過する。
+
 `poc/fixtures/` は静的なので `evaluate` は**何度実行しても同一出力**になる
 （受入条件「同じデータから集計結果を再生成できる」）。`test_run_is_reproducible_from_the_same_fixtures`
-が検証する。出力に secret・答案本文・OCR 本文・生徒識別情報は含めない
-（`test_report_contains_no_answer_text`）。不一致例は case id・スコア差・criterion の
-`result` 変化のみを載せる。
+が検証する。出力に secret・答案本文・OCR 本文・生徒識別情報は含めず、provider 例外の
+詳細も固定コードへ置換する（`test_report_contains_no_answer_text` /
+`test_provider_error_details_do_not_reach_report`）。不一致例は case id・スコア差・criterion の
+`result` 変化と固定エラーコードのみを載せる。
 
 ### 再現条件の記録（prompt / model / version / temperature）
 
@@ -123,15 +130,16 @@ criterion c2 を `partial→fail`、スコアを 1 点下振れ。許容点差�
 
 #### synthetic-b — 人間採点との不一致例（tolerance ±1）
 
-| case             | variant   | human | AI  |   Δ | criterion diffs  | note                              |
-| ---------------- | --------- | ----: | --- | --: | ---------------- | --------------------------------- |
-| q-fill-blank     | ocr_clean |     3 | 2   |  -1 | c1: pass→partial | -                                 |
-| q-fill-blank     | ocr_noisy |     3 | 1   |  -2 | c1: pass→fail    | -                                 |
-| q-photosynthesis | ocr_noisy |     4 | n/a | n/a | -                | grading.rationale: Field required |
+| case             | variant   | human | AI  |   Δ | criterion diffs  | note             |
+| ---------------- | --------- | ----: | --- | --: | ---------------- | ---------------- |
+| q-fill-blank     | ocr_clean |     3 | 2   |  -1 | c1: pass→partial | -                |
+| q-fill-blank     | ocr_noisy |     3 | 1   |  -2 | c1: pass→fail    | -                |
+| q-photosynthesis | ocr_noisy |     4 | n/a | n/a | -                | schema_violation |
 
-3 行目は応答から `grading.rationale` が欠落したケース。`ReplayAIProvider` が
-`SchemaViolation` を送出し、ハーネスは**スコアを推測せず**「未応答（要確認へ送る対象）」
-として集計する（受入条件「schema 不適合をエラーまたは要確認へ送れる」）。
+3 行目は fixture の応答から `grading.rationale` が欠落したケース。`ReplayAIProvider` が
+`SchemaViolation` を送出し、ハーネスは provider の例外詳細を出力せず、**スコアを推測せず**
+「未応答（要確認へ送る対象）」として集計する（受入条件「schema 不適合をエラーまたは
+要確認へ送れる」）。
 
 ---
 
@@ -176,7 +184,7 @@ criterion c2 を `partial→fail`、スコアを 1 点下振れ。許容点差�
 - **fallback**: 採用モデルが `ProviderUnavailable`（キー欠落・レート制限枯渇・ネットワーク
   障害）のとき第 2 候補へ切替。両者不可なら §7 の手動採点 fallback。
 - **再試行条件**: `SchemaViolation` および一時的な `ProviderUnavailable` は指数バックオフで
-  **最大 2 回**再試行。2 回目も `SchemaViolation` なら当該設問を「要確認」に落とす
+  **最大 1 回**再試行。再試行後も `SchemaViolation` なら当該設問を「要確認」に落とす
   （自動確定しない、簡易設計書 §24）。
 - **cost 上限**: 既定 USD 5 / 100 答案。超過見込みで警告、明示承認で継続。
   値は設定化し、コードにハードコードしない。
