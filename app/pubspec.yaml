@@ -46,6 +46,7 @@ dependencies:
   # `pnpm run openapi:generate`; never edit by hand. See docs/sidecar-api.md.
   auto_scoring_api:
     path: packages/auto_scoring_api
+  file_picker: ^12.2.0
 
 dev_dependencies:
   flutter_test:

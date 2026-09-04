@@ -14,7 +14,7 @@ import 'package:auto_scoring_api/auto_scoring_api.dart';
 import 'package:dio/dio.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
-    show ScoreRequest, ScoreResponse;
+    show ScoreRequest, ScoreResponse, SubmissionResponse, TestSummary;
 export 'package:dio/dio.dart' show CancelToken;
 
 /// Where the sidecar is listening and the token minted for this session.
@@ -64,6 +64,22 @@ class SidecarApiException implements Exception {
   @override
   String toString() =>
       'SidecarApiException($kind, "$message", status: $statusCode)';
+}
+
+/// Raised by [SidecarApiClient.createSubmission] when the sidecar already has
+/// a submission with the same PDF content for this test (409) -- Issue #17's
+/// reintake policy (docs/answer-intake-and-preprocessing.md §2). Carries the
+/// existing submission id so the UI can point the user at it instead of just
+/// showing a generic error.
+class DuplicateSubmissionException implements Exception {
+  DuplicateSubmissionException(this.message, this.existingSubmissionId);
+
+  final String message;
+  final String existingSubmissionId;
+
+  @override
+  String toString() =>
+      'DuplicateSubmissionException("$message", existing: $existingSubmissionId)';
 }
 
 /// Thin, typed boundary over the generated sidecar client.
@@ -140,6 +156,105 @@ class SidecarApiClient {
     }
   }
 
+  /// The registered tests available to import answers into (§16.4 test picker).
+  /// Throws [SidecarApiException] on any failure.
+  Future<List<TestSummary>> listTests({CancelToken? cancelToken}) async {
+    try {
+      final response = await _api.listTestsTestsGet(cancelToken: cancelToken);
+      return (response.data ?? const <TestSummary>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every submission imported for [testId], in intake order.
+  /// Throws [SidecarApiException] on any failure.
+  Future<List<SubmissionResponse>> listSubmissions(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _api.listSubmissionsTestsTestIdSubmissionsGet(
+        testId: testId,
+        cancelToken: cancelToken,
+      );
+      return (response.data ?? const <SubmissionResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// One submission's current intake/processing state, for polling progress.
+  /// Throws [SidecarApiException] on any failure.
+  Future<SubmissionResponse> getSubmission(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _api.getSubmissionSubmissionsSubmissionIdGet(
+        submissionId: submissionId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Upload one answer PDF for [testId] (§16.4 答案取込画面). Re-uploading the
+  /// same failed submission retries it in place; re-uploading identical bytes
+  /// for a submission that is not errored throws
+  /// [DuplicateSubmissionException] instead of silently overwriting it
+  /// (docs/answer-intake-and-preprocessing.md §2).
+  Future<SubmissionResponse> createSubmission({
+    required String testId,
+    required String filePath,
+    String? studentLabel,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final file = await MultipartFile.fromFile(filePath);
+      final response = await _api.createSubmissionTestsTestIdSubmissionsPost(
+        testId: testId,
+        file: file,
+        studentLabel: studentLabel,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      final duplicate = _duplicateSubmission(error);
+      if (duplicate != null) throw duplicate;
+      throw _translate(error);
+    }
+  }
+
+  T _requireBody<T>(Response<T> response) {
+    final body = response.data;
+    if (body == null) {
+      throw SidecarApiException(
+        SidecarErrorKind.badResponse,
+        'sidecar returned an empty body',
+        statusCode: response.statusCode,
+      );
+    }
+    return body;
+  }
+
+  DuplicateSubmissionException? _duplicateSubmission(DioException error) {
+    if (error.response?.statusCode != 409) return null;
+    final detail = error.response?.data is Map
+        ? (error.response!.data as Map)['detail']
+        : null;
+    if (detail is! Map) return null;
+    final existingId = detail['existing_submission_id'];
+    if (existingId is! String) return null;
+    final message = detail['message'];
+    return DuplicateSubmissionException(
+      message is String ? message : 'duplicate submission',
+      existingId,
+    );
+  }
+
   /// Release the underlying HTTP connections.
   void close() => _dio.close(force: true);
 
@@ -176,7 +291,8 @@ class SidecarApiClient {
         }
         return SidecarApiException(
           SidecarErrorKind.badResponse,
-          'sidecar returned HTTP $status',
+          _detailMessage(error.response?.data) ??
+              'sidecar returned HTTP $status',
           statusCode: status,
         );
       case DioExceptionType.badCertificate:
@@ -187,6 +303,19 @@ class SidecarApiClient {
         );
     }
   }
+}
+
+/// FastAPI's `{"detail": "..."}` (or our own `{"detail": {"message": "..."}}`
+/// shape for structured errors) -- pulls the human-readable text out so
+/// callers see *why* a request failed, not just its status code.
+String? _detailMessage(Object? data) {
+  if (data is! Map) return null;
+  final detail = data['detail'];
+  if (detail is String) return detail;
+  if (detail is Map && detail['message'] is String) {
+    return detail['message'] as String;
+  }
+  return null;
 }
 
 String _validatedLoopbackBaseUrl(String value) {
