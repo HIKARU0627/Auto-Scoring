@@ -10,9 +10,10 @@ will accept. See docs/poc-4-multi-layout-profiles.md (Issue #15).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from typing import Any
 
 
 class RegionKind(StrEnum):
@@ -53,6 +54,15 @@ class NormalizedBBox:
             abs(self.y1 - other.y1),
         )
 
+    def to_dict(self) -> dict[str, float]:
+        return {"x0": self.x0, "y0": self.y0, "x1": self.x1, "y1": self.y1}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> NormalizedBBox:
+        return cls(
+            x0=float(data["x0"]), y0=float(data["y0"]), x1=float(data["x1"]), y1=float(data["y1"])
+        )
+
 
 @dataclass(frozen=True)
 class Region:
@@ -62,6 +72,27 @@ class Region:
     bbox: NormalizedBBox
     label: str
     confirmed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "region_id": self.region_id,
+            "kind": self.kind.value,
+            "page_index": self.page_index,
+            "bbox": self.bbox.to_dict(),
+            "label": self.label,
+            "confirmed": self.confirmed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Region:
+        return cls(
+            region_id=str(data["region_id"]),
+            kind=RegionKind(data["kind"]),
+            page_index=int(data["page_index"]),
+            bbox=NormalizedBBox.from_dict(data["bbox"]),
+            label=str(data["label"]),
+            confirmed=bool(data["confirmed"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -76,6 +107,13 @@ class PageFormat:
     @property
     def is_landscape(self) -> bool:
         return self.width_pt > self.height_pt
+
+    def to_dict(self) -> dict[str, float]:
+        return {"width_pt": self.width_pt, "height_pt": self.height_pt}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> PageFormat:
+        return cls(width_pt=float(data["width_pt"]), height_pt=float(data["height_pt"]))
 
 
 @dataclass(frozen=True)
@@ -101,10 +139,23 @@ class FormatSignature:
             for a, b in zip(self.pages, other.pages, strict=True)
         )
 
+    def to_dict(self) -> dict[str, Any]:
+        return {"pages": [page.to_dict() for page in self.pages]}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> FormatSignature:
+        return cls(pages=tuple(PageFormat.from_dict(page) for page in data["pages"]))
+
 
 class ProfileStatus(StrEnum):
     DRAFT = "draft"
     CONFIRMED = "confirmed"
+
+
+def _pages_out_of_range(regions: Sequence[Region], signature: FormatSignature) -> list[str]:
+    return [
+        region.region_id for region in regions if not 0 <= region.page_index < len(signature.pages)
+    ]
 
 
 @dataclass(frozen=True)
@@ -131,11 +182,7 @@ class Profile:
         人間確認なしに登録完了にならない" (Issue #15) -- enforced here, not left
         to callers to remember.
         """
-        invalid_pages = [
-            region.region_id
-            for region in regions
-            if not 0 <= region.page_index < len(signature.pages)
-        ]
+        invalid_pages = _pages_out_of_range(regions, signature)
         if invalid_pages:
             raise ValueError(
                 f"regions reference pages outside the format signature: {invalid_pages}"
@@ -154,11 +201,7 @@ class Profile:
         """
         if not reviewed_regions:
             raise ValueError("cannot confirm a profile with no regions")
-        invalid_pages = [
-            region.region_id
-            for region in reviewed_regions
-            if not 0 <= region.page_index < len(self.signature.pages)
-        ]
+        invalid_pages = _pages_out_of_range(reviewed_regions, self.signature)
         if invalid_pages:
             raise ValueError(
                 f"regions reference pages outside the format signature: {invalid_pages}"
@@ -167,3 +210,36 @@ class Profile:
         if unreviewed:
             raise ValueError(f"regions not confirmed: {unreviewed}")
         return replace(self, regions=tuple(reviewed_regions), status=ProfileStatus.CONFIRMED)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-ready dict. See `adapters.local.profile_store.ProfileStore`."""
+        return {
+            "profile_id": self.profile_id,
+            "format_id": self.format_id,
+            "status": self.status.value,
+            "signature": self.signature.to_dict(),
+            "regions": [region.to_dict() for region in self.regions],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Profile:
+        """Reconstruct a previously-saved profile verbatim, including its DRAFT/CONFIRMED status.
+
+        Re-validates the page-range invariant `from_candidates`/`confirm`
+        enforce at write time, so a hand-edited or corrupted file is rejected
+        on load rather than silently reapplied.
+        """
+        signature = FormatSignature.from_dict(data["signature"])
+        regions = tuple(Region.from_dict(region) for region in data["regions"])
+        invalid_pages = _pages_out_of_range(regions, signature)
+        if invalid_pages:
+            raise ValueError(
+                f"regions reference pages outside the format signature: {invalid_pages}"
+            )
+        return cls(
+            profile_id=str(data["profile_id"]),
+            format_id=str(data["format_id"]),
+            signature=signature,
+            regions=regions,
+            status=ProfileStatus(data["status"]),
+        )
