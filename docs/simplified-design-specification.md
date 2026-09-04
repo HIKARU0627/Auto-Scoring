@@ -683,6 +683,11 @@ Annotation
 Review
 ```
 
+> 複数設問の依存関係（Issue #26）は上記に加えて `DependencyGraph` /
+> `DependencyEdge` をテスト単位・バージョン管理で保持する。draft（AI候補）→
+> 人間確認→confirmed の流れと、confirmed graphのみがSubmission処理を許可する
+> ゲートは [`dependency-graph.md`](./dependency-graph.md) を参照。
+
 ---
 
 # 19. Review履歴
