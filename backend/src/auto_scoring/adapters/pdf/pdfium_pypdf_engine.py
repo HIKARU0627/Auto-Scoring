@@ -90,14 +90,17 @@ def _overlay_pdf(reference_page: PageObject, content: str) -> bytes:
     the target page in the same user-space coordinates.
     """
     box = reference_page.mediabox
-    width = float(box.width)
-    height = float(box.height)
+    left = float(box.left)
+    bottom = float(box.bottom)
+    right = float(box.right)
+    top = float(box.top)
     body = content.encode("latin-1")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.4f} {height:.4f}] "
+            f"<< /Type /Page /Parent 2 0 R /MediaBox "
+            f"[{left:.4f} {bottom:.4f} {right:.4f} {top:.4f}] "
             f"/Contents 4 0 R >>"
         ).encode("latin-1"),
         b"<< /Length %d >>\nstream\n" % len(body) + body + b"\nendstream",

@@ -37,6 +37,7 @@ class _Fixture:
     media_height: float
     rotation: int = 0
     crop: tuple[float, float, float, float] | None = None
+    media_offset: tuple[float, float] = (0.0, 0.0)
 
 
 _FIXTURES = [
@@ -46,6 +47,7 @@ _FIXTURES = [
     _Fixture("a4-rotate-270", _A4_W, _A4_H, rotation=270),
     _Fixture("a4-landscape", _A4_H, _A4_W),
     _Fixture("letter-portrait", _LETTER_W, _LETTER_H),
+    _Fixture("a4-mediabox-offset", _A4_W, _A4_H, media_offset=(100.0, 200.0)),
     _Fixture("a4-cropbox-inset", _A4_W, _A4_H, crop=(30.0, 40.0, 565.0, 800.0)),
     _Fixture(
         "a4-cropbox-inset-rotate-90",
@@ -68,6 +70,15 @@ _TEST_POINTS = [
 def _write_fixture(fixture: _Fixture, path: Path) -> None:
     writer = PdfWriter()
     page = writer.add_blank_page(width=fixture.media_width, height=fixture.media_height)
+    media_left, media_bottom = fixture.media_offset
+    page.mediabox = RectangleObject(
+        [
+            media_left,
+            media_bottom,
+            media_left + fixture.media_width,
+            media_bottom + fixture.media_height,
+        ]
+    )
     if fixture.rotation:
         page[NameObject("/Rotate")] = NumberObject(fixture.rotation)
     if fixture.crop is not None:

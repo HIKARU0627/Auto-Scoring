@@ -50,6 +50,12 @@ class Fixture:
     media_height: float
     rotation: int = 0
     crop: tuple[float, float, float, float] | None = None
+    media_offset: tuple[float, float] = (0.0, 0.0)
+
+    @property
+    def media_box_label(self) -> str:
+        left, bottom = self.media_offset
+        return str([left, bottom, left + self.media_width, bottom + self.media_height])
 
     @property
     def crop_label(self) -> str:
@@ -63,6 +69,7 @@ FIXTURES = [
     Fixture("a4-rotate-270", _A4_W, _A4_H, rotation=270),
     Fixture("a4-landscape", _A4_H, _A4_W),
     Fixture("letter-portrait", _LETTER_W, _LETTER_H),
+    Fixture("a4-mediabox-offset", _A4_W, _A4_H, media_offset=(100.0, 200.0)),
     Fixture("a4-cropbox-inset", _A4_W, _A4_H, crop=(30.0, 40.0, 565.0, 800.0)),
     Fixture(
         "a4-cropbox-inset-rotate-90",
@@ -85,6 +92,15 @@ TEST_POINTS = [
 def write_fixture(fixture: Fixture, path: Path) -> None:
     writer = PdfWriter()
     page = writer.add_blank_page(width=fixture.media_width, height=fixture.media_height)
+    media_left, media_bottom = fixture.media_offset
+    page.mediabox = RectangleObject(
+        [
+            media_left,
+            media_bottom,
+            media_left + fixture.media_width,
+            media_bottom + fixture.media_height,
+        ]
+    )
     if fixture.rotation:
         page[NameObject("/Rotate")] = NumberObject(fixture.rotation)
     if fixture.crop is not None:
@@ -134,7 +150,8 @@ def main() -> int:
             error = max(abs(measured.x - point.x), abs(measured.y - point.y))
             worst = max(worst, error)
             rows.append(
-                f"| {fixture.name} | {fixture.rotation} | {fixture.crop_label} "
+                f"| {fixture.name} | {fixture.media_box_label} "
+                f"| {fixture.rotation} | {fixture.crop_label} "
                 f"| ({point.x:.2f}, {point.y:.2f}) "
                 f"| ({user.x:.2f}, {user.y:.2f}) "
                 f"| ({measured.x:.4f}, {measured.y:.4f}) | {error:.4f} |"
@@ -144,6 +161,7 @@ def main() -> int:
     verdict = "PASS" if worst <= _TOLERANCE else "FAIL"
     columns = [
         "fixture",
+        "MediaBox",
         "/Rotate",
         "CropBox",
         "normalized (x, y)",
