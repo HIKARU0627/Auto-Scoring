@@ -107,6 +107,79 @@ def test_confirming_persists_and_locks_the_version(seeded: UowFactory) -> None:
             uow.dependency_graphs.save(_draft(edges=[]))
 
 
+def test_try_confirm_lets_only_one_racing_confirm_win(seeded: UowFactory) -> None:
+    """Two reviewers who both read the same DRAFT before either wrote must
+    not both succeed -- the second's `try_confirm` must lose cleanly, and the
+    persisted edges must be exactly the winner's (Issue #26 review: atomic
+    confirm).
+    """
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft())
+        uow.commit()
+
+    with seeded() as uow:
+        draft = uow.dependency_graphs.get("test-1:v1")
+        assert draft is not None
+        # Both built from the *same* stale DRAFT read, like two concurrent
+        # reviewers who each fetched it before either confirmed.
+        confirmed_a = draft.confirm(edges=[_edge("q-1", "q-2")], confirmed_at=at(5))
+        confirmed_b = draft.confirm(edges=[], confirmed_at=at(6))
+
+        assert uow.dependency_graphs.try_confirm(confirmed_a) is True
+        assert uow.dependency_graphs.try_confirm(confirmed_b) is False
+        uow.commit()
+
+    with seeded() as uow:
+        stored = uow.dependency_graphs.get("test-1:v1")
+    assert stored is not None
+    assert stored.status is DependencyGraphStatus.CONFIRMED
+    assert stored.confirmed_at == at(5)
+    assert {(e.from_question_id, e.to_question_id) for e in stored.edges} == {("q-1", "q-2")}
+
+
+def test_try_confirm_rejects_an_already_confirmed_row(seeded: UowFactory) -> None:
+    with seeded() as uow:
+        draft = _draft()
+        uow.dependency_graphs.save(draft)
+        confirmed = draft.confirm(edges=[_edge("q-1", "q-2")], confirmed_at=at(5))
+        assert uow.dependency_graphs.try_confirm(confirmed) is True
+        uow.commit()
+
+    with seeded() as uow:
+        # A second, independent confirm attempt against the same (now
+        # CONFIRMED) version must also lose, not raise or silently repeat.
+        stale = _draft()
+        confirmed_again = stale.confirm(edges=[], confirmed_at=at(6))
+        assert uow.dependency_graphs.try_confirm(confirmed_again) is False
+
+
+def test_try_confirm_rejects_when_a_newer_version_is_already_confirmed(
+    seeded: UowFactory,
+) -> None:
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft())
+        uow.dependency_graphs.save(_draft(id="test-1:v2", version=2, edges=[]))
+        uow.commit()
+
+    with seeded() as uow:
+        v2 = uow.dependency_graphs.get("test-1:v2")
+        assert v2 is not None
+        confirmed_v2 = v2.confirm(edges=[], confirmed_at=at(5))
+        assert uow.dependency_graphs.try_confirm(confirmed_v2) is True
+        uow.commit()
+
+    with seeded() as uow:
+        v1 = uow.dependency_graphs.get("test-1:v1")
+        assert v1 is not None
+        confirmed_v1 = v1.confirm(edges=[], confirmed_at=at(6))
+        assert uow.dependency_graphs.try_confirm(confirmed_v1) is False
+
+    with seeded() as uow:
+        stored_v1 = uow.dependency_graphs.get("test-1:v1")
+    assert stored_v1 is not None
+    assert stored_v1.status is DependencyGraphStatus.DRAFT
+
+
 def test_get_latest_returns_the_highest_version(seeded: UowFactory) -> None:
     with seeded() as uow:
         v1 = _draft()

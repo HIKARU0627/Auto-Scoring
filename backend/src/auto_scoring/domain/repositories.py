@@ -124,6 +124,16 @@ class DependencyGraphRepository(Protocol):
         """
         ...
 
+    def try_confirm(self, confirmed: DependencyGraph) -> bool:
+        """Atomic compare-and-set DRAFT -> CONFIRMED (Issue #26 review).
+
+        Returns ``True`` and replaces the row's edges only if it is still
+        DRAFT and no higher version for the same test is already CONFIRMED at
+        the moment of the write; returns ``False`` -- unchanged -- otherwise,
+        so two concurrent confirms can never both succeed.
+        """
+        ...
+
     def list_versions(self, test_id: str) -> list[DependencyGraph]: ...
 
 

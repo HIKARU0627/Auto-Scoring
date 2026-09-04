@@ -20,7 +20,7 @@ from auto_scoring.adapters.sqlalchemy_repositories import SqlAlchemyDependencyGr
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.dependency_graph import DependencyGraph, can_start_submission_processing
-from auto_scoring.domain.models import JobState
+from auto_scoring.domain.models import JobState, Rubric, RubricCriterion
 from tests.support import make_job, make_question, make_submission, make_test
 
 _TOKEN = "dag-test-token"
@@ -307,6 +307,37 @@ def test_confirming_an_older_draft_after_a_newer_version_was_confirmed_is_reject
     assert active is not None and active.version == 2
 
 
+def test_confirm_returns_409_when_it_loses_the_atomic_race(
+    client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even when every application-level pre-check passes, the atomic
+    compare-and-set can still lose to a concurrent confirm that reached the
+    database first -- the loser must get 409, never a silent 200 or a raw
+    500 (Issue #26 review: atomic confirm). Forced deterministically since a
+    real two-request race is not reliable through TestClient.
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+
+    monkeypatch.setattr(
+        SqlAlchemyDependencyGraphRepository,
+        "try_confirm",
+        lambda self, confirmed: False,
+    )
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert response.status_code == 409
+
+    with make_uow() as uow:
+        v1 = uow.dependency_graphs.get("test-1:v1")
+    assert v1 is not None
+    assert v1.status.value == "draft"
+
+
 def test_confirming_after_the_test_gained_a_question_requires_reanalysis(
     client: TestClient, make_uow: UowFactory
 ) -> None:
@@ -536,6 +567,36 @@ def test_analyze_rejects_unknown_override_question_id(
     )
     assert response.status_code == 422
     assert "unknown" in response.json()["detail"].lower()
+
+
+def test_analyze_respects_an_explicit_empty_rubric_override(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """An explicit `rubric_text: ""` override must exclude the saved rubric
+    text from analysis, not silently fall back to it (Issue #26 review: `or`
+    treated a deliberate "" the same as "no override was sent").
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    with make_uow() as uow:
+        uow.rubrics.add(
+            Rubric(
+                id="rubric-q2",
+                question_id="q2",
+                criteria=(
+                    RubricCriterion(
+                        id="c-1", description="問1を踏まえて評価する", max_points=5, position=0
+                    ),
+                ),
+            )
+        )
+        uow.commit()
+
+    draft = _analyze(client, overrides=[{"question_id": "q2", "rubric_text": ""}])
+
+    # If the saved rubric text ("問1を踏まえて評価する") had leaked through
+    # despite the explicit "", this would produce a q1 -> q2 edge instead.
+    assert draft["edges"] == []
+    assert "q2" in {u["question_id"] for u in draft["unresolved"]}
 
 
 # --------------------------------------------------------------------------- #

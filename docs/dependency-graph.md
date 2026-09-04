@@ -71,6 +71,20 @@ Issue本文は「graphはテストプロファイル単位で分析・確認・v
   い）。TestClient経由の実スレッド2本での再現は信頼できなかったため、テスト
   では `save()` が最初の1回だけ `IntegrityError` を送出するようモックして
   再試行経路を決定的に検証している。
+- `POST /confirm` の各種チェック（status / 新しいCONFIRMED版の有無 / 設問
+  集合の一致）は、その後の書き込みより前に読んだ状態に基づくため、単体では
+  アトミックでない -- 2つの `/confirm` が両方チェックを通過してから両方書き
+  込む、というレースが理論上あり得る（レビュー指摘）。実際の書き込みは
+  `DependencyGraphRepository.try_confirm` という1本の
+  `UPDATE ... WHERE status = 'draft' AND NOT EXISTS(...更に新しいCONFIRMED...)`
+  で行う。この `WHERE` はSQLiteが**実行時点の実際の行**に対して評価するため
+  （ORM属性を変更してflushする従来の `save()`はPKだけでUPDATEするので、
+  読んだ時点の状態を条件にできず、後勝ちが黙って上書きしてしまっていた）、
+  2つの `/confirm` が競合しても片方だけがマッチし、負けた方は
+  `rowcount == 0` から `False` を受け取って409を返す -- 中身を一切変更しな
+  い。テストでは同じ古いDRAFT読み取りから2つの `confirm()` 済みgraphを作り、
+  `try_confirm` を連続で呼んで「後者は必ず負ける」ことを決定的に検証している
+  （`test_dependency_graph_repository.py`）。
 - 受入条件「確定graphを変更した場合はversionを更新し、古いgraphで未完了の採点
   jobを無効化・再作成できるようにする」は実装済み: `Job` に
   `dependency_graph_version`（そのjobがどの確定バージョンに対して発行された
@@ -132,7 +146,11 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   と `Rubric` の基準説明を自動入力しつつ、問題文・採点基準のテキストを
   リクエストボディの `overrides`（`question_id` ごとの上書き）として受け取る。
   PDFからの問題文抽出パイプラインが実装され次第、そちらをデフォルト入力に
-  差し替え、`overrides` は人間による上書きの位置づけに変わる想定。
+  差し替え、`overrides` は人間による上書きの位置づけに変わる想定。overrideの
+  各フィールドは「未送信（`None`）ならデフォルトへfallback」「明示的な `""`
+  なら文字通り空として使う（デフォルトへ戻さない）」を区別する -- `or` で
+  組むと後者が前者と同じ扱いになり、呼び出し元が意図的に除外したはずの保存
+  済みrubric文言が漏れてanalyzerに読まれてしまう（レビュー指摘）。
 - 将来 `AIProvider` ベースの analyzer に差し替える場合も、`DependencyAnalyzer`
   を実装する新しいadapterを `build_dependency_graph_router(..., analyzer=...)`
   に渡すだけでよい。
@@ -164,7 +182,9 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   検証、`reissue_job_for_graph_version`（cancel + 再作成）のunit test。
 - `backend/tests/test_dependency_graph_repository.py`: 実SQLiteに対する
   upsert・バージョン不変性（`created_at` を含む）・`get_latest`/`list_versions`
-  のintegration test。
+  のintegration test。`try_confirm` が同じ古いDRAFT読み取りから作った2つの
+  confirmed graphのうち一方しか勝てないこと、既にCONFIRMEDな行やより新しい
+  CONFIRMED版がある場合に何も変更せず `False` を返すことのintegration test。
 - `backend/tests/test_sqlalchemy_repositories.py`:
   `JobRepository.list_incomplete_for_stale_versions` がテスト単位・状態・
   バージョンで正しく絞り込むことのintegration test。
@@ -179,6 +199,8 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   後の古いv1へのconfirmが拒否されること、`/analyze` と `/confirm` の間に
   設問が増えた場合にconfirmが拒否されること、`save()` の
   `IntegrityError`（バージョン採番の衝突）から正しく再試行して回復すること
-  （モックで決定的に再現）、**確定graphのバージョンが進んだときに古いバー
-  ジョンの未完了jobがCANCELLEDへ遷移し、新バージョン向けのjobが同一トラン
-  ザクションで作られること**（Issue #26 受入条件そのもの）。
+  （モックで決定的に再現）、`try_confirm` がレースに負けたときAPIが409を返す
+  こと（モックで決定的に再現）、明示的な空rubric override（`""`）が保存済み
+  rubric文言へfallbackせず尊重されること、**確定graphのバージョンが進んだと
+  きに古いバージョンの未完了jobがCANCELLEDへ遷移し、新バージョン向けのjobが
+  同一トランザクションで作られること**（Issue #26 受入条件そのもの）。

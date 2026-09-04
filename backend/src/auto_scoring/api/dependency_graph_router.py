@@ -227,14 +227,21 @@ def build_dependency_graph_router(
             default_rubric_text = (
                 "、".join(c.description for c in rubric.criteria) if rubric is not None else None
             )
+            # `or` would treat a deliberate `""` override (caller explicitly
+            # excluding the saved rubric text from analysis) the same as "no
+            # override was sent", falling back to `default_rubric_text` --
+            # the analyzer would then read text the caller asked it not to
+            # (Issue #26 review). Only an *absent* field (`None`) falls back.
+            prompt_text = override.prompt_text if override is not None else None
+            rubric_text = override.rubric_text if override is not None else None
             infos.append(
                 QuestionInfo(
                     question_id=question.id,
                     number=question.number,
                     page=question.page,
-                    prompt_text=(override.prompt_text if override else None) or "",
+                    prompt_text=prompt_text if prompt_text is not None else "",
                     model_answer=question.model_answer,
-                    rubric_text=(override.rubric_text if override else None) or default_rubric_text,
+                    rubric_text=rubric_text if rubric_text is not None else default_rubric_text,
                 )
             )
         return infos
@@ -393,7 +400,22 @@ def build_dependency_graph_router(
         except DependencyGraphError as error:
             raise HTTPException(422, detail=str(error)) from error
 
-        uow.dependency_graphs.save(confirmed)
+        # The checks above (status / active-confirmed / question set) read
+        # before this write and are not by themselves atomic: two concurrent
+        # `/confirm` calls can both pass them before either writes. The
+        # actual write is a compare-and-set (`try_confirm`), so only one of
+        # two racing confirms can ever win; the loser gets a 409 here instead
+        # of silently overwriting the winner's edges or reissuing jobs
+        # against a version that lost the race (Issue #26 review).
+        if not uow.dependency_graphs.try_confirm(confirmed):
+            raise HTTPException(
+                409,
+                detail=(
+                    f"dependency graph for test {test_id!r} v{request.version} could not be "
+                    "confirmed -- it was confirmed by another request, or a newer version was, "
+                    "in the meantime; re-fetch and retry"
+                ),
+            )
 
         # Issue #26 acceptance: confirming a new version must invalidate and
         # recreate any still-incomplete job left over from a superseded one,

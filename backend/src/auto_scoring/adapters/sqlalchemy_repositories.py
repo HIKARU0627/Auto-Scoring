@@ -14,7 +14,9 @@ constraint violation at the offending call rather than at ``commit``.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
@@ -346,6 +348,65 @@ class SqlAlchemyDependencyGraphRepository:
             child.id = f"{existing.id}:{child.from_question_id}:{child.to_question_id}"
         self._session.add_all(children)
         self._session.flush()
+
+    def try_confirm(self, confirmed: DependencyGraph) -> bool:
+        """Atomically transition one DRAFT row to CONFIRMED, or refuse.
+
+        Unlike ``save``, this is a compare-and-set: the ``UPDATE ... WHERE``
+        below is evaluated by SQLite against the row's *actual* current state
+        at execution time, not against whatever this session read earlier --
+        so it is safe even when another `/confirm` for the same test raced
+        this one and reached the database first (Issue #26 review: without
+        this, two concurrent confirms could both pass their application-level
+        checks -- read before either writes -- and then both blindly
+        overwrite via plain ORM attribute mutation, since a normal ORM
+        ``UPDATE`` only matches on primary key, not on the state it was read
+        with).
+
+        Returns ``True`` (and replaces the edges) if the row was still DRAFT
+        *and* no higher version for the same test was already CONFIRMED at
+        the moment this statement executed. Returns ``False`` -- touching
+        nothing -- if either precondition had already stopped holding; the
+        caller reports a conflict for the loser to re-fetch and retry.
+        """
+        newer_confirmed_exists = (
+            select(DependencyGraphRow.id)
+            .where(
+                DependencyGraphRow.test_id == confirmed.test_id,
+                DependencyGraphRow.status == DependencyGraphStatus.CONFIRMED,
+                DependencyGraphRow.version > confirmed.version,
+            )
+            .exists()
+        )
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(DependencyGraphRow)
+                .where(
+                    DependencyGraphRow.id == confirmed.id,
+                    DependencyGraphRow.status == DependencyGraphStatus.DRAFT,
+                    ~newer_confirmed_exists,
+                )
+                .values(
+                    status=DependencyGraphStatus.CONFIRMED,
+                    unresolved=[],
+                    confirmed_at=confirmed.confirmed_at,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            return False
+
+        for edge_row in self._session.scalars(
+            select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == confirmed.id)
+        ):
+            self._session.delete(edge_row)
+        self._session.flush()  # old candidate edges gone before the reviewed ones land
+
+        _, children = m.dependency_graph_rows(confirmed)
+        self._session.add_all(children)
+        self._session.flush()
+        return True
 
     def _hydrate(self, row: DependencyGraphRow) -> DependencyGraph:
         edges = list(
