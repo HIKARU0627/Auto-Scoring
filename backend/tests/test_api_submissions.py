@@ -164,6 +164,35 @@ def test_create_submission_rejects_oversize_file_before_materializing(
         assert uow.submissions.list_for_test("test-1") == []
 
 
+def test_create_submission_tolerates_multipart_overhead_near_the_limit(
+    client: TestClient, data_root: Path
+) -> None:
+    """A file part sized just *under* max_size_bytes must not be rejected by
+    the ASGI body-size middleware just because multipart framing (boundary,
+    part headers, the student_label field) pushes the *total* request body a
+    little past max_size_bytes -- only the file part itself is subject to
+    that limit (api/app.py::_read_upload_within_limit).
+
+    The padding after `%PDF-` isn't a well-formed PDF, so the request still
+    fails once it reaches PDF parsing (a 400, exercised elsewhere); what this
+    test pins down is that it must not fail at the ASGI layer with 413, which
+    would mean the middleware's own limit didn't get the overhead margin
+    api/app.py adds on top of IntakeLimits.max_size_bytes.
+    """
+    _seed_test(data_root)
+    limit = 5 * 1024 * 1024
+    file_bytes = b"%PDF-1.7\n" + b"0" * (limit - 200)
+    assert len(file_bytes) < limit
+
+    response = client.post(
+        "/tests/test-1/submissions",
+        headers=_auth(),
+        files={"file": ("student-a.pdf", file_bytes, "application/pdf")},
+        data={"student_label": "student-a"},
+    )
+    assert response.status_code != 413
+
+
 def test_create_submission_rejects_unknown_test(client: TestClient) -> None:
     response = client.post(
         "/tests/does-not-exist/submissions",

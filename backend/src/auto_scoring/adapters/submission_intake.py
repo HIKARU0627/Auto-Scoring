@@ -50,6 +50,7 @@ from auto_scoring.domain.pdf_intake import (
     PdfCorruptedError,
     PdfEncryptedError,
     validate_page_count,
+    validate_render_dimensions,
     validate_upload_bytes,
 )
 from auto_scoring.domain.submission_intake import (
@@ -75,6 +76,25 @@ class DuplicateSubmissionError(Exception):
             f"an identical PDF was already submitted as submission {existing_submission_id!r}"
         )
         self.existing_submission_id = existing_submission_id
+
+
+class SubmissionRetryConflictError(Exception):
+    """Another request already claimed this errored submission for retry.
+
+    ``decide_reintake``'s RETRY_EXISTING check and the actual claim
+    (``SubmissionRepository.claim_for_retry``) aren't the same operation, so
+    two concurrent retries of the same submission can both decide "this is
+    retryable" before either claims it. Only one ``claim_for_retry`` call can
+    ever return ``True`` (it's a conditional ``UPDATE ... WHERE state =
+    'error'``); the loser raises this instead of running the full pipeline
+    against a submission someone else is already reprocessing.
+    """
+
+    def __init__(self, submission_id: str) -> None:
+        super().__init__(
+            f"submission {submission_id!r} is already being retried by another request"
+        )
+        self.submission_id = submission_id
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -130,6 +150,21 @@ def intake_submission(
         except Exception as exc:
             raise PdfCorruptedError(f"could not parse PDF: {exc}") from exc
         validate_page_count(page_count, limits)
+
+        # A page's declared MediaBox/CropBox can be enormous even in a tiny,
+        # few-page file; render_page_png below allocates a raster sized from
+        # it at RENDER_SCALE, so an absurd declared size must be rejected
+        # *before* ever rendering, not discovered via an out-of-memory crash.
+        for page in range(1, page_count + 1):
+            try:
+                geometry = pdf_engine.page_geometry(scratch_path, page - 1)
+            except Exception as exc:
+                raise PdfCorruptedError(f"could not parse PDF: {exc}") from exc
+            validate_render_dimensions(
+                geometry.displayed_width * RENDER_SCALE,
+                geometry.displayed_height * RENDER_SCALE,
+                limits,
+            )
 
         content_hash = hashlib.sha256(data).hexdigest()
         existing = uow.submissions.find_by_content_hash(test_id, content_hash)
@@ -272,7 +307,15 @@ def _write_submission(
             staged.add(source_pdf_full_path, data)
 
         if is_retry:
-            uow.submissions.mark_intake_outcome(submission_id, SubmissionState.UNPROCESSED, None)
+            # Conditional UPDATE (WHERE state = 'error'), not a read-then-write:
+            # two concurrent retries of the same submission can both have
+            # decided RETRY_EXISTING before either claims it, and only one
+            # claim_for_retry() can ever return True. The loser raises here,
+            # inside the same try/except that rolls back and discards this
+            # request's staged files -- it never commits a redundant pipeline
+            # run against a submission another request is already reprocessing.
+            if not uow.submissions.claim_for_retry(submission_id):
+                raise SubmissionRetryConflictError(submission_id)
         else:
             new_submission = Submission(
                 id=submission_id,

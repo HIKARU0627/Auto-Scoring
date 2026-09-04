@@ -167,6 +167,65 @@ def test_set_state_allows_a_legal_transition(seeded: UowFactory) -> None:
     assert submission.state is SubmissionState.AI_PROCESSING
 
 
+def test_claim_for_retry_succeeds_from_error_and_updates_state(seeded: UowFactory) -> None:
+    with seeded() as uow:
+        uow.submissions.add(make_submission(state=SubmissionState.ERROR))
+        uow.commit()
+
+    with seeded() as uow:
+        claimed = uow.submissions.claim_for_retry("sub-1")
+        assert claimed is True
+        uow.commit()
+
+    with seeded() as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.UNPROCESSED
+
+
+def test_claim_for_retry_fails_when_not_in_error_state(seeded: UowFactory) -> None:
+    with seeded() as uow:
+        uow.submissions.add(make_submission(state=SubmissionState.UNPROCESSED))
+        uow.commit()
+
+    with seeded() as uow:
+        claimed = uow.submissions.claim_for_retry("sub-1")
+        assert claimed is False
+        uow.commit()
+
+    with seeded() as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.UNPROCESSED  # unchanged
+
+
+def test_claim_for_retry_only_the_first_of_two_concurrent_claims_wins(
+    seeded: UowFactory,
+) -> None:
+    """Simulates two "concurrent" retries racing for the same errored
+    submission: only the first conditional UPDATE (WHERE state = 'error')
+    can match, so a second attempt against the same still-open transaction's
+    view -- or, as here, sequentially after the first already moved the row
+    out of 'error' -- must lose.
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission(state=SubmissionState.ERROR))
+        uow.commit()
+
+    with seeded() as first_uow:
+        assert first_uow.submissions.claim_for_retry("sub-1") is True
+        first_uow.commit()
+
+    with seeded() as second_uow:
+        assert second_uow.submissions.claim_for_retry("sub-1") is False
+        second_uow.commit()
+
+    with seeded() as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.UNPROCESSED
+
+
 def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
     with seeded() as uow:
         uow.submissions.add(make_submission())

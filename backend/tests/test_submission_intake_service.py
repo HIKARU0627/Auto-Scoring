@@ -20,6 +20,7 @@ from auto_scoring.adapters.pdf import PdfiumPypdfEngine
 from auto_scoring.adapters.sqlalchemy_repositories import SqlAlchemySubmissionRepository
 from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
+    SubmissionRetryConflictError,
     intake_submission,
 )
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -34,6 +35,7 @@ from auto_scoring.domain.pdf_intake import (
     PdfEncryptedError,
     PdfInvalidTypeError,
     PdfPageLimitExceededError,
+    PdfPageTooLargeError,
 )
 from tests.support import at, make_question, make_test
 
@@ -370,6 +372,69 @@ def test_retry_reuses_the_errored_submission(
         assert len(uow.answer_images.list_for_submission(first.submission.id)) == 1
 
 
+def test_concurrent_retry_is_reported_as_a_race_loss(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two requests can both decide RETRY_EXISTING for the same errored
+    submission before either claims it; only claim_for_retry()'s conditional
+    UPDATE (WHERE state = 'error') actually arbitrates. Simulate the loser by
+    making claim_for_retry report False even though nothing else changed the
+    row, and confirm intake_submission surfaces that as
+    SubmissionRetryConflictError instead of silently re-running the pipeline.
+    """
+    q1 = make_question(id="q-1", page=1, answer_area=NormalizedRect(x=0, y=0, width=1, height=1))
+    _seed_test_with_questions(make_uow, questions=[q1])
+    data = _pdf_bytes(pages=1)
+
+    with make_uow() as uow:
+        first = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        uow.submissions.set_state(first.submission.id, SubmissionState.ERROR)
+        uow.commit()
+
+    monkeypatch.setattr(
+        SqlAlchemySubmissionRepository, "claim_for_retry", lambda self, submission_id: False
+    )
+
+    with make_uow() as uow, pytest.raises(SubmissionRetryConflictError) as excinfo:
+        intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(seconds=2),
+        )
+    assert excinfo.value.submission_id == first.submission.id
+
+    with make_uow() as uow:
+        # The loser's staged files/state changes were rolled back -- the
+        # submission is exactly where the "winner" (simulated by never
+        # actually running) left it: still ERROR, still one answer image.
+        submission = uow.submissions.get(first.submission.id)
+        assert submission is not None
+        assert submission.state is SubmissionState.ERROR
+        assert len(uow.answer_images.list_for_submission(first.submission.id)) == 1
+
+
 def test_unknown_test_id_raises_lookup_error(
     make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
 ) -> None:
@@ -435,6 +500,35 @@ def test_oversize_page_count_is_rejected(
 
     with make_uow() as uow:
         assert uow.submissions.list_for_test("test-1") == []
+
+
+def test_page_with_an_absurd_declared_size_is_rejected_before_rendering(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """A tiny PDF can still declare an enormous MediaBox; this must be caught
+    before render_page_png ever tries to allocate a raster from it.
+    """
+    _seed_test_with_questions(make_uow, questions=[])
+    huge_page = _pdf_bytes(width=1_000_000, height=1_000_000)
+    assert len(huge_page) < 10_000  # a tiny file, not caught by the size limit
+
+    with make_uow() as uow, pytest.raises(PdfPageTooLargeError):
+        intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=huge_page,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        assert uow.submissions.list_for_test("test-1") == []
+    assert not (store.root / "submissions").exists()
 
 
 def test_wrong_extension_is_rejected_before_any_pdf_parsing(

@@ -43,6 +43,18 @@ class PdfPageLimitExceededError(PdfIntakeError):
     """The PDF has more pages than :attr:`IntakeLimits.max_pages` allows."""
 
 
+class PdfPageTooLargeError(PdfIntakeError):
+    """A page's declared dimensions would rasterize far beyond a sane size.
+
+    A tiny PDF can still declare an enormous ``MediaBox``/``CropBox`` -- the
+    byte-size and page-count checks don't catch that. Rendering it at a fixed
+    scale would then try to allocate a raster far larger than any real answer
+    sheet, exhausting memory (or crashing the sidecar) on an input that
+    otherwise looked harmless (AGENTS.md "Validate every input that crosses a
+    trust boundary").
+    """
+
+
 _MAGIC = b"%PDF-"
 ALLOWED_EXTENSION = ".pdf"
 ALLOWED_MIME_TYPES = frozenset({"application/pdf"})
@@ -56,12 +68,24 @@ class IntakeLimits:
 
     max_size_bytes: int = 50 * 1024 * 1024
     max_pages: int = 100
+    #: Per-side cap on a rendered page, in pixels (at the intake pipeline's
+    #: fixed render scale). Catches a page whose declared width or height
+    #: alone is absurd, independent of the area check below.
+    max_render_dimension_px: int = 20_000
+    #: Cap on a rendered page's total pixel count (width_px * height_px).
+    #: ~38M px is close to a 6000x6300 raster -- generously above any real
+    #: scanned answer sheet, comfortably below "exhausts memory".
+    max_render_pixels: int = 40_000_000
 
     def __post_init__(self) -> None:
         if self.max_size_bytes < 1:
             raise ValueError("max_size_bytes must be positive")
         if self.max_pages < 1:
             raise ValueError("max_pages must be positive")
+        if self.max_render_dimension_px < 1:
+            raise ValueError("max_render_dimension_px must be positive")
+        if self.max_render_pixels < 1:
+            raise ValueError("max_render_pixels must be positive")
 
 
 def validate_filename(filename: str) -> None:
@@ -111,6 +135,28 @@ def validate_page_count(page_count: int, limits: IntakeLimits) -> None:
         raise PdfEmptyError("PDF has no pages")
     if page_count > limits.max_pages:
         raise PdfPageLimitExceededError(f"page count {page_count} exceeds limit {limits.max_pages}")
+
+
+def validate_render_dimensions(width_px: float, height_px: float, limits: IntakeLimits) -> None:
+    """Reject a page whose rasterized size (at the pipeline's render scale)
+    would exceed ``limits``. Call this with each page's *displayed* (rotation-
+    applied) width/height in pixels, before actually rendering it.
+    """
+    if width_px <= 0 or height_px <= 0:
+        raise PdfPageTooLargeError(
+            f"page has non-positive rendered dimensions ({width_px:.0f}x{height_px:.0f}px)"
+        )
+    if width_px > limits.max_render_dimension_px or height_px > limits.max_render_dimension_px:
+        raise PdfPageTooLargeError(
+            f"page would rasterize to {width_px:.0f}x{height_px:.0f}px, "
+            f"exceeding the {limits.max_render_dimension_px}px per-side limit"
+        )
+    area = width_px * height_px
+    if area > limits.max_render_pixels:
+        raise PdfPageTooLargeError(
+            f"page would rasterize to {area:.0f}px total, "
+            f"exceeding the {limits.max_render_pixels}px limit"
+        )
 
 
 def validate_upload_bytes(

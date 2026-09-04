@@ -70,6 +70,15 @@ class SubmissionRepository(Protocol):
         """
         ...
 
+    def claim_for_retry(self, submission_id: str) -> bool:
+        """Atomically move ``submission_id`` from ``ERROR`` to ``UNPROCESSED``
+        via a conditional update (``WHERE state = 'error'``), not a read-then-
+        write -- so two concurrent retries of the same errored submission
+        can't both proceed and both commit the full intake pipeline. Returns
+        whether this call won the race.
+        """
+        ...
+
 
 class AnswerImageRepository(Protocol):
     def add(self, image: AnswerImage) -> None: ...

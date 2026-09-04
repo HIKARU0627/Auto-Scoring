@@ -10,11 +10,13 @@ from auto_scoring.domain.pdf_intake import (
     PdfEmptyError,
     PdfInvalidTypeError,
     PdfPageLimitExceededError,
+    PdfPageTooLargeError,
     PdfTooLargeError,
     sniff_magic_bytes,
     validate_declared_mime,
     validate_filename,
     validate_page_count,
+    validate_render_dimensions,
     validate_size,
     validate_upload_bytes,
 )
@@ -113,3 +115,32 @@ def test_intake_limits_rejects_non_positive_values() -> None:
         IntakeLimits(max_size_bytes=0)
     with pytest.raises(ValueError, match="max_pages"):
         IntakeLimits(max_pages=0)
+    with pytest.raises(ValueError, match="max_render_dimension_px"):
+        IntakeLimits(max_render_dimension_px=0)
+    with pytest.raises(ValueError, match="max_render_pixels"):
+        IntakeLimits(max_render_pixels=0)
+
+
+def test_validate_render_dimensions_accepts_a_normal_page() -> None:
+    # A4 at the intake pipeline's render scale (2.0): ~1190x1684px.
+    validate_render_dimensions(1190, 1684, IntakeLimits())
+
+
+def test_validate_render_dimensions_rejects_non_positive_size() -> None:
+    with pytest.raises(PdfPageTooLargeError):
+        validate_render_dimensions(0, 100, IntakeLimits())
+    with pytest.raises(PdfPageTooLargeError):
+        validate_render_dimensions(100, -1, IntakeLimits())
+
+
+def test_validate_render_dimensions_rejects_an_oversize_single_dimension() -> None:
+    limits = IntakeLimits(max_render_dimension_px=1000, max_render_pixels=10_000_000)
+    with pytest.raises(PdfPageTooLargeError):
+        validate_render_dimensions(2000, 100, limits)
+
+
+def test_validate_render_dimensions_rejects_an_oversize_area() -> None:
+    # Neither side alone exceeds a generous per-side cap, but the area does.
+    limits = IntakeLimits(max_render_dimension_px=20_000, max_render_pixels=1_000_000)
+    with pytest.raises(PdfPageTooLargeError):
+        validate_render_dimensions(5000, 5000, limits)

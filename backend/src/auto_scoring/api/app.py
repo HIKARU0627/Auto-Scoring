@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
+    SubmissionRetryConflictError,
     intake_submission,
 )
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -37,6 +39,15 @@ _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
 #: over-limit upload we ever materialize in one `bytes` object before
 #: aborting (AGENTS.md "Validate every input that crosses a trust boundary").
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+
+#: Slack added on top of IntakeLimits.max_size_bytes for the ASGI-level
+#: MaxBodySizeMiddleware. That middleware bounds the *whole* multipart
+#: request body (boundary markers, part headers, the student_label field),
+#: not just the PDF part; without this margin, a PDF sitting right at the
+#: per-file limit would push the total body over it and get rejected by the
+#: middleware even though _read_upload_within_limit (which only measures the
+#: file part) would have accepted it.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
 async def _read_upload_within_limit(file: UploadFile, max_size_bytes: int) -> bytes:
@@ -120,12 +131,22 @@ def create_app(
     export and tests, but a real sidecar run always passes an explicit,
     persistent path (see ``auto_scoring.api.sidecar``). The final production
     location is provisional pending the Windows-distribution issue (see
-    ``docs/answer-intake-and-preprocessing.md`` §5).
+    ``docs/answer-intake-and-preprocessing.md`` §5). The auto-created temp
+    directory is registered for cleanup at process exit (``atexit``, not a
+    FastAPI/ASGI ``lifespan`` hook: existing call sites -- the module-level
+    ``app`` below, and tests that build a ``TestClient`` without the ``with``
+    form -- never drive ``lifespan`` events) so it doesn't accumulate on disk
+    across every import/test run that omits ``data_root``.
     """
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
     app.state.api_token = api_token or generate_token()
 
-    root = data_root or Path(tempfile.mkdtemp(prefix="auto-scoring-app-data-"))
+    if data_root is not None:
+        root = data_root
+    else:
+        scratch = tempfile.TemporaryDirectory(prefix="auto-scoring-app-data-")
+        atexit.register(scratch.cleanup)
+        root = Path(scratch.name)
     store = LocalFileStore(root)
     db_url = sqlite_url(store.database_path())
     upgrade(db_url, "head")
@@ -137,7 +158,13 @@ def create_app(
 
     # Rejects an over-limit request body at the ASGI stream boundary, before
     # FastAPI's multipart parser buffers/spools it -- api/body_size_limit.py.
-    app.add_middleware(MaxBodySizeMiddleware, max_bytes=limits.max_size_bytes)
+    # The per-file limit is enforced precisely by _read_upload_within_limit
+    # below; this one only needs to be no *smaller* than that plus multipart
+    # framing overhead.
+    app.add_middleware(
+        MaxBodySizeMiddleware,
+        max_bytes=limits.max_size_bytes + _MULTIPART_OVERHEAD_BYTES,
+    )
 
     repository = InMemoryScoreRepository()
     protected = APIRouter(dependencies=[Depends(require_token)])
@@ -221,6 +248,14 @@ def create_app(
                     detail={
                         "message": str(exc),
                         "existing_submission_id": exc.existing_submission_id,
+                    },
+                ) from exc
+            except SubmissionRetryConflictError as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "message": str(exc),
+                        "submission_id": exc.submission_id,
                     },
                 ) from exc
         return _submission_response(result.submission, is_retry=result.is_retry)

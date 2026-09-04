@@ -15,8 +15,10 @@ constraint violation at the offending call rather than at ``commit``.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
@@ -160,6 +162,34 @@ class SqlAlchemySubmissionRepository:
         ensure_submission_transition(SubmissionState(row.state), state)
         row.state = state
         row.review_reason = review_reason
+
+    def claim_for_retry(self, submission_id: str) -> bool:
+        """Atomically move ``submission_id`` from ``error`` to ``unprocessed``,
+        as a single conditional ``UPDATE ... WHERE state = 'error'`` rather
+        than a read-then-write -- so two concurrent retries of the same
+        errored submission can't both read "error" and both go on to run (and
+        commit) the full intake pipeline. Returns whether *this* call won the
+        race; the loser should treat that as a conflict, not retry again
+        itself, since the winner is already handling it.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(SubmissionRow)
+                .where(
+                    SubmissionRow.id == submission_id, SubmissionRow.state == SubmissionState.ERROR
+                )
+                .values(state=SubmissionState.UNPROCESSED)
+            ),
+        )
+        # The raw UPDATE above bypasses the ORM, so a SubmissionRow already
+        # cached in this session's identity map (e.g. from an earlier
+        # find_by_content_hash) would otherwise keep showing the stale
+        # pre-claim state to later session.get() calls in this same session.
+        cached = self._session.get(SubmissionRow, submission_id)
+        if cached is not None:
+            self._session.refresh(cached)
+        return result.rowcount == 1
 
 
 class SqlAlchemyAnswerImageRepository:
