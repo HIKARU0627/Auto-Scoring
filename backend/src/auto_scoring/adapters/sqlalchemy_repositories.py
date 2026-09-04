@@ -347,16 +347,17 @@ class SqlAlchemyDependencyGraphRepository:
         self._session.add_all(children)
         self._session.flush()
 
-    def get(self, graph_id: str) -> DependencyGraph | None:
-        row = self._session.get(DependencyGraphRow, graph_id)
-        if row is None:
-            return None
+    def _hydrate(self, row: DependencyGraphRow) -> DependencyGraph:
         edges = list(
             self._session.scalars(
                 select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
             )
         )
         return m.dependency_graph_from_rows(row, edges)
+
+    def get(self, graph_id: str) -> DependencyGraph | None:
+        row = self._session.get(DependencyGraphRow, graph_id)
+        return self._hydrate(row) if row is not None else None
 
     def get_latest(self, test_id: str) -> DependencyGraph | None:
         row = self._session.scalars(
@@ -365,29 +366,24 @@ class SqlAlchemyDependencyGraphRepository:
             .order_by(DependencyGraphRow.version.desc())
             .limit(1)
         ).one_or_none()
-        if row is None:
-            return None
-        edges = list(
-            self._session.scalars(
-                select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
+        return self._hydrate(row) if row is not None else None
+
+    def get_latest_confirmed(self, test_id: str) -> DependencyGraph | None:
+        row = self._session.scalars(
+            select(DependencyGraphRow)
+            .where(
+                DependencyGraphRow.test_id == test_id,
+                DependencyGraphRow.status == DependencyGraphStatus.CONFIRMED,
             )
-        )
-        return m.dependency_graph_from_rows(row, edges)
+            .order_by(DependencyGraphRow.version.desc())
+            .limit(1)
+        ).one_or_none()
+        return self._hydrate(row) if row is not None else None
 
     def list_versions(self, test_id: str) -> list[DependencyGraph]:
-        rows = list(
-            self._session.scalars(
-                select(DependencyGraphRow)
-                .where(DependencyGraphRow.test_id == test_id)
-                .order_by(DependencyGraphRow.version)
-            )
+        rows = self._session.scalars(
+            select(DependencyGraphRow)
+            .where(DependencyGraphRow.test_id == test_id)
+            .order_by(DependencyGraphRow.version)
         )
-        graphs = []
-        for row in rows:
-            edges = list(
-                self._session.scalars(
-                    select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
-                )
-            )
-            graphs.append(m.dependency_graph_from_rows(row, edges))
-        return graphs
+        return [self._hydrate(row) for row in rows]

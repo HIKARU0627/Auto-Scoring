@@ -51,6 +51,26 @@ Issue本文は「graphはテストプロファイル単位で分析・確認・v
   ないか既にCONFIRMEDなら404/409を返す -- 「latestを対象にする」実装だと、
   別クライアントの確定後に始まった新しいDRAFTへ、レビュー済みでない古い
   レビューが誤って適用されてしまうため。
+- `POST /confirm` はさらに、指定バージョンより**新しい**CONFIRMED済みバー
+  ジョンが既に存在しないかも `DependencyGraphRepository.get_latest_confirmed`
+  で確認する。v2が先にconfirmされた後でv1へのconfirmが遅れて届いても、v1は
+  まだDRAFTのため「既にCONFIRMED」チェックだけでは通過してしまう -- それを
+  許すとgraphが2つ同時にCONFIRMED状態になり、後述のjob無効化処理がv2のjobを
+  誤ってキャンセルしてv1向けに再作成してしまう（graphのlatestとjobの紐づく
+  バージョンが食い違う）。より新しいCONFIRMED版が既にあれば409で拒否する。
+- `POST /confirm` は確定直前にtestの現在の設問集合（`Question.list_for_test`）
+  と `graph.question_ids` を比較する。`/analyze` から `/confirm` までの間に
+  設問が追加・削除されていれば、そのスナップショットはもう test を正しく表
+  していないため409を返し、再度 `/analyze` からやり直させる。
+- バージョン採番自体は「読んでから書く」（`_next_version` が読み、`save` が
+  書く）ため、2つの `/analyze` が重なると両方が同じ次バージョンを計算しう
+  る。SQLiteは書き込みを直列化するため、後から書き込む側だけが
+  `(test_id, version)` のUNIQUE制約違反で `IntegrityError` を受け取る。
+  `analyze()` はこの `IntegrityError` を捕捉して `uow.rollback()` した上で
+  次のバージョンを再計算し、最大5回まで再試行する（生の500として漏らさな
+  い）。TestClient経由の実スレッド2本での再現は信頼できなかったため、テスト
+  では `save()` が最初の1回だけ `IntegrityError` を送出するようモックして
+  再試行経路を決定的に検証している。
 - 受入条件「確定graphを変更した場合はversionを更新し、古いgraphで未完了の採点
   jobを無効化・再作成できるようにする」は実装済み: `Job` に
   `dependency_graph_version`（そのjobがどの確定バージョンに対して発行された
@@ -80,7 +100,10 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   残るが、`q3` はサイクルの下流に過ぎないため報告対象から除く。
 - ヒューリスティックanalyzerは、問題文・模範解答・採点基準のいずれも無い
   設問を「独立」と黙って判定せず、`unresolved` として報告する（分析材料が
-  無いこと自体を「分析できていない」として扱う）。
+  無いこと自体を「分析できていない」として扱う）。空白文字だけの入力
+  （例: `"   "`）も同様に「テキスト無し」として扱う -- Pythonの文字列は
+  空白のみでもtruthyなので、`strip()` してから空判定しないとこのケースが
+  すり抜けて「独立」と誤判定されてしまう。
 
 ### Submission処理のゲート
 
@@ -152,6 +175,10 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   またぎ含む）・分岐/合流・cycle拒否の4fixtureをAPI経由（実SQLite）で検証、
   「AI候補の誤りを人間がconfirmで修正し、確定graphだけが
   `can_start_submission_processing` を満たす」シナリオ、レビュー中の draft を
-  別クライアントの再analyzeが書き換えないこと、**確定graphのバージョンが進んだ
-  ときに古いバージョンの未完了jobがCANCELLEDへ遷移し、新バージョン向けの
-  jobが同一トランザクションで作られること**（Issue #26 受入条件そのもの）。
+  別クライアントの再analyzeが書き換えないこと、v2がv1より先にconfirmされた
+  後の古いv1へのconfirmが拒否されること、`/analyze` と `/confirm` の間に
+  設問が増えた場合にconfirmが拒否されること、`save()` の
+  `IntegrityError`（バージョン採番の衝突）から正しく再試行して回復すること
+  （モックで決定的に再現）、**確定graphのバージョンが進んだときに古いバー
+  ジョンの未完了jobがCANCELLEDへ遷移し、新バージョン向けのjobが同一トラン
+  ザクションで作られること**（Issue #26 受入条件そのもの）。

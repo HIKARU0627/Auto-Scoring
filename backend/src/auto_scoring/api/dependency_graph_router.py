@@ -32,6 +32,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.heuristic_dependency_analyzer import ReferenceHeuristicDependencyAnalyzer
@@ -46,6 +47,12 @@ from auto_scoring.domain.dependency_graph import (
     UnresolvedQuestion,
 )
 from auto_scoring.domain.models import reissue_job_for_graph_version
+
+#: Bound on retries when two concurrent /analyze calls race for the same
+#: next version number (see `analyze` below). Each retry re-reads the latest
+#: version, so this only needs to cover genuinely-overlapping writers, not
+#: sustained contention.
+_MAX_VERSION_ALLOCATION_ATTEMPTS = 5
 
 
 def _now() -> datetime:
@@ -258,25 +265,50 @@ def build_dependency_graph_router(
         _validate_overrides(request.overrides, {q.id for q in questions})
         infos = _question_infos(uow, test_id, request.overrides)
         result = analyzer.analyze(infos)
-        version = _next_version(uow, test_id)
 
-        try:
-            graph = DependencyGraph.from_candidates(
-                id=f"{test_id}:v{version}",
-                test_id=test_id,
-                version=version,
-                question_ids=[q.id for q in questions],
-                edges=result.edges,
-                unresolved=result.unresolved,
-                created_at=_now(),
+        # Version allocation is read-then-write (`_next_version` reads the
+        # latest, we insert one higher) and not protected by a lock, so two
+        # overlapping /analyze calls can both compute the same next version.
+        # SQLite serializes the actual writes, so only the second insert can
+        # fail -- on the `(test_id, version)` unique constraint -- at which
+        # point we roll back (the transaction is aborted) and pick a fresh
+        # version rather than surface a raw IntegrityError as a 500.
+        graph: DependencyGraph | None = None
+        for _attempt in range(_MAX_VERSION_ALLOCATION_ATTEMPTS):
+            version = _next_version(uow, test_id)
+            try:
+                candidate = DependencyGraph.from_candidates(
+                    id=f"{test_id}:v{version}",
+                    test_id=test_id,
+                    version=version,
+                    question_ids=[q.id for q in questions],
+                    edges=result.edges,
+                    unresolved=result.unresolved,
+                    created_at=_now(),
+                )
+            except DependencyGraphError as error:
+                raise HTTPException(422, detail=str(error)) from error
+
+            try:
+                uow.dependency_graphs.save(candidate)
+            except IntegrityError:
+                uow.rollback()
+                continue
+            except DependencyGraphError as error:
+                raise HTTPException(409, detail=str(error)) from error
+
+            graph = candidate
+            break
+
+        if graph is None:
+            raise HTTPException(
+                409,
+                detail=(
+                    f"could not allocate a new dependency graph version for test {test_id!r} "
+                    "after several concurrent attempts; please retry"
+                ),
             )
-        except DependencyGraphError as error:
-            raise HTTPException(422, detail=str(error)) from error
 
-        try:
-            uow.dependency_graphs.save(graph)
-        except DependencyGraphError as error:
-            raise HTTPException(409, detail=str(error)) from error
         uow.commit()
         return DependencyGraphResponse.from_domain(graph)
 
@@ -319,6 +351,38 @@ def build_dependency_graph_router(
                 detail=(
                     f"dependency graph for test {test_id!r} v{request.version} is already "
                     "confirmed; run /analyze to start a new version before confirming again"
+                ),
+            )
+
+        # A *later* version may already be the active confirmed one (e.g. v2
+        # was confirmed while this v1 review was still in flight). Confirming
+        # v1 now would create two simultaneously-CONFIRMED versions, and the
+        # job-invalidation step below would cancel v2's jobs and requeue them
+        # against the now-stale v1 -- graph and job state would disagree
+        # about which version is actually active. Reject it instead.
+        active_confirmed = uow.dependency_graphs.get_latest_confirmed(test_id)
+        if active_confirmed is not None and active_confirmed.version > request.version:
+            raise HTTPException(
+                409,
+                detail=(
+                    f"test {test_id!r} already has a newer confirmed version "
+                    f"(v{active_confirmed.version}); v{request.version} is stale and can no "
+                    "longer be confirmed"
+                ),
+            )
+
+        # The test's question set may have changed since this version was
+        # analyzed (a question added/removed between /analyze and /confirm).
+        # Confirming a snapshot that no longer matches the test would pass
+        # `can_start_submission_processing` while missing/including the wrong
+        # questions -- require a fresh /analyze instead.
+        current_question_ids = {q.id for q in uow.questions.list_for_test(test_id)}
+        if current_question_ids != graph.question_ids:
+            raise HTTPException(
+                409,
+                detail=(
+                    f"test {test_id!r}'s questions changed since v{request.version} was "
+                    "analyzed; run /analyze again before confirming"
                 ),
             )
 

@@ -49,10 +49,14 @@ class ReferenceHeuristicDependencyAnalyzer:
         unresolved: list[UnresolvedQuestion] = []
 
         for question in questions:
+            # `.strip()` before the truthiness check: a whitespace-only part
+            # (e.g. an override of "   ") is truthy as a plain string and
+            # would otherwise slip past `if part` and make `text` itself
+            # falsely non-empty after the join.
             text = " ".join(
-                part
+                part.strip()
                 for part in (question.prompt_text, question.model_answer, question.rubric_text)
-                if part
+                if part and part.strip()
             )
             if not text:
                 # No prompt/model-answer/rubric text to analyze at all. This

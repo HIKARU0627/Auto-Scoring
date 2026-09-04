@@ -13,11 +13,13 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.sqlalchemy_repositories import SqlAlchemyDependencyGraphRepository
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
-from auto_scoring.domain.dependency_graph import can_start_submission_processing
+from auto_scoring.domain.dependency_graph import DependencyGraph, can_start_submission_processing
 from auto_scoring.domain.models import JobState
 from tests.support import make_job, make_question, make_submission, make_test
 
@@ -270,6 +272,110 @@ def test_stale_confirm_after_reanalyze_does_not_touch_the_new_version(
         v2 = uow.dependency_graphs.get("test-1:v2")
     assert v2 is not None
     assert v2.status.value == "draft"
+
+
+def test_confirming_an_older_draft_after_a_newer_version_was_confirmed_is_rejected(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """v2 confirms first; a delayed confirm of v1 must not create a second
+    "active" confirmed version (Issue #26 review: graph/job version would
+    otherwise disagree about which version is actually active).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)  # v1 draft
+    _analyze(client)  # v2 draft
+
+    confirm_v2 = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_v2.status_code == 200, confirm_v2.text
+
+    stale_confirm_v1 = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert stale_confirm_v1.status_code == 409
+
+    with make_uow() as uow:
+        v1 = uow.dependency_graphs.get("test-1:v1")
+        active = uow.dependency_graphs.get_latest_confirmed("test-1")
+    assert v1 is not None
+    assert v1.status.value == "draft"
+    assert active is not None and active.version == 2
+
+
+def test_confirming_after_the_test_gained_a_question_requires_reanalysis(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """A question added between /analyze and /confirm must invalidate the
+    snapshot: confirming it anyway would produce a CONFIRMED graph missing a
+    real question of the test (Issue #26 review).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    draft = _analyze(client)
+    assert draft["version"] == 1
+
+    with make_uow() as uow:
+        uow.questions.add(make_question(id="q2", test_id="test-1", number="問2"))
+        uow.commit()
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert response.status_code == 409
+
+    with make_uow() as uow:
+        v1 = uow.dependency_graphs.get("test-1:v1")
+    assert v1 is not None
+    assert v1.status.value == "draft"
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency: version allocation must not collide (Issue #26 review)
+# --------------------------------------------------------------------------- #
+def test_analyze_retries_past_a_simulated_version_conflict(
+    client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`save()` raises `IntegrityError` when two concurrent /analyze calls
+    both read the same "next version" and both attempt to insert it -- SQLite
+    serializes the writes, so only the second insert violates the
+    `(test_id, version)` unique constraint (a real two-thread reproduction
+    is not reliable through TestClient, which effectively serializes
+    requests). This forces that exact failure once and checks analyze()
+    retries onto a fresh version instead of surfacing a raw 500 (Issue #26
+    review: atomic version allocation).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+
+    real_save = SqlAlchemyDependencyGraphRepository.save
+    failed_once = {"done": False}
+
+    def _conflict_once_then_real(
+        self: SqlAlchemyDependencyGraphRepository, graph: DependencyGraph
+    ) -> None:
+        if not failed_once["done"]:
+            failed_once["done"] = True
+            raise IntegrityError(
+                "INSERT INTO dependency_graphs ...", {}, Exception("UNIQUE constraint failed")
+            )
+        real_save(self, graph)
+
+    monkeypatch.setattr(SqlAlchemyDependencyGraphRepository, "save", _conflict_once_then_real)
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/analyze", json={"overrides": []}, headers=_AUTH
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == 1
+    assert failed_once["done"] is True
+
+    with make_uow() as uow:
+        assert {g.version for g in uow.dependency_graphs.list_versions("test-1")} == {1}
 
 
 # --------------------------------------------------------------------------- #

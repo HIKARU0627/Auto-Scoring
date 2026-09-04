@@ -29,6 +29,18 @@ def test_a_question_with_no_text_at_all_is_unresolved_not_silently_independent()
     assert result.unresolved[0].question_id == "q1"
 
 
+def test_whitespace_only_text_is_also_treated_as_no_text() -> None:
+    """A blank-but-truthy string (e.g. "   ") must not slip past the empty check."""
+    questions = [
+        QuestionInfo(question_id="q1", number="問1", page=1, prompt_text="   "),
+        QuestionInfo(question_id="q2", number="問2", page=1, model_answer="\n\t"),
+        QuestionInfo(question_id="q3", number="問3", page=1, rubric_text=" "),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert result.edges == ()
+    assert {u.question_id for u in result.unresolved} == {"q1", "q2", "q3"}
+
+
 def test_explicit_reference_with_signal_phrase_becomes_a_high_confidence_edge() -> None:
     questions = [
         QuestionInfo(
