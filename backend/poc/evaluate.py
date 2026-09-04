@@ -73,17 +73,23 @@ def _grade_one(
 ) -> CaseOutcome:
     try:
         response = provider.grade(request)
-    except SchemaViolation as exc:
+    except SchemaViolation:
         return CaseOutcome(
             case_id=case_id,
             variant=variant,
             human=human,
             ai=None,
             schema_violation=True,
-            error=exc.reason,
+            error="schema_violation",
         )
-    except ProviderUnavailable as exc:
-        return CaseOutcome(case_id=case_id, variant=variant, human=human, ai=None, error=str(exc))
+    except ProviderUnavailable:
+        return CaseOutcome(
+            case_id=case_id,
+            variant=variant,
+            human=human,
+            ai=None,
+            error="provider_unavailable",
+        )
     return CaseOutcome(
         case_id=case_id,
         variant=variant,
