@@ -5,6 +5,7 @@ description = "Auto-Scoring Python sidecar (MVP 0.2 base)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.115,<1.0",
+    "pydantic>=2.10,<3.0",
 ]
 
 [dependency-groups]
@@ -24,16 +25,22 @@ packages = ["src/auto_scoring"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "poc"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["auto_scoring", "poc"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "poc"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Put the backend root on sys.path so the PoC harness (`poc/`, not shipped in the
+# wheel) is importable from tests alongside the installed `auto_scoring` package.
+pythonpath = ["."]

@@ -1,0 +1,8 @@
+{
+  "provider": "synthetic-a",
+  "model": "synthetic-a-pro",
+  "version": "2026-01-01",
+  "temperature": 0.0,
+  "structured_output_mode": "json_schema",
+  "prompt_id": "poc2-grading-v1"
+}

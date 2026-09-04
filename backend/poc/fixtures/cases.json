@@ -1,0 +1,90 @@
+{
+  "tolerance_points": 1.0,
+  "variants": [
+    "ocr_clean",
+    "ocr_noisy"
+  ],
+  "cases": [
+    {
+      "case_id": "q-photosynthesis",
+      "question_id": "q-photosynthesis",
+      "question_text": "植物が光合成を行うと何が発生するか、理由とともに説明しなさい。",
+      "max_score": 5,
+      "reference_answer": "光エネルギーを用いて二酸化炭素と水から養分を作り、その過程で酸素が発生する。",
+      "rubric": [
+        {
+          "id": "c1",
+          "description": "酸素が発生することに言及している",
+          "points": 3
+        },
+        {
+          "id": "c2",
+          "description": "光エネルギーの利用に言及している",
+          "points": 2
+        }
+      ],
+      "ocr_text": {
+        "ocr_clean": "光合成では光エネルギーを使い、酸素が発生する。",
+        "ocr_noisy": "光合成て゛は光工ネ儿ギ一を使い、酸素か発生する。"
+      },
+      "answer_image_ref": "case/q-photosynthesis/answer-crop",
+      "human_label": {
+        "score": 4,
+        "criteria": {
+          "c1": "pass",
+          "c2": "partial"
+        }
+      }
+    },
+    {
+      "case_id": "q-symbol-select",
+      "question_id": "q-symbol-select",
+      "question_text": "次のうち正しいものを記号で答えなさい。",
+      "max_score": 2,
+      "reference_answer": "イ",
+      "rubric": [
+        {
+          "id": "c1",
+          "description": "正解記号「イ」と一致",
+          "points": 2
+        }
+      ],
+      "ocr_text": {
+        "ocr_clean": "イ",
+        "ocr_noisy": "ィ"
+      },
+      "answer_image_ref": "case/q-symbol-select/answer-crop",
+      "human_label": {
+        "score": 2,
+        "criteria": {
+          "c1": "pass"
+        }
+      }
+    },
+    {
+      "case_id": "q-fill-blank",
+      "question_id": "q-fill-blank",
+      "question_text": "葉の裏から水蒸気が出ていく働きを何というか、漢字で答えなさい。",
+      "max_score": 3,
+      "reference_answer": "蒸散",
+      "rubric": [
+        {
+          "id": "c1",
+          "description": "「蒸散」と一致（許容表現なし）",
+          "points": 3
+        }
+      ],
+      "ocr_text": {
+        "ocr_clean": "蒸散",
+        "ocr_noisy": "苦散"
+      },
+      "answer_image_ref": "case/q-fill-blank/answer-crop",
+      "human_label": {
+        "score": 3,
+        "criteria": {
+          "c1": "pass"
+        }
+      }
+    }
+  ]
+}

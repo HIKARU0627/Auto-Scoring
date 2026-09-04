@@ -1,0 +1,31 @@
+{
+  "_synthetic": true,
+  "raw_response": {
+    "questionId": "q-symbol-select",
+    "recognition": {
+      "text": "イ",
+      "confidence": 0.71
+    },
+    "grading": {
+      "score": 2,
+      "maxScore": 2,
+      "confidence": 0.9,
+      "rationale": "根拠: ルーブリックと模範解答に照らして判定した。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.9,
+        "rationale": "根拠: 該当要素の有無を確認。"
+      }
+    ],
+    "comment": "正解です。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 910,
+    "output_tokens": 92
+  },
+  "latency_s": 1.5
+}

@@ -1,0 +1,31 @@
+{
+  "_synthetic": true,
+  "raw_response": {
+    "questionId": "q-fill-blank",
+    "recognition": {
+      "text": "蒸散",
+      "confidence": 0.6
+    },
+    "grading": {
+      "score": 3,
+      "maxScore": 3,
+      "confidence": 0.83,
+      "rationale": "根拠: ルーブリックと模範解答に照らして判定した。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.85,
+        "rationale": "根拠: 該当要素の有無を確認。"
+      }
+    ],
+    "comment": "正解と判断しました。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 970,
+    "output_tokens": 96
+  },
+  "latency_s": 1.7
+}

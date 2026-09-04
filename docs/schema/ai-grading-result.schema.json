@@ -1,0 +1,160 @@
+{
+  "$defs": {
+    "AnnotationSuggestion": {
+      "additionalProperties": false,
+      "description": "A markup suggestion. Position is resolved later from the OCR bounding box\nor falls back to the question comment area (簡易設計書 §12.4); the AI supplies\nonly the semantic content.",
+      "properties": {
+        "targetText": {
+          "minLength": 1,
+          "title": "Targettext",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "circle",
+            "cross",
+            "triangle",
+            "underline",
+            "box",
+            "comment"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "maxLength": 120,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Comment"
+        }
+      },
+      "required": ["targetText", "kind"],
+      "title": "AnnotationSuggestion",
+      "type": "object"
+    },
+    "CriterionEvaluation": {
+      "additionalProperties": false,
+      "description": "Result for a single rubric criterion, with its own confidence and 根拠.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "result": {
+          "enum": ["pass", "partial", "fail"],
+          "title": "Result",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": ["id", "result", "confidence", "rationale"],
+      "title": "CriterionEvaluation",
+      "type": "object"
+    },
+    "GradingOutcome": {
+      "additionalProperties": false,
+      "description": "The proposed score for the question and how sure the AI is of that score.",
+      "properties": {
+        "score": {
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "maxScore": {
+          "exclusiveMinimum": 0.0,
+          "title": "Maxscore",
+          "type": "number"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": ["score", "maxScore", "confidence", "rationale"],
+      "title": "GradingOutcome",
+      "type": "object"
+    },
+    "RecognitionOutcome": {
+      "additionalProperties": false,
+      "description": "What the AI believes the student wrote, and how sure it is of the reading.",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": ["text", "confidence"],
+      "title": "RecognitionOutcome",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Full structured output for grading one question (簡易設計書 §9.2).\n\n``comment`` is capped at 120 full-width characters (業務ルール §2(6)); the AI\noutput is a *candidate* only and is confirmed by a human (§2(17)).",
+  "properties": {
+    "questionId": {
+      "minLength": 1,
+      "title": "Questionid",
+      "type": "string"
+    },
+    "recognition": {
+      "$ref": "#/$defs/RecognitionOutcome"
+    },
+    "grading": {
+      "$ref": "#/$defs/GradingOutcome"
+    },
+    "criteria": {
+      "items": {
+        "$ref": "#/$defs/CriterionEvaluation"
+      },
+      "minItems": 1,
+      "title": "Criteria",
+      "type": "array"
+    },
+    "comment": {
+      "maxLength": 120,
+      "title": "Comment",
+      "type": "string"
+    },
+    "annotations": {
+      "items": {
+        "$ref": "#/$defs/AnnotationSuggestion"
+      },
+      "title": "Annotations",
+      "type": "array"
+    }
+  },
+  "required": ["questionId", "recognition", "grading", "criteria", "comment"],
+  "title": "AIGradingResult",
+  "type": "object"
+}

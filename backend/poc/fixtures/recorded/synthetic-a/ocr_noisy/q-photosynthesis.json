@@ -1,0 +1,37 @@
+{
+  "_synthetic": true,
+  "raw_response": {
+    "questionId": "q-photosynthesis",
+    "recognition": {
+      "text": "光合成では光エネルギーを使い、酸素が発生する。",
+      "confidence": 0.58
+    },
+    "grading": {
+      "score": 3,
+      "maxScore": 5,
+      "confidence": 0.61,
+      "rationale": "根拠: ルーブリックと模範解答に照らして判定した。"
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "pass",
+        "confidence": 0.74,
+        "rationale": "根拠: 該当要素の有無を確認。"
+      },
+      {
+        "id": "c2",
+        "result": "fail",
+        "confidence": 0.55,
+        "rationale": "根拠: 該当要素の有無を確認。"
+      }
+    ],
+    "comment": "文字認識の信頼度が低く、光エネルギーの記述が読み取れません。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 1980,
+    "output_tokens": 250
+  },
+  "latency_s": 3.4
+}

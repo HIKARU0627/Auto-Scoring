@@ -1,0 +1,30 @@
+{
+  "_synthetic": true,
+  "raw_response": {
+    "questionId": "q-photosynthesis",
+    "recognition": {
+      "text": "光合成て゛は…",
+      "confidence": 0.4
+    },
+    "grading": {
+      "score": 2,
+      "maxScore": 5,
+      "confidence": 0.4
+    },
+    "criteria": [
+      {
+        "id": "c1",
+        "result": "partial",
+        "confidence": 0.4,
+        "rationale": "根拠: 該当要素の有無を確認。"
+      }
+    ],
+    "comment": "読み取り困難。",
+    "annotations": []
+  },
+  "usage": {
+    "input_tokens": 1700,
+    "output_tokens": 210
+  },
+  "latency_s": 5.5
+}
