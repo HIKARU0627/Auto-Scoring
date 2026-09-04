@@ -149,6 +149,172 @@ def test_backfills_pre_existing_submission_metadata_on_upgrade(db_url: str, db_p
     assert loaded["missing-file"].page_count == 1
 
 
+_CHILD_TABLES = (
+    "recognition_results",
+    "grade_results",
+    "annotations",
+    "reviews",
+    "jobs",
+)
+
+
+def test_upgrade_preserves_child_rows_of_a_recreated_submissions_table(db_url: str) -> None:
+    """SQLite performs an implicit ``DELETE FROM`` -- cascading to any ``ON
+    DELETE CASCADE`` children -- when a table is ``DROP``ped while foreign key
+    enforcement is on. Alembic's SQLite batch mode (used here because SQLite
+    can't add a ``CHECK``/``UNIQUE`` constraint without recreating the table)
+    does exactly that to ``submissions`` internally. Every table with a FK to
+    ``submissions.id ON DELETE CASCADE`` must still have its rows after the
+    upgrade, not silently lose them (migrations/env.py disables foreign key
+    enforcement for the whole migration run to prevent this).
+    """
+    upgrade(db_url, "0002")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                    "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                    "VALUES ('q', 't', '1', 1, 5, 'additive')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO submissions "
+                    "(id, test_id, source_pdf_path, state, created_at) "
+                    "VALUES ('s', 't', 'submissions/s/source.pdf', 'unprocessed', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO recognition_results "
+                    "(id, submission_id, question_id, source, text, confidence, boxes, "
+                    "created_at) "
+                    "VALUES ('r1', 's', 'q', 'ai', 'x', 0.9, '[]', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO grade_results "
+                    "(id, submission_id, question_id, source, awarded, maximum, confidence, "
+                    "criteria, created_at) "
+                    "VALUES ('g1', 's', 'q', 'ai', 3, 5, 0.8, '[]', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO annotations "
+                    "(id, submission_id, question_id, source, kind, created_at) "
+                    "VALUES ('a1', 's', 'q', 'ai', 'comment', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO reviews "
+                    "(id, submission_id, question_id, action, ai_grade_result_id, created_at) "
+                    "VALUES ('rv1', 's', 'q', 'approved', 'g1', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO jobs "
+                    "(id, kind, submission_id, state, attempts, max_attempts, created_at, "
+                    "updated_at) "
+                    "VALUES ('j1', 'grading', 's', 'queued', 0, 3, '2026-01-01', '2026-01-01')"
+                )
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT COUNT(*) FROM submissions")).scalar() == 1
+            for table in _CHILD_TABLES:
+                count = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                assert count == 1, f"{table} lost its row(s) during the submissions recreate"
+    finally:
+        engine.dispose()
+
+
+def test_reintake_key_is_unique_per_test(db_url: str) -> None:
+    """A second submission with the same (test_id, source_pdf_sha256) is
+    rejected by the DB itself, not just by the application's pre-insert
+    lookup -- closing the race window between two concurrent intake requests
+    checking "does this hash already exist" at the same time.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO submissions "
+                "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, "
+                "state, created_at) "
+                "VALUES ('s1', 't', 'submissions/s1/source.pdf', '" + ("4" * 64) + "', 1, "
+                "'unprocessed', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        duplicate = text(
+            "INSERT INTO submissions "
+            "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, created_at) "
+            "VALUES ('s2', 't', 'submissions/s2/source.pdf', '" + ("4" * 64) + "', 1, "
+            "'unprocessed', '2026-01-01')"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(duplicate)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_submission_metadata_columns_require_a_value_after_upgrade(db_url: str) -> None:
+    """The temporary migration-time defaults ("" / 1) that let ``ADD COLUMN``
+    succeed against pre-existing rows are removed once every row has a real
+    value (see 0003's docstring); an insert that omits them must fail loudly
+    instead of silently getting an empty hash or a fabricated page count.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        missing_metadata = text(
+            "INSERT INTO submissions (id, test_id, source_pdf_path, state, created_at) "
+            "VALUES ('s', 't', 'submissions/s/source.pdf', 'unprocessed', '2026-01-01')"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(missing_metadata)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
 def test_downgrade_walks_back_to_base(db_url: str) -> None:
     upgrade(db_url, "head")
 

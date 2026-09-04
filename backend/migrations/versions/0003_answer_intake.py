@@ -20,15 +20,36 @@ new columns and the new ``ck_submissions_page_count_positive`` check.
 
 Backfill: a database created before this revision has submission rows with
 no ``source_pdf_sha256``/``page_count`` of their own. The column defaults
-above only cover the *shape* of those rows (``""`` / ``1``) so the ``ADD
-COLUMN`` succeeds; ``Submission.__post_init__`` (``domain/models.py``)
-rejects an empty ``source_pdf_sha256``, so left as ``""`` those rows would
-fail to load the moment this revision lands. ``_backfill_submission_metadata``
-recomputes the real hash and page count from each submission's still-present
-``source.pdf`` (Issue #11: the source PDF is immutable and always kept) right
-after the columns exist. A submission whose file is missing (already purged,
-or a hand-built fixture) gets a stable, clearly-synthetic hash instead of an
-empty one, so it stays loadable rather than crashing every read.
+used in the *first* batch pass below only cover the *shape* of those rows
+(``""`` / ``1``) so the ``ADD COLUMN`` succeeds; ``Submission.__post_init__``
+(``domain/models.py``) rejects an empty ``source_pdf_sha256``, so left as
+``""`` those rows would fail to load the moment this revision lands.
+``_backfill_submission_metadata`` recomputes the real hash and page count
+from each submission's still-present ``source.pdf`` (Issue #11: the source
+PDF is immutable and always kept), right after the columns exist. A
+submission whose file is missing (already purged, or a hand-built fixture)
+gets a stable, clearly-synthetic hash instead of an empty one, so it stays
+loadable rather than crashing every read.
+
+A *second* batch pass, after the backfill, drops those two server defaults
+again and adds a ``UNIQUE(test_id, source_pdf_sha256)`` constraint:
+
+* The defaults were only ever a migration-time device to get the ``ADD
+  COLUMN`` past SQLite's NOT NULL requirement; left in place they would let a
+  future raw-SQL insert (or an adapter bug) silently commit an empty hash /
+  fabricated page count instead of failing loudly, so they're removed once
+  every row has a real value.
+* The unique constraint has to wait until *after* the backfill: adding it in
+  the first pass, while every legacy row still shares the same placeholder
+  ``""`` hash, would itself violate uniqueness for any test with more than
+  one legacy submission.
+* This still doesn't protect against two *pre-existing* submissions in the
+  same test that happen to have byte-identical PDFs -- nothing enforced that
+  before this revision. If that's ever true of a real database, this
+  migration fails loudly on the constraint rather than silently dropping it
+  or picking a row to keep; that's judged safer than guessing which one a
+  human would have wanted removed. Resolve it by hand (decide which
+  submission to purge_submission) and re-run the upgrade.
 """
 
 from __future__ import annotations
@@ -100,9 +121,27 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("original_filename", sa.String(), nullable=True))
         batch_op.add_column(sa.Column("review_reason", sa.String(), nullable=True))
         batch_op.create_check_constraint("ck_submissions_page_count_positive", "page_count >= 1")
-        batch_op.create_index("ix_submissions_test_content_hash", ["test_id", "source_pdf_sha256"])
 
     _backfill_submission_metadata(op.get_bind())
+
+    with op.batch_alter_table("submissions", recreate="always") as batch_op:
+        # Migration-only scaffolding, no longer needed now every row has a real
+        # value -- see the module docstring.
+        batch_op.alter_column(
+            "source_pdf_sha256",
+            existing_type=sa.String(),
+            existing_nullable=False,
+            server_default=None,
+        )
+        batch_op.alter_column(
+            "page_count",
+            existing_type=sa.Integer(),
+            existing_nullable=False,
+            server_default=None,
+        )
+        batch_op.create_unique_constraint(
+            "uq_submissions_test_content_hash", ["test_id", "source_pdf_sha256"]
+        )
 
     op.create_table(
         "answer_images",
@@ -145,7 +184,7 @@ def downgrade() -> None:
     op.drop_table("answer_images")
 
     with op.batch_alter_table("submissions", recreate="always") as batch_op:
-        batch_op.drop_index("ix_submissions_test_content_hash")
+        batch_op.drop_constraint("uq_submissions_test_content_hash", type_="unique")
         batch_op.drop_constraint("ck_submissions_page_count_positive", type_="check")
         batch_op.drop_column("review_reason")
         batch_op.drop_column("original_filename")

@@ -26,8 +26,20 @@ def sqlite_url(path: Path | str) -> str:
     return f"sqlite:///{Path(path)}"
 
 
-def create_sqlite_engine(url: str, *, echo: bool = False) -> Engine:
-    """Create an :class:`~sqlalchemy.Engine` with the sidecar's PRAGMAs applied."""
+def create_sqlite_engine(
+    url: str, *, echo: bool = False, enforce_foreign_keys: bool = True
+) -> Engine:
+    """Create an :class:`~sqlalchemy.Engine` with the sidecar's PRAGMAs applied.
+
+    ``enforce_foreign_keys=False`` is for Alembic's migration connection only
+    (see ``migrations/env.py``): SQLite performs an implicit ``DELETE FROM`` --
+    cascading to any ``ON DELETE CASCADE`` children -- when a table is
+    ``DROP``ped while foreign key enforcement is on, which is exactly what
+    Alembic's SQLite batch mode does internally to express an ``ALTER TABLE``
+    it can't run directly. The pragma must be set at connect time (a no-op
+    once a transaction is open), so this goes through the same connect-event
+    hook as the other PRAGMAs rather than a statement run mid-connection.
+    """
     engine = create_engine(url, echo=echo, future=True)
 
     @event.listens_for(engine, "connect")
@@ -35,7 +47,7 @@ def create_sqlite_engine(url: str, *, echo: bool = False) -> Engine:
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute(f"PRAGMA foreign_keys={'ON' if enforce_foreign_keys else 'OFF'}")
             cursor.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
             cursor.execute("PRAGMA synchronous=NORMAL")
         finally:

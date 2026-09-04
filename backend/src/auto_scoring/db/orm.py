@@ -136,16 +136,16 @@ class SubmissionRow(Base):
             name="ck_submissions_state_valid",
         ),
         CheckConstraint("page_count >= 1", name="ck_submissions_page_count_positive"),
+        UniqueConstraint("test_id", "source_pdf_sha256", name="uq_submissions_test_content_hash"),
         Index("ix_submissions_test_id", "test_id"),
         Index("ix_submissions_state", "state"),
-        Index("ix_submissions_test_content_hash", "test_id", "source_pdf_sha256"),
     )
 
     id: Mapped[str] = _pk()
     test_id: Mapped[str] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), nullable=False)
     source_pdf_path: Mapped[str] = mapped_column(String, nullable=False)
-    source_pdf_sha256: Mapped[str] = mapped_column(String, nullable=False, server_default="")
-    page_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    source_pdf_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[SubmissionState] = mapped_column(_enum(SubmissionState), nullable=False)
     student_label: Mapped[str | None] = mapped_column(String, nullable=True)
     original_filename: Mapped[str | None] = mapped_column(String, nullable=True)
