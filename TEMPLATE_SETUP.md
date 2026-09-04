@@ -27,10 +27,8 @@ Delete this file when you're done.
 - [ ] `pnpm run check` should pass (or fail for real reasons).
 - [ ] `.github/workflows/ci.yml` — pin actions to commit SHAs; add
       integration / e2e jobs if you have them.
-- [ ] After the first real run, make `Quality` and `Agent review` **required**
-      in the `main` branch ruleset. Do not require a native approving-review
-      count of 1 (authors cannot approve their own PRs). Agent PRs are gated
-      by `.github/workflows/agent-review.yml`.
+- [ ] After the first real run, make the `Quality` check **required** in the
+      `main` branch ruleset. Do not require an approving review.
 
 ## 4. MCP servers
 
