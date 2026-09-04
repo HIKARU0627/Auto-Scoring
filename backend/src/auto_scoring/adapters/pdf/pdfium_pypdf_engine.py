@@ -3,11 +3,6 @@
 Selected by PoC 3 (GitHub issue #12) as the licence-clean alternative to
 PyMuPDF. Both libraries are permissively licensed (pypdfium2: Apache-2.0 /
 BSD-3-Clause; pypdf: BSD-3-Clause) and need no commercial agreement.
-
-Copied verbatim from branch ``HIKARU0627/issue-12-pdf-coords-poc`` (PR #31,
-open/unmerged) so Issue #15's profile detection can use the same
-``page_geometry`` PoC 3 verified instead of a second, ad hoc transform; see
-``docs/poc-4-multi-layout-profiles.md``.
 """
 
 from __future__ import annotations

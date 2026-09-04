@@ -1,10 +1,7 @@
 """Port for the PDF read / render / annotate operations the app needs.
 
-Adopted from PoC 3 (GitHub issue #12, PR #31 -- copied verbatim from branch
-``HIKARU0627/issue-12-pdf-coords-poc``; see ``docs/poc-4-multi-layout-profiles.md``
-for why this PoC carries its own copy while PR #31 is still open). Implementations
-live in ``adapters/``; the domain only ever sees this protocol and
-:mod:`auto_scoring.domain.pdf_geometry`.
+Adopted from PoC 3 (GitHub issue #12). Implementations live in ``adapters/``;
+the domain only ever sees this protocol and :mod:`auto_scoring.domain.pdf_geometry`.
 
 PoC 3 selected **pypdfium2 + pypdf** as the implementation (see
 ``docs/poc-3-pdf-coordinates.md``): PyMuPDF stays out until a licence-decision

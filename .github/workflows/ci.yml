@@ -59,6 +59,10 @@ jobs:
         run: pnpm skills:check
       - name: Check formatting
         run: pnpm format:check
+      - name: OpenAPI contract
+        # Regenerates the schema + Dart client and fails on any drift. Needs
+        # uv, dart, and Java (openapi-generator) — all present on the runner.
+        run: pnpm openapi:check
       - name: Lint
         run: pnpm lint
       - name: Typecheck

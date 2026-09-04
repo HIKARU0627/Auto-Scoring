@@ -1,0 +1,5 @@
+# Test tags. Run everything with `flutter test`; skip the sidecar contract
+# tests (which need `uv` on PATH) with `flutter test -x sidecar`.
+tags:
+  sidecar:
+    description: Boots the real Python sidecar from `backend/.venv` (needs `uv sync`).

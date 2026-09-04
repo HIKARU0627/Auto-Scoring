@@ -1,11 +1,6 @@
 """Coordinate contract between the app's ``0..1`` space and PDF user space.
 
-Adopted from PoC 3 (GitHub issue #12, PR #31 -- copied here verbatim from
-branch ``HIKARU0627/issue-12-pdf-coords-poc`` because PR #31 was still open,
-unmerged, when Issue #15 needed this contract; see
-``docs/poc-4-multi-layout-profiles.md`` for why and for the reconciliation
-note). Once PR #31 merges, delete this copy and depend on the merged module
-instead of maintaining two copies.
+Adopted from PoC 3 (GitHub issue #12). See ``docs/poc-3-pdf-coordinates.md``.
 
 The app and the test profile store annotation positions as **normalized points**
 with a *top-left* origin over the page *as displayed* by pdfium (``pdfrx`` on the
