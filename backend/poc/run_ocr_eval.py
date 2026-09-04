@@ -40,7 +40,7 @@ _DEFAULT_DATASET = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / 
 def _load_samples(dataset: Path) -> list[tuple[OcrGroundTruth, OcrResult]]:
     files = sorted(dataset.glob("*.json"))
     if not files:
-        raise SystemExit(f"no *.json samples under {dataset}")
+        raise SystemExit("no *.json samples found in dataset")
     samples: list[tuple[OcrGroundTruth, OcrResult]] = []
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -65,9 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     samples = _load_samples(args.dataset)
     metrics = [evaluate_sample(truth, result) for truth, result in samples]
     table = to_markdown_table(summarize_by_quality(metrics))
-    report = (
-        f"# PoC 1 OCR aggregate\n\nsamples: {len(metrics)}\ndataset: {args.dataset}\n\n{table}\n"
-    )
+    report = f"# PoC 1 OCR aggregate\n\nsamples: {len(metrics)}\n\n{table}\n"
 
     if args.out is not None:
         args.out.write_text(report, encoding="utf-8")
