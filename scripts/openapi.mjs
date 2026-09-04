@@ -9,6 +9,7 @@
 // PATH. See docs/sidecar-api.md and docs/quality-gates.md.
 
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -16,10 +17,12 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const backendDir = join(repoRoot, "backend");
 const generatedDir = join(repoRoot, "app", "packages", "auto_scoring_api");
 const tracked = ["backend/openapi", "app/packages/auto_scoring_api"];
+const require = createRequire(import.meta.url);
+const generatorCli =
+  require.resolve("@openapitools/openapi-generator-cli/main.js");
 
-const isWindows = process.platform === "win32";
 const run = (cmd, args, cwd) =>
-  execFileSync(cmd, args, { cwd, stdio: "inherit", shell: isWindows });
+  execFileSync(cmd, args, { cwd, stdio: "inherit" });
 
 function exportSchema() {
   run("uv", ["run", "auto-scoring-openapi"], backendDir);
@@ -28,8 +31,8 @@ function exportSchema() {
 function generate() {
   exportSchema();
   run(
-    join(repoRoot, "node_modules", ".bin", "openapi-generator-cli"),
-    ["generate", "-c", "openapi-generator.yaml"],
+    process.execPath,
+    [generatorCli, "generate", "-c", "openapi-generator.yaml"],
     repoRoot,
   );
   run("dart", ["pub", "get"], generatedDir);
@@ -45,7 +48,6 @@ function check() {
     {
       cwd: repoRoot,
       encoding: "utf8",
-      shell: isWindows,
     },
   );
   if (status.trim()) {

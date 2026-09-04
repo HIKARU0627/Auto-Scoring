@@ -12,7 +12,6 @@ import uvicorn
 from auto_scoring.api import sidecar
 from auto_scoring.api.sidecar import (
     LOOPBACK,
-    TOKEN_ENV_VAR,
     Handshake,
     install_log_redaction,
     resolve_port,
@@ -78,7 +77,7 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(TOKEN_ENV_VAR, "env-provided-token")
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
     monkeypatch.setattr(sidecar, "install_log_redaction", lambda _token: None)
 
     captured: dict[str, Any] = {}
@@ -95,7 +94,7 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     assert exit_code == 0
     payload = json.loads(handshake_file.read_text(encoding="utf-8"))
     assert payload["host"] == LOOPBACK
-    assert payload["token"] == "env-provided-token"
+    assert payload["token"] == "generated-test-token"
     assert captured["kwargs"]["host"] == LOOPBACK
     assert captured["kwargs"]["port"] == payload["port"]
-    assert captured["app"].state.api_token == "env-provided-token"
+    assert captured["app"].state.api_token == "generated-test-token"

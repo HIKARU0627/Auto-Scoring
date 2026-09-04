@@ -73,15 +73,18 @@ class SidecarApiClient {
     Duration timeout = const Duration(seconds: 10),
     Dio? dio,
   }) : _dio = dio ?? Dio() {
+    final baseUrl = _validatedLoopbackBaseUrl(connection.baseUrl);
     _dio.options
-      ..baseUrl = connection.baseUrl
+      ..baseUrl = baseUrl
       ..connectTimeout = timeout
       ..sendTimeout = timeout
       ..receiveTimeout = timeout;
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          options.headers['Authorization'] = 'Bearer ${connection.token}';
+          if (options.path != '/healthz') {
+            options.headers['Authorization'] = 'Bearer ${connection.token}';
+          }
           handler.next(options);
         },
       ),
@@ -180,8 +183,28 @@ class SidecarApiClient {
       case DioExceptionType.unknown:
         return SidecarApiException(
           SidecarErrorKind.unknown,
-          error.message ?? 'unknown sidecar error',
+          'unexpected sidecar error',
         );
     }
   }
+}
+
+String _validatedLoopbackBaseUrl(String value) {
+  const message = 'sidecar base URL must be an HTTP loopback URL with a port';
+  late final Uri uri;
+  try {
+    uri = Uri.parse(value);
+  } on FormatException {
+    throw ArgumentError(message);
+  }
+  if (uri.scheme != 'http' ||
+      uri.host != '127.0.0.1' ||
+      !uri.hasPort ||
+      (uri.path.isNotEmpty && uri.path != '/') ||
+      uri.hasQuery ||
+      uri.hasFragment ||
+      uri.userInfo.isNotEmpty) {
+    throw ArgumentError(message);
+  }
+  return uri.origin;
 }

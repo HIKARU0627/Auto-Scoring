@@ -1,4 +1,4 @@
-import 'package:auto_scoring_app/api/api_client.dart';
+Future<bool> _stubHealthCheck() async => true;
 
 /// Composition-root dependency container.
 ///
@@ -6,7 +6,8 @@ import 'package:auto_scoring_app/api/api_client.dart';
 /// so the dependency direction stays `features -> core -> api`. A richer DI
 /// solution (Riverpod) arrives with the first real feature.
 class AppDependencies {
-  const AppDependencies({this.apiClient = const ApiClient()});
+  const AppDependencies({this.healthCheck = _stubHealthCheck});
 
-  final ApiClient apiClient;
+  /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
+  final Future<bool> Function() healthCheck;
 }

@@ -1,6 +1,6 @@
 """FastAPI application factory for the sidecar."""
 
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from pydantic import BaseModel
 
 from auto_scoring import __version__
@@ -32,12 +32,13 @@ def create_app(*, api_token: str | None = None) -> FastAPI:
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
     app.state.api_token = api_token or generate_token()
     repository = InMemoryScoreRepository()
+    protected = APIRouter(dependencies=[Depends(require_token)])
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/score", dependencies=[Depends(require_token)])
+    @protected.post("/score")
     def score(request: ScoreRequest) -> ScoreResponse:
         result = clamp_score(request.raw, request.maximum)
         repository.save(request.key, result)
@@ -48,6 +49,7 @@ def create_app(*, api_token: str | None = None) -> FastAPI:
             ratio=result.ratio,
         )
 
+    app.include_router(protected)
     return app
 
 

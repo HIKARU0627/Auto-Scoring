@@ -2,7 +2,7 @@
 
 Binds FastAPI to the loopback interface on a dynamic port, mints a per-session
 bearer token, and hands the ``{host, port, token}`` tuple to its parent process
-over an explicit handshake channel (a file, or stdout as a dev fallback).
+over an explicit handshake file.
 
 Design decisions live in ``docs/technology-stack.md`` §1.1-§1.2 and
 ``docs/sidecar-api.md``:
@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import socket
 from collections.abc import Sequence
 from pathlib import Path
@@ -34,9 +33,6 @@ from auto_scoring.api.auth import generate_token
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
-
-TOKEN_ENV_VAR = "AUTO_SCORING_SIDECAR_TOKEN"
-"""When set, its value is used as the bearer token instead of a random one."""
 
 
 class Handshake(TypedDict):
@@ -94,12 +90,8 @@ def install_log_redaction(token: str) -> None:
     root.setLevel(logging.INFO)
 
 
-def _emit_handshake(handshake: Handshake, destination: Path | None) -> None:
+def _emit_handshake(handshake: Handshake, destination: Path) -> None:
     line = json.dumps(handshake) + "\n"
-    if destination is None:
-        # Dev fallback: the parent reads the first stdout line.
-        print(line, end="", flush=True)
-        return
     destination.write_text(line, encoding="utf-8")
 
 
@@ -114,8 +106,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--handshake-file",
         type=Path,
-        default=None,
-        help="File to write the {host, port, token} JSON line to. Stdout if omitted.",
+        required=True,
+        help="File to write the {host, port, token} JSON line to.",
     )
     return parser.parse_args(argv)
 
@@ -123,7 +115,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 def run(argv: Sequence[str] | None = None) -> int:
     """Start the sidecar. Returns the process exit code."""
     args = _parse_args(argv)
-    token = os.environ.get(TOKEN_ENV_VAR) or generate_token()
+    token = generate_token()
     port = resolve_port(args.port)
 
     install_log_redaction(token)

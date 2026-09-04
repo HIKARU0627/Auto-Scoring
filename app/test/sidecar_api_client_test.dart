@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Boots the real Python sidecar and exercises the boundary against it: an
@@ -17,7 +18,6 @@ import 'package:flutter_test/flutter_test.dart';
 /// `uv sync` to have populated `backend/.venv` (see `pnpm run bootstrap` /
 /// `.github/workflows/ci.yml`).
 void main() {
-  const token = 'integration-test-token';
   final backendDir = Directory(
     '${Directory.current.path}/../backend',
   ).absolute.path;
@@ -33,11 +33,10 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('sidecar_it_');
     final handshakeFile = File('${tempDir.path}/handshake.json');
 
-    sidecar = await Process.start(
-      sidecarExe,
-      ['--handshake-file', handshakeFile.path],
-      environment: {'AUTO_SCORING_SIDECAR_TOKEN': token},
-    );
+    sidecar = await Process.start(sidecarExe, [
+      '--handshake-file',
+      handshakeFile.path,
+    ]);
 
     final handshake = await _readHandshake(handshakeFile);
     connection = SidecarConnection(
@@ -98,7 +97,10 @@ void main() {
     await probe.close();
 
     final client = SidecarApiClient(
-      SidecarConnection(baseUrl: 'http://127.0.0.1:$deadPort', token: token),
+      SidecarConnection(
+        baseUrl: 'http://127.0.0.1:$deadPort',
+        token: connection.token,
+      ),
       timeout: const Duration(seconds: 2),
     );
     addTearDown(client.close);
@@ -112,6 +114,55 @@ void main() {
           'kind',
           SidecarErrorKind.unavailable,
         ),
+      ),
+    );
+  });
+
+  test('rejects a non-loopback destination without echoing credentials', () {
+    const remoteUrl = 'https://example.test/private';
+    const secret = 'must-not-escape';
+
+    expect(
+      () => SidecarApiClient(
+        const SidecarConnection(baseUrl: remoteUrl, token: secret),
+      ),
+      throwsA(
+        isA<ArgumentError>().having(
+          (error) => error.toString(),
+          'message',
+          allOf(isNot(contains(remoteUrl)), isNot(contains(secret))),
+        ),
+      ),
+    );
+  });
+
+  test('unknown transport errors do not expose connection details', () async {
+    const leaked = 'must-not-escape http://127.0.0.1:54321';
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.unknown,
+              message: leaked,
+            ),
+          ),
+        ),
+      );
+    final client = SidecarApiClient(connection, dio: dio);
+    addTearDown(client.close);
+
+    await expectLater(
+      client.score(key: 'q1', raw: 1, maximum: 10),
+      throwsA(
+        isA<SidecarApiException>()
+            .having((error) => error.kind, 'kind', SidecarErrorKind.unknown)
+            .having(
+              (error) => error.toString(),
+              'message',
+              isNot(contains(leaked)),
+            ),
       ),
     );
   });

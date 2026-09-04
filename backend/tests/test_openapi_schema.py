@@ -10,7 +10,11 @@ def test_committed_schema_is_up_to_date() -> None:
     assert committed == schema(), "run `pnpm run openapi:export` and commit the result"
 
 
-def test_healthz_is_public_and_score_requires_bearer() -> None:
+def test_healthz_is_public_and_every_other_operation_requires_bearer() -> None:
     paths = schema()["paths"]
     assert "security" not in paths["/healthz"]["get"]
-    assert paths["/score"]["post"]["security"] == [{"HTTPBearer": []}]
+    for path, path_item in paths.items():
+        if path == "/healthz":
+            continue
+        for operation in path_item.values():
+            assert operation["security"] == [{"HTTPBearer": []}]
