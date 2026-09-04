@@ -51,7 +51,7 @@ void main() {
   tearDownAll(() async {
     sidecar.kill(ProcessSignal.sigkill);
     await sidecar.exitCode;
-    await tempDir.delete(recursive: true);
+    await _deleteWithRetry(tempDir);
   });
 
   test('health check succeeds even with a bogus token', () async {
@@ -90,6 +90,42 @@ void main() {
       ),
     );
   });
+
+  test('listTests succeeds against the real sidecar', () async {
+    final client = SidecarApiClient(connection);
+    addTearDown(client.close);
+
+    expect(await client.listTests(), isA<List<TestSummary>>());
+  });
+
+  test(
+    'createSubmission sends a PDF content type the sidecar accepts',
+    () async {
+      final client = SidecarApiClient(connection);
+      addTearDown(client.close);
+
+      final pdfFile = File('${tempDir.path}/content-type-check.pdf');
+      await pdfFile.writeAsBytes(utf8.encode('%PDF-1.7\n%%EOF'));
+
+      // No test with this id is registered. dio's MultipartFile.fromFile
+      // defaults to application/octet-stream when no contentType is given,
+      // and the sidecar rejects any declared type other than application/pdf
+      // (or none) with 400 -- before it even looks at test_id. Getting 404
+      // here (test not found) instead of 400 proves the upload's content
+      // type passed that check and reached the sidecar's normal pipeline.
+      await expectLater(
+        client.createSubmission(
+          testId: 'does-not-exist',
+          filePath: pdfFile.path,
+        ),
+        throwsA(
+          isA<SidecarApiException>()
+              .having((e) => e.kind, 'kind', SidecarErrorKind.badResponse)
+              .having((e) => e.statusCode, 'statusCode', 404),
+        ),
+      );
+    },
+  );
 
   test('a sidecar that is not running surfaces as unavailable', () async {
     // A port that was free a moment ago and has nothing listening now: the
@@ -168,6 +204,22 @@ void main() {
       ),
     );
   });
+}
+
+/// Windows can hold the killed sidecar's SQLite WAL/shm files open for a
+/// moment after `sigkill`+`exitCode` return, once a test has actually written
+/// through the DB (e.g. `createSubmission`) -- a plain `dir.delete` then
+/// throws `PathAccessException` even though the process is already gone.
+Future<void> _deleteWithRetry(Directory dir) async {
+  for (var attempt = 0; attempt < 10; attempt++) {
+    try {
+      await dir.delete(recursive: true);
+      return;
+    } on FileSystemException {
+      if (attempt == 9) rethrow;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
 }
 
 Future<Map<String, dynamic>> _readHandshake(File file) async {

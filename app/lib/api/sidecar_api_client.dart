@@ -12,6 +12,7 @@ library;
 
 import 'package:auto_scoring_api/auto_scoring_api.dart';
 import 'package:dio/dio.dart';
+import 'package:http_parser/http_parser.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
     show ScoreRequest, ScoreResponse, SubmissionResponse, TestSummary;
@@ -239,8 +240,29 @@ class SidecarApiClient {
     String? studentLabel,
     CancelToken? cancelToken,
   }) async {
+    final MultipartFile file;
     try {
-      final file = await MultipartFile.fromFile(filePath);
+      // Explicit contentType: MultipartFile.fromFile defaults to
+      // application/octet-stream when none is given, and the sidecar rejects
+      // any declared content type other than application/pdf (or none at
+      // all) -- left implicit, every real upload would be rejected before
+      // the sidecar ever looks at the bytes.
+      file = await MultipartFile.fromFile(
+        filePath,
+        contentType: MediaType('application', 'pdf'),
+      );
+    } catch (error) {
+      // Reading the picked file can fail on its own (deleted, a disconnected
+      // removable drive, permissions) before any request is even sent; that
+      // is not a DioException, so it needs converting here too, or it would
+      // reach the UI as an unhandled error instead of the retry banner every
+      // other failure gets.
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
       final response = await _uploadApi
           .createSubmissionTestsTestIdSubmissionsPost(
             testId: testId,

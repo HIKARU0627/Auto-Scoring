@@ -47,6 +47,7 @@ dependencies:
   auto_scoring_api:
     path: packages/auto_scoring_api
   file_picker: ^12.2.0
+  http_parser: ^4.1.2
 
 dev_dependencies:
   flutter_test:
