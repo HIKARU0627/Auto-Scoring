@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Auto-Scoring Python sidecar (MVP 0.2 base)"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.14,<2.0",
     "fastapi[standard]>=0.115,<1.0",
+    "sqlalchemy>=2.0,<3.0",
 ]
 
 [dependency-groups]
