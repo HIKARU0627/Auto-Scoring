@@ -347,6 +347,107 @@ void main() {
   });
 
   testWidgets(
+    'the file picker button and student-label field are disabled while an upload is in flight',
+    (tester) async {
+      final uploadStarted = Completer<void>();
+      final releaseUpload = Completer<SubmissionResponse>();
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async {
+              uploadStarted.complete();
+              return releaseUpload.future;
+            },
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('取り込む'));
+      await tester.pump();
+      await uploadStarted.future;
+      await tester.pump();
+
+      final filePickerButton = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'ファイルを選択'),
+      );
+      expect(filePickerButton.onPressed, isNull);
+      final studentLabelField = tester.widget<TextField>(
+        find.byType(TextField),
+      );
+      expect(studentLabelField.enabled, isFalse);
+
+      releaseUpload.complete(_submission());
+      await tester.pumpAndSettle();
+
+      final filePickerButtonAfter = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'ファイルを選択'),
+      );
+      expect(filePickerButtonAfter.onPressed, isNotNull);
+      final studentLabelFieldAfter = tester.widget<TextField>(
+        find.byType(TextField),
+      );
+      expect(studentLabelFieldAfter.enabled, isTrue);
+    },
+  );
+
+  testWidgets(
+    'disposing the page while a file pick is still pending does not throw',
+    (tester) async {
+      // Regression test: _pickFile must check `mounted` after `await
+      // widget.pickFile()` before touching setState -- otherwise navigating
+      // away while the native file dialog is still open crashes with
+      // "setState() called after dispose()".
+      final pickCompleter = Completer<PickedPdfFile?>();
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          AnswerIntakePage(
+            dependencies: dependencies,
+            pickFile: () => pickCompleter.future,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pump();
+
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pumpAndSettle();
+
+      pickCompleter.complete(
+        const PickedPdfFile(
+          path: 'C:/tmp/student-a.pdf',
+          name: 'student-a.pdf',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'the default (unconnected) dependencies show an error instead of crashing on mount',
     (tester) async {
       // Regression test: AppDependencies()'s default listTests/listSubmissions

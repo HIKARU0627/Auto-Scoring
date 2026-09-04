@@ -105,6 +105,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
 
   Future<void> _pickFile() async {
     final picked = await widget.pickFile();
+    if (!mounted) return;
     if (picked == null) return;
     setState(() {
       _pickedFilePath = picked.path;
@@ -180,6 +181,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
               const SizedBox(height: 16),
               TextField(
                 controller: _studentLabelController,
+                enabled: !_isSubmitting,
                 decoration: const InputDecoration(
                   labelText: '生徒ラベル（任意）',
                   border: OutlineInputBorder(),
@@ -254,7 +256,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     return Row(
       children: [
         OutlinedButton.icon(
-          onPressed: _pickFile,
+          onPressed: _isSubmitting ? null : _pickFile,
           icon: const Icon(Icons.picture_as_pdf),
           label: const Text('ファイルを選択'),
         ),
