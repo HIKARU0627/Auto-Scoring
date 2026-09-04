@@ -163,6 +163,11 @@ class AnswerImageRow(Base):
         ),
         CheckConstraint("page >= 1", name="ck_answer_images_page_positive"),
         CheckConstraint("status IN ('ok', 'needs_review')", name="ck_answer_images_status_valid"),
+        CheckConstraint(
+            "(status = 'ok' AND reason IS NULL) OR "
+            "(status = 'needs_review' AND reason IS NOT NULL AND trim(reason) != '')",
+            name="ck_answer_images_reason_matches_status",
+        ),
         Index("ix_answer_images_submission_id", "submission_id"),
     )
 
