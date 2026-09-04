@@ -6,6 +6,8 @@ doc/HTTPValidationError.md
 doc/LocationInner.md
 doc/ScoreRequest.md
 doc/ScoreResponse.md
+doc/SubmissionResponse.md
+doc/TestSummary.md
 doc/ValidationError.md
 lib/auto_scoring_api.dart
 lib/src/api.dart
@@ -22,6 +24,8 @@ lib/src/model/http_validation_error.dart
 lib/src/model/location_inner.dart
 lib/src/model/score_request.dart
 lib/src/model/score_response.dart
+lib/src/model/submission_response.dart
+lib/src/model/test_summary.dart
 lib/src/model/validation_error.dart
 lib/src/serializers.dart
 pubspec.yaml

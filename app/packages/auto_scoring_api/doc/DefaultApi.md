@@ -9,9 +9,99 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
+[**createSubmissionTestsTestIdSubmissionsPost**](DefaultApi.md#createsubmissionteststestidsubmissionspost) | **POST** /tests/{test_id}/submissions | Create Submission
+[**getSubmissionSubmissionsSubmissionIdGet**](DefaultApi.md#getsubmissionsubmissionssubmissionidget) | **GET** /submissions/{submission_id} | Get Submission
 [**healthzHealthzGet**](DefaultApi.md#healthzhealthzget) | **GET** /healthz | Healthz
+[**listSubmissionsTestsTestIdSubmissionsGet**](DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
+[**listTestsTestsGet**](DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
 [**scoreScorePost**](DefaultApi.md#scorescorepost) | **POST** /score | Score
 
+
+# **createSubmissionTestsTestIdSubmissionsPost**
+> SubmissionResponse createSubmissionTestsTestIdSubmissionsPost(testId, file, studentLabel)
+
+Create Submission
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getDefaultApi();
+final String testId = testId_example; // String | 
+final MultipartFile file = BINARY_DATA_HERE; // MultipartFile | 
+final String studentLabel = studentLabel_example; // String | 
+
+try {
+    final response = api.createSubmissionTestsTestIdSubmissionsPost(testId, file, studentLabel);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling DefaultApi->createSubmissionTestsTestIdSubmissionsPost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+ **file** | **MultipartFile**|  | 
+ **studentLabel** | **String**|  | [optional] 
+
+### Return type
+
+[**SubmissionResponse**](SubmissionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: multipart/form-data
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **getSubmissionSubmissionsSubmissionIdGet**
+> SubmissionResponse getSubmissionSubmissionsSubmissionIdGet(submissionId)
+
+Get Submission
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getDefaultApi();
+final String submissionId = submissionId_example; // String | 
+
+try {
+    final response = api.getSubmissionSubmissionsSubmissionIdGet(submissionId);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling DefaultApi->getSubmissionSubmissionsSubmissionIdGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+
+### Return type
+
+[**SubmissionResponse**](SubmissionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **healthzHealthzGet**
 > BuiltMap<String, String> healthzHealthzGet()
@@ -42,6 +132,84 @@ This endpoint does not need any parameter.
 ### Authorization
 
 No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **listSubmissionsTestsTestIdSubmissionsGet**
+> BuiltList<SubmissionResponse> listSubmissionsTestsTestIdSubmissionsGet(testId)
+
+List Submissions
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getDefaultApi();
+final String testId = testId_example; // String | 
+
+try {
+    final response = api.listSubmissionsTestsTestIdSubmissionsGet(testId);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling DefaultApi->listSubmissionsTestsTestIdSubmissionsGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+
+### Return type
+
+[**BuiltList&lt;SubmissionResponse&gt;**](SubmissionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **listTestsTestsGet**
+> BuiltList<TestSummary> listTestsTestsGet()
+
+List Tests
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getDefaultApi();
+
+try {
+    final response = api.listTestsTestsGet();
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling DefaultApi->listTestsTestsGet: $e\n');
+}
+```
+
+### Parameters
+This endpoint does not need any parameter.
+
+### Return type
+
+[**BuiltList&lt;TestSummary&gt;**](TestSummary.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
 
 ### HTTP request headers
 

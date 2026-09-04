@@ -18,6 +18,8 @@ import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
+import 'package:auto_scoring_api/src/model/submission_response.dart';
+import 'package:auto_scoring_api/src/model/test_summary.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
 
 part 'serializers.g.dart';
@@ -27,6 +29,8 @@ part 'serializers.g.dart';
   LocationInner,
   ScoreRequest,
   ScoreResponse,
+  SubmissionResponse,
+  TestSummary,
   ValidationError,
 ])
 Serializers serializers = (_$serializers.toBuilder()
@@ -39,8 +43,16 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<LocationInner>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(SubmissionResponse)]),
+        () => ListBuilder<SubmissionResponse>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(ValidationError)]),
         () => ListBuilder<ValidationError>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(TestSummary)]),
+        () => ListBuilder<TestSummary>(),
       )
       ..add(const OneOfSerializer())
       ..add(const AnyOfSerializer())

@@ -11,6 +11,8 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(LocationInner.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
+      ..add(SubmissionResponse.serializer)
+      ..add(TestSummary.serializer)
       ..add(ValidationError.serializer)
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(LocationInner)]),
