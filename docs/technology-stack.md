@@ -40,7 +40,7 @@
 │ Flutter Desktop (Dart)      │  ───────────────────────────────────────►  ┌──────────────────────────┐
 │  - UI / Material 3          │                                            │ Python サイドカー         │
 │  - PDF 表示 + Annotation     │  ◄───────────────────────────────────────  │  FastAPI + Uvicorn        │
-│    Overlay                  │        JSON / 画像バイナリ                   │  - PDF 解析 / 生成 (PyMuPDF)│
+│    Overlay                  │        JSON / 画像バイナリ                   │  - PDF 解析 / 生成 (§3.1)  │
 │  - レビュー操作・キー操作     │                                            │  - 画像前処理 (OpenCV)     │
 │  - ジョブ進捗表示            │        子プロセスとして起動・監視・終了       │  - OCRProvider            │
 │  - API キーは保持しない      │  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ►  │  - AIProvider            │
@@ -92,8 +92,10 @@
 ウィジェットとして重ねる（案 A）。Python がページ画像を返す方式（案 B）は帯域とズーム
 品質で不利なため、**確定 PDF 出力時のみ** Python がラスタライズ／描画を担当する（§14）。
 
-- リスク: Flutter（pdfium）と Python（PyMuPDF）で座標系・DPI 解釈がずれる可能性。
-  → **PoC 3 で 0〜1 正規化座標の往復一致を必ず検証**する。
+- リスク: Flutter（pdfium）と Python 側 PDF エンジンで座標系・DPI 解釈がずれる可能性。
+  → **PoC 3（Issue #12）で検証済み**。Python 側を `pypdfium2`（= pdfium）に揃えたこと
+  もあり、回転・CropBox 込みで 0〜1 正規化座標の往復誤差は最大 0.0005・DPI 非依存。
+  [`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。
 
 ---
 
@@ -126,6 +128,15 @@
 
 **本書の推奨**: まず A で PoC を進め、ライセンス費の可否をユーザーが判断。不可なら B へ
 切り替えられるよう、PDF 処理は `PdfEngine` インターフェースで隔離しておく。
+
+**PoC 3（Issue #12）の結果 — 選択肢 B を採用**:
+ライセンス判断者による PyMuPDF 採用の承認記録が無いため、Issue #12 受入条件に従い
+PyMuPDF は候補から外し、**`pypdfium2` + `pypdf`** を採用した。縦横・回転
+（0/90/180/270）・ページサイズ差・CropBox インセットを含む全 fixture で 0〜1 正規化
+座標の往復誤差は最大 0.0005（許容 0.004）、render DPI/zoom 非依存。採用した座標変換と
+`PdfEngine` 契約は `backend/src/auto_scoring/` へ昇格済み。詳細と repro command は
+[`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。承認が後日出た場合は同じ
+`PdfEngine` 契約に `PyMuPDFEngine` を追加して差し替える。
 
 ### 3.2 画像処理
 
@@ -290,30 +301,30 @@ Flutter/Python は `pnpm run` から各ツールを呼び出すラッパーに�
 
 ## 8. 実装前に PoC で潰すべき技術リスク（簡易設計書 §30 と対応）
 
-| PoC | 検証内容                               | 本書として特に確認したい点                                                              |
-| --- | -------------------------------------- | --------------------------------------------------------------------------------------- |
-| 1   | 手書き認識（綺麗／普通／汚い字）       | Google Cloud Vision の日本語手書き精度と Bounding Box の質。LLM 併用時の改善幅          |
-| 2   | 採点（模範解答＋マニュアル＋答案）     | 各 AIProvider の構造化 JSON 出力の安定性、人間採点との一致率、Grading Confidence の較正 |
-| 3   | PDF 座標（○×・コメントの表示・出力）   | **pdfium（Flutter）↔ PyMuPDF/pypdf（Python）間で 0〜1 正規化座標が往復一致するか**      |
-| 4   | レイアウト変更（複数形式のテスト投入） | テストプロファイル生成 → 人間修正 → 各答案適用 のフローが形式差を吸収できるか           |
+| PoC | 検証内容                               | 本書として特に確認したい点                                                                                                                             |
+| --- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | 手書き認識（綺麗／普通／汚い字）       | Google Cloud Vision の日本語手書き精度と Bounding Box の質。LLM 併用時の改善幅                                                                         |
+| 2   | 採点（模範解答＋マニュアル＋答案）     | 各 AIProvider の構造化 JSON 出力の安定性、人間採点との一致率、Grading Confidence の較正                                                                |
+| 3   | PDF 座標（○×・コメントの表示・出力）   | **完了（Issue #12）**: pdfium ↔ pypdfium2+pypdf で 0〜1 正規化座標が往復一致（誤差 ≤0.0005）。[`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md) |
+| 4   | レイアウト変更（複数形式のテスト投入） | テストプロファイル生成 → 人間修正 → 各答案適用 のフローが形式差を吸収できるか                                                                          |
 
 ---
 
 ## 9. 決定サマリ
 
-| 層           | 最終決定                                                                                |
-| ------------ | --------------------------------------------------------------------------------------- |
-| UI           | Flutter (stable) / Dart 3 / Material 3 / Riverpod 3 / go_router / dio / pdfrx / freezed |
-| バックエンド | Python 3.12+ / uv / FastAPI / Uvicorn / Pydantic v2 / Ruff / mypy / pytest              |
-| PDF          | PyMuPDF（**要ライセンス判断**、フォールバック pypdfium2 + pypdf）を `PdfEngine` で隔離  |
-| 画像処理     | opencv-python-headless / Pillow / NumPy                                                 |
-| DB           | SQLite (WAL) / SQLAlchemy 2 / Alembic、書き込みは Python 側のみ                         |
-| ジョブキュー | プロセス内 asyncio.Queue + Semaphore、状態は SQLite に永続化                            |
-| OCR          | `OCRProvider` 抽象。PoC 第一候補 Google Cloud Vision（クラウド不可時ローカル OCR）      |
-| AI           | `AIProvider` 抽象。PoC 候補 Gemini / Claude / GPT。出力は JSON スキーマで構造化         |
-| プロセス連携 | Flutter が Python サイドカーを子プロセス起動、localhost + 起動時トークン、動的ポート    |
-| 配布         | PyInstaller onedir で Python 同梱、MSIX（不可なら Inno Setup）、コード署名              |
-| API 契約     | FastAPI OpenAPI schema を正本に Dart クライアントをコード生成しコミット                 |
+| 層           | 最終決定                                                                                            |
+| ------------ | --------------------------------------------------------------------------------------------------- |
+| UI           | Flutter (stable) / Dart 3 / Material 3 / Riverpod 3 / go_router / dio / pdfrx / freezed             |
+| バックエンド | Python 3.12+ / uv / FastAPI / Uvicorn / Pydantic v2 / Ruff / mypy / pytest                          |
+| PDF          | **pypdfium2 + pypdf** を `PdfEngine` で隔離（PoC 3 で採用。PyMuPDF はライセンス未承認のため不採用） |
+| 画像処理     | opencv-python-headless / Pillow / NumPy                                                             |
+| DB           | SQLite (WAL) / SQLAlchemy 2 / Alembic、書き込みは Python 側のみ                                     |
+| ジョブキュー | プロセス内 asyncio.Queue + Semaphore、状態は SQLite に永続化                                        |
+| OCR          | `OCRProvider` 抽象。PoC 第一候補 Google Cloud Vision（クラウド不可時ローカル OCR）                  |
+| AI           | `AIProvider` 抽象。PoC 候補 Gemini / Claude / GPT。出力は JSON スキーマで構造化                     |
+| プロセス連携 | Flutter が Python サイドカーを子プロセス起動、localhost + 起動時トークン、動的ポート                |
+| 配布         | PyInstaller onedir で Python 同梱、MSIX（不可なら Inno Setup）、コード署名                          |
+| API 契約     | FastAPI OpenAPI schema を正本に Dart クライアントをコード生成しコミット                             |
 
 ---
 
