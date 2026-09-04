@@ -32,6 +32,28 @@ _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
 }
 
+#: Read chunk size for _read_upload_within_limit. Bounds how much of an
+#: over-limit upload we ever materialize in one `bytes` object before
+#: aborting (AGENTS.md "Validate every input that crosses a trust boundary").
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+
+
+async def _read_upload_within_limit(file: UploadFile, max_size_bytes: int) -> bytes:
+    """Read ``file`` in bounded chunks, raising as soon as it exceeds
+    ``max_size_bytes`` rather than first materializing the whole body.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_size_bytes:
+            raise PdfTooLargeError(f"file size exceeds limit {max_size_bytes}")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 class ScoreRequest(BaseModel):
     key: str
@@ -162,7 +184,12 @@ def create_app(
         file: UploadFile = File(...),
         student_label: str | None = Form(None),
     ) -> SubmissionResponse:
-        data = await file.read()
+        try:
+            data = await _read_upload_within_limit(file, limits.max_size_bytes)
+        except PdfTooLargeError as exc:
+            raise HTTPException(
+                _PDF_INTAKE_ERROR_STATUS[PdfTooLargeError], detail=str(exc)
+            ) from exc
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             try:
                 result = intake_submission(

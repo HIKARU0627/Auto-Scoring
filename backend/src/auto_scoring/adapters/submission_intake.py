@@ -143,22 +143,34 @@ def intake_submission(
         expected_pages = tuple(sorted({q.page for q in questions}))
         coverage = PageCoverage(expected_pages=expected_pages, actual_page_count=page_count)
         coverage_issue = describe_coverage_issue(coverage)
+        should_extract = bool(questions) and coverage_issue is None
+
+        questions_by_page: dict[int, list[Question]] = {}
+        if should_extract:
+            for question in questions:
+                questions_by_page.setdefault(question.page, []).append(question)
 
         with transactional_operation(uow, store) as staged:
-            raw_png_cache: dict[int, bytes] = {}
-
-            def raw_page_png(page: int) -> bytes:
-                if page not in raw_png_cache:
-                    raw_png_cache[page] = pdf_engine.render_page_png(
-                        scratch_path, page - 1, scale=RENDER_SCALE
-                    )
-                return raw_png_cache[page]
-
-            for page in range(1, page_count + 1):
-                preview = image_preprocessor.preprocess_page(raw_page_png(page))
-                staged.add(store.submission_page_image_path(submission_id, page), preview.png_bytes)
-
+            # One page's raw raster lives at a time -- not the whole PDF's worth --
+            # so a large page count doesn't multiply the sidecar's memory use.
             answer_images: list[AnswerImage] = []
+            for page in range(1, page_count + 1):
+                raw_png = pdf_engine.render_page_png(scratch_path, page - 1, scale=RENDER_SCALE)
+                preview = image_preprocessor.preprocess_page(raw_png)
+                staged.add(store.submission_page_image_path(submission_id, page), preview.png_bytes)
+                for question in questions_by_page.get(page, ()):
+                    answer_images.append(
+                        _build_answer_image(
+                            question=question,
+                            raw_png=raw_png,
+                            submission_id=submission_id,
+                            store=store,
+                            staged=staged,
+                            id_factory=id_factory,
+                            now=now,
+                        )
+                    )
+
             if not questions:
                 submission_state = SubmissionState.NEEDS_REVIEW
                 submission_review_reason = "no_questions_registered"
@@ -166,15 +178,6 @@ def intake_submission(
                 submission_state = SubmissionState.NEEDS_REVIEW
                 submission_review_reason = coverage_issue
             else:
-                answer_images = _extract_answer_images(
-                    questions=questions,
-                    submission_id=submission_id,
-                    raw_page_png=raw_page_png,
-                    store=store,
-                    staged=staged,
-                    id_factory=id_factory,
-                    now=now,
-                )
                 any_needs_review = any(
                     image.status is AnswerImageStatus.NEEDS_REVIEW for image in answer_images
                 )
@@ -192,7 +195,12 @@ def intake_submission(
 
             source_pdf_full_path = store.submission_source_pdf_path(submission_id)
             source_pdf_path = str(source_pdf_full_path.relative_to(store.root)).replace("\\", "/")
-            staged.add(source_pdf_full_path, data)
+            # A retry reuses the exact bytes already on disk for this submission (the
+            # reintake decision only allows RETRY_EXISTING for an identical content
+            # hash) -- Issue #17's reintake policy never rewrites the source PDF, so
+            # only a brand-new submission stages one.
+            if not is_retry:
+                staged.add(source_pdf_full_path, data)
 
             if is_retry:
                 uow.submissions.mark_intake_outcome(
@@ -233,45 +241,40 @@ def intake_submission(
         )
 
 
-def _extract_answer_images(
+def _build_answer_image(
     *,
-    questions: list[Question],
+    question: Question,
+    raw_png: bytes,
     submission_id: str,
-    raw_page_png: Callable[[int], bytes],
     store: LocalFileStore,
     staged: StagedFiles,
     id_factory: Callable[[], str],
     now: datetime,
-) -> list[AnswerImage]:
-    """Crop each question's answer area from the untouched page raster.
+) -> AnswerImage:
+    """Crop one question's answer area from its (already-rendered) page raster.
 
     A question with no confirmed ``answer_area`` (test registration hasn't
     defined one yet) falls back to the full page preview image, marked
     ``NEEDS_REVIEW`` -- simplified-design-spec.md §24 "回答欄検出失敗は…元画像
     を人間へ提示する".
     """
-    images: list[AnswerImage] = []
-    for question in questions:
-        if question.answer_area is None:
-            image_path = store.submission_page_image_path(submission_id, question.page)
-            status = AnswerImageStatus.NEEDS_REVIEW
-            reason: str | None = "no_answer_area_defined"
-        else:
-            cropped = crop_normalized_rect(raw_page_png(question.page), question.answer_area)
-            image_path = store.submission_question_image_path(submission_id, question.id)
-            staged.add(image_path, cropped)
-            status = AnswerImageStatus.OK
-            reason = None
-        images.append(
-            AnswerImage(
-                id=id_factory(),
-                submission_id=submission_id,
-                question_id=question.id,
-                page=question.page,
-                image_path=str(image_path.relative_to(store.root)).replace("\\", "/"),
-                status=status,
-                reason=reason,
-                created_at=now,
-            )
-        )
-    return images
+    if question.answer_area is None:
+        image_path = store.submission_page_image_path(submission_id, question.page)
+        status = AnswerImageStatus.NEEDS_REVIEW
+        reason: str | None = "no_answer_area_defined"
+    else:
+        cropped = crop_normalized_rect(raw_png, question.answer_area)
+        image_path = store.submission_question_image_path(submission_id, question.id)
+        staged.add(image_path, cropped)
+        status = AnswerImageStatus.OK
+        reason = None
+    return AnswerImage(
+        id=id_factory(),
+        submission_id=submission_id,
+        question_id=question.id,
+        page=question.page,
+        image_path=str(image_path.relative_to(store.root)).replace("\\", "/"),
+        status=status,
+        reason=reason,
+        created_at=now,
+    )

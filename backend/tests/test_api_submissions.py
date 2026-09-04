@@ -145,6 +145,25 @@ def test_create_submission_rejects_oversize_page_count(client: TestClient, data_
     assert response.status_code == 400
 
 
+def test_create_submission_rejects_oversize_file_before_materializing(
+    client: TestClient, data_root: Path
+) -> None:
+    """The 5 MiB fixture limit is enforced while streaming the upload in
+    chunks, not after buffering the whole (6 MiB) body into one `bytes`.
+    """
+    _seed_test(data_root)
+    oversized = b"%PDF-1.7\n" + b"0" * (6 * 1024 * 1024)
+    response = client.post(
+        "/tests/test-1/submissions",
+        headers=_auth(),
+        files={"file": ("big.pdf", oversized, "application/pdf")},
+    )
+    assert response.status_code == 413
+
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        assert uow.submissions.list_for_test("test-1") == []
+
+
 def test_create_submission_rejects_unknown_test(client: TestClient) -> None:
     response = client.post(
         "/tests/does-not-exist/submissions",

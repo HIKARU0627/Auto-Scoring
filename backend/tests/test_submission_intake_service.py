@@ -274,6 +274,9 @@ def test_retry_reuses_the_errored_submission(
         uow.submissions.set_state(first.submission.id, SubmissionState.ERROR)
         uow.commit()
 
+    source_path = store.root / first.submission.source_pdf_path
+    mtime_before_retry = source_path.stat().st_mtime_ns
+
     with make_uow() as uow:
         retried = intake_submission(
             uow,
@@ -291,6 +294,10 @@ def test_retry_reuses_the_errored_submission(
     assert retried.is_retry is True
     assert retried.submission.id == first.submission.id
     assert retried.submission.state is SubmissionState.AI_PROCESSED
+    # The reintake decision table (docs/answer-intake-and-preprocessing.md §2)
+    # never rewrites the source PDF on retry -- same bytes are already on disk.
+    assert source_path.stat().st_mtime_ns == mtime_before_retry
+    assert source_path.read_bytes() == data
 
     with make_uow() as uow:
         assert len(uow.submissions.list_for_test("test-1")) == 1
