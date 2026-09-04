@@ -1062,6 +1062,10 @@ OCRProvider abstraction
 実装前またはPoC後にユーザー判断が必要な項目。
 各項目の現時点の反映状況は `[technology-stack.md](./technology-stack.md)` §7 を参照。
 
+業務ルール・対象範囲・データ保持（本章の項目 4〜18、20〜23 および §27・§31）の確定は
+`[business-rules-and-evaluation-data.md](./business-rules-and-evaluation-data.md)`（GitHub
+Issue #8）で行った。食い違う場合はそちらを優先する。
+
 1. Windows専用とするか
 2. 使用するAIモデル
 3. 使用するOCR

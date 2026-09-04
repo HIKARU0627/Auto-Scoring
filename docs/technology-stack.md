@@ -282,8 +282,9 @@ Flutter/Python は `pnpm run` から各ツールを呼び出すラッパーに�
 | 23            | AI 自動コメント生成の許容範囲                                            | 業務ルール。ユーザー判断                                                             |
 | 24            | 並列 AI 処理数                                                           | 設定値化（既定 2〜3）。レート制限に合わせて調整                                      |
 
-> 上記のうち「業務ルール」に属する項目は本 Issue の技術調査の範囲外。別途ユーザーへの
-> ヒアリング Issue を立てて確定させる。
+> 上記のうち「業務ルール」に属する項目は本 Issue の技術調査の範囲外。
+> [`business-rules-and-evaluation-data.md`](./business-rules-and-evaluation-data.md)
+> （GitHub Issue #8）で確定した。
 
 ---
 
