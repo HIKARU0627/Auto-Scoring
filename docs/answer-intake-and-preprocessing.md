@@ -319,16 +319,16 @@ app-data/
 
 ## 12. 検証（受入条件との対応）
 
-| Issue #17 受入条件・検証項目                                                    | 対応                                                                                                                                                                                         |
-| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 単一/一括取込の採用方式で Submission が作成され、設問画像が profile と対応する  | `Question.answer_area`（Issue #11）をそのまま利用。`test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`                                              |
-| 同一 PDF の再取込方針が決定表どおり動作し、元 PDF を変更しない                  | §2、`test_submission_intake_service.py::test_duplicate_submission_is_rejected` / `::test_retry_reuses_the_errored_submission`                                                                |
-| 不正/暗号化/破損 PDF を安全に拒否し、中途半端な DB/file を残さない              | §5、`test_pdf_intake.py`、`test_submission_intake_service.py::test_encrypted_pdf_is_rejected_without_a_trace` 等                                                                             |
-| 生徒識別情報をログや外部通信へ出さない                                          | `original_filename`/`student_label` はローカル DB のみ。ログ出力コードなし（§28 の既存方針を継続）                                                                                           |
-| 複数 page/回転/破損/oversize/重複 PDF を含む integration test                   | `backend/tests/test_submission_intake_service.py`（複数ページ・欠落ページ）、`test_pdf_engine_intake.py`（暗号化・破損）、`test_pdf_intake.py`（oversize・不正拡張子）                       |
-| Flutter の取込進捗・エラー・再試行・keyboard/focus を確認する                   | `app/test/answer_intake_page_test.dart`                                                                                                                                                      |
-| 1 答案 3 ページ以上の fixture で全 Question が正しい page/question 順で関連付く | `test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`（2ページ）。3ページ以上は同じ経路（`_build_answer_image` はページ数に依存しない実装）で成立する |
-| 前提設問を含むページが欠落した状態では AI 採点を開始しない                      | §3。`needs_review` の Submission に対してジョブを起票する経路が存在しない（Job/採点は Issue #17 対象外）                                                                                     |
+| Issue #17 受入条件・検証項目                                                    | 対応                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 単一/一括取込の採用方式で Submission が作成され、設問画像が profile と対応する  | `Question.answer_area`（Issue #11）をそのまま利用。`test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`                                                      |
+| 同一 PDF の再取込方針が決定表どおり動作し、元 PDF を変更しない                  | §2、`test_submission_intake_service.py::test_duplicate_submission_is_rejected` / `::test_retry_reuses_the_errored_submission`                                                                        |
+| 不正/暗号化/破損 PDF を安全に拒否し、中途半端な DB/file を残さない              | §5、`test_pdf_intake.py`、`test_submission_intake_service.py::test_encrypted_pdf_is_rejected_without_a_trace` 等                                                                                     |
+| 生徒識別情報をログや外部通信へ出さない                                          | `original_filename`/`student_label` はローカル DB のみ。ログ出力コードなし（§28 の既存方針を継続）                                                                                                   |
+| 複数 page/回転/破損/oversize/重複 PDF を含む integration test                   | `backend/tests/test_submission_intake_service.py`（複数ページ・欠落ページ）、`test_pdf_engine_intake.py`（暗号化・破損）、`test_pdf_intake.py`（oversize・不正拡張子）                               |
+| Flutter の取込進捗・エラー・再試行・keyboard/focus を確認する                   | `app/test/answer_intake_page_test.dart`                                                                                                                                                              |
+| 1 答案 3 ページ以上の fixture で全 Question が正しい page/question 順で関連付く | `test_submission_intake_service.py::test_happy_path_creates_submission_and_ok_answer_images`（3ページ・3設問。`result.answer_images`と再取得した永続化済み行の両方で page/question_id の対応を検証） |
+| 前提設問を含むページが欠落した状態では AI 採点を開始しない                      | §3。`needs_review` の Submission に対してジョブを起票する経路が存在しない（Job/採点は Issue #17 対象外）                                                                                             |
 
 ## 13. 未決事項・引き継ぎ
 
@@ -453,3 +453,66 @@ while an upload is in flight'`）。
   対して呼ばれてクラッシュしていた
   （`test: 'disposing the page while a file pick is still pending does not
 throw'`）。
+
+## 16. 4回目のレビュー指摘への対応
+
+- **migration 0003 が legacy 重複を batch DDL 前に検出する（重大）**:
+  pre-0003 の DB に、同一テスト内で内容が完全に一致する submission が
+  2 件以上ある場合（§7 の migration docstring が最初から想定していたケース）、
+  以前の実装は `uq_submissions_test_content_hash` を追加する 2 回目の batch
+  再作成が実際に失敗するまで気づかなかった。SQLite の batch mode は
+  一時テーブル `_alembic_tmp_submissions` を経由してテーブルを再作成するが、
+  pysqlite は DDL の前に暗黙で COMMIT するため、失敗時にその一時テーブルと
+  1 回目の batch（列追加）の結果がディスクに残ったまま `alembic_version` は
+  `0002` のまま、という壊れた状態になっていた。ドキュメント化された
+  「重複を手で解消して再実行」という復旧手順は、この状態では
+  `_alembic_tmp_submissions already exists` で即座に失敗し機能しなかった。
+  `_load_content_hashes`/`_reject_duplicate_content_hashes`
+  （`migrations/versions/0003_answer_intake.py`）が、どちらの batch pass
+  よりも前に、まだディスク上の `source.pdf` から計算した内容ハッシュだけで
+  重複を検出し、あれば `RuntimeError` で即座に中断する。この時点では
+  まだ 1 行の DDL も実行していないため、重複を手で削除して
+  `upgrade` を再実行すれば本当に revision 0002 からクリーンにやり直せる
+  （`test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers`）。
+- **PDF 処理をイベントループから逃がす**: `POST /tests/{test_id}/submissions`
+  はページのラスタライズと OpenCV 前処理を、非同期ハンドラの中で
+  同期的に実行していた。uvicorn はシングルワーカーで動かすため、大きい答案の
+  intake が数分かかる間、`/healthz` を含む他の全リクエストが応答不能になっていた。
+  `api/app.py::_run_intake` にこのパイプライン一式（`SqlAlchemyUnitOfWork` の
+  取得から `intake_submission` 呼び出しまで）を切り出し、
+  `await asyncio.to_thread(_run_intake, ...)` でワーカースレッドへ逃がす。
+  pypdfium2 はプロセス内の複数スレッドから同時に呼び出すことを想定していない
+  （公式ドキュメントの multithreading 注意書き）ため、`threading.Lock`
+  （`intake_lock`）で実際の intake 実行を直列化する。この直列化自体は
+  従来の「イベントループが 1 件ずつ完了させる」動作と実質同じであり、
+  スループット面での劣化ではない。`/healthz` はこのロックに触れないため、
+  intake 実行中でも即座に応答する
+  （`test_healthz_stays_responsive_while_an_intake_is_running`。
+  `with TestClient(app) as client:` でアプリ全体が 1 つの event loop を
+  共有する状態を再現しないと、この検証は修正前のコードでも偶然パスしてしまう）。
+- **リスト読み込み中に完了したアップロードを保持する**: `_selectTest` の
+  `listSubmissions` 呼び出しが完了する前に、ユーザーが別のファイルを
+  選択して送信を完了させると、`_submit` は新しい結果を `_submissions` へ
+  upsert 済みなのに、その後に届く（アップロード開始前に発行された）古い
+  `listSubmissions` のレスポンスがそれを丸ごと上書きし、ページを開き直すまで
+  新しい submission が一覧から消えていた。`_withLocalOnlyPreserved` が、
+  取得結果にまだ含まれていないローカルの項目（＝取得開始後に確定した項目）を
+  取得結果の前に残したうえでマージする
+  （`test: 'a submission created while the list is still loading is not lost
+when the stale list response lands'`）。
+- **低い高さのビューポートでも intake フォームをスクロール可能にする**:
+  固定の `Column` + `Expanded(child: 一覧)` は、モバイルや高さの低いウィンドウ、
+  特に生徒ラベル欄でキーボードが開いた状態で、フォーム部分だけで残り高さを
+  超えて `RenderFlex` オーバーフローを起こし、下の要素を隠していた。
+  `Column` を `CustomScrollView`（`SliverToBoxAdapter` でフォーム一式、
+  `SliverList.separated`/`SliverFillRemaining` で一覧）に置き換え、画面全体を
+  1 つのスクロール可能領域にする。一覧は十分な高さがあれば残り領域を占め、
+  無ければフォームと一緒にスクロールする
+  （`test: 'a short viewport does not overflow the intake form'`）。
+- **3 ページ以上の fixture で page/question の対応を実際に検証する**:
+  `test_happy_path_creates_submission_and_ok_answer_images` は 2 ページ・
+  2 設問の fixture で、3 ページ目以降は「同じ経路なので成立するはず」という
+  コメントで済ませていた。3 ページ・3 設問の fixture に拡張し、
+  `result.answer_images` と `uow.answer_images.list_for_submission` で
+  再取得した永続化済み行の両方について、各ページが正しい `question_id` に
+  page 順で対応していることを直接 assert する（§12 の受入条件表を更新）。
