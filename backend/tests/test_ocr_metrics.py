@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from auto_scoring.domain.ocr import BoundingBox, OcrResult
+from auto_scoring.domain.ocr import (
+    BoundingBox,
+    ConfidenceBand,
+    OcrResult,
+    OcrToken,
+)
 from auto_scoring.domain.ocr_metrics import (
     OcrGroundTruth,
     bounding_box_center_error,
@@ -43,6 +48,36 @@ def test_bounding_box_center_error() -> None:
     a = BoundingBox(x=0.2, y=0.5, width=0.1, height=0.1)
     b = BoundingBox(x=0.3, y=0.5, width=0.1, height=0.1)
     assert bounding_box_center_error(a, b) == pytest.approx(0.1)
+
+
+def test_box_alignment_uses_nearest_box_when_iou_is_tied() -> None:
+    truth = OcrGroundTruth(
+        sample_id="bbox-tie",
+        reference_text="",
+        keywords=(),
+        handwriting_quality="clean",
+        layout_type="single_sheet",
+        expected_boxes=(BoundingBox(0.0, 0.0, 0.1, 0.1),),
+    )
+    result = OcrResult(
+        text="",
+        tokens=(
+            OcrToken(
+                "far",
+                BoundingBox(0.8, 0.0, 0.1, 0.1),
+                0.9,
+                ConfidenceBand.HIGH,
+            ),
+            OcrToken(
+                "near",
+                BoundingBox(0.2, 0.0, 0.1, 0.1),
+                0.9,
+                ConfidenceBand.HIGH,
+            ),
+        ),
+    )
+
+    assert evaluate_sample(truth, result).bounding_box_center_error == pytest.approx(0.2)
 
 
 def _load_samples() -> list[tuple[OcrGroundTruth, OcrResult]]:

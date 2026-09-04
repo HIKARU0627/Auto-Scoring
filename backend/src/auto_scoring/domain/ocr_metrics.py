@@ -76,7 +76,19 @@ def _box_alignment(
     """Mean centre error and mean IoU, matching each expected box to its best actual box."""
     if not expected or not actual:
         return None
-    matches = [(box, max(actual, key=box.iou)) for box in expected]
+    matches = [
+        (
+            box,
+            max(
+                actual,
+                key=lambda candidate: (
+                    box.iou(candidate),
+                    -bounding_box_center_error(box, candidate),
+                ),
+            ),
+        )
+        for box in expected
+    ]
     errors = [bounding_box_center_error(box, best) for box, best in matches]
     ious = [box.iou(best) for box, best in matches]
     return fmean(errors), fmean(ious)
