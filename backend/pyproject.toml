@@ -7,6 +7,9 @@ dependencies = [
     "fastapi[standard]>=0.115,<1.0",
 ]
 
+[project.scripts]
+auto-scoring-sidecar = "auto_scoring.api.sidecar:main"
+
 [dependency-groups]
 dev = [
     "mypy>=1.14",
