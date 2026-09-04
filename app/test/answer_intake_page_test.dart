@@ -177,6 +177,43 @@ void main() {
     expect(find.textContaining('missing_pages:2'), findsOneWidget);
   });
 
+  testWidgets(
+    'a successful retry replaces the errored row instead of duplicating it',
+    (tester) async {
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => [_submission(state: 'error')],
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(state: 'ai_processed'),
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('エラー'), findsOneWidget);
+
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取り込む'));
+      await tester.pumpAndSettle();
+
+      // Same submission id (sub-1 by default) succeeded: exactly one row for
+      // it, showing the new state, not two (stale error + fresh success).
+      expect(find.byType(ListTile), findsOneWidget);
+      expect(find.textContaining('エラー'), findsNothing);
+      expect(find.textContaining('処理済み'), findsWidgets);
+    },
+  );
+
   testWidgets('submitting the student-label field with Enter uploads', (
     tester,
   ) async {

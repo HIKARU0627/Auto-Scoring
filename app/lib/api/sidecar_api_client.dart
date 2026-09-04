@@ -87,15 +87,34 @@ class SidecarApiClient {
   SidecarApiClient(
     SidecarConnection connection, {
     Duration timeout = const Duration(seconds: 10),
+    Duration intakeTimeout = const Duration(minutes: 5),
     Dio? dio,
-  }) : _dio = dio ?? Dio() {
+    Dio? uploadDio,
+  }) : _dio = dio ?? Dio(),
+       _uploadDio = uploadDio ?? Dio() {
+    _configure(_dio, connection, timeout);
+    _configure(_uploadDio, connection, intakeTimeout);
+    // Pass an empty interceptor list so the generated client does not also
+    // register its own auth interceptors on top of ours.
+    _api = AutoScoringApi(dio: _dio, interceptors: const []).getDefaultApi();
+    _uploadApi = AutoScoringApi(
+      dio: _uploadDio,
+      interceptors: const [],
+    ).getDefaultApi();
+  }
+
+  static void _configure(
+    Dio dio,
+    SidecarConnection connection,
+    Duration timeout,
+  ) {
     final baseUrl = _validatedLoopbackBaseUrl(connection.baseUrl);
-    _dio.options
+    dio.options
       ..baseUrl = baseUrl
       ..connectTimeout = timeout
       ..sendTimeout = timeout
       ..receiveTimeout = timeout;
-    _dio.interceptors.add(
+    dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
           if (options.path != '/healthz') {
@@ -105,13 +124,21 @@ class SidecarApiClient {
         },
       ),
     );
-    // Pass an empty interceptor list so the generated client does not also
-    // register its own auth interceptors on top of ours.
-    _api = AutoScoringApi(dio: _dio, interceptors: const []).getDefaultApi();
   }
 
   final Dio _dio;
   late final DefaultApi _api;
+
+  /// A second Dio/client pair, configured with [intakeTimeout] instead of
+  /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
+  /// every page of a large answer PDF happens inside that one request before
+  /// the sidecar responds, so it needs far more headroom than the other
+  /// (near-instant) calls share -- otherwise the client reports a timeout
+  /// failure while the sidecar keeps working and commits anyway, and a
+  /// client-side retry on the same bytes would then just surface as a
+  /// confusing duplicate-submission conflict.
+  final Dio _uploadDio;
+  late final DefaultApi _uploadApi;
 
   /// Liveness probe. Never throws: an unreachable sidecar is a state the UI
   /// renders, not an error. The endpoint itself needs no auth.
@@ -214,12 +241,13 @@ class SidecarApiClient {
   }) async {
     try {
       final file = await MultipartFile.fromFile(filePath);
-      final response = await _api.createSubmissionTestsTestIdSubmissionsPost(
-        testId: testId,
-        file: file,
-        studentLabel: studentLabel,
-        cancelToken: cancelToken,
-      );
+      final response = await _uploadApi
+          .createSubmissionTestsTestIdSubmissionsPost(
+            testId: testId,
+            file: file,
+            studentLabel: studentLabel,
+            cancelToken: cancelToken,
+          );
       return _requireBody(response);
     } on DioException catch (error) {
       final duplicate = _duplicateSubmission(error);
@@ -256,7 +284,10 @@ class SidecarApiClient {
   }
 
   /// Release the underlying HTTP connections.
-  void close() => _dio.close(force: true);
+  void close() {
+    _dio.close(force: true);
+    _uploadDio.close(force: true);
+  }
 
   SidecarApiException _translate(DioException error) {
     switch (error.type) {

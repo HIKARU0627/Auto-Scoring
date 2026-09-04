@@ -131,7 +131,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
       );
       if (!mounted) return;
       setState(() {
-        _submissions = [result, ..._submissions];
+        _submissions = _withUpserted(_submissions, result);
         _pickedFilePath = null;
         _pickedFileName = null;
         _studentLabelController.clear();
@@ -319,6 +319,16 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     );
   }
 }
+
+/// Insert [result] at the front of [submissions], replacing an existing
+/// entry with the same id rather than duplicating it. A successful retry
+/// returns the *same* submission id as the earlier failed attempt (Issue
+/// #17's reintake policy reuses the row), so without this the list would
+/// show both the stale error row and the new one for the same submission.
+List<SubmissionResponse> _withUpserted(
+  List<SubmissionResponse> submissions,
+  SubmissionResponse result,
+) => [result, ...submissions.where((s) => s.id != result.id)];
 
 String _describeError(Object? error) =>
     error is SidecarApiException ? error.message : '$error';
