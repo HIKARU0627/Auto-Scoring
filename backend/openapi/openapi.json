@@ -22,8 +22,16 @@
             },
             "title": "Edges",
             "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
           }
         },
+        "required": [
+          "version",
+          "edges"
+        ],
         "title": "ConfirmRequest",
         "type": "object"
       },
@@ -46,7 +54,7 @@
           },
           "provides": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/DependencyProvision"
             },
             "title": "Provides",
             "type": "array"
@@ -149,6 +157,16 @@
         ],
         "title": "DependencyGraphResponse",
         "type": "object"
+      },
+      "DependencyProvision": {
+        "description": "What a prerequisite question hands to its dependent (\u00a79.2 result shape).",
+        "enum": [
+          "recognized_text",
+          "score",
+          "criterion_result"
+        ],
+        "title": "DependencyProvision",
+        "type": "string"
       },
       "HTTPValidationError": {
         "properties": {

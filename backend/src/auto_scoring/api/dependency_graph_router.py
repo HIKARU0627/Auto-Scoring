@@ -16,8 +16,10 @@ sidecar's bearer-token auth):
 * ``GET  ``          -- the latest version, with its parallel-execution layers.
 * ``GET  /versions``  -- every version, oldest first (Issue #26: 古いgraphの
   参照を保つ -- see docs/dependency-graph.md).
-* ``POST /confirm``   -- human review step: replace the latest DRAFT's edges
-  with the reviewed set and lock it. 409 if there is no draft to confirm.
+* ``POST /confirm``   -- human review step: replace the reviewed version's
+  edges with the human-reviewed set and lock it. The request pins the exact
+  version it reviewed; 404/409 if that version does not exist or is already
+  confirmed (e.g. a concurrent confirm + re-analyze moved past it).
 """
 
 from __future__ import annotations
@@ -50,6 +52,17 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Mark a naive (DB-stored) UTC timestamp as UTC for the API boundary.
+
+    A naive datetime serializes over HTTP with no offset/`Z`, and the
+    generated Dart client's ISO-8601 parser then reads it as local time --
+    a real skew (e.g. 9h in JST). Domain/DB values stay naive (see `_now`);
+    only response payloads need the explicit `tzinfo`.
+    """
+    return value.replace(tzinfo=UTC) if value is not None else None
+
+
 # --------------------------------------------------------------------------- #
 # Request / response schemas
 # --------------------------------------------------------------------------- #
@@ -74,7 +87,10 @@ class AnalyzeRequest(BaseModel):
 class DependencyEdgeModel(BaseModel):
     from_question_id: str
     to_question_id: str
-    provides: list[str]
+    # Typed as the domain enum (not `str`) so Pydantic itself rejects an
+    # unknown provision at request-validation time (422) instead of the
+    # handler raising an uncaught ValueError -> 500 when converting it.
+    provides: list[DependencyProvision]
     rationale: str
     confidence: float | None = None
 
@@ -82,7 +98,7 @@ class DependencyEdgeModel(BaseModel):
         return DependencyEdge(
             from_question_id=self.from_question_id,
             to_question_id=self.to_question_id,
-            provides=tuple(DependencyProvision(p) for p in self.provides),
+            provides=tuple(self.provides),
             rationale=self.rationale,
             confidence=self.confidence,
         )
@@ -92,7 +108,7 @@ class DependencyEdgeModel(BaseModel):
         return cls(
             from_question_id=edge.from_question_id,
             to_question_id=edge.to_question_id,
-            provides=[p.value for p in edge.provides],
+            provides=list(edge.provides),
             rationale=edge.rationale,
             confidence=edge.confidence,
         )
@@ -108,7 +124,15 @@ class UnresolvedQuestionModel(BaseModel):
 
 
 class ConfirmRequest(BaseModel):
-    edges: list[DependencyEdgeModel] = Field(default_factory=list)
+    # The version the caller reviewed. Pinning it (rather than always
+    # confirming "whatever is latest") stops a stale review from landing on
+    # a different, unreviewed version that a concurrent /analyze created in
+    # between (see `confirm` below).
+    version: int
+    # No default: an empty list must be a deliberate "no dependencies"
+    # decision, not an accidental omission that would clear every draft
+    # candidate and unresolved entry (see `confirm` below).
+    edges: list[DependencyEdgeModel]
 
 
 class DependencyGraphResponse(BaseModel):
@@ -134,8 +158,8 @@ class DependencyGraphResponse(BaseModel):
             edges=[DependencyEdgeModel.from_domain(edge) for edge in graph.edges],
             unresolved=[UnresolvedQuestionModel.from_domain(u) for u in graph.unresolved],
             layers=[list(layer) for layer in graph.topological_layers()],
-            created_at=graph.created_at,
-            confirmed_at=graph.confirmed_at,
+            created_at=graph.created_at.replace(tzinfo=UTC),
+            confirmed_at=_as_utc(graph.confirmed_at),
         )
 
 
@@ -156,6 +180,30 @@ def build_dependency_graph_router(
             yield uow
 
     uow_dependency = Depends(_uow)
+
+    def _validate_overrides(
+        overrides: Sequence[QuestionTextOverride], known_question_ids: set[str]
+    ) -> None:
+        """Reject overrides that silently would not do what the caller asked.
+
+        A duplicate `question_id` would otherwise have all but the last entry
+        dropped, and an unknown `question_id` would be ignored outright --
+        both leave the analyzer reading different text than the caller sent,
+        while the request still reports success.
+        """
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for override in overrides:
+            if override.question_id in seen:
+                duplicates.add(override.question_id)
+            seen.add(override.question_id)
+        if duplicates:
+            raise HTTPException(
+                422, detail=f"duplicate question_id in overrides: {sorted(duplicates)}"
+            )
+        unknown = seen - known_question_ids
+        if unknown:
+            raise HTTPException(422, detail=f"unknown question_id in overrides: {sorted(unknown)}")
 
     def _question_infos(
         uow: SqlAlchemyUnitOfWork, test_id: str, overrides: Sequence[QuestionTextOverride]
@@ -198,6 +246,7 @@ def build_dependency_graph_router(
         if not questions:
             raise HTTPException(404, detail=f"test {test_id!r} has no questions to analyze")
 
+        _validate_overrides(request.overrides, {q.id for q in questions})
         infos = _question_infos(uow, test_id, request.overrides)
         result = analyzer.analyze(infos)
         version = _next_version(uow, test_id)
@@ -246,21 +295,26 @@ def build_dependency_graph_router(
         request: ConfirmRequest,
         uow: SqlAlchemyUnitOfWork = uow_dependency,
     ) -> DependencyGraphResponse:
-        latest = uow.dependency_graphs.get_latest(test_id)
-        if latest is None:
-            raise HTTPException(404, detail=f"test {test_id!r} has no dependency graph yet")
-        if latest.status is DependencyGraphStatus.CONFIRMED:
+        # Pinned to the version the caller reviewed -- never "whatever is
+        # latest" -- so a stale review can never land on a different,
+        # unreviewed version (see the module docstring and ConfirmRequest).
+        graph = uow.dependency_graphs.get(f"{test_id}:v{request.version}")
+        if graph is None or graph.test_id != test_id:
+            raise HTTPException(
+                404,
+                detail=f"test {test_id!r} has no dependency graph version {request.version}",
+            )
+        if graph.status is DependencyGraphStatus.CONFIRMED:
             raise HTTPException(
                 409,
                 detail=(
-                    f"dependency graph for test {test_id!r} is already confirmed "
-                    f"at v{latest.version}; run /analyze to start a new version before "
-                    "confirming again"
+                    f"dependency graph for test {test_id!r} v{request.version} is already "
+                    "confirmed; run /analyze to start a new version before confirming again"
                 ),
             )
 
         try:
-            confirmed = latest.confirm(
+            confirmed = graph.confirm(
                 edges=[edge.to_domain() for edge in request.edges], confirmed_at=_now()
             )
         except DependencyGraphError as error:

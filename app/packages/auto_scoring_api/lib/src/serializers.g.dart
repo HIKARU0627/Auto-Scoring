@@ -11,6 +11,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ConfirmRequest.serializer)
       ..add(DependencyEdgeModel.serializer)
       ..add(DependencyGraphResponse.serializer)
+      ..add(DependencyProvision.serializer)
       ..add(HTTPValidationError.serializer)
       ..add(LocationInner.serializer)
       ..add(QuestionTextOverride.serializer)
@@ -39,15 +40,16 @@ Serializers _$serializers = (Serializers().toBuilder()
               BuiltList, const [const FullType(UnresolvedQuestionModel)]),
           () => ListBuilder<UnresolvedQuestionModel>())
       ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(DependencyProvision)]),
+          () => ListBuilder<DependencyProvision>())
+      ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(LocationInner)]),
           () => ListBuilder<LocationInner>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(QuestionTextOverride)]),
           () => ListBuilder<QuestionTextOverride>())
-      ..addBuilderFactory(
-          const FullType(BuiltList, const [const FullType(String)]),
-          () => ListBuilder<String>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ValidationError)]),
           () => ListBuilder<ValidationError>()))

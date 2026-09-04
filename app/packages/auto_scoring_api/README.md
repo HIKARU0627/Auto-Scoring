@@ -78,6 +78,7 @@ Class | Method | HTTP request | Description
  - [ConfirmRequest](doc/ConfirmRequest.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
+ - [DependencyProvision](doc/DependencyProvision.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [LocationInner](doc/LocationInner.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)

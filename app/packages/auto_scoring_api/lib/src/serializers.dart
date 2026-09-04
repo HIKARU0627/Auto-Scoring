@@ -18,6 +18,7 @@ import 'package:auto_scoring_api/src/model/analyze_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
+import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
@@ -33,6 +34,7 @@ part 'serializers.g.dart';
   ConfirmRequest,
   DependencyEdgeModel,
   DependencyGraphResponse,
+  DependencyProvision,
   HTTPValidationError,
   LocationInner,
   QuestionTextOverride,
@@ -65,6 +67,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(ValidationError)]),
         () => ListBuilder<ValidationError>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(DependencyProvision)]),
+        () => ListBuilder<DependencyProvision>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyEdgeModel)]),

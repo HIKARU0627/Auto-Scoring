@@ -17,6 +17,7 @@ export 'package:auto_scoring_api/src/model/analyze_request.dart';
 export 'package:auto_scoring_api/src/model/confirm_request.dart';
 export 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 export 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
+export 'package:auto_scoring_api/src/model/dependency_provision.dart';
 export 'package:auto_scoring_api/src/model/http_validation_error.dart';
 export 'package:auto_scoring_api/src/model/location_inner.dart';
 export 'package:auto_scoring_api/src/model/question_text_override.dart';

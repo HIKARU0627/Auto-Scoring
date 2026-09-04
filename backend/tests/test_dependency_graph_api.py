@@ -153,7 +153,7 @@ def test_human_correction_confirm_gates_submission_processing(
     # empty edge list, correcting it.
     confirm_response = client.post(
         "/tests/test-1/dependency-graph/confirm",
-        json={"edges": []},
+        json={"version": 1, "edges": []},
         headers=_AUTH,
     )
     assert confirm_response.status_code == 200, confirm_response.text
@@ -164,7 +164,9 @@ def test_human_correction_confirm_gates_submission_processing(
     # A second confirm on the now-CONFIRMED graph is rejected: a new version
     # must be analyzed first.
     conflict = client.post(
-        "/tests/test-1/dependency-graph/confirm", json={"edges": []}, headers=_AUTH
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
     )
     assert conflict.status_code == 409
 
@@ -193,7 +195,11 @@ def test_reanalyzing_after_confirm_starts_a_new_version(
 ) -> None:
     _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
     _analyze(client)
-    client.post("/tests/test-1/dependency-graph/confirm", json={"edges": []}, headers=_AUTH)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
 
     second = _analyze(client)
     assert second["version"] == 2
@@ -203,6 +209,117 @@ def test_reanalyzing_after_confirm_starts_a_new_version(
     assert [v["version"] for v in versions] == [1, 2]
     assert versions[0]["status"] == "confirmed"
     assert versions[1]["status"] == "draft"
+
+
+def test_stale_confirm_after_reanalyze_does_not_touch_the_new_version(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """A confirm pinned to v1 must never land on a v2 an analyze created meanwhile."""
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    _analyze(client)  # starts v2 (draft), simulating a concurrent re-analysis
+
+    stale_confirm = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert stale_confirm.status_code == 409
+
+    with make_uow() as uow:
+        v2 = uow.dependency_graphs.get("test-1:v2")
+    assert v2 is not None
+    assert v2.status.value == "draft"
+
+
+def test_confirming_unknown_version_is_not_found(client: TestClient, make_uow: UowFactory) -> None:
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 99, "edges": []},
+        headers=_AUTH,
+    )
+    assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Request validation
+# --------------------------------------------------------------------------- #
+def test_confirm_requires_an_explicit_edges_list(client: TestClient, make_uow: UowFactory) -> None:
+    """Omitting `edges` must fail validation, not silently confirm as empty."""
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1},
+        headers=_AUTH,
+    )
+    assert response.status_code == 422
+
+
+def test_confirm_rejects_an_unknown_provision_with_422_not_500(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={
+            "version": 1,
+            "edges": [
+                {
+                    "from_question_id": "q1",
+                    "to_question_id": "q2",
+                    "provides": ["bogus"],
+                    "rationale": "手動追加",
+                }
+            ],
+        },
+        headers=_AUTH,
+    )
+    assert response.status_code == 422
+
+
+def test_analyze_rejects_duplicate_override_question_id(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/analyze",
+        json={
+            "overrides": [
+                {"question_id": "q1", "prompt_text": "テキストA"},
+                {"question_id": "q1", "prompt_text": "テキストB"},
+            ]
+        },
+        headers=_AUTH,
+    )
+    assert response.status_code == 422
+    assert "duplicate" in response.json()["detail"].lower()
+
+
+def test_analyze_rejects_unknown_override_question_id(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+
+    response = client.post(
+        "/tests/test-1/dependency-graph/analyze",
+        json={"overrides": [{"question_id": "q-not-in-test", "prompt_text": "テキスト"}]},
+        headers=_AUTH,
+    )
+    assert response.status_code == 422
+    assert "unknown" in response.json()["detail"].lower()
 
 
 # --------------------------------------------------------------------------- #

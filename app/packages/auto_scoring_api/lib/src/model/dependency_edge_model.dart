@@ -4,6 +4,7 @@
 
 // ignore_for_file: unused_element
 import 'package:built_collection/built_collection.dart';
+import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
@@ -27,7 +28,7 @@ abstract class DependencyEdgeModel
   String get fromQuestionId;
 
   @BuiltValueField(wireName: r'provides')
-  BuiltList<String> get provides;
+  BuiltList<DependencyProvision> get provides;
 
   @BuiltValueField(wireName: r'rationale')
   String get rationale;
@@ -79,7 +80,7 @@ class _$DependencyEdgeModelSerializer
     yield r'provides';
     yield serializers.serialize(
       object.provides,
-      specifiedType: const FullType(BuiltList, [FullType(String)]),
+      specifiedType: const FullType(BuiltList, [FullType(DependencyProvision)]),
     );
     yield r'rationale';
     yield serializers.serialize(
@@ -134,8 +135,9 @@ class _$DependencyEdgeModelSerializer
         case r'provides':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType(BuiltList, [FullType(String)]),
-          ) as BuiltList<String>;
+            specifiedType:
+                const FullType(BuiltList, [FullType(DependencyProvision)]),
+          ) as BuiltList<DependencyProvision>;
           result.provides.replace(valueDes);
           break;
         case r'rationale':

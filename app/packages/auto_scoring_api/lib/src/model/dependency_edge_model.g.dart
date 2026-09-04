@@ -12,7 +12,7 @@ class _$DependencyEdgeModel extends DependencyEdgeModel {
   @override
   final String fromQuestionId;
   @override
-  final BuiltList<String> provides;
+  final BuiltList<DependencyProvision> provides;
   @override
   final String rationale;
   @override
@@ -86,10 +86,11 @@ class DependencyEdgeModelBuilder
   set fromQuestionId(String? fromQuestionId) =>
       _$this._fromQuestionId = fromQuestionId;
 
-  ListBuilder<String>? _provides;
-  ListBuilder<String> get provides =>
-      _$this._provides ??= ListBuilder<String>();
-  set provides(ListBuilder<String>? provides) => _$this._provides = provides;
+  ListBuilder<DependencyProvision>? _provides;
+  ListBuilder<DependencyProvision> get provides =>
+      _$this._provides ??= ListBuilder<DependencyProvision>();
+  set provides(ListBuilder<DependencyProvision>? provides) =>
+      _$this._provides = provides;
 
   String? _rationale;
   String? get rationale => _$this._rationale;

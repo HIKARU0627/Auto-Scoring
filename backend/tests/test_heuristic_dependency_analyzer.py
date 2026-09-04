@@ -58,6 +58,26 @@ def test_signal_phrase_without_a_resolvable_reference_is_unresolved_not_dropped(
     assert result.unresolved[0].question_id == "q2"
 
 
+def test_question_number_match_does_not_bleed_into_a_longer_number() -> None:
+    """ "問1" must not match inside "問10" -- they are different questions."""
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q10", number="問10", page=1, prompt_text="呼吸について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問10の答えを踏まえて考察せよ。",
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert [(e.from_question_id, e.to_question_id) for e in result.edges] == [("q10", "q2")]
+
+
 def test_multi_page_reference_is_detected() -> None:
     questions = [
         QuestionInfo(

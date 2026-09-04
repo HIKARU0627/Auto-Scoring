@@ -8,12 +8,14 @@ part of 'confirm_request.dart';
 
 class _$ConfirmRequest extends ConfirmRequest {
   @override
-  final BuiltList<DependencyEdgeModel>? edges;
+  final BuiltList<DependencyEdgeModel> edges;
+  @override
+  final int version;
 
   factory _$ConfirmRequest([void Function(ConfirmRequestBuilder)? updates]) =>
       (ConfirmRequestBuilder()..update(updates))._build();
 
-  _$ConfirmRequest._({this.edges}) : super._();
+  _$ConfirmRequest._({required this.edges, required this.version}) : super._();
   @override
   ConfirmRequest rebuild(void Function(ConfirmRequestBuilder) updates) =>
       (toBuilder()..update(updates)).build();
@@ -24,20 +26,25 @@ class _$ConfirmRequest extends ConfirmRequest {
   @override
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
-    return other is ConfirmRequest && edges == other.edges;
+    return other is ConfirmRequest &&
+        edges == other.edges &&
+        version == other.version;
   }
 
   @override
   int get hashCode {
     var _$hash = 0;
     _$hash = $jc(_$hash, edges.hashCode);
+    _$hash = $jc(_$hash, version.hashCode);
     _$hash = $jf(_$hash);
     return _$hash;
   }
 
   @override
   String toString() {
-    return (newBuiltValueToStringHelper(r'ConfirmRequest')..add('edges', edges))
+    return (newBuiltValueToStringHelper(r'ConfirmRequest')
+          ..add('edges', edges)
+          ..add('version', version))
         .toString();
   }
 }
@@ -51,6 +58,10 @@ class ConfirmRequestBuilder
       _$this._edges ??= ListBuilder<DependencyEdgeModel>();
   set edges(ListBuilder<DependencyEdgeModel>? edges) => _$this._edges = edges;
 
+  int? _version;
+  int? get version => _$this._version;
+  set version(int? version) => _$this._version = version;
+
   ConfirmRequestBuilder() {
     ConfirmRequest._defaults(this);
   }
@@ -58,7 +69,8 @@ class ConfirmRequestBuilder
   ConfirmRequestBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
-      _edges = $v.edges?.toBuilder();
+      _edges = $v.edges.toBuilder();
+      _version = $v.version;
       _$v = null;
     }
     return this;
@@ -82,13 +94,15 @@ class ConfirmRequestBuilder
     try {
       _$result = _$v ??
           _$ConfirmRequest._(
-            edges: _edges?.build(),
+            edges: edges.build(),
+            version: BuiltValueNullFieldError.checkNotNull(
+                version, r'ConfirmRequest', 'version'),
           );
     } catch (_) {
       late String _$failedField;
       try {
         _$failedField = 'edges';
-        _edges?.build();
+        edges.build();
       } catch (e) {
         throw BuiltValueNestedFieldError(
             r'ConfirmRequest', _$failedField, e.toString());

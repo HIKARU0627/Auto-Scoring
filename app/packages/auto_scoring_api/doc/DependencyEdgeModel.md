@@ -10,7 +10,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **confidence** | **num** |  | [optional] 
 **fromQuestionId** | **String** |  | 
-**provides** | **BuiltList&lt;String&gt;** |  | 
+**provides** | [**BuiltList&lt;DependencyProvision&gt;**](DependencyProvision.md) |  | 
 **rationale** | **String** |  | 
 **toQuestionId** | **String** |  | 
 

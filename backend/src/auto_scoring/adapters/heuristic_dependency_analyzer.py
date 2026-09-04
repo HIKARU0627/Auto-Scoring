@@ -13,6 +13,7 @@ decision and its limits.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -60,7 +61,7 @@ class ReferenceHeuristicDependencyAnalyzer:
             referenced = [
                 (number, from_id)
                 for number, from_id in by_number.items()
-                if from_id != question.question_id and number in text
+                if from_id != question.question_id and _contains_question_number(text, number)
             ]
 
             if referenced:
@@ -75,7 +76,7 @@ class ReferenceHeuristicDependencyAnalyzer:
                             ),
                             rationale=(
                                 f"{question.number}の設問文/模範解答/採点基準に"
-                                f"{number}への参照表現「{_snippet(text, number)}」を検出"
+                                f"{number}への参照表現「{_snippet_for_number(text, number)}」を検出"
                             ),
                             confidence=0.8 if matched_signal else 0.5,
                         )
@@ -94,10 +95,32 @@ class ReferenceHeuristicDependencyAnalyzer:
         return DependencyAnalysisResult(edges=tuple(edges), unresolved=tuple(unresolved))
 
 
+def _question_number_pattern(number: str) -> re.Pattern[str]:
+    """Match `number` as a whole label, not as a substring of a longer one.
+
+    Without digit-boundary checks, "問1" would also match inside "問10" --
+    a real risk since question numbers are themselves digit strings.
+    """
+    return re.compile(rf"(?<!\d){re.escape(number)}(?!\d)")
+
+
+def _contains_question_number(text: str, number: str) -> bool:
+    return _question_number_pattern(number).search(text) is not None
+
+
 def _snippet(text: str, marker: str, radius: int = 8) -> str:
     index = text.find(marker)
     if index == -1:
         return marker
     start = max(0, index - radius)
     end = min(len(text), index + len(marker) + radius)
+    return text[start:end]
+
+
+def _snippet_for_number(text: str, number: str, radius: int = 8) -> str:
+    match = _question_number_pattern(number).search(text)
+    if match is None:
+        return number
+    start = max(0, match.start() - radius)
+    end = min(len(text), match.end() + radius)
     return text[start:end]

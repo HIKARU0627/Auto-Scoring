@@ -66,6 +66,10 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "graph_id", "from_question_id", "to_question_id", name="uq_dependency_edges_pair"
         ),
+        sa.CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
+            name="ck_dependency_edges_confidence_range",
+        ),
     )
     op.create_index("ix_dependency_edges_graph_id", "dependency_edges", ["graph_id"])
 

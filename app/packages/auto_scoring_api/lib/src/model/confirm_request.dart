@@ -14,11 +14,15 @@ part 'confirm_request.g.dart';
 ///
 /// Properties:
 /// * [edges]
+/// * [version]
 @BuiltValue()
 abstract class ConfirmRequest
     implements Built<ConfirmRequest, ConfirmRequestBuilder> {
   @BuiltValueField(wireName: r'edges')
-  BuiltList<DependencyEdgeModel>? get edges;
+  BuiltList<DependencyEdgeModel> get edges;
+
+  @BuiltValueField(wireName: r'version')
+  int get version;
 
   ConfirmRequest._();
 
@@ -46,14 +50,16 @@ class _$ConfirmRequestSerializer
     ConfirmRequest object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
-    if (object.edges != null) {
-      yield r'edges';
-      yield serializers.serialize(
-        object.edges,
-        specifiedType:
-            const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
-      );
-    }
+    yield r'edges';
+    yield serializers.serialize(
+      object.edges,
+      specifiedType: const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
+    );
+    yield r'version';
+    yield serializers.serialize(
+      object.version,
+      specifiedType: const FullType(int),
+    );
   }
 
   @override
@@ -82,11 +88,17 @@ class _$ConfirmRequestSerializer
         case r'edges':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType.nullable(
-                BuiltList, [FullType(DependencyEdgeModel)]),
-          ) as BuiltList<DependencyEdgeModel>?;
-          if (valueDes == null) continue;
+            specifiedType:
+                const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
+          ) as BuiltList<DependencyEdgeModel>;
           result.edges.replace(valueDes);
+          break;
+        case r'version':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(int),
+          ) as int;
+          result.version = valueDes;
           break;
         default:
           unhandled.add(key);

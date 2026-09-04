@@ -315,6 +315,10 @@ class DependencyEdgeRow(Base):
             "to_question_id",
             name="uq_dependency_edges_pair",
         ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
+            name="ck_dependency_edges_confidence_range",
+        ),
         Index("ix_dependency_edges_graph_id", "graph_id"),
     )
 

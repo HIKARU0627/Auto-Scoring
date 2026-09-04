@@ -7,6 +7,7 @@ doc/DefaultApi.md
 doc/DependencyEdgeModel.md
 doc/DependencyGraphApi.md
 doc/DependencyGraphResponse.md
+doc/DependencyProvision.md
 doc/HTTPValidationError.md
 doc/LocationInner.md
 doc/QuestionTextOverride.md
@@ -30,6 +31,7 @@ lib/src/model/confirm_request.dart
 lib/src/model/date.dart
 lib/src/model/dependency_edge_model.dart
 lib/src/model/dependency_graph_response.dart
+lib/src/model/dependency_provision.dart
 lib/src/model/http_validation_error.dart
 lib/src/model/location_inner.dart
 lib/src/model/question_text_override.dart
