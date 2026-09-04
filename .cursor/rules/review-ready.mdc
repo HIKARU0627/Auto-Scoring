@@ -7,6 +7,7 @@ alwaysApply: false
 
 実装が一段落し「レビュー準備」「PRを出せる状態にして」と依頼されたら、次のCanonical Skillに従う。
 Agentを問わず同じフローにする。Git操作は標準Git、GitHub操作は `AGENTS.md` «GitHub App authentication» が指定する経路に統一する。
+マージ・auto-mergeは、人間がそのPRを明示依頼したときだけ（`AGENTS.md` «Git workflow»）。GitHubの承認レビューは不要。
 
 - オーケストレーター: @.agents/skills/review-ready/SKILL.md
 - 変更の分割: @.agents/skills/atomic-commit-splitter/SKILL.md

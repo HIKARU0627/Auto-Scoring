@@ -46,7 +46,9 @@ own tools.
   `package.json` (`check`, `bootstrap`, `skills:sync`, `format`, …).
 - Agents read `AGENTS.md`, then the relevant skill in `.agents/skills/`.
 - After implementing, run the `review-ready` skill: readability pass →
-  `pnpm run check` → atomic commits → push → PR change summary.
+  `pnpm run check` → atomic commits → push → PR change summary. Do not merge
+  unless a human asked to merge that PR (`AGENTS.md`). GitHub does not require
+  an approving review.
 - Edit a skill in `.agents/skills/`, then `pnpm run skills:sync`. CI fails on
   drift.
 

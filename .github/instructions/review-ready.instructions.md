@@ -15,3 +15,4 @@ AIエージェントの実装が完了したら、「コードを書く」だけ
 4. コミット規約は [`.agents/skills/git-workflow-and-versioning/SKILL.md`](../../.agents/skills/git-workflow-and-versioning/SKILL.md) に従う。
 
 Git操作は標準Git、GitHub操作は `AGENTS.md` «GitHub App authentication» が指定する経路（GitHub App の `./scripts/invoke-github-app-api.ps1`、または `gh` などプロジェクト指定のツール）に統一する。エージェント固有のGitHub認証・GitHubツールを必須にしない。
+マージ・auto-mergeは、人間がそのPRを明示依頼したときだけ（`AGENTS.md` «Git workflow»）。GitHubの承認レビューは不要。
