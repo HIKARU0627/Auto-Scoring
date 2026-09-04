@@ -142,8 +142,8 @@ uv run python poc/run_ocr_eval.py --dataset "<local eval-dataset dir>" --out poc
 ```
 
 実 OCR を叩いて `OcrResult` を録画する live-provider パスは、credentials と
-データセットが揃った時点の**昇格 PR**で追加する（§7.3）。録画時も request/response
-本文はログに残さない。
+データセットが揃い次第、**Issue #13 を閉じる前に本 PoC へ追加する**（§7.3）。
+録画時も request/response 本文はログに残さない。
 
 ---
 
@@ -202,13 +202,16 @@ samples: 4
 - PoC のハーネスは逐次実行（並列度 1）を既定とし、レート制限に当たった候補は
   その旨を結果表の注記に残す。MVP の並列度は PoC 2 後に確定（決定書 §3 E）。
 
-### 7.3 昇格時に追加するもの
+### 7.3 実測前に本 PoC へ追加するもの
 
-- 採用候補の `OCRProvider` 実 アダプタ（`backend/src/auto_scoring/adapters/ocr/`）。
-- そのアダプタ用の `OCRProviderContract` サブクラス（実キーは CI に置かず、
+- 比較する各候補の `OCRProvider` 実アダプタ。
+- 各アダプタ用の `OCRProviderContract` サブクラス（実キーは CI に置かず、
   ローカル／手動実行のマーカー付きテストにする）。
 - `poc/run_ocr_eval.py` の live-provider パス（画像 → `recognize()` → `OcrResult`
   録画）。
+
+実測・選定後は §11 に従い、不採用アダプタを削除して採用アダプタだけを MVP へ
+昇格する。
 
 ---
 
@@ -283,7 +286,7 @@ samples: 4
 | 決定項目                | 記入欄                                                           |
 | ----------------------- | ---------------------------------------------------------------- |
 | 採用 OCR（第一候補）    | _本 PoC クローズ時に確定（第一候補: `gcv`）_                     |
-| クラウド不可時 fallback | _確定（暫定: `local` = PaddleOCR 日本語）_                       |
+| クラウド不可時 fallback | _未確定（候補: `local` = PaddleOCR 日本語）_                     |
 | rate limit 時の扱い     | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）    |
 | 低 Confidence 閾値      | 分布を PoC 2 と合わせて §3 (C) で確定（本 PoC では分布のみ提出） |
 

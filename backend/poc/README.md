@@ -21,6 +21,8 @@ uv run python poc/run_ocr_eval.py
 uv run python poc/run_ocr_eval.py --dataset "<local eval-dataset dir>" --out poc-1-results.md
 ```
 
-The live-provider path (calling Google Cloud Vision / a second candidate,
-recording `OcrResult`s) is added in the promotion PR once credentials and the
-dataset are available; see the doc's "credentials" section.
+The live-provider path (calling Google Cloud Vision / a second candidate and
+recording `OcrResult`s) must be added to this PoC before Issue #13 is closed,
+once credentials and the dataset are available. Only the selected adapter and
+its contract test are promoted afterward; see the doc's credentials and
+promotion sections.
