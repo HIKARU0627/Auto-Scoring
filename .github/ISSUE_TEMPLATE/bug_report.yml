@@ -1,0 +1,67 @@
+name: バグ報告
+description: 再現可能な不具合や意図しない動作を報告する
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告ありがとうございます。調査を円滑に進めるため、分かる範囲で具体的に記載してください。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: 発生している問題を簡潔に説明してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 問題を再現するための操作を順番に記載してください。
+      placeholder: |
+        1. ...
+        2. ...
+        3. エラーが表示される
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      description: エラーメッセージや状態を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      description: OS、ランタイム、ブラウザ、対象ブランチなどを記載してください。
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 補足資料
+      description: スクリーンショット、ログ、関連Issueなどがあれば添付してください。機密情報は含めないでください。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 確認事項
+      options:
+        - label: 同じ内容のIssueがないことを確認しました
+          required: true
+        - label: ログや画像から機密情報を取り除きました
+          required: true

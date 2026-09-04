@@ -1,0 +1,16 @@
+---
+description: AI実装後に人間がレビューしやすい状態まで整える（可読性改善・検証・Atomic Commit・Push・PR Change Summary同期）
+alwaysApply: false
+---
+
+# レビュー準備フロー
+
+実装が一段落し「レビュー準備」「PRを出せる状態にして」と依頼されたら、次のCanonical Skillに従う。
+Agentを問わず同じフローにする。Git操作は標準Git、GitHub操作は `AGENTS.md` «GitHub App authentication» が指定する経路に統一する。
+
+- オーケストレーター: @.agents/skills/review-ready/SKILL.md
+- 変更の分割: @.agents/skills/atomic-commit-splitter/SKILL.md
+- PR説明の生成と同期: @.agents/skills/change-explainer/SKILL.md
+- 可読性改善: @.agents/skills/code-simplification/SKILL.md
+- 過剰実装の洗い出し / YAGNI: @.agents/skills/ponytail-review/SKILL.md / @.agents/skills/ponytail/SKILL.md
+- コミット規約: @.agents/skills/git-workflow-and-versioning/SKILL.md

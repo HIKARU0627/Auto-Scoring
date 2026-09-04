@@ -1,0 +1,5 @@
+# Agent skill trees are managed as-is (external skills + generated mirror)
+.agents/skills/
+.claude/skills/
+skills-lock.json
+pnpm-lock.yaml

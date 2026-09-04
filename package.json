@@ -1,0 +1,29 @@
+{
+  "name": "agent-dev-template",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reusable multi-agent development environment: shared Agent Skills, AGENTS.md contract, GitHub App attribution, git hooks, and CI gates.",
+  "scripts": {
+    "bootstrap": "pwsh -NoProfile -File scripts/bootstrap-worktree.ps1",
+    "github-app-setup": "pwsh -NoProfile -File scripts/configure-github-app-git-attribution.ps1",
+    "hooks": "git config core.hooksPath .githooks",
+    "skills:sync": "node scripts/sync-agent-skills.mjs",
+    "skills:check": "node scripts/sync-agent-skills.mjs --check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "echo 'lint: not configured — replace this script (see TEMPLATE_SETUP.md)'",
+    "typecheck": "echo 'typecheck: not configured — replace this script (see TEMPLATE_SETUP.md)'",
+    "test": "echo 'test: not configured — replace this script (see TEMPLATE_SETUP.md)'",
+    "build": "echo 'build: not configured — replace this script (see TEMPLATE_SETUP.md)'",
+    "check:pre-commit": "pnpm skills:check && pnpm format:check",
+    "check:pre-push": "pnpm lint && pnpm typecheck && pnpm test",
+    "check": "pnpm skills:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "prettier": "3.9.6"
+  },
+  "engines": {
+    "node": ">=24.14.0"
+  },
+  "packageManager": "pnpm@10.34.5"
+}

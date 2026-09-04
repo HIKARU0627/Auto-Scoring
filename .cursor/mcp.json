@@ -1,0 +1,4 @@
+{
+  "//": "MCP servers for Cursor. Keep in sync with .mcp.json and .agents/mcp_config.json. See docs/mcp.md.",
+  "mcpServers": {}
+}

@@ -1,0 +1,4 @@
+{
+  "//": "Model Context Protocol servers for Claude Code / generic agents. See docs/mcp.md. Keep this in sync with .cursor/mcp.json and .agents/mcp_config.json.",
+  "mcpServers": {}
+}

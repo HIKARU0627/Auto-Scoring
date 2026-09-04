@@ -1,0 +1,25 @@
+# Dependencies
+/node_modules/
+/.pnp/
+.pnp.*
+
+# Build / test output (add your framework's dirs as needed)
+/dist/
+/build/
+/coverage/
+/out/
+
+# Local env files — never commit real secrets
+.env
+.env*.local
+
+# Editor / OS
+.DS_Store
+*.pem
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*

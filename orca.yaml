@@ -1,0 +1,5 @@
+# Orca runs this once per new worktree, before the agent starts.
+# Keep it free of secrets and machine-specific absolute paths.
+scripts:
+  setup: |
+    pwsh -NoProfile -File scripts/bootstrap-worktree.ps1

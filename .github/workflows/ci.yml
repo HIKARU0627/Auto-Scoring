@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Template ships with tag refs for readability. Pin to a full commit SHA
+      # before you rely on CI as a merge gate.
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check agent skill mirrors
+        run: pnpm skills:check
+      - name: Check formatting
+        run: pnpm format:check
+      # The steps below are no-ops until you replace the matching scripts in
+      # package.json (see TEMPLATE_SETUP.md). Once real, make them required
+      # checks in the branch ruleset. Add integration / e2e jobs here as needed.
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build

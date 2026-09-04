@@ -1,0 +1,4 @@
+{
+  "//": "MCP servers for Antigravity / OpenCode / Codex and other generic agents. Keep in sync with .mcp.json and .cursor/mcp.json. See docs/mcp.md.",
+  "mcpServers": {}
+}
