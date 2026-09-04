@@ -160,6 +160,18 @@ simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡
 `domain/pdf_geometry.py` が採用した「四隅を変換してから外接矩形を取る」方式
 （PoC 3/4 で実績あり）を踏襲して再設計する。
 
+### メモリ使用量
+
+`adapters/submission_intake.py::intake_submission` はページを 1〜`page_count`
+まで 1 ページずつ処理する（ラスタライズ → 前処理 → その場でそのページの設問を
+切り出し → 次のページへ）。ラスタライズ結果（未加工 PNG）を全ページ分キャッシュ
+することはしない。最大 100 ページ（`IntakeLimits.max_pages`）の PDF でも、
+同時にメモリへ載る未加工ラスタは常に 1 ページ分に留まる。処理済み（デスキュー後の
+プレビュー・切り出し）画像は `StagedFiles`（Issue #11、DB コミット成功後に
+まとめて書き込むための保持）に溜まるが、これは「コミットが成功するまでファイルを
+書かない」という既存の atomicity 保証とのトレードオフであり、本 Issue の範囲では
+そのまま踏襲する。
+
 ## 7. データモデルの追加（Issue #17）
 
 `docs/data-model-and-local-storage.md`（Issue #11）が定義した 9 Entity に加えて、
@@ -192,6 +204,29 @@ simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡
 `status=needs_review, reason="no_answer_area_defined"` とし、`image_path` は
 そのページの前処理済みプレビュー画像を指す（切り出せないので元画像をそのまま
 人間へ提示する、simplified-design-spec.md §24）。
+
+`AnswerImage.__post_init__`（domain）の「`status=ok` なら `reason` は必ず
+`None`、`status=needs_review` なら `reason` は必ず非空」という不変条件は、
+`answer_images` テーブルの `CHECK` 制約（`ck_answer_images_reason_matches_status`）
+としても強制する。アプリ層を経由しない書き込み（手動 SQL・将来のバグ）でも
+矛盾した行がコミットされず、読み込み時に初めて `DomainError` になる事態を防ぐ
+（`AGENTS.md`「不変条件は実制約で保証する」）。
+
+### 既存 DB のバックフィル（マイグレーション `0003`）
+
+0001/0002 時点で作成された `submissions` 行には `source_pdf_sha256` /
+`page_count` が存在しない。カラム追加時の `server_default`（`""` / `1`）は
+`ALTER TABLE` を通すためだけの一時値で、`""` のまま放置すると
+`Submission.__post_init__` が空ハッシュを拒否し、移行直後の一覧・取得が
+`DomainError` で落ちる。`0003_answer_intake.py::_backfill_submission_metadata`
+が、カラム追加直後に各行の `source_pdf_path`（Issue #11: 元 PDF は不変で
+必ず残る）を実際に読み、真の `sha256` と `pypdf` で数えた `page_count` を
+`UPDATE` で書き戻す。ファイルが見つからない行（既に purge 済み、または
+手作業で作った古い fixture）は、空文字列の代わりに
+`sha256("legacy-submission:<id>")` という「実データのハッシュではないと
+分かる」固定値を入れ、`page_count` は `1` にフォールバックする——読み込めない
+以上、正確な値の代わりに何かを捏造するくらいなら、行が読み込み不能になる
+ことだけは避ける、という優先順位。
 
 ## 8. `app-data/` ファイルレイアウトの追加
 
@@ -231,6 +266,12 @@ app-data/
 | `test_id` が存在しない                       | `404`                         | `{"detail": "..."}`                                               |
 | 重複取込（§2 `REJECT_DUPLICATE`）            | `409`                         | `{"detail": {"message": "...", "existing_submission_id": "..."}}` |
 
+`POST /tests/{test_id}/submissions` はアップロード本体を `_UPLOAD_READ_CHUNK_BYTES`
+（1 MiB）単位で読みながら `IntakeLimits.max_size_bytes` を随時チェックし、超えた
+時点で読み込みを打ち切って `413` を返す（`api/app.py::_read_upload_within_limit`）。
+上限超過の巨大ファイルであっても、まず全body分の `bytes` を確保してから検証する
+ことはしない（`AGENTS.md`「trust boundary を跨ぐ入力はすべて検証する」）。
+
 ## 10. `app-data/` の実際の格納場所（未決事項）
 
 サイドカーの `--app-data-dir`（既定 `カレントディレクトリ/app-data`）が実データの
@@ -256,6 +297,16 @@ app-data/
   挙動をそのまま利用）。
 - 取込済み答案一覧は状態ごとに異なるアイコン+日本語ラベルで表示し（§25 の状態機械の
   値をそのまま反映）、`needs_review` の場合は `review_reason` も表示する。
+  再取込（同一 `submission_id` での成功）は一覧の既存行を置き換える（先頭に
+  追加すると、以前失敗した時点の行と新しい行が両方残ってしまうため）。
+
+`SidecarApiClient` は取込アップロード専用に、他の呼び出しより長いタイムアウト
+（既定 5 分、`intakeTimeout`）を設定した別の `Dio`/`DefaultApi` ペアを持つ
+（`createSubmission` のみそちらを使う）。最大 100 ページの PDF は全ページの
+ラスタライズ・前処理・切り出し・DB commit・ファイル書込みを終えてからサイドカーが
+応答するため、他の呼び出しと同じ既定 10 秒では正当なリクエストでもタイムアウトしうる。
+タイムアウトで失敗したとクライアントが判断してもサイドカー側は処理を続けて commit
+する可能性があり、そのまま再送すると紛らわしい重複エラー（409）になる。
 
 `core/app_dependencies.dart` に `listTests` / `listSubmissions` / `createSubmission` を
 関数注入の形で追加した（既存の `healthCheck` と同じスタイル）。実際のサイドカー
