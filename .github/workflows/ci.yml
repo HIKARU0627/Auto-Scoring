@@ -23,13 +23,17 @@ jobs:
       # before you rely on CI as a merge gate.
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
-          cache: pnpm
+      # Enable pnpm through Corepack (bundled with Node). It reads the
+      # packageManager field in package.json and provisions that exact version
+      # instantly, avoiding pnpm/action-setup's npm self-installer
+      # ("Running self-installer..."), which is slow on a cold cache and
+      # depends on the npm registry. Must run after setup-node.
+      - name: Enable pnpm
+        run: corepack enable
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Check agent skill mirrors
