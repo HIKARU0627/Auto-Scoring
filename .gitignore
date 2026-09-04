@@ -23,3 +23,8 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Sidecar local data dir (simplified-design-specification.md §23) -- created
+# at runtime by `auto_scoring.api.sidecar.run` when no --app-data-dir is given.
+/backend/app-data/
+/app/app-data/
