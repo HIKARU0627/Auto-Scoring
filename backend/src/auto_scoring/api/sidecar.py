@@ -109,6 +109,17 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         required=True,
         help="File to write the {host, port, token} JSON line to.",
     )
+    parser.add_argument(
+        "--app-data-dir",
+        type=Path,
+        default=Path.cwd() / "app-data",
+        help=(
+            "app-data/ root (simplified-design-spec.md §23): database, source "
+            "PDFs, generated images. Persists across restarts -- the final "
+            "production location is provisional pending the Windows "
+            "distribution issue (docs/answer-intake-and-preprocessing.md §5)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -125,7 +136,7 @@ def run(argv: Sequence[str] | None = None) -> int:
     )
 
     uvicorn.run(
-        create_app(api_token=token),
+        create_app(api_token=token, data_root=args.app_data_dir),
         host=LOOPBACK,
         port=port,
         log_config=None,
