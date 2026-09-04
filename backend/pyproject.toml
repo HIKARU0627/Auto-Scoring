@@ -18,10 +18,11 @@ auto-scoring-openapi = "auto_scoring.api.openapi_schema:main"
 [dependency-groups]
 dev = [
     "mypy>=1.14",
-    "pillow>=12.3",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
+    # PoC 3 evidence measurement and sample generation.
+    "pillow>=12.3",
 ]
 
 [build-system]
