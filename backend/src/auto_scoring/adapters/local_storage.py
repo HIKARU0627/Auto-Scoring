@@ -50,6 +50,17 @@ class LocalFileStore:
     def submission_dir(self, submission_id: str) -> Path:
         return self._resolve("submissions", submission_id)
 
+    def submission_source_pdf_path(self, submission_id: str) -> Path:
+        return self._resolve("submissions", submission_id, "source.pdf")
+
+    def submission_page_image_path(self, submission_id: str, page: int) -> Path:
+        """Preprocessed full-page preview image (Issue #17 §7.1), 1-based ``page``."""
+        return self._resolve("submissions", submission_id, "pages", f"page-{page}.png")
+
+    def submission_question_image_path(self, submission_id: str, question_id: str) -> Path:
+        """Cropped answer-area image for one question of one submission."""
+        return self._resolve("submissions", submission_id, "questions", f"{question_id}.png")
+
     def exports_dir(self) -> Path:
         return self._resolve("exports")
 

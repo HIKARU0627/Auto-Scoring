@@ -14,12 +14,15 @@ constraint violation at the offending call rather than at ``commit``.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from collections.abc import Sequence
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
 from auto_scoring.db.orm import (
     AnnotationRow,
+    AnswerImageRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -32,6 +35,7 @@ from auto_scoring.db.orm import (
 )
 from auto_scoring.domain.models import (
     Annotation,
+    AnswerImage,
     GradeResult,
     GradingSource,
     Job,
@@ -137,6 +141,51 @@ class SqlAlchemySubmissionRepository:
             raise LookupError(f"submission {submission_id!r} not found")
         ensure_submission_transition(SubmissionState(row.state), state)
         row.state = state
+
+    def find_by_content_hash(self, test_id: str, source_pdf_sha256: str) -> Submission | None:
+        row = self._session.scalars(
+            select(SubmissionRow).where(
+                SubmissionRow.test_id == test_id,
+                SubmissionRow.source_pdf_sha256 == source_pdf_sha256,
+            )
+        ).first()
+        return m.submission_from_row(row) if row is not None else None
+
+    def mark_intake_outcome(
+        self, submission_id: str, state: SubmissionState, review_reason: str | None
+    ) -> None:
+        row = self._session.get(SubmissionRow, submission_id)
+        if row is None:
+            raise LookupError(f"submission {submission_id!r} not found")
+        ensure_submission_transition(SubmissionState(row.state), state)
+        row.state = state
+        row.review_reason = review_reason
+
+
+class SqlAlchemyAnswerImageRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, image: AnswerImage) -> None:
+        self._session.add(m.answer_image_to_row(image))
+        self._session.flush()
+
+    def list_for_submission(self, submission_id: str) -> list[AnswerImage]:
+        rows = self._session.scalars(
+            select(AnswerImageRow)
+            .where(AnswerImageRow.submission_id == submission_id)
+            .order_by(AnswerImageRow.page, AnswerImageRow.question_id)
+        )
+        return [m.answer_image_from_row(row) for row in rows]
+
+    def replace_for_submission(self, submission_id: str, images: Sequence[AnswerImage]) -> None:
+        self._session.execute(
+            delete(AnswerImageRow).where(AnswerImageRow.submission_id == submission_id)
+        )
+        self._session.flush()
+        for image in images:
+            self._session.add(m.answer_image_to_row(image))
+        self._session.flush()
 
 
 class SqlAlchemyRecognitionResultRepository:
