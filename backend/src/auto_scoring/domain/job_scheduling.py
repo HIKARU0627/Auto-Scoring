@@ -108,10 +108,13 @@ def question_statuses(jobs: Sequence[Job]) -> dict[str, QuestionStatus]:
 
     result: dict[str, QuestionStatus] = {}
     for question_id, job in latest.items():
-        if job.state is JobState.SUCCEEDED:
+        if job.state in (JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED):
+            # A FAILED job can be usable too (Issue #18 review round 2, P1):
+            # a human may approve/correct a failed prerequisite's downstream
+            # effect via `JobRepository.mark_usable` without the row lying
+            # about `state`. CANCELLED never carries `usable` (nothing sets
+            # it), so it always falls through to UNUSABLE here.
             result[question_id] = QuestionStatus.USABLE if job.usable else QuestionStatus.UNUSABLE
-        elif job.state in (JobState.FAILED, JobState.CANCELLED):
-            result[question_id] = QuestionStatus.UNUSABLE
         else:
             result[question_id] = QuestionStatus.PENDING
     return result

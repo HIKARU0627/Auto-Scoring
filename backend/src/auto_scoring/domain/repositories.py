@@ -170,14 +170,16 @@ class JobRepository(Protocol):
         ...
 
     def mark_usable(self, job_id: str, *, usable: bool) -> None:
-        """Flip a terminal ``SUCCEEDED`` job's `Job.usable` bit in place.
+        """Flip a terminal (``SUCCEEDED`` or ``FAILED``) job's `Job.usable`
+        bit in place.
 
         Unlike `save`, this does not change ``state`` -- it exists for the
-        "a human corrected a low-confidence result and it is now usable"
-        resume path (Issue #18 §4.4), which changes only this bit, not the
-        job's lifecycle state. A no-op if the job is not SUCCEEDED (the
-        caller is expected to check `Job.state` first if it needs to know
-        whether this had any effect).
+        "a human corrected a low-confidence or failed result and it is now
+        usable" resume path (Issue #18 §4.4), which changes only this bit,
+        not the job's lifecycle state (a FAILED job stays FAILED; only
+        whether its downstream effect may now proceed changes). A no-op if
+        the job is not SUCCEEDED or FAILED (the caller is expected to check
+        `Job.state` first if it needs to know whether this had any effect).
         """
         ...
 

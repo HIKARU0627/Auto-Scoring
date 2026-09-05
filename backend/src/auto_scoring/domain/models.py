@@ -653,11 +653,19 @@ class Job:
     #: the job overall.
     error_code: ErrorCategory | None = None
     blocked_on_question_id: str | None = None
-    #: Whether this job's ``SUCCEEDED`` result is usable by a dependent
-    #: question (Issue #18 §4.4: low-confidence results must not release a
-    #: dependent). ``None`` until the job reaches ``SUCCEEDED``; deciding the
-    #: actual value is `auto_scoring.domain.job_execution.JobProcessor`'s
-    #: responsibility, not this dataclass's.
+    #: Whether this job's terminal result is usable by a dependent question
+    #: (Issue #18 §4.4: low-confidence results must not release a dependent).
+    #: ``None`` until the job reaches ``SUCCEEDED`` or ``FAILED``. A fresh
+    #: transition into either state always starts this at ``None``
+    #: (`transitioned_to` never sets it to ``FAILED``'s target); deciding the
+    #: value for a ``SUCCEEDED`` job is `auto_scoring.domain.job_execution.
+    #: JobProcessor`'s responsibility. ``FAILED`` is included too (review
+    #: round 2, P1) so a human who has corrected/approved a failed attempt's
+    #: downstream effect (business-rules-and-evaluation-data.md §4.4: "人間が
+    #: …前提を承認して続行") can flip it later via
+    #: `JobRepository.mark_usable` without lying about ``state`` -- the
+    #: attempt itself really did fail; only whether dependents may now
+    #: proceed changes.
     usable: bool | None = None
     #: The confirmed `DependencyGraph` version this job was queued against, if
     #: any (Issue #26). Lets a later confirm supersede a still-incomplete job
@@ -676,8 +684,8 @@ class Job:
             raise DomainError("Job.dependency_graph_version must be >= 1")
         if self.error_code is not None and self.state is not JobState.FAILED:
             raise DomainError("Job.error_code may only be set while state is FAILED")
-        if self.usable is not None and self.state is not JobState.SUCCEEDED:
-            raise DomainError("Job.usable may only be set once state is SUCCEEDED")
+        if self.usable is not None and self.state not in (JobState.SUCCEEDED, JobState.FAILED):
+            raise DomainError("Job.usable may only be set once state is SUCCEEDED or FAILED")
 
     def transitioned_to(
         self,

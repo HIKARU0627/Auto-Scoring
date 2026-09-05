@@ -421,7 +421,10 @@ class SqlAlchemyJobRepository:
             CursorResult[Any],
             self._session.execute(
                 update(JobRow)
-                .where(JobRow.id == job_id, JobRow.state == JobState.SUCCEEDED)
+                .where(
+                    JobRow.id == job_id,
+                    JobRow.state.in_([JobState.SUCCEEDED, JobState.FAILED]),
+                )
                 .values(usable=usable)
             ),
         )

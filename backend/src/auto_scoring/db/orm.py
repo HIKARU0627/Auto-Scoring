@@ -316,15 +316,20 @@ class JobRow(Base):
             name="ck_jobs_error_code_valid",
         ),
         # Mirrors `Job.__post_init__`: `error_code`/`usable` may only be set
-        # while the job is in the one state they describe (Issue #18). Both
-        # are one-directional -- a FAILED job need not carry an error_code
+        # while the job is in a state they describe (Issue #18). Both are
+        # one-directional -- a FAILED job need not carry an error_code
         # (nothing before this issue ever set one), but nothing may carry one
-        # outside FAILED/SUCCEEDED respectively.
+        # outside the states allowed here.
         CheckConstraint(
             "error_code IS NULL OR state = 'failed'", name="ck_jobs_error_code_matches_state"
         ),
+        # `usable` is allowed on FAILED too (review round 2, P1): a human can
+        # confirm a failed attempt's downstream effect is usable anyway
+        # (business-rules-and-evaluation-data.md §4.4) without the row lying
+        # about `state` -- the attempt itself really did fail.
         CheckConstraint(
-            "usable IS NULL OR state = 'succeeded'", name="ck_jobs_usable_matches_state"
+            "usable IS NULL OR state IN ('succeeded', 'failed')",
+            name="ck_jobs_usable_matches_state",
         ),
         # The real idempotency key for Submission-DAG jobs (Issue #18,
         # docs/job-queue.md "二重処理防止"): re-running job creation for the
