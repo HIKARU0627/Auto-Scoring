@@ -26,7 +26,11 @@ from auto_scoring.domain.dependency_graph import (
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
 from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
 from auto_scoring.jobs.clock import Clock
-from auto_scoring.jobs.queue import JobNotFoundError, JobQueueService
+from auto_scoring.jobs.queue import (
+    JobQueueService,
+    JobResumeConflictError,
+    JobRetryRejectedError,
+)
 from auto_scoring.jobs.settings import QueueSettings
 from tests.fakes import FakeClock, FakeJobProcessor
 from tests.support import (
@@ -1092,6 +1096,12 @@ async def test_mark_question_usable_aborts_when_a_concurrent_retry_changes_the_j
     call's read and its write could still have both operations commit, with
     this call going on to release a dependent on the strength of a
     prerequisite that, in reality, is already being reprocessed.
+
+    The CAS loses here, so this attempt retries from a fresh read; that read
+    now sees the active version's own row as QUEUED (not terminal), which
+    review round 4's fix (see the round 4 test below) raises
+    JobResumeConflictError for directly, rather than falling back to a
+    stale terminal job from an older version.
     """
     version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
     with SqlAlchemyUnitOfWork(session_factory) as uow:
@@ -1149,7 +1159,7 @@ async def test_mark_question_usable_aborts_when_a_concurrent_retry_changes_the_j
     )
 
     service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
-    with pytest.raises(JobNotFoundError):
+    with pytest.raises(JobResumeConflictError):
         service.mark_question_usable(submission_id="sub-1", question_id="qa")
 
     with SqlAlchemyUnitOfWork(session_factory) as uow:
@@ -1455,3 +1465,198 @@ async def test_shutdown_stops_a_worker_after_its_current_job_instead_of_draining
             assert state is JobState.SUCCEEDED
         else:
             assert state is JobState.QUEUED  # abandoned in the DB, not processed
+
+
+# --------------------------------------------------------------------------- #
+# Review round 4 regressions
+# --------------------------------------------------------------------------- #
+async def test_mark_question_usable_rejects_when_the_active_version_job_is_not_terminal(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: the "active version has no row at all" fallback must only fire
+    when that is actually true -- not merely when the active version's row
+    isn't terminal yet. If it is still QUEUED/RUNNING/BLOCKED (e.g. a
+    concurrent retry_job just requeued it, or confirm just created a fresh
+    replacement), falling back to a stale terminal job from an older
+    version would approve a superseded result while the real, active
+    attempt is still pending, and its dependent would proceed on an
+    outcome nobody has actually confirmed yet.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id="test-1"))
+        uow.questions.add(make_question(id="qa", test_id="test-1", number="qa"))
+        uow.questions.add(make_question(id="qb", test_id="test-1", number="qb"))
+        uow.submissions.add(make_submission(id="sub-1", test_id="test-1"))
+        edge = _edge("qa", "qb")
+        v1 = DependencyGraph.from_candidates(
+            id="test-1:v1",
+            test_id="test-1",
+            version=1,
+            question_ids=["qa", "qb"],
+            edges=[edge],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(v1)
+        assert (
+            uow.dependency_graphs.try_confirm(v1.confirm(edges=[edge], confirmed_at=at())) is True
+        )
+        v2 = DependencyGraph.from_candidates(
+            id="test-1:v2",
+            test_id="test-1",
+            version=2,
+            question_ids=["qa", "qb"],
+            edges=[edge],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(v2)
+        assert (
+            uow.dependency_graphs.try_confirm(v2.confirm(edges=[edge], confirmed_at=at())) is True
+        )
+
+        # v1's qa job: terminal, but stale -- superseded by v2's own row.
+        uow.jobs.add(
+            Job(
+                id="job-qa-v1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.SUCCEEDED,
+                usable=False,
+                dependency_graph_version=1,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        # v2's qa job: the active version's own row, still QUEUED (e.g. a
+        # concurrent retry_job just requeued it).
+        uow.jobs.add(
+            Job(
+                id="job-qa-v2",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.QUEUED,
+                dependency_graph_version=2,
+                created_at=at(seconds=10),
+                updated_at=at(seconds=10),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb-v2",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="qa",
+                dependency_graph_version=2,
+                created_at=at(seconds=10),
+                updated_at=at(seconds=10),
+            )
+        )
+        uow.commit()
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    with pytest.raises(JobResumeConflictError):
+        service.mark_question_usable(submission_id="sub-1", question_id="qa")
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        qa_v1 = uow.jobs.get("job-qa-v1")
+        qa_v2 = uow.jobs.get("job-qa-v2")
+        qb_v2 = uow.jobs.get("job-qb-v2")
+    assert qa_v1 is not None and qa_v1.usable is False  # untouched: stale, never approved
+    assert qa_v2 is not None and qa_v2.state is JobState.QUEUED  # untouched
+    assert qb_v2 is not None and qb_v2.state is JobState.BLOCKED  # never spuriously released
+
+
+async def test_retry_job_rejects_an_already_approved_failed_job(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: retry_job must refuse a FAILED job whose usable bit is already
+    set -- a human approved its downstream effect via mark_question_usable,
+    and its dependent may already be running or done on the strength of
+    that approval. transitioned_to unconditionally clears usable on
+    FAILED -> QUEUED, but nothing re-blocks the already-released dependent
+    to match.
+    """
+    version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                usable=True,  # already approved by a human
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.QUEUED,  # already released on the strength of the approval
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    with pytest.raises(JobRetryRejectedError):
+        service.retry_job("job-qa")
+
+    job = service.get_job("job-qa")
+    assert job is not None
+    assert job.state is JobState.FAILED  # untouched
+    assert job.usable is True  # approval preserved
+
+
+async def test_shutdown_leaves_the_queue_clean_for_a_later_start(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: shutdown must not leave unconsumed job ids or _STOP sentinels
+    sitting in the in-memory queue -- a later start() on this same service
+    (e.g. a second FastAPI app lifespan) would otherwise have its freshly-
+    spawned worker dequeue a stale _STOP left over from the previous
+    shutdown and exit immediately, permanently stranding whatever backlog
+    that start()'s own DB sweep just re-enqueued.
+    """
+    question_ids = [f"q{i}" for i in range(3)]
+    _seed(session_factory, question_ids=question_ids)
+    hold = asyncio.Event()
+    processor = FakeJobProcessor(hold_event=hold)
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=1), clock=clock
+    )
+    await service.start()
+    service.submit_submission(submission_id="sub-1")
+    await _wait_until(lambda: processor.current_concurrency == 1)
+
+    shutdown_task = asyncio.create_task(service.shutdown())
+    await asyncio.sleep(0.02)  # let shutdown mark _closing and queue its _STOP
+    hold.set()  # let the one held job finish; shutdown abandons the rest
+    await shutdown_task
+
+    remaining_before_restart = [job.state for job in service.list_for_submission("sub-1")]
+    assert remaining_before_restart.count(JobState.QUEUED) == 2  # abandoned, per the P2 above
+
+    try:
+        await service.start()  # a later lifespan, reusing this same service instance
+        await _wait_until(
+            lambda: all(
+                _state(service, j.id) is JobState.SUCCEEDED
+                for j in service.list_for_submission("sub-1")
+            )
+        )
+    finally:
+        await service.shutdown()
