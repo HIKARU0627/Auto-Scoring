@@ -31,6 +31,22 @@ from uuid import uuid4
 _TEMP_SUFFIX = ".part"
 
 
+def _ensure_safe_path_segment(value: str) -> None:
+    """Reject a value that isn't safe to use as a single path segment.
+
+    Ids that end up embedded in a path here (``Question.id``, submission/test
+    ids) are only required by the domain layer to be non-empty -- nothing
+    stops a value like ``"../pages/page-1"`` from resolving, once
+    interpolated into a filename, to a completely different file elsewhere
+    under the store root. ``_ensure_within_root`` only catches escaping the
+    root entirely; it would accept a path like that since it still lands
+    inside ``app-data/``, just silently overwriting the wrong file (AGENTS.md
+    "Validate every input that crosses a trust boundary").
+    """
+    if not value or value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(f"unsafe path segment: {value!r}")
+
+
 class LocalFileStore:
     def __init__(self, root: Path | str) -> None:
         self._root = Path(root).resolve()
@@ -112,6 +128,8 @@ class LocalFileStore:
 
     # -- internals ----------------------------------------------------- #
     def _resolve(self, *parts: str) -> Path:
+        for part in parts:
+            _ensure_safe_path_segment(part)
         return self._ensure_within_root(self._root.joinpath(*parts))
 
     def _ensure_within_root(self, path: Path) -> Path:

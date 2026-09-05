@@ -73,6 +73,27 @@ def test_paths_cannot_escape_the_root(store: LocalFileStore) -> None:
         store.write_atomic(store.root / ".." / "escape.pdf", b"x")
 
 
+def test_a_question_id_containing_a_path_separator_is_rejected(store: LocalFileStore) -> None:
+    """A Question.id like "../pages/page-1" would, once interpolated into
+    "<id>.png", resolve inside submissions/<sub>/pages/ instead of
+    submissions/<sub>/questions/ -- landing on (and silently overwriting) the
+    page preview image, not merely escaping the store root (which
+    _ensure_within_root already blocks). This must be rejected outright.
+    """
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        store.submission_question_image_path("sub-1", "../pages/page-1")
+
+
+def test_a_question_id_containing_a_backslash_is_rejected(store: LocalFileStore) -> None:
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        store.submission_question_image_path("sub-1", "..\\pages\\page-1")
+
+
+def test_a_submission_id_containing_a_path_separator_is_rejected(store: LocalFileStore) -> None:
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        store.submission_dir("../tests")
+
+
 def test_read_bytes_round_trips(store: LocalFileStore) -> None:
     target = store.exports_dir() / "out_corrected.pdf"
     store.write_atomic(target, b"data")
