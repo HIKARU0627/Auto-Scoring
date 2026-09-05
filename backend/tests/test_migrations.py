@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0004"
+    assert current_revision(db_url) == "0005"
 
 
 def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
@@ -53,7 +53,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0004"
+    assert current_revision(db_url) == "0005"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -63,7 +63,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0004"
+    assert current_revision(db_url) == "0005"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -212,7 +212,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0004"
+    assert current_revision(db_url) == "0005"
 
 
 _CHILD_TABLES = (
@@ -451,6 +451,16 @@ def test_check_constraint_rejects_bad_row(db_url: str) -> None:
         )
         with pytest.raises(IntegrityError):
             conn.execute(overlong_label_submission)
+
+        overlong_filename_submission = text(
+            "INSERT INTO submissions "
+            "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, "
+            "original_filename, created_at) "
+            "VALUES ('s3', 't', 'submissions/s3/source.pdf', '" + ("2" * 64) + "', 1, "
+            "'unprocessed', '" + ("a" * 256) + "', '2026-01-01')"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(overlong_filename_submission)
     finally:
         conn.close()
         engine.dispose()

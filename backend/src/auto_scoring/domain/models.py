@@ -38,6 +38,16 @@ _EPS = 1e-9
 #: this as a DB CHECK constraint, a second line of defence.
 MAX_STUDENT_LABEL_LENGTH = 200
 
+#: Same reasoning as ``MAX_STUDENT_LABEL_LENGTH``, for the multipart upload's
+#: client-supplied filename: nothing but ``.pdf`` at the end and printable
+#: characters is required, and the whole body can be up to ~50MiB, so a
+#: client posting directly to the API could otherwise pack an arbitrarily
+#: long name into ``original_filename`` -- stored verbatim, returned on every
+#: submission response. Enforced in ``domain.pdf_intake.validate_filename``
+#: (the first, cheapest check on a fresh upload) and mirrored as a DB CHECK
+#: constraint in ``migrations/versions/0005_original_filename_length.py``.
+MAX_ORIGINAL_FILENAME_LENGTH = 255
+
 #: Upper bound for a single annotation comment, in characters
 #: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
 MAX_COMMENT_CHARS = 120
@@ -411,6 +421,14 @@ class Submission:
         if self.student_label is not None and len(self.student_label) > MAX_STUDENT_LABEL_LENGTH:
             raise DomainError(
                 f"Submission.student_label must be at most {MAX_STUDENT_LABEL_LENGTH} characters"
+            )
+        if (
+            self.original_filename is not None
+            and len(self.original_filename) > MAX_ORIGINAL_FILENAME_LENGTH
+        ):
+            raise DomainError(
+                "Submission.original_filename must be at most "
+                f"{MAX_ORIGINAL_FILENAME_LENGTH} characters"
             )
 
     def with_state(self, target: SubmissionState) -> Submission:

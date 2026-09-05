@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from auto_scoring.domain.models import (
+    MAX_ORIGINAL_FILENAME_LENGTH,
     MAX_STUDENT_LABEL_LENGTH,
     Annotation,
     AnnotationKind,
@@ -86,6 +87,15 @@ def test_submission_student_label_length_is_capped() -> None:
 
 def test_submission_student_label_at_the_cap_is_accepted() -> None:
     make_submission(student_label="a" * MAX_STUDENT_LABEL_LENGTH)
+
+
+def test_submission_original_filename_length_is_capped() -> None:
+    with pytest.raises(DomainError):
+        make_submission(original_filename="a" * (MAX_ORIGINAL_FILENAME_LENGTH + 1))
+
+
+def test_submission_original_filename_at_the_cap_is_accepted() -> None:
+    make_submission(original_filename="a" * MAX_ORIGINAL_FILENAME_LENGTH)
 
 
 def test_job_transition_counts_a_run_attempt() -> None:

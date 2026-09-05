@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from auto_scoring.domain.models import MAX_ORIGINAL_FILENAME_LENGTH
+
 
 class PdfIntakeError(Exception):
     """An incoming PDF failed validation before any DB/file write happened."""
@@ -135,6 +137,10 @@ def validate_filename(filename: str) -> None:
         raise PdfInvalidTypeError("filename must not contain path separators")
     if "\x00" in filename:
         raise PdfInvalidTypeError("filename must not contain a null byte")
+    if len(filename) > MAX_ORIGINAL_FILENAME_LENGTH:
+        raise PdfInvalidTypeError(
+            f"filename must be at most {MAX_ORIGINAL_FILENAME_LENGTH} characters"
+        )
     stem_and_suffix = filename.rsplit(".", 1)
     if len(stem_and_suffix) != 2 or f".{stem_and_suffix[1].lower()}" != ALLOWED_EXTENSION:
         raise PdfInvalidTypeError(f"filename must end with {ALLOWED_EXTENSION}")

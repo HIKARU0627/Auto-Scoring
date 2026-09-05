@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from auto_scoring.domain.models import MAX_ORIGINAL_FILENAME_LENGTH
 from auto_scoring.domain.pdf_intake import (
     ALLOWED_MIME_TYPES,
     IntakeLimits,
@@ -36,6 +37,19 @@ def test_validate_filename_accepts_pdf() -> None:
 def test_validate_filename_rejects(filename: str) -> None:
     with pytest.raises(PdfInvalidTypeError):
         validate_filename(filename)
+
+
+def test_validate_filename_rejects_a_name_longer_than_the_limit() -> None:
+    overlong = "a" * (MAX_ORIGINAL_FILENAME_LENGTH - 3) + ".pdf"
+    assert len(overlong) == MAX_ORIGINAL_FILENAME_LENGTH + 1
+    with pytest.raises(PdfInvalidTypeError):
+        validate_filename(overlong)
+
+
+def test_validate_filename_accepts_a_name_at_the_limit() -> None:
+    at_limit = "a" * (MAX_ORIGINAL_FILENAME_LENGTH - 4) + ".pdf"
+    assert len(at_limit) == MAX_ORIGINAL_FILENAME_LENGTH
+    validate_filename(at_limit)
 
 
 def test_validate_declared_mime_accepts_pdf_and_missing() -> None:

@@ -140,6 +140,10 @@ class SubmissionRow(Base):
             "student_label IS NULL OR length(student_label) <= 200",
             name="ck_submissions_student_label_length",
         ),
+        CheckConstraint(
+            "original_filename IS NULL OR length(original_filename) <= 255",
+            name="ck_submissions_original_filename_length",
+        ),
         UniqueConstraint("test_id", "source_pdf_sha256", name="uq_submissions_test_content_hash"),
         Index("ix_submissions_test_id", "test_id"),
         Index("ix_submissions_state", "state"),
