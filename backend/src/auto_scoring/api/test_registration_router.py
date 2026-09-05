@@ -51,6 +51,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.profile_candidate_generation import generate_profile_candidates
 from auto_scoring.adapters.test_intake import register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.dependency_graph import can_start_submission_processing
 from auto_scoring.domain.models import MAX_ORIGINAL_FILENAME_LENGTH, DomainError, Test, TestStatus
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -243,6 +244,28 @@ def build_test_registration_router(
     lock = pdfium_lock or threading.Lock()
     router = APIRouter(tags=["test-registration"])
 
+    # `Profile` has no DB row or version -- it is a JSON file that
+    # `/profile/analyze`, `PUT /profile`, and `/profile/confirm` each read,
+    # transform, and overwrite in full. Without serializing those three per
+    # test, an `/analyze` (or `PUT /profile`) that started before a
+    # `/confirm` -- but finishes after it committed the confirmed
+    # Questions/Rubrics and saved the confirmed profile file -- would
+    # overwrite that confirmed file with its own stale DRAFT result, with
+    # nothing left on disk to say the test was ever confirmed (Issue #16
+    # review round 3). Grown lazily per test id and never removed: the
+    # number of distinct tests ever registered in a process's lifetime is
+    # small enough that this is not worth the complexity of eviction.
+    profile_locks: dict[str, threading.Lock] = {}
+    profile_locks_guard = threading.Lock()
+
+    def _profile_lock(test_id: str) -> threading.Lock:
+        with profile_locks_guard:
+            test_lock = profile_locks.get(test_id)
+            if test_lock is None:
+                test_lock = threading.Lock()
+                profile_locks[test_id] = test_lock
+            return test_lock
+
     def _uow() -> Iterator[SqlAlchemyUnitOfWork]:
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             yield uow
@@ -368,36 +391,42 @@ def build_test_registration_router(
         test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
     ) -> ProfileResponse:
         _get_test_or_404(uow, test_id)
-        try:
-            existing = profile_store.load(test_id)
-        except FileNotFoundError:
-            existing = None
-        if existing is not None and existing.status is ProfileStatus.CONFIRMED:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail=f"test {test_id!r}'s profile is already confirmed and cannot be re-analyzed",
-            )
-
-        try:
-            # Same `pdfium_lock` register_test uses above -- see
-            # build_test_registration_router's docstring. FastAPI runs this
-            # synchronous handler in a worker thread, so without this an
-            # analysis overlapping another analysis or a submission-intake
-            # render would reach PDFium from two threads at once.
-            with lock:
-                profile = generate_profile_candidates(
-                    pdf_engine,
-                    test_id,
-                    test_id,
-                    store.test_model_answer_pdf_path(test_id),
-                    store.test_manual_pdf_path(test_id),
+        # Serializes against `update_profile`/`confirm_profile` for this
+        # same test -- see `_profile_lock`'s docstring.
+        with _profile_lock(test_id):
+            try:
+                existing = profile_store.load(test_id)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and existing.status is ProfileStatus.CONFIRMED:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"test {test_id!r}'s profile is already confirmed and cannot be re-analyzed"
+                    ),
                 )
-        except PdfIntakeError as exc:
-            raise _pdf_intake_http_exception(exc) from exc
-        except DomainError as exc:
-            raise HTTPException(422, detail=str(exc)) from exc
 
-        profile_store.save(profile)
+            try:
+                # Same `pdfium_lock` register_test uses above -- see
+                # build_test_registration_router's docstring. FastAPI runs
+                # this synchronous handler in a worker thread, so without
+                # this an analysis overlapping another analysis or a
+                # submission-intake render would reach PDFium from two
+                # threads at once.
+                with lock:
+                    profile = generate_profile_candidates(
+                        pdf_engine,
+                        test_id,
+                        test_id,
+                        store.test_model_answer_pdf_path(test_id),
+                        store.test_manual_pdf_path(test_id),
+                    )
+            except PdfIntakeError as exc:
+                raise _pdf_intake_http_exception(exc) from exc
+            except DomainError as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
+
+            profile_store.save(profile)
         return ProfileResponse.from_domain(profile)
 
     @router.get("/tests/{test_id}/profile", response_model=ProfileResponse)
@@ -410,22 +439,25 @@ def build_test_registration_router(
         test_id: str, request: UpdateProfileRequest, uow: SqlAlchemyUnitOfWork = uow_dependency
     ) -> ProfileResponse:
         _get_test_or_404(uow, test_id)
-        existing = _load_profile_or_404(test_id)
-        if existing.status is ProfileStatus.CONFIRMED:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail=f"test {test_id!r}'s profile is already confirmed and cannot be edited",
-            )
-        try:
-            updated = Profile.from_candidates(
-                existing.profile_id,
-                existing.format_id,
-                existing.signature,
-                [region.to_domain() for region in request.regions],
-            )
-        except ValueError as exc:
-            raise HTTPException(422, detail=str(exc)) from exc
-        profile_store.save(updated)
+        # Serializes against `analyze_profile`/`confirm_profile` for this
+        # same test -- see `_profile_lock`'s docstring.
+        with _profile_lock(test_id):
+            existing = _load_profile_or_404(test_id)
+            if existing.status is ProfileStatus.CONFIRMED:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=f"test {test_id!r}'s profile is already confirmed and cannot be edited",
+                )
+            try:
+                updated = Profile.from_candidates(
+                    existing.profile_id,
+                    existing.format_id,
+                    existing.signature,
+                    [region.to_domain() for region in request.regions],
+                )
+            except ValueError as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
+            profile_store.save(updated)
         return ProfileResponse.from_domain(updated)
 
     @router.post("/tests/{test_id}/profile/confirm", response_model=ProfileResponse)
@@ -433,65 +465,72 @@ def build_test_registration_router(
         test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
     ) -> ProfileResponse:
         test = _get_test_or_404(uow, test_id)
-        profile = _load_profile_or_404(test_id)
-        if profile.status is ProfileStatus.CONFIRMED:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail=f"test {test_id!r}'s profile is already confirmed",
-            )
-        if not profile.regions:
-            raise HTTPException(422, detail=f"test {test_id!r}'s profile has no regions to confirm")
-        # Confirming is the single act of human sign-off over the whole
-        # current region set (there is no per-region "confirmed" checkbox in
-        # the review UI -- `Profile.__post_init__` itself forbids a DRAFT
-        # profile from holding any `confirmed=true` region, so individual
-        # regions never carry that flag before this point). Every region is
-        # therefore marked confirmed here, matching `Profile.confirm`'s own
-        # contract that the caller attests to each one.
-        reviewed_regions = [replace(region, confirmed=True) for region in profile.regions]
-        try:
-            confirmed = profile.confirm(reviewed_regions)
-        except ValueError as exc:
-            raise HTTPException(422, detail=str(exc)) from exc
+        # Serializes against `analyze_profile`/`update_profile` for this
+        # same test -- see `_profile_lock`'s docstring.
+        with _profile_lock(test_id):
+            profile = _load_profile_or_404(test_id)
+            if profile.status is ProfileStatus.CONFIRMED:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=f"test {test_id!r}'s profile is already confirmed",
+                )
+            if not profile.regions:
+                raise HTTPException(
+                    422, detail=f"test {test_id!r}'s profile has no regions to confirm"
+                )
+            # Confirming is the single act of human sign-off over the whole
+            # current region set (there is no per-region "confirmed"
+            # checkbox in the review UI -- `Profile.__post_init__` itself
+            # forbids a DRAFT profile from holding any `confirmed=true`
+            # region, so individual regions never carry that flag before
+            # this point). Every region is therefore marked confirmed here,
+            # matching `Profile.confirm`'s own contract that the caller
+            # attests to each one.
+            reviewed_regions = [replace(region, confirmed=True) for region in profile.regions]
+            try:
+                confirmed = profile.confirm(reviewed_regions)
+            except ValueError as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
 
-        try:
-            questions, rubrics = build_questions_and_rubrics(
-                test_id, confirmed.regions, default_scoring_method=test.default_scoring_method
-            )
-        except DomainError as exc:
-            # `build_questions_and_rubrics` raises `TestRegistrationError`
-            # for a business-rule violation (duplicate number, bad score,
-            # ...), but a malformed region (e.g. a blank question label)
-            # only fails once `Question(...)` itself validates it, raising
-            # the broader `DomainError` -- catching only the narrower type
-            # let that case fall through as an unhandled 500 (Issue #16
-            # review).
-            raise HTTPException(422, detail=str(exc)) from exc
+            try:
+                questions, rubrics = build_questions_and_rubrics(
+                    test_id, confirmed.regions, default_scoring_method=test.default_scoring_method
+                )
+            except DomainError as exc:
+                # `build_questions_and_rubrics` raises `TestRegistrationError`
+                # for a business-rule violation (duplicate number, bad
+                # score, ...), but a malformed region (e.g. a blank question
+                # label) only fails once `Question(...)` itself validates
+                # it, raising the broader `DomainError` -- catching only the
+                # narrower type let that case fall through as an unhandled
+                # 500 (Issue #16 review).
+                raise HTTPException(422, detail=str(exc)) from exc
 
-        # Reconcile, not insert-if-missing: a retry after a prior confirm
-        # attempt that committed the DB write but then failed on
-        # profile_store.save() below (DB succeeded, file didn't) must end up
-        # with *exactly* this question/rubric set, not a stale one left
-        # over from an earlier attempt -- e.g. a since-removed question, or
-        # one whose points/areas/model_answer changed, would otherwise keep
-        # its old row forever (Issue #16 review: a `ready` test would then
-        # be graded against data that no longer matches its confirmed
-        # profile). Deleting and rebuilding is safe here: this handler
-        # already rejects confirming an already-CONFIRMED profile above, so
-        # no downstream submission processing can have started against
-        # these rows yet.
-        uow.questions.delete_for_test(test_id)
-        for question in questions:
-            uow.questions.add(question)
-        for rubric in rubrics:
-            uow.rubrics.add(rubric)
-        uow.commit()
+            # Reconcile, not insert-if-missing: a retry after a prior
+            # confirm attempt that committed the DB write but then failed on
+            # profile_store.save() below (DB succeeded, file didn't) must
+            # end up with *exactly* this question/rubric set, not a stale
+            # one left over from an earlier attempt -- e.g. a since-removed
+            # question, or one whose points/areas/model_answer changed,
+            # would otherwise keep its old row forever (Issue #16 review: a
+            # `ready` test would then be graded against data that no longer
+            # matches its confirmed profile). Deleting and rebuilding is
+            # safe here: this handler already rejects confirming an
+            # already-CONFIRMED profile above, so no downstream submission
+            # processing can have started against these rows yet.
+            uow.questions.delete_for_test(test_id)
+            for question in questions:
+                uow.questions.add(question)
+            for rubric in rubrics:
+                uow.rubrics.add(rubric)
+            uow.commit()
 
-        # If this fails (e.g. disk full), the Question/Rubric rows above are
-        # already durably committed and this whole handler can simply be
-        # retried -- the idempotent write above will skip them, and only the
-        # file write needs to succeed the second time.
-        profile_store.save(confirmed)
+            # If this fails (e.g. disk full), the Question/Rubric rows above
+            # are already durably committed and this whole handler can
+            # simply be retried -- the idempotent write above will skip
+            # them, and only the file write needs to succeed the second
+            # time.
+            profile_store.save(confirmed)
         return ProfileResponse.from_domain(confirmed)
 
     @router.post(
@@ -512,7 +551,27 @@ def build_test_registration_router(
         except FileNotFoundError:
             profile_confirmed = False
 
-        dependency_graph_confirmed = uow.dependency_graphs.get_latest_confirmed(test_id) is not None
+        # `get_latest_confirmed(...) is not None` alone is not enough: a
+        # confirmed graph is immutable, but the test's own Questions are
+        # not -- `confirm_profile`'s reconcile-on-retry can replace them
+        # after a graph was already confirmed against the old set, leaving
+        # a graph whose `question_ids` no longer describes the test yet
+        # still reads CONFIRMED forever. Reuse the same
+        # `can_start_submission_processing` gate Issue #26's submission
+        # pipeline uses for this exact reason (docs/dependency-graph.md:
+        # "CONFIRMEDだけでは不十分") -- marking a test `ready` on top of a
+        # stale graph would let submission processing start against
+        # question dependencies that never matched the confirmed profile
+        # (Issue #16 review round 3).
+        latest_confirmed_graph = uow.dependency_graphs.get_latest_confirmed(test_id)
+        current_question_ids = {question.id for question in uow.questions.list_for_test(test_id)}
+        dependency_graph_confirmed = can_start_submission_processing(
+            latest_confirmed_graph,
+            current_question_ids=current_question_ids,
+            active_confirmed_version=(
+                latest_confirmed_graph.version if latest_confirmed_graph is not None else None
+            ),
+        )
 
         if not profile_confirmed or not dependency_graph_confirmed:
             missing = []

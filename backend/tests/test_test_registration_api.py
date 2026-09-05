@@ -13,8 +13,10 @@ Japanese text into a hand-built PDF (which would require a full CID font).
 
 from __future__ import annotations
 
+import threading
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,9 +25,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.api import test_registration_router
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
+from auto_scoring.domain.models import Question, Rubric
 from auto_scoring.domain.pdf_intake import IntakeLimits
+from auto_scoring.domain.test_registration import (
+    build_questions_and_rubrics as _real_build_questions_and_rubrics,
+)
 
 _TOKEN = "test-registration-token"
 
@@ -466,6 +473,80 @@ class TestProfileReviewAndConfirm:
         with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
             assert {q.number for q in uow.questions.list_for_test(test_id)} == {"1"}
 
+    def test_confirm_and_analyze_are_serialized_for_the_same_test(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`/profile/analyze` and `/profile/confirm` both read the on-disk
+        profile, transform it, and overwrite it in full -- neither rereads
+        or compare-and-sets against the file right before its own write. An
+        `/analyze` that read the profile as DRAFT before a concurrent
+        `/confirm` committed its Questions and saved the CONFIRMED file
+        would otherwise silently clobber that file with its own stale DRAFT
+        result once it finally finishes (Issue #16 review round 3).
+
+        Simulate the overlap: block `/confirm` mid-flight (after it has
+        already loaded the DRAFT profile, before it writes anything), start
+        `/confirm` a concurrent `/analyze` while it is blocked, and check
+        `/analyze` is blocked behind it rather than running concurrently.
+        Serialized, `/analyze` only proceeds once `/confirm` has fully
+        finished -- so it re-reads a profile that is now CONFIRMED and is
+        rejected (409), instead of racing ahead against stale state and
+        overwriting the confirmed file afterward.
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions()},
+        )
+
+        confirm_started = threading.Event()
+        release_confirm = threading.Event()
+
+        def slow_build(*args: Any, **kwargs: Any) -> tuple[list[Question], list[Rubric]]:
+            confirm_started.set()
+            assert release_confirm.wait(timeout=5)
+            return _real_build_questions_and_rubrics(*args, **kwargs)
+
+        monkeypatch.setattr(test_registration_router, "build_questions_and_rubrics", slow_build)
+
+        confirm_responses: list[int] = []
+
+        def _run_confirm() -> None:
+            response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+            confirm_responses.append(response.status_code)
+
+        confirm_thread = threading.Thread(target=_run_confirm)
+        confirm_thread.start()
+        assert confirm_started.wait(timeout=5)
+
+        analyze_responses: list[int] = []
+
+        def _run_analyze() -> None:
+            response = client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+            analyze_responses.append(response.status_code)
+
+        analyze_thread = threading.Thread(target=_run_analyze)
+        analyze_thread.start()
+        # `/analyze` must not be able to observe or act on the profile
+        # while `/confirm` is still mid-flight -- give it every chance to
+        # race ahead before proving it didn't.
+        analyze_thread.join(timeout=0.5)
+        assert analyze_responses == []
+
+        release_confirm.set()
+        confirm_thread.join(timeout=5)
+        analyze_thread.join(timeout=5)
+
+        assert confirm_responses == [200]
+        # Serialized behind the now-confirmed profile, not a stale 200 that
+        # would go on to overwrite it with a fresh DRAFT.
+        assert analyze_responses == [409]
+
+        profile = client.get(f"/tests/{test_id}/profile", headers=_auth())
+        assert profile.json()["status"] == "confirmed"
+
 
 class TestCompleteRegistration:
     def _confirm_profile(self, client: TestClient, test_id: str) -> None:
@@ -538,6 +619,56 @@ class TestCompleteRegistration:
         # just checks the test-level status the settings screen shows.
         get_test = client.get(f"/tests/{test_id}", headers=_auth())
         assert get_test.json()["status"] == "ready"
+
+    def test_rejects_completion_when_the_confirmed_graph_no_longer_matches_the_questions(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`get_latest_confirmed(...) is not None` alone is not enough: a
+        confirmed graph is immutable, but a profile-confirm retry (Issue #16
+        review) can still replace the test's Questions afterward, leaving a
+        graph whose `question_ids` no longer describes the test yet still
+        reads CONFIRMED. `complete_registration` must reuse
+        `can_start_submission_processing`'s stricter check the same way
+        Issue #26's submission pipeline does, not just check for *any*
+        confirmed graph (Issue #16 review round 3).
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        two_questions = _minimal_regions(label="1") + _minimal_regions(label="2")
+        client.put(f"/tests/{test_id}/profile", headers=_auth(), json={"regions": two_questions})
+
+        real_write_atomic = LocalFileStore.write_atomic
+
+        def failing_write_atomic(self: LocalFileStore, path: Path, data: bytes) -> Path:
+            if path.name == "profile.json":
+                raise OSError("simulated disk-full failure")
+            return real_write_atomic(self, path, data)
+
+        monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
+        with pytest.raises(OSError):
+            client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        monkeypatch.setattr(LocalFileStore, "write_atomic", real_write_atomic)
+
+        # The DB commit from the failed attempt above already created both
+        # questions -- confirm a dependency graph over that (still-current)
+        # set before the retry below changes it.
+        self._confirm_dependency_graph(client, test_id)
+
+        # Retry confirm with question 2 dropped: the profile file never
+        # reached CONFIRMED (the write above failed), so this is allowed --
+        # and reconciles the Questions down to just "1", stranding the
+        # dependency graph confirmed a moment ago.
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions(label="1")},
+        )
+        confirm = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        assert confirm.status_code == 200, confirm.text
+
+        response = client.post(f"/tests/{test_id}/complete-registration", headers=_auth())
+        assert response.status_code == 409
+        assert "設問依存関係" in response.json()["detail"]
 
     def test_cannot_complete_registration_twice(self, client: TestClient) -> None:
         test_id = _register_test(client)

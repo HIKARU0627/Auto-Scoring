@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 from pypdfium2 import PdfTextPage
+from pypdfium2 import raw as pdfium_raw
 
 RectPt = tuple[float, float, float, float]
 """(left, bottom, right, top) in PDF user-space points, origin bottom-left."""
@@ -60,20 +61,41 @@ def _lines_from_textpage(textpage: PdfTextPage) -> list[TextLine]:
         return []
     full_text = textpage.get_text_range(0, n_chars)
     lines: list[TextLine] = []
-    char_index = 0
+    # Position within `full_text`, *not* PDFium's internal char list --
+    # `_line_rect` converts each line's own position independently instead
+    # of this accumulating into a char-list index (see its docstring).
+    text_index = 0
     for raw_line in full_text.split("\r\n"):
         length = len(raw_line)
         stripped = raw_line.strip()
         if stripped:
-            rect = _line_rect(textpage, char_index, length)
+            rect = _line_rect(textpage, text_index, length)
             if rect is not None:
                 lines.append(TextLine(text=stripped, rect_pt=rect))
-        char_index += length + 2  # skip the "\r\n" itself
+        text_index += length + 2  # skip the "\r\n" itself
     return lines
 
 
-def _line_rect(textpage: PdfTextPage, index: int, count: int) -> RectPt | None:
-    n_rects = textpage.count_rects(index, count)
+def _line_rect(textpage: PdfTextPage, text_index: int, length: int) -> RectPt | None:
+    """The bounding rectangle for the `length` characters of `full_text`
+    (`textpage.get_text_range`'s output) starting at `text_index`.
+
+    `count_rects`/`get_rect` index into PDFium's *internal* char list, which
+    `get_text_range`'s own docstring warns can exclude or insert characters
+    relative to the extracted text -- so treating a position in that text as
+    a char-list index directly (as this used to) drifts after the first
+    such mismatch, misassigning every following line's rectangle to the
+    wrong span of characters (Issue #16 review). Converting each line's own
+    `text_index` via `FPDFText_GetCharIndexFromTextIndex` keeps one line's
+    drift from propagating into the next.
+    """
+    if length == 0:
+        return None
+    start_char = pdfium_raw.FPDFText_GetCharIndexFromTextIndex(textpage, text_index)
+    end_char = pdfium_raw.FPDFText_GetCharIndexFromTextIndex(textpage, text_index + length - 1)
+    if start_char == -1 or end_char == -1 or end_char < start_char:
+        return None
+    n_rects = textpage.count_rects(start_char, end_char - start_char + 1)
     if n_rects == 0:
         return None
     lefts: list[float] = []
