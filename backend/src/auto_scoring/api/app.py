@@ -30,7 +30,7 @@ from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
-from auto_scoring.domain.models import Submission
+from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
@@ -287,7 +287,7 @@ def create_app(
     async def create_submission(
         test_id: str,
         file: UploadFile = File(...),
-        student_label: str | None = Form(None),
+        student_label: str | None = Form(None, max_length=MAX_STUDENT_LABEL_LENGTH),
     ) -> SubmissionResponse:
         # Reserved *before* reading a single byte of the upload -- see
         # intake_capacity above. A non-blocking acquire rejects outright

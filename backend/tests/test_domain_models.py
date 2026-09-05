@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from auto_scoring.domain.models import (
+    MAX_STUDENT_LABEL_LENGTH,
     Annotation,
     AnnotationKind,
     DomainError,
@@ -76,6 +77,15 @@ def test_submission_with_state_rejects_illegal_move() -> None:
     submission = make_submission()
     with pytest.raises(InvalidStateTransition):
         submission.with_state(SubmissionState.REVIEWED)
+
+
+def test_submission_student_label_length_is_capped() -> None:
+    with pytest.raises(DomainError):
+        make_submission(student_label="a" * (MAX_STUDENT_LABEL_LENGTH + 1))
+
+
+def test_submission_student_label_at_the_cap_is_accepted() -> None:
+    make_submission(student_label="a" * MAX_STUDENT_LABEL_LENGTH)
 
 
 def test_job_transition_counts_a_run_attempt() -> None:

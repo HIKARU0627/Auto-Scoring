@@ -247,6 +247,42 @@ def test_get_submission_404_for_unknown_id(client: TestClient) -> None:
     assert response.status_code == 404
 
 
+def test_create_submission_rejects_an_overlong_student_label(
+    client: TestClient, data_root: Path
+) -> None:
+    """A client posting directly to the API (not through the Flutter UI,
+    which never sends more than a short label) could otherwise pack an
+    arbitrarily large value into student_label -- it's stored verbatim and
+    returned on every list response. Form(..., max_length=...) rejects this
+    with a clean 422 before intake_submission (and the DB) ever see it.
+    """
+    _seed_test(data_root)
+    response = client.post(
+        "/tests/test-1/submissions",
+        headers=_auth(),
+        files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+        data={"student_label": "a" * 201},
+    )
+    assert response.status_code == 422
+
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        assert uow.submissions.list_for_test("test-1") == []
+
+
+def test_create_submission_accepts_a_student_label_at_the_length_limit(
+    client: TestClient, data_root: Path
+) -> None:
+    _seed_test(data_root)
+    response = client.post(
+        "/tests/test-1/submissions",
+        headers=_auth(),
+        files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+        data={"student_label": "a" * 200},
+    )
+    assert response.status_code == 201
+    assert response.json()["student_label"] == "a" * 200
+
+
 class _SlowPdfEngine:
     """Delegates to a real ``PdfEngine`` but sleeps before every page render --
     standing in for a submission whose rasterization genuinely takes a while.

@@ -28,6 +28,16 @@ from enum import StrEnum
 
 _EPS = 1e-9
 
+#: A client posting directly to the API (bypassing the Flutter UI, which
+#: never sends more than a short label) could otherwise pack most of the
+#: request size limit into this one field -- it's stored verbatim and
+#: returned in full on every submissions-list response, so a handful of
+#: megabyte-scale labels would bloat both the database and every response's
+#: memory footprint (AGENTS.md "Validate every input that crosses a trust
+#: boundary"). ``migrations/versions/0004_student_label_length.py`` mirrors
+#: this as a DB CHECK constraint, a second line of defence.
+MAX_STUDENT_LABEL_LENGTH = 200
+
 #: Upper bound for a single annotation comment, in characters
 #: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
 MAX_COMMENT_CHARS = 120
@@ -398,6 +408,10 @@ class Submission:
         _require_non_empty("Submission.source_pdf_sha256", self.source_pdf_sha256)
         if self.page_count < 1:
             raise DomainError("Submission.page_count must be >= 1")
+        if self.student_label is not None and len(self.student_label) > MAX_STUDENT_LABEL_LENGTH:
+            raise DomainError(
+                f"Submission.student_label must be at most {MAX_STUDENT_LABEL_LENGTH} characters"
+            )
 
     def with_state(self, target: SubmissionState) -> Submission:
         """Return a copy in ``target`` state, or raise if the move is illegal."""

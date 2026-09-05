@@ -136,6 +136,10 @@ class SubmissionRow(Base):
             name="ck_submissions_state_valid",
         ),
         CheckConstraint("page_count >= 1", name="ck_submissions_page_count_positive"),
+        CheckConstraint(
+            "student_label IS NULL OR length(student_label) <= 200",
+            name="ck_submissions_student_label_length",
+        ),
         UniqueConstraint("test_id", "source_pdf_sha256", name="uq_submissions_test_content_hash"),
         Index("ix_submissions_test_id", "test_id"),
         Index("ix_submissions_state", "state"),

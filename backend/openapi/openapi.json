@@ -11,6 +11,7 @@
           "student_label": {
             "anyOf": [
               {
+                "maxLength": 200,
                 "type": "string"
               },
               {
