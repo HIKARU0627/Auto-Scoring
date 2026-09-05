@@ -20,6 +20,7 @@ import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
+import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
@@ -38,6 +39,7 @@ part 'serializers.g.dart';
   DependencyGraphResponse,
   DependencyProvision,
   HTTPValidationError,
+  JobResponse,
   LocationInner,
   QuestionTextOverride,
   ScoreRequest,
@@ -49,10 +51,6 @@ part 'serializers.g.dart';
 ])
 Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
-        const FullType(BuiltList, [FullType(UnresolvedQuestionModel)]),
-        () => ListBuilder<UnresolvedQuestionModel>(),
-      )
-      ..addBuilderFactory(
         const FullType(BuiltMap, [FullType(String), FullType(String)]),
         () => MapBuilder<String, String>(),
       )
@@ -61,12 +59,34 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<DependencyGraphResponse>(),
       )
       ..addBuilderFactory(
-        const FullType(BuiltList, [FullType(LocationInner)]),
-        () => ListBuilder<LocationInner>(),
+        const FullType(BuiltList, [FullType(JobResponse)]),
+        () => ListBuilder<JobResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(SubmissionResponse)]),
         () => ListBuilder<SubmissionResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(TestSummary)]),
+        () => ListBuilder<TestSummary>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
+        () => ListBuilder<DependencyEdgeModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [
+          FullType(BuiltList, [FullType(String)])
+        ]),
+        () => ListBuilder<BuiltList<String>>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(UnresolvedQuestionModel)]),
+        () => ListBuilder<UnresolvedQuestionModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(LocationInner)]),
+        () => ListBuilder<LocationInner>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(QuestionTextOverride)]),
@@ -81,22 +101,8 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<DependencyProvision>(),
       )
       ..addBuilderFactory(
-        const FullType(BuiltList, [FullType(TestSummary)]),
-        () => ListBuilder<TestSummary>(),
-      )
-      ..addBuilderFactory(
-        const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
-        () => ListBuilder<DependencyEdgeModel>(),
-      )
-      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(String)]),
         () => ListBuilder<String>(),
-      )
-      ..addBuilderFactory(
-        const FullType(BuiltList, [
-          FullType(BuiltList, [FullType(String)])
-        ]),
-        () => ListBuilder<BuiltList<String>>(),
       )
       ..add(const OneOfSerializer())
       ..add(const AnyOfSerializer())
