@@ -518,18 +518,27 @@ class JobQueueService:
         SUCCEEDED/FAILED match regardless of recency could revive a stale,
         superseded result instead of the real last one (review round 1, P2).
 
-        The actual write is a compare-and-set on the *exact* state read
-        here (`JobRepository.mark_usable`'s ``expected_state``), retried
-        (bounded) from a fresh read if it loses a race -- e.g. against a
-        concurrent `retry_job` moving the same row FAILED -> QUEUED. Without
-        this, both writes could commit (this call's `mark_usable`, keyed
-        only on "SUCCEEDED or FAILED", and the racing `save`, keyed only on
-        `state`) with this call going on to release dependents on the
-        strength of a prerequisite that, in reality, is already being
-        reprocessed and may yet fail differently (review round 3, P1;
-        AGENTS.md "invariants は…実制約で" applies to the whole read-decide-
-        write transaction here, not just the column). Raises
-        `JobResumeConflictError` if the race keeps losing.
+        The actual write is a compare-and-set on the *exact* state (and, to
+        rule out an ABA cycle -- see below -- ``attempts``) read here
+        (`JobRepository.mark_usable`'s ``expected_state``/
+        ``expected_attempts``), retried (bounded) from a fresh read if it
+        loses a race -- e.g. against a concurrent `retry_job` moving the
+        same row FAILED -> QUEUED. Without this, both writes could commit
+        (this call's `mark_usable`, keyed only on "SUCCEEDED or FAILED",
+        and the racing `save`, keyed only on `state`) with this call going
+        on to release dependents on the strength of a prerequisite that, in
+        reality, is already being reprocessed and may yet fail differently
+        (review round 3, P1; AGENTS.md "invariants は…実制約で" applies to
+        the whole read-decide-write transaction here, not just the
+        column). Raises `JobResumeConflictError` if the race keeps losing.
+
+        ``expected_attempts`` matters because FAILED is not a dead end: a
+        concurrent retry can complete a full FAILED -> QUEUED -> RUNNING ->
+        FAILED cycle in the window between this call's read and its write,
+        landing back on the *same* state this call is keyed on but for a
+        completely different, unreviewed attempt. `state` alone cannot
+        tell that apart; `attempts`, which only ever changes on a
+        transition through RUNNING, can (review round 6, P1).
         """
         for _attempt in range(_MAX_RESUME_ATTEMPTS):
             newly_queued = self._try_mark_question_usable(
@@ -577,7 +586,12 @@ class JobQueueService:
             if target is None:
                 raise JobNotFoundError(f"{submission_id}:{question_id}")
 
-            if not uow.jobs.mark_usable(target.id, usable=True, expected_state=target.state):
+            if not uow.jobs.mark_usable(
+                target.id,
+                usable=True,
+                expected_state=target.state,
+                expected_attempts=target.attempts,
+            ):
                 return None
 
             jobs = [replace(target, usable=True) if j.id == target.id else j for j in jobs]

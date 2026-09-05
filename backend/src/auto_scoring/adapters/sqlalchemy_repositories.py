@@ -429,12 +429,18 @@ class SqlAlchemyJobRepository:
         )
         return [m.job_from_row(row) for row in rows]
 
-    def mark_usable(self, job_id: str, *, usable: bool, expected_state: JobState) -> bool:
+    def mark_usable(
+        self, job_id: str, *, usable: bool, expected_state: JobState, expected_attempts: int
+    ) -> bool:
         result = cast(
             CursorResult[Any],
             self._session.execute(
                 update(JobRow)
-                .where(JobRow.id == job_id, JobRow.state == expected_state)
+                .where(
+                    JobRow.id == job_id,
+                    JobRow.state == expected_state,
+                    JobRow.attempts == expected_attempts,
+                )
                 .values(usable=usable)
             ),
         )

@@ -180,12 +180,14 @@ class JobRepository(Protocol):
         """
         ...
 
-    def mark_usable(self, job_id: str, *, usable: bool, expected_state: JobState) -> bool:
+    def mark_usable(
+        self, job_id: str, *, usable: bool, expected_state: JobState, expected_attempts: int
+    ) -> bool:
         """Flip a job's `Job.usable` bit in place, iff the row is still in
-        ``expected_state`` (``SUCCEEDED`` or ``FAILED``) -- the state the
-        caller itself observed before deciding to do this, exactly like
-        `save`'s compare-and-set. Returns whether the write actually
-        applied.
+        ``expected_state`` (``SUCCEEDED`` or ``FAILED``) with ``attempts``
+        still equal to ``expected_attempts`` -- what the caller itself
+        observed before deciding to do this, exactly like `save`'s
+        compare-and-set. Returns whether the write actually applied.
 
         Unlike `save`, this does not change ``state`` -- it exists for the
         "a human corrected a low-confidence or failed result and it is now
@@ -204,6 +206,18 @@ class JobRepository(Protocol):
         applies to the transaction, not just the column, here). The caller
         is expected to retry from a fresh read on ``False``, the same as
         it would for `JobSaveConflict` from `save`.
+
+        ``expected_attempts`` closes an ABA hole ``state`` alone cannot:
+        FAILED is not a dead end (retry can move it FAILED -> QUEUED ->
+        RUNNING -> FAILED again), so a concurrent retry that completes a
+        whole cycle back to FAILED between this call's read and its write
+        would make a state-only CAS match again -- applying an approval
+        read for one attempt to a completely different, unreviewed later
+        attempt. `attempts` only ever changes on a transition through
+        RUNNING, so it strictly changes across any such cycle, the same way
+        `auto_scoring.jobs.queue.JobQueueService._requeue_after_backoff`
+        already uses it to tell an earlier attempt's stale backoff timer
+        apart from a newer one (Issue #18 review round 6, P1).
         """
         ...
 
