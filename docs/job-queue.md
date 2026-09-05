@@ -584,3 +584,49 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   bodyは引き続き同じ`JobResponse`（cancel前のスナップショット）だが、
   ステータスコード自体が「受理されたが、まだ適用されていない」ことを
   示す。
+
+## レビュー第7round（Codex）で修正した点
+
+- **インフラエラーでqueue workerが死なないようにする**（P1）: `_run_one`
+  はprocessor呼び出し中の例外（processorのバグ、`asyncio.CancelledError`）
+  とcompare-and-set競合（`JobSaveConflict`）は既に吸収していたが、それ
+  以外の予期しない例外（例: claimやfinalization中のSQLiteのbusy timeout
+  による一時的な`OperationalError`）は`_worker_loop`の`await
+self._run_one(...)`から素通りしてしまっていた。固定worker poolには
+  死んだworker taskを置き換える仕組みが無いため、`max_concurrency=1`
+  では再起動までqueue全体が完全に停止し得た。`_worker_loop`側に
+  `try/except Exception`のbackstopを追加し、ログを残してそのjobは
+  諦め次のqueue itemの処理を続けるようにした -- claim済みのまま
+  取り残されたjobがあっても、`start()`のRUNNING sweepが次回起動時に
+  拾う（プロセスが実際にkillされた場合と同じ回復経路）。
+- **job1つにつき1つのtaskを生成する代わりにretry待機を制限する**（P2）:
+  以前は retry可能な失敗のたびに`_sleep_then_requeue`という専用task
+  （`_pending_retries`という`set[Task]`で追跡）を1つ作っていた。これは
+  `start()`が読み込んだ「まだ期限が来ていない」全てのFAILED行（round 5,
+  P2で追加した機能）も含むため、providerの障害でbacklogが大きく失敗が
+  速い場合、固定worker数にもかかわらずO(backlog)個のasyncio taskが
+  蓄積し得、queueのbounded-task設計（モジュールdocstring冒頭で謳って
+  いる性質）を無効化しメモリを枯渇させ得た。`(due_at, seq, job_id,
+expected_attempts)`のmin-heap（`_retry_heap`）と、それを1件ずつ
+  due順に処理する単一のscheduler task（`_retry_scheduler_task`、
+  `_retry_scheduler_loop`）に置き換えた。heapが空の間は`_retry_added`
+  （`asyncio.Event`）で待機し、非空の間は先頭要素の残り時間だけ
+  `self._clock.sleep(...)`する（`FakeClock`はこれまで通り実時間を
+  消費しない）。sleep中に、より早く期限が来る新しいentryが追加されても
+  割り込みはしない -- 現在処理中のentryのsleepが終わるまで少し待たされる
+  だけで、「保留中のretryが何件あってもtaskは常に1つだけ」という性質と
+  引き換えの、許容できる程度の追加の不正確さで済む。テストの
+  `test_a_stale_backoff_timer_does_not_requeue_a_newer_failed_attempt`
+  も、複数timerが同時にsleepするのではなく、単一schedulerが順番に
+  処理する前提に合わせて書き直した。
+- **ランタイムの202レスポンスをOpenAPIで宣言する**（P2）:
+  round 6で`cancel_job`のRUNNING分岐がレスポンスを202へ変更するように
+  したが、FastAPIのルートデコレータは`response_model`由来のデフォルト
+  200（と422）しか宣言していなかったため、生成されたOpenAPI
+  ドキュメントは実際に返り得る202を広告していなかった。契約から生成
+  されたクライアントやバリデータは、受理済みだが保留中のcancel結果を
+  モデル化できず、実際のレスポンスを未文書化として扱い得た。
+  `@router.post(..., responses={202: {"model": JobResponse, ...}})`で
+  `JobResponse`を伴う明示的な202レスポンスを宣言し、
+  `pnpm run openapi:export`/`openapi:generate`でOpenAPIスキーマと
+  Dartクライアントを再生成した。
