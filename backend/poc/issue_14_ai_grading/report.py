@@ -9,6 +9,7 @@ Every ``*.json`` under ``DIR`` is one graded question (see
 ``tests/fixtures/ai_grading/README.md`` for the shape)::
 
     {
+      "subject": "...",
       "ground_truth": {...},
       "input": {...},
       "recorded": {
@@ -29,6 +30,18 @@ Every ``*.json`` under ``DIR`` is one graded question (see
         }
       }
     }
+
+``ground_truth`` follows the wire schema business-rules-and-evaluation-data.md
+section 6.3 documents for a real human-grader label file (``questionId`` /
+``score`` / ``maxScore`` / ``criteria[].{id,result}``, plus optional
+``comment`` / ``annotations`` / ``handwritingQuality`` / ``layoutType`` /
+``source``) so a real label file produced per that section can be used as-is
+-- ``subject`` (which subject this question belongs to) is deliberately a
+sibling of ``ground_truth``, not a field inside it, since section 6.3's
+per-answer label schema has no such field (code review finding: a
+``ground_truth`` model that instead invented its own field names and forbade
+the documented ones rejected every correctly-formed real label file, making
+the real-data harness impossible to run at all).
 
 ``DIR`` defaults to the committed synthetic fixtures, so the command runs with
 no credentials and no dataset and reproduces a secret-free aggregate table
@@ -162,6 +175,19 @@ class _InvalidInput(Exception):
     no corresponding noisy-OCR input (code review finding)."""
 
 
+class _InvalidSubject(Exception):
+    """A sample's top-level ``subject`` field is missing or blank.
+
+    ``subject`` lives alongside ``ground_truth``/``input``/``recorded``, not
+    inside ``ground_truth`` itself: business-rules-and-evaluation-data.md
+    section 6.3's per-answer human-label schema has no ``subject`` field (it
+    is test-level metadata, section 6.1), so :class:`GradingGroundTruth`
+    cannot carry it without rejecting every correctly-formed real label file
+    (code review finding). The harness still needs it to bucket the results
+    table by 教科 (section 3.3), so it is read as a sibling field instead.
+    """
+
+
 def _sanitize_validation_error(exc: ValidationError) -> str:
     """Summarize a ``pydantic.ValidationError`` without the value that failed.
 
@@ -197,17 +223,28 @@ def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) ->
 
 
 def _validated_measurement(value: object, *, field: str, provider: str, path: Path) -> float | None:
+    """Validate one recorded ``cost_usd``/``latency_seconds`` value.
+
+    Never embeds the raw recorded ``value`` in a raised message: it comes
+    from the same untrusted ``--dataset`` file as everything else, and a
+    malformed dataset could put a string containing real answer text there
+    by mistake -- that text must not reach a raised exception, a chained
+    traceback, or a log line any more than a ``ValidationError``'s raw input
+    value may (AGENTS.md "Security"; code review finding; mirrors
+    ``_sanitize_validation_error``). Only the field name and the offending
+    value's type (never its content) are reported.
+    """
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _InvalidMeasurement(
-            f"{path}: provider {provider!r} has a non-numeric {field!r}: {value!r}"
+            f"{path}: provider {provider!r} has a non-numeric {field!r} "
+            f"(got {type(value).__name__})"
         )
     number = float(value)
     if not math.isfinite(number) or number < 0:
         raise _InvalidMeasurement(
-            f"{path}: provider {provider!r} has an invalid {field!r} "
-            f"(must be finite and >= 0): {value!r}"
+            f"{path}: provider {provider!r} has an invalid {field!r} (must be finite and >= 0)"
         )
     return number
 
@@ -326,14 +363,25 @@ def _providers_with_overlapping_recordings(files: list[Path]) -> set[str]:
 
 @dataclass(frozen=True, kw_only=True)
 class _ParsedSample:
-    """One sample's validated ``ground_truth`` + ``input``, plus its raw
-    ``recorded`` dict (still unparsed -- ``_load_cell`` handles that per
-    provider/variant cell)."""
+    """One sample's validated ``subject`` + ``ground_truth`` + ``input``,
+    plus its raw ``recorded`` dict (still unparsed -- ``_load_cell`` handles
+    that per provider/variant cell)."""
 
     path: Path
+    subject: str
     truth: GradingGroundTruth
     input_record: GradingInputRecord
     recorded: dict[str, dict[str, Any]]
+
+
+def _load_subject(raw: dict[str, Any], *, path: Path) -> str:
+    subject = raw.get("subject")
+    if not isinstance(subject, str) or not subject.strip():
+        raise _InvalidSubject(
+            f"{path}: sample has no non-blank top-level 'subject' field (needed to bucket "
+            "this question's metrics by 教科, docs/poc-2-ai-grading.md section 3.3)"
+        )
+    return subject
 
 
 def _load_ground_truth(raw: dict[str, Any], *, path: Path) -> GradingGroundTruth:
@@ -395,11 +443,13 @@ def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
     parsed: list[_ParsedSample] = []
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
+        subject = _load_subject(raw, path=path)
         truth = _load_ground_truth(raw, path=path)
         input_record = _load_input_record(raw, truth=truth, path=path)
         parsed.append(
             _ParsedSample(
                 path=path,
+                subject=subject,
                 truth=truth,
                 input_record=input_record,
                 recorded=raw.get("recorded", {}),
@@ -466,6 +516,7 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
                     evaluate_sample(
                         sample.truth,
                         response,
+                        subject=sample.subject,
                         provider=provider,
                         config_key=config_key,
                         input_variant=variant,

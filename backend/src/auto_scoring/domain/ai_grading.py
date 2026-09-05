@@ -107,6 +107,14 @@ class CriterionResultOutput(BaseModel):
 class AnnotationCandidate(BaseModel):
     """AI never returns PDF coordinates directly (section 12.1): ``target`` +
     ``type`` (+ optional comment) only -- placement is decided by the app.
+
+    ``comment`` is required (and so cannot be blank -- ``_NonBlankStr``) when
+    ``type`` is :attr:`~auto_scoring.domain.models.AnnotationKind.COMMENT`:
+    a comment-kind annotation with no comment text has nothing to display,
+    and ``domain.models.Annotation`` requires non-blank text to construct
+    one later. Rejecting it here, at the untrusted response boundary, keeps
+    that failure a schema violation instead of a crash at persistence or
+    rendering time (code review finding).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -114,6 +122,12 @@ class AnnotationCandidate(BaseModel):
     target: _NonBlankStr
     type: AnnotationKind
     comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)] | None = None
+
+    @model_validator(mode="after")
+    def _comment_type_requires_comment_text(self) -> AnnotationCandidate:
+        if self.type == AnnotationKind.COMMENT and self.comment is None:
+            raise ValueError("annotation type 'comment' requires a non-blank 'comment' field")
+        return self
 
 
 class AIGradingResult(BaseModel):

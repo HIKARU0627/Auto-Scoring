@@ -133,6 +133,23 @@ def test_annotation_type_outside_the_fixed_set_is_rejected() -> None:
         _parse({"annotations": [{"target": "行く", "type": "correction"}]})
 
 
+def test_comment_type_annotation_without_comment_text_is_rejected() -> None:
+    """Code review finding: a ``type: "comment"`` annotation with no
+    ``comment`` has nothing to display, and ``domain.models.Annotation``
+    requires non-blank text to construct one -- reject it here, at the
+    untrusted response boundary, rather than letting it crash later at
+    persistence or rendering time."""
+    with pytest.raises(ValidationError):
+        _parse({"annotations": [{"target": "行く", "type": "comment"}]})
+
+
+def test_comment_type_annotation_with_comment_text_is_accepted() -> None:
+    result = _parse(
+        {"annotations": [{"target": "行く", "type": "comment", "comment": "過去形に注意"}]}
+    )
+    assert result.annotations[0].comment == "過去形に注意"
+
+
 def test_malformed_json_is_a_validation_error_not_a_silent_default() -> None:
     with pytest.raises(ValidationError):
         parse_ai_grading_result("{not valid json")

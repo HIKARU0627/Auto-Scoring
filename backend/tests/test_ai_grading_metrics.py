@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_grading_metrics import (
-    CriterionGroundTruth,
     GradingGroundTruth,
     SampleOutcome,
     evaluate_sample,
@@ -26,7 +25,6 @@ from auto_scoring.domain.ai_provider import (
     descriptor_key,
     grading_response_from_result,
 )
-from auto_scoring.domain.models import CriterionOutcome
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "ai_grading"
 
@@ -70,24 +68,29 @@ def _response(**overrides: object) -> GradingResponse:
 
 
 def _truth(**overrides: object) -> GradingGroundTruth:
-    defaults: dict[str, object] = dict(
-        question_id="q1",
-        subject="subj",
-        test_id="t1",
-        score=4,
-        max_score=5,
-        criteria=(
-            CriterionGroundTruth(criterion_id="c1", outcome=CriterionOutcome.PASS),
-            CriterionGroundTruth(criterion_id="c2", outcome=CriterionOutcome.FAIL),
-        ),
-    )
+    """Build a :class:`GradingGroundTruth` through the same JSON-validation
+    path (``.from_mapping``) real ``--dataset`` files go through, using the
+    documented wire field names (``questionId``/``maxScore``/criteria
+    ``id``/``result``) -- this model's ``populate_by_name`` is deliberately
+    off (mirrors ``ai_grading.AIGradingResult``), so it cannot be constructed
+    from Python-style snake_case keyword arguments at all."""
+    defaults: dict[str, object] = {
+        "questionId": "q1",
+        "score": 4,
+        "maxScore": 5,
+        "criteria": [
+            {"id": "c1", "result": "pass"},
+            {"id": "c2", "result": "fail"},
+        ],
+    }
     defaults.update(overrides)
-    return GradingGroundTruth(**defaults)  # type: ignore[arg-type]
+    return GradingGroundTruth.from_mapping(defaults)
 
 
 def _evaluate(
     truth: GradingGroundTruth, response: GradingResponse | None, **kwargs: object
 ) -> SampleOutcome:
+    kwargs.setdefault("subject", "subj")
     kwargs.setdefault("provider", "p")
     kwargs.setdefault("config_key", _CONFIG)
     kwargs.setdefault("input_variant", "ocr_clean")
@@ -376,32 +379,59 @@ def test_calibration_rate_is_none_when_no_sample_falls_in_the_band() -> None:
 
 def test_ground_truth_rejects_score_exceeding_max_score() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth(question_id="q", subject="s", test_id="t", score=6, max_score=5)
+        GradingGroundTruth.from_mapping({"questionId": "q", "score": 6, "maxScore": 5})
 
 
 def test_ground_truth_rejects_negative_score() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth(question_id="q", subject="s", test_id="t", score=-1, max_score=5)
+        GradingGroundTruth.from_mapping({"questionId": "q", "score": -1, "maxScore": 5})
 
 
 def test_ground_truth_rejects_blank_question_id() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth(question_id="   ", subject="s", test_id="t", score=1, max_score=5)
+        GradingGroundTruth.from_mapping({"questionId": "   ", "score": 1, "maxScore": 5})
 
 
 def test_ground_truth_rejects_duplicate_criterion_ids() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth(
-            question_id="q",
-            subject="s",
-            test_id="t",
-            score=1,
-            max_score=5,
-            criteria=(
-                CriterionGroundTruth(criterion_id="c1", outcome=CriterionOutcome.PASS),
-                CriterionGroundTruth(criterion_id="c1", outcome=CriterionOutcome.FAIL),
-            ),
+        GradingGroundTruth.from_mapping(
+            {
+                "questionId": "q",
+                "score": 1,
+                "maxScore": 5,
+                "criteria": [
+                    {"id": "c1", "result": "pass"},
+                    {"id": "c1", "result": "fail"},
+                ],
+            }
         )
+
+
+def test_ground_truth_accepts_the_documented_real_human_label_schema() -> None:
+    """business-rules-and-evaluation-data.md section 6.3's per-answer label
+    schema (mirrors simplified-design-specification.md section 9.2): a real
+    label file must not be rejected for using the documented field names, or
+    for carrying the human-label-only fields this model itself does not use
+    for PoC 2 metrics (code review finding: an earlier version of this model
+    invented its own snake_case fields and rejected every one of these)."""
+    truth = GradingGroundTruth.from_mapping(
+        {
+            "questionId": "q1",
+            "score": 4,
+            "maxScore": 5,
+            "criteria": [{"id": "c1", "result": "pass"}],
+            "comment": "確定コメント",
+            "annotations": [{"type": "underline", "target": "答案の一部"}],
+            "handwritingQuality": "clean",
+            "layoutType": "grid",
+            "source": "human",
+        }
+    )
+    assert truth.question_id == "q1"
+    assert truth.comment == "確定コメント"
+    assert truth.handwriting_quality == "clean"
+    assert truth.layout_type == "grid"
+    assert truth.source == "human"
 
 
 def test_from_mapping_does_not_truncate_a_non_integer_score() -> None:
@@ -409,25 +439,19 @@ def test_from_mapping_does_not_truncate_a_non_integer_score() -> None:
     4.9 to 4. A non-integer score in the dataset is a malformed label, not a
     rounding problem."""
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping(
-            {"question_id": "q", "subject": "s", "test_id": "t", "score": 4.9, "max_score": 5}
-        )
+        GradingGroundTruth.from_mapping({"questionId": "q", "score": 4.9, "maxScore": 5})
 
 
 def test_from_mapping_does_not_stringify_a_missing_field() -> None:
     """Code review finding: ``str(data[...])`` used to turn a missing/``None``
     value into the literal string ``"None"``."""
     with pytest.raises((ValidationError, KeyError)):
-        GradingGroundTruth.from_mapping(
-            {"question_id": None, "subject": "s", "test_id": "t", "score": 1, "max_score": 5}
-        )
+        GradingGroundTruth.from_mapping({"questionId": None, "score": 1, "maxScore": 5})
 
 
 def test_from_mapping_rejects_score_as_string() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping(
-            {"question_id": "q", "subject": "s", "test_id": "t", "score": "4", "max_score": 5}
-        )
+        GradingGroundTruth.from_mapping({"questionId": "q", "score": "4", "maxScore": 5})
 
 
 def _load_fixture_outcomes() -> list[SampleOutcome]:
@@ -435,6 +459,7 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
     for path in sorted(_FIXTURES.glob("*.json")):
         raw = json.loads(path.read_text(encoding="utf-8"))
         truth = GradingGroundTruth.from_mapping(raw["ground_truth"])
+        subject = raw["subject"]
         for provider, variants in raw.get("recorded", {}).items():
             for variant, cell in variants.items():
                 latency_raw = cell.get("latency_seconds")
@@ -463,6 +488,7 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
                     evaluate_sample(
                         truth,
                         response,
+                        subject=subject,
                         provider=provider,
                         config_key=config_key,
                         input_variant=variant,
@@ -530,3 +556,20 @@ def test_markdown_table_escapes_pipes_in_config_key_so_columns_stay_aligned() ->
     data_cells = data_row.strip("|").split(" | ")
     assert len(header_cells) == len(data_cells)
     assert "\\|" in data_row
+
+
+def test_markdown_table_escapes_pipes_and_newlines_in_subject_and_provider_too() -> None:
+    """Code review finding: ``subject`` and ``provider`` come straight from
+    the dataset, same as ``config_key`` -- a valid subject or provider name
+    containing ``|`` or a newline must not corrupt the table either, not
+    just a ``config_key`` collision."""
+    outcome = _evaluate(
+        _truth(), _response(), subject="日本史|世界史", provider="provider\nwith\nnewlines"
+    )
+    table = to_markdown_table(summarize_by_provider([outcome]))
+    header_row, _divider, data_row = table.splitlines()
+    header_cells = header_row.strip("|").split(" | ")
+    data_cells = data_row.strip("|").split(" | ")
+    assert len(header_cells) == len(data_cells)
+    assert "日本史\\|世界史" in data_row
+    assert "provider with newlines" in data_row

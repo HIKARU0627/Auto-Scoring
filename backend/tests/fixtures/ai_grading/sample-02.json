@@ -1,13 +1,12 @@
 {
+  "subject": "synthetic-world-history",
   "ground_truth": {
-    "question_id": "poc2-synth-02",
-    "subject": "synthetic-world-history",
-    "test_id": "poc2-synthetic-set-01",
+    "questionId": "poc2-synth-02",
     "score": 6,
-    "max_score": 30,
+    "maxScore": 30,
     "criteria": [
-      { "criterion_id": "k1", "outcome": "fail" },
-      { "criterion_id": "k2", "outcome": "pass" }
+      { "id": "k1", "result": "fail" },
+      { "id": "k2", "result": "pass" }
     ]
   },
   "input": {

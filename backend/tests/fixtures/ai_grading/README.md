@@ -18,17 +18,32 @@ licensed exam material) stays outside the repo
 ## File shape
 
 Each `sample-*.json` is one graded question, with recorded (invented)
-provider output for every `(provider, input_variant)` cell:
+provider output for every `(provider, input_variant)` cell. `ground_truth`
+follows the wire schema `business-rules-and-evaluation-data.md` section 6.3
+documents for a real human-grader label file (`questionId` / `score` /
+`maxScore` / `criteria[].{id,result}`, plus the optional `comment` /
+`annotations` / `handwritingQuality` / `layoutType` / `source`), so a real
+label file produced per that section can be loaded as-is -- `subject` is
+deliberately a sibling of `ground_truth`, not a field inside it, since
+section 6.3's per-answer label schema has no `subject` field (it is
+test-level metadata, section 6.1). A `ground_truth` model that instead
+invented its own field names and forbade the documented ones rejected every
+correctly-formed real label file outright, making the real-data harness
+impossible to run at all (code review finding).
 
 ```jsonc
 {
+  "subject": "arbitrary subject label",
   "ground_truth": {
-    "question_id": "opaque id, no PII",
-    "subject": "arbitrary subject label",
-    "test_id": "opaque id",
+    "questionId": "opaque id, no PII",
     "score": 15,
-    "max_score": 20,
-    "criteria": [{ "criterion_id": "c1", "outcome": "pass | partial | fail" }]
+    "maxScore": 20,
+    "criteria": [{ "id": "c1", "result": "pass | partial | fail" }],
+    "comment": "optional -- 確定コメント",
+    "annotations": [],
+    "handwritingQuality": "optional -- clean | normal | messy",
+    "layoutType": "optional",
+    "source": "human"
   },
   "input": {
     "prompt_text": "...",
@@ -100,16 +115,21 @@ counted toward `mismatch_rate`, and likewise never scored as a real grade,
 since comparing raw scores alone could otherwise count an answer to the
 wrong question as an accidental match.
 
-`descriptor` is required on every cell that has a `response` -- the harness
-parses and strictly validates it (`auto_scoring.domain.ai_provider.
-parse_provider_descriptor`) instead of fabricating or coercing one, so two
-cells recorded under different settings (including a prompt-template edit
-alone, tracked via `prompt_version`) for the same `provider` name stay
-distinguishable (Issue #14 "再現条件"), and a malformed value (`model: null`,
-`temperature: true`, a blank string, ...) is rejected rather than silently
-cast into something plausible-looking. A cell that intentionally
-demonstrates a schema violation may omit `descriptor` (it is never reached,
-since the response fails to parse before `descriptor` is read). The
+`descriptor` is required on every cell that has a `response` key -- including
+one that intentionally demonstrates a schema violation. The harness reads and
+strictly validates `descriptor` (`auto_scoring.domain.ai_provider.
+parse_provider_descriptor`) *before* it attempts to parse `response`, so a
+schema-violation fixture still needs a valid `descriptor` to be counted
+toward `schema_violation_rate` under the right configuration bucket
+(the config a violation was produced under still has to be attributable, so
+it can be told apart from a different configuration's violations -- Issue #14
+"再現条件"); omitting `descriptor` on such a cell makes the harness raise
+(`_InvalidDescriptor`) rather than silently drop that cell from the aggregate
+(code review finding: an earlier version of this note said such a cell "is
+never reached" and could omit `descriptor` -- that was never actually true of
+the loader's read order and would have crashed the whole run). A malformed
+`descriptor` value (`model: null`, `temperature: true`, a blank string, ...)
+is rejected rather than silently cast into something plausible-looking. The
 `config` column this produces is a JSON-array encoding of the five fields,
 not a `"|"`-joined string -- a naive join would let two different
 configurations collide whenever a field value itself contains `"|"`.
@@ -117,7 +137,10 @@ configurations collide whenever a field value itself contains `"|"`.
 `latency_seconds` / `cost_usd` are validated as finite, non-negative numbers
 before they reach any aggregate -- a negative, non-finite (`nan`/`inf`), or
 non-numeric (string, boolean) recorded value makes the harness raise rather
-than silently skew the adoption-gate metrics.
+than silently skew the adoption-gate metrics. The raised message never
+embeds the value itself (only the field name and its type) -- it comes from
+the same untrusted `--dataset` file as everything else, and a malformed
+dataset could put arbitrary text there by mistake (code review finding).
 
 A `recorded.<provider>.ocr_noisy` entry is rejected if this sample's
 `input.ocr_noisy` is `null` -- a noisy-variant response with no corresponding
@@ -131,3 +154,15 @@ harness raise, instead of being reported as a clean `staged: N` count (code
 review finding). Any validation failure message is sanitized to the failing
 field's path and error type only -- never the value that failed, since that
 value may be OCR'd student answer text (`AGENTS.md` "Security").
+
+A `response.annotations[]` entry with `type: "comment"` must carry a
+non-blank `comment` -- a comment-kind annotation with nothing to say is
+rejected as a schema violation at this boundary rather than surfacing as a
+crash when `domain.models.Annotation` is built from it later (code review
+finding).
+
+Every text cell the results table renders that is derived from the dataset
+(`subject`, `provider`, `config`) -- not just `config` -- is Markdown-escaped
+before insertion: a literal `|` or newline in any of them would otherwise
+open extra cells or start a new row partway through one (code review
+finding).

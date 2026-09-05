@@ -51,17 +51,22 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 
 `backend/tests/fixtures/ai_grading/README.md` のスキーマに従う。
 
-| フィールド          | 内容                                                              |
-| ------------------- | ----------------------------------------------------------------- |
-| `question_id`       | 個人を特定しない不透明 ID                                         |
-| `subject`           | 教科ラベル                                                        |
-| `score`/`max_score` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）            |
-| `criteria`          | criterion ごとの `pass`/`partial`/`fail`（正解ラベル。§6.3 準拠） |
-| `prompt_text`       | 設問文                                                            |
-| `model_answer`      | 模範解答                                                          |
-| `rubric_text`       | 採点基準・配点                                                    |
-| `ocr_clean`         | OCR 正解文字（人手で正しく書き起こした答案テキスト）              |
-| `ocr_noisy`         | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト）          |
+| フィールド                      | 内容                                                                 |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `subject`（サンプル直下）       | 教科ラベル。`ground_truth` の**外側**の兄弟フィールド（§3.8 参照）   |
+| `ground_truth.questionId`       | 個人を特定しない不透明 ID                                            |
+| `ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）               |
+| `ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠） |
+| `input.prompt_text`             | 設問文                                                               |
+| `input.model_answer`            | 模範解答                                                             |
+| `input.rubric_text`             | 採点基準・配点                                                       |
+| `input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト）                 |
+| `input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト）             |
+
+`ground_truth` は決定書 §6.3 が定める実際の人間採点ラベルファイルの
+ワイヤ形式（`questionId`/`score`/`maxScore`/`criteria[].{id,result}` に加え、
+任意項目 `comment`/`annotations`/`handwritingQuality`/`layoutType`/`source`）
+に**そのまま**準拠する（§3.8）。
 
 ### 1.3 正解ラベル作成（決定書 §6.3）
 
@@ -143,7 +148,12 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 受理する。簡易設計書 §12.1 の例示 JSON（`"type": "correction"`）はこの
 固定セット確定前の説明用の値であり、そのままでは schema violation になる
 （コードレビュー指摘: 未対応の type を受理すると、永続化・PDF 描画の段階で
-初めて失敗する）。
+初めて失敗する）。`type: "comment"` のとき `comment` フィールドが空
+（未設定）の応答も schema violation として拒否する（コードレビュー指摘:
+表示する文言が何もない comment 種別 annotation を受理すると、
+`domain.models.Annotation` を後で構築する際に非空白テキスト要求で
+初めて失敗する。この信頼境界で拒否し、永続化・描画時のクラッシュに
+しない）。
 
 ---
 
@@ -230,6 +240,10 @@ structured_output_mode が同じままでも、別の再現不能な設定とし
 衝突しない）。この識別子自体にモデル名などを通じて `|` が含まれる場合に
 備え、Markdown 描画時はセル区切りと混同されないよう `|` を `\|` に
 エスケープする（そのまま Markdown として貼り付けても列がずれない）。
+この `|`・改行のエスケープは `config` 列だけでなく、`教科`（`subject`）・
+`provider` 列などデータセット由来のテキストセルすべてに適用する
+（コードレビュー指摘: 有効な教科名や provider 名に `|` や改行が含まれても
+同様に列崩れ・行崩れが起きうる）。
 schema violation で終わった記録も、失敗する前に `descriptor` を読み取って
 から集計するため、どの設定が失敗したかが追跡できる。`descriptor` 自体は
 `auto_scoring.domain.ai_provider.parse_provider_descriptor`（strict な
@@ -271,12 +285,13 @@ criterion 一致率の分母は**正解ラベルに存在する criterion の数
 
 ### 3.6 wire フォーマットの alias 厳格化
 
-`AIGradingResult`/`GradingOutput` は `populate_by_name` を有効にしない。
-ドキュメント化された wire フォーマットは camelCase（`questionId`/
-`maxScore`）のみで、Python 形式の `question_id`/`max_score` を受理しない
-（コードレビュー指摘: `populate_by_name=True` のままだと、ドキュメントと
-異なるフィールド名を返す非準拠な provider 応答も schema 検証を通過して
-しまい、schema violation 率を過小評価する）。
+`AIGradingResult`/`GradingOutput`、そして `GradingGroundTruth`（§3.8）は
+いずれも `populate_by_name` を有効にしない。ドキュメント化された wire
+フォーマットは camelCase（`questionId`/`maxScore`）のみで、Python 形式の
+`question_id`/`max_score` を受理しない（コードレビュー指摘:
+`populate_by_name=True` のままだと、ドキュメントと異なるフィールド名を
+返す非準拠な provider 応答も schema 検証を通過してしまい、schema
+violation 率を過小評価する）。
 
 ### 3.7 バリデーションエラーの経路と検証順序の安全性
 
@@ -317,6 +332,42 @@ provider の有無に関わらずハーネスを停止させる。
 ハーネスは `input` を一度だけパースした結果を保持し、`input.ocr_noisy` が
 `null` なのに `ocr_noisy` の応答が記録されているサンプルはハーネスを
 停止させる。
+
+### 3.8 `ground_truth` は文書化された実ラベルスキーマをそのまま受理する
+
+`GradingGroundTruth`（`ai_grading_metrics.py`）は以前、`question_id`/
+`subject`/`test_id`/`max_score` のような、このハーネス自身が発明した
+独自の snake_case フィールド名を要求し、それ以外を `extra="forbid"` で
+拒否していた。決定書 §6.3 が定める実際の人間採点ラベルファイルの形式
+（`questionId`/`score`/`maxScore`/`criteria[].{id,result}`、加えて
+`comment`/`annotations`/`handwritingQuality`/`layoutType`/`source`）は
+これと一致しないため、§6.3 の手順どおりに作られた本物のラベルファイルが
+悉く拒否され、実データでこの PoC を一切実行できないという致命的な問題が
+あった（コードレビュー指摘。AGENTS.md「Source of truth」: 文書化された
+要件が正であり、ハーネス側の思い込みが正ではない）。
+
+修正: `GradingGroundTruth`/`CriterionGroundTruth` を決定書 §6.3 の
+フィールド名にそのまま合わせ（`questionId`/`maxScore`/`criteria[].
+{id,result}` を camelCase alias で受理。§3.6 のとおり `populate_by_name`
+は有効にしない）、§6.3 が挙げる残りの項目（`comment`/`annotations`/
+`handwritingQuality`/`layoutType`/`source`）も任意フィールドとして受理
+するようにした。`annotations`（種別と正規化座標。PoC 3 用）は
+`ai_grading.AnnotationCandidate` とは形が異なり、かつ PoC 2 のメトリクス
+はこれを一切参照しないため、深く型付けせず素通しする。
+
+**`subject` は `ground_truth` の外へ**: §6.3 の項目一覧に `subject`
+（教科）は含まれない（それは §6.1 が定めるテスト単位の「メタデータ」で
+あり、設問ごとのラベルファイル自体の項目ではない）。ハーネスの
+`--dataset` サンプル JSON では、`subject` を `ground_truth` と並ぶ
+兄弟フィールドとして読む（§1.2）。`evaluate_sample()`/
+`SampleOutcome.subject` も `truth.subject` を読む代わりに、呼び出し側から
+明示的な `subject` 引数を受け取るよう変更した。
+
+合成フィクスチャ（`backend/tests/fixtures/ai_grading/sample-*.json`）と
+実データ pilot（本書 §6、リポジトリ外）はいずれもこの新形式に合わせて
+更新済み。§6.2 に記載のとおり、実データ pilot でこの変更後もハーネスを
+再実行し、`staged: 5` が変わらず得られることを確認した（P1-1 の実地
+検証）。
 
 ---
 

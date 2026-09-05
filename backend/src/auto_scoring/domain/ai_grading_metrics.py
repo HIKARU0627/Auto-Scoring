@@ -48,7 +48,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from auto_scoring.domain.ai_provider import GradingResponse
-from auto_scoring.domain.models import CriterionOutcome
+from auto_scoring.domain.models import MAX_COMMENT_CHARS, CriterionOutcome
 
 #: Grading Confidence at/above this counts as "high confidence" for the
 #: calibration gate (docs/poc-2-ai-grading.md section 8.1).
@@ -85,26 +85,52 @@ _NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_lengt
 
 
 class CriterionGroundTruth(BaseModel):
-    """Human label for one rubric criterion (business rules section 6.3).
+    """Human label for one rubric criterion.
 
-    Strict + non-blank-checked: an external ``--dataset`` file is untrusted
-    input, same as a provider response (code review finding: silent coercion
-    of a malformed label -- e.g. a blank id -- would produce metrics that
-    look valid but are not).
+    Field names (``id`` / ``result``) match the documented human-label wire
+    schema (business-rules-and-evaluation-data.md section 6.3: "criteria[]
+    (id、result = pass/partial/fail)"), which itself mirrors
+    ``ai_grading.CriterionResultOutput`` (simplified-design-specification.md
+    section 9.2). Strict + non-blank-checked: an external ``--dataset`` file
+    is untrusted input, same as a provider response (code review finding:
+    silent coercion of a malformed label -- e.g. a blank id -- would produce
+    metrics that look valid but are not).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    criterion_id: _NonBlankStr
-    outcome: CriterionOutcome
+    id: _NonBlankStr
+    result: CriterionOutcome
 
 
 class GradingGroundTruth(BaseModel):
-    """Human label for one graded question (business rules section 6.3).
+    """Human label for one graded question.
 
-    Holds no student-identifying data: ``question_id`` and ``test_id`` are
-    opaque ids. ``criteria`` may be a subset of the rubric's criteria when a
-    single reader could not confidently confirm every item from a scanned
+    Matches the wire schema business-rules-and-evaluation-data.md section 6.3
+    documents for a real human-grader label file: ``questionId`` / ``score``
+    / ``maxScore`` / ``criteria[]`` (``id`` / ``result``), plus the
+    human-label-only fields ``comment``, ``annotations``,
+    ``handwritingQuality``, ``layoutType``, ``source``. Mirrors
+    ``ai_grading.AIGradingResult``'s camelCase-only alias convention
+    (``populate_by_name`` deliberately not set, below) since this is the same
+    kind of untrusted wire boundary, and the documented schema is
+    authoritative (AGENTS.md "Source of truth"): a model that instead
+    invented its own snake_case field names and forbade the documented ones
+    rejected every correctly-formed real human-label file outright (code
+    review finding), making the real-data harness impossible to run at all.
+
+    Holds no student-identifying data (``question_id`` is an opaque id).
+    ``subject`` -- which subject this question belongs to -- is deliberately
+    *not* a field here: section 6.3's item list for the per-answer label file
+    does not include it (it is test-level "メタデータ" per section 6.1:
+    テストID、教科、..., not part of the per-answer JSON), so the harness
+    reads it from the enclosing ``--dataset`` sample instead of expecting it
+    inside this model (code review finding: this model's own invented
+    ``subject``/``test_id`` fields, absent from the documented schema, were
+    part of why a real label file failed to validate).
+
+    ``criteria`` may be a subset of the rubric's criteria when a single
+    reader could not confidently confirm every item from a scanned
     correction sheet -- see the PoC 2 doc's real-data pilot caveat; an
     incomplete ``criteria`` list does not affect ``score`` /
     ``max_score`` accuracy.
@@ -112,20 +138,30 @@ class GradingGroundTruth(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    question_id: _NonBlankStr
-    subject: _NonBlankStr
-    test_id: _NonBlankStr
+    question_id: Annotated[_NonBlankStr, Field(alias="questionId")]
     score: int = Field(ge=0)
-    max_score: int = Field(ge=0)
+    max_score: int = Field(ge=0, alias="maxScore")
     criteria: tuple[CriterionGroundTruth, ...] = ()
+    #: 確定コメント (section 6.3). Optional: not every real label file
+    #: carries one, and PoC 2's metrics never read it.
+    comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)] | None = None
+    #: 種別と正規化座標 (section 6.3, "PoC 3 用") -- a PoC 3 (PDF coordinate)
+    #: concern, structurally different from ``ai_grading.AnnotationCandidate``
+    #: (no coordinates there). PoC 2's metrics never read this; accepted and
+    #: passed through unvalidated rather than modeled in depth here, since
+    #: adding a coordinate schema this PoC does not use would be scope creep.
+    annotations: tuple[dict[str, Any], ...] = ()
+    handwriting_quality: Annotated[str | None, Field(alias="handwritingQuality")] = None
+    layout_type: Annotated[str | None, Field(alias="layoutType")] = None
+    source: str | None = None
 
     @model_validator(mode="after")
     def _validate_invariants(self) -> GradingGroundTruth:
         if self.score > self.max_score:
             raise ValueError(f"score {self.score} exceeds max_score {self.max_score}")
-        ids = [c.criterion_id for c in self.criteria]
+        ids = [c.id for c in self.criteria]
         if len(ids) != len(set(ids)):
-            raise ValueError("criteria contains duplicate criterion_id")
+            raise ValueError("criteria contains duplicate id")
         return self
 
     @classmethod
@@ -267,6 +303,7 @@ def evaluate_sample(
     truth: GradingGroundTruth,
     response: GradingResponse | None,
     *,
+    subject: str,
     provider: str,
     config_key: str,
     input_variant: str,
@@ -275,6 +312,12 @@ def evaluate_sample(
     latency_seconds: float | None = None,
 ) -> SampleOutcome:
     """Score one recorded ``response`` against its human ``truth`` label.
+
+    ``subject`` is passed in by the caller rather than read off ``truth``:
+    it is test-level metadata (business-rules-and-evaluation-data.md section
+    6.1), not part of the per-answer ground-truth label schema section 6.3
+    documents, so :class:`GradingGroundTruth` does not carry it (code review
+    finding).
 
     ``config_key`` (see
     :func:`auto_scoring.domain.ai_provider.descriptor_key`) is required and
@@ -303,7 +346,7 @@ def evaluate_sample(
             provider=provider,
             config_key=config_key,
             input_variant=input_variant,
-            subject=truth.subject,
+            subject=subject,
             schema_violation=True,
             mismatched=False,
             exact_match=None,
@@ -321,7 +364,7 @@ def evaluate_sample(
             provider=provider,
             config_key=config_key,
             input_variant=input_variant,
-            subject=truth.subject,
+            subject=subject,
             schema_violation=False,
             mismatched=True,
             exact_match=None,
@@ -342,13 +385,13 @@ def evaluate_sample(
     # as before -- only labeled criteria enter the denominator.
     response_by_id = {c.criterion_id: c.outcome for c in response.criteria}
     total = len(truth.criteria)
-    matches = sum(1 for c in truth.criteria if response_by_id.get(c.criterion_id) == c.outcome)
+    matches = sum(1 for c in truth.criteria if response_by_id.get(c.id) == c.result)
 
     return SampleOutcome(
         provider=provider,
         config_key=config_key,
         input_variant=input_variant,
-        subject=truth.subject,
+        subject=subject,
         schema_violation=False,
         mismatched=False,
         exact_match=response.score == truth.score,
@@ -473,14 +516,16 @@ def _fmt(value: float | None, digits: int = 3) -> str:
 
 
 def _escape_markdown_cell(value: str) -> str:
-    """Escape a literal ``|`` so it cannot be mistaken for a column separator.
+    """Neutralize characters that would corrupt a Markdown table row.
 
-    ``config_key`` (see ``auto_scoring.domain.ai_provider.descriptor_key``)
-    always contains ``|`` characters; inserted verbatim into a Markdown
-    table row, each one opens extra cells and shifts every following column
-    (code review finding).
+    Applied to every dataset-derived text cell (``subject``, ``provider``,
+    ``config_key``), not just ``config_key`` -- a valid ``subject`` or
+    ``provider`` name can just as easily contain a literal ``|`` (which opens
+    an extra cell and shifts every following column) or a newline (which
+    starts a new table row midway through one logical row) as
+    ``config_key`` can (code review finding).
     """
-    return value.replace("|", "\\|")
+    return value.replace("|", "\\|").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 
 def _fmt_count(measured: int, total: int) -> str:
@@ -507,8 +552,8 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
             "| "
             + " | ".join(
                 (
-                    summary.subject,
-                    summary.provider,
+                    _escape_markdown_cell(summary.subject),
+                    _escape_markdown_cell(summary.provider),
                     _escape_markdown_cell(summary.config_key),
                     summary.input_variant,
                     str(summary.samples),

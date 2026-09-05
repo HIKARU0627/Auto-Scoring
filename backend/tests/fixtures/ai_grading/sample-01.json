@@ -1,15 +1,14 @@
 {
+  "subject": "synthetic-history",
   "ground_truth": {
-    "question_id": "poc2-synth-01",
-    "subject": "synthetic-history",
-    "test_id": "poc2-synthetic-set-01",
+    "questionId": "poc2-synth-01",
     "score": 15,
-    "max_score": 20,
+    "maxScore": 20,
     "criteria": [
-      { "criterion_id": "c1", "outcome": "pass" },
-      { "criterion_id": "c2", "outcome": "pass" },
-      { "criterion_id": "c3", "outcome": "partial" },
-      { "criterion_id": "c4", "outcome": "fail" }
+      { "id": "c1", "result": "pass" },
+      { "id": "c2", "result": "pass" },
+      { "id": "c3", "result": "partial" },
+      { "id": "c4", "result": "fail" }
     ]
   },
   "input": {

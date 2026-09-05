@@ -1,11 +1,10 @@
 {
+  "subject": "synthetic-history",
   "ground_truth": {
-    "question_id": "poc2-synth-03",
-    "subject": "synthetic-history",
-    "test_id": "poc2-synthetic-set-01",
+    "questionId": "poc2-synth-03",
     "score": 10,
-    "max_score": 10,
-    "criteria": [{ "criterion_id": "d1", "outcome": "pass" }]
+    "maxScore": 10,
+    "criteria": [{ "id": "d1", "result": "pass" }]
   },
   "input": {
     "prompt_text": "（合成データ）出来事Yが起きた年を答えよ。",
