@@ -355,7 +355,9 @@ class SqlAlchemyJobRepository:
         row = self._session.get(JobRow, job_id)
         return m.job_from_row(row) if row is not None else None
 
-    def save(self, job: Job, *, expected_state: JobState) -> None:
+    def save(
+        self, job: Job, *, expected_state: JobState, require_usable_unset: bool = False
+    ) -> None:
         """Compare-and-set on ``expected_state`` -- the state the *caller*
         observed before deciding on this transition -- not a state this call
         re-reads from the row itself.
@@ -375,15 +377,26 @@ class SqlAlchemyJobRepository:
         `Job.transitioned_to(...)` ties the compare-and-set to what was
         actually observed, so the second worker's ``WHERE state = 'queued'``
         no longer matches and it correctly loses the race.
+
+        ``require_usable_unset`` adds ``usable IS NULL`` to that same
+        ``WHERE``: `mark_usable` never changes `state`, so without this a
+        `retry_job` call that read ``usable=None`` and this call's own
+        state-only precondition could both still commit even though
+        `mark_usable` committed ``usable=True`` in between -- this call's
+        `WHERE` never noticed, because it never looked at that column
+        (Issue #18 review round 5, P1).
         """
         if job.state is not expected_state:
             ensure_job_transition(expected_state, job.state)
 
+        conditions = [JobRow.id == job.id, JobRow.state == expected_state]
+        if require_usable_unset:
+            conditions.append(JobRow.usable.is_(None))
         result = cast(
             CursorResult[Any],
             self._session.execute(
                 update(JobRow)
-                .where(JobRow.id == job.id, JobRow.state == expected_state)
+                .where(*conditions)
                 .values(
                     state=job.state,
                     attempts=job.attempts,

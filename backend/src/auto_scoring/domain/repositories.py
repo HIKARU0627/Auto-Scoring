@@ -146,7 +146,9 @@ class JobRepository(Protocol):
     def add(self, job: Job) -> None: ...
     def get(self, job_id: str) -> Job | None: ...
 
-    def save(self, job: Job, *, expected_state: JobState) -> None:
+    def save(
+        self, job: Job, *, expected_state: JobState, require_usable_unset: bool = False
+    ) -> None:
         """Persist ``job`` iff the row is still in ``expected_state`` -- the
         state the caller itself observed (e.g. from `get`) before deciding on
         this transition, not a value re-read from the row inside `save`
@@ -156,6 +158,15 @@ class JobRepository(Protocol):
         transition check and matching its own `WHERE` clause (Issue #26
         review). Raises `auto_scoring.domain.models.JobSaveConflict` if the
         row has moved on from ``expected_state``.
+
+        ``require_usable_unset``, if set, also gates the write on ``usable
+        IS NULL``. ``state`` alone is not always enough to serialize two
+        writers: `mark_usable` changes only `usable`, never `state`, so a
+        `save` whose *own* precondition is state-only can still commit after
+        a concurrent `mark_usable` call, silently discarding an approval the
+        caller's own read never saw (Issue #18 review round 5, P1 -- see
+        `auto_scoring.jobs.queue.JobQueueService.retry_job`, the one caller
+        that passes this).
         """
         ...
 
