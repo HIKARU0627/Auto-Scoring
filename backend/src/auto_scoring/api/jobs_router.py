@@ -13,7 +13,10 @@ Endpoints:
 * ``GET  /submissions/{submission_id}/jobs`` -- list, for progress display.
 * ``GET  /jobs/{job_id}`` -- one job's detail.
 * ``POST /jobs/{job_id}/retry`` -- requeue a FAILED job.
-* ``POST /jobs/{job_id}/cancel`` -- cancel a QUEUED/BLOCKED/FAILED/RUNNING job.
+* ``POST /jobs/{job_id}/cancel`` -- cancel a QUEUED/BLOCKED/FAILED job
+  immediately (200, already CANCELLED); for a RUNNING job this only
+  *requests* cancellation (202, still ``state: "running"`` -- the actual
+  write happens asynchronously once the worker notices).
 * ``POST /submissions/{submission_id}/questions/{question_id}/resume`` --
   human-triggered resume once a low-confidence/failed prerequisite has been
   corrected (business-rules-and-evaluation-data.md §4.4).
@@ -23,10 +26,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
-from auto_scoring.domain.models import Job
+from auto_scoring.domain.models import Job, JobState
 from auto_scoring.jobs.queue import (
     JobCancelConflictError,
     JobCancelRejectedError,
@@ -141,9 +144,19 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
             raise HTTPException(409, detail=str(error)) from error
 
     @router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
-    def cancel_job(job_id: str) -> JobResponse:
+    def cancel_job(job_id: str, response: Response) -> JobResponse:
+        """For a QUEUED/BLOCKED/FAILED job, `queue_service.cancel_job`
+        itself already wrote CANCELLED before returning -- 200 with that
+        result is accurate. For a RUNNING job, it only *requests*
+        cancellation and hands back the pre-cancellation snapshot (still
+        ``state: RUNNING``): the actual write is owned by whichever worker
+        task is processing it, and happens moments later, asynchronously
+        (`JobQueueService.cancel_job`'s own docstring). Answering 200 with
+        that stale snapshot would read as "nothing happened"; 202 says the
+        request was accepted but not yet applied (review round 6, P2).
+        """
         try:
-            return JobResponse.from_domain(queue_service.cancel_job(job_id))
+            job = queue_service.cancel_job(job_id)
         except JobNotFoundError as error:
             raise HTTPException(404, detail=str(error)) from error
         except JobNotCancellableError as error:
@@ -152,5 +165,8 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
             raise HTTPException(409, detail=str(error)) from error
         except JobCancelRejectedError as error:
             raise HTTPException(409, detail=str(error)) from error
+        if job.state is JobState.RUNNING:
+            response.status_code = 202
+        return JobResponse.from_domain(job)
 
     return router

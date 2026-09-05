@@ -686,6 +686,16 @@ class JobQueueService:
         let a state-only compare-and-set through, since `mark_usable` never
         touches `state` (review round 5, P1 applied here by the same
         reasoning).
+
+        For a RUNNING job, the returned `Job` is a pre-cancellation
+        snapshot (still ``state: RUNNING``): the actual RUNNING ->
+        CANCELLED write is owned by whichever worker task is processing it
+        (`_finalize_cancelled`, once it notices the `CancelledError`
+        `cancel_running_task` triggers), not this call, and happens
+        moments later. Callers that need to know cancellation is only
+        *requested*, not yet applied, must check ``result.state`` --
+        `auto_scoring.api.jobs_router.cancel_job` answers 202 rather than
+        200 in exactly this case (review round 6, P2).
         """
         for _attempt in range(_MAX_CANCEL_ATTEMPTS):
             with SqlAlchemyUnitOfWork(self._session_factory) as uow:
