@@ -722,3 +722,47 @@ to a different event loop`を送出し得た。`shutdown()`で`clear()`する
   ようにした。既存jobが何らかの理由でin-process dispatchシグナルを
   失った場合の回復は、`start()`自身のQUEUED sweep（round 8, P1）が
   引き続き担う。
+
+## レビュー第10round（Codex）で修正した点
+
+- **data-rootの初期化全体をロックで保護する**（P1）:
+  round 9で追加したdata-root lockは`create_app()`の`_lifespan`
+  （ASGI startup）の時点でしか取得されておらず、その時点までに
+  `create_app()`本体は既にmigration・`store.sweep_temp()`・
+  `repair_incomplete_submissions`を実行済みだった。しかも
+  `auto_scoring.api.sidecar.run()`はsocketのbindとhandshakeファイルの
+  書き込みを`create_app()`の呼び出しより前に済ませてしまうため、
+  稼働中のdata rootを指す2番目のsidecarは、拒否されるより先に
+  1番目のプロセスがまだ書き込み中の`*.part`ファイルを削除したり、
+  進行中のintakeをerroneousとマークしたりし得た。ロック取得を
+  `create_app()`本体の先頭（`owns_session_factory`が真の場合、
+  migration実行より前）へ移動し、そこから`sweep_temp`・
+  `repair_incomplete_submissions`までを`try`で包んで、途中で例外が
+  発生した場合もロックを解放してから再送出するようにした
+  （同一プロセス内での再試行や、別のdata rootに対する後続の
+  `create_app()`呼び出しがロックを取り戻せなくなることを防ぐ）。
+  `_lifespan`は取得済みのハンドルを`service.shutdown()`後に解放する
+  だけになった。副作用として、`data_root`を指定せず一時ディレクトリ
+  （`scratch`）を使う`create_app()`呼び出しも「lifespanを一度も
+  動かさない」まま常にロックを取得するようになったため、
+  `atexit`登録の`_cleanup_scratch`（DBエンジンをdisposeしてから
+  ディレクトリを削除する既存の仕組み）にもロックハンドルのcloseを
+  追加した（Windowsでは開いたままの`.lock`ファイルが
+  `shutil.rmtree`を`PermissionError`で失敗させるため、DBエンジンと
+  同じ理由で必要）。
+- **RUNNINGクレーム後の失敗からjobを回復する**（P1）:
+  `_run_one`が`QUEUED -> RUNNING`のCASをcommitした後（例:
+  `_finalize_result`が結果を永続化する際の一時的なDBエラー）に
+  例外を送出すると、`_worker_loop`の既存のbackstopが行う
+  「job IDを無条件でre-enqueue」では回復できなかった --
+  `_run_one`自身の早期returnガードが、QUEUED以外の状態のjobを
+  即座にno-opしてしまうため、行はプロセス再起動まで
+  RUNNINGのままstrandedし続けた。`_run_one`のclaim成功後の処理を
+  `_run_claimed`として切り出し、`_run_one`がこれを`try`で包んで、
+  例外発生時は新設の`_recover_stuck_running`を呼ぶようにした。
+  `_recover_stuck_running`は`start()`の起動時sweepと全く同じ
+  `recover_running_job`（retryが残っていればQUEUED、尽きていれば
+  FAILEDへ遷移）を使い、その場でDBへ反映し、QUEUEDに戻った場合は
+  `enqueue`で再ディスパッチする。`_worker_loop`自身のbackstopは、
+  claimがcommitされる前（行はまだQUEUEDのまま）の失敗だけを担当する
+  役割に整理した。
