@@ -233,29 +233,29 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   /`DependencyEdgeRow`を直接構築してこれら3種の不整合行を試み、いずれも
   `IntegrityError`になることをORMメタデータ側（`test_dependency_graph_repository.py`）
   とmigration適用後の生SQL側（`test_migrations.py`）の両方で検証している。
-- `ck_dependency_edges_provides_non_empty`はJSONの形（有効なJSON配列で長さ
-  > 0）しか見ておらず、要素の値までは検証していなかった（レビュー指摘）。
-  > 修復・インポート・直接SQLが`provides = '["bogus"]'`のような未知の値を
-  > 書き込めてしまうと、`_mappers.dependency_graph_from_rows`がそれを
-  > `DependencyProvision(...)`へ変換する際に`ValueError`を送出し、その
-  > graphに対する全てのGET/listが500になる。ただしSQLiteの`CHECK`制約は
-  > サブクエリを一切許可しない（`json_each`のようなテーブル値関数を使った
-  > `EXISTS`もサブクエリ扱いで拒否される -- `subqueries prohibited in CHECK
-constraints`）ため、他の不変条件と違って`CHECK`では実装できない。代わりに
-  > `BEFORE INSERT`/`BEFORE UPDATE OF provides`の2本のトリガー
-  > （`trg_dependency_edges_provides_known_values_insert`/`_update`、条件は
-  > `WHEN EXISTS (SELECT 1 FROM json_each(NEW.provides) WHERE value NOT IN
+- `ck_dependency_edges_provides_non_empty`はJSONの形（有効なJSON配列で非空）
+  しか見ておらず、要素の値までは検証していなかった（レビュー指摘）。
+  修復・インポート・直接SQLが`provides = '["bogus"]'`のような未知の値を
+  書き込めてしまうと、`_mappers.dependency_graph_from_rows`がそれを
+  `DependencyProvision(...)`へ変換する際に`ValueError`を送出し、その
+  graphに対する全てのGET/listが500になる。ただしSQLiteの`CHECK`制約は
+  サブクエリを一切許可しない（`json_each`のようなテーブル値関数を使った
+  `EXISTS`もサブクエリ扱いで拒否される -- "subqueries prohibited in CHECK
+  constraints"）ため、他の不変条件と違って`CHECK`では実装できない。代わりに
+  `BEFORE INSERT`/`BEFORE UPDATE OF provides`の2本のトリガー
+  （`trg_dependency_edges_provides_known_values_insert`/`_update`、条件は
+  `WHEN EXISTS (SELECT 1 FROM json_each(NEW.provides) WHERE value NOT IN
 (...))`として`RAISE(ABORT, ...)`）で同じ検証を行う。トリガー本体でだけ
-  > サブクエリ制限が掛からないため、この境界の値検証はトリガーでしか実装
-  > できない。ORM側（`db/orm.py`）は`DependencyEdgeRow.__table__`の
-  > `after_create`イベントに`DDL`でこの2本のトリガーを紐づけ、
-  > `Base.metadata.create_all`でも生成されるようにした。値の一覧
-  > （`recognized_text`/`score`/`criterion_result`）は
-  > `domain.dependency_graph.DependencyProvision`と同期を保つ必要がある。
-  > テストでは未知の値でのINSERT・既存の正しい行に対する未知の値への
-  > UPDATEの両方が`IntegrityError`になることを、ORM経由
-  > （`test_dependency_graph_repository.py`）とmigration適用後の生SQL
-  > （`test_migrations.py`）の両方で検証している。
+  サブクエリ制限が掛からないため、この境界の値検証はトリガーでしか実装
+  できない。ORM側（`db/orm.py`）は`DependencyEdgeRow.__table__`の
+  `after_create`イベントに`DDL`でこの2本のトリガーを紐づけ、
+  `Base.metadata.create_all`でも生成されるようにした。値の一覧
+  （`recognized_text`/`score`/`criterion_result`）は
+  `domain.dependency_graph.DependencyProvision`と同期を保つ必要がある。
+  テストでは未知の値でのINSERT・既存の正しい行に対する未知の値への
+  UPDATEの両方が`IntegrityError`になることを、ORM経由
+  （`test_dependency_graph_repository.py`）とmigration適用後の生SQL
+  （`test_migrations.py`）の両方で検証している。
 - cycle検出はKahnのアルゴリズムが行き詰まった残りノード全部ではなく、
   Tarjanの強連結成分（SCC）でサイクルに実際に参加しているノードだけを
   `CycleDetectedError.cycle_question_ids` に含める。例えば `q1<->q2` の
@@ -280,6 +280,49 @@ from_question_id, to_question_id)` の複合主キー（レビュー指摘）。
   （`test_edge_rows_do_not_collide_when_question_ids_contain_the_separator`、
   修正前は `UNIQUE constraint failed: dependency_edges.id` で失敗すること
   を確認済み）。
+- `provides`の未知値トリガーは`value NOT IN (...)`だけでは不十分だった
+  （レビュー指摘）: 要素がJSONの`null`の場合、SQLの`NULL NOT IN (...)`は
+  真でも偽でもなくNULLに評価され、`WHERE`句はそれを「この行は選ばない」
+  として扱ってしまうため、`provides = '[null]'`はトリガーをすり抜けて
+  しまっていた。修正として`WHERE value IS NULL OR value NOT IN (...)`と
+  し、`value IS NULL`を明示的にチェックするようにした。
+- `question_ids`は非空JSON配列であることしか検証しておらず、要素が文字列
+  であることまでは検証していなかった（レビュー指摘）。修復・インポート・
+  直接SQLが`["q1", null]`のような行を書き込めてしまうと、`DependencyGraph`
+  （`frozenset[str]`）や設問の並び替え・APIレスポンス構築など下流の全て
+  が文字列を前提にしているため、`None`混入で型エラーになる。
+  `dependency_graphs`に`BEFORE INSERT`/`BEFORE UPDATE OF question_ids`の
+  トリガーを追加し、各要素が`json_each.type = 'text'`かつtrim後非空である
+  ことを検証する。
+- `unresolved`はCONFIRMEDの行にしか形状制約が無く（「CONFIRMEDなのに
+  unresolvedが空でない」の逆＝DRAFT行には制約が一切無い）、DRAFT行が
+  `unresolved = 'null'`/`'{}'`/スカラー値のような非配列を持ててしまって
+  いた（レビュー指摘）。`json_array_length`はJSON配列でない値に対しても
+  0を返すため、この種の壊れた値は既存の「CONFIRMEDならlength=0」チェック
+  すらすり抜ける。`ck_dependency_graphs_unresolved_is_array`
+  （`json_valid(unresolved) AND json_type(unresolved) = 'array'`）を
+  status非依存の制約として追加し、さらに各要素が
+  `{question_id: 非空文字列, reason: 非空文字列}`の形を持つことを
+  `BEFORE INSERT`/`BEFORE UPDATE OF unresolved`トリガーで検証する
+  （`UnresolvedQuestion.from_dict`がこの形を要求するため）。
+- edgeの`from_question_id`/`to_question_id`はPKと自己ループチェックにしか
+  関与しておらず、(a) 空白のみの値、(b) 親graphの`question_ids`
+  スナップショットに存在しないID、のどちらも防げていなかった（レビュー
+  指摘）。(a)は`length(trim(...)) > 0`のCHECK制約2本
+  （`ck_dependency_edges_from_question_id_non_empty`/`_to_question_id_non_empty`）
+  で、(b)は`dependency_graphs`とのJOINが必要なため`BEFORE INSERT`/
+  `BEFORE UPDATE OF graph_id, from_question_id, to_question_id`トリガー
+  （`trg_dependency_edges_endpoints_known_insert`/`_update`、
+  `NOT EXISTS (SELECT 1 FROM dependency_graphs g, json_each(g.question_ids)
+qi WHERE g.id = NEW.graph_id AND qi.value = NEW.from_question_id)`という
+  形の条件）で防ぐ。両方とも`DependencyGraph.__post_init__`が
+  `UnknownQuestionError`/`DependencyGraphError`で拒否する不変条件のDB側
+  ミラー。
+- 上記4件はいずれもORMメタデータ（`db/orm.py`）とmigration
+  （`0003_dependency_graph.py`）の両方に同じ内容で追加し、テストは
+  ORM経由（`test_dependency_graph_repository.py`）とmigration適用後の
+  生SQL（`test_migrations.py`）の両方で、修正前に該当パターンが
+  `IntegrityError`にならないことを確認した上で追加している。
 
 ### Submission処理のゲート
 
@@ -465,6 +508,31 @@ numbers`自体はラベルを正しく区別する（round 7の最長一致ロ�
   そのwheelを隔離venvへインストールして `backend/` ソースツリーが存在
   しないディレクトリから `upgrade("sqlite:///test.sqlite", "head")` を実行
   し `current_revision` がheadと一致することまで確認済み。
+- `migrations/env.py::_database_url()` は `AUTO_SCORING_DB_URL` 環境変数を
+  `config.get_main_option("sqlalchemy.url")` より優先していた（開発者が
+  bare な `uv run alembic upgrade head` を打つときにこの環境変数でDBを
+  切り替えられるようにするための仕様）。ところが`sidecar.run()`の
+  `upgrade(db_url, "head")`はプロセス環境を継承するため、たまたま
+  `AUTO_SCORING_DB_URL`がセットされた状態（開発者のシェルの残留、起動元
+  プロセスの設定など）でsidecarを起動すると、`--app-data-dir`配下の
+  意図したDBではなく環境変数側の無関係なDBをmigrateしてしまい、その後
+  sidecar自身は`--app-data-dir`側の（未migrateかもしれない）DBを開いて
+  リクエストを処理する -- `/healthz`は素通りする一方、依存グラフ関連の
+  全リクエストがテーブル欠落エラーで失敗しうる（レビュー指摘、P1）。
+  修正として、`auto_scoring.db.migrator.alembic_config(db_url)`は
+  `db_url`を`config.attributes["configured_db_url"]`にも保存するように
+  し、`_database_url()`はこの値が設定されていれば環境変数より無条件に
+  優先するよう変更した。`config.attributes`はプログラム的な呼び出し
+  （`upgrade`/`downgrade`/`current_revision`、ひいてはsidecarの起動時
+  migration）でのみ設定され、bareな`uv run alembic ...`（`alembic.ini`
+  から素の`Config`を組み立てるだけ）では設定されないため、開発者向けの
+  環境変数オーバーライドの挙動は変えていない。テストでは
+  `AUTO_SCORING_DB_URL`をテスト用DBとは別のダミーパスに向けた状態で
+  `upgrade(db_url, "head")`を呼び、対象の`db_url`だけがmigrateされ
+  ダミーファイルが一切作られないことを検証している
+  （`test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url`、
+  修正前は対象`db_url`側が`current_revision() is None`のまま
+  （＝未migrate）であることを確認済み）。
 
 ## 検証
 

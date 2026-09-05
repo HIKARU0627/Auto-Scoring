@@ -532,3 +532,223 @@ def test_edge_row_update_to_an_unknown_provides_value_is_rejected(seeded: UowFac
             .values(provides=["bogus"])
         )
         uow.commit()
+
+
+def test_edge_row_with_a_null_provides_element_is_rejected(seeded: UowFactory) -> None:
+    """`value NOT IN (...)` alone does not catch a JSON `null` element -- SQL's
+    `NULL NOT IN (...)` evaluates to NULL, which `WHERE` treats as "don't
+    select this row" -- so the known-values trigger must check `value IS
+    NULL` explicitly too (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-2",
+                provides=["recognized_text", None],
+                rationale="null provision value",
+            )
+        )
+        uow.commit()
+
+
+def test_question_ids_with_a_null_element_is_rejected(seeded: UowFactory) -> None:
+    """`ck_dependency_graphs_question_ids_non_empty` only checks that
+    `question_ids` is a non-empty JSON array, not that every element is a
+    string -- a row bypassing the domain could persist `["q-1", null]`, and
+    `DependencyGraph` (a `frozenset[str]`) plus every downstream consumer
+    expects plain strings (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=["q-1", None],
+                unresolved=[],
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_question_ids_with_a_blank_element_is_rejected(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=["q-1", "   "],
+                unresolved=[],
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_question_ids_update_to_a_null_element_is_rejected(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.commit()
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.execute(
+            update(DependencyGraphRow)
+            .where(DependencyGraphRow.id == "test-1:v1")
+            .values(question_ids=["q-1", None])
+        )
+        uow.commit()
+
+
+def test_unresolved_non_array_shape_is_rejected_on_a_draft_row(seeded: UowFactory) -> None:
+    """`ck_dependency_graphs_confirmed_has_no_unresolved` only constrains
+    CONFIRMED rows -- a DRAFT row had no shape requirement on `unresolved`
+    at all, so a row bypassing the domain could persist a JSON `null`,
+    object, or scalar there, even though `DependencyGraph.from_dict` always
+    iterates it expecting a JSON array (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=["q-1", "q-2"],
+                unresolved={},
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_unresolved_element_missing_required_fields_is_rejected(seeded: UowFactory) -> None:
+    """`unresolved`'s outer shape can be a valid, non-empty JSON array while
+    an individual element is still malformed -- missing `reason`, in this
+    case -- which `UnresolvedQuestion.from_dict` rejects with a `KeyError`
+    the next time that graph is hydrated (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=["q-1", "q-2"],
+                unresolved=[{"question_id": "q-1"}],
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_unresolved_element_with_a_blank_reason_is_rejected(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=["q-1", "q-2"],
+                unresolved=[{"question_id": "q-1", "reason": "   "}],
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_edge_endpoint_not_in_the_graph_question_ids_is_rejected(seeded: UowFactory) -> None:
+    """The primary key / self-loop / non-empty checks never verify an edge's
+    endpoints actually belong to its own graph's `question_ids` snapshot --
+    a row bypassing the domain could persist an edge referencing a question
+    that was never part of that graph version, and
+    `DependencyGraph.__post_init__` raises `UnknownQuestionError` the next
+    time it is hydrated (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-999",  # not in this graph's question_ids
+                provides=["recognized_text"],
+                rationale="references an unknown question",
+            )
+        )
+        uow.commit()
+
+
+def test_edge_endpoint_update_to_an_unknown_question_is_rejected(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-2",
+                provides=["recognized_text"],
+                rationale="valid to start",
+            )
+        )
+        uow.commit()
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.execute(
+            update(DependencyEdgeRow)
+            .where(
+                DependencyEdgeRow.graph_id == "test-1:v1",
+                DependencyEdgeRow.from_question_id == "q-1",
+                DependencyEdgeRow.to_question_id == "q-2",
+            )
+            .values(to_question_id="q-999")
+        )
+        uow.commit()
+
+
+def test_edge_row_with_a_blank_from_question_id_is_rejected(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="   ",
+                to_question_id="q-2",
+                provides=["recognized_text"],
+                rationale="blank endpoint",
+            )
+        )
+        uow.commit()

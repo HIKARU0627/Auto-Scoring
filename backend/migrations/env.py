@@ -26,6 +26,26 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
+    """The database this migration run targets.
+
+    ``auto_scoring.db.migrator.alembic_config`` stashes its ``db_url`` in
+    ``config.attributes["configured_db_url"]`` for every *programmatic*
+    caller (the sidecar's startup migration, `upgrade`/`downgrade`/tests) --
+    that value wins unconditionally, since the caller has already decided
+    exactly which database to touch. ``AUTO_SCORING_DB_URL`` only applies to
+    a bare ``uv run alembic ...`` invocation, which builds its `Config`
+    straight from `alembic.ini` and never sets that attribute. Checking the
+    env var first (the previous behaviour) let a stray
+    ``AUTO_SCORING_DB_URL`` inherited by the sidecar's process environment
+    silently redirect its startup migration to an unrelated database, while
+    the sidecar itself went on to open and serve requests against the
+    (possibly still unmigrated) ``--app-data-dir`` database -- `/healthz`
+    kept succeeding while every dependency-graph request failed on a
+    missing table (Issue #26 review).
+    """
+    configured = config.attributes.get("configured_db_url")
+    if configured is not None:
+        return str(configured)
     return (
         os.environ.get("AUTO_SCORING_DB_URL")
         or config.get_main_option("sqlalchemy.url")

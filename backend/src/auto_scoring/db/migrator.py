@@ -56,11 +56,24 @@ def _alembic_ini_path() -> Path | None:
 
 
 def alembic_config(db_url: str) -> Config:
-    """An Alembic :class:`Config` pointed at this repo's migrations and ``db_url``."""
+    """An Alembic :class:`Config` pointed at this repo's migrations and ``db_url``.
+
+    ``db_url`` is also stashed in ``config.attributes`` (in addition to the
+    ``sqlalchemy.url`` main option) so ``migrations/env.py`` can prefer it
+    unconditionally over ``AUTO_SCORING_DB_URL`` -- a caller of this
+    function has decided which database to touch (e.g. the sidecar's
+    ``--app-data-dir``), and that decision must not be silently overridden
+    by an environment variable meant for a bare, un-parameterized
+    ``uv run alembic ...`` invocation. Without this, a stray
+    ``AUTO_SCORING_DB_URL`` inherited by the sidecar's process environment
+    would make it migrate a completely different database than the one it
+    then opens and serves requests against (Issue #26 review).
+    """
     ini_path = _alembic_ini_path()
     config = Config(str(ini_path) if ini_path is not None else None)
     config.set_main_option("script_location", str(_migrations_root()))
     config.set_main_option("sqlalchemy.url", db_url)
+    config.attributes["configured_db_url"] = db_url
     return config
 
 
