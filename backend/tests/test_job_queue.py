@@ -26,7 +26,7 @@ from auto_scoring.domain.dependency_graph import (
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
 from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
 from auto_scoring.jobs.clock import Clock
-from auto_scoring.jobs.queue import JobQueueService
+from auto_scoring.jobs.queue import JobNotFoundError, JobQueueService
 from auto_scoring.jobs.settings import QueueSettings
 from tests.fakes import FakeClock, FakeJobProcessor
 from tests.support import (
@@ -1078,3 +1078,380 @@ async def test_worker_count_is_bounded_regardless_of_backlog_size(
     finally:
         hold.set()
         await service.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Review round 3 regressions
+# --------------------------------------------------------------------------- #
+async def test_mark_question_usable_aborts_when_a_concurrent_retry_changes_the_jobs_state(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: mark_question_usable's write must be a compare-and-set on the
+    exact state it read, not an unconditional usable=True write -- otherwise
+    a concurrent retry_job moving the same row FAILED -> QUEUED between this
+    call's read and its write could still have both operations commit, with
+    this call going on to release a dependent on the strength of a
+    prerequisite that, in reality, is already being reprocessed.
+    """
+    version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="qa",
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_mark_usable = SqlAlchemyJobRepository.mark_usable
+    calls = {"count": 0}
+
+    def _mark_usable_racing_a_concurrent_retry(
+        self: SqlAlchemyJobRepository, job_id: str, *, usable: bool, expected_state: JobState
+    ) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            # Simulate a concurrent retry_job winning the race between this
+            # call's own read and its compare-and-set: flip the row to
+            # QUEUED first, durably, on a separate unit of work.
+            with SqlAlchemyUnitOfWork(session_factory) as inner:
+                job = inner.jobs.get(job_id)
+                assert job is not None
+                requeued = job.transitioned_to(JobState.QUEUED, updated_at=at())
+                inner.jobs.save(requeued, expected_state=JobState.FAILED)
+                inner.commit()
+        return real_mark_usable(self, job_id, usable=usable, expected_state=expected_state)
+
+    monkeypatch.setattr(
+        SqlAlchemyJobRepository, "mark_usable", _mark_usable_racing_a_concurrent_retry
+    )
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    with pytest.raises(JobNotFoundError):
+        service.mark_question_usable(submission_id="sub-1", question_id="qa")
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        qa_final = uow.jobs.get("job-qa")
+        qb_final = uow.jobs.get("job-qb")
+    assert qa_final is not None
+    assert qa_final.state is JobState.QUEUED  # the concurrent retry's write stands
+    assert qa_final.usable is None  # never flipped: this call's CAS lost
+    assert qb_final is not None
+    assert qb_final.state is JobState.BLOCKED  # never spuriously released
+
+
+class _ManualBackoffClock:
+    """A clock whose ``sleep`` blocks on a fresh, per-call `asyncio.Event`
+    kept in `pending` -- lets a test release one specific backoff timer
+    without affecting any other still-sleeping timer."""
+
+    def __init__(self, start: datetime) -> None:
+        self._now = start
+        self.pending: list[asyncio.Event] = []
+
+    def now(self) -> datetime:
+        return self._now
+
+    async def sleep(self, seconds: float) -> None:
+        event = asyncio.Event()
+        self.pending.append(event)
+        await event.wait()
+
+
+async def test_a_stale_backoff_timer_does_not_requeue_a_newer_failed_attempt(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """P1: if a manual retry_job requeues a job while its earlier backoff
+    timer is still sleeping, and the new attempt fails again before that
+    stale timer wakes, the stale timer must not requeue the newer failure --
+    it belongs to an earlier attempt and would otherwise either bypass the
+    newer attempt's own, correctly-timed backoff or wrongly revive a
+    newer failure that had already exhausted its retries.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    clock = _ManualBackoffClock(EPOCH)
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT
+        )
+    )
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_attempts=5), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.FAILED)
+        await _wait_until(lambda: len(clock.pending) == 1)
+        first_attempt = service.get_job(job_id)
+        assert first_attempt is not None and first_attempt.attempts == 1
+
+        # A manual retry while the first backoff timer is still sleeping.
+        service.retry_job(job_id)
+        await _wait_until(
+            lambda: (
+                (job := service.get_job(job_id)) is not None
+                and job.state is JobState.FAILED
+                and job.attempts == 2
+            )
+        )
+        await _wait_until(lambda: len(clock.pending) == 2)
+
+        # Release only the first, now-stale timer; the second (current)
+        # attempt's own timer is left sleeping.
+        clock.pending[0].set()
+        await asyncio.sleep(0.05)  # give it a chance to (incorrectly) act
+
+        job = service.get_job(job_id)
+        assert job is not None
+        assert job.state is JobState.FAILED  # not requeued by the stale timer
+        assert job.attempts == 2  # untouched
+    finally:
+        for event in clock.pending:
+            event.set()
+        await service.shutdown()
+
+
+async def test_a_finalize_conflict_does_not_kill_the_worker(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: if a job's RUNNING row is changed concurrently (e.g. cancelled via
+    a dependency-graph confirm reissue) between _run_one's own read and
+    _finalize_result's compare-and-set write, the resulting JobSaveConflict
+    must be absorbed as a no-op, not allowed to propagate out of
+    _worker_loop -- otherwise it permanently removes one of the pool's fixed
+    workers, and at max_concurrency=1 the whole queue stops forever.
+    """
+    _seed(session_factory, test_id="test-a", submission_id="sub-a", question_ids=["qa"])
+    _seed(session_factory, test_id="test-b", submission_id="sub-b", question_ids=["qb"])
+    real_save = SqlAlchemyJobRepository.save
+    finalize_calls = {"count": 0}
+
+    def _save_that_conflicts_once_on_finalize(
+        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
+    ) -> None:
+        if expected_state is JobState.RUNNING:
+            finalize_calls["count"] += 1
+            if finalize_calls["count"] == 1:
+                raise JobSaveConflict(job.id, expected_state)
+        real_save(self, job, expected_state=expected_state)
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once_on_finalize)
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=1), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-a")
+        job_a = _job_id_for_question(service, "sub-a", "qa")
+        # job_a's own RUNNING -> SUCCEEDED save hits the injected conflict
+        # and is absorbed; give it a moment to be finalized (as a no-op).
+        await asyncio.sleep(0.05)
+        assert finalize_calls["count"] == 1
+        assert _state(service, job_a) is JobState.RUNNING  # left for the real winner to own
+
+        # The worker must have returned to the pool and be free to pick up
+        # an unrelated submission's job -- it must not have died with the
+        # absorbed conflict.
+        service.submit_submission(submission_id="sub-b")
+        job_b = _job_id_for_question(service, "sub-b", "qb")
+        await _wait_until(lambda: _state(service, job_b) is JobState.SUCCEEDED)
+    finally:
+        await service.shutdown()
+
+
+async def test_startup_sweep_does_not_requeue_an_approved_failed_job(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P1: a retryable FAILED job whose downstream effect a human already
+    approved via mark_question_usable (Job.usable is not None) must not be
+    swept up by start()'s automatic-retry recovery -- requeuing it would
+    silently discard that approval the next time it finalizes
+    (transitioned_to always resets usable on a fresh transition), even
+    though a dependent may already have been released on the strength of it.
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                usable=True,  # already approved by a human
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        await service.shutdown()
+    job = service.get_job("job-1")
+    assert job is not None
+    assert job.state is JobState.FAILED  # left exactly as approved
+    assert job.usable is True
+    assert processor.calls == []
+
+
+async def test_backoff_requeue_does_not_override_an_approval_made_while_sleeping(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """P1: mirror of the startup-sweep guard above, for the in-process
+    backoff-timer path -- if a human approves a FAILED job's downstream
+    effect (mark_question_usable) while its backoff timer is still sleeping,
+    the timer must not requeue it once it wakes; that would silently clear
+    the just-granted approval.
+    """
+    _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    clock = _HoldableClock(EPOCH)
+    processor = FakeJobProcessor()
+    processor.script(
+        "sub-1",
+        "qa",
+        [ProcessingResult(outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT)],
+    )
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_a = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_a) is JobState.FAILED)
+        # job_a is now sleeping out its backoff (clock.sleep blocks on hold).
+
+        service.mark_question_usable(submission_id="sub-1", question_id="qa")
+        job_b = _job_id_for_question(service, "sub-1", "qb")
+        await _wait_until(lambda: _state(service, job_b) is JobState.QUEUED)
+
+        clock.hold.set()  # let the now-stale backoff timer wake up
+        await asyncio.sleep(0.05)
+
+        job_a_final = service.get_job(job_a)
+        assert job_a_final is not None
+        assert job_a_final.state is JobState.FAILED  # not requeued
+        assert job_a_final.usable is True  # approval preserved
+    finally:
+        clock.hold.set()
+        await service.shutdown()
+
+
+async def test_retry_job_retries_after_a_compare_and_set_conflict(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2: if another writer changes a job's state between retry_job's read
+    and its compare-and-set write (two concurrent manual retries, or a
+    backoff-driven requeue), that must be retried from a fresh read, not
+    surfaced as an unhandled JobSaveConflict/500.
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_that_conflicts_once(
+        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
+    ) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise JobSaveConflict(job.id, expected_state)
+        real_save(self, job, expected_state=expected_state)
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once)
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    retried = service.retry_job("job-1")
+
+    assert calls["count"] == 2
+    assert retried.state is JobState.QUEUED
+    final = service.get_job("job-1")
+    assert final is not None
+    assert final.state is JobState.QUEUED
+
+
+async def test_shutdown_stops_a_worker_after_its_current_job_instead_of_draining_the_backlog(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: shutdown's _STOP sentinels sit at the *back* of the FIFO queue --
+    without the _closing flag, a worker would keep dequeuing and processing
+    every already-QUEUED job ahead of its own sentinel before honoring
+    shutdown, however large that persisted backlog is. _closing must let a
+    worker stop as soon as it dequeues anything once shutdown has begun,
+    leaving the rest of the backlog QUEUED in the DB for start()'s next
+    sweep.
+    """
+    question_ids = [f"q{i}" for i in range(5)]
+    _seed(session_factory, question_ids=question_ids)
+    hold = asyncio.Event()
+    processor = FakeJobProcessor(hold_event=hold)
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=1), clock=clock
+    )
+    await service.start()
+    service.submit_submission(submission_id="sub-1")
+    await _wait_until(lambda: processor.current_concurrency == 1)
+
+    shutdown_task = asyncio.create_task(service.shutdown())
+    await asyncio.sleep(0.02)  # let shutdown mark _closing and queue its _STOP
+    hold.set()  # release the one job the worker is already holding
+    await shutdown_task
+
+    assert len(processor.calls) == 1  # never drained the rest of the backlog
+    remaining = {job.question_id: job.state for job in service.list_for_submission("sub-1")}
+    processed_question_id = processor.calls[0].question_id
+    for question_id, state in remaining.items():
+        if question_id == processed_question_id:
+            assert state is JobState.SUCCEEDED
+        else:
+            assert state is JobState.QUEUED  # abandoned in the DB, not processed

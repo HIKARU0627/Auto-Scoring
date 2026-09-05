@@ -419,6 +419,54 @@ def test_downgrade_walks_back_to_base(db_url: str) -> None:
     assert _CORE_TABLES.isdisjoint(_tables(db_url))
 
 
+def test_downgrade_from_0009_normalizes_a_failed_usable_row(db_url: str) -> None:
+    """Issue #18 review round 3, P2: a FAILED job's `usable` bit (settable
+    only once 0009's upgrade has run, via a human /resume approval) has no
+    representation in 0008's stricter constraint. Batch mode's "recreate"
+    copies every existing row when dropping/recreating the constraint;
+    downgrading with such a row present must normalize it away first, not
+    abort partway through with an IntegrityError.
+    """
+    upgrade(db_url, "0009")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                    "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO submissions "
+                    "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, "
+                    "created_at) VALUES ('s', 't', 'p', :sha, 1, 'unprocessed', '2026-01-01')"
+                ),
+                {"sha": "0" * 64},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO jobs (id, kind, submission_id, state, attempts, max_attempts, "
+                    "usable, created_at, updated_at) VALUES "
+                    "('j', 'grading', 's', 'failed', 1, 3, 1, '2026-01-01', '2026-01-01')"
+                )
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    downgrade(db_url, "0008")  # must not raise IntegrityError
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT usable FROM jobs WHERE id = 'j'")).one()
+    finally:
+        engine.dispose()
+    assert row.usable is None
+
+
 def test_head_schema_matches_orm_metadata(db_url: str) -> None:
     """`alembic check` finds no difference between the migrations and the ORM."""
     upgrade(db_url, "head")

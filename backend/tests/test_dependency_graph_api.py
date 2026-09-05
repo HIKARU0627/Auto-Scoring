@@ -806,6 +806,90 @@ def test_confirming_a_new_version_with_an_added_edge_blocks_the_new_dependent(
     assert q2_replacement.blocked_on_question_id == "q1"
 
 
+def test_confirming_recomputes_readiness_after_a_stale_claim_actually_completes(
+    client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #18 review round 3, P1: if a stale prerequisite genuinely
+    completes (usably, via a normal worker) between confirm's initial
+    listing of incomplete jobs and its cancellation compare-and-set, the
+    dependent's replacement must be released based on that real outcome --
+    not a tentative snapshot that still shows the prerequisite as merely
+    "pending" (never created because the cancellation lost). Without this,
+    the dependent would be persisted BLOCKED forever: the prerequisite
+    already finished in the past, so no future completion event exists to
+    ever release it.
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        # q1 already completed for real, usably -- but confirm's initial
+        # listing (mocked below) still sees a stale snapshot of it as
+        # QUEUED, simulating the window between that listing and confirm's
+        # own cancellation compare-and-set.
+        uow.jobs.add(
+            make_job(
+                id="job-q1-v1",
+                question_id="q1",
+                state=JobState.SUCCEEDED,
+                usable=True,
+                dependency_graph_version=1,
+            )
+        )
+        uow.jobs.add(
+            make_job(
+                id="job-q2-v1",
+                question_id="q2",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="q1",
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    stale_q1_snapshot = make_job(
+        id="job-q1-v1", question_id="q1", state=JobState.QUEUED, dependency_graph_version=1
+    )
+    real_list = SqlAlchemyJobRepository.list_incomplete_for_stale_versions
+
+    def _list_with_a_stale_q1_snapshot(
+        self: SqlAlchemyJobRepository, test_id: str, current_version: int
+    ) -> list[Job]:
+        real_results = [
+            job for job in real_list(self, test_id, current_version) if job.question_id != "q1"
+        ]
+        return [stale_q1_snapshot, *real_results]
+
+    monkeypatch.setattr(
+        SqlAlchemyJobRepository,
+        "list_incomplete_for_stale_versions",
+        _list_with_a_stale_q1_snapshot,
+    )
+
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        jobs = uow.jobs.list_for_submission("sub-1")
+    q1_final = next(j for j in jobs if j.question_id == "q1")
+    q2_replacement = next(
+        j for j in jobs if j.question_id == "q2" and j.dependency_graph_version == 2
+    )
+    assert q1_final.state is JobState.SUCCEEDED and q1_final.usable is True  # untouched
+    assert q2_replacement.state is JobState.QUEUED  # released, not stuck BLOCKED forever
+
+
 def test_confirming_unknown_version_is_not_found(client: TestClient, make_uow: UowFactory) -> None:
     _seed_questions(make_uow, [("q1", "問1", 1)])
     _analyze(client)
