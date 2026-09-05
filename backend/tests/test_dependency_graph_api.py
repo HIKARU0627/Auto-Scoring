@@ -736,6 +736,76 @@ def test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race(
     assert queued == []  # no duplicate replacement was created for it
 
 
+def test_confirming_a_new_version_with_an_added_edge_blocks_the_new_dependent(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """Issue #18 review round 1 (P1): `reissue_job_for_graph_version` always
+    builds its replacement as QUEUED -- it knows nothing about the *new*
+    version's dependency structure. If v2 adds an edge v1 didn't have
+    (q1 -> q2) and both q1's and q2's jobs were incomplete under v1, q2's
+    replacement must come back BLOCKED on q1, not QUEUED -- otherwise q2
+    could reach the processor before q1 has a usable result, bypassing the
+    DAG gate entirely.
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},  # v1: independent
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(
+                id="job-q1-v1",
+                question_id="q1",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.jobs.add(
+            make_job(
+                id="job-q2-v1",
+                question_id="q2",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={
+            "version": 2,
+            "edges": [
+                {
+                    "from_question_id": "q1",
+                    "to_question_id": "q2",
+                    "provides": ["score"],
+                    "rationale": "q2はq1の結果を使用",
+                }
+            ],
+        },
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        jobs = uow.jobs.list_for_submission("sub-1")
+        q1_replacement = next(
+            j for j in jobs if j.question_id == "q1" and j.dependency_graph_version == 2
+        )
+        q2_replacement = next(
+            j for j in jobs if j.question_id == "q2" and j.dependency_graph_version == 2
+        )
+    assert q1_replacement.state is JobState.QUEUED
+    assert q2_replacement.state is JobState.BLOCKED
+    assert q2_replacement.blocked_on_question_id == "q1"
+
+
 def test_confirming_unknown_version_is_not_found(client: TestClient, make_uow: UowFactory) -> None:
     _seed_questions(make_uow, [("q1", "問1", 1)])
     _analyze(client)

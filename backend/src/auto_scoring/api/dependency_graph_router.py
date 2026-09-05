@@ -26,7 +26,9 @@ sidecar's bearer-token auth):
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -46,7 +48,13 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
     UnresolvedQuestion,
 )
-from auto_scoring.domain.models import Job, JobSaveConflict, reissue_job_for_graph_version
+from auto_scoring.domain.job_scheduling import evaluate_readiness, question_statuses
+from auto_scoring.domain.models import (
+    Job,
+    JobSaveConflict,
+    JobState,
+    reissue_job_for_graph_version,
+)
 
 #: Bound on retries when two concurrent /analyze calls race for the same
 #: next version number (see `analyze` below). Each retry re-reads the latest
@@ -430,28 +438,70 @@ def build_dependency_graph_router(
         # Issue #26 acceptance: confirming a new version must invalidate and
         # recreate any still-incomplete job left over from a superseded one,
         # in the same transaction as the confirmation itself.
-        reissued: list[Job] = []
+        #
+        # `reissue_job_for_graph_version` always builds the replacement as
+        # QUEUED -- it knows nothing about the *new* graph's dependency
+        # structure. If the newly confirmed version added an edge (e.g. a
+        # freshly-added `A -> B` where both A and B had incomplete jobs
+        # under the old version), blindly enqueuing every replacement would
+        # let B reach the processor before A has a usable result, bypassing
+        # the DAG gate entirely (review round 1, P1). So: replan each
+        # submission's replacements against `confirmed` before enqueuing,
+        # the same way a brand-new `submit_submission` would, using every
+        # job that will exist for that submission after this pass (still-
+        # complete jobs from any version, plus every sibling replacement)
+        # to decide readiness.
+        stale_jobs_by_submission: dict[str, list[Job]] = defaultdict(list)
         for stale_job in uow.jobs.list_incomplete_for_stale_versions(test_id, confirmed.version):
-            cancelled, replacement = reissue_job_for_graph_version(
-                stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
-            )
-            try:
-                uow.jobs.save(cancelled, expected_state=stale_job.state)
-            except JobSaveConflict:
-                # Another writer (a worker finishing this job) changed its
-                # state after we listed it as stale. Do not create a
-                # replacement for it -- the job we meant to cancel no longer
-                # exists in the state we read, so a duplicate QUEUED
-                # replacement would risk double-processing the same work.
-                continue
-            uow.jobs.add(replacement)
-            reissued.append(replacement)
+            stale_jobs_by_submission[stale_job.submission_id].append(stale_job)
+
+        reissued: list[Job] = []
+        for submission_id, stale_jobs in stale_jobs_by_submission.items():
+            stale_ids = {job.id for job in stale_jobs}
+            baseline = [
+                job
+                for job in uow.jobs.list_for_submission(submission_id)
+                if job.id not in stale_ids
+            ]
+
+            pairs: list[tuple[Job, Job, Job]] = []
+            for stale_job in stale_jobs:
+                cancelled, replacement = reissue_job_for_graph_version(
+                    stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
+                )
+                pairs.append((stale_job, cancelled, replacement))
+
+            tentative_jobs = baseline + [replacement for _, _, replacement in pairs]
+            statuses = question_statuses(tentative_jobs)
+
+            for stale_job, cancelled, replacement in pairs:
+                try:
+                    uow.jobs.save(cancelled, expected_state=stale_job.state)
+                except JobSaveConflict:
+                    # Another writer (a worker finishing this job) changed
+                    # its state after we listed it as stale. Do not create a
+                    # replacement for it -- the job we meant to cancel no
+                    # longer exists in the state we read, so a duplicate
+                    # QUEUED/BLOCKED replacement would risk double-
+                    # processing the same work.
+                    continue
+                if replacement.question_id is not None:
+                    readiness = evaluate_readiness(confirmed, replacement.question_id, statuses)
+                    if not readiness.ready:
+                        replacement = replace(
+                            replacement,
+                            state=JobState.BLOCKED,
+                            blocked_on_question_id=readiness.blocking_question_id,
+                        )
+                uow.jobs.add(replacement)
+                reissued.append(replacement)
 
         uow.commit()
 
         if on_job_reissued is not None:
             for replacement in reissued:
-                on_job_reissued(replacement)
+                if replacement.state is JobState.QUEUED:
+                    on_job_reissued(replacement)
 
         return DependencyGraphResponse.from_domain(confirmed)
 
