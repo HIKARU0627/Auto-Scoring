@@ -472,3 +472,63 @@ def test_edge_row_with_blank_rationale_is_rejected_by_check_constraint(seeded: U
             )
         )
         uow.commit()
+
+
+def test_edge_row_with_an_unknown_provides_value_is_rejected(seeded: UowFactory) -> None:
+    """`json_valid`/`json_array_length` alone only check JSON shape, not
+    element values -- a row bypassing the domain (repair, import, direct
+    SQL) could still persist `provides = ["bogus"]`, which
+    `DependencyProvision(...)` rejects with a `ValueError` the next time
+    `_mappers.dependency_graph_from_rows` hydrates that graph. SQLite CHECK
+    constraints cannot contain subqueries, so this is enforced by a
+    BEFORE INSERT trigger instead (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-2",
+                provides=["bogus"],
+                rationale="unknown provision value",
+            )
+        )
+        uow.commit()
+
+
+def test_edge_row_update_to_an_unknown_provides_value_is_rejected(seeded: UowFactory) -> None:
+    """The BEFORE INSERT trigger alone would miss a later UPDATE that
+    corrupts `provides` on an already-valid row; the BEFORE UPDATE OF
+    provides trigger must catch that too (Issue #26 review).
+    """
+    from sqlalchemy import update
+
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-2",
+                provides=["recognized_text"],
+                rationale="valid to start",
+            )
+        )
+        uow.commit()
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.execute(
+            update(DependencyEdgeRow)
+            .where(
+                DependencyEdgeRow.graph_id == "test-1:v1",
+                DependencyEdgeRow.from_question_id == "q-1",
+                DependencyEdgeRow.to_question_id == "q-2",
+            )
+            .values(provides=["bogus"])
+        )
+        uow.commit()

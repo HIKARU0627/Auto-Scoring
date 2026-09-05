@@ -233,6 +233,29 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   /`DependencyEdgeRow`を直接構築してこれら3種の不整合行を試み、いずれも
   `IntegrityError`になることをORMメタデータ側（`test_dependency_graph_repository.py`）
   とmigration適用後の生SQL側（`test_migrations.py`）の両方で検証している。
+- `ck_dependency_edges_provides_non_empty`はJSONの形（有効なJSON配列で長さ
+  > 0）しか見ておらず、要素の値までは検証していなかった（レビュー指摘）。
+  > 修復・インポート・直接SQLが`provides = '["bogus"]'`のような未知の値を
+  > 書き込めてしまうと、`_mappers.dependency_graph_from_rows`がそれを
+  > `DependencyProvision(...)`へ変換する際に`ValueError`を送出し、その
+  > graphに対する全てのGET/listが500になる。ただしSQLiteの`CHECK`制約は
+  > サブクエリを一切許可しない（`json_each`のようなテーブル値関数を使った
+  > `EXISTS`もサブクエリ扱いで拒否される -- `subqueries prohibited in CHECK
+constraints`）ため、他の不変条件と違って`CHECK`では実装できない。代わりに
+  > `BEFORE INSERT`/`BEFORE UPDATE OF provides`の2本のトリガー
+  > （`trg_dependency_edges_provides_known_values_insert`/`_update`、条件は
+  > `WHEN EXISTS (SELECT 1 FROM json_each(NEW.provides) WHERE value NOT IN
+(...))`として`RAISE(ABORT, ...)`）で同じ検証を行う。トリガー本体でだけ
+  > サブクエリ制限が掛からないため、この境界の値検証はトリガーでしか実装
+  > できない。ORM側（`db/orm.py`）は`DependencyEdgeRow.__table__`の
+  > `after_create`イベントに`DDL`でこの2本のトリガーを紐づけ、
+  > `Base.metadata.create_all`でも生成されるようにした。値の一覧
+  > （`recognized_text`/`score`/`criterion_result`）は
+  > `domain.dependency_graph.DependencyProvision`と同期を保つ必要がある。
+  > テストでは未知の値でのINSERT・既存の正しい行に対する未知の値への
+  > UPDATEの両方が`IntegrityError`になることを、ORM経由
+  > （`test_dependency_graph_repository.py`）とmigration適用後の生SQL
+  > （`test_migrations.py`）の両方で検証している。
 - cycle検出はKahnのアルゴリズムが行き詰まった残りノード全部ではなく、
   Tarjanの強連結成分（SCC）でサイクルに実際に参加しているノードだけを
   `CycleDetectedError.cycle_question_ids` に含める。例えば `q1<->q2` の
@@ -387,6 +410,26 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   現れることを検証している
   （`test_a_signalled_reference_does_not_silence_a_separate_unsignalled_one`、
   修正前は`unresolved`が空のまま欠落することを確認済み）。
+- edgeのrationaleスニペットは、以前は結合済み`text`全体を`number`のパター
+  ンで再検索して構築していたため（`_snippet_for_number(text, number)`）、
+  「問1-1」への言及がシグナル無しで前方のフィールドに、実際にシグナル付き
+  の「問1」参照が後方のフィールドに、という配置だと、`_resolve_referenced_
+numbers`自体はラベルを正しく区別する（round 7の最長一致ロジック）のに、
+  rationale構築時の再検索は前方の「問1-1」内に埋め込まれた「問1」部分文字
+  列を最初にヒットさせてしまい、生成されたedgeが実際には無関係な設問の
+  文言を根拠として提示してしまっていた（レビュー指摘）。修正として、
+  `_resolve_referenced_numbers`はマッチした最初の非吸収span（位置情報）も
+  一緒に返すようにし、`locally_referenced`を構築するループでは
+  「どのフィールドの・どのspanが」その参照を成立させたかを`local_evidence`
+  （`(number, from_id) -> (field_text, span)`）に保持する。rationaleは
+  `_snippet_from_span(field_text, span)`でその保持しておいた実際の一致箇所
+  から直接切り出すため、もう全文再検索による取り違えは起きない。テストでは
+  「問1-1」（シグナル無し・前方フィールド）と「問1」（シグナル付き・後方
+  フィールド）が同時に存在する設問で、生成されたedgeのrationaleが正しく
+  「問1」側フィールドの文言を含み、「問1-1」側フィールドの文言を含まない
+  ことを検証している
+  （`test_edge_rationale_snippet_comes_from_the_field_that_actually_justified_it`、
+  修正前はrationaleが前方フィールドの無関係な文言を含むことを確認済み）。
 
 ### API・DB配線
 

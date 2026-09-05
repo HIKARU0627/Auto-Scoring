@@ -108,8 +108,49 @@ def upgrade() -> None:
     )
     op.create_index("ix_dependency_edges_graph_id", "dependency_edges", ["graph_id"])
 
+    # `provides_non_empty` above only checks JSON shape, not element values --
+    # a row written outside the domain (repair, import, direct SQL) could
+    # still persist e.g. `provides = '["bogus"]'`, which
+    # `DependencyProvision(...)` rejects with a `ValueError` the next time
+    # that graph is hydrated (Issue #26 review). SQLite's `CHECK` constraints
+    # cannot contain subqueries (including table-valued functions like
+    # `json_each`), so this element-value check has to be a pair of
+    # `BEFORE INSERT`/`BEFORE UPDATE OF provides` triggers instead. Keep the
+    # value list in sync with `domain.dependency_graph.DependencyProvision`'s
+    # members. Mirrored in `db/orm.py`.
+    op.execute(
+        """
+        CREATE TRIGGER trg_dependency_edges_provides_known_values_insert
+        BEFORE INSERT ON dependency_edges
+        FOR EACH ROW
+        WHEN EXISTS (
+            SELECT 1 FROM json_each(NEW.provides)
+            WHERE value NOT IN ('recognized_text', 'score', 'criterion_result')
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'dependency_edges.provides contains an unknown value');
+        END;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_dependency_edges_provides_known_values_update
+        BEFORE UPDATE OF provides ON dependency_edges
+        FOR EACH ROW
+        WHEN EXISTS (
+            SELECT 1 FROM json_each(NEW.provides)
+            WHERE value NOT IN ('recognized_text', 'score', 'criterion_result')
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'dependency_edges.provides contains an unknown value');
+        END;
+        """
+    )
+
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS trg_dependency_edges_provides_known_values_update")
+    op.execute("DROP TRIGGER IF EXISTS trg_dependency_edges_provides_known_values_insert")
     op.drop_index("ix_dependency_edges_graph_id", table_name="dependency_edges")
     op.drop_table("dependency_edges")
     op.drop_index("ix_dependency_graphs_test_id", table_name="dependency_graphs")

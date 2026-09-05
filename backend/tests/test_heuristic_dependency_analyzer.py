@@ -264,6 +264,41 @@ def test_a_signalled_reference_does_not_silence_a_separate_unsignalled_one() -> 
     assert "問1" not in result.unresolved[0].reason  # the resolved edge is not also flagged
 
 
+def test_edge_rationale_snippet_comes_from_the_field_that_actually_justified_it() -> None:
+    """`prompt_text` bears an earlier, unsignalled mention of "問1-1" (whose
+    pattern also satisfies "問1"'s digit-boundary match); `rubric_text`
+    separately has a genuine, signalled reference to "問1". The edge must be
+    attributed to 問1 (not 問1-1) and its rationale snippet must be built
+    from the `rubric_text` occurrence that actually justified it -- not from
+    re-searching the whole concatenated text for "問1", which would resurface
+    the unrelated 問1-1 mention in `prompt_text` instead (Issue #26 review).
+    """
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q1-1", number="問1-1", page=1, prompt_text="光合成の反応式を書け。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問1-1については別紙で解説する。",  # bare mention, no signal
+            rubric_text="採点は問1の得点データに基づいて行う。",  # signalled reference to 問1
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert [(e.from_question_id, e.to_question_id) for e in result.edges] == [("q1", "q2")]
+    rationale = result.edges[0].rationale
+    assert "得点" in rationale  # evidence pulled from the correct (rubric_text) occurrence
+    assert "解説" not in rationale  # not the unrelated prompt_text occurrence of 問1-1
+    assert "1-1" not in rationale
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].question_id == "q2"
+    assert "問1-1" in result.unresolved[0].reason
+
+
 def test_multi_page_reference_is_detected() -> None:
     questions = [
         QuestionInfo(

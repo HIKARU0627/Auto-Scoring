@@ -74,7 +74,12 @@ class ReferenceHeuristicDependencyAnalyzer:
                 continue
 
             matched_signal = next((phrase for phrase in _SIGNAL_PHRASES if phrase in text), None)
-            referenced = _resolve_referenced_numbers(text, by_number, question.question_id)
+            referenced_pairs = [
+                (number, from_id)
+                for number, from_id, _ in _resolve_referenced_numbers(
+                    text, by_number, question.question_id
+                )
+            ]
 
             # A question number and a dependency-signal phrase must appear
             # together in the *same* source field (prompt/model-answer/
@@ -87,14 +92,26 @@ class ReferenceHeuristicDependencyAnalyzer:
             # the signal phrase was never actually modifying (Issue #26
             # review).
             locally_referenced: list[tuple[str, str]] = []
+            # (number, from_id) -> the exact field text + match span that
+            # justified it, so the rationale snippet below is built from
+            # *that* occurrence, not by re-searching the whole concatenated
+            # `text` for the number (which could resurface a different,
+            # unrelated occurrence from an earlier field -- e.g. "問1-1" in
+            # `prompt_text` also satisfies "問1"'s pattern, so re-searching
+            # `text` for "問1" could return a snippet about 問1-1 instead of
+            # the real, signalled 問1 reference found in `rubric_text`;
+            # Issue #26 review).
+            local_evidence: dict[tuple[str, str], tuple[str, tuple[int, int]]] = {}
             for field in fields:
                 if not any(phrase in field for phrase in _SIGNAL_PHRASES):
                     continue
-                for candidate in _resolve_referenced_numbers(
+                for number, from_id, span in _resolve_referenced_numbers(
                     field, by_number, question.question_id
                 ):
-                    if candidate not in locally_referenced:
-                        locally_referenced.append(candidate)
+                    pair = (number, from_id)
+                    if pair not in locally_referenced:
+                        locally_referenced.append(pair)
+                        local_evidence[pair] = (field, span)
 
             if locally_referenced:
                 # A question number *and* a dependency-signal phrase both
@@ -108,6 +125,7 @@ class ReferenceHeuristicDependencyAnalyzer:
                 # review/fix (Issue #26 review; docs/dependency-graph.md
                 # "候補生成").
                 for number, from_id in locally_referenced:
+                    field_text, span = local_evidence[(number, from_id)]
                     edges.append(
                         DependencyEdge(
                             from_question_id=from_id,
@@ -118,13 +136,14 @@ class ReferenceHeuristicDependencyAnalyzer:
                             ),
                             rationale=(
                                 f"{question.number}の設問文/模範解答/採点基準に"
-                                f"{number}への参照表現「{_snippet_for_number(text, number)}」を検出"
+                                f"{number}への参照表現「{_snippet_from_span(field_text, span)}」"
+                                "を検出"
                             ),
                             confidence=0.8,
                         )
                     )
 
-                # `referenced` (computed on the combined text) can name
+                # `referenced_pairs` (computed on the combined text) can name
                 # numbers beyond the ones just turned into edges -- e.g. a
                 # signalled reference to 問1 in `prompt_text` and a separate,
                 # unsignalled bare mention of 問2 in `rubric_text`. Finding
@@ -132,7 +151,7 @@ class ReferenceHeuristicDependencyAnalyzer:
                 # otherwise let a graph with an unreviewed possible
                 # dependency go straight to confirm with no `unresolved`
                 # entry to flag it (Issue #26 review).
-                unmatched = [pair for pair in referenced if pair not in locally_referenced]
+                unmatched = [pair for pair in referenced_pairs if pair not in locally_referenced]
                 if unmatched:
                     numbers = "、".join(number for number, _ in unmatched)
                     unresolved.append(
@@ -144,12 +163,12 @@ class ReferenceHeuristicDependencyAnalyzer:
                             ),
                         )
                     )
-            elif referenced:
+            elif referenced_pairs:
                 # Number(s) mentioned but no dependency-signal phrase: could
                 # be a real dependency stated plainly, or just an unrelated
                 # mention -- ambiguous either way, so it goes to `unresolved`
                 # rather than being silently dropped or guessed as an edge.
-                numbers = "、".join(number for number, _ in referenced)
+                numbers = "、".join(number for number, _ in referenced_pairs)
                 unresolved.append(
                     UnresolvedQuestion(
                         question_id=question.question_id,
@@ -184,8 +203,8 @@ def _question_number_pattern(number: str) -> re.Pattern[str]:
 
 def _resolve_referenced_numbers(
     text: str, by_number: dict[str, str], exclude_id: str
-) -> list[tuple[str, str]]:
-    """Which known question numbers `text` genuinely references.
+) -> list[tuple[str, str, tuple[int, int]]]:
+    """Which known question numbers `text` genuinely references, and where.
 
     Question numbers are arbitrary non-empty labels, so one can be a
     substring of another with only a non-digit separator between them --
@@ -197,6 +216,12 @@ def _resolve_referenced_numbers(
     if it is not itself contained inside a longer label's match at the same
     position; a match fully swallowed by a longer label's span is resolved
     to that longer label instead.
+
+    Returns the first genuine (non-absorbed) match span alongside each
+    number/question-id pair, so a caller building a rationale snippet can
+    slice it directly from *this* text instead of re-searching a different,
+    larger text where an unrelated occurrence of the same pattern could sit
+    earlier (Issue #26 review).
     """
     spans_by_number = {
         number: [match.span() for match in _question_number_pattern(number).finditer(text)]
@@ -212,13 +237,17 @@ def _resolve_referenced_numbers(
             for other_start, other_end in other_spans
         )
 
-    referenced: list[tuple[str, str]] = []
+    referenced: list[tuple[str, str, tuple[int, int]]] = []
     for number, from_id in by_number.items():
         if from_id == exclude_id:
             continue
-        spans = spans_by_number[number]
-        if any(not _is_absorbed_by_a_longer_label(number, span) for span in spans):
-            referenced.append((number, from_id))
+        genuine_spans = [
+            span
+            for span in spans_by_number[number]
+            if not _is_absorbed_by_a_longer_label(number, span)
+        ]
+        if genuine_spans:
+            referenced.append((number, from_id, genuine_spans[0]))
     return referenced
 
 
@@ -231,10 +260,8 @@ def _snippet(text: str, marker: str, radius: int = 8) -> str:
     return text[start:end]
 
 
-def _snippet_for_number(text: str, number: str, radius: int = 8) -> str:
-    match = _question_number_pattern(number).search(text)
-    if match is None:
-        return number
-    start = max(0, match.start() - radius)
-    end = min(len(text), match.end() + radius)
+def _snippet_from_span(text: str, span: tuple[int, int], radius: int = 8) -> str:
+    start, end = span
+    start = max(0, start - radius)
+    end = min(len(text), end + radius)
     return text[start:end]

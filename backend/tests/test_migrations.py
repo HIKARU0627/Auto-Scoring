@@ -295,6 +295,64 @@ def test_dependency_edge_invariants_are_enforced(db_url: str) -> None:
         engine.dispose()
 
 
+def test_dependency_edge_provides_rejects_unknown_values(db_url: str) -> None:
+    """`json_valid`/`json_array_length` alone only check JSON shape, not
+    element values -- a row bypassing the domain layer (repair, import,
+    direct SQL) could still insert `provides = '["bogus"]'`, which
+    `DependencyProvision(...)` rejects the next time that graph is hydrated.
+    SQLite CHECK constraints cannot contain subqueries, so this is enforced
+    by `trg_dependency_edges_provides_known_values_insert`/`_update` triggers
+    instead (Issue #26 review).
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO dependency_graphs "
+                "(id, test_id, version, status, question_ids, unresolved, created_at, "
+                "confirmed_at) "
+                "VALUES ('t:v1', 't', 1, 'draft', '[\"q1\", \"q2\"]', '[]', "
+                "'2026-01-01', NULL)"
+            )
+        )
+        conn.commit()
+
+        unknown_provides = text(
+            "INSERT INTO dependency_edges "
+            "(graph_id, from_question_id, to_question_id, provides, rationale, confidence) "
+            "VALUES ('t:v1', 'q1', 'q2', '[\"bogus\"]', 'x', NULL)"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(unknown_provides)
+
+        conn.execute(
+            text(
+                "INSERT INTO dependency_edges "
+                "(graph_id, from_question_id, to_question_id, provides, rationale, confidence) "
+                "VALUES ('t:v1', 'q1', 'q2', '[\"recognized_text\"]', 'x', NULL)"
+            )
+        )
+        conn.commit()
+
+        update_to_unknown_provides = text(
+            "UPDATE dependency_edges SET provides = '[\"bogus\"]' "
+            "WHERE graph_id = 't:v1' AND from_question_id = 'q1' AND to_question_id = 'q2'"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(update_to_unknown_provides)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
 def test_job_dependency_graph_version_must_be_positive(db_url: str) -> None:
     upgrade(db_url, "head")
     engine = create_sqlite_engine(db_url)

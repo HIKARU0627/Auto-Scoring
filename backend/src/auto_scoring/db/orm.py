@@ -27,11 +27,13 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy import (
     Enum as SAEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import DDL
 
 from auto_scoring.db.base import Base
 from auto_scoring.domain.dependency_graph import DependencyGraphStatus, DependencyProvision
@@ -394,6 +396,52 @@ class DependencyEdgeRow(Base):
     provides: Mapped[list[DependencyProvision]] = mapped_column(JSON, nullable=False, default=list)
     rationale: Mapped[str] = mapped_column(String, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+# `provides_non_empty` above only checks JSON shape, not element values -- a
+# row written outside the domain (repair, import, direct SQL) could still
+# persist e.g. `provides = '["bogus"]'`, which `DependencyProvision(...)`
+# rejects with a `ValueError` the next time `_mappers.dependency_graph_from_rows`
+# hydrates that graph (Issue #26 review). SQLite's `CHECK` constraints cannot
+# contain subqueries (including table-valued functions like `json_each`), so
+# this element-value check -- unlike the others on this table -- has to be a
+# pair of `BEFORE INSERT`/`BEFORE UPDATE OF provides` triggers instead. Keep
+# the value list in sync with `domain.dependency_graph.DependencyProvision`'s
+# members. Mirrored in `migrations/versions/0003_dependency_graph.py`.
+_KNOWN_DEPENDENCY_PROVISIONS_SQL = "'recognized_text', 'score', 'criterion_result'"
+
+_provides_known_values_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_dependency_edges_provides_known_values_insert
+    BEFORE INSERT ON dependency_edges
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.provides)
+        WHERE value NOT IN ({_KNOWN_DEPENDENCY_PROVISIONS_SQL})
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_edges.provides contains an unknown value');
+    END;
+    """
+)
+
+_provides_known_values_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_dependency_edges_provides_known_values_update
+    BEFORE UPDATE OF provides ON dependency_edges
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.provides)
+        WHERE value NOT IN ({_KNOWN_DEPENDENCY_PROVISIONS_SQL})
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_edges.provides contains an unknown value');
+    END;
+    """
+)
+
+event.listen(DependencyEdgeRow.__table__, "after_create", _provides_known_values_insert_trigger)
+event.listen(DependencyEdgeRow.__table__, "after_create", _provides_known_values_update_trigger)
 
 
 class OperationLogRow(Base):
