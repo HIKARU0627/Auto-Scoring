@@ -159,16 +159,35 @@ def create_app(
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
     app.state.api_token = api_token or generate_token()
 
+    scratch: tempfile.TemporaryDirectory[str] | None = None
     if data_root is not None:
         root = data_root
     else:
         scratch = tempfile.TemporaryDirectory(prefix="auto-scoring-app-data-")
-        atexit.register(scratch.cleanup)
         root = Path(scratch.name)
     store = LocalFileStore(root)
     db_url = sqlite_url(store.database_path())
     upgrade(db_url, "head")
-    session_factory = build_session_factory(create_sqlite_engine(db_url))
+    db_engine = create_sqlite_engine(db_url)
+    session_factory = build_session_factory(db_engine)
+
+    if scratch is not None:
+        # The startup repair query below (and every other DB access this app
+        # ever makes) leaves at least one connection sitting in db_engine's
+        # pool -- SQLAlchemy does not close a pooled connection until the
+        # engine itself is disposed. On Windows, that connection holds the
+        # sqlite file open, so registering only scratch.cleanup (as this
+        # used to) fails at process exit with PermissionError and leaks the
+        # whole temp app-data directory instead of removing it. Dispose the
+        # engine before cleaning up the directory it lives in.
+        temp_dir = scratch
+        engine_to_dispose = db_engine
+
+        def _cleanup_scratch() -> None:
+            engine_to_dispose.dispose()
+            temp_dir.cleanup()
+
+        atexit.register(_cleanup_scratch)
 
     # Startup crash recovery. sweep_temp was always documented as "run it on
     # startup" (its own docstring) but was never actually wired up anywhere;
