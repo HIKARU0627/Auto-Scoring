@@ -2012,7 +2012,11 @@ async def test_an_unexpected_run_one_error_does_not_kill_the_worker(
     SQLAlchemy OperationalError from a SQLite busy-timeout while claiming or
     finalizing a job) must not kill the long-lived worker task processing
     it -- nothing else in the fixed pool ever replaces a dead worker, so at
-    max_concurrency=1 the whole queue would stop until a restart.
+    max_concurrency=1 the whole queue would stop until a restart. The
+    affected job itself must not be stranded either: the worker restores
+    its dispatch signal (review round 8, P1) instead of only logging and
+    moving on to other work, so it still completes once the transient
+    condition clears, rather than sitting QUEUED until a full restart.
     """
     _seed(session_factory, test_id="test-a", submission_id="sub-a", question_ids=["qa"])
     _seed(session_factory, test_id="test-b", submission_id="sub-b", question_ids=["qb"])
@@ -2036,17 +2040,18 @@ async def test_an_unexpected_run_one_error_does_not_kill_the_worker(
     try:
         service.submit_submission(submission_id="sub-a")
         job_a = _job_id_for_question(service, "sub-a", "qa")
-        # job_a's own claim-read hit the injected error; give the worker a
-        # moment to absorb it and return to the pool. Its own get() call
-        # here would otherwise be intercepted too, so check the DB directly.
-        await asyncio.sleep(0.05)
-        assert calls["count"] == 1
-        with SqlAlchemyUnitOfWork(session_factory) as uow:
-            job_a_row = uow.jobs.get(job_a)
-        assert job_a_row is not None
-        assert job_a_row.state is JobState.QUEUED  # never even claimed
+        # Wait for the *worker's own* first claim-read to hit the injected
+        # error -- checking calls["count"] directly, rather than polling
+        # via _state() (which itself calls the patched get() and could race
+        # to be the one that hits it instead of the worker).
+        await _wait_until(lambda: calls["count"] >= 1)
 
-        # The worker must have survived to pick up an unrelated
+        # The worker must restore job_a's dispatch signal and let it
+        # succeed normally instead of leaving it stuck QUEUED.
+        await _wait_until(lambda: _state(service, job_a) is JobState.SUCCEEDED)
+        assert calls["count"] > 1  # the retried attempt really did happen
+
+        # The worker must also still be alive to pick up an unrelated
         # submission's job -- it must not have died with the error.
         service.submit_submission(submission_id="sub-b")
         job_b = _job_id_for_question(service, "sub-b", "qb")
@@ -2102,5 +2107,272 @@ async def test_retry_backoff_scheduling_uses_a_single_task_regardless_of_backlog
         assert service._workers  # the fixed worker pool, unaffected
         assert service._retry_scheduler_task is not None
         assert not service._retry_scheduler_task.done()
+    finally:
+        await service.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Review round 8 regressions
+# --------------------------------------------------------------------------- #
+async def test_requeue_after_backoff_loses_to_a_concurrent_approval_that_lands_mid_write(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: _requeue_after_backoff's own read seeing usable=None is not
+    enough -- a concurrent mark_question_usable approval can still commit
+    usable=True in the window between that read and this write, and a
+    state-only compare-and-set would never notice (mark_usable never
+    touches state). require_usable_unset=True closes that window the same
+    way retry_job/cancel_job's own writes already do (review rounds 5/6):
+    the approval landing first makes this save lose instead, leaving the
+    approval (and whatever it already released) untouched.
+    """
+    version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.QUEUED,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_races_a_concurrent_approval(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
+    ) -> None:
+        if expected_state is JobState.FAILED and require_usable_unset:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                # Simulate mark_question_usable committing usable=True in
+                # the window between this call's own read and its write --
+                # independently committed so it survives this call's own
+                # uow rolling back on the resulting lost CAS.
+                with SqlAlchemyUnitOfWork(session_factory) as inner:
+                    assert (
+                        inner.jobs.mark_usable(
+                            job.id,
+                            usable=True,
+                            expected_state=JobState.FAILED,
+                            expected_attempts=1,
+                        )
+                        is True
+                    )
+                    inner.commit()
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_approval)
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    service._requeue_after_backoff("job-qa", expected_attempts=1)
+
+    assert calls["count"] == 1  # the CAS lost to the approval; never retried
+    job = service.get_job("job-qa")
+    assert job is not None
+    assert job.state is JobState.FAILED  # untouched
+    assert job.usable is True  # the approval, not the requeue, won
+    qb = service.get_job("job-qb")
+    assert qb is not None
+    assert qb.state is JobState.QUEUED  # unaffected, sanity check
+
+
+async def test_start_recovery_loses_to_a_concurrent_approval_that_lands_mid_write(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: start()'s retryable-FAILED sweep has the exact same race as
+    _requeue_after_backoff -- its own read of a FAILED job with
+    usable=None is not enough, since a concurrent mark_question_usable
+    approval can still land before this specific write commits (this
+    startup transaction may not yet have escalated to a write lock at this
+    point, if nothing earlier in the same sweep had to write anything).
+    The same require_usable_unset=True guard must apply here too.
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),  # backoff has long since fully elapsed
+            )
+        )
+        uow.commit()
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_races_a_concurrent_approval(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
+    ) -> None:
+        if expected_state is JobState.FAILED and require_usable_unset:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                with SqlAlchemyUnitOfWork(session_factory) as inner:
+                    assert (
+                        inner.jobs.mark_usable(
+                            job.id,
+                            usable=True,
+                            expected_state=JobState.FAILED,
+                            expected_attempts=1,
+                        )
+                        is True
+                    )
+                    inner.commit()
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_approval)
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        await service.shutdown()
+
+    assert calls["count"] == 1
+    job = service.get_job("job-qa")
+    assert job is not None
+    assert job.state is JobState.FAILED  # untouched -- the approval won
+    assert job.usable is True
+    assert processor.calls == []  # never actually reprocessed
+
+
+async def test_retry_scheduler_survives_a_requeue_after_backoff_error(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: an exception from _requeue_after_backoff itself (e.g. a
+    transient SQLite busy-timeout) must not kill the single retry
+    scheduler task -- nothing else services _retry_heap, so letting it die
+    would silently strand every other pending retry until a restart. The
+    scheduler must absorb the failure per entry, keep running, and
+    reschedule the affected entry instead of losing it outright.
+    """
+    _seed(session_factory, test_id="test-a", submission_id="sub-a", question_ids=["qa"])
+    _seed(session_factory, test_id="test-b", submission_id="sub-b", question_ids=["qb"])
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT
+        )
+    )
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_attempts=5), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-a")
+        service.submit_submission(submission_id="sub-b")
+        job_a = _job_id_for_question(service, "sub-a", "qa")
+        job_b = _job_id_for_question(service, "sub-b", "qb")
+
+        real_requeue = JobQueueService._requeue_after_backoff
+        calls = {"count": 0}
+
+        def _requeue_raises_once_for_job_a(
+            self: JobQueueService, job_id: str, *, expected_attempts: int
+        ) -> None:
+            if job_id == job_a and calls["count"] == 0:
+                calls["count"] += 1
+                raise RuntimeError("simulated transient infra error")
+            real_requeue(self, job_id, expected_attempts=expected_attempts)
+
+        # Patched before either job has even failed once, so there is no
+        # window where the real (unpatched) method could service job_a's
+        # entry before this takes effect.
+        monkeypatch.setattr(
+            JobQueueService, "_requeue_after_backoff", _requeue_raises_once_for_job_a
+        )
+
+        await _wait_until(lambda: _state(service, job_a) is JobState.FAILED)
+        await _wait_until(lambda: _state(service, job_b) is JobState.FAILED)
+
+        # Both jobs must still eventually succeed: job_b's own backoff
+        # timer was never affected, and job_a's failed requeue attempt gets
+        # rescheduled rather than lost once the scheduler absorbs the error.
+        processor.set_default(ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True))
+        await _wait_until(lambda: _state(service, job_a) is JobState.SUCCEEDED)
+        await _wait_until(lambda: _state(service, job_b) is JobState.SUCCEEDED)
+        assert calls["count"] == 1
+    finally:
+        await service.shutdown()
+
+
+async def test_shutdown_replaces_the_retry_added_event_not_just_clears_it(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: `_retry_added` is an `asyncio.Event` that binds to whichever
+    loop first awaits it; `clear()` alone does not undo that binding, so a
+    later `start()` on an entirely different event loop (the same
+    reasoning `_loop`/`_queue` are already reset for -- see `shutdown`'s
+    own docstring) would have its `_retry_scheduler_loop` raise "... is
+    bound to a different event loop" the moment it tries to idle on this
+    same object while the heap is empty. shutdown() must replace it with a
+    fresh Event instead of just clearing the existing one.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    processor = FakeJobProcessor()
+    processor.script(
+        "sub-1",
+        "qa",
+        [ProcessingResult(outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT)],
+    )
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    original_event = service._retry_added
+    await service.shutdown()
+    assert service._retry_added is not original_event  # replaced, not just cleared
+
+    # A later start() on this same instance must still work correctly with
+    # the replaced Event: the scheduler idles on it while the heap is
+    # empty, a subsequent failure schedules a retry (which sets it), and
+    # the scheduler actually wakes up and requeues -- if the replacement
+    # were broken, this would simply hang.
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.SUCCEEDED)
     finally:
         await service.shutdown()
