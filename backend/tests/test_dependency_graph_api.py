@@ -730,6 +730,7 @@ def test_confirm_skips_reissue_when_a_stale_job_genuinely_finished(
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
@@ -746,7 +747,11 @@ def test_confirm_skips_reissue_when_a_stale_job_genuinely_finished(
             )
             raise JobSaveConflict(job.id, expected_state)
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(
@@ -808,6 +813,7 @@ def test_confirm_retries_invalidation_when_a_stale_job_merely_moved_to_another_i
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
@@ -823,7 +829,11 @@ def test_confirm_retries_invalidation_when_a_stale_job_merely_moved_to_another_i
             )
             raise JobSaveConflict(job.id, expected_state)
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(

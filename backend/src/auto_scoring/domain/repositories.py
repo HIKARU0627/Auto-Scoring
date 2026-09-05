@@ -147,7 +147,12 @@ class JobRepository(Protocol):
     def get(self, job_id: str) -> Job | None: ...
 
     def save(
-        self, job: Job, *, expected_state: JobState, require_usable_unset: bool = False
+        self,
+        job: Job,
+        *,
+        expected_state: JobState,
+        expected_attempts: int | None = None,
+        require_usable_unset: bool = False,
     ) -> None:
         """Persist ``job`` iff the row is still in ``expected_state`` -- the
         state the caller itself observed (e.g. from `get`) before deciding on
@@ -158,6 +163,19 @@ class JobRepository(Protocol):
         transition check and matching its own `WHERE` clause (Issue #26
         review). Raises `auto_scoring.domain.models.JobSaveConflict` if the
         row has moved on from ``expected_state``.
+
+        ``expected_attempts``, if given, also gates the write on ``attempts
+        ==`` that value -- ``state`` alone cannot rule out an ABA cycle for
+        a non-terminal state like FAILED: a concurrent retry can complete a
+        whole FAILED -> QUEUED -> RUNNING -> FAILED cycle (a fresh,
+        unreviewed attempt, with its own new ``error_code``/``last_error``)
+        between this caller's read and its write, and the state-only CAS
+        would match again -- silently overwriting that newer attempt's
+        state with this caller's stale one instead of losing the race
+        (Issue #18 review round 9, P1). ``attempts`` only ever changes on a
+        transition through RUNNING, so it strictly changes across any such
+        cycle, the same property `mark_usable`'s own ``expected_attempts``
+        already relies on for this exact reason (review round 6, P1).
 
         ``require_usable_unset``, if set, also gates the write on ``usable
         IS NULL``. ``state`` alone is not always enough to serialize two

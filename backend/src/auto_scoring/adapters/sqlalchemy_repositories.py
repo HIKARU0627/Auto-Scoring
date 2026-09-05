@@ -356,7 +356,12 @@ class SqlAlchemyJobRepository:
         return m.job_from_row(row) if row is not None else None
 
     def save(
-        self, job: Job, *, expected_state: JobState, require_usable_unset: bool = False
+        self,
+        job: Job,
+        *,
+        expected_state: JobState,
+        expected_attempts: int | None = None,
+        require_usable_unset: bool = False,
     ) -> None:
         """Compare-and-set on ``expected_state`` -- the state the *caller*
         observed before deciding on this transition -- not a state this call
@@ -378,6 +383,17 @@ class SqlAlchemyJobRepository:
         actually observed, so the second worker's ``WHERE state = 'queued'``
         no longer matches and it correctly loses the race.
 
+        ``expected_attempts`` adds ``attempts ==`` that value to the same
+        ``WHERE``: for a non-terminal state a job can return to (FAILED,
+        via a retry), ``state`` alone cannot tell the row the caller read
+        apart from a *different*, later occupant of that same state -- a
+        concurrent FAILED -> QUEUED -> RUNNING -> FAILED cycle changes
+        ``attempts`` (only ever bumped on a transition through RUNNING)
+        even though it lands back on the same ``state``, so pinning both
+        together closes the ABA hole `mark_usable`'s own
+        ``expected_attempts`` already closes for the same reason (review
+        round 6, P1; round 9, P1 applies it here too).
+
         ``require_usable_unset`` adds ``usable IS NULL`` to that same
         ``WHERE``: `mark_usable` never changes `state`, so without this a
         `retry_job` call that read ``usable=None`` and this call's own
@@ -390,6 +406,8 @@ class SqlAlchemyJobRepository:
             ensure_job_transition(expected_state, job.state)
 
         conditions = [JobRow.id == job.id, JobRow.state == expected_state]
+        if expected_attempts is not None:
+            conditions.append(JobRow.attempts == expected_attempts)
         if require_usable_unset:
             conditions.append(JobRow.usable.is_(None))
         result = cast(

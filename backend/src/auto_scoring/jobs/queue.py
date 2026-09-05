@@ -323,9 +323,18 @@ class JobQueueService:
                     # between the read above and this write, before this
                     # startup transaction's own writes escalate its lock --
                     # see `_requeue_after_backoff`'s identical guard (review
-                    # round 8, P1).
+                    # round 8, P1). expected_attempts=job.attempts closes
+                    # the ABA hole `state` alone cannot: another process (or
+                    # this one, elsewhere) could complete a whole
+                    # FAILED -> QUEUED -> RUNNING -> FAILED cycle for this
+                    # same job in that same window, and a state-only CAS
+                    # would still match a newer, unrelated attempt (review
+                    # round 9, P1).
                     uow.jobs.save(
-                        requeued, expected_state=JobState.FAILED, require_usable_unset=True
+                        requeued,
+                        expected_state=JobState.FAILED,
+                        expected_attempts=job.attempts,
+                        require_usable_unset=True,
                     )
                 except JobSaveConflict:
                     continue
@@ -726,6 +735,14 @@ class JobQueueService:
         `mark_usable` that wins the race in that window makes this `save`
         lose instead -- the retry then re-reads fresh (below) and correctly
         rejects via the check above.
+
+        ``expected_attempts=job.attempts`` closes the ABA hole `state`
+        alone cannot: another process (or worker, elsewhere in this one)
+        could complete a whole FAILED -> QUEUED -> RUNNING -> FAILED cycle
+        for this same job in that same window -- a fresh, unreviewed
+        attempt this call never saw -- and a state-only CAS would still
+        match it, overwriting its newer `attempts`/`error_code` with this
+        call's stale ones instead of losing the race (review round 9, P1).
         """
         for _attempt in range(_MAX_RETRY_ATTEMPTS):
             with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -739,7 +756,10 @@ class JobQueueService:
                 requeued = job.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
                 try:
                     uow.jobs.save(
-                        requeued, expected_state=JobState.FAILED, require_usable_unset=True
+                        requeued,
+                        expected_state=JobState.FAILED,
+                        expected_attempts=job.attempts,
+                        require_usable_unset=True,
                     )
                 except JobSaveConflict:
                     continue  # re-read the fresh state and retry the decision
@@ -801,7 +821,21 @@ class JobQueueService:
                     JobState.CANCELLED, updated_at=self._clock.now(), error="cancelled by user"
                 )
                 try:
-                    uow.jobs.save(cancelled, expected_state=job.state, require_usable_unset=True)
+                    # expected_attempts=job.attempts: when job.state is
+                    # FAILED, state alone cannot rule out an ABA cycle
+                    # (another process/worker completing a whole
+                    # FAILED -> QUEUED -> RUNNING -> FAILED cycle for this
+                    # job in this same window) making this cancel silently
+                    # overwrite a newer, unrelated attempt instead of losing
+                    # the race (review round 9, P1). Harmless for the other
+                    # possible states here (QUEUED/BLOCKED never carry a
+                    # stale `attempts` collision the same way).
+                    uow.jobs.save(
+                        cancelled,
+                        expected_state=job.state,
+                        expected_attempts=job.attempts,
+                        require_usable_unset=True,
+                    )
                 except JobSaveConflict:
                     continue  # re-read the fresh state and retry the decision
                 uow.commit()
@@ -1111,8 +1145,20 @@ class JobQueueService:
                 # own transaction has already released a dependent on the
                 # strength of the approval this write is about to silently
                 # clear (review round 8, P1; same reasoning as `retry_job`
-                # and `cancel_job`, review round 5).
-                uow.jobs.save(requeued, expected_state=JobState.FAILED, require_usable_unset=True)
+                # and `cancel_job`, review round 5). expected_attempts=
+                # current.attempts closes the ABA hole the check above
+                # cannot either: another process/worker could still
+                # complete a whole FAILED -> QUEUED -> RUNNING -> FAILED
+                # cycle for this job between that check and this write,
+                # landing back on FAILED with a newer, unreviewed attempt a
+                # state-only CAS would not distinguish from this one
+                # (review round 9, P1).
+                uow.jobs.save(
+                    requeued,
+                    expected_state=JobState.FAILED,
+                    expected_attempts=current.attempts,
+                    require_usable_unset=True,
+                )
             except JobSaveConflict:
                 return
             uow.commit()

@@ -1046,13 +1046,18 @@ async def test_cancel_job_retries_after_a_compare_and_set_conflict(
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
         if calls["count"] == 1:
             raise JobSaveConflict(job.id, expected_state)
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once)
@@ -1441,13 +1446,18 @@ async def test_retry_job_retries_after_a_compare_and_set_conflict(
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
         if calls["count"] == 1:
             raise JobSaveConflict(job.id, expected_state)
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once)
@@ -1748,6 +1758,7 @@ async def test_retry_job_loses_to_a_concurrent_approval_that_lands_mid_write(
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
@@ -1771,7 +1782,11 @@ async def test_retry_job_loses_to_a_concurrent_approval_that_lands_mid_write(
                 )
                 inner.commit()
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_approval)
@@ -2165,6 +2180,7 @@ async def test_requeue_after_backoff_loses_to_a_concurrent_approval_that_lands_m
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         if expected_state is JobState.FAILED and require_usable_unset:
@@ -2186,7 +2202,11 @@ async def test_requeue_after_backoff_loses_to_a_concurrent_approval_that_lands_m
                     )
                     inner.commit()
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_approval)
@@ -2242,6 +2262,7 @@ async def test_start_recovery_loses_to_a_concurrent_approval_that_lands_mid_writ
         job: Job,
         *,
         expected_state: JobState,
+        expected_attempts: int | None = None,
         require_usable_unset: bool = False,
     ) -> None:
         if expected_state is JobState.FAILED and require_usable_unset:
@@ -2259,7 +2280,11 @@ async def test_start_recovery_loses_to_a_concurrent_approval_that_lands_mid_writ
                     )
                     inner.commit()
         real_save(
-            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
         )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_approval)
@@ -2376,3 +2401,100 @@ async def test_shutdown_replaces_the_retry_added_event_not_just_clears_it(
         await _wait_until(lambda: _state(service, job_id) is JobState.SUCCEEDED)
     finally:
         await service.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Review round 9 regressions
+# --------------------------------------------------------------------------- #
+async def test_retry_job_save_loses_to_a_concurrent_aba_cycle(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: retry_job reads a FAILED job at attempt N and later writes with
+    expected_state=FAILED; state alone cannot rule out a concurrent
+    FAILED -> QUEUED -> RUNNING -> FAILED cycle completing before that
+    write -- a fresh, unreviewed attempt N+1 with its own new
+    error_code/last_error -- which would still match the same state-only
+    CAS and silently overwrite the newer attempt's real state with this
+    call's stale one instead of losing the race. Passing
+    expected_attempts=job.attempts to save() closes that hole the same way
+    mark_usable's own expected_attempts already does (review round 6, P1).
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=5,
+                error_code=ErrorCategory.TIMEOUT,
+                last_error="timed out",
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_races_a_concurrent_aba_cycle(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        expected_attempts: int | None = None,
+        require_usable_unset: bool = False,
+    ) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            # A full cycle back to FAILED, independently committed so it
+            # survives this call's own uow rolling back on the resulting
+            # lost CAS -- simulating another process/worker completing an
+            # entire retry attempt for this same job in the window between
+            # retry_job's own read and this write.
+            # real_save (the unpatched method, captured before this
+            # monkeypatch) is called directly here, not via inner.jobs.save
+            # -- the latter would recurse back into this same patched
+            # dispatcher (it is patched on the class, not this one
+            # instance) and inflate `calls` with these simulated writes
+            # too.
+            with SqlAlchemyUnitOfWork(session_factory) as inner:
+                current = inner.jobs.get("job-qa")
+                assert current is not None
+                requeued = current.transitioned_to(JobState.QUEUED, updated_at=at(seconds=1))
+                real_save(inner.jobs, requeued, expected_state=JobState.FAILED)
+                running = requeued.transitioned_to(JobState.RUNNING, updated_at=at(seconds=2))
+                real_save(inner.jobs, running, expected_state=JobState.QUEUED)
+                failed_again = running.transitioned_to(
+                    JobState.FAILED,
+                    updated_at=at(seconds=3),
+                    error_code=ErrorCategory.SERVER_ERROR,
+                    error="a completely different failure",
+                )
+                real_save(inner.jobs, failed_again, expected_state=JobState.RUNNING)
+                inner.commit()
+        real_save(
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
+        )
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_aba_cycle)
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    retried = service.retry_job("job-qa")
+
+    assert calls["count"] == 2  # the first attempt lost to the ABA cycle and had to be retried
+    assert retried.state is JobState.QUEUED
+    assert retried.attempts == 2  # requeued against the *current* attempt, not the stale one
+    job = service.get_job("job-qa")
+    assert job is not None
+    assert job.state is JobState.QUEUED
+    assert job.attempts == 2

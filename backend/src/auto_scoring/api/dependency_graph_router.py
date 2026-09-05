@@ -523,8 +523,20 @@ def build_dependency_graph_router(
                         current, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
                     )
                     try:
+                        # expected_attempts=current.attempts: when
+                        # current.state is FAILED, state alone cannot rule
+                        # out an ABA cycle -- another process/worker could
+                        # complete a whole FAILED -> QUEUED -> RUNNING ->
+                        # FAILED cycle for this job in this same window, and
+                        # a state-only CAS would still match it, silently
+                        # overwriting a newer, unrelated attempt with this
+                        # stale cancellation instead of losing the race
+                        # (review round 9, P1).
                         uow.jobs.save(
-                            cancelled, expected_state=current.state, require_usable_unset=True
+                            cancelled,
+                            expected_state=current.state,
+                            expected_attempts=current.attempts,
+                            require_usable_unset=True,
                         )
                     except JobSaveConflict:
                         refreshed = uow.jobs.get(current.id)
