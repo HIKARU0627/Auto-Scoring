@@ -74,6 +74,26 @@ def _ensure_safe_path_segment(value: str) -> None:
         raise ValueError(f"unsafe path segment: {value!r}")
 
 
+def _encode_filename_component(value: str) -> str:
+    """Deterministically encode ``value`` for use as a filename stem.
+
+    ``Question.id`` is only required by the domain layer to be non-empty --
+    nothing stops it from containing characters Windows forbids in a
+    filename (``? * " < > | :``, checked above only when they'd also be
+    unsafe as a bare *path segment*, which ``<id>.png`` is not) or from two
+    ids differing only by case: NTFS resolves filenames case-insensitively,
+    so ``"Q-1"`` and ``"q-1"`` would address the same file on Windows even
+    though they are two distinct rows in the DB, each retry of the
+    forbidden-character case would fail finalization again, and the
+    case-collision case would silently overwrite one question's crop with
+    the other's. Hex-encoding the id's UTF-8 bytes sidesteps both: the
+    result is always composed of ``[0-9a-f]`` (always a valid filename on
+    every platform), and it is byte-exact, so differently-cased or
+    differently-punctuated inputs always encode to different strings.
+    """
+    return value.encode("utf-8").hex()
+
+
 class LocalFileStore:
     def __init__(self, root: Path | str) -> None:
         self._root = Path(root).resolve()
@@ -102,7 +122,8 @@ class LocalFileStore:
 
     def submission_question_image_path(self, submission_id: str, question_id: str) -> Path:
         """Cropped answer-area image for one question of one submission."""
-        return self._resolve("submissions", submission_id, "questions", f"{question_id}.png")
+        encoded = _encode_filename_component(question_id)
+        return self._resolve("submissions", submission_id, "questions", f"{encoded}.png")
 
     def exports_dir(self) -> Path:
         return self._resolve("exports")
