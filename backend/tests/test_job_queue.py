@@ -1192,8 +1192,13 @@ async def test_mark_question_usable_aborts_when_a_concurrent_retry_changes_the_j
 
 class _ManualBackoffClock:
     """A clock whose ``sleep`` blocks on a fresh, per-call `asyncio.Event`
-    kept in `pending` -- lets a test release one specific backoff timer
-    without affecting any other still-sleeping timer."""
+    kept in `pending` -- lets a test release one specific backoff wait.
+
+    The single retry-scheduler task (review round 7, P2) only ever awaits
+    one `sleep` call at a time, so `pending` grows one entry at a time, in
+    sequence, rather than accumulating several concurrently-sleeping calls
+    the way the old one-task-per-retry design did.
+    """
 
     def __init__(self, start: datetime) -> None:
         self._now = start
@@ -1246,12 +1251,15 @@ async def test_a_stale_backoff_timer_does_not_requeue_a_newer_failed_attempt(
                 and job.attempts == 2
             )
         )
-        await _wait_until(lambda: len(clock.pending) == 2)
 
-        # Release only the first, now-stale timer; the second (current)
-        # attempt's own timer is left sleeping.
+        # Release the first, now-stale timer -- the single scheduler task
+        # was still sleeping it out (attempt 2's own entry just sits in the
+        # heap until this one is serviced). It must recognize the mismatch
+        # (attempts=2 now, but this timer was scheduled for attempt 1) and
+        # skip requeuing, then move on to service attempt 2's own entry --
+        # which starts a *second* sleep call only now, in sequence.
         clock.pending[0].set()
-        await asyncio.sleep(0.05)  # give it a chance to (incorrectly) act
+        await _wait_until(lambda: len(clock.pending) == 2)
 
         job = service.get_job(job_id)
         assert job is not None
@@ -1992,3 +2000,107 @@ async def test_mark_usable_does_not_apply_a_stale_approval_across_a_full_aba_ret
     assert qa_final.usable is True
     assert qb_final is not None
     assert qb_final.state is JobState.QUEUED  # released on the strength of the fresh approval
+
+
+# --------------------------------------------------------------------------- #
+# Review round 7 regressions
+# --------------------------------------------------------------------------- #
+async def test_an_unexpected_run_one_error_does_not_kill_the_worker(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: an unexpected exception from _run_one itself (e.g. a transient
+    SQLAlchemy OperationalError from a SQLite busy-timeout while claiming or
+    finalizing a job) must not kill the long-lived worker task processing
+    it -- nothing else in the fixed pool ever replaces a dead worker, so at
+    max_concurrency=1 the whole queue would stop until a restart.
+    """
+    _seed(session_factory, test_id="test-a", submission_id="sub-a", question_ids=["qa"])
+    _seed(session_factory, test_id="test-b", submission_id="sub-b", question_ids=["qb"])
+
+    real_get = SqlAlchemyJobRepository.get
+    calls = {"count": 0}
+
+    def _get_raises_once(self: SqlAlchemyJobRepository, job_id: str) -> Job | None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("simulated transient infra error")
+        return real_get(self, job_id)
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "get", _get_raises_once)
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=1), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-a")
+        job_a = _job_id_for_question(service, "sub-a", "qa")
+        # job_a's own claim-read hit the injected error; give the worker a
+        # moment to absorb it and return to the pool. Its own get() call
+        # here would otherwise be intercepted too, so check the DB directly.
+        await asyncio.sleep(0.05)
+        assert calls["count"] == 1
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            job_a_row = uow.jobs.get(job_a)
+        assert job_a_row is not None
+        assert job_a_row.state is JobState.QUEUED  # never even claimed
+
+        # The worker must have survived to pick up an unrelated
+        # submission's job -- it must not have died with the error.
+        service.submit_submission(submission_id="sub-b")
+        job_b = _job_id_for_question(service, "sub-b", "qb")
+        await _wait_until(lambda: _state(service, job_b) is JobState.SUCCEEDED)
+    finally:
+        await service.shutdown()
+
+
+async def test_retry_backoff_scheduling_uses_a_single_task_regardless_of_backlog_size(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """P2: a large backlog of not-yet-due retryable FAILED jobs recovered
+    at startup must not spawn one sleeping task per entry -- a single
+    `_retry_scheduler_task` services a heap of pending retries instead,
+    the same way a fixed worker pool (not one task per queued job) bounds
+    ordinary processing regardless of backlog size.
+    """
+    question_ids = [f"q{i}" for i in range(20)]
+    version = _seed(session_factory, question_ids=question_ids)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        for i, question_id in enumerate(question_ids):
+            uow.jobs.add(
+                Job(
+                    id=f"job-{i}",
+                    kind=JobKind.GRADING,
+                    submission_id="sub-1",
+                    question_id=question_id,
+                    state=JobState.FAILED,
+                    attempts=1,
+                    max_attempts=3,
+                    error_code=ErrorCategory.TIMEOUT,
+                    dependency_graph_version=version,
+                    created_at=at(),
+                    updated_at=at(),  # "just failed" -- essentially the full delay remains
+                )
+            )
+        uow.commit()
+
+    clock = FakeClock(EPOCH)
+    settings = QueueSettings(
+        max_attempts=3,
+        initial_backoff_seconds=1000.0,
+        backoff_multiplier=1.0,
+        max_backoff_seconds=1000.0,
+    )
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, settings=settings, clock=clock)
+    await service.start()
+    try:
+        # All 20 recovered jobs are not-yet-due (~1000s remains on each) --
+        # every one must have landed as heap *data*, not as its own task.
+        assert len(service._retry_heap) == 20
+        assert service._workers  # the fixed worker pool, unaffected
+        assert service._retry_scheduler_task is not None
+        assert not service._retry_scheduler_task.done()
+    finally:
+        await service.shutdown()
