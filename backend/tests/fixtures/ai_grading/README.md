@@ -114,7 +114,23 @@ count, never silently pooled into that provider's own metrics as if they too
 were part of a same-data comparison (code review finding: an earlier version
 only checked overlap dataset-wide, so a provider's solo responses on
 disjoint samples still got scored into its own aggregate exact-match/
-criterion/confidence rates).
+criterion/confidence rates). With 3+ providers, requiring only ">= 2
+responders" per cell is not enough either: if A and B answer sample X
+together, and B and C answer a *different* sample Y together, both cells
+pass an ">= 2" check even though A and C were never run on the same data at
+all -- reporting all three side by side would let a difference in sample
+difficulty masquerade as a difference in provider quality (code review
+finding). A cell is only counted when its responders are *exactly* the
+dataset-wide comparable set, not merely some 2-of-N subset of it.
+
+Every provider's `recorded` entry may only use the two recognized
+input-variant keys (`ocr_clean` / `ocr_noisy`) -- an unrecognized key (a
+typo such as `"ocr_nosiy"`) makes the harness raise rather than silently
+ignoring it: neither lookup used elsewhere in the harness iterates whatever
+keys happen to be present, so a response recorded under a misspelled key
+would otherwise never be found, leaving its cell "pending" forever while
+the harness still exits 0 as if the aggregate were complete (code review
+finding).
 
 Each sample's `input` block is parsed and cross-checked against its
 `ground_truth` (`max_score` must agree) before any of that sample's
@@ -155,6 +171,13 @@ review finding). The
 `config` column this produces is a JSON-array encoding of the five fields,
 not a `"|"`-joined string -- a naive join would let two different
 configurations collide whenever a field value itself contains `"|"`.
+`temperature` is normalized (`float()`, and negative zero folded to
+positive zero) before it is serialized into that key, so a descriptor built
+directly with the Python int literal `0` produces the same `config` as the
+same value loaded through this JSON boundary (which becomes `0.0`) -- two
+equivalent configurations must not split into separate metric buckets just
+because of which code path constructed the descriptor (code review
+finding).
 
 `latency_seconds` / `cost_usd` are validated as finite, non-negative numbers
 before they reach any aggregate -- a negative, non-finite (`nan`/`inf`), or

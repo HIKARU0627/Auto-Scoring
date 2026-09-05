@@ -401,12 +401,23 @@ provider A がサンプル X で provider B と重なりつつ、誰も応答し
 別サンプル Y にも応答を追加で持つ場合、以前の実装はこの Y の応答も
 黙って provider A 自身の集計（完全一致率など）に含めてしまっていた
 （コードレビュー指摘）。`_load_samples` の集計ループは、データセット
-全体のゲートとは別に **サンプル・入力モードごとに** 2 者以上の実応答が
-あるかを再チェックし、満たさない実応答は `outcomes` に追加せず、
-`excluded`（除外）として別途カウントする（`pending`/`staged` と同様、
-黙って捨てない）。`/tmp` で「A・B がサンプル X で重なるが、A だけが
+全体のゲートとは別に **サンプル・入力モードごとに** 実応答した provider
+の集合を再チェックし、`outcomes` に追加するのはその集合が**データセット
+全体で比較可能と判定された provider 集合と完全一致する**セルのみとする。
+満たさない実応答は `excluded`（除外）として別途カウントする（`pending`/
+`staged` と同様、黙って捨てない）。単に「2 者以上」だけを条件にすると、
+provider が 3 者以上いる場合に別の問題が起きる: A・B がサンプル X で、
+B・C が**別の**サンプル Y でそれぞれ重なっている場合、「2 者以上」条件
+だけではどちらのセルも通過してしまい、A・B・C を同じ結果表に並べて
+しまう。しかし A と C は一度も同じデータで比較されておらず、サンプルの
+難易度差が provider の優劣であるかのように見えてしまいかねない
+（コードレビュー指摘）。「完全一致」を要求することで、この 3 者混在の
+ケースも正しく除外される。`/tmp` で「A・B がサンプル X で重なるが、A だけが
 サンプル Y にも応答を持つ」データセットを作り、Y の応答が
-`evaluated cells` に含まれず `excluded: 1` として報告されることを確認した。
+`evaluated cells` に含まれず `excluded: 1` として報告されることを確認し、
+続けて「A・B がサンプル X で、B・C がサンプル Y でそれぞれ重なる」3 者
+データセットでも、X・Y のどちらのセルも `evaluated cells` に含まれず
+`excluded: 4`（4 件の実応答すべて）として報告されることを確認した。
 
 **`ocr_clean`/`ocr_noisy` の空文字を許容する**: §2.1 のとおり、生徒が
 設問を空欄のまま提出した場合の正しい OCR 結果は空文字そのものである。
@@ -431,6 +442,48 @@ provider A がサンプル X で provider B と重なりつつ、誰も応答し
 なかったため、この経路のみ真偽値の temperature を静かに記録できてしまって
 いた（コードレビュー指摘）。数値チェックの前に真偽値を明示的に拒否する
 ことで、両方の経路が同じ不変条件を守るようにした。
+
+### 3.10 provider 非依存 contract の緩和・記録経路の正規化
+
+**AI の認識結果が入力 OCR と異なることを許容する**: `AIProviderContract`
+の `test_grade_preserves_the_recognized_text` は、以前 `response.
+recognition_text` がリクエストの `ocr_text` と完全一致することを要求して
+いた。しかし §2.1 のとおり、`GradingRequest` は答案画像（`answer_image`）
+と OCR テキストの**両方**を渡す設計であり、これはまさにマルチモーダルな
+provider が手書き画像を検査して OCR の誤読を訂正できるようにするためで
+ある。実際に訂正を行う正当な provider がこの provider 非依存の contract
+test に落ちてしまっていた（コードレビュー指摘）。修正後は
+`recognition_text` が文字列であることのみを contract で要求し、
+`grading_response_from_result` が実際に認識結果を保持する（入力の
+OCR テキストへ差し替えたりしない）ことの検証は、入力とは異なる
+`recognition.text` を持つ `AIGradingResult` を直接構築する専用テスト
+（`test_grading_response_from_result_preserves_a_corrected_recognition_text`）
+に分離した。
+
+**config key の temperature を正規化する**: `ProviderDescriptor` は
+pydantic モデルではない plain `dataclass` のため、直接構築された
+インスタンスは型強制を受けない。実アダプタが `temperature=0`（Python の
+int リテラル）を渡すとそのまま `int` として保持されるが、同じ値を
+`--dataset` の JSON 境界（`_DescriptorInput`、`float` 型フィールド）経由で
+読み込むと `0.0`（`float`）になる。`json.dumps` はこの 2 つを異なる文字列
+（`0` と `0.0`）として出力するため、意味的に同一の設定が構築経路の違いだけで
+別々の metric bucket に分かれてしまっていた（コードレビュー指摘）。
+`descriptor_key` は `temperature` を `float()` へ明示変換してから
+シリアライズする。あわせて、符号付きゼロ（`-0.0`）も `0.0` へ畳み込む
+（`-0.0 == 0.0` だが JSON としては異なる文字列になるため）。
+
+**未知の記録済み input variant を拒否する**: `_load_cell`/
+`_providers_with_response_by_variant` はいずれも固定の
+`ocr_clean`/`ocr_noisy` というキー名を直接参照するだけで、記録された
+`recorded.<provider>` オブジェクトの実際のキーを走査してはいない。その
+ため、実データセットが `ocr_noisy` を `ocr_nosiy` のように誤記していても、
+どちらの参照も一致せず、その応答は静かに無視され、該当セルは永遠に
+`pending` のまま扱われてしまう。他の箇所に有効な応答があれば、ハーネスは
+不完全な集計のまま正常終了（exit 0）してしまいかねない（コードレビュー
+指摘。AGENTS.md「Verification」）。`_validate_recorded_variant_keys` を
+`_load_all_samples` の入口で呼び出し、`recorded.<provider>` のキーが
+`ocr_clean`/`ocr_noisy` 以外を含む場合、またはオブジェクトでない場合に
+ハーネスを停止させる。
 
 ---
 

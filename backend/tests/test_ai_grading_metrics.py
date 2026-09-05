@@ -359,6 +359,56 @@ def test_descriptor_key_does_not_collide_when_a_field_contains_the_delimiter() -
     assert descriptor_key(first) != descriptor_key(second)
 
 
+def test_descriptor_key_is_stable_across_int_and_float_temperature() -> None:
+    """Code review finding: ``ProviderDescriptor`` is a plain dataclass, so a
+    directly-constructed instance is never coerced -- an adapter passing the
+    Python int literal ``0`` for ``temperature`` keeps it as an ``int`` at
+    runtime, while the same value loaded through ``_DescriptorInput``
+    (pydantic, a ``float`` field) becomes ``0.0``. ``json.dumps`` renders
+    these differently (``0`` vs ``0.0``), splitting one configuration into
+    two metric buckets depending on which construction path produced it."""
+    int_temperature = ProviderDescriptor(
+        provider="test",
+        model="m",
+        version=None,
+        prompt_version="p1",
+        temperature=0,
+        structured_output_mode="json_schema",
+    )
+    float_temperature = ProviderDescriptor(
+        provider="test",
+        model="m",
+        version=None,
+        prompt_version="p1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    assert descriptor_key(int_temperature) == descriptor_key(float_temperature)
+
+
+def test_descriptor_key_folds_negative_zero_temperature_to_positive_zero() -> None:
+    """``-0.0 == 0.0`` in Python but the two floats serialize to different
+    JSON text (``"-0.0"`` vs ``"0.0"``), which would otherwise split one
+    configuration into two buckets (code review finding)."""
+    negative_zero = ProviderDescriptor(
+        provider="test",
+        model="m",
+        version=None,
+        prompt_version="p1",
+        temperature=-0.0,
+        structured_output_mode="json_schema",
+    )
+    positive_zero = ProviderDescriptor(
+        provider="test",
+        model="m",
+        version=None,
+        prompt_version="p1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    assert descriptor_key(negative_zero) == descriptor_key(positive_zero)
+
+
 def test_calibration_rates_flag_overconfident_wrong_answers() -> None:
     """docs/poc-2-ai-grading.md section 8.1: a high-confidence wrong answer
     must be distinguishable from a low-confidence wrong answer."""

@@ -115,6 +115,25 @@ class ProviderDescriptor:
             )
 
 
+def _normalized_temperature(temperature: float) -> float:
+    """Normalize a temperature value so ``descriptor_key`` is stable
+    regardless of how the ``ProviderDescriptor`` was constructed.
+
+    ``ProviderDescriptor`` is a plain ``dataclass``, not a pydantic model, so
+    a directly-constructed instance is never coerced: an adapter passing the
+    Python int literal ``0`` for ``temperature`` keeps it as an ``int`` at
+    runtime, while the same value loaded through ``_DescriptorInput``
+    (pydantic, a ``float`` field) becomes ``0.0``. ``json.dumps`` renders
+    these two differently (``0`` vs ``0.0``), splitting what should be one
+    configuration into two separate metric buckets. Converting to ``float``
+    here -- and folding negative zero to positive zero, since ``-0.0 ==
+    0.0`` but the two serialize to different JSON text -- keeps the key
+    stable across both construction paths (code review finding).
+    """
+    value = float(temperature)
+    return 0.0 if value == 0.0 else value
+
+
 def descriptor_key(descriptor: ProviderDescriptor) -> str:
     """Stable, collision-free identifier for one reproducibility configuration.
 
@@ -137,7 +156,7 @@ def descriptor_key(descriptor: ProviderDescriptor) -> str:
             descriptor.model,
             descriptor.version,
             descriptor.prompt_version,
-            descriptor.temperature,
+            _normalized_temperature(descriptor.temperature),
             descriptor.structured_output_mode,
         ],
         ensure_ascii=False,

@@ -90,7 +90,22 @@ samples nobody else ever answered; those extra cells are excluded from the
 aggregate one sample-and-variant at a time (never pooled into that
 provider's own metrics as if they were part of a same-data comparison),
 and counted separately as "excluded" rather than silently dropped (code
-review finding).
+review finding). With 3+ providers, ">= 2 responders" alone is not enough
+either: if A and B answer sample X together, and B and C answer a
+*different* sample Y together, both cells would pass an ">= 2" check even
+though A and C were never run on the same data at all -- reporting all
+three side by side would let a difference in sample difficulty masquerade
+as a difference in provider quality (code review finding). A cell is only
+counted when its responders are *exactly* the dataset-wide comparable set,
+not merely some 2-of-N subset of it.
+
+A provider's ``recorded`` entry may only use the two recognized input-variant
+keys (``ocr_clean`` / ``ocr_noisy``) -- an unrecognized key (a typo such as
+``"ocr_nosiy"``) is rejected outright rather than silently ignored: neither
+lookup used elsewhere in this module iterates arbitrary keys, so a response
+recorded under a misspelled key would otherwise never be found, leaving its
+cell "pending" forever while the harness still exits 0 as if the aggregate
+were complete (code review finding).
 
 A cell whose raw JSON fails
 :func:`auto_scoring.domain.ai_grading.parse_ai_grading_result` is a schema
@@ -195,6 +210,20 @@ class _InvalidSubject(Exception):
     cannot carry it without rejecting every correctly-formed real label file
     (code review finding). The harness still needs it to bucket the results
     table by 教科 (section 3.3), so it is read as a sibling field instead.
+    """
+
+
+class _InvalidRecordedVariant(Exception):
+    """A provider's ``recorded`` entry has an input-variant key outside
+    :data:`_INPUT_VARIANTS` (e.g. a typo like ``"ocr_nosiy"``).
+
+    ``_load_cell``/``_providers_with_response_by_variant`` only ever look up
+    the fixed ``ocr_clean``/``ocr_noisy`` keys by name -- a typo'd key is
+    never matched by either lookup, so the recorded response under it would
+    otherwise be silently ignored: the expected cell stays "pending" and the
+    harness can exit 0 printing an incomplete aggregate, even though a real
+    response for that (provider, variant) was actually recorded (AGENTS.md
+    "Verification"; code review finding).
     """
 
 
@@ -452,6 +481,35 @@ def _load_input_record(
     return input_record
 
 
+def _validate_recorded_variant_keys(recorded: dict[str, dict[str, Any]], *, path: Path) -> None:
+    """Reject a provider's ``recorded`` entry with an input-variant key
+    outside :data:`_INPUT_VARIANTS`, instead of silently ignoring it.
+
+    ``_load_cell``/``_providers_with_response_by_variant`` only ever look up
+    the fixed ``ocr_clean``/``ocr_noisy`` keys by name, never iterate
+    whatever keys happen to be present -- so a typo'd key (e.g.
+    ``"ocr_nosiy"`` instead of ``"ocr_noisy"``) is never matched by either
+    lookup. Without this check, a real recorded response under that key
+    would simply never be found: the expected cell stays "pending" forever,
+    and the harness can exit 0 printing an incomplete aggregate as if the
+    dataset had been fully reported (code review finding).
+    """
+    for provider, variants in recorded.items():
+        if not isinstance(variants, dict):
+            raise _InvalidRecordedVariant(
+                f"{path}: provider {provider!r}'s recorded entry must be an object "
+                f"keyed by input variant ({_INPUT_VARIANTS}), got {type(variants).__name__}"
+            )
+        unknown = sorted(set(variants) - set(_INPUT_VARIANTS))
+        if unknown:
+            raise _InvalidRecordedVariant(
+                f"{path}: provider {provider!r} has recorded response(s) under unknown "
+                f"input-variant key(s) {unknown} -- only {_INPUT_VARIANTS} are recognized "
+                "(this looks like a typo; a response recorded there would otherwise be "
+                "silently ignored rather than counted)"
+            )
+
+
 def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
     """Parse and validate every file's ``ground_truth`` and ``input`` block.
 
@@ -463,6 +521,7 @@ def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
     parsed: list[_ParsedSample] = []
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
+        _validate_recorded_variant_keys(raw.get("recorded", {}), path=path)
         subject = _load_subject(raw, path=path)
         truth = _load_ground_truth(raw, path=path)
         input_record = _load_input_record(raw, truth=truth, path=path)
@@ -489,16 +548,20 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int, int]:
     (some other sample recorded that provider) but missing for this one.
 
     The fourth count ("excluded") covers a real recorded response whose
-    *own* ``(sample, input_variant)`` has no second provider recorded there
-    -- so, even though a dataset-wide pair of providers overlaps somewhere
-    else in the dataset (the :func:`_providers_with_overlapping_recordings`
-    gate below), *this particular* response has no same-data comparison
-    partner. Such a cell is never added to ``outcomes``: pooling it into its
-    provider's aggregate metrics would silently blend a compared sample with
-    an uncompared one, skewing that provider's own exact-match / criterion /
-    confidence rates using data no other candidate was ever run against
-    (code review finding). It is still counted (never silently dropped),
-    same as ``pending``/``staged``.
+    *own* ``(sample, input_variant)`` was not answered by *exactly* the full
+    set of providers found comparable dataset-wide (see
+    :func:`_providers_with_overlapping_recordings`). Requiring an exact
+    match, not just ">= 2 responders", matters once there are 3+ providers:
+    if A and B both answer sample X, and B and C both answer a *different*
+    sample Y, a ">= 2" check alone would accept both cells and report A, B,
+    and C side by side as if they had been compared together -- but A and C
+    were never run on the same data at all, so their rates are not
+    comparable, and sample difficulty differences could masquerade as a
+    provider-quality difference (code review finding; docs/poc-2-ai-grading.md
+    section 2's same-data requirement). A cell failing this check is never
+    added to ``outcomes``: pooling it into its provider's aggregate metrics
+    would silently blend a compared sample with an uncompared one. It is
+    still counted (never silently dropped), same as ``pending``/``staged``.
 
     Raises unless at least :data:`_MINIMUM_PROVIDERS` providers each have a
     real recorded response on a *shared sample and input variant* (see
@@ -539,6 +602,12 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int, int]:
         # ``comparable`` gate above: a provider can be part of the dataset's
         # overall comparison (via some *other* sample) while still having no
         # comparison partner on *this* sample/variant (code review finding).
+        # Every responder set with >= 2 members is, by construction, a
+        # subset of ``comparable`` (that is exactly how ``comparable`` was
+        # built above), so requiring equality -- not just ">= 2" -- is what
+        # makes this a *common* cohort: a cell only counts if it was
+        # answered by the full comparable set, not just some 2-of-N subset
+        # of it (code review finding).
         responders_by_variant = _providers_with_response_by_variant(sample.recorded)
         for provider in sorted(providers):
             cells_for_provider = sample.recorded.get(provider, {})
@@ -551,7 +620,7 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int, int]:
                     pending += 1
                     continue
                 assert config_key is not None  # only None when is_pending
-                if len(responders_by_variant[variant]) < _MINIMUM_PROVIDERS:
+                if responders_by_variant[variant] != comparable:
                     excluded += 1
                     continue
                 outcomes.append(

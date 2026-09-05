@@ -67,10 +67,22 @@ class AIProviderContract:
     def test_grade_preserves_the_recognized_text(self, provider: AIProvider) -> None:
         """simplified-design-specification.md section 16.5 lists "AI認識文字"
         as its own review-UI field, distinct from the confidence number
-        (Issue #14 review: "GradingResponseにrecognized textを保持する")."""
+        (Issue #14 review: "GradingResponseにrecognized textを保持する").
+
+        Not required to equal the request's ``ocr_text``: a real multimodal
+        provider is given ``answer_image`` too (docs/poc-2-ai-grading.md
+        section 2.1 -- exactly so it can derive Recognition Confidence from
+        the handwriting itself, not just trust the given OCR text) and may
+        legitimately correct an OCR misreading, so its own recognized
+        reading can differ from what it was given (code review finding: this
+        provider-agnostic contract test used to reject any conforming
+        adapter that corrects OCR errors, since it required byte-for-byte
+        equality with the input). See
+        ``test_grading_response_from_result_preserves_a_corrected_recognition_text``
+        below for the mapping-fidelity check this leaves in place.
+        """
         response = provider.grade(_VALID_REQUEST)
         assert isinstance(response.recognition_text, str)
-        assert response.recognition_text == _VALID_REQUEST.ocr_text
 
     def test_grade_preserves_annotation_candidates(self, provider: AIProvider) -> None:
         """simplified-design-specification.md section 12.1: the app places
@@ -189,6 +201,41 @@ class TestReplayAIProviderContract(AIProviderContract):
     @pytest.fixture
     def provider(self) -> _ReplayAIProvider:
         return _ReplayAIProvider()
+
+
+def test_grading_response_from_result_preserves_a_corrected_recognition_text() -> None:
+    """Mapping-fidelity check, distinct from the provider-agnostic contract
+    above (which no longer requires equality with the request's ``ocr_text``,
+    since a real provider may legitimately correct it): builds an
+    ``AIGradingResult`` whose ``recognition.text`` deliberately differs from
+    any request's OCR text -- as a real multimodal provider's corrected
+    reading would -- and confirms ``grading_response_from_result`` carries
+    that exact value through, rather than silently dropping it or defaulting
+    to something else."""
+    raw = json.dumps(
+        {
+            "questionId": "q1",
+            "recognition": {"text": "訂正後の認識結果", "confidence": 0.95},
+            "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
+            "criteria": [
+                {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+            ],
+            "comment": "コメント",
+            "rationale": "全体根拠",
+            "annotations": [],
+        }
+    )
+    parsed = parse_ai_grading_result(raw)
+    descriptor = ProviderDescriptor(
+        provider="test",
+        model="test",
+        version=None,
+        prompt_version="v1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    response = grading_response_from_result(parsed, descriptor=descriptor, latency_seconds=0.0)
+    assert response.recognition_text == "訂正後の認識結果"
 
 
 def test_provider_unavailable_is_distinct_from_schema_violation() -> None:
