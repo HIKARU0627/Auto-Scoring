@@ -382,3 +382,47 @@ def test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body
     # The rejected request never got far enough to create a row.
     with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
         assert len(uow.submissions.list_for_test("test-1")) == 1
+
+
+def test_starting_the_app_repairs_a_submission_left_incomplete_by_a_prior_crash(
+    data_root: Path,
+) -> None:
+    """create_app() runs a startup repair sweep (api/app.py) for exactly the
+    case a caught FinalizationError can't cover: a submission that committed
+    successfully in a *previous* process, one of whose files never actually
+    reached disk before that process died. Simulate the crash by deleting a
+    file after a normal successful upload, then create a fresh app instance
+    against the same data_root (as a restart would) and confirm the sweep
+    moves it to error before the app ever serves a request.
+    """
+    first_app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    _seed_test(data_root)
+    first_client = TestClient(first_app)
+    created = first_client.post(
+        "/tests/test-1/submissions",
+        headers=_auth(),
+        files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+    )
+    assert created.status_code == 201
+    submission_id = created.json()["id"]
+
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        submission = uow.submissions.get(submission_id)
+    assert submission is not None
+    (data_root / submission.source_pdf_path).unlink()
+
+    restarted_app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    restarted_client = TestClient(restarted_app)
+
+    fetched = restarted_client.get(f"/submissions/{submission_id}", headers=_auth())
+    assert fetched.status_code == 200
+    assert fetched.json()["state"] == "error"
+    assert fetched.json()["review_reason"] == "finalization_failed"

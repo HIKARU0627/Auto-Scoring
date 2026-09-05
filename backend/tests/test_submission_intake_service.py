@@ -24,6 +24,7 @@ from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
     SubmissionRetryConflictError,
     intake_submission,
+    repair_incomplete_submissions,
 )
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import (
@@ -522,6 +523,81 @@ def test_finalization_failure_marks_error_and_a_retry_heals_the_missing_file(
     assert retried.submission.id == failed.id
     assert retried.submission.state is SubmissionState.AI_PROCESSED
     assert source_path.read_bytes() == data
+
+
+def test_repair_incomplete_submissions_moves_a_submission_with_a_missing_file_to_error(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """Standing in for a process crash or power loss between the DB commit
+    and the file writes that follow it (unlike a raised write failure,
+    nothing runs to flag this while it happens): a submission commits
+    successfully, then one of its files is deleted out from under it
+    (simulating "this write never actually completed"). The next startup's
+    repair sweep must notice and move it to error, the same outcome as a
+    caught FinalizationError, so a re-upload of the same PDF becomes a
+    retry instead of staying rejected as a duplicate forever.
+    """
+    q1 = make_question(id="q-1", page=1, answer_area=NormalizedRect(x=0, y=0, width=1, height=1))
+    _seed_test_with_questions(make_uow, questions=[q1])
+    data = _pdf_bytes(pages=1)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+    assert result.submission.state is SubmissionState.AI_PROCESSED
+
+    source_path = store.root / result.submission.source_pdf_path
+    source_path.unlink()
+
+    with make_uow() as uow:
+        repaired = repair_incomplete_submissions(uow, store)
+    assert repaired == [result.submission.id]
+
+    with make_uow() as uow:
+        submission = uow.submissions.get(result.submission.id)
+    assert submission is not None
+    assert submission.state is SubmissionState.ERROR
+    assert submission.review_reason == "finalization_failed"
+
+
+def test_repair_incomplete_submissions_leaves_a_fully_written_submission_alone(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    q1 = make_question(id="q-1", page=1, answer_area=NormalizedRect(x=0, y=0, width=1, height=1))
+    _seed_test_with_questions(make_uow, questions=[q1])
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=_pdf_bytes(pages=1),
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        repaired = repair_incomplete_submissions(uow, store)
+    assert repaired == []
+
+    with make_uow() as uow:
+        submission = uow.submissions.get(result.submission.id)
+    assert submission is not None
+    assert submission.state is SubmissionState.AI_PROCESSED
 
 
 def test_reintake_of_an_errored_submission_with_downstream_processing_is_rejected(

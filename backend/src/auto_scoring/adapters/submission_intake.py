@@ -440,3 +440,50 @@ def _build_answer_image(
         reason=reason,
         created_at=now,
     )
+
+
+def repair_incomplete_submissions(uow: SqlAlchemyUnitOfWork, store: LocalFileStore) -> list[str]:
+    """Move any submission whose expected files are missing on disk back to
+    ``error``, so a re-upload of the same PDF is recognized as a retry
+    instead of ``REJECT_DUPLICATE``. Returns the ids repaired this way.
+
+    ``FinalizationError`` (``adapters.atomic``) catches a *raised* write
+    failure and does exactly this at the call site -- but a process crash or
+    power loss between ``transactional_operation``'s DB commit and the file
+    writes that follow it leaves a submission recorded as
+    ``ai_processed``/``needs_review`` with some files missing, with no
+    exception handler ever running to notice. Call this once at startup
+    (``api/app.py::create_app``), the same way ``LocalFileStore.sweep_temp``
+    cleans up interrupted writes' leftover ``*.part`` files, to catch what a
+    prior run left in that state before it could shut down cleanly.
+
+    This only ever *detects* the problem and makes it retryable again -- it
+    never regenerates a file itself. The user still has to re-upload the
+    same PDF (the sidecar keeps no other durable copy of the upload bytes
+    between requests) for the normal retry path to actually rewrite
+    whatever's missing.
+    """
+    repaired: list[str] = []
+    for test in uow.tests.list_all():
+        for submission in uow.submissions.list_for_test(test.id):
+            if submission.state not in (SubmissionState.AI_PROCESSED, SubmissionState.NEEDS_REVIEW):
+                continue
+            expected_paths = [
+                store.submission_source_pdf_path(submission.id),
+                *(
+                    store.submission_page_image_path(submission.id, page)
+                    for page in range(1, submission.page_count + 1)
+                ),
+                *(
+                    store.root / image.image_path
+                    for image in uow.answer_images.list_for_submission(submission.id)
+                ),
+            ]
+            if all(path.is_file() for path in expected_paths):
+                continue
+            uow.submissions.mark_intake_outcome(
+                submission.id, SubmissionState.ERROR, "finalization_failed"
+            )
+            uow.commit()
+            repaired.append(submission.id)
+    return repaired

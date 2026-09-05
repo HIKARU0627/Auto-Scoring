@@ -22,6 +22,7 @@ from auto_scoring.adapters.submission_intake import (
     SubmissionIntakeResult,
     SubmissionRetryConflictError,
     intake_submission,
+    repair_incomplete_submissions,
 )
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
@@ -166,6 +167,19 @@ def create_app(
     db_url = sqlite_url(store.database_path())
     upgrade(db_url, "head")
     session_factory = build_session_factory(create_sqlite_engine(db_url))
+
+    # Startup crash recovery. sweep_temp was always documented as "run it on
+    # startup" (its own docstring) but was never actually wired up anywhere;
+    # it only removes interrupted writes' leftover *.part files, not the DB
+    # side of the same problem -- a prior run that crashed or lost power
+    # between a submission's DB commit and the file writes that follow it
+    # (adapters.atomic.FinalizationError only catches that failure when the
+    # process is alive to raise it) leaves that submission stuck: recorded
+    # as complete, some files missing, and no way to retry it.
+    # repair_incomplete_submissions covers that other half.
+    store.sweep_temp()
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        repair_incomplete_submissions(uow, store)
 
     engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()
