@@ -42,18 +42,29 @@ times both input variants (``ocr_clean`` / ``ocr_noisy``) -- not just the
 cells a given sample happens to define. A cell missing from that matrix (no
 ``recorded[provider][variant]`` entry at all, or one with no ``response`` key)
 is "pending", never silently skipped. The PoC requires comparing at least 2
-candidates *on the same data* (docs/poc-2-ai-grading.md section 2): an empty
-or all-pending ``recorded`` entry does not count as a candidate, and two
-providers recorded only on disjoint samples (never together on one question)
-do not count as a comparison either -- both are refused outright rather than
-printed as if the comparison were complete (code review finding).
+candidates *on the same data, on the same input variant* (docs/poc-2-ai-grading.md
+section 2): an empty or all-pending ``recorded`` entry does not count as a
+candidate, and neither does a pair of providers recorded only on disjoint
+samples, or recorded on the same sample but under different variants
+(provider A only on ``ocr_clean``, provider B only on ``ocr_noisy``) -- ``clean``
+and ``noisy`` are different evaluation modes (section 2.1), so that is still
+not a comparison. All three are refused outright rather than printed as if
+the comparison were complete (code review finding).
+
+Every recorded ``input`` block is parsed and cross-checked against its
+``ground_truth`` (``max_score`` must agree) before any cell in that sample is
+scored: a same-data comparison requires the underlying question material,
+not just the final score, to actually match (code review finding).
 
 A cell whose raw JSON fails
 :func:`auto_scoring.domain.ai_grading.parse_ai_grading_result` is a schema
 violation and is scored as such -- never as a free-text-parsed guess
 (Issue #14 acceptance). A cell's ``descriptor`` (model / version / prompt
-version / temperature / structured-output mode) is read from the recorded
-data itself, never fabricated here, and is required on every non-pending
+version / temperature / structured-output mode) is parsed and strictly
+validated by :func:`auto_scoring.domain.ai_provider.parse_provider_descriptor`
+-- never coerced (code review finding: a naive ``str()``/``float()`` cast
+would turn ``model: null`` into the literal string ``"None"``, or
+``temperature: true`` into ``1.0``) -- and is required on every non-pending
 cell (even one that turns out to be a schema violation): two cells for the
 same ``provider`` name recorded under different settings -- including a
 prompt template edit alone -- are aggregated as separate buckets, keyed on
@@ -82,16 +93,19 @@ from pydantic import ValidationError
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_grading_metrics import (
     GradingGroundTruth,
+    GradingInputRecord,
     SampleOutcome,
     evaluate_sample,
     summarize_by_provider,
     to_markdown_table,
+    validate_input_matches_truth,
 )
 from auto_scoring.domain.ai_provider import (
     GradingResponse,
     ProviderDescriptor,
     descriptor_key,
     grading_response_from_result,
+    parse_provider_descriptor,
 )
 
 _DEFAULT_DATASET = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "ai_grading"
@@ -107,27 +121,8 @@ _INPUT_VARIANTS = ("ocr_clean", "ocr_noisy")
 _MINIMUM_PROVIDERS = 2
 
 
-class _MissingDescriptor(Exception):
-    """A recorded cell has a ``response`` but no ``descriptor`` metadata."""
-
-
-def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) -> ProviderDescriptor:
-    raw = cell.get("descriptor")
-    if raw is None:
-        raise _MissingDescriptor(
-            f"{path}: provider {provider!r} has a recorded response but no 'descriptor' "
-            "(model/version/prompt_version/temperature/structured_output_mode) -- cannot "
-            "be reproduced or safely bucketed (Issue #14 '再現条件'). Add a descriptor "
-            "object to this cell."
-        )
-    return ProviderDescriptor(
-        provider=provider,
-        model=str(raw["model"]),
-        version=None if raw.get("version") is None else str(raw["version"]),
-        prompt_version=str(raw["prompt_version"]),
-        temperature=float(raw["temperature"]),
-        structured_output_mode=str(raw["structured_output_mode"]),
-    )
+class _InvalidDescriptor(Exception):
+    """A recorded cell's ``descriptor`` is missing or fails strict validation."""
 
 
 class _InvalidMeasurement(Exception):
@@ -141,6 +136,30 @@ class _InvalidMeasurement(Exception):
     ``inf``) must be rejected before it reaches the adoption-gate metrics,
     not coerced or fed into ``statistics.fmean`` as-is (code review finding).
     """
+
+
+class _InvalidInput(Exception):
+    """A recorded sample's ``input`` block is missing, malformed, or
+    disagrees with its ``ground_truth`` (code review finding)."""
+
+
+def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) -> ProviderDescriptor:
+    raw = cell.get("descriptor")
+    if raw is None:
+        raise _InvalidDescriptor(
+            f"{path}: provider {provider!r} has a recorded response but no 'descriptor' "
+            "(model/version/prompt_version/temperature/structured_output_mode) -- cannot "
+            "be reproduced or safely bucketed (Issue #14 '再現条件'). Add a descriptor "
+            "object to this cell."
+        )
+    try:
+        return parse_provider_descriptor(json.dumps(raw), provider=provider)
+    except ValidationError as exc:
+        raise _InvalidDescriptor(
+            f"{path}: provider {provider!r} has an invalid 'descriptor' "
+            f"(must be model/version/prompt_version/temperature/structured_output_mode, "
+            f"strictly typed, non-blank strings, finite non-negative temperature): {exc}"
+        ) from exc
 
 
 def _validated_measurement(value: object, *, field: str, provider: str, path: Path) -> float | None:
@@ -215,8 +234,9 @@ def _all_providers(files: list[Path]) -> set[str]:
     *not* used to decide whether the dataset qualifies as a real comparison
     (see :func:`_providers_with_overlapping_recordings`): an empty
     ``"claude": {}`` placeholder, or a provider recorded only on samples no
-    other provider ever touched, is a key here but must not count as a
-    second candidate being compared (code review finding).
+    other provider ever touched (or under a different input variant), is a
+    key here but must not count as a second candidate being compared
+    (code review finding).
     """
     providers: set[str] = set()
     for path in files:
@@ -225,14 +245,24 @@ def _all_providers(files: list[Path]) -> set[str]:
     return providers
 
 
-def _providers_with_response_in_file(raw: dict[str, Any]) -> set[str]:
-    """Providers that have an actual (non-pending) ``response`` recorded
-    somewhere in this one file, for at least one input variant."""
-    providers: set[str] = set()
+def _providers_with_response_by_variant(raw: dict[str, Any]) -> dict[str, set[str]]:
+    """Providers that have an actual (non-pending) ``response`` recorded in
+    this one file, split by input variant.
+
+    Split by variant, not merged: a provider recorded only on ``ocr_clean``
+    and another recorded only on ``ocr_noisy`` for the same sample have
+    never actually been compared against each other -- ``ocr_clean`` and
+    ``ocr_noisy`` are different evaluation modes (docs/poc-2-ai-grading.md
+    section 2.1), so overlap must be checked within one variant at a time
+    (code review finding).
+    """
+    by_variant: dict[str, set[str]] = {variant: set() for variant in _INPUT_VARIANTS}
     for provider, variants in raw.get("recorded", {}).items():
-        if any(isinstance(cell, dict) and "response" in cell for cell in variants.values()):
-            providers.add(provider)
-    return providers
+        for variant in _INPUT_VARIANTS:
+            cell = variants.get(variant)
+            if isinstance(cell, dict) and "response" in cell:
+                by_variant[variant].add(provider)
+    return by_variant
 
 
 def _providers_with_overlapping_recordings(files: list[Path]) -> set[str]:
@@ -240,23 +270,42 @@ def _providers_with_overlapping_recordings(files: list[Path]) -> set[str]:
 
     A provider qualifies only if it has recorded an actual response (not
     just an empty or all-pending ``recorded`` entry) *and* shares at least
-    one sample with another such provider -- i.e. there is at least one
-    question both providers were actually run against. Two providers each
-    recorded only on disjoint samples are never compared on the same data,
-    so neither counts (code review finding: `len(providers) >= 2` on raw
-    dict keys passed even when the dataset had an empty placeholder entry,
-    or two providers that never appeared together on one question).
+    one sample *and input variant* with another such provider -- i.e. there
+    is at least one (question, variant) pair both providers were actually
+    run against. Two providers each recorded only on disjoint samples, or
+    only under different variants of the same sample, are never compared on
+    the same data, so neither counts (code review finding: `len(providers)
+    >= 2` on raw dict keys passed even when the dataset had an empty
+    placeholder entry, two providers that never appeared together on one
+    question, or two providers recorded on the same question but under
+    different input variants).
     """
-    per_file: list[set[str]] = []
+    overlapping: set[str] = set()
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        per_file.append(_providers_with_response_in_file(raw))
-
-    overlapping: set[str] = set()
-    for providers_in_file in per_file:
-        if len(providers_in_file) >= _MINIMUM_PROVIDERS:
-            overlapping.update(providers_in_file)
+        by_variant = _providers_with_response_by_variant(raw)
+        for providers_in_variant in by_variant.values():
+            if len(providers_in_variant) >= _MINIMUM_PROVIDERS:
+                overlapping.update(providers_in_variant)
     return overlapping
+
+
+def _load_input_record(raw: dict[str, Any], *, truth: GradingGroundTruth, path: Path) -> None:
+    """Parse this sample's ``input`` block and cross-check it against ``truth``.
+
+    Raises ``_InvalidInput`` if ``input`` is missing, fails strict
+    validation, or disagrees with ``ground_truth`` (e.g. a different
+    ``max_score``): a same-data comparison requires the underlying question
+    material to actually match, not just the recorded score
+    (code review finding).
+    """
+    if "input" not in raw:
+        raise _InvalidInput(f"{path}: sample has no 'input' block to validate against")
+    try:
+        input_record = GradingInputRecord.from_mapping(raw["input"])
+        validate_input_matches_truth(input_record, truth)
+    except (ValidationError, ValueError) as exc:
+        raise _InvalidInput(f"{path}: invalid or inconsistent 'input' block: {exc}") from exc
 
 
 def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
@@ -268,13 +317,13 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     dataset-wide) -- distinct from "pending" cells, which are expected
     (some other sample recorded that provider) but missing for this one.
 
-    Raises ``SystemExit`` unless at least
-    :data:`_MINIMUM_PROVIDERS` providers each have a real recorded response
-    on a *shared* sample (see :func:`_providers_with_overlapping_recordings`):
-    the PoC requires comparing candidates on the same data, so a dataset
-    where only one provider (or several, but never together on one
-    question) has actually been run is refused outright rather than printed
-    as if the comparison were complete (code review finding).
+    Raises unless at least :data:`_MINIMUM_PROVIDERS` providers each have a
+    real recorded response on a *shared sample and input variant* (see
+    :func:`_providers_with_overlapping_recordings`): the PoC requires
+    comparing candidates on the same data, so a dataset where only one
+    provider (or several, but never together on one question and variant)
+    has actually been run is refused outright rather than printed as if the
+    comparison were complete (code review finding).
     """
     files = sorted(dataset.glob("*.json"))
     if not files:
@@ -288,12 +337,13 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     if len(comparable) < _MINIMUM_PROVIDERS:
         raise SystemExit(
             f"only {len(comparable)} provider(s) have a real recorded response on a "
-            f"shared sample ({sorted(comparable)}) -- PoC 2 requires comparing >= "
-            f"{_MINIMUM_PROVIDERS} candidates on the same data (docs/poc-2-ai-grading.md "
-            "section 2). Refusing to report a result that is not a same-data comparison; "
-            "an empty/placeholder provider entry, or providers recorded only on disjoint "
-            "samples, do not count. Record at least one more provider on a shared sample "
-            "before re-running."
+            f"shared sample and input variant ({sorted(comparable)}) -- PoC 2 requires "
+            f"comparing >= {_MINIMUM_PROVIDERS} candidates on the same data "
+            "(docs/poc-2-ai-grading.md section 2). Refusing to report a result that is "
+            "not a same-data comparison; an empty/placeholder provider entry, providers "
+            "recorded only on disjoint samples, or providers recorded under different "
+            "input variants of the same sample, do not count. Record at least one more "
+            "provider on a shared sample and variant before re-running."
         )
 
     outcomes: list[SampleOutcome] = []
@@ -301,6 +351,7 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
         truth = GradingGroundTruth.from_mapping(raw["ground_truth"])
+        _load_input_record(raw, truth=truth, path=path)
         recorded: dict[str, dict[str, Any]] = raw.get("recorded", {})
         for provider in sorted(providers):
             cells_for_provider = recorded.get(provider, {})

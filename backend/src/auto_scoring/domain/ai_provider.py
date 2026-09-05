@@ -21,11 +21,19 @@ only pins the contract every provider must honour:
 
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Annotated, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from auto_scoring.domain.ai_grading import AIGradingResult
 from auto_scoring.domain.models import AnnotationKind, CriterionOutcome
+
+#: A required string that must contain more than just whitespace (mirrors
+#: ``ai_grading._NonBlankStr``): plain ``min_length=1`` accepts ``" "``.
+_NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class SchemaViolation(Exception):
@@ -70,7 +78,7 @@ class ProviderDescriptor:
 
 
 def descriptor_key(descriptor: ProviderDescriptor) -> str:
-    """Stable identifier for one reproducibility configuration.
+    """Stable, collision-free identifier for one reproducibility configuration.
 
     Two recordings under the same ``provider`` name but a different model,
     version, prompt version, temperature, or structured-output mode are two
@@ -78,10 +86,70 @@ def descriptor_key(descriptor: ProviderDescriptor) -> str:
     bucket (code review finding: a passing and a failing configuration
     averaged together can look like an overall pass). Callers key
     aggregation on this, not on ``provider`` alone.
+
+    Encoded as a JSON array rather than a ``"|"``-joined string: a naive
+    join is ambiguous whenever a field value itself contains the delimiter
+    (code review finding: ``model="a|b", version="c"`` and ``model="a",
+    version="b|c"`` would join to the identical string). JSON array
+    serialization escapes/quotes each element, so the two cases are never
+    equal.
     """
-    return (
-        f"{descriptor.model}|{descriptor.version}|{descriptor.prompt_version}|"
-        f"{descriptor.temperature}|{descriptor.structured_output_mode}"
+    return json.dumps(
+        [
+            descriptor.model,
+            descriptor.version,
+            descriptor.prompt_version,
+            descriptor.temperature,
+            descriptor.structured_output_mode,
+        ],
+        ensure_ascii=False,
+    )
+
+
+class _DescriptorInput(BaseModel):
+    """Untrusted-input boundary for one recorded cell's ``descriptor``.
+
+    Strictly validated, never coerced (code review finding: a naive
+    ``str(raw["model"])`` / ``float(raw["temperature"])`` cast would turn
+    ``model: null`` into the literal string ``"None"``, or
+    ``temperature: true`` into ``1.0``, silently accepting reproducibility
+    metadata that cannot actually reproduce the call). This is the same
+    trust boundary as an ``AIGradingResult`` response
+    (``ai_grading.parse_ai_grading_result``) -- a real ``--dataset`` file is
+    untrusted input (AGENTS.md "Verification").
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    model: _NonBlankStr
+    version: _NonBlankStr | None = None
+    prompt_version: _NonBlankStr
+    temperature: float = Field(ge=0.0)
+    structured_output_mode: _NonBlankStr
+
+    @model_validator(mode="after")
+    def _temperature_is_finite(self) -> _DescriptorInput:
+        if not math.isfinite(self.temperature):
+            raise ValueError(f"temperature must be finite, got {self.temperature!r}")
+        return self
+
+
+def parse_provider_descriptor(raw: str | bytes, *, provider: str) -> ProviderDescriptor:
+    """Parse and validate one recorded cell's ``descriptor`` JSON.
+
+    Raises ``pydantic.ValidationError`` on any malformed value (missing
+    field, wrong type, blank string, non-finite temperature, unknown extra
+    field, ...) -- there is no fallback that coerces a bad value into
+    something plausible-looking.
+    """
+    parsed = _DescriptorInput.model_validate_json(raw)
+    return ProviderDescriptor(
+        provider=provider,
+        model=parsed.model,
+        version=parsed.version,
+        prompt_version=parsed.prompt_version,
+        temperature=parsed.temperature,
+        structured_output_mode=parsed.structured_output_mode,
     )
 
 

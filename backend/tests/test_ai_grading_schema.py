@@ -198,3 +198,24 @@ def test_recognition_text_may_be_empty_for_an_unreadable_region() -> None:
     (mirrors domain.ocr.OcrResult, not a value to reject)."""
     result = _parse({"recognition": {"text": "", "confidence": 0.1}})
     assert result.recognition.text == ""
+
+
+def test_snake_case_question_id_is_rejected_not_populated_by_name() -> None:
+    """Code review finding: the documented wire contract is camelCase
+    (``questionId``) only. Accepting the Python-style ``question_id`` too
+    would let a non-conformant provider response pass as schema-valid,
+    understating the real schema violation rate."""
+    payload = dict(_VALID)
+    payload["question_id"] = payload.pop("questionId")
+    with pytest.raises(ValidationError):
+        parse_ai_grading_result(json.dumps(payload))
+
+
+def test_snake_case_max_score_is_rejected_not_populated_by_name() -> None:
+    payload = dict(_VALID)
+    assert isinstance(payload["grading"], dict)
+    grading: dict[str, object] = dict(payload["grading"])
+    grading["max_score"] = grading.pop("maxScore")
+    payload["grading"] = grading
+    with pytest.raises(ValidationError):
+        parse_ai_grading_result(json.dumps(payload))

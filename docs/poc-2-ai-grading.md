@@ -100,12 +100,17 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 「実際の応答が記録された provider」が 2 種類未満の場合、`evaluated cells: 0`
 の空表を「比較完了」であるかのように出力せず、非ゼロ終了で明示的に拒否する
 （§4.2・§7.3 参照）。単に `recorded` の辞書キーの数を数えるのではなく、
-**同じ答案（サンプル）上で** 2 candidate 以上が実際に応答を記録している
-かどうかを見る: 空の `"claude": {}` のようなプレースホルダは候補として
-数えず、2 candidate が互いに素な答案にしか応答を持たない場合（一度も
-同じ設問で両方が採点していない場合）も比較とはみなさない（コードレビュー
-指摘: 単一候補の結果、または実際には同一データ上で比較されていない結果を、
-比較結果として報告してはならない）。
+**同じ答案（サンプル）・同じ入力モード（`ocr_clean` または `ocr_noisy`）上で**
+2 candidate 以上が実際に応答を記録しているかどうかを見る: 空の
+`"claude": {}` のようなプレースホルダは候補として数えず、2 candidate が
+互いに素な答案にしか応答を持たない場合（一度も同じ設問で両方が採点して
+いない場合）も比較とはみなさない。さらに、同じ答案であっても一方が
+`ocr_clean` だけ、もう一方が `ocr_noisy` だけしか応答を持たない場合も
+比較とはみなさない（`ocr_clean` と `ocr_noisy` は §2.1 のとおり別の評価
+モードであり、両者を混ぜて「比較できた」とは扱えないため。コードレビュー
+指摘: 単一候補の結果、実際には同一データ上で比較されていない結果、または
+同じ答案でも異なる入力モードにしか応答がない結果を、比較結果として報告
+してはならない）。
 
 ### 2.1 評価モード（Issue #14「OCR正解文字とOCR誤認文字を分けて入力し、Recognition ConfidenceとGrading Confidenceを混同しない」）
 
@@ -208,12 +213,24 @@ structured_output_mode が同じままでも、別の再現不能な設定とし
 
 同じ provider 名の下で設定違いの記録を 1 行にプールすると、片方が採用基準を
 満たし片方が満たさない場合でも平均としては通過して見えてしまう
-（コードレビュー指摘）。結果表の `config` 列にこの識別子
-（`model|version|prompt_version|temperature|structured_output_mode`）が
-表示される（内部の `|` はセル区切りと混同されないよう `\|` にエスケープ
-して描画するため、そのまま Markdown として貼り付けても列がずれない）。
+（コードレビュー指摘）。結果表の `config` 列にこの識別子が表示される。
+識別子は `model` / `version` / `prompt_version` / `temperature` /
+`structured_output_mode` を JSON 配列としてエンコードしたもの（例:
+`["gemini-2.5-flash", "2026-01", "v3", 0.0, "json_schema"]`）で、
+`"|"` 区切り文字列は使わない（コードレビュー指摘: 単純な `"|"` 結合は
+フィールド値自体に `|` が含まれると衝突しうる。例えば
+`model="a|b", version="c"` と `model="a", version="b|c"` が同じ文字列に
+なってしまう。JSON 配列エンコードなら各要素が引用符で区切られるため
+衝突しない）。この識別子自体にモデル名などを通じて `|` が含まれる場合に
+備え、Markdown 描画時はセル区切りと混同されないよう `|` を `\|` に
+エスケープする（そのまま Markdown として貼り付けても列がずれない）。
 schema violation で終わった記録も、失敗する前に `descriptor` を読み取って
-から集計するため、どの設定が失敗したかが追跡できる。
+から集計するため、どの設定が失敗したかが追跡できる。`descriptor` 自体は
+`auto_scoring.domain.ai_provider.parse_provider_descriptor`（strict な
+Pydantic モデル）で検証し、値をコンストラクタで型キャストしない
+（コードレビュー指摘: 素朴な `str(raw["model"])`/`float(raw["temperature"])`
+は `model: null` を文字列 `"None"` に、`temperature: true` を `1.0` に
+変換してしまい、再現できない設定を「有効」として受理してしまう）。
 
 ### 3.4 criterion 一致率の分母（正解ラベル基準）
 
@@ -225,6 +242,27 @@ criterion 一致率の分母は**正解ラベルに存在する criterion の数
 85% 以上の採用ゲート（§8.1）を通過できてしまう。逆に、正解ラベルに
 存在しない criterion（意図的に記録されなかった人間ラベル）を応答が
 追加で返しても、分母にも分子にも数えず無視する。
+
+### 3.5 記録済み `input` の検証（正解ラベルとの整合性）
+
+各サンプルの `input`（`prompt_text`/`model_answer`/`rubric_text`/
+`max_score`/`ocr_clean`/`ocr_noisy`）は、そのサンプルの `recorded` を
+1 セルでも集計する前に必ずパースし、`ground_truth.max_score` と一致するかを
+確認する（`auto_scoring.domain.ai_grading_metrics.GradingInputRecord` +
+`validate_input_matches_truth`）。一致しない場合、またはそもそも `input`
+ブロックが欠落・型不正の場合はハーネスを停止する（コードレビュー指摘:
+`input` を一切検証しないと、記録された応答が正解ラベルの得点とたまたま
+一致しさえすれば、実際には異なる配点・採点基準の設問を比較していても
+「同一データでの比較」として通ってしまう）。
+
+### 3.6 wire フォーマットの alias 厳格化
+
+`AIGradingResult`/`GradingOutput` は `populate_by_name` を有効にしない。
+ドキュメント化された wire フォーマットは camelCase（`questionId`/
+`maxScore`）のみで、Python 形式の `question_id`/`max_score` を受理しない
+（コードレビュー指摘: `populate_by_name=True` のままだと、ドキュメントと
+異なるフィールド名を返す非準拠な provider 応答も schema 検証を通過して
+しまい、schema violation 率を過小評価する）。
 
 ---
 
@@ -306,22 +344,23 @@ evaluated cells: 12
 
 | 教科 | provider | config | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | latency計測件数 | 概算cost(USD/1000問) | cost計測件数 | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.700 | 1.100 | 2/2 | 0.65 | 2/2 | 0.000 | - |
-| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.900 | 1.300 | 2/2 | 0.65 | 2/2 | - | - |
-| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.500 | 0.900 | 2/2 | 0.25 | 2/2 | 0.000 | - |
-| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.000 | 1.400 | 2/2 | 0.25 | 2/2 | - | 1.000 |
-| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
-| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
-| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
-| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
+| synthetic-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.900 | 1.080 | 2/2 | 0.65 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 1.100 | 1.280 | 2/2 | 0.65 | 2/2 | - | - |
+| synthetic-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.700 | 0.880 | 2/2 | 0.25 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.200 | 1.380 | 2/2 | 0.25 | 2/2 | - | 1.000 |
+| synthetic-world-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
 ```
 
-`config` 列は `model|version|prompt_version|temperature|structured_output_mode`
-（`descriptor_key`。表示時は `|` を `\|` にエスケープする）で、本合成データ
-ではフィクスチャに埋め込んだ架空の設定（`synthetic-model-a`/
-`synthetic-model-b`、`synthetic-prompt-v1`）をそのまま表示している。`latency
-計測件数`・`cost計測件数` はすべて `n/n`（bucket の全件で計測済み）で、
-本合成データには計測欠損を意図的に混ぜていない。
+`config` 列は `model`/`version`/`prompt_version`/`temperature`/
+`structured_output_mode` を JSON 配列としてエンコードしたもの
+（`descriptor_key`。§3.3）で、本合成データではフィクスチャに埋め込んだ
+架空の設定（`synthetic-model-a`/`synthetic-model-b`、
+`synthetic-prompt-v1`）をそのまま表示している。`latency計測件数`・
+`cost計測件数` はすべて `n/n`（bucket の全件で計測済み）で、本合成データ
+には計測欠損を意図的に混ぜていない。
 
 合成データの `synthetic-b`/`synthetic-world-history`/`ocr_noisy` セルは、
 「Recognition Confidence が低いのに Grading Confidence が高いまま、実際には

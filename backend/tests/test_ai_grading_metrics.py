@@ -240,7 +240,8 @@ def test_latency_and_cost_are_included_in_aggregate_even_for_schema_violations()
         _evaluate(_truth(), _response(), latency_seconds=1.0),
     ]
     summary = summarize_by_provider(outcomes)[0]
-    assert summary.latency_p95 == pytest.approx(9.0)
+    # Interpolated p95 of [1.0, 9.0]: rank = 0.95 * 1 = 0.95 -> 1.0 + 8.0*0.95 = 8.6.
+    assert summary.latency_p95 == pytest.approx(8.6)
     assert summary.latency_measured == 2
 
 
@@ -257,6 +258,34 @@ def test_partial_latency_measurement_is_reported_not_hidden() -> None:
     assert summary.samples == 3
     assert summary.latency_measured == 1
     assert summary.cost_measured == 0
+
+
+def test_p50_is_the_true_interpolated_median_for_an_even_sized_bucket() -> None:
+    """Code review finding: nearest-rank with Python's round() (banker's
+    rounding) does not compute a median -- ``[1.0, 9.0]`` must report p50 as
+    the textbook median ``5.0``, not one of the two endpoints."""
+    outcomes = [
+        _evaluate(_truth(), _response(), latency_seconds=1.0),
+        _evaluate(_truth(), _response(), latency_seconds=9.0),
+    ]
+    summary = summarize_by_provider(outcomes)[0]
+    assert summary.latency_p50 == pytest.approx(5.0)
+
+
+def test_p50_for_an_odd_sized_bucket_is_the_middle_value() -> None:
+    outcomes = [_evaluate(_truth(), _response(), latency_seconds=v) for v in (1.0, 2.0, 9.0)]
+    summary = summarize_by_provider(outcomes)[0]
+    assert summary.latency_p50 == pytest.approx(2.0)
+
+
+def test_p95_interpolates_between_the_two_highest_observations() -> None:
+    outcomes = [
+        _evaluate(_truth(), _response(), latency_seconds=v) for v in (1.0, 2.0, 3.0, 4.0, 10.0)
+    ]
+    summary = summarize_by_provider(outcomes)[0]
+    # rank = 0.95 * (5 - 1) = 3.8 -> interpolate between index 3 (4.0) and
+    # index 4 (10.0) with weight 0.8: 4.0 + (10.0 - 4.0) * 0.8 = 8.8
+    assert summary.latency_p95 == pytest.approx(8.8)
 
 
 def test_bucket_with_no_scorable_sample_reports_undefined_not_zero_accuracy() -> None:
@@ -300,6 +329,29 @@ def test_prompt_version_alone_changes_the_config_key() -> None:
         structured_output_mode=_DESCRIPTOR.structured_output_mode,
     )
     assert descriptor_key(same_everything_else) != _CONFIG
+
+
+def test_descriptor_key_does_not_collide_when_a_field_contains_the_delimiter() -> None:
+    """Code review finding: a naive ``"|"``-joined key is ambiguous when a
+    field value itself contains ``"|"`` -- ``model="a|b", version="c"`` and
+    ``model="a", version="b|c"`` must not produce the same key."""
+    first = ProviderDescriptor(
+        provider="test",
+        model="a|b",
+        version="c",
+        prompt_version="p1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    second = ProviderDescriptor(
+        provider="test",
+        model="a",
+        version="b|c",
+        prompt_version="p1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    assert descriptor_key(first) != descriptor_key(second)
 
 
 def test_calibration_rates_flag_overconfident_wrong_answers() -> None:
@@ -456,11 +508,19 @@ def test_markdown_table_renders_header_and_rows() -> None:
 
 
 def test_markdown_table_escapes_pipes_in_config_key_so_columns_stay_aligned() -> None:
-    """Code review finding: ``config_key`` always contains literal ``|``
-    characters (it is ``model|version|prompt_version|temperature|mode``);
-    inserted verbatim into a Markdown table row, each one opens extra cells
-    and shifts every following column out of alignment."""
-    outcome = _evaluate(_truth(), _response())
+    """Code review finding: whenever a ``config_key`` (or any other cell
+    value) contains a literal ``|`` -- e.g. a model name that happens to
+    include one -- inserted verbatim into a Markdown table row, each one
+    opens extra cells and shifts every following column out of alignment."""
+    descriptor_with_pipe = ProviderDescriptor(
+        provider="test",
+        model="model|with|pipes",
+        version=None,
+        prompt_version="prompt-v1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    outcome = _evaluate(_truth(), _response(), config_key=descriptor_key(descriptor_with_pipe))
     table = to_markdown_table(summarize_by_provider([outcome]))
     header_row, _divider, data_row = table.splitlines()
     # Cells are always joined with " | " (space-pipe-space); an escaped

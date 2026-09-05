@@ -73,7 +73,14 @@ class GradingOutput(BaseModel):
     confidences must never be read from the same field.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, populate_by_name=True)
+    #: ``populate_by_name`` is deliberately *not* set: this is an untrusted
+    #: wire boundary (AGENTS.md "Verification"), and the documented contract
+    #: (simplified-design-specification.md section 9.2) is the camelCase
+    #: alias only. Accepting the Python-style name too would let a provider
+    #: that returns ``max_score`` instead of the documented ``maxScore`` pass
+    #: as schema-valid, silently understating the real schema violation rate
+    #: (code review finding).
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     score: int = Field(ge=0)
     max_score: int = Field(ge=0, alias="maxScore")
@@ -112,7 +119,11 @@ class AnnotationCandidate(BaseModel):
 class AIGradingResult(BaseModel):
     """The full structured output for one question (section 9.2 example)."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, populate_by_name=True)
+    #: See :class:`GradingOutput` -- ``populate_by_name`` is deliberately
+    #: off at this untrusted wire boundary: only the documented ``questionId``
+    #: alias is accepted, not the Python-style ``question_id`` (code review
+    #: finding).
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     question_id: Annotated[_NonBlankStr, Field(alias="questionId")]
     recognition: RecognitionOutput

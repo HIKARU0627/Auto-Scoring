@@ -39,6 +39,7 @@ than shrinking the denominator and inflating the rate towards 100%
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean
@@ -139,6 +140,53 @@ class GradingGroundTruth(BaseModel):
         ``int`` field) is rejected.
         """
         return cls.model_validate_json(json.dumps(data, ensure_ascii=False))
+
+
+class GradingInputRecord(BaseModel):
+    """The recorded ``input`` sent to every candidate for one graded question.
+
+    Validated the same as any other untrusted ``--dataset`` boundary (code
+    review finding: an unparsed, uncross-checked ``input`` block could
+    silently disagree with the ``ground_truth`` it is paired with -- e.g. a
+    different ``max_score`` or rubric -- while a recorded response still
+    happens to match the label's score, making an inconsistent sample look
+    like a valid same-data comparison). ``ocr_noisy`` may be ``None``: a
+    real-data pilot sample staged before a noisy-OCR variant was authored
+    (docs/poc-2-ai-grading.md section 6.2) still has a valid ``input``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    prompt_text: _NonBlankStr
+    model_answer: _NonBlankStr
+    rubric_text: _NonBlankStr
+    max_score: int = Field(ge=0)
+    ocr_clean: _NonBlankStr
+    ocr_noisy: _NonBlankStr | None = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> GradingInputRecord:
+        """Parse and validate an ``input`` mapping loaded from ``--dataset`` JSON."""
+        return cls.model_validate_json(json.dumps(data, ensure_ascii=False))
+
+
+def validate_input_matches_truth(
+    input_record: GradingInputRecord, truth: GradingGroundTruth
+) -> None:
+    """Raise ``ValueError`` if the recorded ``input`` disagrees with the
+    ``ground_truth`` label it is paired with.
+
+    A same-data comparison requires the underlying question material -- not
+    just the final score -- to actually match; a sample whose ``input``
+    silently uses a different ``max_score`` (a stale or edited rubric,
+    say) must not be scored as if it were consistent (code review finding).
+    """
+    if input_record.max_score != truth.max_score:
+        raise ValueError(
+            f"input.max_score ({input_record.max_score}) does not match "
+            f"ground_truth.max_score ({truth.max_score}) for question "
+            f"{truth.question_id!r}"
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -315,11 +363,29 @@ def evaluate_sample(
 
 
 def _percentile(values: Sequence[float], q: float) -> float | None:
+    """Linear-interpolation percentile (the common "R-7" / NumPy default
+    definition), not nearest-rank.
+
+    Code review finding: nearest-rank with Python's ``round()`` (banker's
+    rounding) does not compute a median for an even-sized bucket -- for
+    ``[1.0, 9.0]``, ``round(0.5)`` is ``0`` (round-half-to-even), so p50
+    returned ``1.0`` instead of the textbook median ``5.0``, and which
+    endpoint it picked wobbled with the bucket size rather than converging.
+    Interpolating between the two nearest ranks is deterministic and matches
+    ``[1.0, 9.0]`` -> p50 ``5.0``.
+    """
     if not values:
         return None
     ordered = sorted(values)
-    index = min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))
-    return ordered[index]
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = q * (len(ordered) - 1)
+    lower_index = math.floor(rank)
+    upper_index = math.ceil(rank)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    weight = rank - lower_index
+    return ordered[lower_index] + (ordered[upper_index] - ordered[lower_index]) * weight
 
 
 def _mean_or_none(values: Sequence[float]) -> float | None:
