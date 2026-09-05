@@ -347,3 +347,93 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   という記録に嘘をつかない）。その上で`mark_question_usable`の対象選択を
   「アクティブバージョンのSUCCEEDED/FAILED」→（無ければ）「任意バージョン
   の中で最新のSUCCEEDED/FAILED」の順で解決するようにした。
+
+## レビュー第3round（Codex）で修正した点
+
+- **resumeをretry遷移に対して直列化する**（P1）: `mark_question_usable`が
+  対象Jobを読んでから`JobRepository.mark_usable`で書き込むまでの間に、
+  別の`retry_job`呼び出しが同じ行を`FAILED -> QUEUED`へ書き換えると、
+  以前の`mark_usable`は`state`を条件にせず`usable`列だけを無条件に書いて
+  いたため、両方の書き込みがcommitされ得た -- resumeは「まだ
+  FAILEDだと思っている」古いJobの上で後続Questionを解放してしまうが、
+  実際にはそのJobは既に再試行が始まっており、結果はまだ分からない。
+  `JobRepository.mark_usable`のシグネチャに`expected_state`を追加し、
+  `UPDATE ... WHERE id=? AND state=?`のcompare-and-setにした。
+  `mark_question_usable`は他のcompare-and-setリトライと同じ形（有限回
+  リトライ、負けたら`_MAX_RESUME_ATTEMPTS`回で`JobResumeConflictError`
+  を送出）に変えた。CASが負けた場合、次のリトライで対象を読み直すと
+  当該Jobは既に終端状態(SUCCEEDED/FAILED)ではなくなっているため、通常は
+  `JobNotFoundError`になる（前提が今まさに再処理中であることの自然な
+  帰結であり、人間には再度状況を見て判断してもらう）。
+- **各backoffタイマーを発生元の失敗に紐付ける**（P1）: `_schedule_retry`
+  が起動するsleep+再enqueueのtaskは、以前は起き抜けに「今も`FAILED`か」
+  だけを確認していた。手動`retry_job`がbackoff中のJobを先に再enqueueし、
+  その新しいattemptがそのタイマーの目覚めより前に再び失敗すると、
+  タイマーは「新しい失敗も`FAILED`だから」と誤って再enqueueしてしまい、
+  新しいattempt自身の（正しいタイミングの）backoffを飛ばすか、既にretry
+  上限に達していた新しい失敗を不正に復活させ得た。`_schedule_retry`/
+  `_sleep_then_requeue`/`_requeue_after_backoff`に
+  `expected_attempts`（タイマーが発生した瞬間の`current.attempts`）を
+  持たせ、起きた時点の`current.attempts`と一致しなければno-opにした。
+- **finalization競合を吸収しworkerを殺さない**（P1）: `_finalize_result`
+  が`RUNNING`行を読んでからcompare-and-setで書き込むまでの間に、
+  `dependency_graph_router.confirm`のreissue処理が同じ行を`CANCELLED`へ
+  書き換えると、以前は`uow.jobs.save(...)`が送出する`JobSaveConflict`を
+  誰も捕捉しておらず、`_finalize_result` → `_run_one` →
+  `_worker_loop`まで例外が伝播して、固定poolからそのworker taskが
+  恒久的に失われていた（`max_concurrency=1`ならqueue全体が次の再起動まで
+  完全に停止する）。SUCCEEDED/FAILED両方の書き込みを
+  `try/except JobSaveConflict: return None`で包み、staleな
+  finalizationを「既に他の書き込みがこのJobの運命を決めている」as-is
+  no-opとして扱うようにした。
+- **stale job claim成功後にreadinessを再計算する**（P1）:
+  `dependency_graph_router.confirm`のreissueは、以前は最初の一覧取得
+  （`list_incomplete_for_stale_versions`）で作った暫定snapshotをそのまま
+  使って後続Questionのreadinessを判定していた。その一覧取得と各Jobの
+  cancellation compare-and-setの間に、stale前提が実際に（本物のworkerで）
+  完了すると、そのJobの置き換えはCASの前提が崩れてskipされるが、readiness
+  計算は依然として「その置き換えは存在する（＝PENDING）」という幻の
+  snapshotを見てしまい、既に完了した本物の行を見落としたまま後続を
+  `BLOCKED`で永続化し得た -- そのアクティブversionの前提はもう二度と
+  完了イベントを起こさないので、その後続は永久に解放されない。`confirm`
+  を2パスに分割した: 1パス目は全てのcancellation CASを試みて
+  `accepted_replacements`（実際に成功した置き換え）を集め、2パス目は
+  `uow.jobs.list_for_submission`で最新のJob一覧を読み直し、その実際の
+  状態から`question_statuses`を計算した上で、成功した置き換えについてのみ
+  readinessを評価する。
+- **自動回復時に承認済みの失敗を保持する**（P1）: `start()`起動時の
+  retry可能FAILED job sweepと、`_requeue_after_backoff`のbackoff明け
+  チェックは、どちらも「retry可能で`attempts < max_attempts`ならFAILEDを
+  requeueする」という条件だけを見ていた。人間が`mark_question_usable`
+  で既に`usable=True`（承認済み）とマークしたFAILED jobもこの条件を
+  満たしてしまい、後続Questionが既に解放されているにもかかわらず、
+  自動回復がそれを再enqueueしてしまうと`transitioned_to`が
+  `usable`をリセットし、その承認が黙って失われる。両方の経路に
+  `job.usable is not None`（＝人間が既に判断済み）を除外条件として
+  追加した -- 承認済みの失敗を自動retryの対象から外す。
+- **retry CASの競合を500ではなく処理する**（P2）: `retry_job`が読んだ後、
+  2つの手動retryリクエストが重なる、またはbackoffによる自動requeueが
+  先に同じ行を書き換えると`JobSaveConflict`が発生し、以前は捕捉されず
+  素の500になっていた。`cancel_job`と同じ形（有限回のcompare-and-set
+  リトライ、負けたら新設の`JobRetryConflictError`でAPI層は409）にした。
+- **永続化されたbacklogを排出する前にworkerを停止する**（P2）:
+  `shutdown`が積む`_STOP`センチネルはFIFO queueの**末尾**に置かれるため、
+  以前はqueued idがまだ多数残っている状態でshutdownを呼ぶと、workerは
+  自分の`_STOP`に辿り着くまで（遅いprovider呼び出しを含む）残りの
+  backlog全部を律儀に処理してから止まっていた -- 大きな永続的backlogが
+  あるとアプリの終了/再起動が無期限に遅延し得る。`shutdown`が`_STOP`を
+  積む**前**に立てる`_closing`フラグを追加し、`_worker_loop`は
+  dequeueした直後に`_closing`を確認して、`_STOP`以外のitemであっても
+  即座にreturnするようにした。処理されなかった分はDB上QUEUEDのまま
+  残り、次回`start()`のsweepが拾う。
+- **ダウングレード前にfailed usable行を正規化する**（P2、migration
+  0009）: `/resume`がFAILED jobに`usable=True`を保存した後にmigration
+  0009をダウングレードすると、batch modeの「recreate」は既存行を
+  そのまま新しいテーブルへコピーするため、その行は
+  「`usable`は`SUCCEEDED`のみ許可」という古い制約に違反し、
+  `IntegrityError`でダウングレードが中断していた。`downgrade()`の
+  batch再構成の前に
+  `UPDATE jobs SET usable = NULL WHERE state = 'failed' AND usable IS NOT NULL`
+  を実行して正規化するようにした（古いスキーマにはそもそも表現できない
+  情報なので、これは新しいデータの捏造ではなく正規化であり、明示的な
+  ダウングレード操作でしか走らない）。
