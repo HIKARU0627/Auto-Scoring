@@ -157,7 +157,16 @@ class JobKind(StrEnum):
 
 
 class JobState(StrEnum):
-    """Lifecycle of a background job. ``BLOCKED`` = waiting on a dependency (§4.4)."""
+    """Lifecycle of a background job. ``BLOCKED`` = waiting on a dependency (§4.4).
+
+    ``BLOCKED`` covers both "a prerequisite is still processing" and "a
+    prerequisite finished but was not usable (low confidence, failed, or
+    cancelled)" -- Issue #18 deliberately does not add a separate
+    "locked_by_dependency" state for the latter, since the machine behaviour
+    is identical (stay put, never call the external provider, resume only
+    when the prerequisite becomes usable). See docs/job-queue.md
+    "`BLOCKED`を「待機中」と「前提がusableでないためロック中」の両方に使う".
+    """
 
     QUEUED = "queued"
     RUNNING = "running"
@@ -165,6 +174,28 @@ class JobState(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class ErrorCategory(StrEnum):
+    """How a failed `Job` attempt is classified for retry purposes (Issue #18).
+
+    Only ``TIMEOUT``/``RATE_LIMITED``/``SERVER_ERROR`` are retryable
+    (docs/job-queue.md "retry対象の分類"); ``PERMANENT`` never is. Deciding
+    which category a real provider failure belongs to is the concrete
+    `auto_scoring.domain.job_execution.JobProcessor` implementation's
+    responsibility (a later issue), not this enum's.
+    """
+
+    TIMEOUT = "timeout"
+    RATE_LIMITED = "rate_limited"
+    SERVER_ERROR = "server_error"
+    PERMANENT = "permanent"
+
+
+#: Categories a queue worker should automatically retry (docs/job-queue.md).
+RETRYABLE_ERROR_CATEGORIES = frozenset(
+    {ErrorCategory.TIMEOUT, ErrorCategory.RATE_LIMITED, ErrorCategory.SERVER_ERROR}
+)
 
 
 class ReviewAction(StrEnum):
@@ -225,6 +256,12 @@ _JOB_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
             JobState.FAILED,
             JobState.BLOCKED,
             JobState.CANCELLED,
+            # Startup crash recovery only (Issue #18: a job left RUNNING by a
+            # killed process is requeued, not treated as failed, when it
+            # still has retry attempts left) -- see
+            # `domain.job_scheduling.recover_running_job`. Application code
+            # never uses this transition directly.
+            JobState.QUEUED,
         }
     ),
     JobState.BLOCKED: frozenset({JobState.QUEUED, JobState.CANCELLED}),
@@ -610,7 +647,18 @@ class Job:
     attempts: int = 0
     max_attempts: int = 3
     last_error: str | None = None
+    #: Categorized reason for the most recent ``FAILED`` (retry classification,
+    #: Issue #18). ``None`` once the job leaves FAILED, and always ``None``
+    #: for every other state -- it describes the *last failed attempt*, not
+    #: the job overall.
+    error_code: ErrorCategory | None = None
     blocked_on_question_id: str | None = None
+    #: Whether this job's ``SUCCEEDED`` result is usable by a dependent
+    #: question (Issue #18 §4.4: low-confidence results must not release a
+    #: dependent). ``None`` until the job reaches ``SUCCEEDED``; deciding the
+    #: actual value is `auto_scoring.domain.job_execution.JobProcessor`'s
+    #: responsibility, not this dataclass's.
+    usable: bool | None = None
     #: The confirmed `DependencyGraph` version this job was queued against, if
     #: any (Issue #26). Lets a later confirm supersede a still-incomplete job
     #: whose dependency structure has since changed -- see
@@ -626,6 +674,10 @@ class Job:
             raise DomainError("Job.attempts must be >= 0")
         if self.dependency_graph_version is not None and self.dependency_graph_version < 1:
             raise DomainError("Job.dependency_graph_version must be >= 1")
+        if self.error_code is not None and self.state is not JobState.FAILED:
+            raise DomainError("Job.error_code may only be set while state is FAILED")
+        if self.usable is not None and self.state is not JobState.SUCCEEDED:
+            raise DomainError("Job.usable may only be set once state is SUCCEEDED")
 
     def transitioned_to(
         self,
@@ -633,11 +685,16 @@ class Job:
         *,
         updated_at: datetime,
         error: str | None = None,
+        error_code: ErrorCategory | None = None,
         blocked_on_question_id: str | None = None,
+        usable: bool | None = None,
     ) -> Job:
         """Return a copy in ``target`` state (raises on an illegal move).
 
-        Entering ``RUNNING`` counts as one attempt.
+        Entering ``RUNNING`` counts as one attempt. ``error_code`` only makes
+        sense alongside ``target is JobState.FAILED``; ``usable`` only
+        alongside ``target is JobState.SUCCEEDED`` -- both are dropped
+        (reset to ``None``) for every other target, matching ``__post_init__``.
         """
         ensure_job_transition(self.state, target)
         attempts = self.attempts + 1 if target is JobState.RUNNING else self.attempts
@@ -646,7 +703,9 @@ class Job:
             state=target,
             attempts=attempts,
             last_error=error,
+            error_code=error_code if target is JobState.FAILED else None,
             blocked_on_question_id=blocked_on_question_id,
+            usable=usable if target is JobState.SUCCEEDED else None,
             updated_at=updated_at,
         )
 
@@ -678,7 +737,9 @@ def reissue_job_for_graph_version(
         state=JobState.QUEUED,
         attempts=0,
         last_error=None,
+        error_code=None,
         blocked_on_question_id=None,
+        usable=None,
         dependency_graph_version=new_version,
         created_at=at,
         updated_at=at,

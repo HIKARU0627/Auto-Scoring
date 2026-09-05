@@ -389,7 +389,9 @@ class SqlAlchemyJobRepository:
                     attempts=job.attempts,
                     max_attempts=job.max_attempts,
                     last_error=job.last_error,
+                    error_code=job.error_code,
                     blocked_on_question_id=job.blocked_on_question_id,
+                    usable=job.usable,
                     updated_at=job.updated_at,
                 )
             ),
@@ -407,6 +409,25 @@ class SqlAlchemyJobRepository:
             select(JobRow).where(JobRow.state == state).order_by(JobRow.created_at)
         )
         return [m.job_from_row(row) for row in rows]
+
+    def list_for_submission(self, submission_id: str) -> list[Job]:
+        rows = self._session.scalars(
+            select(JobRow).where(JobRow.submission_id == submission_id).order_by(JobRow.created_at)
+        )
+        return [m.job_from_row(row) for row in rows]
+
+    def mark_usable(self, job_id: str, *, usable: bool) -> None:
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(JobRow)
+                .where(JobRow.id == job_id, JobRow.state == JobState.SUCCEEDED)
+                .values(usable=usable)
+            ),
+        )
+        row = self._session.get(JobRow, job_id)
+        if row is not None and result.rowcount == 1:
+            self._session.expire(row)
 
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
         # FAILED is not terminal here: FAILED -> QUEUED is a valid retry

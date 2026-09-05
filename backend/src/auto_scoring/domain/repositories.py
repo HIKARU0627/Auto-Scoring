@@ -161,6 +161,26 @@ class JobRepository(Protocol):
 
     def list_by_state(self, state: JobState) -> list[Job]: ...
 
+    def list_for_submission(self, submission_id: str) -> list[Job]:
+        """Every job for ``submission_id`` (any state), for progress display
+        (Issue #18: 一覧・進捗API) and for recomputing DAG readiness after one
+        question's job finishes (`auto_scoring.domain.job_scheduling.
+        question_statuses`).
+        """
+        ...
+
+    def mark_usable(self, job_id: str, *, usable: bool) -> None:
+        """Flip a terminal ``SUCCEEDED`` job's `Job.usable` bit in place.
+
+        Unlike `save`, this does not change ``state`` -- it exists for the
+        "a human corrected a low-confidence result and it is now usable"
+        resume path (Issue #18 §4.4), which changes only this bit, not the
+        job's lifecycle state. A no-op if the job is not SUCCEEDED (the
+        caller is expected to check `Job.state` first if it needs to know
+        whether this had any effect).
+        """
+        ...
+
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
         """Jobs for ``test_id`` still QUEUED/RUNNING/BLOCKED against a
         `dependency_graph_version` other than ``current_version`` (Issue #26:
