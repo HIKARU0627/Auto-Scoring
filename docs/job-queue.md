@@ -437,3 +437,42 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   を実行して正規化するようにした（古いスキーマにはそもそも表現できない
   情報なので、これは新しいデータの捏造ではなく正規化であり、明示的な
   ダウングレード操作でしか走らない）。
+
+## レビュー第4round（Codex）で修正した点
+
+- **アクティブversionのjobが存在しない場合のみfallbackする**（P2）:
+  `mark_question_usable`の「アクティブバージョンに行が無ければ他バージョン
+  の最新終端jobにfallbackする」ロジック（round 2, P1）は、`at_active_version`
+  を`state in terminal_states`で絞り込んでから空かどうかを見ていたため、
+  アクティブバージョンに行自体はあるがまだ終端状態でない（QUEUED/RUNNING/
+  BLOCKED）場合も「無い」と誤判定し、古いバージョンのstaleな終端jobを
+  fallbackで選んで承認してしまい得た。retryが`/resume`と競合した直後や、
+  current-versionのjobが作成された直後にこれが起こると、アクティブな
+  jobが保留のままなのに古い結果を承認したことになり、後続が誤って解放
+  され得る。「アクティブバージョンに行が**一件も無い**」ケースと「ある
+  が終端でない」ケースを`active_version_jobs`（状態を問わない）と
+  `at_active_version`（終端のみ）の2つに分けて判定し、後者の場合は
+  fallbackせず`JobResumeConflictError`（409、既存の「再度読み直して
+  retry」挙動と同じ）を返すようにした。
+- **承認済みの失敗した前提のretryを拒否する**（P2）: `/resume`が
+  FAILEDの前提を`usable=True`とマークし後続を解放した後も、`retry_job`
+  は`state is FAILED`しか見ていなかったためそのretryを許可してしまい
+  得た。`transitioned_to`はFAILED→QUEUEDの遷移で`usable`を無条件に
+  クリアするが、既に解放された後続を再びBLOCKEDへ戻す仕組みは無いため、
+  `A -> B`のgraphでAの置き換え結果が定まらないままBが走り得た。
+  `retry_job`は`job.usable is not None`（＝人間が既に承認/判断済み）
+  なら新設の`JobRetryRejectedError`（409）で拒否するようにした -- 本当に
+  このattemptをやり直したいなら、まず解放済みの後続をcancelしてからにする。
+- **shutdown時にin-memory queueをリセットする**（P2）: 同じserviceを
+  （あるいはFastAPI app lifespanが再度）`start()`すると、直前の
+  `shutdown`が未消費のまま残したjob idや`_STOP`センチネルが
+  `self._queue`に居座り続けていた。次の`start()`が spawn する新しい
+  workerは、まずそのstaleな`_STOP`を先に引いてしまい、`_closing`が
+  既に`False`に戻っていても`item is _STOP`の判定で即座に終了して
+  しまう -- その結果、次の`start()`自身がDBのsweepで再投入したはずの
+  backlogが処理されないまま永久に取り残され得た（2回目のlifespanが別の
+  event loopを使う場合も同様に安全でない）。`shutdown`が worker の
+  gatherを終えた直後に`self._queue = asyncio.Queue()`で作り直し、
+  `self._loop = None`でloop所有権もクリアするようにした -- 破棄される
+  job idはどれも既にDB上QUEUEDのまま残っているので、次の`start()`自身の
+  sweepが必ず拾い直す。
