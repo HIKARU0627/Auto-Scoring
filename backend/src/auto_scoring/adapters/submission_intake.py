@@ -207,6 +207,7 @@ def intake_submission(
                 coverage_issue=coverage_issue,
                 id_factory=id_factory,
                 now=now,
+                limits=limits,
             )
         except IntegrityError as exc:
             # Two concurrent requests can both see "no existing submission for
@@ -247,6 +248,7 @@ def _write_submission(
     coverage_issue: str | None,
     id_factory: Callable[[], str],
     now: datetime,
+    limits: IntakeLimits,
 ) -> tuple[Submission, list[AnswerImage]]:
     """Render every page, extract answer images, and commit the submission row.
 
@@ -254,7 +256,9 @@ def _write_submission(
     (the part that touches the DB and staged files) in one try/except for the
     concurrent-insert race -- see the ``IntegrityError`` handling there.
     """
-    with transactional_operation(uow, store) as staged:
+    with transactional_operation(
+        uow, store, max_staged_bytes=limits.max_staged_output_bytes
+    ) as staged:
         # One page's raw raster lives at a time -- not the whole PDF's worth --
         # so a large page count doesn't multiply the sidecar's memory use.
         answer_images: list[AnswerImage] = []

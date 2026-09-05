@@ -20,16 +20,28 @@ from pathlib import Path
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.pdf_intake import StagedOutputTooLargeError
 
 
 @dataclass
 class StagedFiles:
-    """Collects ``(path, bytes)`` to write only once the DB commit succeeds."""
+    """Collects ``(path, bytes)`` to write only once the DB commit succeeds.
+
+    ``max_total_bytes``, when set, bounds the running total of every ``data``
+    handed to :meth:`add` -- not just one call's size -- since these bytes all
+    sit in memory together until the commit that triggers :meth:`_finalize`
+    (see :class:`~auto_scoring.domain.pdf_intake.StagedOutputTooLargeError`).
+    """
 
     store: LocalFileStore
+    max_total_bytes: int | None = None
     _pending: list[tuple[Path, bytes]] = field(default_factory=list)
+    _total_bytes: int = 0
 
     def add(self, path: Path, data: bytes) -> None:
+        self._total_bytes += len(data)
+        if self.max_total_bytes is not None and self._total_bytes > self.max_total_bytes:
+            raise StagedOutputTooLargeError(self._total_bytes, self.max_total_bytes)
         self._pending.append((path, data))
 
     def _finalize(self) -> list[Path]:
@@ -41,9 +53,9 @@ class StagedFiles:
 
 @contextmanager
 def transactional_operation(
-    uow: SqlAlchemyUnitOfWork, store: LocalFileStore
+    uow: SqlAlchemyUnitOfWork, store: LocalFileStore, *, max_staged_bytes: int | None = None
 ) -> Iterator[StagedFiles]:
-    staged = StagedFiles(store)
+    staged = StagedFiles(store, max_total_bytes=max_staged_bytes)
     try:
         yield staged
         uow.commit()

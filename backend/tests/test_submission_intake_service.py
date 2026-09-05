@@ -36,6 +36,7 @@ from auto_scoring.domain.pdf_intake import (
     PdfInvalidTypeError,
     PdfPageLimitExceededError,
     PdfPageTooLargeError,
+    StagedOutputTooLargeError,
 )
 from tests.support import at, make_question, make_test
 
@@ -553,6 +554,40 @@ def test_page_with_an_absurd_declared_size_is_rejected_before_rendering(
             declared_mime=None,
             data=huge_page,
             limits=_LIMITS,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        assert uow.submissions.list_for_test("test-1") == []
+    assert not (store.root / "submissions").exists()
+
+
+def test_decoded_output_exceeding_the_staged_size_cap_is_rejected(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """A page's declared size and its compressed bytes on disk can both look
+    fine while the *decoded* raster is huge -- the per-page checks above
+    don't catch that. A tiny max_staged_output_bytes cap stands in for that
+    case here: even one rendered+preprocessed page trips it, proving the
+    limit is actually enforced (not just present on IntakeLimits), and that
+    tripping it leaves no DB row or file behind, same as any other rejection.
+    """
+    _seed_test_with_questions(make_uow, questions=[])
+    tiny_staged_limits = IntakeLimits(
+        max_size_bytes=10 * 1024 * 1024, max_pages=20, max_staged_output_bytes=100
+    )
+
+    with make_uow() as uow, pytest.raises(StagedOutputTooLargeError):
+        intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=_pdf_bytes(pages=1),
+            limits=tiny_staged_limits,
             now=at(),
         )
 

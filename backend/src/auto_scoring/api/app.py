@@ -31,11 +31,17 @@ from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.models import Submission
 from auto_scoring.domain.pdf_engine import PdfEngine
-from auto_scoring.domain.pdf_intake import IntakeLimits, PdfIntakeError, PdfTooLargeError
+from auto_scoring.domain.pdf_intake import (
+    IntakeLimits,
+    PdfIntakeError,
+    PdfTooLargeError,
+    StagedOutputTooLargeError,
+)
 from auto_scoring.domain.scoring import clamp_score
 
 _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
+    StagedOutputTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
 }
 
 #: Read chunk size for _read_upload_within_limit. Bounds how much of an

@@ -55,6 +55,29 @@ class PdfPageTooLargeError(PdfIntakeError):
     """
 
 
+class StagedOutputTooLargeError(PdfIntakeError):
+    """The decoded output staged for one submission grew past a safety limit.
+
+    ``adapters.atomic.StagedFiles`` holds every page preview and question
+    crop as raw PNG bytes in memory until the DB commit succeeds (issue #11's
+    "commit before write" guarantee). A page passing every other check
+    (declared size, page count, render dimensions) can still decode into a
+    PNG far larger than its compressed bytes on disk -- a 50 MiB,
+    JPEG-compressed, page-by-page-legal PDF can still expand into gigabytes
+    of accumulated PNG bytes across all of its pages before anything is
+    written out. This caps the running total instead (AGENTS.md "Validate
+    every input that crosses a trust boundary").
+    """
+
+    def __init__(self, total_bytes: int, limit_bytes: int) -> None:
+        super().__init__(
+            f"decoded output for this submission reached {total_bytes} bytes, "
+            f"exceeding the {limit_bytes}-byte safety limit"
+        )
+        self.total_bytes = total_bytes
+        self.limit_bytes = limit_bytes
+
+
 _MAGIC = b"%PDF-"
 ALLOWED_EXTENSION = ".pdf"
 ALLOWED_MIME_TYPES = frozenset({"application/pdf"})
@@ -76,6 +99,14 @@ class IntakeLimits:
     #: ~38M px is close to a 6000x6300 raster -- generously above any real
     #: scanned answer sheet, comfortably below "exhausts memory".
     max_render_pixels: int = 40_000_000
+    #: Cap on the *cumulative* decoded bytes (page previews + question crops)
+    #: staged in memory for one submission before the DB commit that would
+    #: flush them to disk. Per-page checks above bound one page's raster; this
+    #: bounds the running total across every page of a large, legally-sized
+    #: submission (see StagedOutputTooLargeError). 300 MiB comfortably covers
+    #: a full 100-page submission's worth of preview + crop PNGs, well under
+    #: what would meaningfully threaten the sidecar's memory.
+    max_staged_output_bytes: int = 300 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if self.max_size_bytes < 1:
@@ -86,6 +117,8 @@ class IntakeLimits:
             raise ValueError("max_render_dimension_px must be positive")
         if self.max_render_pixels < 1:
             raise ValueError("max_render_pixels must be positive")
+        if self.max_staged_output_bytes < 1:
+            raise ValueError("max_staged_output_bytes must be positive")
 
 
 def validate_filename(filename: str) -> None:
