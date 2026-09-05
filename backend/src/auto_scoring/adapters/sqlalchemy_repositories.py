@@ -191,6 +191,21 @@ class SqlAlchemySubmissionRepository:
             self._session.refresh(cached)
         return result.rowcount == 1
 
+    def has_downstream_processing(self, submission_id: str) -> bool:
+        row_types: tuple[type[RecognitionResultRow | GradeResultRow | ReviewRow | JobRow], ...] = (
+            RecognitionResultRow,
+            GradeResultRow,
+            ReviewRow,
+            JobRow,
+        )
+        return any(
+            self._session.execute(
+                select(row_type.id).where(row_type.submission_id == submission_id).limit(1)
+            ).first()
+            is not None
+            for row_type in row_types
+        )
+
 
 class SqlAlchemyAnswerImageRepository:
     def __init__(self, session: Session) -> None:

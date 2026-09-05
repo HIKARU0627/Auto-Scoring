@@ -226,6 +226,45 @@ def test_claim_for_retry_only_the_first_of_two_concurrent_claims_wins(
     assert submission.state is SubmissionState.UNPROCESSED
 
 
+def test_has_downstream_processing_is_false_for_a_fresh_submission(
+    seeded: UowFactory,
+) -> None:
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.commit()
+
+    with seeded() as uow:
+        assert uow.submissions.has_downstream_processing("sub-1") is False
+
+
+def _seed_review(uow: SqlAlchemyUnitOfWork) -> None:
+    # An approved review must reference an AI grade result, so seed one first.
+    uow.grades.add(make_grade())
+    uow.reviews.add(make_review())
+
+
+@pytest.mark.parametrize(
+    "seed_row",
+    [
+        lambda uow: uow.recognitions.add(make_recognition()),
+        lambda uow: uow.grades.add(make_grade()),
+        _seed_review,
+        lambda uow: uow.jobs.add(make_job()),
+    ],
+    ids=["recognition", "grade", "review", "job"],
+)
+def test_has_downstream_processing_is_true_once_any_downstream_row_exists(
+    seeded: UowFactory, seed_row: Callable[[SqlAlchemyUnitOfWork], None]
+) -> None:
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        seed_row(uow)
+        uow.commit()
+
+    with seeded() as uow:
+        assert uow.submissions.has_downstream_processing("sub-1") is True
+
+
 def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
     with seeded() as uow:
         uow.submissions.add(make_submission())

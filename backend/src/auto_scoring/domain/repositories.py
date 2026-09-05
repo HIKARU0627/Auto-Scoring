@@ -79,6 +79,23 @@ class SubmissionRepository(Protocol):
         """
         ...
 
+    def has_downstream_processing(self, submission_id: str) -> bool:
+        """Whether any recognition/grade/review/job row references
+        ``submission_id`` -- i.e. whether processing already moved past
+        intake for it.
+
+        Used by the answer-intake retry decision
+        (``domain.submission_intake.decide_reintake``) to keep in-place retry
+        limited to intake-stage failures: those tables are append-only
+        history (or, for jobs, independently-scheduled work) keyed on
+        ``submission_id``/``question_id``, not on a particular attempt's
+        answer images. Blindly reprocessing a submission in place once
+        something downstream has already touched it would leave that history
+        (and any still-queued job) orphaned against a fresh set of
+        regenerated answer images.
+        """
+        ...
+
 
 class AnswerImageRepository(Protocol):
     def add(self, image: AnswerImage) -> None: ...

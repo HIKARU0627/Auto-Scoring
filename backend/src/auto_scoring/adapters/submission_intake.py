@@ -168,7 +168,10 @@ def intake_submission(
 
         content_hash = hashlib.sha256(data).hexdigest()
         existing = uow.submissions.find_by_content_hash(test_id, content_hash)
-        decision = decide_reintake(existing)
+        has_downstream_processing = (
+            existing is not None and uow.submissions.has_downstream_processing(existing.id)
+        )
+        decision = decide_reintake(existing, has_downstream_processing=has_downstream_processing)
         if decision is ReintakeDecision.REJECT_DUPLICATE:
             assert existing is not None
             raise DuplicateSubmissionError(existing.id)

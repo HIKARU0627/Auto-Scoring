@@ -22,23 +22,38 @@ class ReintakeDecision(StrEnum):
 
     #: No prior submission with this content hash exists for the test.
     ACCEPT_NEW = "accept_new"
-    #: A prior submission with this content hash exists and is not errored;
-    #: refuse silently overwriting it.
+    #: A prior submission with this content hash exists and is not errored, or
+    #: is errored but not safely retryable in place; refuse silently
+    #: overwriting it.
     REJECT_DUPLICATE = "reject_duplicate"
-    #: A prior submission with this content hash exists but ended in ``ERROR``;
-    #: retry it instead of piling up dead rows for the same bytes.
+    #: A prior submission with this content hash exists, ended in ``ERROR``,
+    #: and nothing downstream of intake has touched it yet; retry it in place
+    #: instead of piling up dead rows for the same bytes.
     RETRY_EXISTING = "retry_existing"
 
 
-def decide_reintake(existing: Submission | None) -> ReintakeDecision:
+def decide_reintake(
+    existing: Submission | None, *, has_downstream_processing: bool = False
+) -> ReintakeDecision:
     """Decide what happens when ``existing`` already has this PDF's content hash.
 
     ``existing`` is looked up by ``(test_id, source_pdf_sha256)`` -- the same
-    bytes submitted again for the same test.
+    bytes submitted again for the same test. ``has_downstream_processing``
+    (from ``SubmissionRepository.has_downstream_processing``) says whether any
+    recognition/grade/review/job row already references it: intake's in-place
+    retry only replaces ``answer_images`` and re-derives the submission's own
+    state, so retrying a submission something downstream (a later issue --
+    OCR/AI grading) has already produced results for would leave that
+    append-only history and any queued job orphaned against freshly
+    regenerated images, rather than actually undoing the failed attempt. Such
+    a submission is reported the same as any other non-retryable duplicate;
+    resolving it (e.g. ``purge_submission``, once a replacement flow exists
+    for a submission that has downstream results) is a human decision this
+    function does not make on its own.
     """
     if existing is None:
         return ReintakeDecision.ACCEPT_NEW
-    if existing.state is SubmissionState.ERROR:
+    if existing.state is SubmissionState.ERROR and not has_downstream_processing:
         return ReintakeDecision.RETRY_EXISTING
     return ReintakeDecision.REJECT_DUPLICATE
 

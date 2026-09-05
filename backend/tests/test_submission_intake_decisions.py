@@ -34,6 +34,20 @@ def test_decide_reintake_retries_an_errored_submission() -> None:
     assert decide_reintake(existing) is ReintakeDecision.RETRY_EXISTING
 
 
+def test_decide_reintake_rejects_an_errored_submission_with_downstream_processing() -> None:
+    """Once recognition/grading/review/job rows exist for a submission (a
+    later issue's OCR/AI grading), retrying it in place would only replace
+    its answer_images and leave that append-only history and any queued job
+    orphaned against a fresh set of images. An errored submission with
+    downstream activity must not be treated as safely retryable in place.
+    """
+    existing = make_submission(state=SubmissionState.ERROR)
+    assert (
+        decide_reintake(existing, has_downstream_processing=True)
+        is ReintakeDecision.REJECT_DUPLICATE
+    )
+
+
 def test_page_coverage_complete_when_pages_match() -> None:
     coverage = PageCoverage(expected_pages=(1, 2, 3), actual_page_count=3)
     assert coverage.is_complete
