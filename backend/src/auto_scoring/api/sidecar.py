@@ -28,11 +28,8 @@ from typing import TypedDict
 
 import uvicorn
 
-from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.api.app import create_app
 from auto_scoring.api.auth import generate_token
-from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
-from auto_scoring.db.migrator import upgrade
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
@@ -46,26 +43,39 @@ class Handshake(TypedDict):
     token: str
 
 
-def _find_free_port(host: str = LOOPBACK) -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind((host, 0))
-        return int(probe.getsockname()[1])
+def _bind_socket(requested: int, host: str = LOOPBACK) -> socket.socket:
+    """Bind and return an open socket on a bindable port -- held open (not
+    yet listening) until the caller hands it straight to uvicorn.
 
+    ``0`` means "any free port". A non-zero ``requested`` port that cannot be
+    bound (already in use) falls back to any free port rather than failing
+    startup.
 
-def resolve_port(requested: int, host: str = LOOPBACK) -> int:
-    """Return a bindable port on ``host``.
-
-    ``0`` means "any free port". A non-zero port that cannot be bound (already
-    in use) falls back to a free port rather than failing startup.
+    This used to be a plain ``resolve_port() -> int``: bind a throwaway probe
+    socket, read the port number the OS assigned it, close the probe, and
+    hand back just the number for the *caller* to bind again later. That left
+    a real gap between "a free port was found" and "the real server is
+    listening on it" -- during which the OS was free to hand that exact
+    number to something else. Observed in practice on Windows: the longer
+    ``create_app()`` (schema migrations) took to run in that gap, the more
+    often asyncio's own event loop -- started moments later, inside this same
+    process, to actually serve the app -- ended up binding its own internal
+    sockets to the just-freed port first, silently shifting the real server
+    onto the *next* port instead, while the handshake file had already been
+    written with the original one. A client trusting the handshake would
+    then reach nothing at all. Returning the still-open, already-bound
+    socket instead of a bare number closes that gap entirely: nothing else
+    can ever claim this exact port between here and ``run()`` handing the
+    same socket object to uvicorn.
     """
-    if requested == 0:
-        return _find_free_port(host)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind((host, requested))
-        except OSError:
-            return _find_free_port(host)
-    return requested
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, requested))
+    except OSError:
+        sock.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind((host, 0))
+    return sock
 
 
 class _RedactingFilter(logging.Filter):
@@ -115,9 +125,13 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--app-data-dir",
         type=Path,
-        default=Path("app-data"),
-        help="Local data directory (simplified-design-specification.md §23); "
-        "holds database.sqlite, migrated to head on startup.",
+        default=Path.cwd() / "app-data",
+        help=(
+            "app-data/ root (simplified-design-spec.md §23): database, source "
+            "PDFs, generated images. Persists across restarts -- the final "
+            "production location is provisional pending the Windows "
+            "distribution issue (docs/answer-intake-and-preprocessing.md §5)."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -126,7 +140,13 @@ def run(argv: Sequence[str] | None = None) -> int:
     """Start the sidecar. Returns the process exit code."""
     args = _parse_args(argv)
     token = generate_token()
-    port = resolve_port(args.port)
+
+    # Bound (and held open) before anything else in this function -- see
+    # _bind_socket's docstring for why: create_app() below runs schema
+    # migrations and can take a while, and the socket must stay reserved for
+    # the whole of that, not just for the instant this line runs.
+    sock = _bind_socket(args.port)
+    port = int(sock.getsockname()[1])
 
     install_log_redaction(token)
     _emit_handshake(
@@ -134,19 +154,22 @@ def run(argv: Sequence[str] | None = None) -> int:
         args.handshake_file,
     )
 
-    store = LocalFileStore(args.app_data_dir)
-    store.sweep_temp()
-    db_url = sqlite_url(store.database_path())
-    upgrade(db_url, "head")
-    session_factory = build_session_factory(create_sqlite_engine(db_url))
-
-    uvicorn.run(
-        create_app(api_token=token, session_factory=session_factory),
+    # data_root only, no session_factory: create_app() builds the database
+    # itself (migrations, engine, the startup repair sweep) rather than this
+    # function duplicating that -- see create_app()'s docstring for why
+    # session_factory is reserved for callers (Issue #26's tests) that need
+    # to hand in an already-migrated database instead.
+    config = uvicorn.Config(
+        create_app(api_token=token, data_root=args.app_data_dir),
         host=LOOPBACK,
         port=port,
         log_config=None,
         access_log=True,
     )
+    # sockets=[sock], not host=/port= alone: uvicorn would otherwise bind a
+    # *new* socket to config.port itself, reopening exactly the gap
+    # _bind_socket exists to close.
+    uvicorn.Server(config).run(sockets=[sock])
     return 0
 
 

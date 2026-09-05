@@ -14,14 +14,16 @@ constraint violation at the offending call rather than at ``commit``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
 from auto_scoring.db.orm import (
     AnnotationRow,
+    AnswerImageRow,
     DependencyEdgeRow,
     DependencyGraphRow,
     GradeResultRow,
@@ -41,6 +43,7 @@ from auto_scoring.domain.dependency_graph import (
 )
 from auto_scoring.domain.models import (
     Annotation,
+    AnswerImage,
     GradeResult,
     GradingSource,
     Job,
@@ -147,6 +150,94 @@ class SqlAlchemySubmissionRepository:
             raise LookupError(f"submission {submission_id!r} not found")
         ensure_submission_transition(SubmissionState(row.state), state)
         row.state = state
+
+    def find_by_content_hash(self, test_id: str, source_pdf_sha256: str) -> Submission | None:
+        row = self._session.scalars(
+            select(SubmissionRow).where(
+                SubmissionRow.test_id == test_id,
+                SubmissionRow.source_pdf_sha256 == source_pdf_sha256,
+            )
+        ).first()
+        return m.submission_from_row(row) if row is not None else None
+
+    def mark_intake_outcome(
+        self, submission_id: str, state: SubmissionState, review_reason: str | None
+    ) -> None:
+        row = self._session.get(SubmissionRow, submission_id)
+        if row is None:
+            raise LookupError(f"submission {submission_id!r} not found")
+        ensure_submission_transition(SubmissionState(row.state), state)
+        row.state = state
+        row.review_reason = review_reason
+
+    def claim_for_retry(self, submission_id: str) -> bool:
+        """Atomically move ``submission_id`` from ``error`` to ``unprocessed``,
+        as a single conditional ``UPDATE ... WHERE state = 'error'`` rather
+        than a read-then-write -- so two concurrent retries of the same
+        errored submission can't both read "error" and both go on to run (and
+        commit) the full intake pipeline. Returns whether *this* call won the
+        race; the loser should treat that as a conflict, not retry again
+        itself, since the winner is already handling it.
+        """
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(SubmissionRow)
+                .where(
+                    SubmissionRow.id == submission_id, SubmissionRow.state == SubmissionState.ERROR
+                )
+                .values(state=SubmissionState.UNPROCESSED)
+            ),
+        )
+        # The raw UPDATE above bypasses the ORM, so a SubmissionRow already
+        # cached in this session's identity map (e.g. from an earlier
+        # find_by_content_hash) would otherwise keep showing the stale
+        # pre-claim state to later session.get() calls in this same session.
+        cached = self._session.get(SubmissionRow, submission_id)
+        if cached is not None:
+            self._session.refresh(cached)
+        return result.rowcount == 1
+
+    def has_downstream_processing(self, submission_id: str) -> bool:
+        row_types: tuple[type[RecognitionResultRow | GradeResultRow | ReviewRow | JobRow], ...] = (
+            RecognitionResultRow,
+            GradeResultRow,
+            ReviewRow,
+            JobRow,
+        )
+        return any(
+            self._session.execute(
+                select(row_type.id).where(row_type.submission_id == submission_id).limit(1)
+            ).first()
+            is not None
+            for row_type in row_types
+        )
+
+
+class SqlAlchemyAnswerImageRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, image: AnswerImage) -> None:
+        self._session.add(m.answer_image_to_row(image))
+        self._session.flush()
+
+    def list_for_submission(self, submission_id: str) -> list[AnswerImage]:
+        rows = self._session.scalars(
+            select(AnswerImageRow)
+            .where(AnswerImageRow.submission_id == submission_id)
+            .order_by(AnswerImageRow.page, AnswerImageRow.question_id)
+        )
+        return [m.answer_image_from_row(row) for row in rows]
+
+    def replace_for_submission(self, submission_id: str, images: Sequence[AnswerImage]) -> None:
+        self._session.execute(
+            delete(AnswerImageRow).where(AnswerImageRow.submission_id == submission_id)
+        )
+        self._session.flush()
+        for image in images:
+            self._session.add(m.answer_image_to_row(image))
+        self._session.flush()
 
 
 class SqlAlchemyRecognitionResultRepository:

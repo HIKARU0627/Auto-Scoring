@@ -54,6 +54,12 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 | `Annotation`                 | ○×△・点数・コメント・下線/囲み                | —            |
 | `Review`                     | 人間の承認/修正/却下の履歴                    | **追記のみ** |
 | `Job`                        | 非同期処理（recognition/grading/export）      | —            |
+| `AnswerImage`                | 設問ごとの回答欄切り出し画像（Issue #17）     | —            |
+
+> `AnswerImage` と `Submission` の `source_pdf_sha256` / `page_count` /
+> `original_filename` / `review_reason` は Issue #17（答案取込・画像前処理）で
+> マイグレーション `0005_answer_intake` により追加した。詳細は
+> [`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md)。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、
@@ -112,9 +118,15 @@ Job:
 app-data/
 ├─ database.sqlite            # WAL: database.sqlite-wal / -shm も同ディレクトリに生成される
 ├─ tests/<test-id>/{model-answer.pdf, manual.pdf, profile.json}
-├─ submissions/<submission-id>/source.pdf
+├─ submissions/<submission-id>/
+│   ├─ source.pdf                      # 元PDF（不変）
+│   ├─ pages/page-<N>.png              # 前処理済みページプレビュー（Issue #17）
+│   └─ questions/<question-id>.png     # 設問ごとの回答欄切り出し画像（Issue #17）
 └─ exports/<元ファイル名の stem>_corrected[_N].pdf
 ```
+
+`pages/` と `questions/` 配下は Issue #17（答案取込・画像前処理）で追加した。詳細は
+[`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md) §6〜8。
 
 `adapters/local_storage.py` の `LocalFileStore` が担当する。
 
@@ -156,8 +168,19 @@ app-data/
 - リビジョン:
   - `0001_initial_schema` — 10 個のコアテーブル一式。
   - `0002_operation_log` — 削除操作の監査ログテーブルを追加（§5 参照）。
+  - `0003_dependency_graph` / `0004_job_dependency_graph_version` — 設問依存
+    関係 DAG（Issue #26）。詳細は `docs/dependency-graph.md`。
+  - `0005_answer_intake` — `answer_images` テーブルと `submissions` への
+    `source_pdf_sha256` / `page_count` / `original_filename` / `review_reason`
+    列を追加（Issue #17）。SQLite の `CHECK` 制約追加は列追加を伴う既存テーブルの
+    再作成が必要なため、Alembic のバッチモード（`recreate="always"`）を使う。
     「1 世代前 DB」（0001 で止まっている既存 DB）から `head` への適用と、
     `head → 0001 → base` の downgrade を `tests/test_migrations.py` で検証する。
+  - `0006_student_label_length` / `0007_original_filename_length` —
+    `submissions.student_label` / `original_filename` に長さ上限の `CHECK`
+    制約を追加（Issue #17 レビュー対応）。PR #37 が main にマージされた PR #36
+    （Issue #26、`0003`/`0004` を先に使用）と競合したため、Issue #17 側の
+    `0003`〜`0005` を `0005`〜`0007` へ振り直した。
 - スキーマを変更したら `db/orm.py` を直し、`uv run alembic revision --autogenerate`
   で新しい revision を作る。`alembic.command.check`（`test_head_schema_matches_orm_metadata`）
   が ORM とマイグレーション履歴の乖離を検出する。

@@ -24,6 +24,8 @@ import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
+import 'package:auto_scoring_api/src/model/submission_response.dart';
+import 'package:auto_scoring_api/src/model/test_summary.dart';
 import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
 
@@ -40,6 +42,8 @@ part 'serializers.g.dart';
   QuestionTextOverride,
   ScoreRequest,
   ScoreResponse,
+  SubmissionResponse,
+  TestSummary,
   UnresolvedQuestionModel,
   ValidationError,
 ])
@@ -61,6 +65,10 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<LocationInner>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(SubmissionResponse)]),
+        () => ListBuilder<SubmissionResponse>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(QuestionTextOverride)]),
         () => ListBuilder<QuestionTextOverride>(),
       )
@@ -71,6 +79,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyProvision)]),
         () => ListBuilder<DependencyProvision>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(TestSummary)]),
+        () => ListBuilder<TestSummary>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyEdgeModel)]),

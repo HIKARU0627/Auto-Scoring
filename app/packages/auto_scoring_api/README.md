@@ -48,12 +48,15 @@ import 'package:auto_scoring_api/auto_scoring_api.dart';
 
 
 final api = AutoScoringApi().getDefaultApi();
+final String testId = testId_example; // String | 
+final MultipartFile file = BINARY_DATA_HERE; // MultipartFile | 
+final String studentLabel = studentLabel_example; // String | 
 
 try {
-    final response = await api.healthzHealthzGet();
+    final response = await api.createSubmissionTestsTestIdSubmissionsPost(testId, file, studentLabel);
     print(response);
 } on DioException catch (e) {
-    print("Exception when calling DefaultApi->healthzHealthzGet: $e\n");
+    print("Exception when calling DefaultApi->createSubmissionTestsTestIdSubmissionsPost: $e\n");
 }
 
 ```
@@ -64,7 +67,11 @@ All URIs are relative to *http://localhost*
 
 Class | Method | HTTP request | Description
 ------------ | ------------- | ------------- | -------------
+[*DefaultApi*](doc/DefaultApi.md) | [**createSubmissionTestsTestIdSubmissionsPost**](doc/DefaultApi.md#createsubmissionteststestidsubmissionspost) | **POST** /tests/{test_id}/submissions | Create Submission
+[*DefaultApi*](doc/DefaultApi.md) | [**getSubmissionSubmissionsSubmissionIdGet**](doc/DefaultApi.md#getsubmissionsubmissionssubmissionidget) | **GET** /submissions/{submission_id} | Get Submission
 [*DefaultApi*](doc/DefaultApi.md) | [**healthzHealthzGet**](doc/DefaultApi.md#healthzhealthzget) | **GET** /healthz | Healthz
+[*DefaultApi*](doc/DefaultApi.md) | [**listSubmissionsTestsTestIdSubmissionsGet**](doc/DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
+[*DefaultApi*](doc/DefaultApi.md) | [**listTestsTestsGet**](doc/DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
 [*DefaultApi*](doc/DefaultApi.md) | [**scoreScorePost**](doc/DefaultApi.md#scorescorepost) | **POST** /score | Score
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**analyzeTestsTestIdDependencyGraphAnalyzePost**](doc/DependencyGraphApi.md#analyzeteststestiddependencygraphanalyzepost) | **POST** /tests/{test_id}/dependency-graph/analyze | Analyze
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
@@ -84,6 +91,8 @@ Class | Method | HTTP request | Description
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
+ - [SubmissionResponse](doc/SubmissionResponse.md)
+ - [TestSummary](doc/TestSummary.md)
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
  - [ValidationError](doc/ValidationError.md)
 

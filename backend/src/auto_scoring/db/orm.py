@@ -39,6 +39,7 @@ from auto_scoring.db.base import Base
 from auto_scoring.domain.dependency_graph import DependencyGraphStatus, DependencyProvision
 from auto_scoring.domain.models import (
     AnnotationKind,
+    AnswerImageStatus,
     GradingSource,
     JobKind,
     JobState,
@@ -137,6 +138,16 @@ class SubmissionRow(Base):
             "'needs_review', 'reviewed', 'exported', 'error')",
             name="ck_submissions_state_valid",
         ),
+        CheckConstraint("page_count >= 1", name="ck_submissions_page_count_positive"),
+        CheckConstraint(
+            "student_label IS NULL OR length(student_label) <= 200",
+            name="ck_submissions_student_label_length",
+        ),
+        CheckConstraint(
+            "original_filename IS NULL OR length(original_filename) <= 255",
+            name="ck_submissions_original_filename_length",
+        ),
+        UniqueConstraint("test_id", "source_pdf_sha256", name="uq_submissions_test_content_hash"),
         Index("ix_submissions_test_id", "test_id"),
         Index("ix_submissions_state", "state"),
     )
@@ -144,8 +155,44 @@ class SubmissionRow(Base):
     id: Mapped[str] = _pk()
     test_id: Mapped[str] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), nullable=False)
     source_pdf_path: Mapped[str] = mapped_column(String, nullable=False)
+    source_pdf_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[SubmissionState] = mapped_column(_enum(SubmissionState), nullable=False)
     student_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    original_filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    review_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class AnswerImageRow(Base):
+    """One question's extracted answer-area image for one submission (Issue #17 §7.1)."""
+
+    __tablename__ = "answer_images"
+    __table_args__ = (
+        UniqueConstraint(
+            "submission_id", "question_id", name="uq_answer_images_submission_question"
+        ),
+        CheckConstraint("page >= 1", name="ck_answer_images_page_positive"),
+        CheckConstraint("status IN ('ok', 'needs_review')", name="ck_answer_images_status_valid"),
+        CheckConstraint(
+            "(status = 'ok' AND reason IS NULL) OR "
+            "(status = 'needs_review' AND reason IS NOT NULL AND trim(reason) != '')",
+            name="ck_answer_images_reason_matches_status",
+        ),
+        Index("ix_answer_images_submission_id", "submission_id"),
+    )
+
+    id: Mapped[str] = _pk()
+    submission_id: Mapped[str] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    question_id: Mapped[str] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), nullable=False
+    )
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    image_path: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[AnswerImageStatus] = mapped_column(_enum(AnswerImageStatus), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

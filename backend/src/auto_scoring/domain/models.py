@@ -28,6 +28,26 @@ from enum import StrEnum
 
 _EPS = 1e-9
 
+#: A client posting directly to the API (bypassing the Flutter UI, which
+#: never sends more than a short label) could otherwise pack most of the
+#: request size limit into this one field -- it's stored verbatim and
+#: returned in full on every submissions-list response, so a handful of
+#: megabyte-scale labels would bloat both the database and every response's
+#: memory footprint (AGENTS.md "Validate every input that crosses a trust
+#: boundary"). ``migrations/versions/0006_student_label_length.py`` mirrors
+#: this as a DB CHECK constraint, a second line of defence.
+MAX_STUDENT_LABEL_LENGTH = 200
+
+#: Same reasoning as ``MAX_STUDENT_LABEL_LENGTH``, for the multipart upload's
+#: client-supplied filename: nothing but ``.pdf`` at the end and printable
+#: characters is required, and the whole body can be up to ~50MiB, so a
+#: client posting directly to the API could otherwise pack an arbitrarily
+#: long name into ``original_filename`` -- stored verbatim, returned on every
+#: submission response. Enforced in ``domain.pdf_intake.validate_filename``
+#: (the first, cheapest check on a fresh upload) and mirrored as a DB CHECK
+#: constraint in ``migrations/versions/0007_original_filename_length.py``.
+MAX_ORIGINAL_FILENAME_LENGTH = 255
+
 #: Upper bound for a single annotation comment, in characters
 #: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
 MAX_COMMENT_CHARS = 120
@@ -153,6 +173,17 @@ class ReviewAction(StrEnum):
     APPROVED = "approved"
     MODIFIED = "modified"
     REJECTED = "rejected"
+
+
+class AnswerImageStatus(StrEnum):
+    """Outcome of extracting one question's answer-area image from a submission
+    (§7.1, §24 "回答欄検出失敗"). ``NEEDS_REVIEW`` means the crop could not be
+    trusted (e.g. the submission's page count didn't match the test's
+    registered pages) and the original page image is shown to a human instead.
+    """
+
+    OK = "ok"
+    NEEDS_REVIEW = "needs_review"
 
 
 # --------------------------------------------------------------------------- #
@@ -378,19 +409,48 @@ class Rubric:
 
 @dataclass(frozen=True, kw_only=True)
 class Submission:
-    """One student's answers for a test. ``student_label`` stays local-only (§2 (13))."""
+    """One student's answers for a test. ``student_label`` stays local-only (§2 (13)).
+
+    ``source_pdf_sha256`` is the intake dedupe key (see
+    ``domain.submission_intake.decide_reintake``) and ``page_count`` is learned
+    once, at intake, so later code doesn't need to reopen the PDF just to know
+    how many pages it has. ``original_filename`` is never used as a storage
+    path (Issue #17: "path traversalと上書きを防ぐ") and is local-only, like
+    ``student_label``. ``review_reason`` records why intake routed this
+    submission to ``NEEDS_REVIEW`` (e.g. a page-count mismatch against the
+    test's registered questions), for display without re-deriving it.
+    """
 
     id: str
     test_id: str
     source_pdf_path: str
+    source_pdf_sha256: str
+    page_count: int
     created_at: datetime
     state: SubmissionState = SubmissionState.UNPROCESSED
     student_label: str | None = None
+    original_filename: str | None = None
+    review_reason: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("Submission.id", self.id)
         _require_non_empty("Submission.test_id", self.test_id)
         _require_non_empty("Submission.source_pdf_path", self.source_pdf_path)
+        _require_non_empty("Submission.source_pdf_sha256", self.source_pdf_sha256)
+        if self.page_count < 1:
+            raise DomainError("Submission.page_count must be >= 1")
+        if self.student_label is not None and len(self.student_label) > MAX_STUDENT_LABEL_LENGTH:
+            raise DomainError(
+                f"Submission.student_label must be at most {MAX_STUDENT_LABEL_LENGTH} characters"
+            )
+        if (
+            self.original_filename is not None
+            and len(self.original_filename) > MAX_ORIGINAL_FILENAME_LENGTH
+        ):
+            raise DomainError(
+                "Submission.original_filename must be at most "
+                f"{MAX_ORIGINAL_FILENAME_LENGTH} characters"
+            )
 
     def with_state(self, target: SubmissionState) -> Submission:
         """Return a copy in ``target`` state, or raise if the move is illegal."""
@@ -502,6 +562,38 @@ class Review:
             raise DomainError(f"{self.action} review must reference the AI grade result")
         if self.action is ReviewAction.MODIFIED and not self.human_grade_result_id:
             raise DomainError("modified review must reference the human grade result")
+
+
+@dataclass(frozen=True, kw_only=True)
+class AnswerImage:
+    """The per-question image cropped from a submission's answer area (§7.1).
+
+    One row per ``(submission_id, question_id)`` -- a fresh submission (e.g. a
+    retry) gets its own set. ``image_path`` follows the same
+    app-data-root-relative convention as ``Submission.source_pdf_path``.
+    """
+
+    id: str
+    submission_id: str
+    question_id: str
+    page: int
+    image_path: str
+    status: AnswerImageStatus
+    created_at: datetime
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_non_empty("AnswerImage.id", self.id)
+        _require_non_empty("AnswerImage.submission_id", self.submission_id)
+        _require_non_empty("AnswerImage.question_id", self.question_id)
+        _require_non_empty("AnswerImage.image_path", self.image_path)
+        if self.page < 1:
+            raise DomainError("AnswerImage.page must be >= 1")
+        needs_review = self.status is AnswerImageStatus.NEEDS_REVIEW
+        if needs_review and not (self.reason and self.reason.strip()):
+            raise DomainError("needs_review answer image requires a reason")
+        if self.status is AnswerImageStatus.OK and self.reason is not None:
+            raise DomainError("ok answer image must not carry a reason")
 
 
 @dataclass(frozen=True, kw_only=True)

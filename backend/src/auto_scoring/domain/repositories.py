@@ -14,11 +14,13 @@ and the human-confirmed value are always retrievable side by side
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
 from auto_scoring.domain.dependency_graph import DependencyGraph
 from auto_scoring.domain.models import (
     Annotation,
+    AnswerImage,
     GradeResult,
     GradingSource,
     Job,
@@ -55,6 +57,58 @@ class SubmissionRepository(Protocol):
     def get(self, submission_id: str) -> Submission | None: ...
     def list_for_test(self, test_id: str) -> list[Submission]: ...
     def set_state(self, submission_id: str, state: SubmissionState) -> None: ...
+    def find_by_content_hash(self, test_id: str, source_pdf_sha256: str) -> Submission | None: ...
+
+    def mark_intake_outcome(
+        self, submission_id: str, state: SubmissionState, review_reason: str | None
+    ) -> None:
+        """Validated state transition plus ``review_reason``, in one write.
+
+        Used only by the answer-intake pipeline (``adapters.submission_intake``)
+        so a retry can both move the submission out of ``ERROR`` and record why
+        it did (or didn't) land in ``NEEDS_REVIEW`` again, without a second
+        round trip.
+        """
+        ...
+
+    def claim_for_retry(self, submission_id: str) -> bool:
+        """Atomically move ``submission_id`` from ``ERROR`` to ``UNPROCESSED``
+        via a conditional update (``WHERE state = 'error'``), not a read-then-
+        write -- so two concurrent retries of the same errored submission
+        can't both proceed and both commit the full intake pipeline. Returns
+        whether this call won the race.
+        """
+        ...
+
+    def has_downstream_processing(self, submission_id: str) -> bool:
+        """Whether any recognition/grade/review/job row references
+        ``submission_id`` -- i.e. whether processing already moved past
+        intake for it.
+
+        Used by the answer-intake retry decision
+        (``domain.submission_intake.decide_reintake``) to keep in-place retry
+        limited to intake-stage failures: those tables are append-only
+        history (or, for jobs, independently-scheduled work) keyed on
+        ``submission_id``/``question_id``, not on a particular attempt's
+        answer images. Blindly reprocessing a submission in place once
+        something downstream has already touched it would leave that history
+        (and any still-queued job) orphaned against a fresh set of
+        regenerated answer images.
+        """
+        ...
+
+
+class AnswerImageRepository(Protocol):
+    def add(self, image: AnswerImage) -> None: ...
+    def list_for_submission(self, submission_id: str) -> list[AnswerImage]: ...
+
+    def replace_for_submission(self, submission_id: str, images: Sequence[AnswerImage]) -> None:
+        """Delete any answer images already recorded for ``submission_id`` and
+        insert ``images`` in their place -- a retry re-runs the whole
+        extraction, so the old set (which may reference a since-deleted file
+        state) must not linger alongside the new one.
+        """
+        ...
 
 
 class RecognitionResultRepository(Protocol):
@@ -157,6 +211,7 @@ class UnitOfWork(Protocol):
     questions: QuestionRepository
     rubrics: RubricRepository
     submissions: SubmissionRepository
+    answer_images: AnswerImageRepository
     recognitions: RecognitionResultRepository
     grades: GradeResultRepository
     annotations: AnnotationRepository

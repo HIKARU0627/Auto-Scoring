@@ -8,6 +8,8 @@ from typing import Any
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
+    AnswerImage,
+    AnswerImageStatus,
     GradeResult,
     GradingSource,
     Job,
@@ -73,10 +75,26 @@ def make_submission(**overrides: Any) -> Submission:
         "id": "sub-1",
         "test_id": "test-1",
         "source_pdf_path": "submissions/sub-1/source.pdf",
+        "source_pdf_sha256": "0" * 64,
+        "page_count": 1,
         "created_at": at(),
     }
     values.update(overrides)
     return Submission(**values)
+
+
+def make_answer_image(**overrides: Any) -> AnswerImage:
+    values: dict[str, Any] = {
+        "id": "answer-image-1",
+        "submission_id": "sub-1",
+        "question_id": "q-1",
+        "page": 1,
+        "image_path": "submissions/sub-1/questions/q-1.png",
+        "status": AnswerImageStatus.OK,
+        "created_at": at(),
+    }
+    values.update(overrides)
+    return AnswerImage(**values)
 
 
 def make_recognition(**overrides: Any) -> RecognitionResult:

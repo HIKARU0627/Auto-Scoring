@@ -102,8 +102,13 @@ def test_different_formats_are_stored_independently(tmp_path: Path) -> None:
 
 
 def test_profile_path_rejects_escaping_the_storage_root(tmp_path: Path) -> None:
+    """A test_id containing embedded path-traversal segments is now caught by
+    LocalFileStore's per-segment sanitization (unsafe path segment) before it
+    would even reach the separate whole-path root-escape check -- either way,
+    the important thing is that this is still rejected outright.
+    """
     store = ProfileStore(tmp_path / "app-data")
-    with pytest.raises(ValueError, match="escapes storage root"):
+    with pytest.raises(ValueError, match="unsafe path segment"):
         store.profile_path("../../outside")
 
 

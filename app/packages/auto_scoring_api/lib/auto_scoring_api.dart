@@ -23,5 +23,7 @@ export 'package:auto_scoring_api/src/model/location_inner.dart';
 export 'package:auto_scoring_api/src/model/question_text_override.dart';
 export 'package:auto_scoring_api/src/model/score_request.dart';
 export 'package:auto_scoring_api/src/model/score_response.dart';
+export 'package:auto_scoring_api/src/model/submission_response.dart';
+export 'package:auto_scoring_api/src/model/test_summary.dart';
 export 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 export 'package:auto_scoring_api/src/model/validation_error.dart';

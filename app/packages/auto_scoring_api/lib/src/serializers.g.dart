@@ -17,6 +17,8 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(QuestionTextOverride.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
+      ..add(SubmissionResponse.serializer)
+      ..add(TestSummary.serializer)
       ..add(UnresolvedQuestionModel.serializer)
       ..add(ValidationError.serializer)
       ..addBuilderFactory(

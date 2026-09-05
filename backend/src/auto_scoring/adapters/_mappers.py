@@ -10,6 +10,7 @@ from typing import Any
 
 from auto_scoring.db.orm import (
     AnnotationRow,
+    AnswerImageRow,
     DependencyEdgeRow,
     DependencyGraphRow,
     GradeResultRow,
@@ -32,6 +33,8 @@ from auto_scoring.domain.dependency_graph import (
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
+    AnswerImage,
+    AnswerImageStatus,
     BoundingBox,
     CriterionOutcome,
     CriterionResult,
@@ -192,8 +195,12 @@ def submission_to_row(submission: Submission) -> SubmissionRow:
         id=submission.id,
         test_id=submission.test_id,
         source_pdf_path=submission.source_pdf_path,
+        source_pdf_sha256=submission.source_pdf_sha256,
+        page_count=submission.page_count,
         state=submission.state,
         student_label=submission.student_label,
+        original_filename=submission.original_filename,
+        review_reason=submission.review_reason,
         created_at=submission.created_at,
     )
 
@@ -203,8 +210,41 @@ def submission_from_row(row: SubmissionRow) -> Submission:
         id=row.id,
         test_id=row.test_id,
         source_pdf_path=row.source_pdf_path,
+        source_pdf_sha256=row.source_pdf_sha256,
+        page_count=row.page_count,
         state=SubmissionState(row.state),
         student_label=row.student_label,
+        original_filename=row.original_filename,
+        review_reason=row.review_reason,
+        created_at=row.created_at,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# AnswerImage
+# --------------------------------------------------------------------------- #
+def answer_image_to_row(image: AnswerImage) -> AnswerImageRow:
+    return AnswerImageRow(
+        id=image.id,
+        submission_id=image.submission_id,
+        question_id=image.question_id,
+        page=image.page,
+        image_path=image.image_path,
+        status=image.status,
+        reason=image.reason,
+        created_at=image.created_at,
+    )
+
+
+def answer_image_from_row(row: AnswerImageRow) -> AnswerImage:
+    return AnswerImage(
+        id=row.id,
+        submission_id=row.submission_id,
+        question_id=row.question_id,
+        page=row.page,
+        image_path=row.image_path,
+        status=AnswerImageStatus(row.status),
+        reason=row.reason,
         created_at=row.created_at,
     )
 
