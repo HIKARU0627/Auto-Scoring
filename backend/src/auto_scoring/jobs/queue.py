@@ -86,6 +86,15 @@ _MAX_RETRY_ATTEMPTS = 5
 #: state -- see `mark_question_usable`.
 _MAX_RESUME_ATTEMPTS = 5
 
+#: Delay before `_retry_scheduler_loop` re-schedules an entry whose own
+#: `_requeue_after_backoff` call raised (e.g. a transient SQLite busy-
+#: timeout) -- always > 0 so the loop's next attempt goes through the
+#: sleep-then-requeue branch (a real ``await``) instead of looping back to
+#: `_requeue_after_backoff` with no yield point at all, which an
+#: immediately-recurring error would turn into an event-loop-starving spin
+#: (review round 8, P1).
+_SCHEDULER_ERROR_RETRY_DELAY_SECONDS = 1.0
+
 
 class SubmissionNotReadyError(Exception):
     """The submission's test has no confirmed, up-to-date dependency graph."""
@@ -902,6 +911,15 @@ class JobQueueService:
         needing more than this one task no matter how many retries are
         pending at once. Cancelled (by `shutdown`), not run to completion:
         see `shutdown`'s own docstring for why that loses nothing.
+
+        A `_requeue_after_backoff` call that itself raises (e.g. a
+        transient SQLite busy-timeout) is caught per entry rather than left
+        to escape this loop: this is the *only* task servicing
+        `_retry_heap`, so letting it die would silently strand every other
+        still-pending retry until the next process restart -- a worse
+        outcome than losing track of just the one entry that failed
+        (review round 8, P1). The failed entry is rescheduled after
+        `_SCHEDULER_ERROR_RETRY_DELAY_SECONDS` instead of being dropped.
         """
         while True:
             if not self._retry_heap:
@@ -912,7 +930,18 @@ class JobQueueService:
             remaining = (due_at - self._clock.now()).total_seconds()
             if remaining > 0:
                 await self._clock.sleep(remaining)
-            self._requeue_after_backoff(job_id, expected_attempts=expected_attempts)
+            try:
+                self._requeue_after_backoff(job_id, expected_attempts=expected_attempts)
+            except Exception:
+                logger.exception(
+                    "retry scheduler failed to requeue a job; rescheduling",
+                    extra={"job_id": job_id},
+                )
+                self._schedule_retry(
+                    job_id,
+                    _SCHEDULER_ERROR_RETRY_DELAY_SECONDS,
+                    expected_attempts=expected_attempts,
+                )
 
     def _finalize_cancelled(self, job_id: str) -> None:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
