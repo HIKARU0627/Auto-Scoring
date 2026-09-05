@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from auto_scoring.adapters.atomic import FinalizationError, transactional_operation
 from auto_scoring.adapters.local_storage import LocalFileStore
+from auto_scoring.adapters.pdf.text_layout_extraction import extract_text_lines
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import ScoringMethod, Test, TestStatus
 from auto_scoring.domain.pdf_engine import PdfEngine
@@ -73,6 +74,36 @@ def _validate_one_pdf(pdf_engine: PdfEngine, path: Path, limits: IntakeLimits) -
             pdf_engine.page_geometry(path, page_index)
         except ValueError as exc:
             raise PdfGeometryError(f"page {page_index + 1} has invalid geometry: {exc}") from exc
+        except Exception as exc:
+            # `page_geometry` (pypdf) can fail in ways other than the
+            # `ValueError` its own box-validation raises -- e.g. `KeyError`/
+            # `TypeError` resolving an inherited MediaBox/CropBox/rotation
+            # through a broken page tree, or one of pypdf's own parse
+            # errors. None of those are a "the geometry is invalid" problem
+            # this test should carry `PdfGeometryError`'s more specific
+            # message; they mean the page itself couldn't be read (Issue
+            # #16 review round 7).
+            raise PdfCorruptedError(
+                f"could not determine page {page_index + 1}'s geometry: {exc}"
+            ) from exc
+        try:
+            # `page_geometry`/`page_count`/`is_encrypted` above are all
+            # pypdf-backed, but `generate_profile_candidates` (the first
+            # thing that will actually read this file's text, via
+            # `_question_blocks`) uses pypdfium2 directly -- pypdf can
+            # parse, and silently repair, a PDF whose structure pypdfium2's
+            # own stricter parser refuses outright. Without exercising that
+            # exact code path here, such a file would pass intake, get
+            # persisted, and only fail once `/profile/analyze` calls it,
+            # leaving a persisted draft with no profile and no documented
+            # way back in (docs/test-registration.md's "不正PDFを安全に
+            # 拒否する" contract must hold at intake, not partway through
+            # analysis -- Issue #16 review round 7).
+            extract_text_lines(path, page_index)
+        except Exception as exc:
+            raise PdfCorruptedError(
+                f"page {page_index + 1} could not be parsed with pdfium: {exc}"
+            ) from exc
 
 
 def register_test(

@@ -319,6 +319,27 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   マッチ自体しないようにした（`_extract_points`は「score無し」として扱い、
   通常通り`InvalidScoreError`になる）。
 
+## レビュー対応（PRラウンド7）
+
+- **analysisが使うパーサー（pdfium）でもintake時に検証する**: `_validate_one_pdf`
+  はpypdf（`page_count`/`is_encrypted`/`page_geometry`）だけで検証しており、
+  pypdfiumium2は一度も開かれていなかった。pypdfが読める（時に黙って修復して
+  しまう）が構造が壊れているPDFを、後で`generate_profile_candidates`が
+  `extract_text_lines`経由でpdfiumから開こうとして初めて拒否されると、
+  `analyze_profile`はその例外を変換せず500になり、しかもTest行・PDFは既に
+  永続化済みのため`PUT /profile`が要求するprofileが一切無いまま取り残されて
+  いた。intake時にも各ページで`extract_text_lines`を実際に呼び出し、失敗を
+  `PdfCorruptedError`（400）に変換することで、`generate_profile_candidates`が
+  後で遭遇する不正PDFをtest登録の時点で確実に拒否するようにした。
+- **page-geometry解析の全ての失敗経路を正規化する**: `page_geometry`
+  （pypdf）はCropBox/MediaBox/rotationを継承チェーンから解決する際、
+  `PageGeometry.__post_init__`自身が送出する`ValueError`以外にも
+  `KeyError`/`TypeError`/pypdfの独自パースエラーを送出し得たが、
+  `except ValueError`しか捕捉していなかった。`page_geometry`呼び出しに
+  broadな`except Exception`を追加し、`ValueError`（ジオメトリ自体が不正）は
+  引き続き`PdfGeometryError`に、それ以外（ページ自体が読めない）は
+  `PdfCorruptedError`に変換するようにした。
+
 ## 未決事項
 
 - PDFオーバーレイでのregion視覚編集（上記「UI設計」）。

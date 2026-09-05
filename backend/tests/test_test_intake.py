@@ -17,20 +17,25 @@ from auto_scoring.adapters.test_intake import register_test, repair_incomplete_t
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
-from auto_scoring.domain.pdf_intake import PdfGeometryError
+from auto_scoring.domain.pdf_intake import PdfCorruptedError, PdfGeometryError
 from tests.support import at, make_test
 
 _ENGINE = PdfiumPypdfEngine()
 
 
 class _BadGeometryPdfEngine:
-    """Delegates to a real `PdfEngine`, but `page_geometry` always raises --
-    standing in for a PDF whose CropBox/MediaBox don't intersect, or whose
-    `/Rotate` isn't a multiple of 90 (`PageGeometry.__post_init__`).
+    """Delegates to a real `PdfEngine`, but `page_geometry` always raises
+    `exc` -- standing in for a PDF whose CropBox/MediaBox don't intersect,
+    or whose `/Rotate` isn't a multiple of 90 (`PageGeometry.__post_init__`,
+    a `ValueError`), or one whose page tree is broken in some other way
+    pypdf's own box/rotation lookups surface as a different exception type
+    entirely (`KeyError`, `TypeError`, one of pypdf's own parse errors --
+    Issue #16 review round 7).
     """
 
-    def __init__(self, delegate: PdfEngine) -> None:
+    def __init__(self, delegate: PdfEngine, *, exc: Exception | None = None) -> None:
         self._delegate = delegate
+        self._exc = exc or ValueError("crop dimensions must be positive")
 
     def page_count(self, source: Path) -> int:
         return self._delegate.page_count(source)
@@ -39,7 +44,7 @@ class _BadGeometryPdfEngine:
         return self._delegate.is_encrypted(source)
 
     def page_geometry(self, source: Path, page_index: int) -> PageGeometry:
-        raise ValueError("crop dimensions must be positive")
+        raise self._exc
 
     def render_page_png(self, source: Path, page_index: int, *, scale: float) -> bytes:
         return self._delegate.render_page_png(source, page_index, scale=scale)
@@ -163,6 +168,84 @@ def test_rejects_a_pdf_with_invalid_page_geometry(
             uow,
             store,
             _BadGeometryPdfEngine(_ENGINE),
+            name="国語",
+            subject=None,
+            model_answer_filename="model-answer.pdf",
+            model_answer_mime="application/pdf",
+            model_answer_data=_pdf_bytes(),
+            manual_filename="manual.pdf",
+            manual_mime="application/pdf",
+            manual_data=_pdf_bytes(),
+            now=at(),
+        )
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.tests.list_all() == []
+
+
+@pytest.mark.parametrize("exc", [KeyError("/MediaBox"), TypeError("not a rectangle")])
+def test_rejects_a_pdf_whose_geometry_lookup_fails_with_a_non_value_error(
+    store: LocalFileStore, session_factory: sessionmaker[Session], exc: Exception
+) -> None:
+    """`page_geometry` (pypdf) can fail resolving an inherited MediaBox/
+    CropBox/rotation through a broken page tree with something other than
+    the `ValueError` its own box-validation raises. Before this, such a
+    failure sailed past the `except ValueError` guard entirely and
+    surfaced as an unhandled 500 from `POST /tests` (Issue #16 review
+    round 7).
+    """
+    with (
+        SqlAlchemyUnitOfWork(session_factory) as uow,
+        pytest.raises(PdfCorruptedError),
+    ):
+        register_test(
+            uow,
+            store,
+            _BadGeometryPdfEngine(_ENGINE, exc=exc),
+            name="国語",
+            subject=None,
+            model_answer_filename="model-answer.pdf",
+            model_answer_mime="application/pdf",
+            model_answer_data=_pdf_bytes(),
+            manual_filename="manual.pdf",
+            manual_mime="application/pdf",
+            manual_data=_pdf_bytes(),
+            now=at(),
+        )
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.tests.list_all() == []
+
+
+def test_rejects_a_pdf_pypdf_accepts_but_pdfium_cannot_extract_text_from(
+    store: LocalFileStore,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pypdf can parse -- and silently repair -- a PDF whose structure
+    pypdfium2 refuses outright. `generate_profile_candidates` (the first
+    thing that actually reads this file's text, once `/profile/analyze` is
+    called) uses pypdfium2 directly, not the `PdfEngine` abstraction
+    exercised above -- so a file that only pypdfium2 rejects must be
+    caught at intake too, before the `Test` row and its PDFs are
+    persisted, or the resulting draft has no profile and no documented way
+    back in (Issue #16 review round 7).
+    """
+    import auto_scoring.adapters.test_intake as test_intake_module
+
+    def failing_extract_text_lines(path: Path, page_index: int) -> list[object]:
+        raise RuntimeError("simulated pdfium parse failure")
+
+    monkeypatch.setattr(test_intake_module, "extract_text_lines", failing_extract_text_lines)
+
+    with (
+        SqlAlchemyUnitOfWork(session_factory) as uow,
+        pytest.raises(PdfCorruptedError),
+    ):
+        register_test(
+            uow,
+            store,
+            _ENGINE,
             name="国語",
             subject=None,
             model_answer_filename="model-answer.pdf",
