@@ -309,7 +309,15 @@ class JobQueueService:
                     continue
                 requeued = job.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
                 try:
-                    uow.jobs.save(requeued, expected_state=JobState.FAILED)
+                    # require_usable_unset=True: a concurrent `/resume` call
+                    # (its own short transaction) can still commit `usable`
+                    # between the read above and this write, before this
+                    # startup transaction's own writes escalate its lock --
+                    # see `_requeue_after_backoff`'s identical guard (review
+                    # round 8, P1).
+                    uow.jobs.save(
+                        requeued, expected_state=JobState.FAILED, require_usable_unset=True
+                    )
                 except JobSaveConflict:
                     continue
                 logger.info(
@@ -1051,7 +1059,16 @@ class JobQueueService:
                 return
             requeued = current.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
             try:
-                uow.jobs.save(requeued, expected_state=JobState.FAILED)
+                # require_usable_unset=True closes the same race the check
+                # above cannot: `usable` could still land between that read
+                # and this write (`mark_usable` never touches `state`, so a
+                # state-only CAS would otherwise still match) -- without it,
+                # this save could commit right after a `/resume` call whose
+                # own transaction has already released a dependent on the
+                # strength of the approval this write is about to silently
+                # clear (review round 8, P1; same reasoning as `retry_job`
+                # and `cancel_job`, review round 5).
+                uow.jobs.save(requeued, expected_state=JobState.FAILED, require_usable_unset=True)
             except JobSaveConflict:
                 return
             uow.commit()
