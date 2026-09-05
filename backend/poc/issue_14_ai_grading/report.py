@@ -35,17 +35,21 @@ The expected comparison matrix is every provider seen anywhere in the dataset
 times both input variants (``ocr_clean`` / ``ocr_noisy``) -- not just the
 cells a given sample happens to define. A cell missing from that matrix (no
 ``recorded[provider][variant]`` entry at all, or one with no ``response`` key)
-is "pending", never silently skipped: comparing only 2 candidates when the
-PoC requires >= 2 x both input modes must be visible in the output, not
-inferred from an incomplete loop (code review finding).
+is "pending", never silently skipped. The PoC requires comparing at least 2
+candidates (docs/poc-2-ai-grading.md section 2): a dataset that has only ever
+recorded one provider name is refused outright, rather than printing a
+complete-looking table for a single candidate (code review finding).
 
 A cell whose raw JSON fails
 :func:`auto_scoring.domain.ai_grading.parse_ai_grading_result` is a schema
 violation and is scored as such -- never as a free-text-parsed guess
 (Issue #14 acceptance). A cell's ``descriptor`` (model / version / temperature
 / structured-output mode) is read from the recorded data itself, never
-fabricated here: two cells for the same ``provider`` name recorded under
-different settings must stay distinguishable (Issue #14 "再現条件").
+fabricated here, and is required on every non-pending cell (even one that
+turns out to be a schema violation): two cells for the same ``provider`` name
+recorded under different settings are aggregated as separate buckets, keyed
+on :func:`auto_scoring.domain.ai_provider.descriptor_key`, never pooled
+(Issue #14 "再現条件").
 
 Only counts and averaged scores are printed. Provider response bodies (and
 any real answer text they might embed) are read only long enough to compute
@@ -73,6 +77,7 @@ from auto_scoring.domain.ai_grading_metrics import (
 from auto_scoring.domain.ai_provider import (
     GradingResponse,
     ProviderDescriptor,
+    descriptor_key,
     grading_response_from_result,
 )
 
@@ -82,6 +87,11 @@ _DEFAULT_DATASET = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / 
 #: section 2.1). Fixed rather than derived from whatever keys happen to be
 #: present, so a variant missing for one provider is still reported.
 _INPUT_VARIANTS = ("ocr_clean", "ocr_noisy")
+
+#: The PoC requires comparing at least this many candidates on the same data
+#: (docs/poc-2-ai-grading.md section 2: "Gemini、Claude、OpenAI GPTのうち
+#: 利用可能な最低2候補を...比較する").
+_MINIMUM_PROVIDERS = 2
 
 
 class _MissingDescriptor(Exception):
@@ -94,7 +104,7 @@ def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) ->
         raise _MissingDescriptor(
             f"{path}: provider {provider!r} has a recorded response but no 'descriptor' "
             "(model/version/temperature/structured_output_mode) -- cannot be reproduced "
-            "(Issue #14 '再現条件'). Add a descriptor object to this cell."
+            "or safely bucketed (Issue #14 '再現条件'). Add a descriptor object to this cell."
         )
     return ProviderDescriptor(
         provider=provider,
@@ -107,34 +117,39 @@ def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) ->
 
 def _load_cell(
     cell: dict[str, Any] | None, *, provider: str, path: Path
-) -> tuple[GradingResponse | None, float | None, float | None, bool]:
+) -> tuple[GradingResponse | None, str | None, float | None, float | None, bool]:
     """Parse one recorded ``(provider, input_variant)`` cell.
 
-    Returns ``(GradingResponse | None, cost_usd, latency_seconds, pending)``.
-    ``pending`` is true when the cell is entirely absent or has no
-    ``response`` key; a malformed ``response`` yields ``(None, cost,
-    latency, False)`` -- a schema violation, not a pending measurement.
-    ``latency_seconds`` is read independent of whether the response parsed,
-    and is ``None`` (not a fabricated ``0.0``) when the cell records none.
+    Returns ``(GradingResponse | None, config_key, cost_usd, latency_seconds,
+    pending)``. ``pending`` is true when the cell is entirely absent or has
+    no ``response`` key; a malformed ``response`` yields ``(None, config_key,
+    cost, latency, False)`` -- a schema violation, not a pending measurement.
+    ``descriptor`` (and so ``config_key``) is required as soon as a
+    ``response`` key is present, even if that response goes on to fail
+    schema validation, so schema-violating cells are still bucketed by the
+    configuration that produced them. ``latency_seconds`` is read independent
+    of whether the response parsed, and is ``None`` (not a fabricated
+    ``0.0``) when the cell records none.
     """
     if cell is None or "response" not in cell:
         cost_usd = None if cell is None else cell.get("cost_usd")
-        return None, cost_usd, None, True
+        return None, None, cost_usd, None, True
 
     cost_usd = cell.get("cost_usd")
     latency_raw = cell.get("latency_seconds")
     latency_seconds = float(latency_raw) if latency_raw is not None else None
+    descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
+    config_key = descriptor_key(descriptor)
 
     try:
         parsed = parse_ai_grading_result(json.dumps(cell["response"]))
     except ValidationError:
-        return None, cost_usd, latency_seconds, False
+        return None, config_key, cost_usd, latency_seconds, False
 
-    descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
     response = grading_response_from_result(
         parsed, descriptor=descriptor, latency_seconds=latency_seconds or 0.0
     )
-    return response, cost_usd, latency_seconds, False
+    return response, config_key, cost_usd, latency_seconds, False
 
 
 def _all_providers(files: list[Path]) -> set[str]:
@@ -159,6 +174,12 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     ``AIProvider`` call (ground truth transcribed, ``recorded`` left ``{}``
     dataset-wide) -- distinct from "pending" cells, which are expected
     (some other sample recorded that provider) but missing for this one.
+
+    Raises ``SystemExit`` if the dataset has recorded exactly one provider
+    (not zero -- that is the "nothing recorded yet" case above, and not
+    two-or-more): the PoC requires comparing >= 2 candidates on the same
+    data, so a single-candidate dataset is refused outright rather than
+    printed as if the comparison were complete (code review finding).
     """
     files = sorted(dataset.glob("*.json"))
     if not files:
@@ -167,6 +188,13 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     providers = _all_providers(files)
     if not providers:
         return [], 0, len(files)
+    if len(providers) < _MINIMUM_PROVIDERS:
+        raise SystemExit(
+            f"only {len(providers)} provider(s) recorded ({sorted(providers)}) -- "
+            f"PoC 2 requires comparing >= {_MINIMUM_PROVIDERS} candidates on the same data "
+            "(docs/poc-2-ai-grading.md section 2). Refusing to report a single-candidate "
+            "result as a comparison; record at least one more provider before re-running."
+        )
 
     outcomes: list[SampleOutcome] = []
     pending = 0
@@ -178,17 +206,19 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
             cells_for_provider = recorded.get(provider, {})
             for variant in _INPUT_VARIANTS:
                 cell = cells_for_provider.get(variant)
-                response, cost_usd, latency_seconds, is_pending = _load_cell(
+                response, config_key, cost_usd, latency_seconds, is_pending = _load_cell(
                     cell, provider=provider, path=path
                 )
                 if is_pending:
                     pending += 1
                     continue
+                assert config_key is not None  # only None when is_pending
                 outcomes.append(
                     evaluate_sample(
                         truth,
                         response,
                         provider=provider,
+                        config_key=config_key,
                         input_variant=variant,
                         cost_usd=cost_usd,
                         latency_seconds=latency_seconds,

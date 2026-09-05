@@ -78,6 +78,12 @@
           "recognition": { "text": "役職Aは中央から派遣され、役職Bは地元の有力者から任命された。役職Aには任期があり、役職Bはほぼ終身であった。", "confidence": 0.96 },
           "grading": { "score": 16, "maxScore": 20, "confidence": 0.8 }
         },
+        "descriptor": {
+          "model": "synthetic-model-b",
+          "version": "2026-01-pilot",
+          "temperature": 0.2,
+          "structured_output_mode": "tool_use"
+        },
         "latency_seconds": 0.9,
         "cost_usd": 0.0003
       },

@@ -96,6 +96,11 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 トークン最適化・モデル固有の JSON モードに依存したパースを本実装しない」に従い、
 実測して確定するのは本 PoC のクローズ時）。
 
+ハーネス（`report.py`）はこれを機械的にも強制する: データセット全体で観測された
+provider 名が 1 種類以下の場合、`evaluated cells: 0` の空表を「比較完了」であるかの
+ように出力せず、非ゼロ終了で明示的に拒否する（§4.2・§7.3 参照。コードレビュー
+指摘: 単一候補の結果を比較結果として報告してはならない）。
+
 ### 2.1 評価モード（Issue #14「OCR正解文字とOCR誤認文字を分けて入力し、Recognition ConfidenceとGrading Confidenceを混同しない」）
 
 | モード      | 入力                                                 | 測る狙い                                        |
@@ -124,13 +129,16 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 | 平均 Recognition Conf | `recognition.confidence` の平均（Grading Conf とは別集計）                          | `summarize_by_provider` |
 | 平均 Grading Conf     | `grading.confidence` の平均（Recognition Conf とは別集計）                          | `summarize_by_provider` |
 | latency               | 1 設問あたりの応答時間（p50 / p95。応答の妥当性を問わず全呼び出しから算出）         | `summarize_by_provider` |
+| latency 計測件数      | bucket の件数のうち `latency_seconds` が実際に記録されていた件数（§3.2 参照）       | `summarize_by_provider` |
 | 概算 cost             | 1,000 設問あたりの API 料金（各社公開単価 × 実リクエスト数、USD。§8.1 と同じ単位）  | `summarize_by_provider` |
+| cost 計測件数         | bucket の件数のうち `cost_usd` が実際に記録されていた件数（§3.2 参照）              | `summarize_by_provider` |
 | 高/低 Conf 誤り率     | Grading Confidence ≥0.8 / <0.5 の集団それぞれで完全一致しなかった割合（較正ゲート） | `summarize_by_provider` |
 
 `tolerance <= 1 点差` を既定とする（設問の配点が小さい場合は採用判断時に見直す）。
-集計は `summarize_by_provider()` が (教科, provider, 入力モード) ごとに平均し、
-`to_markdown_table()` が §8 の結果表を生成する。集計出力は**件数と平均値のみ**で
-秘匿情報（答案本文・secret）を含まない。
+集計は `summarize_by_provider()` が (教科, provider, **config**, 入力モード)
+ごとに平均し、`to_markdown_table()` が §8 の結果表を生成する（`config` は
+§3.3 参照）。集計出力は**件数と平均値のみ**で秘匿情報（答案本文・secret）を
+含まない。
 
 **schema violation の扱い**: スキーマ検証に失敗した応答は、自由文 parse で
 救済せず、完全一致率・許容点差内率・criterion 一致率の計算対象から除外し
@@ -149,6 +157,32 @@ schema violation とは別に `mismatch_rate` として集計する。latency・
 は対応不一致でも実際に呼び出しが発生している以上そのまま計上するが、
 完全一致率・許容点差内率・criterion 一致率・Confidence 平均には算入しない
 （`evaluate_sample` の `mismatched` フラグ）。
+
+### 3.2 採点不能な bucket・不完全な計測の扱い
+
+- bucket 内の全応答が schema violation または対応不一致で、採点可能な応答が
+  1 件もない場合、完全一致率・許容点差内率は **`0.0` ではなく `-`（未定義）**
+  を表示する。`0.0` は「採点した結果 0% しか合っていない」という意味になって
+  しまい、「そもそも採点できる応答がなかった」こととは区別できない
+  （コードレビュー指摘）。
+- latency・概算 cost は、bucket 内の一部の呼び出しにしか記録されていない
+  ことがある（例: 一部だけ計測ツールが失敗した）。この場合も p50/p95・平均値
+  はコンプリートに見えてしまうため、`latency 計測件数`・`cost 計測件数`
+  （「計測できた件数/bucket の総件数」の形式、例: `8/20`）を必ず併記し、
+  一部の呼び出しからしか計算されていないことを明示する。件数が bucket の
+  総件数と一致しない行は、§8.1 の latency/cost ゲート判定に使う前に
+  計測を補完するか、判定を保留する。
+
+### 3.3 provider の設定（config）ごとの分離
+
+同じ `provider` 名でも、記録された `descriptor`（model / version /
+temperature / structured_output_mode）が異なれば**別の bucket**として集計する
+（`auto_scoring.domain.ai_provider.descriptor_key`）。同じ provider 名の下で
+設定違いの記録を 1 行にプールすると、片方が採用基準を満たし片方が満たさない
+場合でも平均としては通過して見えてしまう（コードレビュー指摘）。結果表の
+`config` 列にこの識別子（`model|version|temperature|structured_output_mode`）
+がそのまま表示される。schema violation で終わった記録も、失敗する前に
+`descriptor` を読み取ってから集計するため、どの設定が失敗したかが追跡できる。
 
 ---
 
@@ -193,6 +227,13 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 いなければ「pending」として明示し、単に走査対象から漏れて比較が完了した
 ように見えることを防ぐ（Issue #14 受入条件: 最低 2 候補・両入力モード）。
 
+データセット全体を通じて記録された provider 名が **1 種類以下**の場合、
+ハーネスは集計表を出さず `SystemExit`（非ゼロ終了）で明示的に拒否する
+（コードレビュー指摘: 単一候補しか記録されていないのに `evaluated cells: 0`
+の空表が正常終了し、あたかも比較が完了したかのように見えてしまう不具合の
+修正）。実データ収集の途中で 1 候補分しか live-provider 呼び出しをまだ
+終えていない場合は、2 候補目を記録してから再実行する。
+
 ---
 
 ## 5. 期待結果
@@ -219,17 +260,23 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 # uv run python poc/issue_14_ai_grading/report.py の出力（合成データ / 参考値のみ）
 evaluated cells: 12
 
-| 教科 | provider | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | 概算cost(USD/1000問) | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| synthetic-history | synthetic-a | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.700 | 1.100 | 0.65 | 0.000 | - |
-| synthetic-history | synthetic-a | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.900 | 1.300 | 0.65 | - | - |
-| synthetic-history | synthetic-b | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.500 | 0.900 | 0.25 | 0.000 | - |
-| synthetic-history | synthetic-b | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.000 | 1.400 | 0.25 | - | 1.000 |
-| synthetic-world-history | synthetic-a | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 0.70 | - | - |
-| synthetic-world-history | synthetic-a | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 0.70 | - | - |
-| synthetic-world-history | synthetic-b | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 0.20 | - | - |
-| synthetic-world-history | synthetic-b | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 0.20 | 1.000 | - |
+| 教科 | provider | config | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | latency計測件数 | 概算cost(USD/1000問) | cost計測件数 | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.700 | 1.100 | 2/2 | 0.65 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.900 | 1.300 | 2/2 | 0.65 | 2/2 | - | - |
+| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.500 | 0.900 | 2/2 | 0.25 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.000 | 1.400 | 2/2 | 0.25 | 2/2 | - | 1.000 |
+| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
 ```
+
+`config` 列は `model|version|temperature|structured_output_mode`
+（`descriptor_key`）で、本合成データではフィクスチャに埋め込んだ架空の設定
+（`synthetic-model-a`/`synthetic-model-b`）をそのまま表示している。`latency
+計測件数`・`cost計測件数` はすべて `n/n`（bucket の全件で計測済み）で、
+本合成データには計測欠損を意図的に混ぜていない。
 
 合成データの `synthetic-b`/`synthetic-world-history`/`ocr_noisy` セルは、
 「Recognition Confidence が低いのに Grading Confidence が高いまま、実際には
@@ -382,22 +429,34 @@ evaluated cells: 12
   精緻化する）。
 - schema violation は自由文 parse で救済しない。`SchemaViolation` として
   「要確認」へ送ることを contract test で検証する。
+- 完全一致率・許容点差内率が `-`（未定義。§3.2）の bucket は、閾値を「満たした」
+  とも「満たさなかった」とも判定しない。採点可能な応答が 1 件もない設定であり、
+  採用判断の対象外として原因（schema violation・対応不一致の内訳）を先に
+  調査する。
+- latency（p50/p95）・概算 cost のゲート判定は、`latency 計測件数`・
+  `cost 計測件数`（§3.2）が bucket の `件数` と一致している行にのみ適用する。
+  一致しない行は計測が不完全なため、閾値を満たしているように見えても
+  そのままでは採用根拠にしない。
+- 同じ `provider` 名でも `config` 列（§3.3）が異なれば別の判定対象として扱う。
+  ある設定が閾値を満たし、別の設定が満たさない場合、`provider` 単位ではなく
+  `config` 単位で採用可否を記録する。
 
 ### 8.2 結果表（実測は本 PoC クローズ時に記入）
 
 `uv run python poc/issue_14_ai_grading/report.py` の実データ実行結果をそのまま
-貼り付ける（列は `to_markdown_table` の出力に準拠。cost は 1,000 設問あたり）。
+貼り付ける（列は `to_markdown_table` の出力に準拠。cost は 1,000 設問あたり。
+`config` は §3.3 の識別子、`latency件数`/`cost件数` は §3.2 の計測件数）。
 
-| provider         | 教科   | 入力        | 完全一致率 | 許容点差内率 | criterion一致率 | schema違反率 | 対応不一致率 | p50 latency | p95 latency | cost/1k | 平均Recognition Conf | 平均Grading Conf | 高Conf誤り率 | 低Conf誤り率 |
-| ---------------- | ------ | ----------- | ---------- | ------------ | --------------- | ------------ | ------------ | ----------- | ----------- | ------- | -------------------- | ---------------- | ------------ | ------------ |
-| `gemini`         | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `gemini`         | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `gemini`         | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `gemini`         | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| provider         | config | 教科   | 入力        | 完全一致率 | 許容点差内率 | criterion一致率 | schema違反率 | 対応不一致率 | p50 latency | p95 latency | latency件数 | cost/1k | cost件数 | 平均Recognition Conf | 平均Grading Conf | 高Conf誤り率 | 低Conf誤り率 |
+| ---------------- | ------ | ------ | ----------- | ---------- | ------------ | --------------- | ------------ | ------------ | ----------- | ----------- | ----------- | ------- | -------- | -------------------- | ---------------- | ------------ | ------------ |
+| `gemini`         | _TBD_  | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `gemini`         | _TBD_  | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `gemini`         | _TBD_  | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `gemini`         | _TBD_  | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | _TBD_  | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | _TBD_  | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | _TBD_  | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | _TBD_  | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
 
 ### 8.3 人間採点との不一致例（実測後に記入）
 

@@ -20,6 +20,14 @@ does not match the label it is being compared against, so an answer to a
 different question can never register as an accidental exact match
 (code review finding: comparing raw scores alone let a 4/100 answer to the
 wrong question count as matching a 4/5 truth label).
+
+Every outcome also carries a ``config_key`` (see
+:func:`auto_scoring.domain.ai_provider.descriptor_key`): two recordings under
+the same ``provider`` name but a different model / version / temperature /
+structured-output mode are aggregated into separate buckets, never pooled
+(code review finding: pooling could let a passing and a failing
+configuration average out to something that looks like it cleared the
+adoption gate).
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ _LOW_CONFIDENCE_THRESHOLD = 0.5
 _COLUMNS = (
     "教科",
     "provider",
+    "config",
     "入力",
     "件数",
     "完全一致率",
@@ -56,7 +65,9 @@ _COLUMNS = (
     "対応不一致率",
     "p50 latency(s)",
     "p95 latency(s)",
+    "latency計測件数",
     "概算cost(USD/1000問)",
+    "cost計測件数",
     "高Conf誤り率(>=0.8)",
     "低Conf誤り率(<0.5)",
 )
@@ -137,9 +148,16 @@ class SampleOutcome:
     ``question_id`` and/or ``max_score``) -- also never scored as a real
     grade, and reported separately from a schema violation so the two
     failure modes are not conflated.
+
+    ``config_key`` (see
+    :func:`auto_scoring.domain.ai_provider.descriptor_key`) is required: a
+    sample is only ever produced from a cell whose reproducibility metadata
+    was read (or, for a pending cell, never produced at all -- pending cells
+    are counted separately by the harness, not represented here).
     """
 
     provider: str
+    config_key: str
     input_variant: str  # "ocr_clean" | "ocr_noisy"
     subject: str
     schema_violation: bool
@@ -156,14 +174,27 @@ class SampleOutcome:
 
 @dataclass(frozen=True, kw_only=True)
 class BucketSummary:
-    """Averaged metrics for every sample in one (subject, provider, input_variant) bucket."""
+    """Averaged metrics for every sample in one (subject, provider, config, input_variant) bucket.
+
+    ``exact_match_rate`` / ``within_tolerance_rate`` are ``None`` (rendered
+    ``-``, never ``0.0``) when the bucket has no scorable sample -- every
+    response was a schema violation or a mismatch. A ``0.0`` there would read
+    as "0% correct", not "nothing to score" (code review finding).
+
+    ``latency_measured`` / ``cost_measured`` count how many of ``samples``
+    actually carried that measurement, so a percentile or mean computed from
+    a partial subset is never mistaken for one computed over the full bucket
+    (code review finding: a latency p95 from 2 of 20 calls looked identical
+    to one from all 20).
+    """
 
     subject: str
     provider: str
+    config_key: str
     input_variant: str
     samples: int
-    exact_match_rate: float
-    within_tolerance_rate: float
+    exact_match_rate: float | None
+    within_tolerance_rate: float | None
     criterion_agreement_rate: float | None
     mean_recognition_confidence: float | None
     mean_grading_confidence: float | None
@@ -171,7 +202,9 @@ class BucketSummary:
     mismatch_rate: float
     latency_p50: float | None
     latency_p95: float | None
+    latency_measured: int
     mean_cost_usd: float | None
+    cost_measured: int
     high_confidence_wrong_rate: float | None
     low_confidence_wrong_rate: float | None
 
@@ -181,12 +214,19 @@ def evaluate_sample(
     response: GradingResponse | None,
     *,
     provider: str,
+    config_key: str,
     input_variant: str,
     tolerance: int = 1,
     cost_usd: float | None = None,
     latency_seconds: float | None = None,
 ) -> SampleOutcome:
     """Score one recorded ``response`` against its human ``truth`` label.
+
+    ``config_key`` (see
+    :func:`auto_scoring.domain.ai_provider.descriptor_key`) is required and
+    keyed on downstream, alongside ``provider``: two recordings under the
+    same provider name but different model/version/temperature/output-mode
+    settings must end up in different buckets, not pooled together.
 
     ``response`` is ``None`` when the provider's raw output was rejected by
     schema validation (:class:`~auto_scoring.domain.ai_provider.SchemaViolation`)
@@ -207,6 +247,7 @@ def evaluate_sample(
     if response is None:
         return SampleOutcome(
             provider=provider,
+            config_key=config_key,
             input_variant=input_variant,
             subject=truth.subject,
             schema_violation=True,
@@ -224,6 +265,7 @@ def evaluate_sample(
     if response.question_id != truth.question_id or response.max_score != truth.max_score:
         return SampleOutcome(
             provider=provider,
+            config_key=config_key,
             input_variant=input_variant,
             subject=truth.subject,
             schema_violation=False,
@@ -248,6 +290,7 @@ def evaluate_sample(
 
     return SampleOutcome(
         provider=provider,
+        config_key=config_key,
         input_variant=input_variant,
         subject=truth.subject,
         schema_violation=False,
@@ -281,15 +324,15 @@ def _wrong_rate(samples: Sequence[SampleOutcome]) -> float | None:
 
 
 def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummary]:
-    """Group per-sample outcomes by (subject, provider, input_variant) and average each."""
-    by_bucket: dict[tuple[str, str, str], list[SampleOutcome]] = {}
+    """Group per-sample outcomes by (subject, provider, config, input_variant) and average each."""
+    by_bucket: dict[tuple[str, str, str, str], list[SampleOutcome]] = {}
     for sample in samples:
-        key = (sample.subject, sample.provider, sample.input_variant)
+        key = (sample.subject, sample.provider, sample.config_key, sample.input_variant)
         by_bucket.setdefault(key, []).append(sample)
 
     summaries: list[BucketSummary] = []
     for key in sorted(by_bucket):
-        subject, provider, input_variant = key
+        subject, provider, config_key, input_variant = key
         group = by_bucket[key]
         # Correctness / criterion / confidence stats only make sense for a
         # response that both parsed and answers the right question.
@@ -300,7 +343,9 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
         grading = [s.grading_confidence for s in scored if s.grading_confidence is not None]
         # Latency and cost reflect the call itself, independent of whether
         # the response was structurally valid -- computed over the full
-        # group, not just ``scored`` (code review finding).
+        # group, not just ``scored`` (code review finding). The measured
+        # count is reported alongside so a partial subset is never mistaken
+        # for a complete one.
         latencies = [s.latency_seconds for s in group if s.latency_seconds is not None]
         costs = [s.cost_usd for s in group if s.cost_usd is not None]
         criterion_total = sum(s.criterion_total for s in scored)
@@ -316,20 +361,20 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
             for s in scored
             if s.grading_confidence is not None and s.grading_confidence < _LOW_CONFIDENCE_THRESHOLD
         ]
-        mean_cost = _mean_or_none(costs)
 
         summaries.append(
             BucketSummary(
                 subject=subject,
                 provider=provider,
+                config_key=config_key,
                 input_variant=input_variant,
                 samples=len(group),
-                exact_match_rate=fmean(float(bool(s.exact_match)) for s in scored)
-                if scored
-                else 0.0,
-                within_tolerance_rate=fmean(float(bool(s.within_tolerance)) for s in scored)
-                if scored
-                else 0.0,
+                exact_match_rate=(
+                    fmean(float(bool(s.exact_match)) for s in scored) if scored else None
+                ),
+                within_tolerance_rate=(
+                    fmean(float(bool(s.within_tolerance)) for s in scored) if scored else None
+                ),
                 criterion_agreement_rate=(
                     criterion_matches / criterion_total if criterion_total else None
                 ),
@@ -339,7 +384,9 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
                 mismatch_rate=fmean(float(s.mismatched) for s in group),
                 latency_p50=_percentile(latencies, 0.50),
                 latency_p95=_percentile(latencies, 0.95),
-                mean_cost_usd=mean_cost,
+                latency_measured=len(latencies),
+                mean_cost_usd=_mean_or_none(costs),
+                cost_measured=len(costs),
                 high_confidence_wrong_rate=_wrong_rate(high_confidence),
                 low_confidence_wrong_rate=_wrong_rate(low_confidence),
             )
@@ -349,6 +396,12 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
 
 def _fmt(value: float | None, digits: int = 3) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
+
+
+def _fmt_count(measured: int, total: int) -> str:
+    """Render "measured/total", flagging partial coverage the reader must not
+    mistake for a complete measurement (code review finding)."""
+    return f"{measured}/{total}"
 
 
 def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
@@ -371,6 +424,7 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
                 (
                     summary.subject,
                     summary.provider,
+                    summary.config_key,
                     summary.input_variant,
                     str(summary.samples),
                     _fmt(summary.exact_match_rate),
@@ -382,7 +436,9 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
                     _fmt(summary.mismatch_rate),
                     _fmt(summary.latency_p50),
                     _fmt(summary.latency_p95),
+                    _fmt_count(summary.latency_measured, summary.samples),
                     _fmt(cost_per_1k, digits=2),
+                    _fmt_count(summary.cost_measured, summary.samples),
                     _fmt(summary.high_confidence_wrong_rate),
                     _fmt(summary.low_confidence_wrong_rate),
                 )

@@ -50,6 +50,12 @@
           "rationale": "l(小文字エル)と1(数字イチ)の誤読の可能性を考慮し、模範解答と整合すると判断した。",
           "explanation": "この余分なフィールドはスキーマ違反（extra=forbid）を意図的に再現するためのものです。"
         },
+        "descriptor": {
+          "model": "synthetic-model-a",
+          "version": "2026-01-pilot",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema"
+        },
         "latency_seconds": 0.9,
         "cost_usd": 0.0005
       }

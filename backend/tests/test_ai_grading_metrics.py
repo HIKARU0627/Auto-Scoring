@@ -23,6 +23,7 @@ from auto_scoring.domain.ai_grading_metrics import (
 from auto_scoring.domain.ai_provider import (
     GradingResponse,
     ProviderDescriptor,
+    descriptor_key,
     grading_response_from_result,
 )
 from auto_scoring.domain.models import CriterionOutcome
@@ -36,6 +37,16 @@ _DESCRIPTOR = ProviderDescriptor(
     temperature=0.0,
     structured_output_mode="json_schema",
 )
+_CONFIG = descriptor_key(_DESCRIPTOR)
+
+_OTHER_DESCRIPTOR = ProviderDescriptor(
+    provider="test",
+    model="test",
+    version=None,
+    temperature=0.9,
+    structured_output_mode="tool_use",
+)
+_OTHER_CONFIG = descriptor_key(_OTHER_DESCRIPTOR)
 
 
 def _response(**overrides: object) -> GradingResponse:
@@ -72,26 +83,36 @@ def _truth(**overrides: object) -> GradingGroundTruth:
     return GradingGroundTruth(**defaults)  # type: ignore[arg-type]
 
 
+def _evaluate(
+    truth: GradingGroundTruth, response: GradingResponse | None, **kwargs: object
+) -> SampleOutcome:
+    kwargs.setdefault("provider", "p")
+    kwargs.setdefault("config_key", _CONFIG)
+    kwargs.setdefault("input_variant", "ocr_clean")
+    return evaluate_sample(truth, response, **kwargs)  # type: ignore[arg-type]
+
+
 def test_exact_match_and_full_criterion_agreement() -> None:
-    outcome = evaluate_sample(_truth(), _response(), provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), _response())
     assert outcome.exact_match is True
     assert outcome.within_tolerance is True
     assert outcome.criterion_matches == 2
     assert outcome.criterion_total == 2
     assert outcome.schema_violation is False
     assert outcome.mismatched is False
+    assert outcome.config_key == _CONFIG
 
 
 def test_within_tolerance_but_not_exact() -> None:
     response = _response(grading={"score": 3, "maxScore": 5, "confidence": 0.7})
-    outcome = evaluate_sample(_truth(), response, provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), response)
     assert outcome.exact_match is False
     assert outcome.within_tolerance is True  # default tolerance = 1
 
 
 def test_outside_tolerance() -> None:
     response = _response(grading={"score": 1, "maxScore": 5, "confidence": 0.7})
-    outcome = evaluate_sample(_truth(), response, provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), response)
     assert outcome.within_tolerance is False
 
 
@@ -102,7 +123,7 @@ def test_criterion_mismatch_is_counted_not_averaged_away() -> None:
             {"id": "c2", "result": "pass", "confidence": 0.6, "rationale": "根拠2 (誤り)"},
         ]
     )
-    outcome = evaluate_sample(_truth(), response, provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), response)
     assert outcome.criterion_matches == 1
     assert outcome.criterion_total == 2
 
@@ -113,7 +134,7 @@ def test_schema_violation_sample_is_excluded_from_exact_match_not_scored_as_wron
     with pytest.raises(ValidationError):
         parse_ai_grading_result(json.dumps({"questionId": "q1"}))
 
-    outcome = evaluate_sample(_truth(), None, provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), None)
     assert outcome.schema_violation is True
     assert outcome.mismatched is False
     assert outcome.exact_match is None
@@ -128,7 +149,7 @@ def test_response_to_a_different_question_is_mismatched_not_an_accidental_match(
         questionId="some-other-question",
         grading={"score": 4, "maxScore": 100, "confidence": 0.8},
     )
-    outcome = evaluate_sample(_truth(), response, provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), response)
     assert outcome.mismatched is True
     assert outcome.schema_violation is False
     assert outcome.exact_match is None
@@ -141,21 +162,14 @@ def test_response_with_wrong_max_score_is_mismatched_even_with_matching_question
     """Same question id, different point scale (e.g. the provider graded
     against a stale rubric) must not be compared as if the scales agreed."""
     response = _response(grading={"score": 4, "maxScore": 10, "confidence": 0.8})
-    outcome = evaluate_sample(_truth(), response, provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), response)
     assert outcome.mismatched is True
     assert outcome.exact_match is None
 
 
 def test_mismatched_sample_still_preserves_latency_and_cost() -> None:
     response = _response(questionId="other")
-    outcome = evaluate_sample(
-        _truth(),
-        response,
-        provider="p",
-        input_variant="ocr_clean",
-        latency_seconds=2.5,
-        cost_usd=0.001,
-    )
+    outcome = _evaluate(_truth(), response, latency_seconds=2.5, cost_usd=0.001)
     assert outcome.mismatched is True
     assert outcome.latency_seconds == pytest.approx(2.5)
     assert outcome.cost_usd == pytest.approx(0.001)
@@ -166,23 +180,21 @@ def test_recognition_and_grading_confidence_stay_in_separate_columns() -> None:
         recognition={"text": "答案", "confidence": 0.98},
         grading={"score": 4, "maxScore": 5, "confidence": 0.63},
     )
-    outcome = evaluate_sample(_truth(), response, provider="p", input_variant="ocr_noisy")
+    outcome = _evaluate(_truth(), response, input_variant="ocr_noisy")
     assert outcome.recognition_confidence == pytest.approx(0.98)
     assert outcome.grading_confidence == pytest.approx(0.63)
     assert outcome.recognition_confidence != outcome.grading_confidence
 
 
 def test_latency_defaults_to_none_not_a_fabricated_zero() -> None:
-    outcome = evaluate_sample(_truth(), _response(), provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), _response())
     assert outcome.latency_seconds is None
 
 
 def test_latency_is_preserved_for_a_schema_violation_not_lost() -> None:
     """Code review finding: a call that took real time but returned invalid
     structured output must not have that measurement discarded."""
-    outcome = evaluate_sample(
-        _truth(), None, provider="p", input_variant="ocr_clean", latency_seconds=3.4
-    )
+    outcome = _evaluate(_truth(), None, latency_seconds=3.4)
     assert outcome.schema_violation is True
     assert outcome.latency_seconds == pytest.approx(3.4)
 
@@ -191,15 +203,55 @@ def test_latency_and_cost_are_included_in_aggregate_even_for_schema_violations()
     """latency/cost measure the call, not the grade -- they must not be
     dropped from the aggregate just because the response was invalid."""
     outcomes = [
-        evaluate_sample(
-            _truth(), None, provider="p", input_variant="ocr_clean", latency_seconds=9.0
-        ),
-        evaluate_sample(
-            _truth(), _response(), provider="p", input_variant="ocr_clean", latency_seconds=1.0
-        ),
+        _evaluate(_truth(), None, latency_seconds=9.0),
+        _evaluate(_truth(), _response(), latency_seconds=1.0),
     ]
     summary = summarize_by_provider(outcomes)[0]
     assert summary.latency_p95 == pytest.approx(9.0)
+    assert summary.latency_measured == 2
+
+
+def test_partial_latency_measurement_is_reported_not_hidden() -> None:
+    """Code review finding: a percentile computed from only some of the
+    bucket's calls must not look identical to one computed from all of
+    them -- the measured count must say so."""
+    outcomes = [
+        _evaluate(_truth(), _response(), latency_seconds=1.0),
+        _evaluate(_truth(), _response(), latency_seconds=None),
+        _evaluate(_truth(), _response(), cost_usd=None),
+    ]
+    summary = summarize_by_provider(outcomes)[0]
+    assert summary.samples == 3
+    assert summary.latency_measured == 1
+    assert summary.cost_measured == 0
+
+
+def test_bucket_with_no_scorable_sample_reports_undefined_not_zero_accuracy() -> None:
+    """Code review finding: a bucket where every sample is a schema
+    violation or a mismatch has no scorable response at all -- reporting
+    0.0 would misleadingly read as "0% correct" rather than "nothing to
+    score"."""
+    outcomes = [
+        _evaluate(_truth(), None),  # schema violation
+        _evaluate(_truth(), _response(questionId="other")),  # mismatched
+    ]
+    summary = summarize_by_provider(outcomes)[0]
+    assert summary.exact_match_rate is None
+    assert summary.within_tolerance_rate is None
+
+
+def test_same_provider_different_config_are_separate_buckets() -> None:
+    """Code review finding: two recordings under the same provider name but
+    different model/version/temperature/structured-output-mode settings
+    must never be pooled -- averaging a passing and a failing configuration
+    together could look like an overall pass."""
+    passing = _evaluate(_truth(), _response(), config_key=_CONFIG)
+    failing_response = _response(grading={"score": 0, "maxScore": 5, "confidence": 0.9})
+    failing = _evaluate(_truth(), failing_response, config_key=_OTHER_CONFIG)
+    summaries = {s.config_key: s for s in summarize_by_provider([passing, failing])}
+    assert len(summaries) == 2
+    assert summaries[_CONFIG].exact_match_rate == pytest.approx(1.0)
+    assert summaries[_OTHER_CONFIG].exact_match_rate == pytest.approx(0.0)
 
 
 def test_calibration_rates_flag_overconfident_wrong_answers() -> None:
@@ -207,17 +259,14 @@ def test_calibration_rates_flag_overconfident_wrong_answers() -> None:
     must be distinguishable from a low-confidence wrong answer."""
     overconfident_wrong = _response(grading={"score": 0, "maxScore": 5, "confidence": 0.95})
     underconfident_right = _response(grading={"score": 4, "maxScore": 5, "confidence": 0.3})
-    outcomes = [
-        evaluate_sample(_truth(), overconfident_wrong, provider="p", input_variant="ocr_clean"),
-        evaluate_sample(_truth(), underconfident_right, provider="p", input_variant="ocr_clean"),
-    ]
+    outcomes = [_evaluate(_truth(), overconfident_wrong), _evaluate(_truth(), underconfident_right)]
     summary = summarize_by_provider(outcomes)[0]
     assert summary.high_confidence_wrong_rate == pytest.approx(1.0)
     assert summary.low_confidence_wrong_rate == pytest.approx(0.0)
 
 
 def test_calibration_rate_is_none_when_no_sample_falls_in_the_band() -> None:
-    outcome = evaluate_sample(_truth(), _response(), provider="p", input_variant="ocr_clean")
+    outcome = _evaluate(_truth(), _response())
     summary = summarize_by_provider([outcome])[0]
     # grading confidence 0.8 falls in neither the high (>= 0.8 -> included)
     # nor low (< 0.5) band boundary check: 0.8 is high-confidence exactly.
@@ -290,6 +339,15 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
             for variant, cell in variants.items():
                 latency_raw = cell.get("latency_seconds")
                 latency_seconds = float(latency_raw) if latency_raw is not None else None
+                descriptor_raw = cell["descriptor"]
+                descriptor = ProviderDescriptor(
+                    provider=provider,
+                    model=str(descriptor_raw["model"]),
+                    version=descriptor_raw.get("version"),
+                    temperature=float(descriptor_raw["temperature"]),
+                    structured_output_mode=str(descriptor_raw["structured_output_mode"]),
+                )
+                config_key = descriptor_key(descriptor)
                 try:
                     parsed = parse_ai_grading_result(json.dumps(cell["response"]))
                 except ValidationError:
@@ -297,7 +355,7 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
                 else:
                     response = grading_response_from_result(
                         parsed,
-                        descriptor=_DESCRIPTOR,
+                        descriptor=descriptor,
                         latency_seconds=latency_seconds if latency_seconds is not None else 0.0,
                     )
                 outcomes.append(
@@ -305,6 +363,7 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
                         truth,
                         response,
                         provider=provider,
+                        config_key=config_key,
                         input_variant=variant,
                         cost_usd=cell.get("cost_usd"),
                         latency_seconds=latency_seconds,
@@ -329,9 +388,19 @@ def test_fixtures_contain_at_least_one_schema_violation() -> None:
     assert any(not o.schema_violation for o in outcomes)
 
 
+def test_all_fixture_cells_carry_a_config_key() -> None:
+    """Every recorded cell (including the deliberate schema-violation ones)
+    must have descriptor metadata, since a schema violation still needs to
+    be attributed to the configuration that produced it."""
+    outcomes = _load_fixture_outcomes()
+    assert all(o.config_key for o in outcomes)
+
+
 def test_markdown_table_renders_header_and_rows() -> None:
     table = to_markdown_table(summarize_by_provider(_load_fixture_outcomes()))
     assert table.startswith("| 教科 |")
     assert "schema違反率" in table
     assert "p95 latency(s)" in table
     assert "概算cost(USD/1000問)" in table
+    assert "config" in table
+    assert "計測件数" in table

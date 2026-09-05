@@ -60,6 +60,22 @@ class ProviderDescriptor:
     structured_output_mode: str
 
 
+def descriptor_key(descriptor: ProviderDescriptor) -> str:
+    """Stable identifier for one reproducibility configuration.
+
+    Two recordings under the same ``provider`` name but a different model,
+    version, temperature, or structured-output mode are two different
+    configurations and must never be pooled into the same metrics bucket
+    (code review finding: a passing and a failing configuration averaged
+    together can look like an overall pass). Callers key aggregation on this,
+    not on ``provider`` alone.
+    """
+    return (
+        f"{descriptor.model}|{descriptor.version}|"
+        f"{descriptor.temperature}|{descriptor.structured_output_mode}"
+    )
+
+
 @dataclass(frozen=True, kw_only=True)
 class GradingRequest:
     """Everything sent for one question. Holds no student-identifying data
