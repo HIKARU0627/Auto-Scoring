@@ -204,3 +204,59 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   実プロバイダ向けテストを追加する際は、AGENTS.md/`docs/quality-gates.md`の
   方針どおり`pnpm run check`から分離し、必要な環境変数とコマンドをそちらの
   ドキュメントに明記すること。
+
+## レビュー第1round（Codex）で修正した点
+
+- **再発行されたJobを新グラフに対して再計画してからenqueueする**
+  （P1）: `dependency_graph_router.confirm`が呼ぶ`reissue_job_for_graph_version`
+  は常に置き換えをQUEUEDとして作る -- 新バージョンの依存構造を一切見ない。
+  v2が新しいedge（例: 既存の独立設問同士にA→Bを追加）を持ち、A・B両方が
+  v1で未完了だった場合、Bの置き換えをそのままenqueueするとAがusableになる
+  前にBがprocessorへ到達し、DAGゲートを回避してしまう。`confirm`は
+  Submissionごとに、置き換え候補全体（そのSubmissionの完了済みJob + 全ての
+  兄弟置き換え）から`question_statuses`/`evaluate_readiness`で再判定し、
+  readyでないものはQUEUEDではなくBLOCKED（`blocked_on_question_id`付き）
+  として保存する。`on_job_reissued`もQUEUEDになったものだけを呼ぶ。
+- **queue操作をevent loopスレッドへ委譲する**（P1）: FastAPIは同期`def`の
+  route handlerをworker threadで実行するが、`JobQueueService`の
+  `asyncio.Queue`/`asyncio.Task`はlifespanのevent loopが所有する。
+  `asyncio.Queue.put_nowait`と`Task.cancel`はどちらも呼び出し元スレッドを
+  問わないわけではない。`JobQueueService.enqueue`と`cancel_job`のtask
+  cancel要求は`loop.call_soon_threadsafe`経由にし、`start()`で
+  `asyncio.get_running_loop()`を保持しておく。route handler自体は同期の
+  ままにし（既存の他routeとの一貫性、DBアクセスをevent loop上でブロック
+  させない）、asyncioへ触れる箇所だけをthread-safeにする設計を選んだ。
+- **重複したdispatchシグナルでもactive taskの追跡を失わない**（P2）:
+  起動時の「recoveredしたJob」と「QUEUEDの全件sweep」が同じjob_idを二重に
+  enqueueしうる（他にも冪等な`submit_submission`の二重呼び出し等）。
+  `_job_tasks`を`job_id -> 単一Task`ではなく`job_id -> set[Task]`にし、
+  doneコールバックは自分自身をsetから取り除くだけにする。単一slotのままだと、
+  後発の（速いno-opの）Taskが先発の（実際にまだ実行中の）Taskの参照を
+  上書きし、先発Taskが本当に終わっていないのに`_job_tasks`から消えて
+  `cancel_job`/`shutdown`が追跡できなくなる。
+- **`submit_submission`の並行idempotency競合を処理する**（P2）: 2つの
+  リクエストが同じSubmissionに対して同時に呼ばれると、両方とも「既存Jobな
+  し」を観測して`insert`を試みうる。`JobRepository.add`は即座にflushする
+  ため、負けた側は複合UNIQUE制約から`IntegrityError`を受け取る。
+  `submit_submission`はこれを捕捉し、新しい`SqlAlchemyUnitOfWork`から読み
+  直して最大5回まで再試行する（`dependency_graph_router.analyze`のバージョ
+  ン割当と同じパターン）。尽きた場合は`SubmissionJobCreationConflictError`
+  （API層で409）。
+- **retry可否は永続化されたJob自身の`max_attempts`で判定する**（P2）:
+  以前は`self._settings.retry_policy`（サービス現在の設定）を使っていたが、
+  設定変更後の再起動や再発行/レガシーJobでは、Jobが実際に持つ
+  `max_attempts`と食い違いうる。`_retry_policy_for(job)`でJob自身の
+  `max_attempts`を使い、backoffのタイミング（initial/multiplier/max）だけ
+  サービス設定から取る。
+- **backoff sleep中はSemaphoreを解放する**（P2）: 以前は`_finalize_result`が
+  `_run_one`の`async with self._semaphore:`の内側でsleepしていたため、
+  既に`FAILED`として永続化された（実行中ではない）Jobがbackoffの間ずっと
+  並列度枠を1つ占有し続けていた。`_finalize_result`はDB書き込みとretry
+  遅延の計算だけを行う同期関数にし、実際の`await self._clock.sleep(...)`
+  と再enqueueは`_run_one`がSemaphoreを抜けた後に行う。
+- **`mark_question_usable`はアクティブなgraph versionのJobを対象にする**
+  （P2）: `list_for_submission`は作成日時の古い順に並ぶため、単に最初の
+  `SUCCEEDED`一致を使うと、グラフバージョンが進んだ後でも古い（既に
+  supersedeされた）バージョンのJobを誤って復活させてしまう。まず
+  `get_latest_confirmed`でそのテストのアクティブなconfirmed graphを解決し、
+  `dependency_graph_version`がそのバージョンと一致するJobだけを対象にする。
