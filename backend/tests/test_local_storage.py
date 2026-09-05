@@ -94,6 +94,34 @@ def test_a_submission_id_containing_a_path_separator_is_rejected(store: LocalFil
         store.submission_dir("../tests")
 
 
+def test_a_question_id_shaped_like_a_windows_drive_relative_path_is_rejected(
+    store: LocalFileStore,
+) -> None:
+    """On Windows, ``Path.joinpath(root, "C:foo.png")`` resolves to the same
+    path as plain ``"foo.png"`` -- no "/" or "\\" involved, so a colon has to
+    be rejected on its own or two different question ids collide on one file.
+    """
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        store.submission_question_image_path("sub-1", "C:foo")
+
+
+def test_a_question_id_matching_a_windows_reserved_device_name_is_rejected(
+    store: LocalFileStore,
+) -> None:
+    """``CON``, ``COM1``, etc. address a reserved device via most Win32 APIs
+    regardless of extension -- ``CON.png`` still means ``CON``.
+    """
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        store.submission_question_image_path("sub-1", "CON")
+
+
+def test_a_question_id_matching_a_reserved_device_name_case_insensitively_is_rejected(
+    store: LocalFileStore,
+) -> None:
+    with pytest.raises(ValueError, match="unsafe path segment"):
+        store.submission_question_image_path("sub-1", "com1")
+
+
 def test_read_bytes_round_trips(store: LocalFileStore) -> None:
     target = store.exports_dir() / "out_corrected.pdf"
     store.write_atomic(target, b"data")

@@ -30,6 +30,15 @@ from uuid import uuid4
 
 _TEMP_SUFFIX = ".part"
 
+#: Windows device names reserved regardless of extension (``CON.png`` still
+#: addresses the ``CON`` device via most Win32 APIs). Checked against the
+#: segment's stem, case-insensitively.
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
 
 def _ensure_safe_path_segment(value: str) -> None:
     """Reject a value that isn't safe to use as a single path segment.
@@ -42,8 +51,26 @@ def _ensure_safe_path_segment(value: str) -> None:
     root entirely; it would accept a path like that since it still lands
     inside ``app-data/``, just silently overwriting the wrong file (AGENTS.md
     "Validate every input that crosses a trust boundary").
+
+    A colon is rejected outright rather than just "/" and "\\": on Windows, a
+    drive-relative segment like ``"C:foo"`` carries no path separator at all,
+    yet ``Path.joinpath(root, "C:foo.png")`` resolves to the same path as
+    plain ``"foo.png"`` -- two different ids would silently collide on one
+    file. Windows' reserved device names (``CON``, ``COM1``, ...) are
+    rejected too: many Win32 APIs address the device through a name like
+    that regardless of extension (``CON.png`` still means ``CON``).
     """
-    if not value or value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+    if (
+        not value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or "\x00" in value
+        or ":" in value
+    ):
+        raise ValueError(f"unsafe path segment: {value!r}")
+    stem = value.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED_STEMS:
         raise ValueError(f"unsafe path segment: {value!r}")
 
 
