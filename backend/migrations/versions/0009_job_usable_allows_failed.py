@@ -38,6 +38,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # A FAILED row's `usable` (set via a human /resume approval -- only
+    # possible once this migration's upgrade() has run) has no
+    # representation in the schema being downgraded to. Batch mode's
+    # "recreate" copies every existing row into the new table as part of
+    # dropping/recreating the constraint below; left unnormalized, such a
+    # row would violate the stricter constraint being restored and abort
+    # the downgrade with an IntegrityError partway through (review round 3,
+    # P2). Clear it first so the downgrade always completes -- the
+    # information doesn't fit the older schema either way, so this is a
+    # normalization, not a silent invention of new data (AGENTS.md "Confirm
+    # scope…before destructive…changes"; this only ever runs on an explicit
+    # downgrade request).
+    op.execute("UPDATE jobs SET usable = NULL WHERE state = 'failed' AND usable IS NOT NULL")
     with op.batch_alter_table("jobs", recreate="always") as batch_op:
         batch_op.drop_constraint("ck_jobs_usable_matches_state", type_="check")
         batch_op.create_check_constraint(
