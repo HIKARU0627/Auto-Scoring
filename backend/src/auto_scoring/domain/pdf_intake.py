@@ -152,8 +152,16 @@ def validate_declared_mime(content_type: str | None) -> None:
     A missing content type is tolerated -- some upload paths (raw bytes from
     Flutter's file picker) don't set one -- but magic-byte sniffing below still
     catches anything that isn't actually a PDF.
+
+    The type/subtype tokens of an HTTP media type are case-insensitive (RFC
+    9110 §8.3.1); comparing the raw declared string would reject a
+    standards-compliant client sending ``Application/PDF`` or
+    ``application/PDF; charset=binary``.
     """
-    if content_type is not None and content_type.split(";", 1)[0].strip() not in ALLOWED_MIME_TYPES:
+    if content_type is None:
+        return
+    base_type = content_type.split(";", 1)[0].strip().lower()
+    if base_type not in ALLOWED_MIME_TYPES:
         raise PdfInvalidTypeError(f"unsupported content type: {content_type}")
 
 

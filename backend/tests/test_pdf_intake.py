@@ -63,6 +63,15 @@ def test_validate_declared_mime_rejects_other_types() -> None:
         validate_declared_mime("image/png")
 
 
+def test_validate_declared_mime_is_case_insensitive() -> None:
+    """RFC 9110 §8.3.1: the type/subtype tokens of a media type are
+    case-insensitive. A standards-compliant client sending ``Application/
+    PDF`` must not be rejected.
+    """
+    validate_declared_mime("Application/PDF")
+    validate_declared_mime("APPLICATION/PDF; charset=binary")
+
+
 def test_allowed_mime_types_is_pdf_only() -> None:
     assert frozenset({"application/pdf"}) == ALLOWED_MIME_TYPES
 
