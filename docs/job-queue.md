@@ -476,3 +476,61 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   `self._loop = None`でloop所有権もクリアするようにした -- 破棄される
   job idはどれも既にDB上QUEUEDのまま残っているので、次の`start()`自身の
   sweepが必ず拾い直す。
+
+## レビュー第5round（Codex）で修正した点
+
+- **無効化CASが失敗した場合はstale jobを再読み込みする**（P1）:
+  `dependency_graph_router.confirm`のreissue処理は、以前は各stale job
+  のcancellation compare-and-setが失敗した場合、常に「本当に完了/
+  キャンセルされた」とみなしてそのjobをskipしていた。しかし失敗する
+  理由は他にもある: 初回一覧取得とこの書き込みの間にworkerがQUEUEDを
+  RUNNINGとしてclaimした、あるいはbackoffによる自動requeueがFAILEDを
+  QUEUEDへ戻した、といった「まだ未完了の別状態へ移っただけ」という
+  ケースも同じ例外を送出する。それを一律skipすると、そのjobは新しく
+  確定されたgraphが追加した依存関係を回避したまま、supersededな古い
+  graph versionの下で走り続けてしまい得る
+  （docs/dependency-graph.md「stale-job無効化要件」違反）。各stale job
+  の無効化を有限回リトライするループに変更した: CASが失敗したら
+  `uow.jobs.get`で対象を再読み込みし、その状態がまだ
+  `QUEUED`/`RUNNING`/`BLOCKED`/`FAILED`（=`list_incomplete_for_stale_versions`
+  が対象とする「未完了」の集合）のいずれかであれば、その新しい状態を
+  前提に無効化をやり直す。再読み込みの結果が`SUCCEEDED`/`CANCELLED`
+  （本当に終端に達した）または行自体が消えていた場合にのみskipする。
+  リトライが尽きた場合は409を返し、confirm全体をロールバックして
+  クライアントに再試行を促す。
+- **resumeとretryを両方の順序で排他的にする**（P1）: `mark_usable`の
+  compare-and-setは`state`しか見ないため、`retry_job`が「FAILED/
+  usable未設定」の行を読んだ後、その書き込みの前に`/resume`が
+  `usable=True`をcommitして後続を解放しても、`retry_job`側の
+  `save(... expected_state=FAILED)`は`state`列だけを条件にしているため
+  依然としてマッチし、後続が実行を継続しているにもかかわらず
+  `usable`をクリアしてしまい得た（round 4のP2で追加した「読んだ時点で
+  `usable is not None`なら拒否する」チェックは、retry自身の読み取り
+  **後**に承認がcommitされるこの窓を防げない）。`JobRepository.save`に
+  `require_usable_unset: bool = False`を追加し、真の場合はCASの
+  `WHERE`へ`usable IS NULL`も加えるようにした。`retry_job`は自分の
+  `save`呼び出しにこれを渡す -- `/resume`がこの窓でcommitに勝てば
+  `retry_job`側のCASが負けて`JobSaveConflict`となり、読み直した結果
+  `usable is not None`を検知して`JobRetryRejectedError`で正しく拒否
+  できる。
+- **承認済みの失敗した前提のキャンセルを拒否する**（P2）: `usable=True`
+  のFAILED jobは、後続が既にqueued/runningかもしれない人間承認済みの
+  前提を表す。`cancel_job`はこの条件を見ておらず、
+  `transitioned_to(CANCELLED)`が後続を再ブロックしないまま`usable`を
+  クリアしてしまうため、後続はキャンセル済みとして記録された前提に
+  対して処理を継続してしまい得た。`retry_job`と同じ形で
+  `job.state is FAILED and job.usable is not None`なら新設の
+  `JobCancelRejectedError`（409）で拒否するようにした。書き込み自体にも
+  `require_usable_unset=True`を渡し、`retry_job`と同じ理由でresumeとの
+  レースを閉じている。
+- **起動時回復をまたいでretry backoffを保持する**（P2）: `start()`の
+  retry可能FAILED job sweepは、以前はbackoffが尽きているかどうかに
+  関わらず即座にQUEUEDへ書き換えていた。長いrate-limit backoff
+  （例: 429で初期値が数十秒〜数分）の途中でプロセスが再起動すると、
+  この処理がその指数backoffを完全に無視してproviderへ即座に再度アクセス
+  してしまい得た。`job.updated_at`（FAILEDへ遷移した瞬間に更新される）
+  と現在時刻から経過時間を求め、`RetryPolicy.delay_seconds(job.attempts)`
+  が返すそのattemptの本来のbackoffから差し引いた「残り時間」だけを待つ
+  ようにした -- 残りが0以下ならこれまで通り即座にQUEUEDへ、残りがあれば
+  行はFAILEDのまま`_schedule_retry`（既存のbackoffタイマー機構、
+  `_pending_retries`に追跡される）へその残り時間だけを渡す。
