@@ -373,12 +373,20 @@ def _build_answer_image(
     A question with no confirmed ``answer_area`` (test registration hasn't
     defined one yet) falls back to the full page preview image, marked
     ``NEEDS_REVIEW`` -- simplified-design-spec.md §24 "回答欄検出失敗は…元画像
-    を人間へ提示する".
+    を人間へ提示する". The domain model currently allows a zero-``width``/
+    ``height`` ``NormalizedRect`` through, and ``crop_normalized_rect``'s own
+    clamp would silently turn that into a meaningless 1x1px crop marked "OK"
+    rather than failing; treated the same as "not defined" here instead, so a
+    degenerate answer area still reaches a human, not a submission that
+    quietly landed on ``ai_processed`` with unusable answer data.
     """
-    if question.answer_area is None:
+    zero_area = question.answer_area is not None and (
+        question.answer_area.width <= 0 or question.answer_area.height <= 0
+    )
+    if question.answer_area is None or zero_area:
         image_path = store.submission_page_image_path(submission_id, question.page)
         status = AnswerImageStatus.NEEDS_REVIEW
-        reason: str | None = "no_answer_area_defined"
+        reason: str | None = "answer_area_zero_area" if zero_area else "no_answer_area_defined"
     else:
         cropped = crop_normalized_rect(raw_png, question.answer_area)
         image_path = store.submission_question_image_path(submission_id, question.id)

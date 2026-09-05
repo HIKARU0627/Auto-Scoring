@@ -243,6 +243,48 @@ def test_question_without_answer_area_falls_back_to_page_preview(
     ).replace("\\", "/")
 
 
+def test_zero_area_answer_area_falls_back_to_page_preview_instead_of_a_useless_crop(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """A NormalizedRect with width or height 0 is a "defined" answer area as
+    far as the domain model is concerned (it doesn't reject zero), but
+    cropping it produces a meaningless 1x1px image via
+    crop_normalized_rect's own clamp. This must land the same as "no answer
+    area defined" -- needs_review, full page preview -- not a silent "OK".
+    """
+    q1 = make_question(
+        id="q-1",
+        page=1,
+        answer_area=NormalizedRect(x=0.2, y=0.3, width=0.0, height=0.4),
+    )
+    _seed_test_with_questions(make_uow, questions=[q1])
+    data = _pdf_bytes(pages=1)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result.submission.state is SubmissionState.NEEDS_REVIEW
+    assert len(result.answer_images) == 1
+    image = result.answer_images[0]
+    assert image.status is AnswerImageStatus.NEEDS_REVIEW
+    assert image.reason == "answer_area_zero_area"
+    # Falls back to the full page preview path, not a question-crop image.
+    assert image.image_path == str(
+        store.submission_page_image_path(result.submission.id, 1).relative_to(store.root)
+    ).replace("\\", "/")
+
+
 def test_duplicate_submission_is_rejected(
     make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
 ) -> None:
