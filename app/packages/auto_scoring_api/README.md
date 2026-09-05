@@ -77,23 +77,38 @@ Class | Method | HTTP request | Description
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**getLatestTestsTestIdDependencyGraphGet**](doc/DependencyGraphApi.md#getlatestteststestiddependencygraphget) | **GET** /tests/{test_id}/dependency-graph | Get Latest
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**listVersionsTestsTestIdDependencyGraphVersionsGet**](doc/DependencyGraphApi.md#listversionsteststestiddependencygraphversionsget) | **GET** /tests/{test_id}/dependency-graph/versions | List Versions
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**completeRegistrationTestsTestIdCompleteRegistrationPost**](doc/TestRegistrationApi.md#completeregistrationteststestidcompleteregistrationpost) | **POST** /tests/{test_id}/complete-registration | Complete Registration
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**confirmProfileTestsTestIdProfileConfirmPost**](doc/TestRegistrationApi.md#confirmprofileteststestidprofileconfirmpost) | **POST** /tests/{test_id}/profile/confirm | Confirm Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**createTestTestsPost**](doc/TestRegistrationApi.md#createtesttestspost) | **POST** /tests | Create Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getProfileTestsTestIdProfileGet**](doc/TestRegistrationApi.md#getprofileteststestidprofileget) | **GET** /tests/{test_id}/profile | Get Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getTestTestsTestIdGet**](doc/TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**updateProfileTestsTestIdProfilePut**](doc/TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
 
 
 ## Documentation For Models
 
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
+ - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
  - [DependencyProvision](doc/DependencyProvision.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [LocationInner](doc/LocationInner.md)
+ - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)
+ - [PageFormatModel](doc/PageFormatModel.md)
+ - [ProfileResponse](doc/ProfileResponse.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
+ - [RegionKind](doc/RegionKind.md)
+ - [RegionModel](doc/RegionModel.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
+ - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
+ - [UpdateProfileRequest](doc/UpdateProfileRequest.md)
  - [ValidationError](doc/ValidationError.md)
 
 

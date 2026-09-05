@@ -8,18 +8,26 @@ part of 'serializers.dart';
 
 Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnalyzeRequest.serializer)
+      ..add(CompleteRegistrationResponse.serializer)
       ..add(ConfirmRequest.serializer)
       ..add(DependencyEdgeModel.serializer)
       ..add(DependencyGraphResponse.serializer)
       ..add(DependencyProvision.serializer)
       ..add(HTTPValidationError.serializer)
       ..add(LocationInner.serializer)
+      ..add(NormalizedBBoxModel.serializer)
+      ..add(PageFormatModel.serializer)
+      ..add(ProfileResponse.serializer)
       ..add(QuestionTextOverride.serializer)
+      ..add(RegionKind.serializer)
+      ..add(RegionModel.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
       ..add(SubmissionResponse.serializer)
+      ..add(TestResponse.serializer)
       ..add(TestSummary.serializer)
       ..add(UnresolvedQuestionModel.serializer)
+      ..add(UpdateProfileRequest.serializer)
       ..add(ValidationError.serializer)
       ..addBuilderFactory(
           const FullType(
@@ -49,9 +57,18 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(BuiltList, const [const FullType(LocationInner)]),
           () => ListBuilder<LocationInner>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(PageFormatModel)]),
+          () => ListBuilder<PageFormatModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(RegionModel)]),
+          () => ListBuilder<RegionModel>())
+      ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(QuestionTextOverride)]),
           () => ListBuilder<QuestionTextOverride>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(RegionModel)]),
+          () => ListBuilder<RegionModel>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ValidationError)]),
           () => ListBuilder<ValidationError>()))

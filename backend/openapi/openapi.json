@@ -40,6 +40,64 @@
         "title": "Body_create_submission_tests__test_id__submissions_post",
         "type": "object"
       },
+      "Body_create_test_tests_post": {
+        "properties": {
+          "manual": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Manual",
+            "type": "string"
+          },
+          "model_answer": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Model Answer",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          }
+        },
+        "required": [
+          "name",
+          "model_answer",
+          "manual"
+        ],
+        "title": "Body_create_test_tests_post",
+        "type": "object"
+      },
+      "CompleteRegistrationResponse": {
+        "properties": {
+          "dependency_graph_confirmed": {
+            "title": "Dependency Graph Confirmed",
+            "type": "boolean"
+          },
+          "profile_confirmed": {
+            "title": "Profile Confirmed",
+            "type": "boolean"
+          },
+          "test": {
+            "$ref": "#/components/schemas/TestResponse"
+          }
+        },
+        "required": [
+          "test",
+          "profile_confirmed",
+          "dependency_graph_confirmed"
+        ],
+        "title": "CompleteRegistrationResponse",
+        "type": "object"
+      },
       "ConfirmRequest": {
         "properties": {
           "edges": {
@@ -207,6 +265,86 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "NormalizedBBoxModel": {
+        "properties": {
+          "x0": {
+            "title": "X0",
+            "type": "number"
+          },
+          "x1": {
+            "title": "X1",
+            "type": "number"
+          },
+          "y0": {
+            "title": "Y0",
+            "type": "number"
+          },
+          "y1": {
+            "title": "Y1",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x0",
+          "y0",
+          "x1",
+          "y1"
+        ],
+        "title": "NormalizedBBoxModel",
+        "type": "object"
+      },
+      "PageFormatModel": {
+        "properties": {
+          "height_pt": {
+            "title": "Height Pt",
+            "type": "number"
+          },
+          "width_pt": {
+            "title": "Width Pt",
+            "type": "number"
+          }
+        },
+        "required": [
+          "width_pt",
+          "height_pt"
+        ],
+        "title": "PageFormatModel",
+        "type": "object"
+      },
+      "ProfileResponse": {
+        "properties": {
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageFormatModel"
+            },
+            "title": "Pages",
+            "type": "array"
+          },
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/RegionModel"
+            },
+            "title": "Regions",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "test_id",
+          "status",
+          "pages",
+          "regions"
+        ],
+        "title": "ProfileResponse",
+        "type": "object"
+      },
       "QuestionTextOverride": {
         "description": "Extracted PDF text for one question, supplied by the caller.\n\nThe MVP question record (Issue #11) does not yet store \u554f\u984c\u6587 text\nextracted from the model-answer/manual PDFs, so the analyze request\ncarries it explicitly -- once PDF text extraction exists this becomes the\ndefault and overrides stay optional.",
         "properties": {
@@ -241,6 +379,65 @@
           "question_id"
         ],
         "title": "QuestionTextOverride",
+        "type": "object"
+      },
+      "RegionKind": {
+        "enum": [
+          "question",
+          "answer_area",
+          "annotation_area",
+          "score",
+          "rubric",
+          "model_answer"
+        ],
+        "title": "RegionKind",
+        "type": "string"
+      },
+      "RegionModel": {
+        "properties": {
+          "bbox": {
+            "$ref": "#/components/schemas/NormalizedBBoxModel"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RegionKind"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "page_index": {
+            "title": "Page Index",
+            "type": "integer"
+          },
+          "region_id": {
+            "title": "Region Id",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "region_id",
+          "kind",
+          "page_index",
+          "bbox",
+          "label"
+        ],
+        "title": "RegionModel",
         "type": "object"
       },
       "ScoreRequest": {
@@ -366,6 +563,46 @@
         "title": "SubmissionResponse",
         "type": "object"
       },
+      "TestResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "title": "TestResponse",
+        "type": "object"
+      },
       "TestSummary": {
         "properties": {
           "id": {
@@ -411,6 +648,19 @@
           "reason"
         ],
         "title": "UnresolvedQuestionModel",
+        "type": "object"
+      },
+      "UpdateProfileRequest": {
+        "properties": {
+          "regions": {
+            "items": {
+              "$ref": "#/components/schemas/RegionModel"
+            },
+            "title": "Regions",
+            "type": "array"
+          }
+        },
+        "title": "UpdateProfileRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -602,6 +852,144 @@
           }
         ],
         "summary": "List Tests"
+      },
+      "post": {
+        "operationId": "create_test_tests_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_test_tests_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Test",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}": {
+      "get": {
+        "operationId": "get_test_tests__test_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Test",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/complete-registration": {
+      "post": {
+        "operationId": "complete_registration_tests__test_id__complete_registration_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteRegistrationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Complete Registration",
+        "tags": [
+          "test-registration"
+        ]
       }
     },
     "/tests/{test_id}/dependency-graph": {
@@ -813,6 +1201,202 @@
         "summary": "List Versions",
         "tags": [
           "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/profile": {
+      "get": {
+        "operationId": "get_profile_tests__test_id__profile_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Profile",
+        "tags": [
+          "test-registration"
+        ]
+      },
+      "put": {
+        "operationId": "update_profile_tests__test_id__profile_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Profile",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/profile/analyze": {
+      "post": {
+        "operationId": "analyze_profile_tests__test_id__profile_analyze_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Analyze Profile",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/profile/confirm": {
+      "post": {
+        "operationId": "confirm_profile_tests__test_id__profile_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm Profile",
+        "tags": [
+          "test-registration"
         ]
       }
     },
