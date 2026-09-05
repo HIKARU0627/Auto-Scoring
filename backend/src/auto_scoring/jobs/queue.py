@@ -9,7 +9,11 @@ in parallel" and "one submission's DAG runs in parallel where the graph
 allows" under the same concurrency cap (Issue #18 acceptance), and, unlike a
 semaphore shared by an unbounded number of per-job tasks, it also bounds how
 many tasks this service ever has alive at once regardless of how large a
-recovered/submitted backlog is (review round 2, P2).
+recovered/submitted backlog is (review round 2, P2). Pending retry backoffs
+are likewise a single scheduler task servicing a heap, not one sleeping task
+per pending retry -- a large backlog of not-yet-due FAILED jobs recovered at
+startup, or a fast, sustained run of failures, must not grow the task count
+past that fixed total either (review round 7, P2).
 
 Every operation opens its own short-lived `SqlAlchemyUnitOfWork`; nothing here
 ever holds a transaction open across an ``await`` into
@@ -33,9 +37,11 @@ P2).
 from __future__ import annotations
 
 import asyncio
+import heapq
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import cast
 from uuid import uuid4
 
@@ -198,14 +204,27 @@ class JobQueueService:
         #: because the loser's CAS fails and it never registers anything
         #: (review round 1, P2).
         self._running: dict[str, asyncio.Task[None]] = {}
-        #: Backoff-wait tasks for a retryable FAILED job, decoupled from the
-        #: worker pool so a job sleeping out its backoff does not occupy a
-        #: worker slot another, independent submission's job could use
-        #: (review round 1, P2). Bounded by recent failure rate, not by
-        #: backlog size -- a fundamentally different, much smaller growth
-        #: factor than the per-job dispatcher task this service no longer
-        #: creates (review round 2, P2; see docs/job-queue.md).
-        self._pending_retries: set[asyncio.Task[None]] = set()
+        #: Min-heap of ``(due_at, seq, job_id, expected_attempts)`` for every
+        #: retryable FAILED job currently sleeping out its backoff, serviced
+        #: by the single `_retry_scheduler_task` rather than one task per
+        #: pending retry -- decoupled from the worker pool so a job sleeping
+        #: out its backoff does not occupy a worker slot another, independent
+        #: submission's job could use (review round 1, P2), but *without*
+        #: growing this service's task count with backlog size or failure
+        #: rate the way one task per pending retry used to (review round 7,
+        #: P2; a large not-yet-due-FAILED-job backlog recovered at startup,
+        #: or a fast, sustained run of failures, could otherwise spawn
+        #: unboundedly many sleeping tasks -- exactly what the fixed worker
+        #: pool above was designed to avoid in the first place). ``seq`` is a
+        #: tie-breaker so two equal ``due_at`` values never fall back to
+        #: comparing ``job_id`` strings against each other pointlessly.
+        self._retry_heap: list[tuple[datetime, int, str, int]] = []
+        self._retry_heap_seq = 0
+        #: Set whenever `_schedule_retry` pushes onto `_retry_heap` while
+        #: `_retry_scheduler_loop` is idling on an empty heap, so it wakes up
+        #: to notice the new entry instead of waiting forever.
+        self._retry_added = asyncio.Event()
+        self._retry_scheduler_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         #: Set for the duration of `shutdown`. Checked by `_worker_loop`
         #: right after dequeuing so a worker stops after its *current* job
@@ -230,14 +249,17 @@ class JobQueueService:
         yet) needs re-enqueuing here, not just the ones ``RUNNING`` when the
         process died -- and so does every ``FAILED`` job that still had
         retry attempts left: if the process was killed while a job was
-        sleeping out its backoff (`_pending_retries`), that in-process timer
-        died with it, and nothing else would ever wake the job up again
-        (review round 2, P1). A restart during a *long* backoff (a large
-        rate-limit delay, say) must not skip the rest of it, though -- the
-        remaining wait is derived from ``updated_at`` (bumped exactly when
-        the FAILED transition was persisted) and a fresh, `_pending_retries`-
-        tracked timer picks up only what is left, same as an in-process
-        backoff would have (review round 5, P2).
+        sleeping out its backoff (`_retry_heap`), that in-process timer died
+        with it, and nothing else would ever wake the job up again (review
+        round 2, P1). A restart during a *long* backoff (a large rate-limit
+        delay, say) must not skip the rest of it, though -- the remaining
+        wait is derived from ``updated_at`` (bumped exactly when the FAILED
+        transition was persisted) and a fresh `_retry_heap` entry picks up
+        only what is left, same as an in-process backoff would have (review
+        round 5, P2). However large this backlog of not-yet-due FAILED jobs
+        is, scheduling all of it only ever grows `_retry_heap`'s data, never
+        the single `_retry_scheduler_task` that services it (review round 7,
+        P2).
         """
         self._loop = asyncio.get_running_loop()
         to_enqueue: list[str] = []
@@ -302,6 +324,7 @@ class JobQueueService:
         self._workers = [
             asyncio.create_task(self._worker_loop()) for _ in range(self._settings.max_concurrency)
         ]
+        self._retry_scheduler_task = asyncio.create_task(self._retry_scheduler_loop())
         for job_id in to_enqueue:
             self.enqueue(job_id)
         for job_id, remaining, attempts in to_schedule_backoff:
@@ -313,13 +336,18 @@ class JobQueueService:
         graceful shutdown lets it finish; only an actual process kill
         leaves a job RUNNING for `start` to recover next time.
 
-        Pending backoff-wait timers are cancelled rather than awaited to
-        completion: the job behind each one is already durably persisted as
-        FAILED with its real ``attempts``/``error_code``, so `start`'s
-        retryable-FAILED sweep recovers it next time regardless of whether
-        this process exited gracefully or was killed -- waiting out the
-        full backoff here first would only make routine shutdowns slower
-        for no benefit.
+        The retry scheduler task is cancelled rather than awaited to actual
+        completion of whatever it was sleeping out: every job still sitting
+        in `_retry_heap` is already durably persisted as FAILED with its
+        real ``attempts``/``error_code``, so `start`'s retryable-FAILED
+        sweep recovers each of them next time regardless of whether this
+        process exited gracefully or was killed -- waiting out the full
+        backoff here first would only make routine shutdowns slower for no
+        benefit. `_retry_heap` is cleared for the same reason `_queue` is
+        replaced below: harmless either way (`_requeue_after_backoff`'s own
+        state/attempts check makes a stale entry a no-op), but leaving it
+        populated across a later `start()` on this same instance serves no
+        purpose either.
 
         Sets `_closing` before pushing the `_STOP` sentinels: those sit at
         the *back* of the FIFO queue, so if a large backlog of already-
@@ -355,10 +383,12 @@ class JobQueueService:
         self._closing = False
         self._queue = asyncio.Queue()
         self._loop = None
-        for task in list(self._pending_retries):
-            task.cancel()
-        if self._pending_retries:
-            await asyncio.gather(*list(self._pending_retries), return_exceptions=True)
+        if self._retry_scheduler_task is not None:
+            self._retry_scheduler_task.cancel()
+            await asyncio.gather(self._retry_scheduler_task, return_exceptions=True)
+            self._retry_scheduler_task = None
+        self._retry_heap = []
+        self._retry_added.clear()
 
     async def _worker_loop(self) -> None:
         while True:
@@ -804,26 +834,48 @@ class JobQueueService:
             self._schedule_retry(job_id, delay, expected_attempts=attempts_at_failure)
 
     def _schedule_retry(self, job_id: str, delay: float, *, expected_attempts: int) -> None:
-        """Wait out ``delay`` and requeue, on a task decoupled from the
-        worker pool (see `_pending_retries`) so this worker is immediately
-        free for other jobs instead of occupying a pool slot for the whole
-        backoff window (review round 1, P2).
+        """Push a heap entry due ``delay`` seconds from now, serviced by the
+        single `_retry_scheduler_task` -- decoupled from the worker pool so
+        this worker is immediately free for other jobs instead of occupying
+        a pool slot for the whole backoff window (review round 1, P2), and
+        without spawning a new task per call the way this used to (review
+        round 7, P2; see `_retry_heap`).
 
-        ``expected_attempts`` pins this timer to the specific failed
-        attempt that spawned it (`current.attempts` at the moment
-        `_finalize_result` decided to retry) -- see `_requeue_after_backoff`.
+        ``expected_attempts`` pins this entry to the specific failed attempt
+        that spawned it (`current.attempts` at the moment `_finalize_result`
+        decided to retry) -- see `_requeue_after_backoff`.
         """
-        task = asyncio.create_task(
-            self._sleep_then_requeue(job_id, delay, expected_attempts=expected_attempts)
-        )
-        self._pending_retries.add(task)
-        task.add_done_callback(self._pending_retries.discard)
+        due_at = self._clock.now() + timedelta(seconds=delay)
+        self._retry_heap_seq += 1
+        heapq.heappush(self._retry_heap, (due_at, self._retry_heap_seq, job_id, expected_attempts))
+        self._retry_added.set()
 
-    async def _sleep_then_requeue(
-        self, job_id: str, delay: float, *, expected_attempts: int
-    ) -> None:
-        await self._clock.sleep(delay)
-        self._requeue_after_backoff(job_id, expected_attempts=expected_attempts)
+    async def _retry_scheduler_loop(self) -> None:
+        """Service `_retry_heap` one entry at a time, in due-time order,
+        for as long as this service runs -- the single task that replaces
+        one-task-per-pending-retry (review round 7, P2).
+
+        Idles on `_retry_added` while the heap is empty. While non-empty,
+        always sleeps out (via `self._clock`, so `FakeClock`-based tests
+        never actually wait) exactly the *earliest* entry's own remaining
+        delay before requeuing it; a new entry added mid-sleep that turns
+        out to be due sooner simply waits until this sleep completes and is
+        serviced on the next loop iteration, rather than interrupting it --
+        a bounded, small amount of extra imprecision in exchange for never
+        needing more than this one task no matter how many retries are
+        pending at once. Cancelled (by `shutdown`), not run to completion:
+        see `shutdown`'s own docstring for why that loses nothing.
+        """
+        while True:
+            if not self._retry_heap:
+                await self._retry_added.wait()
+                self._retry_added.clear()
+                continue
+            due_at, _, job_id, expected_attempts = heapq.heappop(self._retry_heap)
+            remaining = (due_at - self._clock.now()).total_seconds()
+            if remaining > 0:
+                await self._clock.sleep(remaining)
+            self._requeue_after_backoff(job_id, expected_attempts=expected_attempts)
 
     def _finalize_cancelled(self, job_id: str) -> None:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -865,8 +917,9 @@ class JobQueueService:
         """Persist ``result`` and return ``(delay, attempts_at_failure)``
         before a retry, or ``None`` if none is needed. Purely synchronous --
         the caller (`_run_one`) hands the pair to `_schedule_retry`, which
-        is the one that actually awaits the delay, decoupled from the
-        worker pool. ``attempts_at_failure`` is ``current.attempts`` at the
+        only pushes a heap entry; `_retry_scheduler_loop` is the one that
+        actually awaits the delay, decoupled from the worker pool.
+        ``attempts_at_failure`` is ``current.attempts`` at the
         moment of this decision, so `_requeue_after_backoff` can tell this
         specific attempt's timer apart from a later one (review round 3,
         P1 -- see that method).
