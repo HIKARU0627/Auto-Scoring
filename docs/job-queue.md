@@ -228,12 +228,12 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   させない）、asyncioへ触れる箇所だけをthread-safeにする設計を選んだ。
 - **重複したdispatchシグナルでもactive taskの追跡を失わない**（P2）:
   起動時の「recoveredしたJob」と「QUEUEDの全件sweep」が同じjob_idを二重に
-  enqueueしうる（他にも冪等な`submit_submission`の二重呼び出し等）。
-  `_job_tasks`を`job_id -> 単一Task`ではなく`job_id -> set[Task]`にし、
-  doneコールバックは自分自身をsetから取り除くだけにする。単一slotのままだと、
-  後発の（速いno-opの）Taskが先発の（実際にまだ実行中の）Taskの参照を
-  上書きし、先発Taskが本当に終わっていないのに`_job_tasks`から消えて
-  `cancel_job`/`shutdown`が追跡できなくなる。
+  enqueueしうる（他にも冪等な`submit_submission`の二重呼び出し等）。当初は
+  `_job_tasks`を`job_id -> 単一Task`ではなく`job_id -> set[Task]`にし、doneコ
+  ールバックは自分自身をsetから取り除くだけにする、という対処にしたが、この
+  方式はレビュー第2roundでdispatcher自体をworker poolへ置き換えたことで、
+  「CASに勝ったworkerだけが登録する」という、そもそも重複登録が起こらない
+  設計に置き換わった。詳細は下の第2round節を参照。
 - **`submit_submission`の並行idempotency競合を処理する**（P2）: 2つの
   リクエストが同じSubmissionに対して同時に呼ばれると、両方とも「既存Jobな
   し」を観測して`insert`を試みうる。`JobRepository.add`は即座にflushする
@@ -253,10 +253,97 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   既に`FAILED`として永続化された（実行中ではない）Jobがbackoffの間ずっと
   並列度枠を1つ占有し続けていた。`_finalize_result`はDB書き込みとretry
   遅延の計算だけを行う同期関数にし、実際の`await self._clock.sleep(...)`
-  と再enqueueは`_run_one`がSemaphoreを抜けた後に行う。
+  と再enqueueは`_run_one`がSemaphoreを抜けた後に行う（第2roundでSemaphore
+  自体をworker poolへ置き換えた後も、この「backoffはworkerを専有しない」と
+  いう性質はそのまま`_schedule_retry`が引き継いでいる。下の第2round節参照）。
 - **`mark_question_usable`はアクティブなgraph versionのJobを対象にする**
   （P2）: `list_for_submission`は作成日時の古い順に並ぶため、単に最初の
   `SUCCEEDED`一致を使うと、グラフバージョンが進んだ後でも古い（既に
   supersedeされた）バージョンのJobを誤って復活させてしまう。まず
   `get_latest_confirmed`でそのテストのアクティブなconfirmed graphを解決し、
   `dependency_graph_version`がそのバージョンと一致するJobだけを対象にする。
+
+## レビュー第2round（Codex）で修正した点
+
+- **起動時にretry可能なFAILED jobを回収する**（P1）: 第1roundで「backoff
+  sleep中はSemaphoreを解放する」ようにした結果、backoffのsleepは
+  `_run_one`とは別の（worker poolを専有しない）task
+  （`_schedule_retry`/`_sleep_then_requeue`）で行うようになった。この
+  timerはプロセスが強制終了されると一緒に消える。Jobは既にその時点で
+  `FAILED`としてattempts/error_code込みで永続化されているが、backoffが
+  明けても誰も再enqueueしないため、再起動しない限り恒久的に取り残されて
+  いた。`start()`は`RUNNING`の回収・`QUEUED`のsweepに加えて、
+  `error_code`が`is_retryable`かつ`attempts < max_attempts`な`FAILED` Job
+  を`QUEUED`へ戻すsweepも行う（backoffをもう一度待たせず即座に再試行 --
+  プロセス再起動自体が既に十分な間隔になっているとみなす）。
+- **stale RUNNING jobのJob再発行時に実タスクもキャンセルする**（P1）:
+  `dependency_graph_router.confirm`のreissue処理は、staleなJobが`RUNNING`
+  だった場合もDB行を`CANCELLED`へ書き換えるだけで、実際にprocessorを呼んで
+  いる非同期taskには何も伝えていなかった。`JobQueueService`へ新しい公開
+  メソッド`cancel_running_task(job_id)`を追加し（DBへは一切書き込まず、
+  その`job_id`を現在処理しているworker taskへcancel要求を送るだけ）、
+  `build_dependency_graph_router`に`on_stale_running_job_cancelled`フックを
+  追加して`create_app`から`queue_service.cancel_running_task`を配線した。
+  confirmの側は自分の書き込みが終わった**後**にこれを呼ぶ -- DB上のstate
+  遷移は依然としてconfirm自身のtransactionが所有し、`cancel_running_task`
+  は「実行中のtaskへ知らせる」役目だけを持つ。
+- **worker poolへの設計変更**（この2つのP1と、下のP2 x2をまとめて解決する
+  ための土台）: 以前は「dispatcherがqueueから1件取り出すたびに新しい
+  `asyncio.Task`を作り、`asyncio.Semaphore`でprocessor呼び出しだけを絞る」
+  方式だった。これだと巨大なbacklog（起動時の一括回収や大量submitなど）が
+  あると、実際に並列実行できる数を超えて大量のtaskがその場で作られてしま
+  い、メモリと`shutdown`（全taskをgatherする）の所要時間がbacklogの大きさ
+  に比例してしまう（P2「dispatcher taskをworker並行度で制限する」）。
+  `max_concurrency`個の長生きするworker coroutine（`_worker_loop`）が
+  `asyncio.Queue`を消費し続ける固定poolに置き換えた。worker数自体が並列度
+  の上限になるため、`asyncio.Semaphore`は不要になった。
+  - **タスク追跡はCASに勝ったworkerだけが行う**（P2「task-registryへの
+    アクセスをevent loop上に保つ」も合わせて解決）: `_run_one`は
+    `QUEUED -> RUNNING`のcompare-and-setに**成功した**workerだけが
+    `self._running[job_id] = 自分のtask`を登録する（登録は常にevent loop
+    上で、他のworkerとの競合なしに行われる）。重複したdispatchシグナルで
+    生まれた「負けた」呼び出しは登録を一切行わずno-opで終わるため、
+    `job_id -> 単一Task`のdictのままで安全（第1roundの`set[Task]`は不要に
+    なった）。`cancel_running_task`は「lookupしてcancelする」処理全体を
+    `loop.call_soon_threadsafe`で1つの関数としてevent loopへ丸ごと委譲する
+    ため、worker threadがdictを直接読むことは無くなり、「イテレーション中
+    にdictが変化してRuntimeError」という懸念自体が構造的に起こらない
+    （そもそも複数taskを保持するcollectionを反復する場面が無い）。
+  - **backoffは専用の軽量taskに切り出す**: workerが自分自身をbackoffの
+    sleepで塞ぐと、そのworkerがpoolから実質的に1枠減ってしまい、第1round
+    で直した「backoffはpermitを専有しない」という性質が別の形で壊れる。
+    `_schedule_retry`は`self._pending_retries`という別集合に切り出した
+    task（`_sleep_then_requeue`）でsleep+再enqueueを行い、workerはすぐに
+    次のqueue itemを処理できる。この`_pending_retries`はbacklogの大きさで
+    はなく直近の失敗率に比例するため、dispatcher taskと同種の問題にはなら
+    ない（`shutdown`はこれらを待たずcancelするだけ -- 上記の起動時FAILED
+    sweepが後始末を保証する）。
+- **cancelのcompare-and-set失敗を処理する**（P2）: `cancel_job`が読んだ後、
+  workerや別のbackoff再enqueueが同じ行を書き換えると`JobSaveConflict`が
+  発生し、以前は捕捉されず素の500になっていた。`cancel_job`を（他の
+  compare-and-setリトライと同じ）有限回のretryループにし、`JobSaveConflict`
+  を捕捉したら最新状態を読み直して判定をやり直す。それでも勝てなければ
+  新設の`JobCancelConflictError`（API層で409）。
+- **retry設定を構築時に検証する**（P2）: `QueueSettings`が持つbackoff関連の
+  値（`initial_backoff_seconds`が負、`backoff_multiplier`が1未満、
+  `max_backoff_seconds`が`initial_backoff_seconds`未満など）は、以前は
+  `QueueSettings()`の構築自体は素通りし、最初にJobが失敗して
+  `_retry_policy_for`が`RetryPolicy`を組み立てる時点で初めて例外になって
+  いた -- その時点では既にRUNNING行がcommit済みで、再起動するまでそのJob
+  が詰まってしまう。`QueueSettings.__post_init__`が`RetryPolicy`を実際に
+  構築してみることで検証を再利用し（値を重複定義しない）、構築時点で早期に
+  失敗するようにした。
+- **前提Questionの全ての「使用不能」終端結果を再開できるようにする**
+  （P1）: `mark_question_usable`は`SUCCEEDED`のJobしか対象にしていなかった
+  ため、(a) 前提QuestionがFAILEDのまま人間が修正した場合と、(b) confirmの
+  reissueは「未完了」だったJobしか作り直さないため、既に終端状態
+  （SUCCEEDED/FAILED）だった古いバージョンのJobがアクティブバージョンに
+  一切存在しない場合、の両方で404になり後続Questionが永久にBLOCKEDのまま
+  残っていた。まず`Job.usable`を`SUCCEEDED`だけでなく`FAILED`でも設定
+  できるようにドメインモデル・DB制約（`ck_jobs_usable_matches_state`、
+  migration 0009）・`JobRepository.mark_usable`・
+  `domain.job_scheduling.question_statuses`を拡張した（FAILEDのJobは
+  `state`をFAILEDのまま保ちつつ`usable`だけを持てる -- 実際に失敗した
+  という記録に嘘をつかない）。その上で`mark_question_usable`の対象選択を
+  「アクティブバージョンのSUCCEEDED/FAILED」→（無ければ）「任意バージョン
+  の中で最新のSUCCEEDED/FAILED」の順で解決するようにした。
