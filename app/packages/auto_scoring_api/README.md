@@ -73,16 +73,27 @@ Class | Method | HTTP request | Description
 [*DefaultApi*](doc/DefaultApi.md) | [**listSubmissionsTestsTestIdSubmissionsGet**](doc/DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
 [*DefaultApi*](doc/DefaultApi.md) | [**listTestsTestsGet**](doc/DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
 [*DefaultApi*](doc/DefaultApi.md) | [**scoreScorePost**](doc/DefaultApi.md#scorescorepost) | **POST** /score | Score
+[*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**analyzeTestsTestIdDependencyGraphAnalyzePost**](doc/DependencyGraphApi.md#analyzeteststestiddependencygraphanalyzepost) | **POST** /tests/{test_id}/dependency-graph/analyze | Analyze
+[*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
+[*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**getLatestTestsTestIdDependencyGraphGet**](doc/DependencyGraphApi.md#getlatestteststestiddependencygraphget) | **GET** /tests/{test_id}/dependency-graph | Get Latest
+[*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**listVersionsTestsTestIdDependencyGraphVersionsGet**](doc/DependencyGraphApi.md#listversionsteststestiddependencygraphversionsget) | **GET** /tests/{test_id}/dependency-graph/versions | List Versions
 
 
 ## Documentation For Models
 
+ - [AnalyzeRequest](doc/AnalyzeRequest.md)
+ - [ConfirmRequest](doc/ConfirmRequest.md)
+ - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
+ - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
+ - [DependencyProvision](doc/DependencyProvision.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [LocationInner](doc/LocationInner.md)
+ - [QuestionTextOverride](doc/QuestionTextOverride.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
  - [TestSummary](doc/TestSummary.md)
+ - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
  - [ValidationError](doc/ValidationError.md)
 
 

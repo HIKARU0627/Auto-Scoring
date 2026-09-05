@@ -1,7 +1,7 @@
 """limit submissions.original_filename length
 
-Revision ID: 0005
-Revises: 0004
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-09-05
 
 Issue #17 review round 8 (P2 "永続化するoriginal filenameに上限を設ける"):
@@ -11,17 +11,17 @@ bytes -- there is no per-part-header size limit in multipart parsing, so a
 client posting directly to the API (bypassing the Flutter picker, which
 never sends more than a normal filename) could pack most of the ~50MiB
 overall body limit into this one field. It's stored verbatim and returned in
-full on every submission response, the same bloat risk 0004 fixed for
+full on every submission response, the same bloat risk 0006 fixed for
 ``student_label``.
 
 ``domain.models.MAX_ORIGINAL_FILENAME_LENGTH`` (255) and
 ``domain.pdf_intake.validate_filename`` are the first line of defence,
 checked before anything else about the upload; this DB CHECK constraint is
-the second, the same layered pattern 0003/0004 used. SQLite can't add a CHECK
+the second, the same layered pattern 0005/0006 used. SQLite can't add a CHECK
 constraint to an existing column without recreating the table, hence
 Alembic's batch mode.
 
-No backfill/preflight is needed here for the same reason as 0004: this is an
+No backfill/preflight is needed here for the same reason as 0006: this is an
 actively-developed MVP with no real user data yet, so a legacy row that
 happens to already exceed the new limit fails the batch recreate loudly with
 an ``IntegrityError`` rather than being silently truncated. Resolve it by
@@ -35,8 +35,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0005"
-down_revision: str | None = "0004"
+revision: str = "0007"
+down_revision: str | None = "0006"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

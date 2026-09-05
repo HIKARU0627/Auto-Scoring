@@ -116,6 +116,8 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     assert config.host == LOOPBACK
     assert config.port == payload["port"]
     assert config.app.state.api_token == "generated-test-token"
+    # The DB was created and migrated to head under --app-data-dir (Issue #26).
+    assert (tmp_path / "app-data" / "database.sqlite").is_file()
 
     # The exact socket handed to Server.run() is bound to the same port the
     # handshake already promised, and it is *still open* here -- proving

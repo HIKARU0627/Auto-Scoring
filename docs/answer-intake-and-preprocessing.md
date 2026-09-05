@@ -175,7 +175,7 @@ simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡
 ## 7. データモデルの追加（Issue #17）
 
 `docs/data-model-and-local-storage.md`（Issue #11）が定義した 9 Entity に加えて、
-以下を追加する（マイグレーション `0003_answer_intake`）。
+以下を追加する（マイグレーション `0005_answer_intake`）。
 
 ### `Submission` への追加カラム
 
@@ -212,13 +212,13 @@ simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡
 矛盾した行がコミットされず、読み込み時に初めて `DomainError` になる事態を防ぐ
 （`AGENTS.md`「不変条件は実制約で保証する」）。
 
-### 既存 DB のバックフィル（マイグレーション `0003`）
+### 既存 DB のバックフィル（マイグレーション `0005`）
 
 0001/0002 時点で作成された `submissions` 行には `source_pdf_sha256` /
 `page_count` が存在しない。カラム追加時の `server_default`（`""` / `1`）は
 `ALTER TABLE` を通すためだけの一時値で、`""` のまま放置すると
 `Submission.__post_init__` が空ハッシュを拒否し、移行直後の一覧・取得が
-`DomainError` で落ちる。`0003_answer_intake.py::_backfill_submission_metadata`
+`DomainError` で落ちる。`0005_answer_intake.py::_backfill_submission_metadata`
 が、カラム追加直後に各行の `source_pdf_path`（Issue #11: 元 PDF は不変で
 必ず残る）を実際に読み、真の `sha256` と `pypdf` で数えた `page_count` を
 `UPDATE` で書き戻す。ファイルが見つからない行（既に purge 済み、または
@@ -456,8 +456,8 @@ throw'`）。
 
 ## 16. 4回目のレビュー指摘への対応
 
-- **migration 0003 が legacy 重複を batch DDL 前に検出する（重大）**:
-  pre-0003 の DB に、同一テスト内で内容が完全に一致する submission が
+- **migration 0005 が legacy 重複を batch DDL 前に検出する（重大）**:
+  pre-0005 の DB に、同一テスト内で内容が完全に一致する submission が
   2 件以上ある場合（§7 の migration docstring が最初から想定していたケース）、
   以前の実装は `uq_submissions_test_content_hash` を追加する 2 回目の batch
   再作成が実際に失敗するまで気づかなかった。SQLite の batch mode は
@@ -468,7 +468,7 @@ throw'`）。
   「重複を手で解消して再実行」という復旧手順は、この状態では
   `_alembic_tmp_submissions already exists` で即座に失敗し機能しなかった。
   `_load_content_hashes`/`_reject_duplicate_content_hashes`
-  （`migrations/versions/0003_answer_intake.py`）が、どちらの batch pass
+  （`migrations/versions/0005_answer_intake.py`）が、どちらの batch pass
   よりも前に、まだディスク上の `source.pdf` から計算した内容ハッシュだけで
   重複を検出し、あれば `RuntimeError` で即座に中断する。この時点では
   まだ 1 行の DDL も実行していないため、重複を手で削除して
@@ -678,10 +678,10 @@ _selectTestRequestId` に置き換え）
   `Submission.__post_init__` で検証（domain 層）、
   `api/app.py` の `Form(..., max_length=MAX_STUDENT_LABEL_LENGTH)` で
   API 層でも検証（超過は綺麗な `422` になり、domain 層まで到達しない）、
-  さらに migration `0004_student_label_length.py` で
+  さらに migration `0006_student_label_length.py` で
   `ck_submissions_student_label_length`
   （`student_label IS NULL OR length(student_label) <= 200`）を DB 制約として
-  追加した（3 層目）。0003 の重複チェックと異なり事前チェック/バックフィルは
+  追加した（3 層目）。0005 の重複チェックと異なり事前チェック/バックフィルは
   行わない -- これまで上限が存在しなかったことを踏まえ、既存データが
   超過していれば batch 再作成が `IntegrityError` で失敗するに任せる（MVP で
   実データがまだ無い前提として許容）
@@ -753,9 +753,9 @@ retry'`）。
   一覧応答を肥大化させ得た。`domain/models.py::MAX_ORIGINAL_FILENAME_LENGTH`
   （255）を新設し、`domain/pdf_intake.py::validate_filename`（PDF を開く前の
   最も安価なチェック）と `Submission.__post_init__` の双方で検証、
-  さらに migration `0005_original_filename_length.py` で
+  さらに migration `0007_original_filename_length.py` で
   `ck_submissions_original_filename_length` を DB 制約として追加した
-  （0004 と同じ 3 層構成）。`student_label` と異なり `Form(...)` のような
+  （0006 と同じ 3 層構成）。`student_label` と異なり `Form(...)` のような
   API 層での宣言的な長さ制限は使えない（`filename` は multipart パートの
   ヘッダであり、FastAPI の Form フィールドではない）ため、API 層の防御は
   「`PdfInvalidTypeError` は既存のハンドラで綺麗な `400` に変換される」という

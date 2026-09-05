@@ -1,7 +1,7 @@
 """limit submissions.student_label length
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: 0006
+Revises: 0005
 Create Date: 2026-09-05
 
 Issue #17 review round 7 (P2 "student labelに上限を設ける"): ``student_label``
@@ -16,11 +16,11 @@ list response's memory footprint.
 ``domain.models.MAX_STUDENT_LABEL_LENGTH`` (200) and ``api/app.py``'s
 ``Form(..., max_length=...)`` on the same value are the first line of
 defence; this DB CHECK constraint is the second, the same layered pattern
-0003 used for ``ck_submissions_page_count_positive``. SQLite can't add a
+0005 used for ``ck_submissions_page_count_positive``. SQLite can't add a
 CHECK constraint to an existing column without recreating the table, hence
 Alembic's batch mode.
 
-No backfill/preflight is needed here (contrast 0003's duplicate-content
+No backfill/preflight is needed here (contrast 0005's duplicate-content
 check before its own batch pass): the previous absence of *any* limit means
 a legacy row could in principle already exceed this one, in which case the
 batch recreate below fails loudly with an ``IntegrityError`` rather than
@@ -35,8 +35,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0004"
-down_revision: str | None = "0003"
+revision: str = "0006"
+down_revision: str | None = "0005"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

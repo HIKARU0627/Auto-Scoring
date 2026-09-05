@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from auto_scoring.adapters.sqlalchemy_repositories import (
     SqlAlchemyAnnotationRepository,
     SqlAlchemyAnswerImageRepository,
+    SqlAlchemyDependencyGraphRepository,
     SqlAlchemyGradeResultRepository,
     SqlAlchemyJobRepository,
     SqlAlchemyQuestionRepository,
@@ -45,6 +46,7 @@ class SqlAlchemyUnitOfWork:
     annotations: SqlAlchemyAnnotationRepository
     reviews: SqlAlchemyReviewRepository
     jobs: SqlAlchemyJobRepository
+    dependency_graphs: SqlAlchemyDependencyGraphRepository
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -63,6 +65,7 @@ class SqlAlchemyUnitOfWork:
         self.annotations = SqlAlchemyAnnotationRepository(session)
         self.reviews = SqlAlchemyReviewRepository(session)
         self.jobs = SqlAlchemyJobRepository(session)
+        self.dependency_graphs = SqlAlchemyDependencyGraphRepository(session)
         return self
 
     def __exit__(

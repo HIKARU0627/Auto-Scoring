@@ -154,6 +154,11 @@ def run(argv: Sequence[str] | None = None) -> int:
         args.handshake_file,
     )
 
+    # data_root only, no session_factory: create_app() builds the database
+    # itself (migrations, engine, the startup repair sweep) rather than this
+    # function duplicating that -- see create_app()'s docstring for why
+    # session_factory is reserved for callers (Issue #26's tests) that need
+    # to hand in an already-migrated database instead.
     config = uvicorn.Config(
         create_app(api_token=token, data_root=args.app_data_dir),
         host=LOOPBACK,

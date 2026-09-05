@@ -7,13 +7,16 @@ from collections.abc import Callable
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from auto_scoring.adapters import sqlalchemy_repositories
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import (
     GradingSource,
     InvalidStateTransition,
+    JobSaveConflict,
     JobState,
     Score,
     SubmissionState,
+    ensure_job_transition,
 )
 from tests.support import (
     at,
@@ -272,7 +275,170 @@ def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
         uow.commit()
 
     with seeded() as uow, pytest.raises(InvalidStateTransition):
-        uow.jobs.save(make_job(state=JobState.SUCCEEDED))
+        uow.jobs.save(make_job(state=JobState.SUCCEEDED), expected_state=JobState.QUEUED)
+
+
+def test_job_save_raises_conflict_when_the_row_changes_between_read_and_write(
+    seeded: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulates the race directly: another transaction commits a state
+    change to this job in the narrow window between `save()`'s own read (plus
+    its in-Python transition check) and its atomic write. A plain ORM update
+    (PK-only ``WHERE``) would silently overwrite that already-committed
+    change; the compare-and-set must instead detect it and raise (Issue #26
+    review: e.g. `/confirm` cancelling a job the instant before a worker
+    reports it succeeded).
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(make_job(state=JobState.RUNNING))
+        uow.commit()
+
+    injected = {"done": False}
+
+    def _cancel_concurrently_then_check(current: JobState, target: JobState) -> JobState:
+        result = ensure_job_transition(current, target)
+        if not injected["done"]:
+            injected["done"] = True
+            with seeded() as concurrent_uow:
+                stale = concurrent_uow.jobs.get("job-1")
+                assert stale is not None
+                concurrent_uow.jobs.save(
+                    stale.transitioned_to(JobState.CANCELLED, updated_at=at(5)),
+                    expected_state=stale.state,
+                )
+                concurrent_uow.commit()
+        return result
+
+    monkeypatch.setattr(
+        sqlalchemy_repositories, "ensure_job_transition", _cancel_concurrently_then_check
+    )
+
+    with seeded() as uow:
+        job = uow.jobs.get("job-1")
+        assert job is not None
+        completed = job.transitioned_to(JobState.SUCCEEDED, updated_at=at(10))
+        with pytest.raises(JobSaveConflict):
+            uow.jobs.save(completed, expected_state=job.state)
+
+    with seeded() as uow:
+        final = uow.jobs.get("job-1")
+    assert final is not None
+    assert final.state is JobState.CANCELLED
+
+
+def test_job_save_rejects_the_second_of_two_workers_racing_to_claim_the_same_job(
+    seeded: UowFactory,
+) -> None:
+    """Two workers both read the same QUEUED job and both decide to move it
+    to RUNNING. By the time the second worker's `save()` executes, the row
+    already holds RUNNING -- coincidentally the very state the second worker
+    is also trying to write. A `save()` that re-reads "current state" from
+    the row itself (rather than using what the caller actually observed)
+    would see its own target state already matching that re-read value, skip
+    the transition check, and match its own ``WHERE state = 'running'``
+    against the first worker's write -- silently letting both workers claim
+    the same job (Issue #26 review). Passing each worker's own
+    `expected_state` (QUEUED, what it actually read) keeps the second
+    worker's ``WHERE state = 'queued'`` from matching the now-RUNNING row.
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(make_job(state=JobState.QUEUED))
+        uow.commit()
+
+    with seeded() as uow_a:
+        job_a = uow_a.jobs.get("job-1")
+    with seeded() as uow_b:
+        job_b = uow_b.jobs.get("job-1")
+    assert job_a is not None and job_b is not None
+
+    with seeded() as uow_a:
+        uow_a.jobs.save(
+            job_a.transitioned_to(JobState.RUNNING, updated_at=at(5)),
+            expected_state=job_a.state,
+        )
+        uow_a.commit()
+
+    with seeded() as uow_b, pytest.raises(JobSaveConflict):
+        uow_b.jobs.save(
+            job_b.transitioned_to(JobState.RUNNING, updated_at=at(6)),
+            expected_state=job_b.state,
+        )
+
+    with seeded() as uow:
+        final = uow.jobs.get("job-1")
+    assert final is not None
+    assert final.attempts == 1  # only the winner's transitioned_to() attempt was recorded
+
+
+def test_list_incomplete_for_stale_versions_filters_correctly(seeded: UowFactory) -> None:
+    """QUEUED/RUNNING/BLOCKED/FAILED jobs tagged with a *different* graph
+    version count as stale (Issue #26); untagged and truly-terminal
+    (SUCCEEDED/CANCELLED) jobs do not. FAILED counts as incomplete because
+    FAILED -> QUEUED is a valid retry transition -- a stale FAILED job left
+    out here could still be retried later against the superseded graph
+    version (Issue #26 review).
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(id="job-stale-queued", state=JobState.QUEUED, dependency_graph_version=1)
+        )
+        uow.jobs.add(
+            make_job(id="job-stale-blocked", state=JobState.BLOCKED, dependency_graph_version=1)
+        )
+        uow.jobs.add(
+            make_job(id="job-stale-failed", state=JobState.FAILED, dependency_graph_version=1)
+        )
+        uow.jobs.add(make_job(id="job-current", state=JobState.QUEUED, dependency_graph_version=2))
+        uow.jobs.add(
+            make_job(id="job-no-version", state=JobState.QUEUED, dependency_graph_version=None)
+        )
+        uow.jobs.add(make_job(id="job-done", state=JobState.SUCCEEDED, dependency_graph_version=1))
+        uow.jobs.add(
+            make_job(id="job-cancelled", state=JobState.CANCELLED, dependency_graph_version=1)
+        )
+        uow.commit()
+
+    with seeded() as uow:
+        stale = uow.jobs.list_incomplete_for_stale_versions("test-1", current_version=2)
+    assert {job.id for job in stale} == {
+        "job-stale-queued",
+        "job-stale-blocked",
+        "job-stale-failed",
+    }
+
+
+def test_list_incomplete_for_stale_versions_is_scoped_to_the_test(make_uow: UowFactory) -> None:
+    with make_uow() as uow:
+        uow.tests.add(make_test(id="test-1"))
+        uow.tests.add(make_test(id="test-2", name="別テスト"))
+        uow.questions.add(make_question(id="q-1", test_id="test-1"))
+        uow.questions.add(make_question(id="q-2", test_id="test-2"))
+        uow.submissions.add(make_submission(id="sub-1", test_id="test-1"))
+        uow.submissions.add(make_submission(id="sub-2", test_id="test-2"))
+        uow.jobs.add(
+            make_job(
+                id="job-test-1",
+                submission_id="sub-1",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.jobs.add(
+            make_job(
+                id="job-test-2",
+                submission_id="sub-2",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    with make_uow() as uow:
+        stale = uow.jobs.list_incomplete_for_stale_versions("test-1", current_version=2)
+    assert {job.id for job in stale} == {"job-test-1"}
 
 
 def test_orphan_row_is_rejected_by_foreign_key(make_uow: UowFactory) -> None:

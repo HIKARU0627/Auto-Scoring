@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring import __version__
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
@@ -27,6 +28,7 @@ from auto_scoring.adapters.submission_intake import (
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
+from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
@@ -127,6 +129,7 @@ def create_app(
     *,
     api_token: str | None = None,
     data_root: Path | None = None,
+    session_factory: sessionmaker[Session] | None = None,
     pdf_engine: PdfEngine | None = None,
     image_preprocessor: ImagePreprocessor | None = None,
     intake_limits: IntakeLimits | None = None,
@@ -155,6 +158,15 @@ def create_app(
     ``SubmissionUploadGateMiddleware`` for why that capacity has to be
     reserved at the ASGI boundary, before FastAPI ever touches the body, not
     inside the (already serialized) intake pipeline itself.
+
+    ``session_factory`` lets a caller supply an already-migrated database
+    directly (Issue #26's dependency-graph tests do this against an
+    isolated fixture) instead of having this function build one from
+    ``data_root``. When supplied, this function never touches migrations,
+    engine creation/disposal, or the startup repair sweep for it -- the
+    caller owns that database's whole lifecycle. ``store`` (used by the
+    submission/test routes below regardless) still comes from ``data_root``
+    as usual either way.
     """
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
     app.state.api_token = api_token or generate_token()
@@ -166,10 +178,20 @@ def create_app(
         scratch = tempfile.TemporaryDirectory(prefix="auto-scoring-app-data-")
         root = Path(scratch.name)
     store = LocalFileStore(root)
-    db_url = sqlite_url(store.database_path())
-    upgrade(db_url, "head")
-    db_engine = create_sqlite_engine(db_url)
-    session_factory = build_session_factory(db_engine)
+
+    # Only build (and later dispose/repair) a database this function itself
+    # owns the lifecycle of. A caller-supplied session_factory is already
+    # migrated against its own fixture; touching it here (or sweeping/
+    # repairing files under `store`, which has nothing to do with whatever
+    # database that session_factory actually points at) would be wrong.
+    owns_session_factory = session_factory is None
+    db_engine = None
+    if owns_session_factory:
+        db_url = sqlite_url(store.database_path())
+        upgrade(db_url, "head")
+        db_engine = create_sqlite_engine(db_url)
+        session_factory = build_session_factory(db_engine)
+    assert session_factory is not None  # either supplied, or just built above
 
     if scratch is not None:
         # The startup repair query below (and every other DB access this app
@@ -179,28 +201,32 @@ def create_app(
         # sqlite file open, so registering only scratch.cleanup (as this
         # used to) fails at process exit with PermissionError and leaks the
         # whole temp app-data directory instead of removing it. Dispose the
-        # engine before cleaning up the directory it lives in.
+        # engine (if this function created one) before cleaning up the
+        # directory it lives in.
         temp_dir = scratch
         engine_to_dispose = db_engine
 
         def _cleanup_scratch() -> None:
-            engine_to_dispose.dispose()
+            if engine_to_dispose is not None:
+                engine_to_dispose.dispose()
             temp_dir.cleanup()
 
         atexit.register(_cleanup_scratch)
 
-    # Startup crash recovery. sweep_temp was always documented as "run it on
-    # startup" (its own docstring) but was never actually wired up anywhere;
-    # it only removes interrupted writes' leftover *.part files, not the DB
-    # side of the same problem -- a prior run that crashed or lost power
-    # between a submission's DB commit and the file writes that follow it
-    # (adapters.atomic.FinalizationError only catches that failure when the
-    # process is alive to raise it) leaves that submission stuck: recorded
-    # as complete, some files missing, and no way to retry it.
-    # repair_incomplete_submissions covers that other half.
-    store.sweep_temp()
-    with SqlAlchemyUnitOfWork(session_factory) as uow:
-        repair_incomplete_submissions(uow, store)
+    if owns_session_factory:
+        # Startup crash recovery. sweep_temp was always documented as "run it
+        # on startup" (its own docstring) but was never actually wired up
+        # anywhere; it only removes interrupted writes' leftover *.part
+        # files, not the DB side of the same problem -- a prior run that
+        # crashed or lost power between a submission's DB commit and the
+        # file writes that follow it (adapters.atomic.FinalizationError only
+        # catches that failure when the process is alive to raise it) leaves
+        # that submission stuck: recorded as complete, some files missing,
+        # and no way to retry it. repair_incomplete_submissions covers that
+        # other half.
+        store.sweep_temp()
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            repair_incomplete_submissions(uow, store)
 
     engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()
@@ -356,6 +382,8 @@ def create_app(
                 },
             ) from exc
         return _submission_response(result.submission, is_retry=result.is_retry)
+
+    protected.include_router(build_dependency_graph_router(session_factory))
 
     app.include_router(protected)
     return app

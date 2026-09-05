@@ -58,7 +58,7 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 
 > `AnswerImage` と `Submission` の `source_pdf_sha256` / `page_count` /
 > `original_filename` / `review_reason` は Issue #17（答案取込・画像前処理）で
-> マイグレーション `0003_answer_intake` により追加した。詳細は
+> マイグレーション `0005_answer_intake` により追加した。詳細は
 > [`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md)。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
@@ -157,15 +157,30 @@ app-data/
 
 - `backend/alembic.ini` + `backend/migrations/`。`auto_scoring.db.migrator` が
   Python から呼び出す薄いラッパー（`upgrade` / `downgrade` / `current_revision`）。
+  この2つはソースツリー直下（`backend/`）に置いた開発者向けの配置で、
+  `pyproject.toml` の `force-include` で wheel には `auto_scoring/migrations` /
+  `auto_scoring/alembic.ini` としても同梱する（Issue #26）。`db/migrator.py` は
+  パッケージ内配置とソースツリー配置の両方を試し、存在する方を使う --
+  `auto-scoring-sidecar` コンソールスクリプトはインストール済みの
+  `auto_scoring` パッケージだけが存在する環境（`backend/` ソースツリーは無い）
+  で起動時に `upgrade(db_url, "head")` を呼ぶため、パッケージ内蔵が無いと
+  Uvicorn 起動前に落ちる（詳細: `docs/dependency-graph.md`）。
 - リビジョン:
   - `0001_initial_schema` — 10 個のコアテーブル一式。
   - `0002_operation_log` — 削除操作の監査ログテーブルを追加（§5 参照）。
-  - `0003_answer_intake` — `answer_images` テーブルと `submissions` への
+  - `0003_dependency_graph` / `0004_job_dependency_graph_version` — 設問依存
+    関係 DAG（Issue #26）。詳細は `docs/dependency-graph.md`。
+  - `0005_answer_intake` — `answer_images` テーブルと `submissions` への
     `source_pdf_sha256` / `page_count` / `original_filename` / `review_reason`
     列を追加（Issue #17）。SQLite の `CHECK` 制約追加は列追加を伴う既存テーブルの
     再作成が必要なため、Alembic のバッチモード（`recreate="always"`）を使う。
     「1 世代前 DB」（0001 で止まっている既存 DB）から `head` への適用と、
     `head → 0001 → base` の downgrade を `tests/test_migrations.py` で検証する。
+  - `0006_student_label_length` / `0007_original_filename_length` —
+    `submissions.student_label` / `original_filename` に長さ上限の `CHECK`
+    制約を追加（Issue #17 レビュー対応）。PR #37 が main にマージされた PR #36
+    （Issue #26、`0003`/`0004` を先に使用）と競合したため、Issue #17 側の
+    `0003`〜`0005` を `0005`〜`0007` へ振り直した。
 - スキーマを変更したら `db/orm.py` を直し、`uv run alembic revision --autogenerate`
   で新しい revision を作る。`alembic.command.check`（`test_head_schema_matches_orm_metadata`）
   が ORM とマイグレーション履歴の乖離を検出する。

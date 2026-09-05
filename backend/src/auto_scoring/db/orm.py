@@ -27,13 +27,16 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy import (
     Enum as SAEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.schema import DDL
 
 from auto_scoring.db.base import Base
+from auto_scoring.domain.dependency_graph import DependencyGraphStatus, DependencyProvision
 from auto_scoring.domain.models import (
     AnnotationKind,
     AnswerImageStatus,
@@ -296,8 +299,13 @@ class JobRow(Base):
         ),
         CheckConstraint("attempts >= 0", name="ck_jobs_attempts_non_negative"),
         CheckConstraint("max_attempts >= 1", name="ck_jobs_max_attempts_positive"),
+        CheckConstraint(
+            "dependency_graph_version IS NULL OR dependency_graph_version >= 1",
+            name="ck_jobs_dependency_graph_version_positive",
+        ),
         Index("ix_jobs_state", "state"),
         Index("ix_jobs_submission_id", "submission_id"),
+        Index("ix_jobs_dependency_graph_version", "dependency_graph_version"),
     )
 
     id: Mapped[str] = _pk()
@@ -315,8 +323,342 @@ class JobRow(Base):
     blocked_on_question_id: Mapped[str | None] = mapped_column(
         ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
     )
+    #: The confirmed DependencyGraph version this job was queued against
+    #: (Issue #26). No FK: dependency_graphs is keyed by (test_id, version),
+    #: not by version alone, so this stays a plain int matched against
+    #: DependencyGraphRepository.list_incomplete_for_stale_versions.
+    dependency_graph_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DependencyGraphRow(Base):
+    """One version of one test's dependency graph (Issue #26).
+
+    ``(test_id, version)`` is the real identity a repository upserts against:
+    a DRAFT row is replaced in place by later analysis/confirm calls for the
+    same version, but a CONFIRMED row is never updated again -- changing a
+    confirmed graph means inserting a new, higher version (see
+    ``domain.dependency_graph.DependencyGraph.confirm`` and
+    docs/dependency-graph.md).
+    """
+
+    __tablename__ = "dependency_graphs"
+    __table_args__ = (
+        UniqueConstraint("test_id", "version", name="uq_dependency_graphs_test_version"),
+        CheckConstraint("version >= 1", name="ck_dependency_graphs_version_positive"),
+        CheckConstraint(
+            "status IN ('draft', 'confirmed')", name="ck_dependency_graphs_status_valid"
+        ),
+        # Mirrors DependencyGraph.__post_init__: a confirmed graph can never
+        # carry unresolved questions, checked here too so a row written
+        # outside the domain layer (repair, import) can't slip past it.
+        CheckConstraint(
+            "status != 'confirmed' OR json_array_length(unresolved) = 0",
+            name="ck_dependency_graphs_confirmed_has_no_unresolved",
+        ),
+        # The check above only constrains CONFIRMED rows -- a DRAFT row had no
+        # shape requirement at all, so a row written outside the domain
+        # (repair, import, direct SQL) could persist `unresolved = 'null'`,
+        # `'{}'`, or a bare scalar. `json_array_length` returns 0 for all of
+        # those (SQLite: "0 if X is not a JSON array"), so they would even
+        # slip past a CONFIRMED row's check above; but `DependencyGraph.
+        # from_dict` always iterates `data["unresolved"]` expecting a JSON
+        # array of question/reason objects, and hydration blows up on
+        # anything else (Issue #26 review). Applies to every row regardless
+        # of status.
+        CheckConstraint(
+            "json_valid(unresolved) AND json_type(unresolved) = 'array'",
+            name="ck_dependency_graphs_unresolved_is_array",
+        ),
+        # Mirrors DependencyGraph.__post_init__'s status/confirmed_at pairing
+        # (CONFIRMED <=> confirmed_at IS NOT NULL) at the DB layer too, so a
+        # row written outside the domain (repair, import, direct SQL) can't
+        # produce a state `_hydrate` refuses to load -- `DependencyGraph`'s
+        # own constructor raises `DependencyGraphError` for exactly this
+        # mismatch, which would otherwise surface as a 500 on every GET/list
+        # of that row instead of being rejected at write time (Issue #26
+        # review).
+        CheckConstraint(
+            "(status = 'confirmed') = (confirmed_at IS NOT NULL)",
+            name="ck_dependency_graphs_confirmed_at_matches_status",
+        ),
+        # `DependencyGraph.__post_init__` requires `question_ids` to be a
+        # non-empty set (a graph over zero questions is not a graph); nothing
+        # short of the domain enforced that at the DB layer, so a row written
+        # outside it (repair, import, direct SQL) could persist
+        # `question_ids = '[]'` and every later GET/list of it would raise on
+        # hydration (Issue #26 review). `json_valid` guards against a
+        # non-JSON string reaching `json_array_length`, which would otherwise
+        # error out the constraint check itself rather than simply failing it.
+        CheckConstraint(
+            "json_valid(question_ids) AND json_array_length(question_ids) > 0",
+            name="ck_dependency_graphs_question_ids_non_empty",
+        ),
+        Index("ix_dependency_graphs_test_id", "test_id"),
+    )
+
+    id: Mapped[str] = _pk()
+    test_id: Mapped[str] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[DependencyGraphStatus] = mapped_column(
+        _enum(DependencyGraphStatus), nullable=False
+    )
+    question_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    unresolved: Mapped[list[dict[str, Any]]] = _json_list()
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class DependencyEdgeRow(Base):
+    """One edge of one dependency-graph version.
+
+    Primary key is the composite ``(graph_id, from_question_id,
+    to_question_id)`` -- there is no synthetic ``id``. A synthetic id built by
+    joining the three parts with a separator (e.g. ``f"{graph_id}:{a}:{b}"``)
+    can collide: question ids are only required to be non-empty (see
+    ``domain.models._require_non_empty``), so ``from="a:b", to="c"`` and
+    ``from="a", to="b:c"`` would produce the identical joined string even
+    though they are different, otherwise-valid edges (Issue #26 review). The
+    composite key sidesteps the whole class of separator-collision bugs.
+    """
+
+    __tablename__ = "dependency_edges"
+    __table_args__ = (
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
+            name="ck_dependency_edges_confidence_range",
+        ),
+        # Mirrors `DependencyEdge.__post_init__`'s remaining invariants (only
+        # `confidence` had a DB-level mirror before): a row written outside
+        # the domain (repair, import, direct SQL) could otherwise persist a
+        # self-loop, or an edge with no `provides`/blank `rationale`, and
+        # `DependencyEdge`'s own constructor would raise `SelfLoopError`/
+        # `DependencyGraphError` the next time that graph is hydrated,
+        # breaking every API call touching it (Issue #26 review).
+        CheckConstraint(
+            "from_question_id != to_question_id", name="ck_dependency_edges_no_self_loop"
+        ),
+        # `domain.models._require_non_empty` requires both endpoint ids to be
+        # non-blank strings; the self-loop check above compares them to each
+        # other but never checks either against blank on its own (Issue #26
+        # review).
+        CheckConstraint(
+            "length(trim(from_question_id)) > 0",
+            name="ck_dependency_edges_from_question_id_non_empty",
+        ),
+        CheckConstraint(
+            "length(trim(to_question_id)) > 0",
+            name="ck_dependency_edges_to_question_id_non_empty",
+        ),
+        CheckConstraint(
+            "json_valid(provides) AND json_array_length(provides) > 0",
+            name="ck_dependency_edges_provides_non_empty",
+        ),
+        CheckConstraint(
+            "length(trim(rationale)) > 0", name="ck_dependency_edges_rationale_non_empty"
+        ),
+        Index("ix_dependency_edges_graph_id", "graph_id"),
+    )
+
+    graph_id: Mapped[str] = mapped_column(
+        ForeignKey("dependency_graphs.id", ondelete="CASCADE"), primary_key=True
+    )
+    from_question_id: Mapped[str] = mapped_column(String, primary_key=True)
+    to_question_id: Mapped[str] = mapped_column(String, primary_key=True)
+    provides: Mapped[list[DependencyProvision]] = mapped_column(JSON, nullable=False, default=list)
+    rationale: Mapped[str] = mapped_column(String, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+# The remaining invariants below need `json_each`, a table-valued function,
+# to inspect array *elements* -- and SQLite's `CHECK` constraints cannot
+# contain subqueries (including table-valued functions), so every one of
+# these is a pair of `BEFORE INSERT`/`BEFORE UPDATE OF <col>` triggers
+# instead of a `CheckConstraint`. All are mirrored in
+# `migrations/versions/0003_dependency_graph.py`.
+
+# `provides_non_empty` only checks JSON shape, not element values -- a row
+# written outside the domain (repair, import, direct SQL) could still
+# persist e.g. `provides = '["bogus"]'` or `provides = '[null]'`, which
+# `DependencyProvision(...)` rejects with a `ValueError` the next time
+# `_mappers.dependency_graph_from_rows` hydrates that graph (Issue #26
+# review). `value NOT IN (...)` alone does not catch a JSON `null` element --
+# SQL's `NULL NOT IN (...)` evaluates to NULL (neither true nor false), which
+# `WHERE` treats as "don't select this row" -- so `value IS NULL` must be
+# checked explicitly. Keep the value list in sync with
+# `domain.dependency_graph.DependencyProvision`'s members.
+_KNOWN_DEPENDENCY_PROVISIONS_SQL = "'recognized_text', 'score', 'criterion_result'"
+
+_provides_known_values_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_dependency_edges_provides_known_values_insert
+    BEFORE INSERT ON dependency_edges
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.provides)
+        WHERE value IS NULL OR value NOT IN ({_KNOWN_DEPENDENCY_PROVISIONS_SQL})
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_edges.provides contains an unknown value');
+    END;
+    """
+)
+
+_provides_known_values_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_dependency_edges_provides_known_values_update
+    BEFORE UPDATE OF provides ON dependency_edges
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.provides)
+        WHERE value IS NULL OR value NOT IN ({_KNOWN_DEPENDENCY_PROVISIONS_SQL})
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_edges.provides contains an unknown value');
+    END;
+    """
+)
+
+# `ck_dependency_graphs_question_ids_non_empty` only checks that
+# `question_ids` is a non-empty JSON array, not that every element is a
+# (non-blank) string -- a row written outside the domain could persist
+# `question_ids = '[null]'` or `'["q1", null]'`, and `DependencyGraph`'s own
+# type (`frozenset[str]`) plus every downstream consumer (layer/response
+# sorting, API responses) expects plain strings, not `None` (Issue #26
+# review).
+_question_ids_elements_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    """
+    CREATE TRIGGER trg_dependency_graphs_question_ids_elements_insert
+    BEFORE INSERT ON dependency_graphs
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.question_ids)
+        WHERE json_each.type IS NOT 'text' OR length(trim(json_each.value)) = 0
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_graphs.question_ids contains a non-string or blank value');
+    END;
+    """
+)
+
+_question_ids_elements_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    """
+    CREATE TRIGGER trg_dependency_graphs_question_ids_elements_update
+    BEFORE UPDATE OF question_ids ON dependency_graphs
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.question_ids)
+        WHERE json_each.type IS NOT 'text' OR length(trim(json_each.value)) = 0
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_graphs.question_ids contains a non-string or blank value');
+    END;
+    """
+)
+
+# `ck_dependency_graphs_unresolved_is_array` only checks the outer JSON
+# shape -- each element must additionally be an object matching
+# `UnresolvedQuestion`'s shape (non-blank string `question_id`/`reason`), or
+# `UnresolvedQuestion.from_dict` raises the next time that graph is hydrated
+# (Issue #26 review).
+_unresolved_elements_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    """
+    CREATE TRIGGER trg_dependency_graphs_unresolved_elements_insert
+    BEFORE INSERT ON dependency_graphs
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.unresolved)
+        WHERE json_each.type IS NOT 'object'
+           OR json_type(json_each.value, '$.question_id') IS NOT 'text'
+           OR length(trim(json_extract(json_each.value, '$.question_id'))) = 0
+           OR json_type(json_each.value, '$.reason') IS NOT 'text'
+           OR length(trim(json_extract(json_each.value, '$.reason'))) = 0
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_graphs.unresolved contains a malformed entry');
+    END;
+    """
+)
+
+_unresolved_elements_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    """
+    CREATE TRIGGER trg_dependency_graphs_unresolved_elements_update
+    BEFORE UPDATE OF unresolved ON dependency_graphs
+    FOR EACH ROW
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.unresolved)
+        WHERE json_each.type IS NOT 'object'
+           OR json_type(json_each.value, '$.question_id') IS NOT 'text'
+           OR length(trim(json_extract(json_each.value, '$.question_id'))) = 0
+           OR json_type(json_each.value, '$.reason') IS NOT 'text'
+           OR length(trim(json_extract(json_each.value, '$.reason'))) = 0
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_graphs.unresolved contains a malformed entry');
+    END;
+    """
+)
+
+event.listen(DependencyGraphRow.__table__, "after_create", _question_ids_elements_insert_trigger)
+event.listen(DependencyGraphRow.__table__, "after_create", _question_ids_elements_update_trigger)
+event.listen(DependencyGraphRow.__table__, "after_create", _unresolved_elements_insert_trigger)
+event.listen(DependencyGraphRow.__table__, "after_create", _unresolved_elements_update_trigger)
+
+event.listen(DependencyEdgeRow.__table__, "after_create", _provides_known_values_insert_trigger)
+event.listen(DependencyEdgeRow.__table__, "after_create", _provides_known_values_update_trigger)
+
+# The primary key / self-loop / non-empty checks above never verify an edge's
+# endpoints actually belong to its own graph's `question_ids` snapshot -- a
+# row written outside the domain (repair, import, direct SQL) could persist
+# an edge whose `from_question_id`/`to_question_id` names a question that was
+# never part of that graph version, and `DependencyGraph.__post_init__`
+# raises `UnknownQuestionError` the next time it is hydrated, breaking every
+# read of that graph (Issue #26 review). This needs a join against the
+# parent `dependency_graphs` row, so -- like the element-value checks above
+# -- it has to be a trigger, not a `CheckConstraint`.
+_edge_endpoints_known_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    """
+    CREATE TRIGGER trg_dependency_edges_endpoints_known_insert
+    BEFORE INSERT ON dependency_edges
+    FOR EACH ROW
+    WHEN
+        NOT EXISTS (
+            SELECT 1 FROM dependency_graphs g, json_each(g.question_ids) qi
+            WHERE g.id = NEW.graph_id AND qi.value = NEW.from_question_id
+        )
+        OR NOT EXISTS (
+            SELECT 1 FROM dependency_graphs g, json_each(g.question_ids) qi
+            WHERE g.id = NEW.graph_id AND qi.value = NEW.to_question_id
+        )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_edges endpoint is not in its graph''s question_ids');
+    END;
+    """
+)
+
+_edge_endpoints_known_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    """
+    CREATE TRIGGER trg_dependency_edges_endpoints_known_update
+    BEFORE UPDATE OF graph_id, from_question_id, to_question_id ON dependency_edges
+    FOR EACH ROW
+    WHEN
+        NOT EXISTS (
+            SELECT 1 FROM dependency_graphs g, json_each(g.question_ids) qi
+            WHERE g.id = NEW.graph_id AND qi.value = NEW.from_question_id
+        )
+        OR NOT EXISTS (
+            SELECT 1 FROM dependency_graphs g, json_each(g.question_ids) qi
+            WHERE g.id = NEW.graph_id AND qi.value = NEW.to_question_id
+        )
+    BEGIN
+        SELECT RAISE(ABORT, 'dependency_edges endpoint is not in its graph''s question_ids');
+    END;
+    """
+)
+
+event.listen(DependencyEdgeRow.__table__, "after_create", _edge_endpoints_known_insert_trigger)
+event.listen(DependencyEdgeRow.__table__, "after_create", _edge_endpoints_known_update_trigger)
 
 
 class OperationLogRow(Base):

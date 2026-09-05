@@ -1,7 +1,7 @@
 """add answer intake columns and answer_images table
 
-Revision ID: 0003
-Revises: 0002
+Revision ID: 0005
+Revises: 0004
 Create Date: 2026-09-04
 
 Issue #17 (answer PDF intake / storage / image preprocessing):
@@ -60,13 +60,13 @@ again and adds a ``UNIQUE(test_id, source_pdf_sha256)`` constraint:
   temporary ``_alembic_tmp_submissions``, and pysqlite implicitly commits
   before DDL, so a mid-batch failure can leave that temp table behind and the
   *first* batch pass's column additions already durable on disk even though
-  ``alembic_version`` never advanced past ``0002`` -- "purge the duplicate and
+  ``alembic_version`` never advanced past ``0004`` -- "purge the duplicate and
   re-run the upgrade" would then fail immediately with "table
   _alembic_tmp_submissions already exists" instead of actually retrying.
   Checking first means a database with a genuine duplicate is left completely
   untouched by this revision -- no column added, no temp table created -- so
   the documented recovery (purge, then re-run ``upgrade``) really does start
-  clean from ``0002``.
+  clean from ``0004``.
 """
 
 from __future__ import annotations
@@ -80,8 +80,8 @@ import sqlalchemy as sa
 from alembic import op
 from pypdf import PdfReader
 
-revision: str = "0003"
-down_revision: str | None = "0002"
+revision: str = "0005"
+down_revision: str | None = "0004"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -160,11 +160,11 @@ def _reject_duplicate_content_hashes(hashes: list[_SubmissionContentHash]) -> No
         for (test_id, sha256), ids in duplicates.items()
     )
     raise RuntimeError(
-        "Revision 0003 cannot add uq_submissions_test_content_hash: pre-existing "
+        "Revision 0005 cannot add uq_submissions_test_content_hash: pre-existing "
         f"duplicate submission content found ({details}). Nothing enforced this "
         "before this revision. Resolve by hand -- purge_submission every "
         "duplicate but one in each group -- then re-run the upgrade; no schema "
-        "change has been applied yet, so it starts cleanly from revision 0002."
+        "change has been applied yet, so it starts cleanly from revision 0004."
     )
 
 
