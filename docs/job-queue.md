@@ -630,3 +630,48 @@ expected_attempts)`のmin-heap（`_retry_heap`）と、それを1件ずつ
   `JobResponse`を伴う明示的な202レスポンスを宣言し、
   `pnpm run openapi:export`/`openapi:generate`でOpenAPIスキーマと
   Dartクライアントを再生成した。
+
+## レビュー第8round（Codex）で修正した点
+
+- **自動requeueをusable未設定の場合のみに限定する**（P1）:
+  `_requeue_after_backoff`と`start()`の起動時retry sweepは、どちらも
+  読み取り時点の`job.usable is not None`チェックだけに頼っていた。
+  `/resume`がこのチェックの後・実際のsaveの前に`usable=True`を
+  commitすると、`mark_usable`は`state`を変更しないため両方の操作は
+  依然として`state=FAILED`に一致してしまい、このsaveがその承認を
+  `usable=None`で上書きしてjobを再enqueueしてしまい得た -- resumeの
+  トランザクションが既に後続を解放している可能性があるにもかかわらず。
+  `retry_job`/`cancel_job`が既に使っている`require_usable_unset=True`
+  （round 5, P1）を、この2箇所のsaveにも追加した。
+- **一時的なworker失敗後にjobを再enqueueする**（P1）:
+  round 7で追加した`_worker_loop`の`try/except`は、workerが死ぬことは
+  防いだが、`_run_one`がclaim（QUEUED→RUNNINGのCAS）より前に例外を
+  送出した場合、そのjobの行はQUEUEDのまま残るのに、in-memory queueから
+  はこのworkerが既にIDを取り出してしまっているため、ログを出して
+  続行するだけでは誰もそのjobを再度dispatchしない -- アプリ全体が
+  再起動するまで未処理のまま残り得た。例外を吸収した直後に
+  `self.enqueue(job_id)`でdispatchシグナルを復元するようにした。
+  claimが実際には成功していた場合（RUNNINGへ遷移済み）でも、この
+  再enqueueは無害（次の`_run_one`呼び出しが単に「もうQUEUEDではない」
+  と気づいて即座にno-opするだけ）。
+- **1回のrequeueエラー後もretry schedulerを生かし続ける**（P1）:
+  `_retry_scheduler_loop`が`_requeue_after_backoff`を無防備に呼んで
+  いたため、その呼び出しが一度でも例外を送出すると（例:
+  SQLiteがbusy timeoutを超える）、唯一のscheduler taskそのものが
+  終了してしまい、以降のretryは`_retry_heap`に溜まり続けるだけで
+  再起動まで誰も消費しなくなり得た。`_requeue_after_backoff`の呼び出しを
+  entryごとに`try/except`で囲み、失敗したentryは
+  `_SCHEDULER_ERROR_RETRY_DELAY_SECONDS`（1秒、常に0より大きい値 --
+  event loopを一度も`await`で明け渡さずにスピンし続けることを防ぐため）
+  後に`_schedule_retry`で再スケジュールしつつ、loop自体は次のentryの
+  処理へ進み続けるようにした。
+- **event loopを変更する際にretry eventを再作成する**（P2）:
+  `_retry_added`（`asyncio.Event`）は、最初に`await`されたevent loopに
+  束縛される。lifecycleドキュメントが明示的に許可している通り、この
+  serviceが別のevent loopの下でshutdown・startされ得るが（`_loop`や
+  `_queue`が同じ理由でリセットされているのと同様）、`clear()`は
+  この束縛を解除しない。そのため、heapが空の状態で再起動した
+  schedulerがこの同じEventを待とうとすると`RuntimeError: ... is bound
+to a different event loop`を送出し得た。`shutdown()`で`clear()`する
+  代わりに新しい`asyncio.Event()`へ置き換えるようにした（`_queue`を
+  作り直しているのと同じ扱い）。
