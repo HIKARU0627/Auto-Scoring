@@ -216,6 +216,113 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a completed retry is not overwritten by a stale in-flight list response',
+    (tester) async {
+      final listCompleter = Completer<List<SubmissionResponse>>();
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) => listCompleter.future,
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(state: 'ai_processed'),
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      // listSubmissions() is now in flight, unresolved -- from here on use
+      // pump(duration), not pumpAndSettle(): the loading spinner's
+      // indeterminate animation never settles on its own and would hang it.
+      await tester.pump(const Duration(milliseconds: 50));
+
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text('取り込む'));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // The retry (createSubmission) already landed locally as ai_processed.
+      expect(find.textContaining('処理済み'), findsWidgets);
+
+      // The list fetch that started before the retry succeeded finally
+      // resolves -- with a *stale* snapshot that still shows this same
+      // submission id in `error`. That must not clobber the fresher local
+      // copy just because the id already exists in the fetched response.
+      listCompleter.complete([_submission(state: 'error')]);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ListTile), findsOneWidget);
+      expect(find.textContaining('エラー'), findsNothing);
+      expect(find.textContaining('処理済み'), findsWidgets);
+    },
+  );
+
+  testWidgets('retrying a list-load failure reloads the list, not an upload', (
+    tester,
+  ) async {
+    var test2ListAttempts = 0;
+    var createSubmissionCalls = 0;
+    final dependencies = AppDependencies(
+      listTests: () async => [
+        _test(id: 'test-1', name: '国語 第1回'),
+        _test(id: 'test-2', name: '算数 第1回'),
+      ],
+      listSubmissions: (testId) async {
+        if (testId == 'test-1') return const [];
+        test2ListAttempts++;
+        if (test2ListAttempts == 1) {
+          throw SidecarApiException(SidecarErrorKind.badResponse, 'list失敗');
+        }
+        return const [];
+      },
+      createSubmission:
+          ({required testId, required filePath, studentLabel}) async {
+            createSubmissionCalls++;
+            return _submission();
+          },
+    );
+
+    await tester.pumpWidget(
+      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('国語 第1回').last);
+    await tester.pumpAndSettle();
+
+    // A file is picked while test-1 (whose list loaded fine) is selected --
+    // switching tests below doesn't clear it, so it's still present when
+    // the new test's list load fails.
+    await tester.tap(find.text('ファイルを選択'));
+    await tester.pumpAndSettle();
+    expect(find.text('student-a.pdf'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('算数 第1回').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('list失敗'), findsOneWidget);
+    expect(test2ListAttempts, 1);
+
+    // If the retry button called _submit instead of reloading the list, this
+    // would upload the still-picked file instead.
+    await tester.tap(find.text('再試行'));
+    await tester.pumpAndSettle();
+
+    expect(test2ListAttempts, 2);
+    expect(createSubmissionCalls, 0);
+    expect(find.text('list失敗'), findsNothing);
+  });
+
   testWidgets('submitting the student-label field with Enter uploads', (
     tester,
   ) async {

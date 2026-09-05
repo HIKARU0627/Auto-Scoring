@@ -49,6 +49,11 @@ class AnswerIntakePage extends StatefulWidget {
   State<AnswerIntakePage> createState() => _AnswerIntakePageState();
 }
 
+/// Which operation an [_AnswerIntakePageState._errorMessage] came from, so
+/// the error banner's retry button can retry *that* operation instead of
+/// always retrying the upload.
+enum _ErrorKind { listLoad, submit }
+
 class _AnswerIntakePageState extends State<AnswerIntakePage> {
   final _studentLabelController = TextEditingController();
   final _submitFocusNode = FocusNode(debugLabel: '取込ボタン');
@@ -59,11 +64,22 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
   List<SubmissionResponse> _submissions = const [];
   bool _loadingSubmissions = false;
 
+  // Monotonic counter bumped on every locally-applied submission update
+  // (a successful create or retry). _lastLocalUpdateSeq records, per
+  // submission id, the counter value at the moment it was last updated
+  // locally -- so a listSubmissions() response that was in flight *before*
+  // that update can be recognized as stale for that id specifically and not
+  // allowed to overwrite it, even though the id isn't new (see
+  // _mergeFetchedSubmissions).
+  int _localUpdateSeq = 0;
+  final Map<String, int> _lastLocalUpdateSeq = {};
+
   String? _pickedFilePath;
   String? _pickedFileName;
 
   bool _isSubmitting = false;
   String? _errorMessage;
+  _ErrorKind? _errorKind;
 
   @override
   void initState() {
@@ -86,18 +102,33 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
       _selectedTestId = testId;
       _submissions = const [];
       _errorMessage = null;
+      _errorKind = null;
     });
     if (testId == null) return;
     setState(() => _loadingSubmissions = true);
+    // Captured before the request goes out: any submission locally updated
+    // at or before this point is exactly what this fetch's response should
+    // (eventually) reflect; anything updated *after* this point happened
+    // while the fetch was already in flight, so this fetch's answer for
+    // that id predates it and must not overwrite it.
+    final fetchStartSeq = _localUpdateSeq;
     try {
       final submissions = await widget.dependencies.listSubmissions(testId);
       if (!mounted || _selectedTestId != testId) return;
       setState(
-        () => _submissions = _withLocalOnlyPreserved(_submissions, submissions),
+        () => _submissions = _mergeFetchedSubmissions(
+          current: _submissions,
+          fetched: submissions,
+          fetchStartSeq: fetchStartSeq,
+          lastLocalUpdateSeq: _lastLocalUpdateSeq,
+        ),
       );
     } on SidecarApiException catch (error) {
       if (!mounted || _selectedTestId != testId) return;
-      setState(() => _errorMessage = error.message);
+      setState(() {
+        _errorMessage = error.message;
+        _errorKind = _ErrorKind.listLoad;
+      });
     } finally {
       if (mounted && _selectedTestId == testId) {
         setState(() => _loadingSubmissions = false);
@@ -113,6 +144,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
       _pickedFilePath = picked.path;
       _pickedFileName = picked.name;
       _errorMessage = null;
+      _errorKind = null;
     });
   }
 
@@ -124,6 +156,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     setState(() {
       _isSubmitting = true;
       _errorMessage = null;
+      _errorKind = null;
     });
     final label = _studentLabelController.text.trim();
     try {
@@ -139,6 +172,8 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
         // disabled picker) against upserting testId's result into a
         // different test's list that happens to be showing.
         if (_selectedTestId == testId) {
+          _localUpdateSeq++;
+          _lastLocalUpdateSeq[result.id] = _localUpdateSeq;
           _submissions = _withUpserted(_submissions, result);
         }
         _pickedFilePath = null;
@@ -148,13 +183,17 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
       _showSnackBar('取込完了: ${_stateLabel(result.state)}');
     } on DuplicateSubmissionException catch (error) {
       if (!mounted) return;
-      setState(
-        () => _errorMessage =
-            '同じ内容の答案は既に取り込まれています（既存の答案ID: ${error.existingSubmissionId}）',
-      );
+      setState(() {
+        _errorMessage =
+            '同じ内容の答案は既に取り込まれています（既存の答案ID: ${error.existingSubmissionId}）';
+        _errorKind = _ErrorKind.submit;
+      });
     } on SidecarApiException catch (error) {
       if (!mounted) return;
-      setState(() => _errorMessage = error.message);
+      setState(() {
+        _errorMessage = error.message;
+        _errorKind = _ErrorKind.submit;
+      });
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -291,6 +330,15 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
   }
 
   Widget _buildErrorBanner() {
+    // A list-load failure must retry *that* fetch, not start an upload: the
+    // shared error banner used to always wire this button to _submit, so a
+    // list failure with a file already picked would silently upload instead
+    // of reloading the list it actually reported failing to load.
+    final VoidCallback? retry = switch (_errorKind) {
+      _ErrorKind.listLoad =>
+        _loadingSubmissions ? null : () => _selectTest(_selectedTestId),
+      _ErrorKind.submit || null => _canSubmit ? _submit : null,
+    };
     return Card(
       color: Theme.of(context).colorScheme.errorContainer,
       child: Padding(
@@ -310,10 +358,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
                 ),
               ),
             ),
-            TextButton(
-              onPressed: _canSubmit ? _submit : null,
-              child: const Text('再試行'),
-            ),
+            TextButton(onPressed: retry, child: const Text('再試行')),
           ],
         ),
       ),
@@ -369,22 +414,37 @@ List<SubmissionResponse> _withUpserted(
   SubmissionResponse result,
 ) => [result, ...submissions.where((s) => s.id != result.id)];
 
-/// Merge a fresh `listSubmissions` [fetched] result with whatever is still in
-/// [current] but missing from it. A submission created while that fetch was
-/// in flight (via [_withUpserted], right after `createSubmission` returns)
-/// can't be in [fetched] -- the fetch was already sent before that submission
-/// existed on the server -- so a plain replace would silently drop it from
-/// view until the page reopens. Anything in [fetched] is the source of truth
-/// for its own id (a re-fetch after a state change should win over a locally
-/// upserted copy that's now stale).
-List<SubmissionResponse> _withLocalOnlyPreserved(
-  List<SubmissionResponse> current,
-  List<SubmissionResponse> fetched,
-) {
-  final localOnly = current.where(
-    (local) => !fetched.any((f) => f.id == local.id),
+/// Merge a fresh `listSubmissions` [fetched] result with [current], without
+/// letting [fetched] overwrite anything [current] knows is newer.
+///
+/// [fetched] reflects the server's state as of whenever the request that
+/// produced it was actually *answered* server-side -- which can be before a
+/// local update this page already applied, if that update (a create or a
+/// successful retry, via [_withUpserted]) landed while the fetch was still
+/// in flight. [lastLocalUpdateSeq] records the [_localUpdateSeq] value at
+/// each such local update; a submission is kept from [current] instead of
+/// [fetched] whenever its recorded sequence number is greater than
+/// [fetchStartSeq] (the counter's value when this fetch was issued) --
+/// whether or not [fetched] happens to already contain that id. This is what
+/// [_withLocalOnlyPreserved]'s old "keep it if `fetched` doesn't have this id
+/// at all" rule missed: an *existing* id updated locally after the fetch
+/// started (e.g. a retry that reused its errored submission's id) would
+/// still be found in a [fetched] response snapshotted before that retry
+/// landed, and the old rule let that stale copy win.
+List<SubmissionResponse> _mergeFetchedSubmissions({
+  required List<SubmissionResponse> current,
+  required List<SubmissionResponse> fetched,
+  required int fetchStartSeq,
+  required Map<String, int> lastLocalUpdateSeq,
+}) {
+  final updatedAfterFetchStarted = current.where(
+    (local) => (lastLocalUpdateSeq[local.id] ?? 0) > fetchStartSeq,
   );
-  return [...localOnly, ...fetched];
+  final newerLocalIds = updatedAfterFetchStarted.map((s) => s.id).toSet();
+  final notSupersededByLocal = fetched.where(
+    (f) => !newerLocalIds.contains(f.id),
+  );
+  return [...updatedAfterFetchStarted, ...notSupersededByLocal];
 }
 
 String _describeError(Object? error) =>
