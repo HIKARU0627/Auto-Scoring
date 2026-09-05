@@ -1,0 +1,84 @@
+{
+  "ground_truth": {
+    "question_id": "poc2-synth-03",
+    "subject": "synthetic-history",
+    "test_id": "poc2-synthetic-set-01",
+    "score": 10,
+    "max_score": 10,
+    "criteria": [{ "criterion_id": "d1", "outcome": "pass" }]
+  },
+  "input": {
+    "prompt_text": "（合成データ）出来事Yが起きた年を答えよ。",
+    "model_answer": "（合成データ）1234年。",
+    "rubric_text": "d1: 年号「1234」が正しく書かれている (10点、部分点なし)",
+    "max_score": 10,
+    "ocr_clean": "1234年",
+    "ocr_noisy": "l234年"
+  },
+  "recorded": {
+    "synthetic-a": {
+      "ocr_clean": {
+        "response": {
+          "questionId": "poc2-synth-03",
+          "recognition": { "text": "1234年", "confidence": 0.99 },
+          "grading": { "score": 10, "maxScore": 10, "confidence": 0.99 },
+          "criteria": [
+            { "id": "d1", "result": "pass", "confidence": 0.99, "rationale": "年号1234が模範解答と一致している。" }
+          ],
+          "comment": "正解です。",
+          "rationale": "模範解答と完全に一致するため満点とした。",
+          "annotations": []
+        },
+        "latency_seconds": 0.7,
+        "cost_usd": 0.0005
+      },
+      "ocr_noisy": {
+        "response": {
+          "questionId": "poc2-synth-03",
+          "recognition": { "text": "l234年", "confidence": 0.4 },
+          "grading": { "score": 10, "maxScore": 10, "confidence": 0.6 },
+          "criteria": [
+            { "id": "d1", "result": "pass", "confidence": 0.6, "rationale": "「l234」は「1234」のOCR誤読と推定し、数字として妥当と判断。" }
+          ],
+          "comment": "文字化けの可能性があるため念のため確認してください。",
+          "rationale": "l(小文字エル)と1(数字イチ)の誤読の可能性を考慮し、模範解答と整合すると判断した。",
+          "explanation": "この余分なフィールドはスキーマ違反（extra=forbid）を意図的に再現するためのものです。"
+        },
+        "latency_seconds": 0.9,
+        "cost_usd": 0.0005
+      }
+    },
+    "synthetic-b": {
+      "ocr_clean": {
+        "response": {
+          "questionId": "poc2-synth-03",
+          "recognition": { "text": "1234年", "confidence": 0.99 },
+          "grading": { "score": 10, "maxScore": 10, "confidence": 0.95 },
+          "criteria": [
+            { "id": "d1", "result": "pass", "confidence": 0.95, "rationale": "年号が一致。" }
+          ],
+          "comment": "正解。",
+          "rationale": "模範解答と一致。",
+          "annotations": []
+        },
+        "latency_seconds": 0.5,
+        "cost_usd": 0.0002
+      },
+      "ocr_noisy": {
+        "response": {
+          "questionId": "poc2-synth-03",
+          "recognition": { "text": "l234年", "confidence": 0.35 },
+          "grading": { "score": 9, "maxScore": 10, "confidence": 0.4 },
+          "criteria": [
+            { "id": "d1", "result": "partial", "confidence": 0.4, "rationale": "文字化けのため確信が持てず部分点とした。" }
+          ],
+          "comment": "文字が判読しづらいため要確認としました。",
+          "rationale": "低い認識信頼度を反映し部分点にとどめた。",
+          "annotations": []
+        },
+        "latency_seconds": 1.0,
+        "cost_usd": 0.0002
+      }
+    }
+  }
+}
