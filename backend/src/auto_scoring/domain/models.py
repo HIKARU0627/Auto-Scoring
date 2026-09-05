@@ -109,6 +109,26 @@ class ScoringMethod(StrEnum):
     SUBTRACTIVE = "subtractive"
 
 
+class TestStatus(StrEnum):
+    """Registration lifecycle of one test (Issue #16, simplified-design-spec.md §6.1).
+
+    A test starts ``DRAFT`` the moment its two PDFs are registered and stays
+    there through candidate generation and human review of the profile and
+    dependency graph. Only an explicit, one-way move to ``READY`` (see
+    ``Test.mark_ready``) unblocks answer processing for it -- there is no path
+    back to ``DRAFT``.
+    """
+
+    #: Not a pytest test class -- only named ``TestStatus`` because it
+    #: describes ``Test.status``. Without this, pytest's default
+    #: ``Test*``-prefix collection heuristic tries (and fails) to collect it,
+    #: emitting a `PytestCollectionWarning` on every run.
+    __test__ = False
+
+    DRAFT = "draft"
+    READY = "ready"
+
+
 class GradingSource(StrEnum):
     """Who produced a result. AI values are proposals; humans confirm (§17)."""
 
@@ -343,10 +363,22 @@ class Test:
     created_at: datetime
     subject: str | None = None
     default_scoring_method: ScoringMethod = ScoringMethod.ADDITIVE
+    status: TestStatus = TestStatus.DRAFT
 
     def __post_init__(self) -> None:
         _require_non_empty("Test.id", self.id)
         _require_non_empty("Test.name", self.name)
+
+    def mark_ready(self) -> Test:
+        """Return a copy transitioned to ``READY`` -- the only allowed move.
+
+        Raises ``InvalidStateTransition`` if this test is already ``READY``:
+        the move is one-way (Issue #16), so re-confirming an already-ready
+        test is a caller bug, not an idempotent no-op.
+        """
+        if self.status is TestStatus.READY:
+            raise InvalidStateTransition("test", self.status, TestStatus.READY)
+        return replace(self, status=TestStatus.READY)
 
 
 @dataclass(frozen=True, kw_only=True)

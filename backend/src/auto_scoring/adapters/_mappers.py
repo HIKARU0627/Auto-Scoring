@@ -55,6 +55,7 @@ from auto_scoring.domain.models import (
     Submission,
     SubmissionState,
     Test,
+    TestStatus,
 )
 
 
@@ -105,6 +106,7 @@ def test_to_row(test: Test) -> TestRow:
         name=test.name,
         subject=test.subject,
         default_scoring_method=test.default_scoring_method,
+        status=test.status,
         created_at=test.created_at,
     )
 
@@ -115,6 +117,7 @@ def test_from_row(row: TestRow) -> Test:
         name=row.name,
         subject=row.subject,
         default_scoring_method=ScoringMethod(row.default_scoring_method),
+        status=TestStatus(row.status),
         created_at=row.created_at,
     )
 

@@ -20,6 +20,7 @@ from auto_scoring.domain.models import (
     Score,
     ScoreOutOfRange,
     SubmissionState,
+    TestStatus,
     ensure_job_transition,
     ensure_submission_transition,
     reissue_job_for_graph_version,
@@ -31,7 +32,27 @@ from tests.support import (
     make_job,
     make_review,
     make_submission,
+    make_test,
 )
+
+
+def test_new_test_starts_as_draft() -> None:
+    assert make_test().status is TestStatus.DRAFT
+
+
+def test_mark_ready_transitions_a_draft_test() -> None:
+    ready = make_test().mark_ready()
+    assert ready.status is TestStatus.READY
+
+
+def test_mark_ready_is_one_way() -> None:
+    """Issue #16: registration completion is a one-way move -- a test that
+    is already `ready` cannot be "re-completed" (that would silently no-op
+    what should be a caller bug, e.g. calling complete-registration twice).
+    """
+    ready = make_test().mark_ready()
+    with pytest.raises(InvalidStateTransition):
+        ready.mark_ready()
 
 
 @pytest.mark.parametrize("awarded", [-1, 6])

@@ -66,7 +66,7 @@ def requires_manual_fallback(markers: Sequence[Marker], profile: Profile) -> boo
     return bool(unrecognized_tags(markers)) or not required_kinds <= detected_kinds
 
 
-def _rect_to_bbox(rect_pt: RectPt, geometry: PageGeometry) -> NormalizedBBox:
+def rect_to_bbox(rect_pt: RectPt, geometry: PageGeometry) -> NormalizedBBox:
     """Convert a PDF user-space rectangle to a normalized bbox via the adopted transform.
 
     Applies `user_space_to_normalized` (PoC 3 / Issue #12) to all four corners
@@ -118,7 +118,7 @@ def generate_candidates(
                 region_id=f"{marker.tag}-{index}",
                 kind=kind,
                 page_index=marker.page_index,
-                bbox=_rect_to_bbox(marker.rect_pt, geometry),
+                bbox=rect_to_bbox(marker.rect_pt, geometry),
                 label=marker.tag,
                 confirmed=False,
             )

@@ -1,0 +1,181 @@
+"""Turn a confirmed profile's regions into the `Question`/`Rubric` rows a test
+actually needs (Issue #16).
+
+`domain.profile.Profile` (Issue #15/PoC 4) only knows about PDF-layout
+regions bound to a document *format* -- it has no idea what a "question" is
+in the business sense. This module is the missing bridge: once a human has
+confirmed every region, `build_questions_and_rubrics` groups them by question
+number (`Region.label`) and produces the `Question`/`Rubric` entities the
+rest of the system (submissions, dependency graph, grading) already depends
+on.
+
+Validation here covers the Issue #16 acceptance criteria the domain layer is
+responsible for: invalid scoring, duplicate question numbers, and regions
+that don't add up to a usable question. Out-of-range coordinates are already
+rejected by `NormalizedBBox`/`NormalizedRect` themselves.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import defaultdict
+from collections.abc import Sequence
+
+from auto_scoring.domain.models import (
+    DomainError,
+    NormalizedRect,
+    Question,
+    Rubric,
+    RubricCriterion,
+    ScoringMethod,
+)
+from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
+
+
+class TestRegistrationError(DomainError):
+    """A confirmed profile's regions could not be turned into a valid test."""
+
+
+class DuplicateQuestionNumberError(TestRegistrationError):
+    """Two or more `QUESTION` regions share the same label (question number)."""
+
+
+class InvalidScoreError(TestRegistrationError):
+    """A question has no usable score, or a `SCORE` region wasn't numeric."""
+
+
+class IncompleteRegionsError(TestRegistrationError):
+    """The confirmed regions contain no question at all."""
+
+
+_SCORE_NUMBER_PATTERN = re.compile(r"\d+")
+
+
+def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:
+    """`NormalizedBBox` (x0/y0/x1/y1, Issue #15) -> `NormalizedRect` (x/y/width/height,
+    Issue #11). Both use the same top-left-origin, 0..1 convention (see
+    `NormalizedBBox`'s docstring), so this is a pure reshape, no coordinate
+    transform.
+    """
+    return NormalizedRect(x=bbox.x0, y=bbox.y0, width=bbox.x1 - bbox.x0, height=bbox.y1 - bbox.y0)
+
+
+def _combined_text(regions: Sequence[Region]) -> str | None:
+    texts = [region.text.strip() for region in regions if region.text and region.text.strip()]
+    return "\n".join(texts) if texts else None
+
+
+def _extract_points(score_regions: Sequence[Region]) -> int | None:
+    """Pull an integer point value out of the `SCORE` region(s)' text.
+
+    Candidate generation (`domain.profile_candidate_generation`) writes the
+    matched number as region text; a human can also type a corrected value in
+    directly before confirming. Returns `None` when there is no `SCORE`
+    region or its text carries no digits -- the caller treats that as an
+    invalid score, not a silent zero (Issue #16 acceptance: "配点不正…を拒否
+    する").
+    """
+    for region in score_regions:
+        if not region.text:
+            continue
+        match = _SCORE_NUMBER_PATTERN.search(region.text)
+        if match is not None:
+            return int(match.group())
+    return None
+
+
+def build_questions_and_rubrics(
+    test_id: str,
+    regions: Sequence[Region],
+    *,
+    default_scoring_method: ScoringMethod = ScoringMethod.ADDITIVE,
+) -> tuple[list[Question], list[Rubric]]:
+    """Group confirmed `regions` by question number and build the test's
+    `Question`/`Rubric` rows.
+
+    Every region's `label` is treated as the question number it belongs to
+    (candidate generation and manual region edits both set this) -- a
+    `QUESTION` region names the question itself, and any `ANSWER_AREA` /
+    `ANNOTATION_AREA` / `SCORE` / `MODEL_ANSWER` / `RUBRIC` region sharing the
+    same label is folded into that question. Labels with no `QUESTION` region
+    (e.g. a stray manually-added area) are ignored rather than raising, since
+    the profile itself is not required to be question-shaped end to end --
+    only the labels that *do* have a `QUESTION` region become real questions.
+
+    Raises `DuplicateQuestionNumberError` if the same number has more than
+    one `QUESTION` region, `InvalidScoreError` if a question has no usable
+    (positive, numeric) score, and `IncompleteRegionsError` if no question
+    was found at all.
+    """
+    grouped: dict[str, dict[RegionKind, list[Region]]] = defaultdict(lambda: defaultdict(list))
+    for region in regions:
+        grouped[region.label][region.kind].append(region)
+
+    questions: list[Question] = []
+    rubrics: list[Rubric] = []
+    for number in sorted(grouped):
+        kinds = grouped[number]
+        question_regions = kinds.get(RegionKind.QUESTION, [])
+        if not question_regions:
+            continue
+        if len(question_regions) > 1:
+            raise DuplicateQuestionNumberError(
+                f"question number {number!r} has {len(question_regions)} QUESTION regions; "
+                "expected exactly one"
+            )
+        question_region = question_regions[0]
+
+        score_regions = kinds.get(RegionKind.SCORE, [])
+        points = _extract_points(score_regions)
+        if points is None:
+            raise InvalidScoreError(
+                f"question {number!r} has no valid score (SCORE region missing or non-numeric)"
+            )
+        if points <= 0:
+            raise InvalidScoreError(f"question {number!r} has a non-positive score: {points}")
+
+        answer_regions = kinds.get(RegionKind.ANSWER_AREA, [])
+        annotation_regions = kinds.get(RegionKind.ANNOTATION_AREA, [])
+        model_answer_regions = kinds.get(RegionKind.MODEL_ANSWER, [])
+        rubric_regions = kinds.get(RegionKind.RUBRIC, [])
+
+        question_id = f"{test_id}:{number}"
+        questions.append(
+            Question(
+                id=question_id,
+                test_id=test_id,
+                number=number,
+                page=question_region.page_index + 1,
+                points=points,
+                scoring_method=default_scoring_method,
+                model_answer=_combined_text(model_answer_regions),
+                answer_area=_bbox_to_rect(answer_regions[0].bbox) if answer_regions else None,
+                score_area=_bbox_to_rect(score_regions[0].bbox) if score_regions else None,
+                comment_area=(
+                    _bbox_to_rect(annotation_regions[0].bbox) if annotation_regions else None
+                ),
+            )
+        )
+
+        rubric_text = _combined_text(rubric_regions)
+        if rubric_text is not None:
+            rubrics.append(
+                Rubric(
+                    id=f"{question_id}:rubric",
+                    question_id=question_id,
+                    criteria=(
+                        RubricCriterion(
+                            id=f"{question_id}:rubric:c1",
+                            description=rubric_text,
+                            max_points=points,
+                            position=0,
+                        ),
+                    ),
+                )
+            )
+
+    if not questions:
+        raise IncompleteRegionsError(
+            "no QUESTION regions found; a test needs at least one confirmed question"
+        )
+    return questions, rubrics

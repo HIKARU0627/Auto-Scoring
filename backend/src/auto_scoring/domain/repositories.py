@@ -40,6 +40,15 @@ class TestRepository(Protocol):
     def get(self, test_id: str) -> Test | None: ...
     def list_all(self) -> list[Test]: ...
 
+    def mark_ready(self, test_id: str) -> bool:
+        """Atomically move ``test_id`` from ``draft`` to ``ready`` via a
+        conditional update (``WHERE status = 'draft'``), not a read-then-write
+        -- so two concurrent "complete registration" requests for the same
+        test can't both observe ``draft`` and both report success. Returns
+        whether this call won the race.
+        """
+        ...
+
 
 class QuestionRepository(Protocol):
     def add(self, question: Question) -> None: ...

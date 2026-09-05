@@ -110,6 +110,14 @@ class LocalFileStore:
     def test_dir(self, test_id: str) -> Path:
         return self._resolve("tests", test_id)
 
+    def test_model_answer_pdf_path(self, test_id: str) -> Path:
+        """The registered model-answer PDF (Issue #16, simplified-design-spec.md §23)."""
+        return self._resolve("tests", test_id, "model-answer.pdf")
+
+    def test_manual_pdf_path(self, test_id: str) -> Path:
+        """The registered marking-manual PDF (Issue #16, simplified-design-spec.md §23)."""
+        return self._resolve("tests", test_id, "manual.pdf")
+
     def submission_dir(self, submission_id: str) -> Path:
         return self._resolve("submissions", submission_id)
 

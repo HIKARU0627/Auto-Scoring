@@ -1,0 +1,150 @@
+"""`domain.test_registration.build_questions_and_rubrics` -- turning a
+confirmed profile's regions into a test's real `Question`/`Rubric` rows
+(Issue #16).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
+from auto_scoring.domain.test_registration import (
+    DuplicateQuestionNumberError,
+    IncompleteRegionsError,
+    InvalidScoreError,
+    build_questions_and_rubrics,
+)
+
+_BBOX = NormalizedBBox(x0=0.1, y0=0.1, x1=0.5, y1=0.2)
+
+
+def _region(
+    kind: RegionKind, label: str, *, page_index: int = 0, text: str | None = None
+) -> Region:
+    return Region(
+        region_id=f"{kind.value}-{label}",
+        kind=kind,
+        page_index=page_index,
+        bbox=_BBOX,
+        label=label,
+        confirmed=True,
+        text=text,
+    )
+
+
+def test_builds_one_question_from_its_regions() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=1, text="問1"),
+        _region(RegionKind.ANSWER_AREA, "1"),
+        _region(RegionKind.ANNOTATION_AREA, "1"),
+        _region(RegionKind.SCORE, "1", text="5点"),
+        _region(RegionKind.MODEL_ANSWER, "1", text="光合成は葉緑体で行われる"),
+        _region(RegionKind.RUBRIC, "1", text="葉緑体という語を含む"),
+    ]
+
+    questions, rubrics = build_questions_and_rubrics("test-1", regions)
+
+    assert len(questions) == 1
+    question = questions[0]
+    assert question.id == "test-1:1"
+    assert question.number == "1"
+    assert question.page == 2  # page_index=1 -> 1-based page 2
+    assert question.points == 5
+    assert question.model_answer == "光合成は葉緑体で行われる"
+    assert question.answer_area is not None
+    assert question.score_area is not None
+    assert question.comment_area is not None
+
+    assert len(rubrics) == 1
+    rubric = rubrics[0]
+    assert rubric.question_id == question.id
+    assert len(rubric.criteria) == 1
+    assert rubric.criteria[0].description == "葉緑体という語を含む"
+    assert rubric.criteria[0].max_points == 5
+
+
+def test_multiple_questions_are_grouped_independently() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="3点"),
+        _region(RegionKind.QUESTION, "2", text="問2"),
+        _region(RegionKind.SCORE, "2", text="7点"),
+    ]
+
+    questions, _ = build_questions_and_rubrics("test-1", regions)
+
+    by_number = {q.number: q for q in questions}
+    assert set(by_number) == {"1", "2"}
+    assert by_number["1"].points == 3
+    assert by_number["2"].points == 7
+
+
+def test_question_without_a_rubric_region_gets_no_rubric() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="5点"),
+    ]
+
+    questions, rubrics = build_questions_and_rubrics("test-1", regions)
+
+    assert len(questions) == 1
+    assert rubrics == []
+
+
+def test_a_label_with_no_question_region_is_ignored() -> None:
+    # A stray manually-added ANSWER_AREA with no matching QUESTION heading
+    # must not become a question -- only labels with a QUESTION region do.
+    regions = [
+        _region(RegionKind.ANSWER_AREA, "orphan"),
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="5点"),
+    ]
+
+    questions, _ = build_questions_and_rubrics("test-1", regions)
+
+    assert [q.number for q in questions] == ["1"]
+
+
+def test_duplicate_question_regions_for_the_same_number_are_rejected() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.QUESTION, "1", text="重複した問1"),
+        _region(RegionKind.SCORE, "1", text="5点"),
+    ]
+
+    with pytest.raises(DuplicateQuestionNumberError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_missing_score_region_is_rejected() -> None:
+    regions = [_region(RegionKind.QUESTION, "1", text="問1")]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_non_numeric_score_text_is_rejected() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="配点未定"),
+    ]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_zero_score_is_rejected() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="0点"),
+    ]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_no_questions_at_all_is_rejected() -> None:
+    regions = [_region(RegionKind.ANSWER_AREA, "orphan")]
+
+    with pytest.raises(IncompleteRegionsError):
+        build_questions_and_rubrics("test-1", regions)
