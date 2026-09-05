@@ -131,6 +131,12 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 実アダプタが手書きから意味のある Recognition Confidence を導出できない
 （コードレビュー指摘）。
 
+応答側の `GradingResponse` は AI が認識した文字列そのもの
+（`recognition_text`）も `recognition_confidence` と並んで保持する。
+簡易設計書 §16.5 はレビュー UI の独立した項目として「AI認識文字」を
+挙げており、confidence の数値だけでは呼び出し側がその文字列を表示・
+永続化できない（コードレビュー指摘）。
+
 応答側の `annotations[].type` は
 `業務ルール決定書 §2 (5)` が固定した MVP の Annotation 種別
 （`circle`/`cross`/`triangle`/`score`/`comment`/`underline`/`box`）のみを
@@ -232,6 +238,14 @@ Pydantic モデル）で検証し、値をコンストラクタで型キャス�
 は `model: null` を文字列 `"None"` に、`temperature: true` を `1.0` に
 変換してしまい、再現できない設定を「有効」として受理してしまう）。
 
+この不変条件は `--dataset` の JSON 境界（`_DescriptorInput`）だけでなく、
+`ProviderDescriptor` 自体の `__post_init__` でも強制する: 実アダプタは
+自身の `describe()` からこの境界を経由せず直接 `ProviderDescriptor` を
+構築するため、空白の `provider`/`model`/`prompt_version`/
+`structured_output_mode` や非有限（`inf`/`nan`）・負の `temperature` を
+そもそも構築できないようにする（コードレビュー指摘: 「再現可能なはず」の
+descriptor が実際には空白や無限大では何も再現できない）。
+
 ### 3.4 criterion 一致率の分母（正解ラベル基準）
 
 criterion 一致率の分母は**正解ラベルに存在する criterion の数**であり、
@@ -263,6 +277,46 @@ criterion 一致率の分母は**正解ラベルに存在する criterion の数
 （コードレビュー指摘: `populate_by_name=True` のままだと、ドキュメントと
 異なるフィールド名を返す非準拠な provider 応答も schema 検証を通過して
 しまい、schema violation 率を過小評価する）。
+
+### 3.7 バリデーションエラーの経路と検証順序の安全性
+
+**バリデーションエラーに答案本文を含めない**: `--dataset` の `input`/
+`ground_truth` ブロックがバリデーションに失敗した際、`pydantic.
+ValidationError` をそのまま `str(exc)` で埋め込んだりログへ流したりしない。
+`ValidationError.errors()` の各要素は失敗した実際の入力値を `input` キーに
+保持しており（例えば `ocr_clean` の型不正であれば、そこには OCR 化された
+生徒答案本文が入りうる）、これをそのまま表示すると生徒の答案内容が
+ターミナルや CI ログに残ってしまう（AGENTS.md「Security」違反、
+コードレビュー指摘）。`report.py` の `_sanitize_validation_error()` は
+`errors()` の `loc`（フィールドパス）と `type`（違反の種類）だけを連結した
+文字列を組み立て、値そのものは一切含めない。加えて、元の
+`ValidationError` を `raise ... from exc` で連鎖させない
+（`raise ... from None` を使う）: Python の既定の traceback 表示は
+連鎖元（`__context__`/`__cause__`）例外自身の `__str__()` も出力するため、
+新しいメッセージから値を除いても、連鎖された元の例外經由で同じ値が
+traceback に残ってしまう。
+
+**staged サンプルは全件検証してから判定する**: credentials 未取得の間、
+実データセットは全サンプルの `recorded` が `{}`（このハーネスでは
+「まだ計測していない」正当なステージング状態、§4.2 参照）になりうる。
+以前の実装は「記録済み provider が 1 つもない」ことを検出した時点で
+`ground_truth`/`input` を一切パースせずに `staged: N` として早期リターン
+していたため、`ground_truth.score` が `max_score` を超えるような不正な
+サンプルが 1 件混ざっていても、それを検出せずにステージング中の正常な
+データであるかのように報告してしまっていた（コードレビュー指摘）。
+`_load_all_samples()` が全ファイルの `ground_truth`/`input` を検証してから
+提供された provider の集合を確認するよう順序を入れ替え、不正なサンプルは
+provider の有無に関わらずハーネスを停止させる。
+
+**noisy 応答は対応する noisy 入力があって初めて有効**: あるサンプルの
+`input.ocr_noisy` が `null`（そのサンプルには noisy バリアントが一度も
+作成されていない）であるにもかかわらず、`recorded.<provider>.ocr_noisy`
+に応答が記録されている場合、それは古い記録か手作業での誤挿入であり、
+存在しない入力に対する結果を noisy バリアントの実測値として扱うと
+§2.1 の「同一データでの比較」が成立しなくなる（コードレビュー指摘）。
+ハーネスは `input` を一度だけパースした結果を保持し、`input.ocr_noisy` が
+`null` なのに `ocr_noisy` の応答が記録されているサンプルはハーネスを
+停止させる。
 
 ---
 

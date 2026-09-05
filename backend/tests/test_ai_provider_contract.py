@@ -64,6 +64,14 @@ class AIProviderContract:
         assert 0.0 <= response.grading_confidence <= 1.0
         assert 0 <= response.score <= response.max_score
 
+    def test_grade_preserves_the_recognized_text(self, provider: AIProvider) -> None:
+        """simplified-design-specification.md section 16.5 lists "AI認識文字"
+        as its own review-UI field, distinct from the confidence number
+        (Issue #14 review: "GradingResponseにrecognized textを保持する")."""
+        response = provider.grade(_VALID_REQUEST)
+        assert isinstance(response.recognition_text, str)
+        assert response.recognition_text == _VALID_REQUEST.ocr_text
+
     def test_grade_preserves_annotation_candidates(self, provider: AIProvider) -> None:
         """simplified-design-specification.md section 12.1: the app places
         annotation candidates on the PDF, so the AIProvider port must not
@@ -188,3 +196,45 @@ def test_provider_unavailable_is_distinct_from_schema_violation() -> None:
     assert issubclass(ProviderUnavailable, Exception)
     assert not issubclass(ProviderUnavailable, SchemaViolation)
     assert not issubclass(SchemaViolation, ProviderUnavailable)
+
+
+_VALID_DESCRIPTOR_KWARGS: dict[str, object] = {
+    "provider": "p",
+    "model": "m",
+    "version": None,
+    "prompt_version": "v1",
+    "temperature": 0.0,
+    "structured_output_mode": "json_schema",
+}
+
+
+@pytest.mark.parametrize("field", ["provider", "model", "prompt_version", "structured_output_mode"])
+def test_descriptor_rejects_a_blank_required_field_at_construction(field: str) -> None:
+    """Code review finding: a real ``AIProvider`` adapter builds
+    ``ProviderDescriptor`` directly from its own ``describe()``, bypassing
+    the ``--dataset`` JSON boundary (``_DescriptorInput``) entirely -- a
+    blank value must be impossible to construct, not merely rejected when it
+    happens to arrive as recorded JSON."""
+    kwargs = dict(_VALID_DESCRIPTOR_KWARGS)
+    kwargs[field] = "   "
+    with pytest.raises(ValueError):
+        ProviderDescriptor(**kwargs)  # type: ignore[arg-type]
+
+
+def test_descriptor_rejects_a_whitespace_only_version() -> None:
+    kwargs = dict(_VALID_DESCRIPTOR_KWARGS)
+    kwargs["version"] = "  "
+    with pytest.raises(ValueError):
+        ProviderDescriptor(**kwargs)  # type: ignore[arg-type]
+
+
+def test_descriptor_accepts_a_none_version() -> None:
+    ProviderDescriptor(**_VALID_DESCRIPTOR_KWARGS)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("temperature", [float("inf"), float("-inf"), float("nan"), -0.1])
+def test_descriptor_rejects_a_non_finite_or_negative_temperature(temperature: float) -> None:
+    kwargs = dict(_VALID_DESCRIPTOR_KWARGS)
+    kwargs["temperature"] = temperature
+    with pytest.raises(ValueError):
+        ProviderDescriptor(**kwargs)  # type: ignore[arg-type]

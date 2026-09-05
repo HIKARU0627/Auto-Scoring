@@ -67,6 +67,16 @@ class ProviderDescriptor:
     review finding). It is a short, stable tag or content hash for the exact
     prompt template used -- never the prompt text itself (no student content,
     no risk of drifting into a huge cache key).
+
+    Invariants are enforced here, at construction, not only by the
+    ``--dataset`` JSON boundary (:class:`_DescriptorInput`): a real
+    ``AIProvider`` adapter builds this directly from its own ``describe()``,
+    bypassing that boundary entirely, so a blank ``provider``/``model``/
+    ``prompt_version``/``structured_output_mode`` or a non-finite
+    ``temperature`` must be impossible to construct at all -- not merely
+    rejected when it happens to arrive as recorded JSON (code review finding:
+    a supposedly-reproducible descriptor that is actually blank or infinite
+    cannot really reproduce anything).
     """
 
     provider: str
@@ -75,6 +85,22 @@ class ProviderDescriptor:
     prompt_version: str
     temperature: float
     structured_output_mode: str
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("provider", self.provider),
+            ("model", self.model),
+            ("prompt_version", self.prompt_version),
+            ("structured_output_mode", self.structured_output_mode),
+        ):
+            if not value.strip():
+                raise ValueError(f"ProviderDescriptor.{field_name} must be a non-blank string")
+        if self.version is not None and not self.version.strip():
+            raise ValueError("ProviderDescriptor.version must not be a whitespace-only string")
+        if not math.isfinite(self.temperature) or self.temperature < 0:
+            raise ValueError(
+                f"ProviderDescriptor.temperature must be finite and >= 0, got {self.temperature!r}"
+            )
 
 
 def descriptor_key(descriptor: ProviderDescriptor) -> str:
@@ -211,9 +237,17 @@ class GradingResponse:
     """Validated grading result for one question, plus the metadata the PoC
     harness needs to compute latency / cost / agreement metrics without
     touching student answer text again.
+
+    ``recognition_text`` carries the AI's recognized-text reading alongside
+    its confidence: simplified-design-specification.md section 16.5 lists
+    "AI認識文字" (AI-recognized text) as its own field in the review UI,
+    distinct from the score/rationale/comment -- a caller cannot display or
+    persist it if only the confidence number survives the mapping from the
+    validated wire response (code review finding).
     """
 
     question_id: str
+    recognition_text: str
     recognition_confidence: float
     score: int
     max_score: int
@@ -240,6 +274,7 @@ def grading_response_from_result(
     """
     return GradingResponse(
         question_id=result.question_id,
+        recognition_text=result.recognition.text,
         recognition_confidence=result.recognition.confidence,
         score=result.grading.score,
         max_score=result.grading.max_score,

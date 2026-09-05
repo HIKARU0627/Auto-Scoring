@@ -118,3 +118,16 @@ configurations collide whenever a field value itself contains `"|"`.
 before they reach any aggregate -- a negative, non-finite (`nan`/`inf`), or
 non-numeric (string, boolean) recorded value makes the harness raise rather
 than silently skew the adoption-gate metrics.
+
+A `recorded.<provider>.ocr_noisy` entry is rejected if this sample's
+`input.ocr_noisy` is `null` -- a noisy-variant response with no corresponding
+noisy input was never a real same-data comparison (code review finding).
+Every sample's `ground_truth` and `input` are parsed and validated up front,
+across *all* files, before the harness even checks whether any provider has
+a real recorded response -- a dataset where every sample is still `"recorded":
+{}` (the staged, no-credentials-yet case) is not exempt from this: an invalid
+`ground_truth` (e.g. `score > max_score`) in a staged sample still makes the
+harness raise, instead of being reported as a clean `staged: N` count (code
+review finding). Any validation failure message is sanitized to the failing
+field's path and error type only -- never the value that failed, since that
+value may be OCR'd student answer text (`AGENTS.md` "Security").
