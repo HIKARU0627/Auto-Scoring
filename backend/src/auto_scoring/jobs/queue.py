@@ -1,12 +1,15 @@
 """The asyncio job queue engine (Issue #18).
 
-``asyncio.Queue`` + ``asyncio.Semaphore``-bounded worker pool, as decided in
-docs/technology-stack.md §3.4. One `JobQueueService` instance lives for the
-lifetime of the FastAPI app (`auto_scoring.api.app.create_app`) and is shared
-by every submission/question -- the single `asyncio.Semaphore` is what keeps
-"different submissions run in parallel" and "one submission's DAG runs in
-parallel where the graph allows" under the same concurrency cap (Issue #18
-acceptance).
+A fixed pool of ``max_concurrency`` long-lived worker coroutines consumes an
+``asyncio.Queue`` of job ids, as decided in docs/technology-stack.md §3.4.
+One `JobQueueService` instance lives for the lifetime of the FastAPI app
+(`auto_scoring.api.app.create_app`) and is shared by every submission/
+question -- the fixed worker count is what keeps "different submissions run
+in parallel" and "one submission's DAG runs in parallel where the graph
+allows" under the same concurrency cap (Issue #18 acceptance), and, unlike a
+semaphore shared by an unbounded number of per-job tasks, it also bounds how
+many tasks this service ever has alive at once regardless of how large a
+recovered/submitted backlog is (review round 2, P2).
 
 Every operation opens its own short-lived `SqlAlchemyUnitOfWork`; nothing here
 ever holds a transaction open across an ``await`` into
@@ -20,7 +23,11 @@ exactly that). Every place a route handler can reach an asyncio primitive --
 `enqueue` and cancelling a `RUNNING` job's task -- goes through
 ``loop.call_soon_threadsafe`` instead of calling it directly, since
 ``asyncio.Queue.put_nowait``/``Task.cancel`` are not themselves safe to call
-from a different thread (review round 1, P1).
+from a different thread (review round 1, P1). Cancellation specifically
+schedules the *entire* lookup-and-cancel operation onto the loop (not just
+the final ``.cancel()`` call), so a worker thread never reads `_running`
+directly while the loop thread is concurrently mutating it (review round 2,
+P2).
 """
 
 from __future__ import annotations
@@ -46,18 +53,23 @@ from auto_scoring.domain.job_scheduling import (
     recover_running_job,
 )
 from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
-from auto_scoring.domain.retry_policy import RetryPolicy
+from auto_scoring.domain.retry_policy import RetryPolicy, is_retryable
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.settings import QueueSettings
 
 logger = logging.getLogger(__name__)
 
-_STOP = object()  # sentinel pushed to the queue to end the dispatcher loop
+_STOP = object()  # sentinel pushed to the queue, one per worker, to stop it
 
 #: Bound on retries when two concurrent `submit_submission` calls race to
 #: create a job for the same (submission, question, graph version) -- see
 #: `submit_submission`.
 _MAX_SUBMIT_ATTEMPTS = 5
+
+#: Bound on retries when `cancel_job`'s compare-and-set loses a race against
+#: a worker or a backoff-driven requeue changing the same row -- see
+#: `cancel_job`.
+_MAX_CANCEL_ATTEMPTS = 5
 
 
 class SubmissionNotReadyError(Exception):
@@ -81,6 +93,17 @@ class JobNotCancellableError(Exception):
         self.state = state
 
 
+class JobCancelConflictError(Exception):
+    """`cancel_job` kept losing the compare-and-set race against another writer."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            f"job {job_id!r} could not be cancelled -- its state kept changing "
+            "concurrently; please re-fetch and retry"
+        )
+        self.job_id = job_id
+
+
 class JobNotRetryableError(Exception):
     def __init__(self, job_id: str, state: JobState) -> None:
         super().__init__(f"job {job_id!r} is {state!s}; only a FAILED job can be retried")
@@ -89,7 +112,7 @@ class JobNotRetryableError(Exception):
 
 
 class JobQueueService:
-    """Owns the in-memory queue/semaphore and drives every Job through it."""
+    """Owns the in-memory queue and worker pool and drives every Job through it."""
 
     def __init__(
         self,
@@ -104,29 +127,42 @@ class JobQueueService:
         self._settings = settings or QueueSettings()
         self._clock = clock or SystemClock()
         self._queue: asyncio.Queue[object] = asyncio.Queue()
-        self._semaphore = asyncio.Semaphore(self._settings.max_concurrency)
-        self._dispatcher_task: asyncio.Task[None] | None = None
-        #: Every task currently handling one dispatch of a given job id. A
-        #: *set*, not a single `Task`, because duplicate dispatch signals for
-        #: the same id are expected (see `start` re-enqueuing both a
-        #: recovered job and the general QUEUED sweep, or two idempotent
-        #: `submit_submission` calls) -- a single-slot mapping would let a
-        #: fast no-op second task silently overwrite the entry for a real,
-        #: still-running first one (review round 1, P2).
-        self._job_tasks: dict[str, set[asyncio.Task[None]]] = {}
+        self._workers: list[asyncio.Task[None]] = []
+        #: job_id -> the single worker task currently processing it. Only
+        #: the worker whose compare-and-set (QUEUED -> RUNNING) actually
+        #: wins ever registers here (in `_run_one`, after the CAS
+        #: succeeds) -- so unlike a naive "register on dispatch" scheme, a
+        #: duplicate dispatch signal for the same id (start()'s recovered-
+        #: then-swept lists, or two idempotent `submit_submission` calls)
+        #: can never overwrite tracking for a real, still-running worker,
+        #: because the loser's CAS fails and it never registers anything
+        #: (review round 1, P2).
+        self._running: dict[str, asyncio.Task[None]] = {}
+        #: Backoff-wait tasks for a retryable FAILED job, decoupled from the
+        #: worker pool so a job sleeping out its backoff does not occupy a
+        #: worker slot another, independent submission's job could use
+        #: (review round 1, P2). Bounded by recent failure rate, not by
+        #: backlog size -- a fundamentally different, much smaller growth
+        #: factor than the per-job dispatcher task this service no longer
+        #: creates (review round 2, P2; see docs/job-queue.md).
+        self._pending_retries: set[asyncio.Task[None]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
     async def start(self) -> None:
-        """Recover from a killed process, then start dispatching (Issue #18
-        acceptance: "強制終了後の再起動でjobが失われず…").
+        """Recover from a killed process, then start the worker pool (Issue
+        #18 acceptance: "強制終了後の再起動でjobが失われず…").
 
         The in-memory queue is empty on a fresh process no matter how the
         previous one ended, so every still-``QUEUED`` job (never picked up
         yet) needs re-enqueuing here, not just the ones ``RUNNING`` when the
-        process died.
+        process died -- and so does every ``FAILED`` job that still had
+        retry attempts left: if the process was killed while a job was
+        sleeping out its backoff (`_pending_retries`), that in-process timer
+        died with it, and nothing else would ever wake the job up again
+        (review round 2, P1).
         """
         self._loop = asyncio.get_running_loop()
         to_enqueue: list[str] = []
@@ -143,46 +179,65 @@ class JobQueueService:
                 )
                 if recovered.state is JobState.QUEUED:
                     to_enqueue.append(recovered.id)
+
+            for job in uow.jobs.list_by_state(JobState.FAILED):
+                if (
+                    job.error_code is None
+                    or not is_retryable(job.error_code)
+                    or job.attempts >= job.max_attempts
+                ):
+                    continue
+                requeued = job.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
+                try:
+                    uow.jobs.save(requeued, expected_state=JobState.FAILED)
+                except JobSaveConflict:
+                    continue
+                logger.info(
+                    "retryable failed job recovered at startup",
+                    extra={"job_id": requeued.id, "state": requeued.state.value},
+                )
+                to_enqueue.append(requeued.id)
+
             to_enqueue.extend(job.id for job in uow.jobs.list_by_state(JobState.QUEUED))
             uow.commit()
 
-        self._dispatcher_task = asyncio.create_task(self._dispatch_loop())
+        self._workers = [
+            asyncio.create_task(self._worker_loop()) for _ in range(self._settings.max_concurrency)
+        ]
         for job_id in to_enqueue:
             self.enqueue(job_id)
 
     async def shutdown(self) -> None:
-        """Stop dispatching and wait for in-flight jobs to reach a resting
-        state. Does not cancel RUNNING jobs -- a graceful shutdown lets them
-        finish; only an actual process kill leaves a job RUNNING for `start`
-        to recover next time.
-        """
-        if self._dispatcher_task is None:
-            return
-        self._queue.put_nowait(_STOP)
-        await self._dispatcher_task
-        all_tasks = [task for tasks in self._job_tasks.values() for task in tasks]
-        if all_tasks:
-            await asyncio.gather(*all_tasks, return_exceptions=True)
-        self._dispatcher_task = None
+        """Stop the worker pool and wait for in-flight jobs to reach a
+        resting state. Does not cancel a RUNNING job's processing -- a
+        graceful shutdown lets it finish; only an actual process kill
+        leaves a job RUNNING for `start` to recover next time.
 
-    async def _dispatch_loop(self) -> None:
+        Pending backoff-wait timers are cancelled rather than awaited to
+        completion: the job behind each one is already durably persisted as
+        FAILED with its real ``attempts``/``error_code``, so `start`'s
+        retryable-FAILED sweep recovers it next time regardless of whether
+        this process exited gracefully or was killed -- waiting out the
+        full backoff here first would only make routine shutdowns slower
+        for no benefit.
+        """
+        if not self._workers:
+            return
+        for _ in self._workers:
+            self._queue.put_nowait(_STOP)
+        await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers = []
+        for task in list(self._pending_retries):
+            task.cancel()
+        if self._pending_retries:
+            await asyncio.gather(*list(self._pending_retries), return_exceptions=True)
+
+    async def _worker_loop(self) -> None:
         while True:
             item = await self._queue.get()
             if item is _STOP:
                 return
-            job_id = cast(str, item)
-            task = asyncio.create_task(self._run_one(job_id))
-            self._job_tasks.setdefault(job_id, set()).add(task)
-
-            def _on_done(finished: asyncio.Task[None], jid: str = job_id) -> None:
-                tasks = self._job_tasks.get(jid)
-                if tasks is None:
-                    return
-                tasks.discard(finished)
-                if not tasks:
-                    self._job_tasks.pop(jid, None)
-
-            task.add_done_callback(_on_done)
+            await self._run_one(cast(str, item))
 
     def enqueue(self, job_id: str) -> None:
         """Push an already-QUEUED job's id onto the in-memory queue.
@@ -294,19 +349,36 @@ class JobQueueService:
     # Human-triggered resume (Issue #18 §4.4)
     # ------------------------------------------------------------------ #
     def mark_question_usable(self, *, submission_id: str, question_id: str) -> None:
-        """Flip the submission's completed job for ``question_id`` to usable
-        and release any dependent whose other prerequisites are also usable
-        now (business-rules-and-evaluation-data.md §4.4 resume condition:
-        "人間が…前提を承認して続行…選んだ時点で、依存先を自動でキュー再投入
-        する"). A future review API calls this once a human approves or
-        corrects a low-confidence/failed result.
+        """Flip the submission's terminal (last known) job for
+        ``question_id`` to usable and release any dependent whose other
+        prerequisites are also usable now (business-rules-and-evaluation-
+        data.md §4.4 resume condition: "人間が…前提を承認して続行…選んだ時点
+        で、依存先を自動でキュー再投入する"). A future review API calls this
+        once a human approves or corrects a low-confidence/failed result.
 
         Resolves the submission's test's *currently active* confirmed graph
-        version first, and only considers a completed job tagged with that
-        version -- `list_for_submission` returns jobs oldest-first, so
-        picking the first SUCCEEDED match regardless of version could revive
-        a stale, superseded graph version's job instead of the current one's
-        (review round 1, P2).
+        version first. The target job is, in order of preference:
+
+        1. A SUCCEEDED or FAILED job for ``question_id`` at the active
+           version -- the normal case.
+        2. If none exists at the active version at all: the most recent
+           SUCCEEDED or FAILED job for ``question_id`` at *any* version.
+           `dependency_graph_router.confirm` only reissues jobs that were
+           still *incomplete* when the graph advanced (Issue #26); a
+           question whose last job had already reached a terminal state
+           under an older version is never reissued, so the active version
+           can have no row for it at all even though it is very much still
+           part of the active graph. Without this fallback, resuming such a
+           question would 404 forever and its dependents would stay BLOCKED
+           permanently (review round 2, P1).
+
+        Both SUCCEEDED and FAILED are eligible (review round 2, P1): a human
+        may approve a low-confidence *success* or correct a *failure*'s
+        downstream effect -- `list_for_submission` returning jobs oldest-
+        first is also why this only ever considers the active version (or,
+        for the fallback, the most recently updated row): picking any
+        SUCCEEDED/FAILED match regardless of recency could revive a stale,
+        superseded result instead of the real last one (review round 1, P2).
         """
         newly_queued: list[str] = []
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -318,18 +390,21 @@ class JobQueueService:
                 raise JobNotFoundError(f"{submission_id}:{question_id}")
 
             jobs = uow.jobs.list_for_submission(submission_id)
-            target = next(
-                (
-                    j
-                    for j in jobs
-                    if j.question_id == question_id
-                    and j.state is JobState.SUCCEEDED
-                    and j.dependency_graph_version == graph.version
-                ),
-                None,
-            )
+            terminal_states = (JobState.SUCCEEDED, JobState.FAILED)
+            at_active_version = [
+                j
+                for j in jobs
+                if j.question_id == question_id
+                and j.state in terminal_states
+                and j.dependency_graph_version == graph.version
+            ]
+            candidates = at_active_version or [
+                j for j in jobs if j.question_id == question_id and j.state in terminal_states
+            ]
+            target = max(candidates, key=lambda j: j.updated_at, default=None)
             if target is None:
                 raise JobNotFoundError(f"{submission_id}:{question_id}")
+
             uow.jobs.mark_usable(target.id, usable=True)
             jobs = [replace(target, usable=True) if j.id == target.id else j for j in jobs]
 
@@ -368,64 +443,100 @@ class JobQueueService:
         return requeued
 
     def cancel_job(self, job_id: str) -> Job:
-        with SqlAlchemyUnitOfWork(self._session_factory) as uow:
-            job = uow.jobs.get(job_id)
-            if job is None:
-                raise JobNotFoundError(job_id)
-            if job.state in (JobState.SUCCEEDED, JobState.CANCELLED):
-                raise JobNotCancellableError(job_id, job.state)
-            if job.state is JobState.RUNNING:
-                for task in self._job_tasks.get(job_id, ()):
-                    self._cancel_task_threadsafe(task)
-                # The running task's own CancelledError handler
-                # (_finalize_cancelled) owns the RUNNING -> CANCELLED write,
-                # so this call must not also write it -- that would race the
-                # same UPDATE from two places.
-                uow.rollback()
-                return job
-            cancelled = job.transitioned_to(
-                JobState.CANCELLED, updated_at=self._clock.now(), error="cancelled by user"
-            )
-            uow.jobs.save(cancelled, expected_state=job.state)
-            uow.commit()
-            return cancelled
+        """Cancel ``job_id``, retrying the compare-and-set if another writer
+        (a worker finishing it, or a backoff-driven requeue) changes its
+        state concurrently, instead of letting `JobSaveConflict` surface as
+        an unhandled 500 (review round 2, P2). Raises `JobCancelConflictError`
+        if the race keeps losing after several attempts.
+        """
+        for _attempt in range(_MAX_CANCEL_ATTEMPTS):
+            with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+                job = uow.jobs.get(job_id)
+                if job is None:
+                    raise JobNotFoundError(job_id)
+                if job.state in (JobState.SUCCEEDED, JobState.CANCELLED):
+                    raise JobNotCancellableError(job_id, job.state)
+                if job.state is JobState.RUNNING:
+                    self.cancel_running_task(job_id)
+                    # The running worker's own CancelledError handler
+                    # (_finalize_cancelled) owns the RUNNING -> CANCELLED
+                    # write, so this call must not also write it -- that
+                    # would race the same UPDATE from two places.
+                    uow.rollback()
+                    return job
+                cancelled = job.transitioned_to(
+                    JobState.CANCELLED, updated_at=self._clock.now(), error="cancelled by user"
+                )
+                try:
+                    uow.jobs.save(cancelled, expected_state=job.state)
+                except JobSaveConflict:
+                    continue  # re-read the fresh state and retry the decision
+                uow.commit()
+                return cancelled
+        raise JobCancelConflictError(job_id)
 
-    def _cancel_task_threadsafe(self, task: asyncio.Task[None]) -> None:
-        """Request cancellation of ``task`` safely from any thread.
+    def cancel_running_task(self, job_id: str) -> None:
+        """Best-effort: ask whatever worker task is currently processing
+        ``job_id`` (in *this* process) to stop, without touching its
+        persisted state.
 
-        ``Task.cancel()`` is not itself safe to call from a thread other
-        than the loop's own (review round 1, P1) -- see `enqueue`.
+        Used both by `cancel_job` (RUNNING branch) and by the dependency-
+        graph confirm reissue path (Issue #26) when a stale job being
+        cancelled there was RUNNING -- that DB write happens in confirm's
+        own transaction, so this call must not also try to persist
+        anything, only signal the in-process task (review round 2, P1: a
+        stale RUNNING job's actual provider call used to keep going
+        indefinitely after only its DB row was flipped to CANCELLED).
+
+        The lookup and the cancellation are scheduled together as one unit
+        onto the owning event loop (never performed here directly if a
+        different thread calls this), so a worker thread never reads
+        `_running` while the loop thread is concurrently mutating it
+        (review round 2, P2).
         """
         if self._loop is None:
-            task.cancel()
+            self._cancel_running_task_on_loop(job_id)
             return
-        self._loop.call_soon_threadsafe(task.cancel)
+        self._loop.call_soon_threadsafe(self._cancel_running_task_on_loop, job_id)
+
+    def _cancel_running_task_on_loop(self, job_id: str) -> None:
+        task = self._running.get(job_id)
+        if task is not None:
+            task.cancel()
 
     # ------------------------------------------------------------------ #
     # Worker
     # ------------------------------------------------------------------ #
     async def _run_one(self, job_id: str) -> None:
-        retry_delay: float | None = None
-        async with self._semaphore:
-            with SqlAlchemyUnitOfWork(self._session_factory) as uow:
-                job = uow.jobs.get(job_id)
-                if job is None or job.state is not JobState.QUEUED:
-                    # Already handled, cancelled while queued, or a stale
-                    # enqueue signal -- nothing to do.
-                    return
-                running = job.transitioned_to(JobState.RUNNING, updated_at=self._clock.now())
-                try:
-                    uow.jobs.save(running, expected_state=JobState.QUEUED)
-                except JobSaveConflict:
-                    return
-                uow.commit()
+        with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+            job = uow.jobs.get(job_id)
+            if job is None or job.state is not JobState.QUEUED:
+                # Already handled, cancelled while queued, or a stale
+                # enqueue signal -- nothing to do.
+                return
+            running = job.transitioned_to(JobState.RUNNING, updated_at=self._clock.now())
+            try:
+                uow.jobs.save(running, expected_state=JobState.QUEUED)
+            except JobSaveConflict:
+                return
+            uow.commit()
 
+        # Only the CAS winner above ever reaches here, so at most one entry
+        # per job_id ever exists in `_running` (review round 1, P2).
+        current_task = cast(asyncio.Task[None], asyncio.current_task())
+        self._running[job_id] = current_task
+        try:
             started_at = self._clock.now()
             try:
                 result = await self._processor.process(running)
             except asyncio.CancelledError:
+                # Deliberately swallowed, not re-raised: this cancels only
+                # this job's processing, not the worker's own long-lived
+                # task -- `cancel_running_task` targets a specific job_id,
+                # never the worker pool itself, and re-raising here would
+                # permanently kill one of the pool's fixed workers.
                 self._finalize_cancelled(job_id)
-                raise
+                return
             except Exception as exc:  # a processor bug must not crash the worker loop
                 result = ProcessingResult(
                     outcome=ProcessingOutcome.FAILED,
@@ -434,13 +545,26 @@ class JobQueueService:
                 )
             latency = (self._clock.now() - started_at).total_seconds()
             retry_delay = self._finalize_result(job_id, result, latency=latency)
-        # Semaphore released above -- a job merely waiting out its backoff
-        # delay is not "running" and must not keep occupying a concurrency
-        # permit another, independent submission's job could use in the
-        # meantime (review round 1, P2).
+        finally:
+            if self._running.get(job_id) is current_task:
+                self._running.pop(job_id, None)
+
         if retry_delay is not None:
-            await self._clock.sleep(retry_delay)
-            self._requeue_after_backoff(job_id)
+            self._schedule_retry(job_id, retry_delay)
+
+    def _schedule_retry(self, job_id: str, delay: float) -> None:
+        """Wait out ``delay`` and requeue, on a task decoupled from the
+        worker pool (see `_pending_retries`) so this worker is immediately
+        free for other jobs instead of occupying a pool slot for the whole
+        backoff window (review round 1, P2).
+        """
+        task = asyncio.create_task(self._sleep_then_requeue(job_id, delay))
+        self._pending_retries.add(task)
+        task.add_done_callback(self._pending_retries.discard)
+
+    async def _sleep_then_requeue(self, job_id: str, delay: float) -> None:
+        await self._clock.sleep(delay)
+        self._requeue_after_backoff(job_id)
 
     def _finalize_cancelled(self, job_id: str) -> None:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -464,7 +588,10 @@ class JobQueueService:
         legacy job carrying a different value), and the decision of whether
         another attempt is allowed must honour what was actually persisted
         for this job, not whatever the service happens to be configured with
-        right now (review round 1, P2).
+        right now (review round 1, P2). Cannot fail validation:
+        `Job.max_attempts` is already required to be ``>= 1`` at
+        construction, and `QueueSettings.__post_init__` already validates
+        the backoff fields.
         """
         return RetryPolicy(
             max_attempts=job.max_attempts,
@@ -478,8 +605,8 @@ class JobQueueService:
     ) -> float | None:
         """Persist ``result`` and return the backoff delay before a retry,
         or ``None`` if none is needed. Purely synchronous -- the caller
-        (`_run_one`) is the one that actually awaits the delay, after
-        releasing the concurrency permit (see `_run_one`).
+        (`_run_one`) hands the delay to `_schedule_retry`, which is the one
+        that actually awaits it, decoupled from the worker pool.
         """
         now = self._clock.now()
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:

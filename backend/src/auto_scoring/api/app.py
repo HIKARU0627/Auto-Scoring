@@ -426,7 +426,9 @@ def create_app(
 
     protected.include_router(
         build_dependency_graph_router(
-            session_factory, on_job_reissued=lambda job: queue_service.enqueue(job.id)
+            session_factory,
+            on_job_reissued=lambda job: queue_service.enqueue(job.id),
+            on_stale_running_job_cancelled=queue_service.cancel_running_task,
         )
     )
     protected.include_router(build_jobs_router(queue_service))

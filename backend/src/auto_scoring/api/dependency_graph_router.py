@@ -190,6 +190,7 @@ def build_dependency_graph_router(
     *,
     analyzer: DependencyAnalyzer | None = None,
     on_job_reissued: Callable[[Job], None] | None = None,
+    on_stale_running_job_cancelled: Callable[[str], None] | None = None,
 ) -> APIRouter:
     """Build the router. One `SqlAlchemyUnitOfWork` is opened per request.
 
@@ -200,6 +201,15 @@ def build_dependency_graph_router(
     a reissued job actually runs before the next process restart, instead of
     sitting QUEUED in the database until `JobQueueService.start`'s sweep
     picks it up.
+
+    ``on_stale_running_job_cancelled``, if given, is called once per stale
+    job that was RUNNING when reissued, with its id, after commit. This
+    router's own write only flips the DB row to CANCELLED; it says nothing
+    to whatever in-process task might actually still be calling the
+    external provider for it. `JobQueueService.cancel_running_task` wired
+    here stops that task too (review round 2, P1: without this, a stale
+    job's provider call used to keep running indefinitely after being
+    "cancelled").
     """
     analyzer = analyzer or ReferenceHeuristicDependencyAnalyzer()
     router = APIRouter(prefix="/tests/{test_id}/dependency-graph", tags=["dependency-graph"])
@@ -456,6 +466,7 @@ def build_dependency_graph_router(
             stale_jobs_by_submission[stale_job.submission_id].append(stale_job)
 
         reissued: list[Job] = []
+        cancelled_running_job_ids: list[str] = []
         for submission_id, stale_jobs in stale_jobs_by_submission.items():
             stale_ids = {job.id for job in stale_jobs}
             baseline = [
@@ -485,6 +496,12 @@ def build_dependency_graph_router(
                     # QUEUED/BLOCKED replacement would risk double-
                     # processing the same work.
                     continue
+                if stale_job.state is JobState.RUNNING:
+                    # This write only flipped the DB row; the in-process
+                    # task (if any, possibly in a different JobQueueService
+                    # instance than whichever confirmed this) still needs a
+                    # separate signal to actually stop (review round 2, P1).
+                    cancelled_running_job_ids.append(stale_job.id)
                 if replacement.question_id is not None:
                     readiness = evaluate_readiness(confirmed, replacement.question_id, statuses)
                     if not readiness.ready:
@@ -502,6 +519,10 @@ def build_dependency_graph_router(
             for replacement in reissued:
                 if replacement.state is JobState.QUEUED:
                     on_job_reissued(replacement)
+
+        if on_stale_running_job_cancelled is not None:
+            for job_id in cancelled_running_job_ids:
+                on_stale_running_job_cancelled(job_id)
 
         return DependencyGraphResponse.from_domain(confirmed)
 

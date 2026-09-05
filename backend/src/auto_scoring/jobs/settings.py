@@ -30,6 +30,14 @@ class QueueSettings:
     def __post_init__(self) -> None:
         if self.max_concurrency < 1:
             raise ValueError("QueueSettings.max_concurrency must be >= 1")
+        # Reuses RetryPolicy's own validation instead of duplicating it here,
+        # and fails at construction time instead of at the first job's
+        # failure inside `JobQueueService._retry_policy_for` -- a bad value
+        # (negative backoff, multiplier < 1, max below initial) used to pass
+        # QueueSettings() silently and only raise later, after a RUNNING row
+        # was already committed, leaving that job stuck until a restart
+        # (Issue #18 review round 2, P2).
+        _ = self.retry_policy
 
     @property
     def retry_policy(self) -> RetryPolicy:
