@@ -371,17 +371,42 @@ class SidecarApiClient {
   /// (テスト設定画面 "自動解析"/再実行). Safe to call again -- it always
   /// overwrites whatever DRAFT profile was there. Throws [SidecarApiException]
   /// (409) if the profile is already confirmed.
+  ///
+  /// Uses the same longer intake timeout as [createTest]/[createSubmission]:
+  /// this scans up to 100 pages across both PDFs and may wait behind the
+  /// sidecar's shared PDFium lock if a submission intake is already running,
+  /// so the default (near-instant) timeout would fire while the server is
+  /// still working -- the client would then report a failure and let the
+  /// review screen re-analyze on top of a draft profile the first, still
+  /// in-flight call is about to overwrite anyway.
   Future<ProfileResponse> analyzeProfile(
     String testId, {
     CancelToken? cancelToken,
   }) async {
     try {
-      final response = await _testRegistrationApi
+      final response = await _uploadTestRegistrationApi
           .analyzeProfileTestsTestIdProfileAnalyzePost(
             testId: testId,
             cancelToken: cancelToken,
           );
       return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every test regardless of status (テスト設定画面の再開導線) -- unlike
+  /// [listTests], which only returns `ready` tests for the answer-intake
+  /// picker, this is how a `draft` registration (its `TestSettingsPage`
+  /// closed, or the app restarted) can be found and reopened again (Issue
+  /// #16 review).
+  Future<List<TestResponse>> listTestRegistrations({
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .listTestRegistrationsTestRegistrationsGet(cancelToken: cancelToken);
+      return (response.data ?? const <TestResponse>[]).toList();
     } on DioException catch (error) {
       throw _translate(error);
     }

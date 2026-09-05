@@ -830,6 +830,37 @@
         "summary": "Get Submission"
       }
     },
+    "/test-registrations": {
+      "get": {
+        "description": "Every test regardless of status (draft or ready), for the \u30c6\u30b9\u30c8\n\u8a2d\u5b9a\u753b\u9762's own entry point.\n\n`GET /tests` (api.app, answer intake's test picker) only returns\n`ready` tests -- a `draft` test has no other way to be found again\nonce its `TestSettingsPage` is closed (Issue #16 review: leaving\nregistration mid-way, or restarting the app, must not make an\nalready-uploaded, persisted draft unreachable).",
+        "operationId": "list_test_registrations_test_registrations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestResponse"
+                  },
+                  "title": "Response List Test Registrations Test Registrations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Test Registrations",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
     "/tests": {
       "get": {
         "operationId": "list_tests_tests_get",

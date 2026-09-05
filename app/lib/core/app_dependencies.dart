@@ -41,6 +41,9 @@ Future<TestResponse> _unavailableCreateTest({
 
 Future<TestResponse> _unavailableGetTest(String testId) async => _unavailable();
 
+Future<List<TestResponse>> _unavailableListTestRegistrations() async =>
+    _unavailable();
+
 Future<ProfileResponse> _unavailableAnalyzeProfile(String testId) async =>
     _unavailable();
 
@@ -106,6 +109,10 @@ typedef CreateTest =
 /// One test's current registration state (テスト設定画面).
 typedef GetTest = Future<TestResponse> Function(String testId);
 
+/// Every test regardless of status -- how a `draft` registration is found
+/// and reopened again after leaving テスト設定画面 or restarting the app.
+typedef ListTestRegistrations = Future<List<TestResponse>> Function();
+
 /// Generates DRAFT profile candidates from a test's two registration PDFs.
 /// Safe to call again -- always overwrites whatever DRAFT profile was there.
 typedef AnalyzeProfile = Future<ProfileResponse> Function(String testId);
@@ -158,6 +165,7 @@ class AppDependencies {
     this.createSubmission = _unavailableCreateSubmission,
     this.createTest = _unavailableCreateTest,
     this.getTest = _unavailableGetTest,
+    this.listTestRegistrations = _unavailableListTestRegistrations,
     this.analyzeProfile = _unavailableAnalyzeProfile,
     this.getProfile = _unavailableGetProfile,
     this.updateProfile = _unavailableUpdateProfile,
@@ -176,6 +184,7 @@ class AppDependencies {
   final CreateSubmission createSubmission;
   final CreateTest createTest;
   final GetTest getTest;
+  final ListTestRegistrations listTestRegistrations;
   final AnalyzeProfile analyzeProfile;
   final GetProfile getProfile;
   final UpdateProfile updateProfile;

@@ -410,7 +410,9 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
                   label: const Text('自動解析（再実行）'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: (_busy || regions == null) ? null : _addRegion,
+                  onPressed: (_busy || regions == null || _profileConfirmed)
+                      ? null
+                      : _addRegion,
                   icon: const Icon(Icons.add_box_outlined),
                   label: const Text('領域を手動追加'),
                 ),
@@ -518,10 +520,14 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
               children: [
                 FilledButton.icon(
                   key: const Key('analyze-dependency-graph-button'),
+                  // Gated on the *profile* being confirmed, not merely
+                  // analyzed: Question rows (what the dependency-graph
+                  // endpoint actually operates on) are only created by
+                  // confirmProfile, so tapping this in the normal
+                  // draft-profile interim would always hit the backend's
+                  // 404 "no questions to analyze" (Issue #16 review).
                   onPressed:
-                      (_busy ||
-                          _dependencyGraphConfirmed ||
-                          _editableRegions == null)
+                      (_busy || _dependencyGraphConfirmed || !_profileConfirmed)
                       ? null
                       : _analyzeDependencyGraph,
                   icon: const Icon(Icons.auto_fix_high),

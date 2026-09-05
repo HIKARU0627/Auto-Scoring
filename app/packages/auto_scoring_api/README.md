@@ -83,6 +83,7 @@ Class | Method | HTTP request | Description
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**createTestTestsPost**](doc/TestRegistrationApi.md#createtesttestspost) | **POST** /tests | Create Test
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getProfileTestsTestIdProfileGet**](doc/TestRegistrationApi.md#getprofileteststestidprofileget) | **GET** /tests/{test_id}/profile | Get Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getTestTestsTestIdGet**](doc/TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listTestRegistrationsTestRegistrationsGet**](doc/TestRegistrationApi.md#listtestregistrationstestregistrationsget) | **GET** /test-registrations | List Test Registrations
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**updateProfileTestsTestIdProfilePut**](doc/TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
 
 
