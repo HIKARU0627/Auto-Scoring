@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/features/answer_intake/answer_intake_page.dart';
+import 'package:auto_scoring_app/features/test_registration/test_registration_page.dart';
 
 /// Landing screen. Confirms the app boots and can reach the (stubbed) backend.
 ///
@@ -34,6 +35,17 @@ class HomePage extends StatelessWidget {
               },
             ),
             const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      TestRegistrationPage(dependencies: dependencies),
+                ),
+              ),
+              icon: const Icon(Icons.add_task),
+              label: const Text('テスト登録'),
+            ),
+            const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
