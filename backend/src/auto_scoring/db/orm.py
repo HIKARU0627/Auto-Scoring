@@ -316,17 +316,21 @@ class DependencyGraphRow(Base):
         # mismatch, which would otherwise surface as a 500 on every GET/list
         # of that row instead of being rejected at write time (Issue #26
         # review).
-        # Mirrors DependencyGraph.__post_init__'s status/confirmed_at pairing
-        # (CONFIRMED <=> confirmed_at IS NOT NULL) at the DB layer too, so a
-        # row written outside the domain (repair, import, direct SQL) can't
-        # produce a state `_hydrate` refuses to load -- `DependencyGraph`'s
-        # own constructor raises `DependencyGraphError` for exactly this
-        # mismatch, which would otherwise surface as a 500 on every GET/list
-        # of that row instead of being rejected at write time (Issue #26
-        # review).
         CheckConstraint(
             "(status = 'confirmed') = (confirmed_at IS NOT NULL)",
             name="ck_dependency_graphs_confirmed_at_matches_status",
+        ),
+        # `DependencyGraph.__post_init__` requires `question_ids` to be a
+        # non-empty set (a graph over zero questions is not a graph); nothing
+        # short of the domain enforced that at the DB layer, so a row written
+        # outside it (repair, import, direct SQL) could persist
+        # `question_ids = '[]'` and every later GET/list of it would raise on
+        # hydration (Issue #26 review). `json_valid` guards against a
+        # non-JSON string reaching `json_array_length`, which would otherwise
+        # error out the constraint check itself rather than simply failing it.
+        CheckConstraint(
+            "json_valid(question_ids) AND json_array_length(question_ids) > 0",
+            name="ck_dependency_graphs_question_ids_non_empty",
         ),
         Index("ix_dependency_graphs_test_id", "test_id"),
     )
@@ -361,6 +365,23 @@ class DependencyEdgeRow(Base):
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
             name="ck_dependency_edges_confidence_range",
+        ),
+        # Mirrors `DependencyEdge.__post_init__`'s remaining invariants (only
+        # `confidence` had a DB-level mirror before): a row written outside
+        # the domain (repair, import, direct SQL) could otherwise persist a
+        # self-loop, or an edge with no `provides`/blank `rationale`, and
+        # `DependencyEdge`'s own constructor would raise `SelfLoopError`/
+        # `DependencyGraphError` the next time that graph is hydrated,
+        # breaking every API call touching it (Issue #26 review).
+        CheckConstraint(
+            "from_question_id != to_question_id", name="ck_dependency_edges_no_self_loop"
+        ),
+        CheckConstraint(
+            "json_valid(provides) AND json_array_length(provides) > 0",
+            name="ck_dependency_edges_provides_non_empty",
+        ),
+        CheckConstraint(
+            "length(trim(rationale)) > 0", name="ck_dependency_edges_rationale_non_empty"
         ),
         Index("ix_dependency_edges_graph_id", "graph_id"),
     )

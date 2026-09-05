@@ -235,6 +235,35 @@ def test_signal_phrase_in_the_same_field_as_the_reference_still_becomes_an_edge(
     assert result.unresolved == ()
 
 
+def test_a_signalled_reference_does_not_silence_a_separate_unsignalled_one() -> None:
+    """A question whose `prompt_text` has a signalled reference to 問1 (an
+    edge) and whose `rubric_text` separately has a bare, unsignalled mention
+    of 問2 must still report 問2 as unresolved -- finding one genuine edge
+    must not suppress a *different* reference's ambiguity, or a possible
+    dependency on 問2 could be confirmed without ever surfacing for human
+    review (Issue #26 review).
+    """
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(question_id="q2", number="問2", page=1, prompt_text="呼吸について説明せよ。"),
+        QuestionInfo(
+            question_id="q3",
+            number="問3",
+            page=1,
+            prompt_text="問1を踏まえて考察せよ。",  # number + signal, same field -> edge
+            rubric_text="採点は問2と比較して行うこと。",  # bare mention, no signal -> unresolved
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert [(e.from_question_id, e.to_question_id) for e in result.edges] == [("q1", "q3")]
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].question_id == "q3"
+    assert "問2" in result.unresolved[0].reason
+    assert "問1" not in result.unresolved[0].reason  # the resolved edge is not also flagged
+
+
 def test_multi_page_reference_is_detected() -> None:
     questions = [
         QuestionInfo(

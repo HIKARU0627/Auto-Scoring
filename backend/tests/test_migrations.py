@@ -208,6 +208,93 @@ def test_dependency_graph_status_confirmed_at_pairing_is_enforced(db_url: str) -
         engine.dispose()
 
 
+def test_dependency_graph_requires_non_empty_question_ids(db_url: str) -> None:
+    """DB-level mirror of `DependencyGraph.__post_init__`'s non-empty
+    `question_ids` invariant (Issue #26 review): a graph over zero questions
+    is not a graph, and a row bypassing the domain layer (repair, import,
+    direct SQL) must not be able to insert `question_ids = '[]'`, or
+    `DependencyGraph.from_dict` raises on every later GET/list of that row.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        empty_question_ids = text(
+            "INSERT INTO dependency_graphs "
+            "(id, test_id, version, status, question_ids, unresolved, created_at, confirmed_at) "
+            "VALUES ('t:v1', 't', 1, 'draft', '[]', '[]', '2026-01-01', NULL)"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(empty_question_ids)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_dependency_edge_invariants_are_enforced(db_url: str) -> None:
+    """DB-level mirror of `DependencyEdge.__post_init__`'s self-loop,
+    non-empty-`provides`, and non-blank-`rationale` invariants (Issue #26
+    review): a row bypassing the domain layer (repair, import, direct SQL)
+    must not be able to insert any of these, or hydrating that graph raises
+    on every later GET/list of it.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO dependency_graphs "
+                "(id, test_id, version, status, question_ids, unresolved, created_at, "
+                "confirmed_at) "
+                "VALUES ('t:v1', 't', 1, 'draft', '[\"q1\", \"q2\"]', '[]', "
+                "'2026-01-01', NULL)"
+            )
+        )
+        conn.commit()
+
+        self_loop = text(
+            "INSERT INTO dependency_edges "
+            "(graph_id, from_question_id, to_question_id, provides, rationale, confidence) "
+            "VALUES ('t:v1', 'q1', 'q1', '[\"recognized_text\"]', 'x', NULL)"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(self_loop)
+
+        empty_provides = text(
+            "INSERT INTO dependency_edges "
+            "(graph_id, from_question_id, to_question_id, provides, rationale, confidence) "
+            "VALUES ('t:v1', 'q1', 'q2', '[]', 'x', NULL)"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(empty_provides)
+
+        blank_rationale = text(
+            "INSERT INTO dependency_edges "
+            "(graph_id, from_question_id, to_question_id, provides, rationale, confidence) "
+            "VALUES ('t:v1', 'q1', 'q2', '[\"recognized_text\"]', '   ', NULL)"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(blank_rationale)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
 def test_job_dependency_graph_version_must_be_positive(db_url: str) -> None:
     upgrade(db_url, "head")
     engine = create_sqlite_engine(db_url)

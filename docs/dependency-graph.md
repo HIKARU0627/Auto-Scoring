@@ -208,6 +208,31 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   DRAFT+confirmed_at設定済み）を試み、両方とも`IntegrityError`になること
   をORMメタデータ側（`test_dependency_graph_repository.py`）とmigration適用
   後の生SQL側（`test_migrations.py`）の両方で検証している。
+- 同様の理由で、`DependencyGraph.__post_init__`が要求する
+  「`question_ids`は非空」という不変条件にもDBレベルのミラーが無かった
+  （レビュー指摘）。0件の設問からなるgraphは概念として意味を持たない
+  にもかかわらず、修復・インポート・直接SQLは`question_ids = '[]'`を
+  書き込めてしまい、その行は`_hydrate`が`DependencyGraph.from_dict`を
+  呼ぶたびに`DependencyGraphError`で失敗する。ORMメタデータとmigrationの
+  両方に`ck_dependency_graphs_question_ids_non_empty`
+  （`json_valid(question_ids) AND json_array_length(question_ids) > 0`）を
+  追加した。`json_valid`は、`json_array_length`が非JSON文字列を受け取って
+  制約チェック自体がエラーになるのを防ぐガード。
+- `dependency_edges`も`confidence`の範囲チェック以外は同様に無防備だった
+  （レビュー指摘）。`DependencyEdge.__post_init__`はself-loop
+  （`from_question_id == to_question_id`）を`SelfLoopError`で拒否し、
+  `provides`の空配列と空白のみの`rationale`を`DependencyGraphError`で
+  拒否するが、これらもDBレベルのミラーが無く、修復・インポート・直接SQLが
+  違反行を書き込めてしまうとそのgraphを読み込むたびにAPIが壊れる。ORMメタ
+  データとmigrationの両方に`ck_dependency_edges_no_self_loop`
+  （`from_question_id != to_question_id`）、
+  `ck_dependency_edges_provides_non_empty`
+  （`json_valid(provides) AND json_array_length(provides) > 0`）、
+  `ck_dependency_edges_rationale_non_empty`
+  （`length(trim(rationale)) > 0`）を追加した。テストでは`DependencyGraphRow`
+  /`DependencyEdgeRow`を直接構築してこれら3種の不整合行を試み、いずれも
+  `IntegrityError`になることをORMメタデータ側（`test_dependency_graph_repository.py`）
+  とmigration適用後の生SQL側（`test_migrations.py`）の両方で検証している。
 - cycle検出はKahnのアルゴリズムが行き詰まった残りノード全部ではなく、
   Tarjanの強連結成分（SCC）でサイクルに実際に参加しているノードだけを
   `CycleDetectedError.cycle_question_ids` に含める。例えば `q1<->q2` の
@@ -345,6 +370,23 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   （`test_a_bare_mention_and_an_unrelated_signal_in_another_field_do_not_combine`、
   `test_signal_phrase_in_the_same_field_as_the_reference_still_becomes_an_edge`、
   修正前は前者が誤ってedgeを1件生成することを確認済み）。
+- `locally_referenced`（同一フィールド内でシグナルと共起した参照）が非空の
+  場合、それ以外の参照（`referenced`グローバルには含まれるが
+  `locally_referenced`には含まれないもの）を黙って無視していた（レビュー
+  指摘）。例えば`prompt_text`が「問1を踏まえて…」（edge化される）、
+  `rubric_text`が「問2と比較…」（シグナル無しの裸の言及）の場合、以前は
+  `locally_referenced`が非空になった時点で`elif referenced:`分岐が
+  スキップされ、問2への参照は`unresolved`に一切現れずq1→currentのedgeだけ
+  が生成されていた -- 問2への依存の可能性が人間のレビューに一度も上がらな
+  いまま、そのgraphがconfirmできてしまう。修正として、`locally_referenced`
+  でedge化した後に `referenced` との差分（`locally_referenced`に含まれない
+  参照）を計算し、差分が非空なら同じ「言及はあるが依存シグナルが見つから
+  ない」文言で`unresolved`に追加するようにした。テストでは、signal付き参照
+  1件とsignal無し裸参照1件が別々のフィールドに混在する設問で、edgeが
+  signal付きの分だけ生成されつつ、裸参照の設問番号が`unresolved`に確実に
+  現れることを検証している
+  （`test_a_signalled_reference_does_not_silence_a_separate_unsignalled_one`、
+  修正前は`unresolved`が空のまま欠落することを確認済み）。
 
 ### API・DB配線
 

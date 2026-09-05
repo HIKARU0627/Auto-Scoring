@@ -123,6 +123,27 @@ class ReferenceHeuristicDependencyAnalyzer:
                             confidence=0.8,
                         )
                     )
+
+                # `referenced` (computed on the combined text) can name
+                # numbers beyond the ones just turned into edges -- e.g. a
+                # signalled reference to 問1 in `prompt_text` and a separate,
+                # unsignalled bare mention of 問2 in `rubric_text`. Finding
+                # an edge for 問1 must not silence 問2's ambiguity; it would
+                # otherwise let a graph with an unreviewed possible
+                # dependency go straight to confirm with no `unresolved`
+                # entry to flag it (Issue #26 review).
+                unmatched = [pair for pair in referenced if pair not in locally_referenced]
+                if unmatched:
+                    numbers = "、".join(number for number, _ in unmatched)
+                    unresolved.append(
+                        UnresolvedQuestion(
+                            question_id=question.question_id,
+                            reason=(
+                                f"{numbers}への言及はありますが、依存を示唆する表現が見つからず、"
+                                "実際に依存があるか判断できません"
+                            ),
+                        )
+                    )
             elif referenced:
                 # Number(s) mentioned but no dependency-signal phrase: could
                 # be a real dependency stated plainly, or just an unrelated

@@ -389,3 +389,86 @@ def test_draft_status_with_confirmed_at_is_rejected_by_check_constraint(
             )
         )
         uow.commit()
+
+
+def test_empty_question_ids_is_rejected_by_check_constraint(seeded: UowFactory) -> None:
+    """`DependencyGraph.__post_init__` requires a non-empty `question_ids`
+    set (a graph over zero questions is not a graph); a row bypassing the
+    domain (repair, import, direct SQL) must not be able to persist
+    `question_ids = []`, or `_hydrate` would raise on every later GET/list
+    of it (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=[],
+                unresolved=[],
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_self_loop_edge_row_is_rejected_by_check_constraint(seeded: UowFactory) -> None:
+    """`DependencyEdge.__post_init__` raises `SelfLoopError` for
+    `from_question_id == to_question_id`; a row bypassing the domain (repair,
+    import, direct SQL) must not be able to persist one, or hydrating that
+    graph would raise on every later GET/list of it (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.dependency_graphs.save(_draft())
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-1",
+                provides=["recognized_text"],
+                rationale="self-loop",
+            )
+        )
+        uow.commit()
+
+
+def test_edge_row_with_empty_provides_is_rejected_by_check_constraint(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        # `edges=[]` so this edge's (graph_id, from, to) doesn't collide with
+        # `_draft()`'s own default edge on the composite primary key.
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-2",
+                provides=[],
+                rationale="no provides",
+            )
+        )
+        uow.commit()
+
+
+def test_edge_row_with_blank_rationale_is_rejected_by_check_constraint(seeded: UowFactory) -> None:
+    from auto_scoring.db.orm import DependencyEdgeRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.dependency_graphs.save(_draft(edges=[]))
+        uow.session.add(
+            DependencyEdgeRow(
+                graph_id="test-1:v1",
+                from_question_id="q-1",
+                to_question_id="q-2",
+                provides=["recognized_text"],
+                rationale="   ",
+            )
+        )
+        uow.commit()

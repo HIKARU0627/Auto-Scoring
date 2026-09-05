@@ -60,6 +60,15 @@ def upgrade() -> None:
             "(status = 'confirmed') = (confirmed_at IS NOT NULL)",
             name="ck_dependency_graphs_confirmed_at_matches_status",
         ),
+        # Mirrors DependencyGraph.__post_init__: `question_ids` must be
+        # non-empty (a graph over zero questions is not a graph). Without
+        # this, a row written outside the domain layer (repair, import,
+        # direct SQL) could persist `question_ids = '[]'` and every later
+        # GET/list of it would raise on hydration (Issue #26 review).
+        sa.CheckConstraint(
+            "json_valid(question_ids) AND json_array_length(question_ids) > 0",
+            name="ck_dependency_graphs_question_ids_non_empty",
+        ),
     )
     op.create_index("ix_dependency_graphs_test_id", "dependency_graphs", ["test_id"])
 
@@ -79,6 +88,22 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
             name="ck_dependency_edges_confidence_range",
+        ),
+        # Mirrors `DependencyEdge.__post_init__`'s remaining invariants: a
+        # row written outside the domain (repair, import, direct SQL) could
+        # otherwise persist a self-loop, or an edge with no `provides`/blank
+        # `rationale`, and hydrating that graph would raise `SelfLoopError`/
+        # `DependencyGraphError`, breaking every API call touching it (Issue
+        # #26 review).
+        sa.CheckConstraint(
+            "from_question_id != to_question_id", name="ck_dependency_edges_no_self_loop"
+        ),
+        sa.CheckConstraint(
+            "json_valid(provides) AND json_array_length(provides) > 0",
+            name="ck_dependency_edges_provides_non_empty",
+        ),
+        sa.CheckConstraint(
+            "length(trim(rationale)) > 0", name="ck_dependency_edges_rationale_non_empty"
         ),
     )
     op.create_index("ix_dependency_edges_graph_id", "dependency_edges", ["graph_id"])
