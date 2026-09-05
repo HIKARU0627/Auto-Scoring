@@ -30,6 +30,7 @@ from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
+from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
@@ -384,6 +385,9 @@ def create_app(
         return _submission_response(result.submission, is_retry=result.is_retry)
 
     protected.include_router(build_dependency_graph_router(session_factory))
+    protected.include_router(
+        build_test_registration_router(session_factory, store, engine, intake_limits=limits)
+    )
 
     app.include_router(protected)
     return app
