@@ -675,3 +675,50 @@ expected_attempts)`のmin-heap（`_retry_heap`）と、それを1件ずつ
 to a different event loop`を送出し得た。`shutdown()`で`clear()`する
   代わりに新しい`asyncio.Event()`へ置き換えるようにした（`_queue`を
   作り直しているのと同じ扱い）。
+
+## レビュー第9round（Codex）で修正した点
+
+- **job saveのCASにattempt番号を含める**（P1）:
+  `FAILED`は終端状態ではなく、`FAILED -> QUEUED -> RUNNING -> FAILED`と
+  何度でも循環し得る（`attempts`は`RUNNING`を経由する遷移でのみ増える）。
+  そのため呼び出し元がattempt Nの時点でFAILEDのjobを読み取った後、
+  別のretryがこの更新の前にABAサイクルを完了しattempt N+1でFAILEDに
+  戻った場合、`state`（と`usable`）述語だけのCASは依然として一致して
+  しまい、staleな値がより新しいattemptの結果を上書きし得た。
+  `mark_usable`が round 6 で導入した`expected_attempts`パターンを
+  汎用の`JobRepository.save()`自体に拡張し、`retry_job`・`cancel_job`・
+  `_requeue_after_backoff`・起動時のFAILED sweep・
+  `dependency_graph_router.confirm`の古いjob無効化、それぞれの呼び出しに
+  `expected_attempts=job.attempts`（読み取り時点の値）を渡すようにした。
+- **排他的なdata-root lockで複数sidecarの共存を防ぐ**（P1）:
+  `auto_scoring.api.sidecar`の`--app-data-dir`は`cwd()/app-data`が
+  既定値で、2つのsidecarプロセスが同じdata rootを指すことを妨げる
+  仕組みがなかった。その場合、後から起動した方の`start()`が実行する
+  クラッシュ回復sweepは、先に起動して今も生きているプロセスの
+  RUNNING jobを「クラッシュの残骸」と区別できず再enqueueしてしまい、
+  providerへの二重呼び出しや、先のプロセスの本来の finalize が
+  CASに負けて実際には完了した結果を静かに握り潰す事態が起こり得た。
+  `auto_scoring.adapters.data_root_lock.acquire_data_root_lock`を追加し、
+  data root配下の`.lock`ファイルに対してOSレベルの排他ロック
+  （POSIX: `fcntl.flock`、Windows: `msvcrt.locking`）を取得するように
+  した。ロックはファイルの中身ではなくOSが管理するため、プロセスが
+  クラッシュしてもファイルディスクリプタが閉じた時点で自動的に
+  解放され、stale lockの掃除は不要。`create_app()`の`_lifespan`に
+  組み込み、`session_factory`を自前で用意している場合
+  （＝実運用のdata root）にのみ`service.start()`の前で取得し、
+  `service.shutdown()`の後で解放するようにした。テストが供給する
+  `session_factory`を使う場合はロックを取得しない
+  （同じdata rootに対して複数の`create_app()`インスタンスを作るが
+  lifespanは同時に走らせない既存テストと衝突しないため）。
+- **冪等なsubmissionのdispatchを重複排除する**（P2）:
+  既存のjobがQUEUEDのままの間に同じsubmissionへ`submit_submission`
+  （`POST /submissions/{id}/jobs`）が繰り返されるたびに、同じjob IDが
+  in-memory queueへ再度積まれていた。queueにはpending IDの重複排除が
+  なく、クライアントの繰り返しretryやpollingが無制限にqueueへ
+  同じIDを溜め込み得た（`_run_one`のclaim CAS自体は無害にno-opする
+  が、その前に走るDB lookupが無関係なsubmissionの新規jobを同じFIFO
+  queueの中で遅延させ得る）。`_plan_and_create_jobs`が既存jobを見つけた
+  ときの再enqueue分岐を削除し、新しく作成したjobだけをenqueueする
+  ようにした。既存jobが何らかの理由でin-process dispatchシグナルを
+  失った場合の回復は、`start()`自身のQUEUED sweep（round 8, P1）が
+  引き続き担う。
