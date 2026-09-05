@@ -26,7 +26,7 @@ sidecar's bearer-token auth):
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -46,7 +46,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
     UnresolvedQuestion,
 )
-from auto_scoring.domain.models import JobSaveConflict, reissue_job_for_graph_version
+from auto_scoring.domain.models import Job, JobSaveConflict, reissue_job_for_graph_version
 
 #: Bound on retries when two concurrent /analyze calls race for the same
 #: next version number (see `analyze` below). Each retry re-reads the latest
@@ -181,8 +181,18 @@ def build_dependency_graph_router(
     session_factory: sessionmaker[Session],
     *,
     analyzer: DependencyAnalyzer | None = None,
+    on_job_reissued: Callable[[Job], None] | None = None,
 ) -> APIRouter:
-    """Build the router. One `SqlAlchemyUnitOfWork` is opened per request."""
+    """Build the router. One `SqlAlchemyUnitOfWork` is opened per request.
+
+    ``on_job_reissued``, if given, is called once per replacement job this
+    router's ``/confirm`` creates for a superseded dependency-graph version
+    (see ``confirm`` below), *after* it has committed. Issue #18's
+    `auto_scoring.jobs.queue.JobQueueService` wires its own `enqueue` here so
+    a reissued job actually runs before the next process restart, instead of
+    sitting QUEUED in the database until `JobQueueService.start`'s sweep
+    picks it up.
+    """
     analyzer = analyzer or ReferenceHeuristicDependencyAnalyzer()
     router = APIRouter(prefix="/tests/{test_id}/dependency-graph", tags=["dependency-graph"])
 
@@ -420,6 +430,7 @@ def build_dependency_graph_router(
         # Issue #26 acceptance: confirming a new version must invalidate and
         # recreate any still-incomplete job left over from a superseded one,
         # in the same transaction as the confirmation itself.
+        reissued: list[Job] = []
         for stale_job in uow.jobs.list_incomplete_for_stale_versions(test_id, confirmed.version):
             cancelled, replacement = reissue_job_for_graph_version(
                 stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
@@ -434,8 +445,14 @@ def build_dependency_graph_router(
                 # replacement would risk double-processing the same work.
                 continue
             uow.jobs.add(replacement)
+            reissued.append(replacement)
 
         uow.commit()
+
+        if on_job_reissued is not None:
+            for replacement in reissued:
+                on_job_reissued(replacement)
+
         return DependencyGraphResponse.from_domain(confirmed)
 
     return router

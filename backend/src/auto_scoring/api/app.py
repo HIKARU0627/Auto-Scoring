@@ -6,6 +6,8 @@ import atexit
 import tempfile
 import threading
 from asyncio import to_thread
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,10 +31,12 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
+from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
+from auto_scoring.domain.job_execution import JobProcessor
 from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -42,6 +46,10 @@ from auto_scoring.domain.pdf_intake import (
     StagedOutputTooLargeError,
 )
 from auto_scoring.domain.scoring import clamp_score
+from auto_scoring.jobs.clock import Clock
+from auto_scoring.jobs.null_processor import NullJobProcessor
+from auto_scoring.jobs.queue import JobQueueService
+from auto_scoring.jobs.settings import QueueSettings
 
 _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
@@ -134,6 +142,9 @@ def create_app(
     image_preprocessor: ImagePreprocessor | None = None,
     intake_limits: IntakeLimits | None = None,
     max_concurrent_uploads: int = 2,
+    job_processor: JobProcessor | None = None,
+    queue_settings: QueueSettings | None = None,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -167,8 +178,29 @@ def create_app(
     caller owns that database's whole lifecycle. ``store`` (used by the
     submission/test routes below regardless) still comes from ``data_root``
     as usual either way.
+
+    ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
+    parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
+    ``job_processor`` defaults to `auto_scoring.jobs.null_processor.
+    NullJobProcessor` (OCR/AI processing is a later issue's job); tests
+    inject a fake (``tests/fakes.py``). The queue's worker pool only actually
+    starts/stops via the FastAPI lifespan below, so a `TestClient` used
+    without ``with`` (several existing tests do this, same as the temp-dir
+    cleanup above) never runs it -- see ``app.state.queue_service`` for tests
+    that need to drive it directly instead.
     """
-    app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
+    queue_service_holder: dict[str, JobQueueService] = {}
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        service = queue_service_holder["queue_service"]
+        await service.start()
+        try:
+            yield
+        finally:
+            await service.shutdown()
+
+    app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
     app.state.api_token = api_token or generate_token()
 
     scratch: tempfile.TemporaryDirectory[str] | None = None
@@ -192,6 +224,15 @@ def create_app(
         db_engine = create_sqlite_engine(db_url)
         session_factory = build_session_factory(db_engine)
     assert session_factory is not None  # either supplied, or just built above
+
+    queue_service = JobQueueService(
+        session_factory,
+        job_processor or NullJobProcessor(),
+        settings=queue_settings,
+        clock=clock,
+    )
+    queue_service_holder["queue_service"] = queue_service
+    app.state.queue_service = queue_service
 
     if scratch is not None:
         # The startup repair query below (and every other DB access this app
@@ -383,7 +424,12 @@ def create_app(
             ) from exc
         return _submission_response(result.submission, is_retry=result.is_retry)
 
-    protected.include_router(build_dependency_graph_router(session_factory))
+    protected.include_router(
+        build_dependency_graph_router(
+            session_factory, on_job_reissued=lambda job: queue_service.enqueue(job.id)
+        )
+    )
+    protected.include_router(build_jobs_router(queue_service))
 
     app.include_router(protected)
     return app
