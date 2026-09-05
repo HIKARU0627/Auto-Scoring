@@ -13,8 +13,10 @@ from collections.abc import Callable
 from datetime import datetime
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.sqlalchemy_repositories import SqlAlchemyJobRepository
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.dependency_graph import (
     DependencyEdge,
@@ -487,3 +489,297 @@ async def test_retry_job_requeues_a_failed_job(
         await _wait_until(lambda: _state(service, job_id) is JobState.SUCCEEDED)
     finally:
         await service.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Review round 1 regressions
+# --------------------------------------------------------------------------- #
+async def test_submit_and_cancel_from_a_different_thread_than_the_event_loop(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P1: FastAPI runs a synchronous route handler in a worker thread, not
+    on the loop that owns this service's asyncio.Queue/Task objects.
+    submit_submission/cancel_job must reach those objects safely (via
+    loop.call_soon_threadsafe) even when called from such a thread.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    hold = asyncio.Event()
+    processor = FakeJobProcessor(hold_event=hold)
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, lambda: service.submit_submission(submission_id="sub-1"))
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.RUNNING)
+
+        await loop.run_in_executor(None, lambda: service.cancel_job(job_id))
+        await _wait_until(lambda: _state(service, job_id) is JobState.CANCELLED)
+    finally:
+        hold.set()
+        await service.shutdown()
+
+
+async def test_submit_submission_recovers_from_a_concurrent_idempotency_conflict(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2: two concurrent submit_submission calls can both observe "no
+    existing job" for the same question and both attempt to insert one; the
+    loser's add() hits the new unique constraint (add() flushes
+    immediately). That must be treated as "someone else already created it"
+    and retried from a fresh read, not surfaced as a raw IntegrityError/500.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    real_add = SqlAlchemyJobRepository.add
+    calls = {"count": 0}
+
+    def _add_that_conflicts_once(self: SqlAlchemyJobRepository, job: Job) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise IntegrityError(
+                "insert", {}, Exception("uq_jobs_submission_question_graph_version")
+            )
+        real_add(self, job)
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "add", _add_that_conflicts_once)
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    created = service.submit_submission(submission_id="sub-1")
+
+    assert calls["count"] == 2  # first attempt conflicted, second succeeded
+    assert len(created) == 1
+    assert [j.question_id for j in service.list_for_submission("sub-1")] == ["qa"]
+
+
+async def test_duplicate_enqueue_signal_does_not_lose_track_of_the_real_running_task(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: a duplicate dispatch signal for the same job id (e.g. start()'s
+    recovered-then-swept QUEUED list, or two idempotent submit_submission
+    calls) must not let a second, fast no-op task overwrite tracking for the
+    real one -- otherwise cancel_job/shutdown can no longer find it once the
+    real task is the only one still running.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    hold = asyncio.Event()
+    processor = FakeJobProcessor(hold_event=hold)
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.RUNNING)
+
+        # A duplicate signal for the same, already-running job id. _run_one
+        # for this second signal sees the job is no longer QUEUED and
+        # no-ops almost instantly.
+        service.enqueue(job_id)
+        await asyncio.sleep(0.05)  # let the duplicate's no-op task finish
+
+        cancelled_snapshot = service.cancel_job(job_id)
+        assert (
+            cancelled_snapshot.state is JobState.RUNNING
+        )  # cancel is async; this is the pre-cancel read
+        hold.set()
+        await _wait_until(lambda: _state(service, job_id) is JobState.CANCELLED)
+    finally:
+        await service.shutdown()
+
+
+async def test_retry_honors_the_jobs_own_persisted_max_attempts(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: retry decisions must use the persisted Job's own max_attempts,
+    not the service's current QueueSettings.max_attempts -- those can differ
+    (settings changed since the job was created, a reissued/legacy job
+    carrying a different value).
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.QUEUED,
+                max_attempts=1,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT
+        )
+    )
+    # The service's own settings would allow 5 attempts -- the job's
+    # persisted max_attempts=1 must win.
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_attempts=5), clock=clock
+    )
+    await service.start()  # start()'s QUEUED sweep picks job-1 up
+    try:
+        await _wait_until(lambda: _state(service, "job-1") is JobState.FAILED)
+        await asyncio.sleep(0.05)
+    finally:
+        await service.shutdown()
+    job = service.get_job("job-1")
+    assert job is not None
+    assert job.attempts == 1
+    assert len(processor.calls) == 1
+
+
+class _HoldableClock:
+    """A clock whose ``sleep`` blocks until the test releases ``hold``,
+    for precisely observing whether a concurrency permit is held during a
+    backoff sleep."""
+
+    def __init__(self, start: datetime) -> None:
+        self._now = start
+        self.hold = asyncio.Event()
+
+    def now(self) -> datetime:
+        return self._now
+
+    async def sleep(self, seconds: float) -> None:
+        await self.hold.wait()
+
+
+async def test_backoff_sleep_releases_the_concurrency_permit_for_other_submissions(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """P2: the backoff sleep after a retryable failure must happen outside
+    the semaphore -- otherwise a failed job occupies a concurrency permit
+    for the whole backoff window, and with max_concurrency=1 an independent
+    submission's job could never even start until the sleep ends.
+    """
+    _seed(session_factory, test_id="test-a", submission_id="sub-a", question_ids=["qa"])
+    _seed(session_factory, test_id="test-b", submission_id="sub-b", question_ids=["qb"])
+    clock = _HoldableClock(EPOCH)
+    processor = FakeJobProcessor()
+    processor.script(
+        "sub-a",
+        "qa",
+        [ProcessingResult(outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT)],
+    )
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=1), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-a")
+        job_a = _job_id_for_question(service, "sub-a", "qa")
+        await _wait_until(lambda: _state(service, job_a) is JobState.FAILED)
+
+        # job A is now sleeping out its backoff (clock.sleep blocks on
+        # `hold`, never set yet). With only 1 concurrency permit, job B can
+        # only run at all if that permit was actually released before the
+        # sleep, not held through it.
+        service.submit_submission(submission_id="sub-b")
+        job_b = _job_id_for_question(service, "sub-b", "qb")
+        await _wait_until(lambda: _state(service, job_b) is JobState.SUCCEEDED)
+    finally:
+        clock.hold.set()
+        await service.shutdown()
+
+
+async def test_mark_question_usable_resolves_the_active_graph_version(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: mark_question_usable must resolve the submission's test's
+    *currently active* confirmed dependency-graph version first, and only
+    flip a completed job tagged with that version -- list_for_submission
+    returns jobs oldest-first, so picking the first SUCCEEDED match
+    regardless of version could revive a stale, superseded version's job
+    instead of the active one's.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id="test-1"))
+        uow.questions.add(make_question(id="qa", test_id="test-1", number="qa"))
+        uow.questions.add(make_question(id="qb", test_id="test-1", number="qb"))
+        uow.submissions.add(make_submission(id="sub-1", test_id="test-1"))
+        edge = _edge("qa", "qb")
+        v1 = DependencyGraph.from_candidates(
+            id="test-1:v1",
+            test_id="test-1",
+            version=1,
+            question_ids=["qa", "qb"],
+            edges=[edge],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(v1)
+        assert (
+            uow.dependency_graphs.try_confirm(v1.confirm(edges=[edge], confirmed_at=at())) is True
+        )
+        v2 = DependencyGraph.from_candidates(
+            id="test-1:v2",
+            test_id="test-1",
+            version=2,
+            question_ids=["qa", "qb"],
+            edges=[edge],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(v2)
+        assert (
+            uow.dependency_graphs.try_confirm(v2.confirm(edges=[edge], confirmed_at=at())) is True
+        )
+
+        # v1's qa job: succeeded but locked (not usable) -- historical, must
+        # stay untouched.
+        uow.jobs.add(
+            Job(
+                id="job-qa-v1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.SUCCEEDED,
+                usable=False,
+                dependency_graph_version=1,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        # v2 (the active version)'s qa job: also succeeded but still locked.
+        uow.jobs.add(
+            Job(
+                id="job-qa-v2",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.SUCCEEDED,
+                usable=False,
+                dependency_graph_version=2,
+                created_at=at(seconds=10),
+                updated_at=at(seconds=10),
+            )
+        )
+        # v2's qb job: blocked on qa, at the active version.
+        uow.jobs.add(
+            Job(
+                id="job-qb-v2",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="qa",
+                dependency_graph_version=2,
+                created_at=at(seconds=10),
+                updated_at=at(seconds=10),
+            )
+        )
+        uow.commit()
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    service.mark_question_usable(submission_id="sub-1", question_id="qa")
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        qa_v1 = uow.jobs.get("job-qa-v1")
+        qa_v2 = uow.jobs.get("job-qa-v2")
+        qb_v2 = uow.jobs.get("job-qb-v2")
+    assert qa_v1 is not None and qa_v1.usable is False  # untouched: stale version
+    assert qa_v2 is not None and qa_v2.usable is True  # the active version's job is flipped
+    assert qb_v2 is not None and qb_v2.state is JobState.QUEUED  # released

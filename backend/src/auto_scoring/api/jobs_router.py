@@ -32,6 +32,7 @@ from auto_scoring.jobs.queue import (
     JobNotFoundError,
     JobNotRetryableError,
     JobQueueService,
+    SubmissionJobCreationConflictError,
     SubmissionNotReadyError,
 )
 
@@ -89,6 +90,8 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
         try:
             queue_service.submit_submission(submission_id=submission_id)
         except SubmissionNotReadyError as error:
+            raise HTTPException(409, detail=str(error)) from error
+        except SubmissionJobCreationConflictError as error:
             raise HTTPException(409, detail=str(error)) from error
         except JobNotFoundError as error:
             raise HTTPException(404, detail=str(error)) from error

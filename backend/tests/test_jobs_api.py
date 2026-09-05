@@ -98,8 +98,15 @@ def test_create_submission_jobs_without_a_confirmed_graph_returns_409(
 
 
 def test_create_submission_jobs_returns_the_planned_jobs(
-    client: TestClient, session_factory: sessionmaker[Session]
+    session_factory: sessionmaker[Session],
 ) -> None:
+    # Deliberately not `with TestClient(app) as client:` -- the lifespan (and
+    # so the background queue) never starts, so the planned jobs' initial
+    # state is a stable snapshot instead of a race against a real,
+    # near-instant FakeJobProcessor already having finished qa (and thus
+    # released qb) by the time this response is built.
+    app = create_app(api_token=_TOKEN, session_factory=session_factory)
+    client = TestClient(app)
     _seed_confirmed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
 
     response = client.post("/submissions/sub-1/jobs", headers=_AUTH)

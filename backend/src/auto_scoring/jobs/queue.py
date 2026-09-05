@@ -12,17 +12,27 @@ Every operation opens its own short-lived `SqlAlchemyUnitOfWork`; nothing here
 ever holds a transaction open across an ``await`` into
 `auto_scoring.domain.job_execution.JobProcessor.process` (that call may be a
 slow network round trip in a real, future implementation).
+
+Thread-safety: FastAPI runs a synchronous ``def`` route handler in a worker
+thread, not on the event loop that owns this service's ``asyncio.Queue``/
+``asyncio.Task`` objects (`auto_scoring.api.jobs_router`'s handlers are
+exactly that). Every place a route handler can reach an asyncio primitive --
+`enqueue` and cancelling a `RUNNING` job's task -- goes through
+``loop.call_soon_threadsafe`` instead of calling it directly, since
+``asyncio.Queue.put_nowait``/``Task.cancel`` are not themselves safe to call
+from a different thread (review round 1, P1).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import cast
 from uuid import uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -36,6 +46,7 @@ from auto_scoring.domain.job_scheduling import (
     recover_running_job,
 )
 from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
+from auto_scoring.domain.retry_policy import RetryPolicy
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.settings import QueueSettings
 
@@ -43,9 +54,18 @@ logger = logging.getLogger(__name__)
 
 _STOP = object()  # sentinel pushed to the queue to end the dispatcher loop
 
+#: Bound on retries when two concurrent `submit_submission` calls race to
+#: create a job for the same (submission, question, graph version) -- see
+#: `submit_submission`.
+_MAX_SUBMIT_ATTEMPTS = 5
+
 
 class SubmissionNotReadyError(Exception):
     """The submission's test has no confirmed, up-to-date dependency graph."""
+
+
+class SubmissionJobCreationConflictError(Exception):
+    """Concurrent `submit_submission` calls kept losing the idempotency race."""
 
 
 class JobNotFoundError(Exception):
@@ -86,7 +106,15 @@ class JobQueueService:
         self._queue: asyncio.Queue[object] = asyncio.Queue()
         self._semaphore = asyncio.Semaphore(self._settings.max_concurrency)
         self._dispatcher_task: asyncio.Task[None] | None = None
-        self._job_tasks: dict[str, asyncio.Task[None]] = {}
+        #: Every task currently handling one dispatch of a given job id. A
+        #: *set*, not a single `Task`, because duplicate dispatch signals for
+        #: the same id are expected (see `start` re-enqueuing both a
+        #: recovered job and the general QUEUED sweep, or two idempotent
+        #: `submit_submission` calls) -- a single-slot mapping would let a
+        #: fast no-op second task silently overwrite the entry for a real,
+        #: still-running first one (review round 1, P2).
+        self._job_tasks: dict[str, set[asyncio.Task[None]]] = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -100,6 +128,7 @@ class JobQueueService:
         yet) needs re-enqueuing here, not just the ones ``RUNNING`` when the
         process died.
         """
+        self._loop = asyncio.get_running_loop()
         to_enqueue: list[str] = []
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             for job in uow.jobs.list_by_state(JobState.RUNNING):
@@ -131,8 +160,9 @@ class JobQueueService:
             return
         self._queue.put_nowait(_STOP)
         await self._dispatcher_task
-        if self._job_tasks:
-            await asyncio.gather(*list(self._job_tasks.values()), return_exceptions=True)
+        all_tasks = [task for tasks in self._job_tasks.values() for task in tasks]
+        if all_tasks:
+            await asyncio.gather(*all_tasks, return_exceptions=True)
         self._dispatcher_task = None
 
     async def _dispatch_loop(self) -> None:
@@ -142,14 +172,17 @@ class JobQueueService:
                 return
             job_id = cast(str, item)
             task = asyncio.create_task(self._run_one(job_id))
-            self._job_tasks[job_id] = task
-            task.add_done_callback(self._forget_job_task(job_id))
+            self._job_tasks.setdefault(job_id, set()).add(task)
 
-    def _forget_job_task(self, job_id: str) -> Callable[[asyncio.Task[None]], None]:
-        def _on_done(_task: asyncio.Task[None]) -> None:
-            self._job_tasks.pop(job_id, None)
+            def _on_done(finished: asyncio.Task[None], jid: str = job_id) -> None:
+                tasks = self._job_tasks.get(jid)
+                if tasks is None:
+                    return
+                tasks.discard(finished)
+                if not tasks:
+                    self._job_tasks.pop(jid, None)
 
-        return _on_done
+            task.add_done_callback(_on_done)
 
     def enqueue(self, job_id: str) -> None:
         """Push an already-QUEUED job's id onto the in-memory queue.
@@ -158,8 +191,21 @@ class JobQueueService:
         directly (e.g. Issue #26's dependency-graph confirm reissue path)
         can hand it to this same worker pool instead of waiting for the next
         process restart's `start()` sweep to pick it up.
+
+        Safe to call from any thread: goes through
+        ``loop.call_soon_threadsafe`` since ``asyncio.Queue.put_nowait`` is
+        not itself safe to call from a thread other than the one running the
+        loop (review round 1, P1) -- FastAPI runs a synchronous route
+        handler (`auto_scoring.api.jobs_router`) in a worker thread, not on
+        this service's event loop.
         """
-        self._queue.put_nowait(job_id)
+        if self._loop is None:
+            # Not started yet (or already shut down) -- nothing is consuming
+            # the queue anyway; queue directly so a caller that starts the
+            # service afterwards still sees it via `start`'s QUEUED sweep.
+            self._queue.put_nowait(job_id)
+            return
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, job_id)
 
     # ------------------------------------------------------------------ #
     # Submission-DAG job creation
@@ -173,11 +219,27 @@ class JobQueueService:
         Idempotent: if jobs already exist for this submission under the
         active graph version, this creates nothing new and only re-enqueues
         whichever of them are still QUEUED (see
-        ``uq_jobs_submission_question_graph_version``).
-
-        Raises `SubmissionNotReadyError` if the test has no confirmed,
-        up-to-date dependency graph (`can_start_submission_processing`).
+        ``uq_jobs_submission_question_graph_version``). Two concurrent calls
+        for the same submission can both observe "no existing job" for the
+        same question and both try to insert one; the loser's `add()` raises
+        `IntegrityError` on that same unique constraint (review round 1,
+        P2), so the whole attempt is retried from a fresh read rather than
+        surfacing a raw 500.
         """
+        for _attempt in range(_MAX_SUBMIT_ATTEMPTS):
+            try:
+                created, newly_queued = self._plan_and_create_jobs(submission_id)
+            except IntegrityError:
+                continue
+            for job_id in newly_queued:
+                self.enqueue(job_id)
+            return created
+        raise SubmissionJobCreationConflictError(
+            f"could not create jobs for submission {submission_id!r} after several concurrent "
+            "attempts; please retry"
+        )
+
+    def _plan_and_create_jobs(self, submission_id: str) -> tuple[list[Job], list[str]]:
         newly_queued: list[str] = []
         created: list[Job] = []
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -221,15 +283,12 @@ class JobQueueService:
                     blocked_on_question_id=(None if plan.ready else plan.blocking_question_id),
                     dependency_graph_version=graph.version,
                 )
-                uow.jobs.add(job)
+                uow.jobs.add(job)  # flushes immediately; may raise IntegrityError
                 created.append(job)
                 if plan.ready:
                     newly_queued.append(job.id)
             uow.commit()
-
-        for job_id in newly_queued:
-            self.enqueue(job_id)
-        return created
+        return created, newly_queued
 
     # ------------------------------------------------------------------ #
     # Human-triggered resume (Issue #18 §4.4)
@@ -241,12 +300,32 @@ class JobQueueService:
         "人間が…前提を承認して続行…選んだ時点で、依存先を自動でキュー再投入
         する"). A future review API calls this once a human approves or
         corrects a low-confidence/failed result.
+
+        Resolves the submission's test's *currently active* confirmed graph
+        version first, and only considers a completed job tagged with that
+        version -- `list_for_submission` returns jobs oldest-first, so
+        picking the first SUCCEEDED match regardless of version could revive
+        a stale, superseded graph version's job instead of the current one's
+        (review round 1, P2).
         """
         newly_queued: list[str] = []
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+            submission = uow.submissions.get(submission_id)
+            if submission is None:
+                raise JobNotFoundError(submission_id)
+            graph = uow.dependency_graphs.get_latest_confirmed(submission.test_id)
+            if graph is None:
+                raise JobNotFoundError(f"{submission_id}:{question_id}")
+
             jobs = uow.jobs.list_for_submission(submission_id)
             target = next(
-                (j for j in jobs if j.question_id == question_id and j.state is JobState.SUCCEEDED),
+                (
+                    j
+                    for j in jobs
+                    if j.question_id == question_id
+                    and j.state is JobState.SUCCEEDED
+                    and j.dependency_graph_version == graph.version
+                ),
                 None,
             )
             if target is None:
@@ -254,16 +333,9 @@ class JobQueueService:
             uow.jobs.mark_usable(target.id, usable=True)
             jobs = [replace(target, usable=True) if j.id == target.id else j for j in jobs]
 
-            submission = uow.submissions.get(submission_id)
-            if submission is None:
-                raise JobNotFoundError(submission_id)
-            graph = uow.dependency_graphs.get(
-                f"{submission.test_id}:v{target.dependency_graph_version}"
+            newly_queued = self._release_ready_dependents(
+                uow, graph=graph, jobs=jobs, completed_question_id=question_id
             )
-            if graph is not None:
-                newly_queued = self._release_ready_dependents(
-                    uow, graph=graph, jobs=jobs, completed_question_id=question_id
-                )
             uow.commit()
         for job_id in newly_queued:
             self.enqueue(job_id)
@@ -303,9 +375,8 @@ class JobQueueService:
             if job.state in (JobState.SUCCEEDED, JobState.CANCELLED):
                 raise JobNotCancellableError(job_id, job.state)
             if job.state is JobState.RUNNING:
-                task = self._job_tasks.get(job_id)
-                if task is not None:
-                    task.cancel()
+                for task in self._job_tasks.get(job_id, ()):
+                    self._cancel_task_threadsafe(task)
                 # The running task's own CancelledError handler
                 # (_finalize_cancelled) owns the RUNNING -> CANCELLED write,
                 # so this call must not also write it -- that would race the
@@ -319,10 +390,22 @@ class JobQueueService:
             uow.commit()
             return cancelled
 
+    def _cancel_task_threadsafe(self, task: asyncio.Task[None]) -> None:
+        """Request cancellation of ``task`` safely from any thread.
+
+        ``Task.cancel()`` is not itself safe to call from a thread other
+        than the loop's own (review round 1, P1) -- see `enqueue`.
+        """
+        if self._loop is None:
+            task.cancel()
+            return
+        self._loop.call_soon_threadsafe(task.cancel)
+
     # ------------------------------------------------------------------ #
     # Worker
     # ------------------------------------------------------------------ #
     async def _run_one(self, job_id: str) -> None:
+        retry_delay: float | None = None
         async with self._semaphore:
             with SqlAlchemyUnitOfWork(self._session_factory) as uow:
                 job = uow.jobs.get(job_id)
@@ -350,7 +433,14 @@ class JobQueueService:
                     error_message=f"processor raised {type(exc).__name__}",
                 )
             latency = (self._clock.now() - started_at).total_seconds()
-            await self._finalize_result(job_id, result, latency=latency)
+            retry_delay = self._finalize_result(job_id, result, latency=latency)
+        # Semaphore released above -- a job merely waiting out its backoff
+        # delay is not "running" and must not keep occupying a concurrency
+        # permit another, independent submission's job could use in the
+        # meantime (review round 1, P2).
+        if retry_delay is not None:
+            await self._clock.sleep(retry_delay)
+            self._requeue_after_backoff(job_id)
 
     def _finalize_cancelled(self, job_id: str) -> None:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -367,16 +457,36 @@ class JobQueueService:
                 pass
         logger.info("job cancelled", extra={"job_id": job_id, "state": "cancelled"})
 
-    async def _finalize_result(
+    def _retry_policy_for(self, job: Job) -> RetryPolicy:
+        """A `RetryPolicy` using *this job's own* persisted `max_attempts`,
+        not the service's current `QueueSettings.max_attempts` -- those can
+        differ (settings changed since this job was created, a reissued or
+        legacy job carrying a different value), and the decision of whether
+        another attempt is allowed must honour what was actually persisted
+        for this job, not whatever the service happens to be configured with
+        right now (review round 1, P2).
+        """
+        return RetryPolicy(
+            max_attempts=job.max_attempts,
+            initial_backoff_seconds=self._settings.initial_backoff_seconds,
+            backoff_multiplier=self._settings.backoff_multiplier,
+            max_backoff_seconds=self._settings.max_backoff_seconds,
+        )
+
+    def _finalize_result(
         self, job_id: str, result: ProcessingResult, *, latency: float
-    ) -> None:
+    ) -> float | None:
+        """Persist ``result`` and return the backoff delay before a retry,
+        or ``None`` if none is needed. Purely synchronous -- the caller
+        (`_run_one`) is the one that actually awaits the delay, after
+        releasing the concurrency permit (see `_run_one`).
+        """
         now = self._clock.now()
-        retry_delay: float | None = None
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             current = uow.jobs.get(job_id)
             if current is None or current.state is not JobState.RUNNING:
                 # Cancelled concurrently; that handler owns the transition.
-                return
+                return None
 
             if result.outcome is ProcessingOutcome.SUCCEEDED:
                 done = current.transitioned_to(
@@ -411,10 +521,10 @@ class JobQueueService:
                 uow.commit()
                 for ready_job_id in newly_queued:
                     self.enqueue(ready_job_id)
-                return
+                return None
 
             category = result.error_category or ErrorCategory.PERMANENT
-            retry_policy = self._settings.retry_policy
+            retry_policy = self._retry_policy_for(current)
             should_retry = retry_policy.should_retry(category=category, attempts=current.attempts)
             failed = current.transitioned_to(
                 JobState.FAILED, updated_at=now, error=result.error_message, error_code=category
@@ -431,12 +541,7 @@ class JobQueueService:
                 },
             )
             uow.commit()
-            if should_retry:
-                retry_delay = retry_policy.delay_seconds(current.attempts)
-
-        if retry_delay is not None:
-            await self._clock.sleep(retry_delay)
-            self._requeue_after_backoff(job_id)
+            return retry_policy.delay_seconds(current.attempts) if should_retry else None
 
     def _requeue_after_backoff(self, job_id: str) -> None:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
