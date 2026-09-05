@@ -432,31 +432,30 @@ class JobQueueService:
             try:
                 await self._run_one(job_id)
             except Exception:
-                # _run_one already absorbs a processor bug and a lost
-                # compare-and-set (JobSaveConflict); this is the backstop
-                # for anything else it doesn't specifically expect -- most
-                # plausibly a transient SQLAlchemy OperationalError (e.g. a
-                # SQLite busy-timeout) while claiming or finalizing this job.
-                # Nothing else in the pool ever replaces a dead worker task,
-                # so letting this propagate out of the loop would shrink the
-                # pool by one permanently; at max_concurrency=1 that stops
-                # every future job until the next process restart (review
-                # round 7, P1). Log and move on to the next queued item
-                # instead of dying.
+                # _run_one already absorbs a processor bug, a lost
+                # compare-and-set (JobSaveConflict), and any failure past
+                # its own claim (QUEUED -> RUNNING) commit -- see
+                # `_recover_stuck_running` (review round 10, P1). Anything
+                # that still escapes here happened *before* that claim ever
+                # committed (most plausibly a transient SQLAlchemy
+                # OperationalError, e.g. a SQLite busy-timeout, while
+                # reading or claiming the row). Nothing else in the pool
+                # ever replaces a dead worker task, so letting this
+                # propagate out of the loop would shrink the pool by one
+                # permanently; at max_concurrency=1 that stops every future
+                # job until the next process restart (review round 7, P1).
+                # Log and move on to the next queued item instead of dying.
                 logger.exception(
-                    "worker failed to process a job; continuing",
+                    "worker failed to claim a job; re-enqueuing",
                     extra={"job_id": job_id},
                 )
                 # This worker already dequeued job_id -- that in-memory
-                # dispatch signal is gone regardless of whether the failure
-                # happened before or after _run_one's own claim (QUEUED ->
-                # RUNNING) CAS committed. If it was *before* the row is
+                # dispatch signal is gone. Safe to restore unconditionally:
+                # the claim never committed (still handled inside
+                # `_run_one`'s own try/except otherwise), so the row is
                 # still QUEUED with nothing left to ever re-signal it short
                 # of a full process restart's `start()` sweep (review round
-                # 8, P1). Restoring the signal unconditionally costs nothing
-                # if the claim actually did succeed before the failure --
-                # the next `_run_one(job_id)` simply finds it no longer
-                # QUEUED and no-ops immediately.
+                # 8, P1).
                 self.enqueue(job_id)
 
     def enqueue(self, job_id: str) -> None:
@@ -909,6 +908,30 @@ class JobQueueService:
                 return
             uow.commit()
 
+        # The claim above is committed: this worker now owns job_id's only
+        # RUNNING row. A failure from here on must not be handled the way
+        # `_worker_loop` handles one from *before* this point (just
+        # re-enqueue job_id) -- this same method's own early return above
+        # immediately no-ops a non-QUEUED job, so a naive re-enqueue would
+        # silently strand the row RUNNING until the next process restart's
+        # recovery sweep (review round 10, P1). Recover it in-process
+        # instead, the same way `start()` would on the next restart.
+        try:
+            await self._run_claimed(job_id, running)
+        except Exception:
+            logger.exception(
+                "worker failed to finish a claimed job; recovering in-process",
+                extra={"job_id": job_id},
+            )
+            self._recover_stuck_running(job_id)
+
+    async def _run_claimed(self, job_id: str, running: Job) -> None:
+        """The rest of `_run_one`, run only after ``job_id``'s claim
+        (QUEUED -> RUNNING) already committed. Split out so `_run_one` can
+        wrap just this part in the in-process recovery described there --
+        a failure before the claim commits leaves the row untouched (still
+        QUEUED) and needs no such recovery.
+        """
         # Only the CAS winner above ever reaches here, so at most one entry
         # per job_id ever exists in `_running` (review round 1, P2).
         current_task = cast(asyncio.Task[None], asyncio.current_task())
@@ -940,6 +963,41 @@ class JobQueueService:
         if retry is not None:
             delay, attempts_at_failure = retry
             self._schedule_retry(job_id, delay, expected_attempts=attempts_at_failure)
+
+    def _recover_stuck_running(self, job_id: str) -> None:
+        """Recover ``job_id`` after `_run_claimed` failed to finish it by
+        some means it doesn't already handle itself (most plausibly a
+        transient SQLAlchemy OperationalError while persisting the
+        outcome) -- the exact recovery `start()`'s own crash-recovery sweep
+        applies to a RUNNING row left by a killed process, just run
+        in-process right away instead of waiting for the next restart
+        (review round 10, P1).
+
+        No compare-and-set race is possible between the read and the write
+        below (nothing else in this process can run in between -- there is
+        no ``await`` -- and another process is excluded entirely by the
+        data-root lock, review round 9, P1), so this needs no
+        ``expected_attempts`` guard, matching `start()`'s identical
+        recovery write.
+        """
+        with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+            current = uow.jobs.get(job_id)
+            if current is None or current.state is not JobState.RUNNING:
+                # Already finalized, cancelled, or reissued by another
+                # writer in the meantime -- nothing left to recover.
+                return
+            recovered = recover_running_job(current, at=self._clock.now())
+            try:
+                uow.jobs.save(recovered, expected_state=JobState.RUNNING)
+            except JobSaveConflict:
+                return
+            uow.commit()
+        logger.info(
+            "job recovered after an in-process failure",
+            extra={"job_id": job_id, "state": recovered.state.value},
+        )
+        if recovered.state is JobState.QUEUED:
+            self.enqueue(job_id)
 
     def _schedule_retry(self, job_id: str, delay: float, *, expected_attempts: int) -> None:
         """Push a heap entry due ``delay`` seconds from now, serviced by the

@@ -2528,3 +2528,67 @@ async def test_submit_submission_does_not_re_enqueue_an_existing_queued_job(
     for _ in range(5):
         service.submit_submission(submission_id="sub-1")
     assert service._queue.qsize() == 1
+
+
+# --------------------------------------------------------------------------- #
+# Review round 10 regressions
+# --------------------------------------------------------------------------- #
+async def test_a_post_claim_failure_recovers_the_stuck_running_job(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: an unexpected exception *after* _run_one's own claim (QUEUED ->
+    RUNNING) has already committed -- e.g. a transient SQLAlchemy
+    OperationalError while persisting the outcome -- must not be treated
+    the same way a pre-claim failure is (just re-enqueue the job id).
+    `_run_one`'s own early-return guard immediately no-ops a non-QUEUED
+    row, so a plain re-enqueue signal for a job stuck RUNNING would do
+    nothing at all, stranding it until the next process restart's
+    recovery sweep. The worker must instead recover it in-process, the
+    same way `start()` would on restart: QUEUED again here (a fresh job,
+    retries remain), then actually re-processed to completion -- not left
+    RUNNING forever.
+    """
+    _seed(session_factory, question_ids=["qa"])
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"finalize_attempts": 0}
+
+    def _save_raises_once_on_finalize(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        expected_attempts: int | None = None,
+        require_usable_unset: bool = False,
+    ) -> None:
+        if expected_state is JobState.RUNNING and calls["finalize_attempts"] == 0:
+            calls["finalize_attempts"] += 1
+            raise RuntimeError("simulated transient infra error while finalizing")
+        real_save(
+            self,
+            job,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+            require_usable_unset=require_usable_unset,
+        )
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_raises_once_on_finalize)
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=1), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        # In-process recovery must flip the stuck RUNNING row back to
+        # QUEUED and re-enqueue it, letting it go on to actually succeed --
+        # not sit stuck RUNNING forever.
+        await _wait_until(lambda: _state(service, job_id) is JobState.SUCCEEDED)
+        assert calls["finalize_attempts"] == 1  # the injected failure really fired once
+        job = service.get_job(job_id)
+        assert job is not None
+        assert job.attempts == 2  # the recovered attempt, then the one that actually succeeded
+    finally:
+        await service.shutdown()
