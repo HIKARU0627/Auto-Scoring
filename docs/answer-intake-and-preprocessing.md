@@ -841,3 +841,59 @@ Defenderのリアルタイム保護が有効でサードパーティ製AVは無�
   宣言を `400` で拒否してしまっていた。allowlist と照合する前にベースの
   メディアタイプを小文字化するようにした
   （`test_validate_declared_mime_is_case_insensitive`）。
+
+## 22. GitHub Actions（Windows runner）での CI 失敗調査
+
+PR #37 の CI「Quality」ジョブで `app/test/sidecar_api_client_test.dart` の
+7 テストが `TimeoutException after 0:00:30.000000` → 最終的に
+`Bad state: sidecar never became healthy` で失敗した
+（実行: `.github/workflows/ci.yml` の `quality` ジョブ、`windows-latest`）。
+ローカルの `pnpm run check` はこれまで通りグリーンだった。
+
+**調査した仮説と結果**:
+
+- **ASGI 層のアップロード容量ゲート（round 8 の P1 修正）が `/healthz` に干渉
+  している** → 却下。`SubmissionUploadGateMiddleware` は
+  `POST /tests/{test_id}/submissions` にのみマッチし、それ以外
+  （`GET /healthz` を含む）は即座にそのまま素通しする。コードを確認した
+  限り干渉の余地はない。
+- **`sidecar.py` のポートバインドの競合（round 8 で修正した TOCTOU）が
+  別の形で再発している** → 却下。修正後はソケットを bind した瞬間から
+  `uvicorn.Server.run(sockets=[sock])` に渡すまで一度も手放さないため、
+  タイミングに依存せず構造的にギャップが無い。
+- **GitHub Actions の `windows-latest` は Defender のリアルタイム保護で
+  未知の実行ファイルを詳しく検査し、起動が遅くなる** → 検証の結果、根拠なし
+  と判断。`actions/runner-images` リポジトリの
+  `Configure-WindowsDefender.ps1` によれば、`windows-latest` イメージは
+  既定で `C:\` と `D:\`（GitHub Actions のチェックアウト先はこの `D:\`
+  配下）を Defender のスキャン対象から除外済みであり、これ以上除外設定を
+  足しても効果は無い。
+
+**実際に採った対応**: 根本原因を「CI ランナー固有の起動遅延」（Defender では
+なく、初回実行のコールドスタート・共有 CPU 等、CI 環境で一般的な要因の
+いずれか、あるいはローカルで観測していたものと同種の一時的な遅延）と特定
+しきれなかったため、原因そのものを取り除くのではなく、**実際にかかる時間に
+対してテスト側の待ち時間予算が単純に不足していた**という、ログから直接読み
+取れる事実に対処した。
+
+- `app/test/sidecar_api_client_test.dart` に `@Timeout(Duration(minutes: 3))`
+  をファイル全体へ追加した。CI ログの失敗パターン（1つ目のテストが
+  `package:test` 既定の 30 秒でタイムアウト→次のテストも同じ共有 `Future`
+  を待って 30 秒でタイムアウト、を繰り返し、最終的に約92秒でサイドカー
+  自身の起動が完了する）は、起動そのものが「ハングしている」のではなく
+  「`package:test` の既定タイムアウトより時間がかかっているだけ」で
+  あることを示している。single-flight 化（round 8）により実際の起動作業は
+  1 回しか走らないため、最初の呼び出し元に十分な猶予を与えれば以降は
+  即座に共有結果を受け取れる。
+- `_readHandshake`（30 秒）・`_waitUntilHealthy`（2 分）を固定試行回数から
+  時間ベースのループに変更し、予算を大幅に拡大した。
+- `startSidecar` がサイドカーの stdout/stderr を起動直後から溜め込み、
+  起動に失敗した場合はそれまでに出力された内容をテストログへ印字するように
+  した。従来は起動が遅い・失敗した場合でも診断できる情報が一切ログに
+  残らなかった（今回の CI 失敗もそうだった）ため、次に何か問題が起きた際に
+  実際の原因が見えるようにする狙い。
+
+これらは「原因そのものの除去」ではなく「実際の所要時間に対して予算を
+現実的な値へ引き上げ、かつ次回以降の切り分けを容易にする」対応である。
+CI での再実行結果を見て、なお失敗する場合は stdout/stderr の内容から
+さらに切り分ける。
