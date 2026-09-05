@@ -14,33 +14,77 @@ import 'package:built_value/iso_8601_date_time_serializer.dart';
 import 'package:auto_scoring_api/src/date_serializer.dart';
 import 'package:auto_scoring_api/src/model/date.dart';
 
+import 'package:auto_scoring_api/src/model/analyze_request.dart';
+import 'package:auto_scoring_api/src/model/confirm_request.dart';
+import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
+import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
+import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
+import 'package:auto_scoring_api/src/model/question_text_override.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
+import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
 
 part 'serializers.g.dart';
 
 @SerializersFor([
+  AnalyzeRequest,
+  ConfirmRequest,
+  DependencyEdgeModel,
+  DependencyGraphResponse,
+  DependencyProvision,
   HTTPValidationError,
   LocationInner,
+  QuestionTextOverride,
   ScoreRequest,
   ScoreResponse,
+  UnresolvedQuestionModel,
   ValidationError,
 ])
 Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(UnresolvedQuestionModel)]),
+        () => ListBuilder<UnresolvedQuestionModel>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltMap, [FullType(String), FullType(String)]),
         () => MapBuilder<String, String>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(DependencyGraphResponse)]),
+        () => ListBuilder<DependencyGraphResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(LocationInner)]),
         () => ListBuilder<LocationInner>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(QuestionTextOverride)]),
+        () => ListBuilder<QuestionTextOverride>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(ValidationError)]),
         () => ListBuilder<ValidationError>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(DependencyProvision)]),
+        () => ListBuilder<DependencyProvision>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
+        () => ListBuilder<DependencyEdgeModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(String)]),
+        () => ListBuilder<String>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [
+          FullType(BuiltList, [FullType(String)])
+        ]),
+        () => ListBuilder<BuiltList<String>>(),
       )
       ..add(const OneOfSerializer())
       ..add(const AnyOfSerializer())

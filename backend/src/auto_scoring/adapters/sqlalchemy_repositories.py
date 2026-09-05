@@ -14,12 +14,16 @@ constraint violation at the offending call rather than at ``commit``.
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
 from auto_scoring.db.orm import (
     AnnotationRow,
+    DependencyEdgeRow,
+    DependencyGraphRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -30,11 +34,17 @@ from auto_scoring.db.orm import (
     SubmissionRow,
     TestRow,
 )
+from auto_scoring.domain.dependency_graph import (
+    DependencyGraph,
+    DependencyGraphError,
+    DependencyGraphStatus,
+)
 from auto_scoring.domain.models import (
     Annotation,
     GradeResult,
     GradingSource,
     Job,
+    JobSaveConflict,
     JobState,
     Question,
     RecognitionResult,
@@ -254,22 +264,285 @@ class SqlAlchemyJobRepository:
         row = self._session.get(JobRow, job_id)
         return m.job_from_row(row) if row is not None else None
 
-    def save(self, job: Job) -> None:
+    def save(self, job: Job, *, expected_state: JobState) -> None:
+        """Compare-and-set on ``expected_state`` -- the state the *caller*
+        observed before deciding on this transition -- not a state this call
+        re-reads from the row itself.
+
+        Re-reading "current state" from the row inside `save()` (the
+        previous implementation) reopens the exact race it was meant to
+        close: if two workers both read the same job as QUEUED and both
+        decide to move it to RUNNING, whichever `save()` runs second would
+        re-read the row *after* the first has already committed RUNNING, see
+        its own freshly re-read ``current_state`` already equal to its own
+        target state (RUNNING), skip the `ensure_job_transition` check
+        entirely (``job.state is not current_state`` is false), and then its
+        own ``WHERE state = 'running'`` would match the row the first writer
+        just produced -- silently "succeeding" a claim this call never
+        actually observed permission for (Issue #26 review). Requiring the
+        caller to pass the state it read via `get()` before calling
+        `Job.transitioned_to(...)` ties the compare-and-set to what was
+        actually observed, so the second worker's ``WHERE state = 'queued'``
+        no longer matches and it correctly loses the race.
+        """
+        if job.state is not expected_state:
+            ensure_job_transition(expected_state, job.state)
+
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(JobRow)
+                .where(JobRow.id == job.id, JobRow.state == expected_state)
+                .values(
+                    state=job.state,
+                    attempts=job.attempts,
+                    max_attempts=job.max_attempts,
+                    last_error=job.last_error,
+                    blocked_on_question_id=job.blocked_on_question_id,
+                    updated_at=job.updated_at,
+                )
+            ),
+        )
         row = self._session.get(JobRow, job.id)
-        if row is None:
-            raise LookupError(f"job {job.id!r} not found")
-        current_state = JobState(row.state)
-        if job.state is not current_state:
-            ensure_job_transition(current_state, job.state)
-        row.state = job.state
-        row.attempts = job.attempts
-        row.max_attempts = job.max_attempts
-        row.last_error = job.last_error
-        row.blocked_on_question_id = job.blocked_on_question_id
-        row.updated_at = job.updated_at
+        if result.rowcount != 1:
+            if row is None:
+                raise LookupError(f"job {job.id!r} not found")
+            raise JobSaveConflict(job.id, expected_state)
+        if row is not None:
+            self._session.expire(row)
 
     def list_by_state(self, state: JobState) -> list[Job]:
         rows = self._session.scalars(
             select(JobRow).where(JobRow.state == state).order_by(JobRow.created_at)
         )
         return [m.job_from_row(row) for row in rows]
+
+    def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
+        # FAILED is not terminal here: FAILED -> QUEUED is a valid retry
+        # transition (see `auto_scoring.domain.models._JOB_TRANSITIONS` and
+        # docs/data-model-and-local-storage.md), so a stale FAILED job left
+        # unlisted could still be retried later and run against the
+        # superseded graph version (Issue #26 review).
+        rows = self._session.scalars(
+            select(JobRow)
+            .join(SubmissionRow, JobRow.submission_id == SubmissionRow.id)
+            .where(
+                SubmissionRow.test_id == test_id,
+                JobRow.dependency_graph_version.is_not(None),
+                JobRow.dependency_graph_version != current_version,
+                JobRow.state.in_(
+                    [JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED, JobState.FAILED]
+                ),
+            )
+            .order_by(JobRow.created_at)
+        )
+        return [m.job_from_row(row) for row in rows]
+
+
+class SqlAlchemyDependencyGraphRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def save(self, graph: DependencyGraph) -> None:
+        """Upsert on ``(test_id, version)``.
+
+        Inserts a new row when this version has never been saved. When it
+        has, the existing row is overwritten -- unless it is already
+        CONFIRMED, in which case this raises: a confirmed version is
+        immutable (see `DependencyGraph.confirm`).
+
+        The overwrite itself is a compare-and-set (``WHERE status =
+        'draft'``), not a blind PK update: the early ``existing.status``
+        check above only proves the row was DRAFT *when this call read it*,
+        and says nothing about whether another transaction (`try_confirm`)
+        confirmed it in the meantime. Without the ``WHERE``, this call's
+        edge-delete-then-unconditional-UPDATE would still run against a row
+        that has since become CONFIRMED, deleting its reviewed edges and
+        writing this call's (stale, pre-confirm) status back over CONFIRMED
+        -- silently un-confirming a graph a human already signed off on
+        (Issue #26 review; the same class of bug `try_confirm` and
+        `JobRepository.save` were already hardened against). A rowcount of 0
+        means the row moved on since the read above; report it as the same
+        `DependencyGraphError` as the early check rather than corrupting
+        whichever write actually won.
+        """
+        existing = self._session.scalars(
+            select(DependencyGraphRow).where(
+                DependencyGraphRow.test_id == graph.test_id,
+                DependencyGraphRow.version == graph.version,
+            )
+        ).one_or_none()
+
+        if existing is None:
+            parent, children = m.dependency_graph_rows(graph)
+            self._session.add(parent)
+            self._session.flush()  # graph row before its edges
+            self._session.add_all(children)
+            self._session.flush()
+            return
+
+        if DependencyGraphStatus(existing.status) is DependencyGraphStatus.CONFIRMED:
+            raise DependencyGraphError(
+                f"dependency graph {graph.test_id!r} v{graph.version} is already confirmed "
+                "and cannot be overwritten; save a new version instead"
+            )
+
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(DependencyGraphRow)
+                .where(
+                    DependencyGraphRow.id == existing.id,
+                    DependencyGraphRow.status == DependencyGraphStatus.DRAFT,
+                )
+                .values(
+                    status=graph.status,
+                    question_ids=sorted(graph.question_ids),
+                    unresolved=[u.to_dict() for u in graph.unresolved],
+                    created_at=graph.created_at,
+                    confirmed_at=graph.confirmed_at,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            raise DependencyGraphError(
+                f"dependency graph {graph.test_id!r} v{graph.version} was confirmed by another "
+                "request while this save was in flight and cannot be overwritten"
+            )
+        self._session.expire(existing)
+
+        for edge_row in self._session.scalars(
+            select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == existing.id)
+        ):
+            self._session.delete(edge_row)
+        self._session.flush()  # old edges gone before the new ones land
+
+        _, children = m.dependency_graph_rows(graph)
+        for child in children:
+            child.graph_id = existing.id
+        self._session.add_all(children)
+        self._session.flush()
+
+    def try_confirm(self, confirmed: DependencyGraph) -> bool:
+        """Atomically transition one DRAFT row to CONFIRMED, or refuse.
+
+        Unlike ``save``, this is a compare-and-set: the ``UPDATE ... WHERE``
+        below is evaluated by SQLite against the row's *actual* current state
+        at execution time, not against whatever this session read earlier --
+        so it is safe even when another `/confirm` for the same test raced
+        this one and reached the database first (Issue #26 review: without
+        this, two concurrent confirms could both pass their application-level
+        checks -- read before either writes -- and then both blindly
+        overwrite via plain ORM attribute mutation, since a normal ORM
+        ``UPDATE`` only matches on primary key, not on the state it was read
+        with).
+
+        Returns ``True`` (and replaces the edges) if, at the moment this
+        statement executed: the row was still DRAFT; no higher version for
+        the same test was already CONFIRMED; and the test's *current*
+        questions are still exactly ``confirmed.question_ids`` (a question
+        added/removed between the application-level check and this write
+        would otherwise let a stale snapshot get CONFIRMED -- Issue #26
+        review). Returns ``False`` -- touching nothing -- if any precondition
+        had already stopped holding; the caller reports a conflict for the
+        loser to re-fetch and retry.
+        """
+        newer_confirmed_exists = (
+            select(DependencyGraphRow.id)
+            .where(
+                DependencyGraphRow.test_id == confirmed.test_id,
+                DependencyGraphRow.status == DependencyGraphStatus.CONFIRMED,
+                DependencyGraphRow.version > confirmed.version,
+            )
+            .exists()
+        )
+        # Set equality via cardinality + one-way containment: if the test's
+        # current question count equals len(confirmed.question_ids) *and*
+        # none of the test's current questions falls outside that set, the
+        # two sets are identical (both finite, no duplicates).
+        expected_question_ids = sorted(confirmed.question_ids)
+        current_question_count = (
+            select(func.count(QuestionRow.id))
+            .where(QuestionRow.test_id == confirmed.test_id)
+            .scalar_subquery()
+        )
+        question_outside_expected_exists = (
+            select(QuestionRow.id)
+            .where(
+                QuestionRow.test_id == confirmed.test_id,
+                QuestionRow.id.not_in(expected_question_ids),
+            )
+            .exists()
+        )
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(DependencyGraphRow)
+                .where(
+                    DependencyGraphRow.id == confirmed.id,
+                    DependencyGraphRow.status == DependencyGraphStatus.DRAFT,
+                    ~newer_confirmed_exists,
+                    current_question_count == len(expected_question_ids),
+                    ~question_outside_expected_exists,
+                )
+                .values(
+                    status=DependencyGraphStatus.CONFIRMED,
+                    unresolved=[],
+                    confirmed_at=confirmed.confirmed_at,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            return False
+
+        for edge_row in self._session.scalars(
+            select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == confirmed.id)
+        ):
+            self._session.delete(edge_row)
+        self._session.flush()  # old candidate edges gone before the reviewed ones land
+
+        _, children = m.dependency_graph_rows(confirmed)
+        self._session.add_all(children)
+        self._session.flush()
+        return True
+
+    def _hydrate(self, row: DependencyGraphRow) -> DependencyGraph:
+        edges = list(
+            self._session.scalars(
+                select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == row.id)
+            )
+        )
+        return m.dependency_graph_from_rows(row, edges)
+
+    def get(self, graph_id: str) -> DependencyGraph | None:
+        row = self._session.get(DependencyGraphRow, graph_id)
+        return self._hydrate(row) if row is not None else None
+
+    def get_latest(self, test_id: str) -> DependencyGraph | None:
+        row = self._session.scalars(
+            select(DependencyGraphRow)
+            .where(DependencyGraphRow.test_id == test_id)
+            .order_by(DependencyGraphRow.version.desc())
+            .limit(1)
+        ).one_or_none()
+        return self._hydrate(row) if row is not None else None
+
+    def get_latest_confirmed(self, test_id: str) -> DependencyGraph | None:
+        row = self._session.scalars(
+            select(DependencyGraphRow)
+            .where(
+                DependencyGraphRow.test_id == test_id,
+                DependencyGraphRow.status == DependencyGraphStatus.CONFIRMED,
+            )
+            .order_by(DependencyGraphRow.version.desc())
+            .limit(1)
+        ).one_or_none()
+        return self._hydrate(row) if row is not None else None
+
+    def list_versions(self, test_id: str) -> list[DependencyGraph]:
+        rows = self._session.scalars(
+            select(DependencyGraphRow)
+            .where(DependencyGraphRow.test_id == test_id)
+            .order_by(DependencyGraphRow.version)
+        )
+        return [self._hydrate(row) for row in rows]

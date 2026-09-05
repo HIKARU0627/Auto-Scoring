@@ -89,7 +89,14 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
 
     handshake_file = tmp_path / "handshake.json"
-    exit_code = run(["--handshake-file", str(handshake_file)])
+    exit_code = run(
+        [
+            "--handshake-file",
+            str(handshake_file),
+            "--app-data-dir",
+            str(tmp_path / "app-data"),
+        ]
+    )
 
     assert exit_code == 0
     payload = json.loads(handshake_file.read_text(encoding="utf-8"))
@@ -98,3 +105,5 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     assert captured["kwargs"]["host"] == LOOPBACK
     assert captured["kwargs"]["port"] == payload["port"]
     assert captured["app"].state.api_token == "generated-test-token"
+    # The DB was created and migrated to head under --app-data-dir (Issue #26).
+    assert (tmp_path / "app-data" / "database.sqlite").is_file()

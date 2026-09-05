@@ -1,6 +1,173 @@
 {
   "components": {
     "schemas": {
+      "AnalyzeRequest": {
+        "properties": {
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionTextOverride"
+            },
+            "title": "Overrides",
+            "type": "array"
+          }
+        },
+        "title": "AnalyzeRequest",
+        "type": "object"
+      },
+      "ConfirmRequest": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/DependencyEdgeModel"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "edges"
+        ],
+        "title": "ConfirmRequest",
+        "type": "object"
+      },
+      "DependencyEdgeModel": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "from_question_id": {
+            "title": "From Question Id",
+            "type": "string"
+          },
+          "provides": {
+            "items": {
+              "$ref": "#/components/schemas/DependencyProvision"
+            },
+            "title": "Provides",
+            "type": "array"
+          },
+          "rationale": {
+            "title": "Rationale",
+            "type": "string"
+          },
+          "to_question_id": {
+            "title": "To Question Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_question_id",
+          "to_question_id",
+          "provides",
+          "rationale"
+        ],
+        "title": "DependencyEdgeModel",
+        "type": "object"
+      },
+      "DependencyGraphResponse": {
+        "properties": {
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/DependencyEdgeModel"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "layers": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Layers",
+            "type": "array"
+          },
+          "question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Question Ids",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          },
+          "unresolved": {
+            "items": {
+              "$ref": "#/components/schemas/UnresolvedQuestionModel"
+            },
+            "title": "Unresolved",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "test_id",
+          "version",
+          "status",
+          "question_ids",
+          "edges",
+          "unresolved",
+          "layers",
+          "created_at"
+        ],
+        "title": "DependencyGraphResponse",
+        "type": "object"
+      },
+      "DependencyProvision": {
+        "description": "What a prerequisite question hands to its dependent (\u00a79.2 result shape).",
+        "enum": [
+          "recognized_text",
+          "score",
+          "criterion_result"
+        ],
+        "title": "DependencyProvision",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -12,6 +179,42 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "QuestionTextOverride": {
+        "description": "Extracted PDF text for one question, supplied by the caller.\n\nThe MVP question record (Issue #11) does not yet store \u554f\u984c\u6587 text\nextracted from the model-answer/manual PDFs, so the analyze request\ncarries it explicitly -- once PDF text extraction exists this becomes the\ndefault and overrides stay optional.",
+        "properties": {
+          "prompt_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Text"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "rubric_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rubric Text"
+          }
+        },
+        "required": [
+          "question_id"
+        ],
+        "title": "QuestionTextOverride",
         "type": "object"
       },
       "ScoreRequest": {
@@ -63,6 +266,24 @@
           "ratio"
         ],
         "title": "ScoreResponse",
+        "type": "object"
+      },
+      "UnresolvedQuestionModel": {
+        "properties": {
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "reason"
+        ],
+        "title": "UnresolvedQuestionModel",
         "type": "object"
       },
       "ValidationError": {
@@ -183,6 +404,218 @@
           }
         ],
         "summary": "Score"
+      }
+    },
+    "/tests/{test_id}/dependency-graph": {
+      "get": {
+        "operationId": "get_latest_tests__test_id__dependency_graph_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DependencyGraphResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Latest",
+        "tags": [
+          "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/dependency-graph/analyze": {
+      "post": {
+        "operationId": "analyze_tests__test_id__dependency_graph_analyze_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyzeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DependencyGraphResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Analyze",
+        "tags": [
+          "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/dependency-graph/confirm": {
+      "post": {
+        "operationId": "confirm_tests__test_id__dependency_graph_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DependencyGraphResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm",
+        "tags": [
+          "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/dependency-graph/versions": {
+      "get": {
+        "operationId": "list_versions_tests__test_id__dependency_graph_versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DependencyGraphResponse"
+                  },
+                  "title": "Response List Versions Tests  Test Id  Dependency Graph Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Versions",
+        "tags": [
+          "dependency-graph"
+        ]
       }
     }
   }

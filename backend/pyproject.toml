@@ -31,6 +31,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/auto_scoring"]
+# `migrations/` and `alembic.ini` live at the `backend/` project root (outside
+# `src/auto_scoring`) for developer convenience (`uv run alembic ...` from
+# `backend/`), but `auto_scoring.db.migrator.upgrade` -- which the packaged
+# `auto-scoring-sidecar` console script calls on startup -- needs them
+# installed *inside* the package too, or a wheel install has no migrations to
+# run and the sidecar exits before Uvicorn ever starts (Issue #26 review).
+# `db/migrator.py` resolves both this packaged location and the source-tree
+# one, preferring whichever exists.
+force-include = { "migrations" = "auto_scoring/migrations", "alembic.ini" = "auto_scoring/alembic.ini" }
+exclude = ["**/__pycache__", "**/*.pyc"]
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,19 @@
+# auto_scoring_api.model.DependencyEdgeModel
+
+## Load the model package
+```dart
+import 'package:auto_scoring_api/api.dart';
+```
+
+## Properties
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**confidence** | **num** |  | [optional] 
+**fromQuestionId** | **String** |  | 
+**provides** | [**BuiltList&lt;DependencyProvision&gt;**](DependencyProvision.md) |  | 
+**rationale** | **String** |  | 
+**toQuestionId** | **String** |  | 
+
+[[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

@@ -28,8 +28,11 @@ from typing import TypedDict
 
 import uvicorn
 
+from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.api.app import create_app
 from auto_scoring.api.auth import generate_token
+from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
+from auto_scoring.db.migrator import upgrade
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
@@ -109,6 +112,13 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         required=True,
         help="File to write the {host, port, token} JSON line to.",
     )
+    parser.add_argument(
+        "--app-data-dir",
+        type=Path,
+        default=Path("app-data"),
+        help="Local data directory (simplified-design-specification.md §23); "
+        "holds database.sqlite, migrated to head on startup.",
+    )
     return parser.parse_args(argv)
 
 
@@ -124,8 +134,14 @@ def run(argv: Sequence[str] | None = None) -> int:
         args.handshake_file,
     )
 
+    store = LocalFileStore(args.app_data_dir)
+    store.sweep_temp()
+    db_url = sqlite_url(store.database_path())
+    upgrade(db_url, "head")
+    session_factory = build_session_factory(create_sqlite_engine(db_url))
+
     uvicorn.run(
-        create_app(api_token=token),
+        create_app(api_token=token, session_factory=session_factory),
         host=LOOPBACK,
         port=port,
         log_config=None,

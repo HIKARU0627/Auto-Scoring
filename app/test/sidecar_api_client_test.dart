@@ -36,6 +36,8 @@ void main() {
     sidecar = await Process.start(sidecarExe, [
       '--handshake-file',
       handshakeFile.path,
+      '--app-data-dir',
+      '${tempDir.path}/app-data',
     ]);
 
     final handshake = await _readHandshake(handshakeFile);
