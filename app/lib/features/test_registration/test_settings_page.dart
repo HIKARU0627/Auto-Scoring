@@ -711,6 +711,13 @@ String _regionKindLabel(RegionKind kind) => switch (kind) {
   _ => kind.toString(),
 };
 
+String _provisionLabel(DependencyProvision provision) => switch (provision) {
+  DependencyProvision.recognizedText => '認識テキスト',
+  DependencyProvision.score => '得点',
+  DependencyProvision.criterionResult => '採点基準の判定結果',
+  _ => provision.toString(),
+};
+
 /// Edits one region's kind/page/label/bbox/text in place.
 class _RegionEditDialog extends StatefulWidget {
   const _RegionEditDialog({required this.region});
@@ -925,6 +932,14 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
   late String _from;
   late String _to;
   late final TextEditingController _rationaleController;
+  // A `Set`, not a `List` -- `provides` has no meaningful order or
+  // duplicates, and toggling membership per checkbox is simplest against a
+  // set. Backend's `DependencyEdge.__post_init__` rejects an empty
+  // `provides`, so an edge whose dependency is really "score" or
+  // "criterion_result" (not just recognized text) must be expressible here,
+  // not silently coerced to whatever `_addEdge` defaulted it to (Issue #16
+  // review round 4).
+  late Set<DependencyProvision> _provides;
   String? _validationError;
 
   @override
@@ -933,6 +948,7 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
     _from = widget.edge.fromQuestionId;
     _to = widget.edge.toQuestionId;
     _rationaleController = TextEditingController(text: widget.edge.rationale);
+    _provides = widget.edge.provides.toSet();
   }
 
   @override
@@ -946,6 +962,10 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
       setState(() => _validationError = '依存元と依存先には異なる設問を選んでください');
       return;
     }
+    if (_provides.isEmpty) {
+      setState(() => _validationError = '依存先に渡す内容を少なくとも1つ選択してください');
+      return;
+    }
     if (_rationaleController.text.trim().isEmpty) {
       setState(() => _validationError = '根拠を入力してください');
       return;
@@ -954,7 +974,8 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
       (b) => b
         ..fromQuestionId = _from
         ..toQuestionId = _to
-        ..rationale = _rationaleController.text.trim(),
+        ..rationale = _rationaleController.text.trim()
+        ..provides.replace(_provides),
     );
     Navigator.of(context).pop(updated);
   }
@@ -963,48 +984,68 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('依存関係を編集'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          DropdownButtonFormField<String>(
-            key: const Key('edge-from-field'),
-            initialValue: _from,
-            decoration: const InputDecoration(labelText: '依存元（先に処理する設問）'),
-            items: [
-              for (final id in widget.questionIds)
-                DropdownMenuItem(value: id, child: Text(id)),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _from = value);
-            },
-          ),
-          DropdownButtonFormField<String>(
-            key: const Key('edge-to-field'),
-            initialValue: _to,
-            decoration: const InputDecoration(labelText: '依存先（後で処理する設問）'),
-            items: [
-              for (final id in widget.questionIds)
-                DropdownMenuItem(value: id, child: Text(id)),
-            ],
-            onChanged: (value) {
-              if (value != null) setState(() => _to = value);
-            },
-          ),
-          TextField(
-            key: const Key('edge-rationale-field'),
-            controller: _rationaleController,
-            maxLines: 2,
-            decoration: const InputDecoration(labelText: '根拠'),
-          ),
-          if (_validationError != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _validationError!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            DropdownButtonFormField<String>(
+              key: const Key('edge-from-field'),
+              initialValue: _from,
+              decoration: const InputDecoration(labelText: '依存元（先に処理する設問）'),
+              items: [
+                for (final id in widget.questionIds)
+                  DropdownMenuItem(value: id, child: Text(id)),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _from = value);
+              },
             ),
+            DropdownButtonFormField<String>(
+              key: const Key('edge-to-field'),
+              initialValue: _to,
+              decoration: const InputDecoration(labelText: '依存先（後で処理する設問）'),
+              items: [
+                for (final id in widget.questionIds)
+                  DropdownMenuItem(value: id, child: Text(id)),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _to = value);
+              },
+            ),
+            const SizedBox(height: 8),
+            const Text('依存先に渡す内容'),
+            for (final provision in DependencyProvision.values)
+              CheckboxListTile(
+                key: Key('edge-provision-${provision.name}'),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: Text(_provisionLabel(provision)),
+                value: _provides.contains(provision),
+                onChanged: (checked) => setState(() {
+                  if (checked ?? false) {
+                    _provides.add(provision);
+                  } else {
+                    _provides.remove(provision);
+                  }
+                }),
+              ),
+            TextField(
+              key: const Key('edge-rationale-field'),
+              controller: _rationaleController,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: '根拠'),
+            ),
+            if (_validationError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _validationError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
       actions: [
         TextButton(

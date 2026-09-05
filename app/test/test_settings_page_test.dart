@@ -303,6 +303,101 @@ void main() {
   );
 
   testWidgets(
+    'editing a dependency edge lets a reviewer choose what it provides',
+    (tester) async {
+      final edge = DependencyEdgeModel(
+        (b) => b
+          ..fromQuestionId = 'test-1:1'
+          ..toQuestionId = 'test-1:2'
+          ..rationale = '問1の得点を利用'
+          ..provides.replace([DependencyProvision.recognizedText]),
+      );
+      List<DependencyEdgeModel>? confirmedEdges;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
+        confirmDependencyGraph:
+            (testId, {required version, required edges}) async {
+              confirmedEdges = edges;
+              return _dependencyGraph(
+                status: 'confirmed',
+                version: version,
+                edges: edges,
+              );
+            },
+      );
+
+      await _pumpSettings(
+        tester,
+        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
+      );
+
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const Key('edge-tile-0')),
+          matching: find.byIcon(Icons.edit_outlined),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Swap the default provision for a different one -- the dialog must
+      // let both be expressed, not silently keep whatever `_addEdge` (or
+      // the analyzer) originally set (Issue #16 review round 4).
+      await tester.tap(find.byKey(const Key('edge-provision-recognizedText')));
+      await tester.tap(find.byKey(const Key('edge-provision-score')));
+      await tester.tap(find.byKey(const Key('edge-save-button')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('confirm-dependency-graph-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(confirmedEdges, isNotNull);
+      expect(confirmedEdges!.single.provides, [DependencyProvision.score]);
+    },
+  );
+
+  testWidgets('the edge dialog rejects saving with no provision selected', (
+    tester,
+  ) async {
+    final edge = DependencyEdgeModel(
+      (b) => b
+        ..fromQuestionId = 'test-1:1'
+        ..toQuestionId = 'test-1:2'
+        ..rationale = '問1の結果を利用'
+        ..provides.replace([DependencyProvision.recognizedText]),
+    );
+    final dependencies = AppDependencies(
+      getTest: (testId) async => _test(),
+      getProfile: (testId) async => _profile(status: 'confirmed'),
+      getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
+    );
+
+    await _pumpSettings(
+      tester,
+      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
+    );
+
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('edge-tile-0')),
+        matching: find.byIcon(Icons.edit_outlined),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('edge-provision-recognizedText')));
+    await tester.tap(find.byKey(const Key('edge-save-button')));
+    await tester.pump();
+
+    expect(find.text('依存先に渡す内容を少なくとも1つ選択してください'), findsOneWidget);
+    // The dialog itself is still open (the save was rejected).
+    expect(find.byKey(const Key('edge-save-button')), findsOneWidget);
+  });
+
+  testWidgets(
     'the dependency-graph analyze button stays enabled once confirmed, to '
     'start a new version',
     (tester) async {
