@@ -566,3 +566,71 @@ response'`）。
   `_errorKind` に応じて「同じ test で `_selectTest` をやり直す」か
   「`_submit` する」かに振り分ける
   （`test: 'retrying a list-load failure reloads the list, not an upload'`）。
+
+## 18. 6回目のレビュー指摘への対応
+
+- **ファイル確定処理失敗後もリトライ可能な状態を維持する（重大）**:
+  `adapters.atomic.transactional_operation` は DB コミット成功後に staged
+  ファイルを書き込む（`StagedFiles._finalize`）が、ディスク満杯や ACL
+  エラーでこの書込みが失敗した場合、DB 側は既に `ai_processed`/
+  `needs_review` としてコミット済みでロールバックできない。従来はこの
+  失敗がそのまま未捕捉の例外として伝播するだけで、submission は
+  「成功扱いだが一部ファイル欠落」のまま固定され、同じ PDF を再送しても
+  `decide_reintake` が非 `error` 状態を見て `REJECT_DUPLICATE`（409）を返し、
+  手動で `error` に書き換えても retry は `source.pdf` を再書込みしない
+  （既存の最適化）ため欠落ファイルを直せなかった。`transactional_operation`
+  はこの種の失敗を `FinalizationError`（`adapters/atomic.py`、新設）として
+  明示的に区別して送出し、`adapters/submission_intake.py::intake_submission`
+  がそれを捕捉して submission を新しいコミットで `error`
+  （`review_reason="finalization_failed"`）へ移す。さらに retry 時の
+  `source.pdf` 再書込みは「retry でなければ常に書く」から「retry でも
+  ファイルが実際に存在しなければ書く」に変更し、どのファイルが失敗して
+  いても次の retry で修復できるようにした
+  （`test_finalization_failure_marks_error_and_a_retry_heals_the_missing_file`）。
+- **画像パス生成前にパスセグメントをサニタイズする**: `Question.id` は
+  ドメイン層では非空であることしか要求されないため、`../pages/page-1`
+  のような値が「有効な ID」として通ってしまう。これを
+  `submission_question_image_path` でファイル名に埋め込むと、
+  `_ensure_within_root` は app-data 配下に留まる限り受理してしまい、
+  結果的に同じ submission の page preview のパスに解決されて上書きして
+  しまう（root からの脱出ではなく、root 内での取り違え）。
+  `LocalFileStore._resolve` に渡される全パートを検証する
+  `_ensure_safe_path_segment`（`adapters/local_storage.py`）を追加し、
+  `/`・`\`・null バイト・空文字・`.`/`..` そのものを拒否する
+  （`test_a_question_id_containing_a_path_separator_is_rejected` 等）。
+- **リトライを downstream 処理から分離する**: `decide_reintake` は
+  submission の状態が `error` であることだけを見て in-place retry を許可
+  していたが、Issue #17 の範囲外である将来の OCR/AI 採点が
+  recognition/grade/review/job 行を既に作っていた場合、retry は
+  `answer_images` だけを差し替えて submission を `ai_processed` に戻すため、
+  追記専用の history や未処理の job がそのまま孤立して残ってしまう。
+  `SubmissionRepository.has_downstream_processing`（新設。4 テーブルいずれかに
+  `submission_id` の行があれば true）を追加し、`decide_reintake` に
+  `has_downstream_processing` パラメータを渡して、downstream 処理が
+  存在する場合は `error` 状態でも `RETRY_EXISTING` ではなく
+  `REJECT_DUPLICATE` にする。実際には OCR/採点はまだ実装されていないため
+  現状のフローには影響しないが、将来それらが実装された時点で同じ穴が
+  空かないようにする防御的な変更
+  （`test_decide_reintake_rejects_an_errored_submission_with_downstream_processing`、
+  `test_reintake_of_an_errored_submission_with_downstream_processing_is_rejected`）。
+- **追い越された test-list リクエストを破棄する**: `_selectTest` は
+  `_selectedTestId != testId` のチェックだけで古いレスポンスを弾いていたが、
+  A→B→A と素早く切り替えると、最初の A リクエストが未解決のまま 2 回目の
+  A リクエストが発行され、両方とも同じ `_selectedTestId == "A"` を通過して
+  しまう。最初の（古い）レスポンスが後から届くと、2 回目のリクエストが
+  取得した新しいデータを上書きし、その `finally` ブロックが 2 回目の
+  リクエストの loading 状態まで誤って消してしまっていた。`_selectTest`
+  呼び出しごとに単調増加する `_selectTestRequestId` を発行し、最後に
+  発行されたリクエストのコールバックだけが結果の反映・loading 解除を
+  行えるようにした（`_selectedTestId` との比較を `requestId ==
+_selectTestRequestId` に置き換え）
+  （`test: 'a superseded test-list request cannot overwrite a newer one'`）。
+- **render 時の PDF 失敗を intake エラーに変換する**: pypdf にとっては
+  有効なページツリー・ジオメトリを持ちながら、PDFium で実際に render
+  する時だけ失敗する不正/非対応の content stream を含む PDF があり得る。
+  従来この例外は `_write_submission` のページ処理ループから未捕捉のまま
+  伝播し、文書化された bad-PDF 拒否（400）ではなく未処理の 500 になって
+  いた。`pdf_engine.render_page_png` の呼び出しを try/except で囲み、
+  `PdfCorruptedError` に変換する（`is_encrypted`/`page_count`/
+  `page_geometry` に対して既に使っているパターンと同じ）
+  （`test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error`）。
