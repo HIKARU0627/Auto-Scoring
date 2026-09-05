@@ -133,6 +133,22 @@ def test_non_numeric_score_text_is_rejected() -> None:
         build_questions_and_rubrics("test-1", regions)
 
 
+@pytest.mark.parametrize("score_text", ["-5", "-5点", "5.5", "5.5点", "5.", "-5.5"])
+def test_negative_or_decimal_score_text_is_rejected(score_text: str) -> None:
+    """A bare digit search would extract a positive integer ("5") out of
+    "-5" or "5.5" and let it through as if it were a valid score -- the
+    non-positive check downstream never sees the sign or fraction that made
+    the original value invalid.
+    """
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text=score_text),
+    ]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
 def test_zero_score_is_rejected() -> None:
     regions = [
         _region(RegionKind.QUESTION, "1", text="問1"),

@@ -40,6 +40,18 @@ class TestRepository(Protocol):
     def get(self, test_id: str) -> Test | None: ...
     def list_all(self) -> list[Test]: ...
 
+    def delete(self, test_id: str) -> None:
+        """Remove ``test_id`` (a no-op if it doesn't exist).
+
+        Used to compensate for a registration whose `Test` row committed but
+        whose PDF files then failed to write to disk
+        (``adapters.test_intake.register_test``'s `FinalizationError`
+        handling) -- a `draft` test with no confirmed profile yet has no
+        `Question`/`Rubric` rows to cascade, so this is always safe to call
+        in that situation.
+        """
+        ...
+
     def mark_ready(self, test_id: str) -> bool:
         """Atomically move ``test_id`` from ``draft`` to ``ready`` via a
         conditional update (``WHERE status = 'draft'``), not a read-then-write

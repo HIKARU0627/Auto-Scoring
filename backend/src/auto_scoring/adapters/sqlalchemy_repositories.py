@@ -78,6 +78,12 @@ class SqlAlchemyTestRepository:
         rows = self._session.scalars(select(TestRow).order_by(TestRow.created_at))
         return [m.test_from_row(row) for row in rows]
 
+    def delete(self, test_id: str) -> None:
+        row = self._session.get(TestRow, test_id)
+        if row is not None:
+            self._session.delete(row)
+            self._session.flush()
+
     def mark_ready(self, test_id: str) -> bool:
         result = cast(
             "CursorResult[Any]",

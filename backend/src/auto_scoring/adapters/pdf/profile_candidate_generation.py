@@ -105,6 +105,17 @@ def _format_signature(geometries: list[PageGeometry]) -> FormatSignature:
 
 
 def _question_blocks(source: Path, page_count: int) -> list[_QuestionBlock]:
+    """One block per detected heading, never spanning a page boundary.
+
+    A question's body that continues past a page break (no new heading
+    appears before the next page starts) is cut off at the end of the
+    heading's own page, rather than folding the next page's lines into the
+    same block. `_model_answer_regions`/`_manual_derived_regions` union a
+    block's body rectangles and normalize them through a single page's
+    `PageGeometry`; letting a block span two pages of potentially different
+    size would union rectangles from two different coordinate spaces and
+    silently produce a wrong (or out-of-range) region (Issue #16 review).
+    """
     blocks: list[_QuestionBlock] = []
     current: _QuestionBlock | None = None
     for page_index in range(page_count):
@@ -118,8 +129,11 @@ def _question_blocks(source: Path, page_count: int) -> list[_QuestionBlock]:
                 )
             elif current is not None:
                 current.body.append(line)
-    if current is not None:
-        blocks.append(current)
+        # Flush at the page boundary, before moving to the next page's
+        # lines: a block's body never crosses into a different page.
+        if current is not None:
+            blocks.append(current)
+            current = None
     return blocks
 
 

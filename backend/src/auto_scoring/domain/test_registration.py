@@ -48,7 +48,13 @@ class IncompleteRegionsError(TestRegistrationError):
     """The confirmed regions contain no question at all."""
 
 
-_SCORE_NUMBER_PATTERN = re.compile(r"\d+")
+#: Matches a run of digits that is not itself part of a negative number or a
+#: decimal (e.g. rejects the "5" inside "-5" or "5.5" -- a bare `\d+` search
+#: would extract a positive integer out of both and let an invalid score
+#: through `int(match.group())` without ever reaching the non-positive check
+#: below, defeating the "配点不正を拒否する" acceptance criterion). Requires
+#: the match not be preceded by `-`/`.`/another digit, nor followed by `.`.
+_SCORE_NUMBER_PATTERN = re.compile(r"(?<![-.\d])\d+(?!\.)")
 
 
 def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:

@@ -19,8 +19,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
+from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.local_storage import LocalFileStore
+from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
+from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.domain.pdf_intake import IntakeLimits
 
 _TOKEN = "test-registration-token"
@@ -61,6 +65,11 @@ def client(data_root: Path) -> TestClient:
 
 def _auth() -> dict[str, str]:
     return {"Authorization": f"Bearer {_TOKEN}"}
+
+
+def _session_factory(data_root: Path) -> sessionmaker[Session]:
+    db_url = sqlite_url(data_root / "database.sqlite")
+    return build_session_factory(create_sqlite_engine(db_url))
 
 
 def _register_test(client: TestClient, *, name: str = "国語 第1回") -> str:
@@ -166,6 +175,33 @@ class TestCreateTest:
         )
         assert response.status_code == 422
 
+    def test_does_not_413_when_two_within_limit_pdfs_exceed_one_files_worth(
+        self, client: TestClient
+    ) -> None:
+        """`POST /tests` carries two independently size-limited PDFs in one
+        multipart body. The ASGI-level `MaxBodySizeMiddleware` must be sized
+        for *two* files, not one -- each file here is within the 5 MiB
+        fixture limit on its own, but their combined body exceeds a
+        single-file budget (5 MiB + overhead), which would previously 413
+        before either file's own validation ever ran.
+
+        The padding after `%PDF-` isn't a well-formed PDF, so this still
+        fails validation (400) once the body is actually read; what this
+        test pins down is that it must not fail at the ASGI layer with 413.
+        """
+        each_file_size = 3 * 1024 * 1024
+        padded = b"%PDF-1.7\n" + b"0" * (each_file_size - 20)
+        response = client.post(
+            "/tests",
+            headers=_auth(),
+            data={"name": "サイズ確認"},
+            files={
+                "model_answer": ("model-answer.pdf", padded, "application/pdf"),
+                "manual": ("manual.pdf", padded, "application/pdf"),
+            },
+        )
+        assert response.status_code != 413
+
 
 class TestProfileReviewAndConfirm:
     def test_analyze_then_update_then_confirm_creates_questions(self, client: TestClient) -> None:
@@ -224,6 +260,26 @@ class TestProfileReviewAndConfirm:
         )
         assert response.status_code == 422
 
+    def test_update_requires_the_regions_field(self, client: TestClient) -> None:
+        """A malformed body omitting `regions` entirely must fail validation
+        (422), not silently wipe every region the way a `default_factory`
+        empty list would (Issue #16 review).
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions()},
+        )
+
+        response = client.put(f"/tests/{test_id}/profile", headers=_auth(), json={})
+        assert response.status_code == 422
+
+        # The prior regions must survive the rejected request untouched.
+        profile = client.get(f"/tests/{test_id}/profile", headers=_auth())
+        assert len(profile.json()["regions"]) == 3
+
     def test_cannot_edit_or_reanalyze_after_confirming(self, client: TestClient) -> None:
         test_id = _register_test(client)
         client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
@@ -265,6 +321,45 @@ class TestProfileReviewAndConfirm:
         response = restarted_client.get(f"/tests/{test_id}/profile", headers=_auth())
         assert response.status_code == 200
         assert len(response.json()["regions"]) == 3
+
+    def test_confirm_recovers_from_a_profile_file_write_failure(
+        self, client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If `profile.json` fails to write after Question/Rubric rows have
+        already committed (disk full, permissions, ...), a retried confirm
+        must succeed without duplicating those rows (Issue #16 review: a
+        naive re-add would hit a UNIQUE constraint and the registration
+        would be stuck unable to ever complete).
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions()},
+        )
+
+        real_write_atomic = LocalFileStore.write_atomic
+
+        def failing_write_atomic(self: LocalFileStore, path: Path, data: bytes) -> Path:
+            if path.name == "profile.json":
+                raise OSError("simulated disk-full failure")
+            return real_write_atomic(self, path, data)
+
+        monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
+        with pytest.raises(OSError):
+            client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            assert len(uow.questions.list_for_test(test_id)) == 1
+
+        monkeypatch.setattr(LocalFileStore, "write_atomic", real_write_atomic)
+        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "confirmed"
+
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            assert len(uow.questions.list_for_test(test_id)) == 1
 
 
 class TestCompleteRegistration:

@@ -172,6 +172,48 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   テスト登録画面・テスト設定画面のwidget test（フォームバリデーション、エラー表示と
   再試行、region編集と保存、依存グラフ確認、登録完了ボタンの活性制御）。
 
+## レビュー対応（PRラウンド1）
+
+- **`ready` の強制を答案取込側にも配線**: `GET /tests`（答案取込のテスト選択）は
+  `TestStatus.READY` のテストのみ返し、`intake_submission`（Issue #17）も
+  `draft` のテストへのsubmission作成を`TestNotReadyError`（409）で拒否する。
+  従来は`Test`行の存在確認のみだったため、profile/依存グラフが未確認のまま
+  答案処理を始められてしまっていた。
+- **profile確定は保存してから確定する**: テスト設定画面の「確定」操作は、まず
+  現在のworking copyを`PUT /profile`で保存してから`POST /profile/confirm`を
+  呼ぶ。以前は未保存の編集がconfirmで黙って破棄され得た。
+- **登録リクエストのボディ上限を2ファイル分にする**: `MaxBodySizeMiddleware`は
+  アプリ全体で共有される1つの上限であり、`POST /tests`は模範解答・マニュアルの
+  2ファイルを1つのmultipartボディで受け取るため、`IntakeLimits.max_size_bytes`
+  の2倍+multipartオーバーヘッドをASGI層の上限にした。
+- **依存関係分析に問題文を渡す**: `Question`にはまだ問題文（prompt_text）を
+  保存する列が無い（`dependency-graph.md`参照）。テスト設定画面は確定済み
+  `QUESTION` regionのtextを`{test_id}:{label}`形式のquestion_idに対応付けて
+  `QuestionTextOverride`として渡すようにした。
+- **`UpdateProfileRequest.regions`を必須化**: `default_factory=list`だと
+  `{}`のような不正bodyが422にならず全region削除として成功してしまっていた。
+- **配点テキストの数値抽出を厳格化**: `\d+`の単純な検索は`"-5"`や`"5.5"`から
+  正の整数`5`を抜き出してしまい、後続の非正数チェックをすり抜けていた。直前直後に
+  `-`/`.`/数字が無い数字列のみを配点として認める正規表現に変更した。
+- **登録PDFのfinalization失敗を補償する**: `Test`行のcommit後にPDFのディスク
+  書き込みが失敗すると（`FinalizationError`）、`Submission`と異なり`Test`には
+  再試行用の`error`状態が無いため、可視のdraft testが永久に壊れたまま残って
+  いた。同じトランザクション内で`Test`行と書き込み済みファイルを削除する補償を
+  追加した。
+- **profile確定をDB/ファイル間で回復可能にする**: Question/Rubricのcommit後に
+  `profile.json`の書き込みが失敗すると、再試行時に同じ決定的IDでのinsertが
+  UNIQUE制約違反になり詰まっていた。DB書き込みを「既存なら追加しない」冪等な
+  ものにし、再試行はファイル書き込みだけをやり直せるようにした。
+- **PDFiumの呼び出しを直列化する**: `analyze_profile`と`create_test`内のPDF
+  検証は、答案取込パイプラインが使う`intake_lock`と同じロックを共有するように
+  した。pypdfium2はプロセス内マルチスレッドで安全に呼べないため、以前は
+  analysisと答案取込が同時に走るとPDFiumへ複数スレッドから同時アクセスし得た。
+- **設問領域をページ境界で分割する**: 設問本文が次の見出しの前にページをまたぐ
+  場合、`_question_blocks`は以前ページをまたいでも同じblockに行を積んでいた。
+  異なるページのジオメトリで座標をunion/正規化すると誤った領域になるため、
+  ページ境界で必ずblockを打ち切るようにした（本文の後半はどのblockにも属さなく
+  なる—§未決事項参照）。
+
 ## 未決事項
 
 - PDFオーバーレイでのregion視覚編集（上記「UI設計」）。
@@ -181,3 +223,8 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   「(1)」「Q1」「配点：5」）は現状検出できない —— 検出できなかった場合は
   `PUT /profile` での手動追加にフォールバックする設計だが、フォールバック発生率は
   未計測。
+- 設問本文がページをまたぐ場合、後半（次ページの行）は自動検出の対象にならない
+  （上記「PDFiumの呼び出しを直列化する」の下、ページ境界分割を参照）。人間が
+  `PUT /profile`で次ページ側の回答欄領域を手動追加する必要がある。ページをまたぐ
+  領域そのものをどう表現するか（複数regionを1設問に束ねる、regionに
+  複数ページのbboxを持たせる等）は未設計。

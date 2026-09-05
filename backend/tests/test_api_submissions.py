@@ -17,7 +17,7 @@ from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
-from auto_scoring.domain.models import NormalizedRect
+from auto_scoring.domain.models import NormalizedRect, TestStatus
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import IntakeLimits
@@ -62,7 +62,10 @@ def _session_factory(data_root: Path) -> sessionmaker[Session]:
 def _seed_test(data_root: Path, *, with_answer_area: bool = True) -> None:
     factory = _session_factory(data_root)
     with SqlAlchemyUnitOfWork(factory) as uow:
-        uow.tests.add(make_test(id="test-1", name="国語", subject=None))
+        # READY: intake_submission() now rejects a draft test (Issue #16),
+        # and GET /tests only lists ready ones -- these submission-intake
+        # tests are exercising intake itself, not the registration gate.
+        uow.tests.add(make_test(id="test-1", name="国語", subject=None, status=TestStatus.READY))
         uow.questions.add(
             make_question(
                 id="q-1",
@@ -87,6 +90,41 @@ def test_list_tests_returns_seeded_test(client: TestClient, data_root: Path) -> 
     response = client.get("/tests", headers=_auth())
     assert response.status_code == 200
     assert response.json() == [{"id": "test-1", "name": "国語", "subject": None}]
+
+
+def test_list_tests_excludes_a_draft_test(client: TestClient, data_root: Path) -> None:
+    """Issue #16: registration is not "complete" until both the profile and
+    the dependency graph are confirmed (`Test.mark_ready`). A `draft` test
+    must not appear in the answer-intake test picker.
+    """
+    factory = _session_factory(data_root)
+    with SqlAlchemyUnitOfWork(factory) as uow:
+        uow.tests.add(make_test(id="draft-test", name="下書き", subject=None))
+        uow.commit()
+
+    response = client.get("/tests", headers=_auth())
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_create_submission_rejects_a_draft_test(client: TestClient, data_root: Path) -> None:
+    """Issue #16: a test whose registration is not complete
+    (`Test.status != ready`) must reject submissions outright, independent
+    of the `GET /tests` UX filter above."""
+    factory = _session_factory(data_root)
+    with SqlAlchemyUnitOfWork(factory) as uow:
+        uow.tests.add(make_test(id="draft-test", name="下書き", subject=None))
+        uow.commit()
+
+    response = client.post(
+        "/tests/draft-test/submissions",
+        headers=_auth(),
+        files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+    )
+    assert response.status_code == 409
+
+    with SqlAlchemyUnitOfWork(factory) as uow:
+        assert uow.submissions.list_for_test("draft-test") == []
 
 
 def test_create_submission_requires_auth(client: TestClient, data_root: Path) -> None:

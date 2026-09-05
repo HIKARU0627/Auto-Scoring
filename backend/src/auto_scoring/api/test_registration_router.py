@@ -35,14 +35,16 @@ Registration flow (simplified-design-specification.md §6, docs/test-registratio
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.atomic import FinalizationError
 from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.profile_candidate_generation import generate_profile_candidates
@@ -192,10 +194,12 @@ class ProfileResponse(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    # No default: an empty list must be a deliberate "delete every region"
-    # decision, not an accidental omission (same reasoning as
-    # `ConfirmRequest.edges` in `api.dependency_graph_router`).
-    regions: list[RegionModel] = Field(default_factory=list)
+    # Required, no default: an empty list must be a deliberate "delete every
+    # region" decision, not an accidental omission (same reasoning as
+    # `ConfirmRequest.edges` in `api.dependency_graph_router`). A
+    # `default_factory=list` here would let a malformed `{}` body silently
+    # wipe every region instead of failing validation with 422.
+    regions: list[RegionModel]
 
 
 class CompleteRegistrationResponse(BaseModel):
@@ -215,14 +219,27 @@ def build_test_registration_router(
     pdf_engine: PdfEngine,
     *,
     intake_limits: IntakeLimits | None = None,
+    pdfium_lock: threading.Lock | None = None,
 ) -> APIRouter:
     """Build the router. One `SqlAlchemyUnitOfWork` is opened per request.
 
     ``session_factory`` is the same ``sessionmaker`` `api.app.create_app`
     passes to `api.dependency_graph_router.build_dependency_graph_router`.
+
+    ``pdfium_lock`` must be the *same* lock `api.app.create_app` uses to
+    serialize its own answer-intake pipeline (`intake_lock`): pypdfium2 is
+    not safe to call concurrently from multiple threads of one process, and
+    FastAPI runs each of this router's synchronous handlers in a worker
+    thread, so a profile analysis (or PDF validation during registration)
+    overlapping with a submission-intake render would otherwise reach
+    PDFium from two threads at once. When omitted (e.g. schema export, unit
+    tests that never call `analyze`/`create_test` concurrently with intake),
+    a private lock is created -- still correct on its own, just not shared
+    with the rest of the app.
     """
     limits = intake_limits or IntakeLimits()
     profile_store = ProfileStore(store.root)
+    lock = pdfium_lock or threading.Lock()
     router = APIRouter(tags=["test-registration"])
 
     def _uow() -> Iterator[SqlAlchemyUnitOfWork]:
@@ -262,23 +279,38 @@ def build_test_registration_router(
         except PdfIntakeError as exc:
             raise _pdf_intake_http_exception(exc) from exc
         try:
-            test = register_test(
-                uow,
-                store,
-                pdf_engine,
-                name=name,
-                subject=subject,
-                model_answer_filename=(model_answer.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
-                model_answer_mime=model_answer.content_type,
-                model_answer_data=model_answer_data,
-                manual_filename=(manual.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
-                manual_mime=manual.content_type,
-                manual_data=manual_data,
-                limits=limits,
-                now=_now(),
-            )
+            # Holds `pdfium_lock` for the PDF-validation calls inside
+            # register_test (page_count/is_encrypted) -- see the docstring
+            # above for why this must be the same lock the answer-intake
+            # pipeline uses.
+            with lock:
+                test = register_test(
+                    uow,
+                    store,
+                    pdf_engine,
+                    name=name,
+                    subject=subject,
+                    model_answer_filename=(model_answer.filename or "")[
+                        :MAX_ORIGINAL_FILENAME_LENGTH
+                    ],
+                    model_answer_mime=model_answer.content_type,
+                    model_answer_data=model_answer_data,
+                    manual_filename=(manual.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
+                    manual_mime=manual.content_type,
+                    manual_data=manual_data,
+                    limits=limits,
+                    now=_now(),
+                )
         except PdfIntakeError as exc:
             raise _pdf_intake_http_exception(exc) from exc
+        except FinalizationError as exc:
+            # The Test row was compensated away (register_test's own
+            # handling) -- report a retryable failure rather than a 500
+            # that suggests the id survived when it didn't.
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"could not save the registered PDFs to disk: {exc}",
+            ) from exc
         return TestResponse.from_domain(test)
 
     @router.get("/tests/{test_id}", response_model=TestResponse)
@@ -301,13 +333,19 @@ def build_test_registration_router(
             )
 
         try:
-            profile = generate_profile_candidates(
-                pdf_engine,
-                test_id,
-                test_id,
-                store.test_model_answer_pdf_path(test_id),
-                store.test_manual_pdf_path(test_id),
-            )
+            # Same `pdfium_lock` register_test uses above -- see
+            # build_test_registration_router's docstring. FastAPI runs this
+            # synchronous handler in a worker thread, so without this an
+            # analysis overlapping another analysis or a submission-intake
+            # render would reach PDFium from two threads at once.
+            with lock:
+                profile = generate_profile_candidates(
+                    pdf_engine,
+                    test_id,
+                    test_id,
+                    store.test_model_answer_pdf_path(test_id),
+                    store.test_manual_pdf_path(test_id),
+                )
         except PdfIntakeError as exc:
             raise _pdf_intake_http_exception(exc) from exc
         except DomainError as exc:
@@ -377,12 +415,27 @@ def build_test_registration_router(
         except TestRegistrationError as exc:
             raise HTTPException(422, detail=str(exc)) from exc
 
+        # Idempotent DB write: if a prior confirm attempt committed these
+        # rows but then failed on the profile_store.save() below (DB commit
+        # succeeded, file write didn't), a retry must not re-INSERT rows
+        # that already exist -- `build_questions_and_rubrics` derives the
+        # same deterministic ids from the same confirmed regions every time,
+        # so a plain re-add would hit the `uq_questions_test_number`/primary
+        # key UNIQUE constraint and the registration would be stuck unable
+        # to ever complete (Issue #16 review).
+        existing_question_ids = {q.id for q in uow.questions.list_for_test(test_id)}
         for question in questions:
-            uow.questions.add(question)
+            if question.id not in existing_question_ids:
+                uow.questions.add(question)
         for rubric in rubrics:
-            uow.rubrics.add(rubric)
+            if rubric.question_id not in existing_question_ids:
+                uow.rubrics.add(rubric)
         uow.commit()
 
+        # If this fails (e.g. disk full), the Question/Rubric rows above are
+        # already durably committed and this whole handler can simply be
+        # retried -- the idempotent write above will skip them, and only the
+        # file write needs to succeed the second time.
         profile_store.save(confirmed)
         return ProfileResponse.from_domain(confirmed)
 

@@ -82,6 +82,27 @@ class TestQuestionBlocks:
             blocks = pcg._question_blocks(tmp_path / "dummy.pdf", 1)
         assert blocks == []
 
+    def test_a_block_does_not_span_a_page_boundary(self, tmp_path: Path) -> None:
+        """A question whose body continues past a page break must not pull
+        the next page's lines into the same block -- `_model_answer_regions`
+        would union rectangles from two pages (possibly different sizes)
+        and normalize them through only the heading's own `PageGeometry`.
+        """
+        lines_by_page = {
+            0: [_line("問1 光合成について説明せよ", 72, 700, 300, 720)],
+            1: [_line("光合成は葉緑体で行われる、続き", 72, 700, 300, 720)],
+        }
+        with patch.object(
+            pcg, "extract_text_lines", lambda source, page_index: lines_by_page.get(page_index, [])
+        ):
+            blocks = pcg._question_blocks(tmp_path / "dummy.pdf", 2)
+
+        assert [block.number for block in blocks] == ["1"]
+        assert blocks[0].page_index == 0
+        # The continuation line on page 2 belongs to no heading -- it is not
+        # silently absorbed into page 1's block.
+        assert blocks[0].body == []
+
     def test_heading_at_the_last_line_of_the_last_page_is_still_captured(
         self, tmp_path: Path
     ) -> None:

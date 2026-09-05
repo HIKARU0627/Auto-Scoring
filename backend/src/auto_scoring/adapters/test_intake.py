@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from auto_scoring.adapters.atomic import transactional_operation
+from auto_scoring.adapters.atomic import FinalizationError, transactional_operation
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import ScoringMethod, Test
@@ -94,9 +94,29 @@ def register_test(
             default_scoring_method=ScoringMethod.ADDITIVE,
             created_at=now,
         )
-        with transactional_operation(uow, store) as staged:
-            uow.tests.add(test)
-            staged.add(store.test_model_answer_pdf_path(test.id), model_answer_data)
-            staged.add(store.test_manual_pdf_path(test.id), manual_data)
+        try:
+            with transactional_operation(uow, store) as staged:
+                uow.tests.add(test)
+                staged.add(store.test_model_answer_pdf_path(test.id), model_answer_data)
+                staged.add(store.test_manual_pdf_path(test.id), manual_data)
+        except FinalizationError:
+            # The Test row already committed (transactional_operation only
+            # guarantees "DB commit before file write", not that the write
+            # also succeeds) but one or both PDFs failed to reach disk (full
+            # disk, permissions, ...). Left alone, this id would linger
+            # forever as a `draft` test with missing files -- unusable
+            # (neither PDF can be analyzed) and, since the caller never
+            # received this id (the request as a whole is about to raise),
+            # unreachable for a retry too. Compensate by removing the
+            # now-file-less row in a fresh transaction on the same
+            # already-committed session, and any partial file (e.g. the
+            # model-answer PDF, staged before a failing manual PDF) that did
+            # reach disk -- an orphaned file with no owning row would never
+            # be cleaned up by anything else. The client's only path forward
+            # is to submit the two PDFs again, which mints a fresh id anyway.
+            uow.tests.delete(test.id)
+            uow.commit()
+            store.delete_test(test.id)
+            raise
 
     return test
