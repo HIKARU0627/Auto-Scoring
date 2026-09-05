@@ -804,3 +804,40 @@ Defenderのリアルタイム保護が有効でサードパーティ製AVは無�
 除外設定の有無は未確認）。CIは `windows-latest` のホスト型ランナーを使うため
 再現しない可能性が高い。アプリケーションコード側でこれ以上確実に解決する手段は
 見つかっていない未解決事項として記録する。
+
+## 21. 9回目のレビュー指摘への対応
+
+- **Windows のファイル名として使う前に設問 ID をエンコードする（重大）**:
+  `submission_question_image_path()` は `Question.id` をそのままファイル名へ
+  埋め込んでいた。domain 層は非空であることしか要求しないため、`?`・`*`・
+  `"`・`<`・`>`・`|` のような Windows のファイル名で禁止された文字を含む ID
+  は書込みのたびに失敗し続け、大文字小文字だけが異なる 2 つの ID（NTFS は
+  ファイル名の大小文字を区別しない）は同じファイルに解決されて、DB の行は
+  両方残っているのに片方の crop がもう片方を黙って上書きしてしまい得た。
+  `_encode_filename_component()` を新設し、ID の UTF-8 バイト列を hex
+  エンコードしてからファイル名に使うようにした。結果は常に `[0-9a-f]` のみで
+  構成される（どの環境でも安全）うえバイト完全一致のエンコードなので、大小
+  文字や記号が異なる ID は必ず異なるファイル名になる。個別の禁止文字を
+  ブロックリストで弾く従来方式をこの呼び出し箇所については置き換える形になる
+  （`test_question_ids_differing_only_by_case_do_not_collide`、
+  `test_a_question_id_matching_a_windows_reserved_device_name_is_encoded_safely`）。
+- **一時ルートのクリーンアップ前に SQLite engine を dispose する**:
+  `data_root` を指定せずに `create_app()` を呼ぶと、起動時の repair クエリ
+  （および以後のあらゆる DB アクセス）が engine の接続プールに接続を残すが、
+  SQLAlchemy は engine 自体を dispose するまでプール内の接続を閉じない。
+  Windows は開いたままの DB ファイルを含むディレクトリの削除を拒否するため、
+  `scratch.cleanup` だけを登録していた従来のコールバックは `PermissionError`
+  を送出し、一時 app-data ディレクトリをリークしていた（本セッション中
+  ずっと pytest 実行後に出ていた "Exception ignored in atexit callback" の
+  正体がこれだった）。cleanup コールバックを 1 つにまとめ、engine を
+  dispose してからディレクトリを削除するようにした
+  （`test_default_temp_app_data_dir_cleanup_disposes_the_engine_first`。
+  修正前に戻すと実際に落ちることを確認済み）。
+- **宣言された MIME タイプを大文字小文字を区別せず比較する**: HTTP メディア
+  タイプの type/subtype トークンは大文字小文字を区別しない（RFC 9110
+  §8.3.1）が、`validate_declared_mime` は宣言文字列をそのまま
+  `ALLOWED_MIME_TYPES` と比較していたため、`Application/PDF` や
+  `application/PDF; charset=binary` のような規格に準拠したクライアントの
+  宣言を `400` で拒否してしまっていた。allowlist と照合する前にベースの
+  メディアタイプを小文字化するようにした
+  （`test_validate_declared_mime_is_case_insensitive`）。
