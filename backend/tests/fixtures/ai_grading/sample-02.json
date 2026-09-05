@@ -1,5 +1,6 @@
 {
   "subject": "synthetic-world-history",
+  "submissionId": "poc2-synth-submission-02",
   "ground_truth": {
     "questionId": "poc2-synth-02",
     "score": 6,

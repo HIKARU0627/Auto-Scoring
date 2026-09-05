@@ -37,9 +37,19 @@ field that tells a real human-grader label apart from an AI-generated
 response mistakenly fed in as if it were ground truth (an omitted or
 `"ai"` `source` is rejected; code review finding).
 
+`submissionId` is likewise a required, non-blank sibling field: section 6.3
+identifies each real answer sheet by a non-PII `submissionId`, and one real
+submission commonly spans several questions, each its own sample file here.
+Without it the harness cannot tell "30 distinct submissions" (section 6.2's
+minimum dataset size) apart from "30 questions on 6 submissions" --
+`questionId` alone identifies which question, not which answer sheet it
+came from (code review finding). The aggregate report includes a distinct-
+submission count per subject for exactly this coverage check.
+
 ```jsonc
 {
   "subject": "arbitrary subject label",
+  "submissionId": "opaque id, no PII -- identifies the answer sheet, not the question",
   "ground_truth": {
     "questionId": "opaque id, no PII",
     "score": 15,
@@ -121,7 +131,22 @@ pass an ">= 2" check even though A and C were never run on the same data at
 all -- reporting all three side by side would let a difference in sample
 difficulty masquerade as a difference in provider quality (code review
 finding). A cell is only counted when its responders are *exactly* the
-dataset-wide comparable set, not merely some 2-of-N subset of it.
+dataset-wide comparable set, not merely some 2-of-N subset of it -- and
+that identity is `(provider, config_key)`, not provider name alone: a
+provider that switches configuration between samples (A/v1 grades X, then
+A/v2 grades Y, while B/v1 grades both) must not have its X and Y cells
+treated as "the same candidate" just because the provider name matches,
+since the results table buckets them into two different config rows drawn
+from two different sample pools either way (code review finding;
+docs/poc-2-ai-grading.md section 3.3's config-bucket separation).
+
+Every raw `recorded` provider key is normalized (whitespace-stripped)
+before it is counted as a candidate: `ProviderDescriptor` only rejects an
+entirely blank name, so `"gemini"` and `"gemini "` would otherwise count as
+two separate candidates for the same real provider, letting one
+inconsistently-spelled key alone satisfy the >= 2 comparison gate (code
+review finding). Two different raw keys that normalize to the same id are
+rejected outright rather than silently merged.
 
 Every provider's `recorded` entry may only use the two recognized
 input-variant keys (`ocr_clean` / `ocr_noisy`) -- an unrecognized key (a
@@ -130,7 +155,8 @@ ignoring it: neither lookup used elsewhere in the harness iterates whatever
 keys happen to be present, so a response recorded under a misspelled key
 would otherwise never be found, leaving its cell "pending" forever while
 the harness still exits 0 as if the aggregate were complete (code review
-finding).
+finding). The unrecognized key itself is never echoed in the raised
+message (see below).
 
 Each sample's `input` block is parsed and cross-checked against its
 `ground_truth` (`max_score` must agree) before any of that sample's
@@ -198,7 +224,14 @@ a real recorded response -- a dataset where every sample is still `"recorded":
 harness raise, instead of being reported as a clean `staged: N` count (code
 review finding). Any validation failure message is sanitized to the failing
 field's path and error type only -- never the value that failed, since that
-value may be OCR'd student answer text (`AGENTS.md` "Security").
+value may be OCR'd student answer text (`AGENTS.md` "Security"). The field
+*path* itself is sanitized too: for an `extra_forbidden` error (an
+unrecognized key on a strict model), pydantic's `loc` for that error is
+exactly the offending key itself, copied verbatim from the untrusted
+mapping -- a stray note accidentally left as a JSON key could carry real
+student text straight into an otherwise "sanitized" message. Only the
+final `loc` segment of such an error is ever untrusted, and it is replaced
+with a fixed placeholder rather than echoed (code review finding).
 
 A `response.annotations[]` entry with `type: "comment"` must carry a
 non-blank `comment` -- a comment-kind annotation with nothing to say is

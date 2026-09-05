@@ -54,6 +54,7 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 | フィールド                      | 内容                                                                 |
 | ------------------------------- | -------------------------------------------------------------------- |
 | `subject`（サンプル直下）       | 教科ラベル。`ground_truth` の**外側**の兄弟フィールド（§3.8 参照）   |
+| `submissionId`（サンプル直下）  | 必須・非空白。答案（提出物）を識別する不透明 ID（§3.11 参照）        |
 | `ground_truth.questionId`       | 個人を特定しない不透明 ID                                            |
 | `ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）               |
 | `ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠） |
@@ -67,7 +68,10 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 `ground_truth` は決定書 §6.3 が定める実際の人間採点ラベルファイルの
 ワイヤ形式（`questionId`/`score`/`maxScore`/`criteria[].{id,result}`/
 `source` に加え、任意項目 `comment`/`annotations`/`handwritingQuality`/
-`layoutType`）に**そのまま**準拠する（§3.8）。
+`layoutType`）に**そのまま**準拠する（§3.8）。`submissionId` は決定書 §6.3
+が「1 答案 = 1 JSON ファイル（個人情報を含まない `submissionId` で識別）」
+と定める答案（提出物）の識別子で、`subject` 同様 `ground_truth` の外側の
+兄弟フィールドとする（§3.11）。
 
 ### 1.3 正解ラベル作成（決定書 §6.3）
 
@@ -473,17 +477,78 @@ int リテラル）を渡すとそのまま `int` として保持されるが、
 （`-0.0 == 0.0` だが JSON としては異なる文字列になるため）。
 
 **未知の記録済み input variant を拒否する**: `_load_cell`/
-`_providers_with_response_by_variant` はいずれも固定の
-`ocr_clean`/`ocr_noisy` というキー名を直接参照するだけで、記録された
-`recorded.<provider>` オブジェクトの実際のキーを走査してはいない。その
-ため、実データセットが `ocr_noisy` を `ocr_nosiy` のように誤記していても、
-どちらの参照も一致せず、その応答は静かに無視され、該当セルは永遠に
-`pending` のまま扱われてしまう。他の箇所に有効な応答があれば、ハーネスは
-不完全な集計のまま正常終了（exit 0）してしまいかねない（コードレビュー
-指摘。AGENTS.md「Verification」）。`_validate_recorded_variant_keys` を
-`_load_all_samples` の入口で呼び出し、`recorded.<provider>` のキーが
-`ocr_clean`/`ocr_noisy` 以外を含む場合、またはオブジェクトでない場合に
-ハーネスを停止させる。
+セル走査ロジックはいずれも固定の `ocr_clean`/`ocr_noisy` というキー名を
+直接参照するだけで、記録された `recorded.<provider>` オブジェクトの実際の
+キーを走査してはいない。そのため、実データセットが `ocr_noisy` を
+`ocr_nosiy` のように誤記していても、どちらの参照も一致せず、その応答は
+静かに無視され、該当セルは永遠に `pending` のまま扱われてしまう。他の箇所に
+有効な応答があれば、ハーネスは不完全な集計のまま正常終了（exit 0）して
+しまいかねない（コードレビュー指摘。AGENTS.md「Verification」）。
+`_validate_recorded_variant_keys` を `_load_all_samples` の入口で呼び出し、
+`recorded.<provider>` のキーが `ocr_clean`/`ocr_noisy` 以外を含む場合、
+またはオブジェクトでない場合にハーネスを停止させる。
+
+### 3.11 submission 追跡・config を跨いだ比較セルの再検証・キー漏洩の防止
+
+**評価サンプルに submission ID を追跡する**: 決定書 §6.3 は「1 答案 = 1
+JSON ファイル（個人情報を含まない `submissionId` で識別）」と定めるが、
+このハーネスの `--dataset` サンプルは「1 サンプル = 1 設問」であり、
+1 つの実答案（提出物）は複数設問にまたがって複数のサンプルファイルに
+分かれうる。`questionId` だけでは「どの設問か」しか分からず、「30 件の
+異なる答案」（§6.2 の下限）なのか「6 件の答案に対する 30 件の設問」なのか
+を区別できなかった（コードレビュー指摘）。`subject` と同様、`submissionId`
+を `ground_truth` の外側の兄弟フィールドとして追加し、必須・非空白を検証
+する。ハーネスの集計出力には、教科ごとの distinct `submissionId` 件数を
+「decision record section 6.2 requires >= 30 per subject」という文言と
+共に含め、この下限に対するカバレッジを直接確認できるようにした。合成
+フィクスチャ・実データ pilot（本書 §6、リポジトリ外）ともにこの新フィールド
+を追加済み。
+
+**各 configuration を共通の sample コホートで比較する**: §3.9 で「同じ
+provider 名の 2 者以上が同じ (sample, variant) に応答したセルだけを集計
+する」よう修正したが、これは provider **名**だけを見ており、同じ provider
+が sample ごとに使う config を変える場合を捉えられていなかった。例えば
+provider A が sample X では config v1、sample Y では config v2 を使い、
+provider B は両方とも v1 のままだった場合、以前の実装はどちらのセルも
+受理してしまう。しかし `summarize_by_provider` は A/v1 を X だけから、
+A/v2 を Y だけから、B/v1 を X・Y 両方から生成するため、config 行ごとの
+集計がもはや同じ sample 集合を比較しておらず、sample の難易度差が採用
+判断を歪めかねない（コードレビュー指摘。§2・§3.3 の same-data・config
+固有の要件に反する）。修正: 「比較可能かどうか」の判定単位を provider 名
+から `(provider, config_key)` のペアへ変更した。これにより、A が sample
+間で config を変えるケースは、X・Y のどちらの応答も
+「データセット全体で比較可能と判定された `(provider, config_key)` の
+集合」と完全一致しなくなり、両方とも除外される（`/tmp` で構成した
+検証用データセットで、A・B が sample X で config v1 同士のときは通過し、
+A が sample Y で v2 に切り替えた途端、X・Y 双方の全応答が `excluded`
+として除外されることを確認した）。
+
+**候補を数える前に provider ID を正規化する**: `ProviderDescriptor` は
+完全に空白の名前しか拒否せず、前後の空白は保持してしまう。そのため、
+同じ入力 variant に対して `"gemini"` と `"gemini "`（末尾スペース付き）の
+両方が記録されていると、これらは 2 つの別々の set member として扱われ、
+実際には 1 つの provider にすぎないにもかかわらず、最低 2 候補ゲートを
+満たしてしまいかねなかった（コードレビュー指摘）。候補を数える前に、
+記録された全 provider キーを正規化（前後の空白除去）し、異なる 2 つの
+生キーが同じ正規化後 ID に衝突する場合はハーネスを停止させる（黙って
+1 つにまとめることも、2 つの別候補のまま扱うことも、どちらもデータセット
+の不整合を隠しかねないため）。
+
+**バリデーションエラーから信頼できない JSON キーを除去する**: `pydantic`
+の `extra_forbidden` エラー（`extra="forbid"` なモデルが未知のキーを
+拒否する際のエラー）は、その `loc` にまさにその未知キー自体を、未検証の
+入力からそのままコピーして持つ。§3.7 の `_sanitize_validation_error` は
+`loc` の各セグメントをそのまま連結していたため、たとえば生徒に関する
+メモが誤って `ground_truth` の JSON キーとして紛れ込んだ場合、その
+キー文字列自体が「サニタイズ済み」のはずのメッセージに漏洩してしまって
+いた（コードレビュー指摘。AGENTS.md「Security」）。`_validate_recorded_
+variant_keys` が未知の input variant キーをメッセージに含めていたのも
+同様の問題である。修正: `extra_forbidden` エラーの `loc` の**最後の
+セグメントのみ**を固定のプレースホルダ（`<unexpected field>`）に置換する
+（それ以前のセグメントはこのモジュール自身のスキーマ定義に由来する
+既知のフィールド名・インデックスであり安全）。`_validate_recorded_
+variant_keys` のメッセージも、未知キーの件数のみを報告し、キー自体は
+一切含めないよう修正した。
 
 ---
 
@@ -517,7 +582,9 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 `--dataset` に本 PoC の予備調査データ（§6、5 件）を指定すると、現時点では
 `recorded`（AI 応答）が空のため **`evaluated cells: 0`** と
 **`staged ground truth with no provider recorded anywhere in the dataset: 5`**
-が出力される（credentials 未整備を推測で埋めない設計。§6.2 参照）。実 AI
+に加え、教科ごとの distinct `submissionId` 件数（日本史 3・世界史 2。§3.11・
+§6.2 参照）が出力される（credentials 未整備を推測で埋めない設計。§6.2
+参照）。実 AI
 呼び出しの live-provider パスは、credentials が揃い次第、**Issue #14 を閉じる
 前に本 PoC へ追加する**（§7.3）。呼び出し時も request/response 本文はログに
 残さない。
@@ -562,6 +629,10 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 ```
 # uv run python poc/issue_14_ai_grading/report.py の出力（合成データ / 参考値のみ）
 evaluated cells: 12
+
+distinct submissions (answers, by submissionId) per subject -- decision record section 6.2 requires >= 30 per subject:
+  synthetic-history: 2
+  synthetic-world-history: 1
 
 | 教科 | provider | config | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | latency計測件数 | 概算cost(USD/1000問) | cost計測件数 | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -1,5 +1,6 @@
 {
   "subject": "synthetic-history",
+  "submissionId": "poc2-synth-submission-03",
   "ground_truth": {
     "questionId": "poc2-synth-03",
     "score": 10,
