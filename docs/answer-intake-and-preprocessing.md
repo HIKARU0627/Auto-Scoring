@@ -697,4 +697,110 @@ _selectTestRequestId` に置き換え）
   提供するようにした
   （`test: 'a native file-picker failure shows an error with a working
 retry'`）。
-  （`test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error`）。
+
+## 20. 8回目のレビュー指摘への対応
+
+- **FastAPI が multipart ボディを解析する前にアップロードをゲートする（重大）**:
+  7 回目で追加した `intake_capacity`（`threading.Semaphore`）はハンドラ内で
+  取得していたが、それは FastAPI がルーティング・依存解決の一環として
+  `await request.form()` を実行し、multipart ボディを完全に spool した
+  **後**にしか実行されない。`require_token`（Bearer 認証）も同じ依存解決の
+  中の一つの `Depends` に過ぎず、ボディの解析より確実に先に走る保証はない。
+  つまり有効なトークンを持たないクライアントを含む複数のクライアントが
+  上限付近の multipart ボディを同時に送ると、いずれの防御にも引っかかる前に
+  パーサ側のメモリ/一時ディスク使用が積み上がり得た。
+  `api/submission_upload_gate.py::SubmissionUploadGateMiddleware` を新設し、
+  `POST /tests/{test_id}/submissions` にだけ絞って ASGI の `receive` 境界
+  （`MaxBodySizeMiddleware` より外側に登録し、それより先に実行される）で
+  Bearer トークンの検証と capacity の確保を行う。認証に失敗すれば `401`、
+  capacity が枯渇していれば `503` を、いずれもボディを一切読まずに返す。
+  ハンドラ側にあった capacity の取得/解放は削除し、このミドルウェアに
+  一本化した
+  （`test_rejects_a_request_with_no_bearer_token_before_touching_the_body`、
+  `test_rejects_when_capacity_is_exhausted_before_touching_the_body`、
+  `test_create_submission_requires_auth`）。
+- **streamed ボディの超過に対して 413 を維持する**: `MaxBodySizeMiddleware`
+  の Content-Length なしパスは、ラップ先のアプリの `receive()` 呼び出し中に
+  `_BodyTooLarge` を送出して検知していた。しかし multipart リクエストでは
+  その `receive()` 呼び出しは FastAPI 自身の `await request.form()` の内部で
+  行われ、FastAPI はそこを丸ごと `except Exception: raise HTTPException(400,
+...)` で囲んでいるため、送出した `_BodyTooLarge` は本ミドルウェアの
+  `except` に届く前に FastAPI に捕まり、汎用的な `400` に化けて `413` が
+  クライアントに届かなかった。「ラップ先が受信中に例外を送出したら検知する」
+  設計自体が、ラップ先の例外処理次第で成立しなくなる。
+  ミドルウェア自身がメッセージを `max_bytes + 1` バイト分までバッファし、
+  上限内で完結すれば全メッセージをラップ先へ再生（replay）し、超過すれば
+  ラップ先を一切呼び出さずに自分で `413` を送信するよう変更した -- ラップ先が
+  例外をどう扱おうと無関係になる
+  （`test_streamed_overflow_yields_413_even_if_the_wrapped_app_swallows_exceptions`）。
+- **Windows のドライブ相対パスセグメントを拒否する**:
+  `local_storage.py::_ensure_safe_path_segment` は `/`・`\`・`..` 等は
+  拒否していたが、コロンは見ていなかった。Windows では `C:foo` のような
+  セグメントに区切り文字が一切無いにもかかわらず、
+  `Path.joinpath(root, "C:foo.png")` は素の `foo.png` と同じパスに解決される
+  ため、`Question.id` が `"C:foo"` と `"foo"` のように衝突する 2 つの値で
+  あっても同じ 1 枚の PNG を指してしまい得る。コロンを含む値と、拡張子の
+  有無に関わらず Win32 API が予約デバイスとして扱う名前（`CON`・`PRN`・
+  `AUX`・`NUL`・`COM1`-`9`・`LPT1`-`9`、大小文字区別なし）を拒否するよう
+  `_ensure_safe_path_segment` を拡張した
+  （`test_a_question_id_shaped_like_a_windows_drive_relative_path_is_rejected`、
+  `test_a_question_id_matching_a_windows_reserved_device_name_is_rejected`）。
+- **永続化する original filename に上限を設ける**: `original_filename` は
+  拡張子が `.pdf` であることと区切り文字を含まないことしか検証しておらず、
+  長さには上限が無かった。multipart のパート単位のヘッダにはサイズ上限が
+  無く、ボディ全体の上限（約 50MiB）まで許容してしまうため、API を直接叩く
+  クライアントは小さな PDF 本体とは無関係に、この 1 フィールドで DB と
+  一覧応答を肥大化させ得た。`domain/models.py::MAX_ORIGINAL_FILENAME_LENGTH`
+  （255）を新設し、`domain/pdf_intake.py::validate_filename`（PDF を開く前の
+  最も安価なチェック）と `Submission.__post_init__` の双方で検証、
+  さらに migration `0005_original_filename_length.py` で
+  `ck_submissions_original_filename_length` を DB 制約として追加した
+  （0004 と同じ 3 層構成）。`student_label` と異なり `Form(...)` のような
+  API 層での宣言的な長さ制限は使えない（`filename` は multipart パートの
+  ヘッダであり、FastAPI の Form フィールドではない）ため、API 層の防御は
+  「`PdfInvalidTypeError` は既存のハンドラで綺麗な `400` に変換される」という
+  既存の仕組みにそのまま乗る形になる
+  （`test_validate_filename_rejects_a_name_longer_than_the_limit`、
+  `test_submission_original_filename_length_is_capped`）。
+
+### 8回目レビュー対応中に見つかった別件の不具合（2件）
+
+`app/test/sidecar_api_client_test.dart`（実プロセスとしてサイドカーを起動する
+統合テスト）がローカル環境で不安定に失敗する件を調査する過程で、レビュー指摘とは
+別に実在する不具合を 2 件発見し、あわせて修正した。
+
+- **`sidecar.py` のポート決定に TOCTOU 競合状態があった**: 従来の
+  `resolve_port()` は使い捨てのプローブ用ソケットを `bind` してOSが割り当てた
+  ポート番号を読み取り、そのソケットを閉じてから番号だけを返し、`run()` が
+  後で `uvicorn.run(port=...)` として同じ番号に**改めて** bind し直していた。
+  「空きポートが見つかった瞬間」と「実際にそのポートで listen する瞬間」の
+  間には `create_app()`（スキーマmigration実行、環境によっては1秒前後）を
+  挟む real なギャップがあり、その間にOSが同じポート番号を他の用途に
+  割り当ててしまうと、handshakeファイルに書いた番号と実際にuvicornが
+  listenするポートがズレる。このマシン上で手動再現に成功した（netstatで
+  handshake記載のポートが全く listen されておらず、実際には隣の番号で
+  listen されていた）。`_bind_socket()` に置き換え、ソケットを bind した
+  まま保持し続け、handshake書き込みから `uvicorn.Server(config).run(sockets=
+[sock])` に渡すまで同じソケットオブジェクトを手放さないようにしてギャップを
+  完全に無くした
+  （`test_bind_socket_zero_returns_an_open_socket_on_a_free_loopback_port`、
+  `test_run_binds_loopback_and_hands_off_matching_credentials`）。
+- **統合テスト自身の共有サイドカー起動ヘルパーに競合状態があった**: 7回目で
+  `setUpAll` をやめて自作の遅延初期化に変えた際、「解決済みの値」だけを
+  `if (x != null) return x;` でメモ化していた。`package:test` はこのファイルの
+  トップレベル `test()` を厳密に1つずつ順番には実行しない（複数が同時進行し
+  得る）ため、最初の起動が完了する前に複数のテストがこのチェックへ到達すると
+  全員が「まだ無い」と判定し、それぞれ別々にサイドカープロセスを起動してしまい
+  得た。進行中の `Future` 自体を（`await` する前に同期的に）メモ化する
+  single-flightパターンに変更し、最初の起動を全員が共有するようにした。
+
+上記2件を修正した上でもなお、このマシンではこのテストファイルだけ約90秒かかる
+ことがある。`_waitUntilHealthy` が失敗する際の実際の症状は「接続拒否」ではなく
+「接続がタイムアウトする（応答が一切返らない）」で、しかもサイドカー自身は
+その直後に確かに該当ポートで listen できていることを確認した。これは
+新規生成された未認識の子プロセスへのループバック接続をリアルタイムに検査する
+セキュリティソフトの介入によく見られる症状と一致する（本マシンはWindows
+Defenderのリアルタイム保護が有効でサードパーティ製AVは無し。管理者権限が無く
+除外設定の有無は未確認）。CIは `windows-latest` のホスト型ランナーを使うため
+再現しない可能性が高い。アプリケーションコード側でこれ以上確実に解決する手段は
+見つかっていない未解決事項として記録する。
