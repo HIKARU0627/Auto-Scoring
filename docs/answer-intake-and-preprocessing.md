@@ -516,3 +516,53 @@ when the stale list response lands'`）。
   `result.answer_images` と `uow.answer_images.list_for_submission` で
   再取得した永続化済み行の両方について、各ページが正しい `question_id` に
   page 順で対応していることを直接 assert する（§12 の受入条件表を更新）。
+
+## 17. 5回目のレビュー指摘への対応
+
+- **staged 画像の総メモリ量を制限する（重大）**: `adapters.atomic.StagedFiles`
+  は DB コミットが成功するまで、ページプレビューと設問切り出し画像を PNG バイト列
+  としてメモリに保持し続ける。ページ 1 枚ずつラスタライズしていても、
+  各ページの検証（宣言サイズ・ページ数上限・レンダリング寸法）を通過した
+  合法的な大きな答案（例: JPEG 圧縮率の高い 50 MiB ぎりぎりの複数ページ PDF）が、
+  展開後の PNG では総計ギガバイト単位に膨張しうる。`StagedFiles.add` に
+  累積バイト数のカウンタを持たせ、`transactional_operation` へ渡した
+  `max_staged_bytes`（`IntakeLimits.max_staged_output_bytes`、既定 300 MiB）を
+  超えたら `StagedOutputTooLargeError`（`domain/pdf_intake.py`、`PdfIntakeError`
+  のサブクラス、API 層は 413 にマップ）を送出する。これは
+  `transactional_operation` の既存の失敗処理（rollback + staged 破棄）にそのまま
+  乗るため、DB 行もファイルも残らない
+  （`test_max_staged_bytes_bounds_the_running_total_not_just_one_add`、
+  `test_decoded_output_exceeding_the_staged_size_cap_is_rejected`）。
+- **面積ゼロの解答領域を needs_review に回す**: `NormalizedRect` は
+  `width`/`height` が 0 でもドメインモデルとしては許容している。
+  `adapters/image/opencv_preprocessor.py::crop_normalized_rect` 自身のクランプ
+  （`x1 = max(x0 + 1, ...)` 等）はこれを黙って 1×1px の crop に変換してしまい、
+  `_build_answer_image` はそれを `OK` として扱っていたため、意味のない画像の
+  まま submission が `ai_processed` に到達し得た。`_build_answer_image` で
+  `answer_area` が `None` の場合と同じ扱いにし（ページプレビューへフォール
+  バックし `NEEDS_REVIEW`、理由は区別のため `answer_area_zero_area`）、
+  `crop_normalized_rect` 自体は呼ばれないようにする
+  （`test_zero_area_answer_area_falls_back_to_page_preview_instead_of_a_useless_crop`）。
+- **完了済みリトライを古い list レスポンスで上書きしない**: 4 回目の対応
+  （§16）で入れた `_withLocalOnlyPreserved`（「fetch 結果に無い id だけ残す」）
+  では、リトライが _既存_ の submission id を再利用するケースを取りこぼして
+  いた。listSubmissions がエラー行を取得した後、それが返ってくる前にリトライが
+  成功すると、フェッチ結果には同じ id がまだ（古い `error` 状態のまま）
+  含まれているため、「id が無ければ残す」ルールでは古い方が勝ってしまう。
+  `_localUpdateSeq`（送信のたびに増分する単調カウンタ）と、id ごとに
+  最後にローカル更新された時点のカウンタ値を記録する
+  `_lastLocalUpdateSeq` を導入し、`_selectTest` が fetch を発行した時点の
+  カウンタ値（`fetchStartSeq`）より後にローカル更新された id は、fetch 結果に
+  同じ id が含まれていても常にローカル側を優先する `_mergeFetchedSubmissions`
+  に置き換えた
+  （`test: 'a completed retry is not overwritten by a stale in-flight list
+response'`）。
+- **submissions 一覧の読込失敗はその読込をリトライする**: 共有の
+  `_errorMessage` バナーの再試行ボタンは常に `_submit` を呼んでいたため、
+  ファイルが既に選択された状態で `listSubmissions` が失敗すると、再試行が
+  一覧の再取得ではなくアップロードを実行してしまっていた（ファイル未選択なら
+  ボタンは無効のまま何も起きない）。エラーの発生元を `_ErrorKind`
+  （`listLoad` / `submit`）として記録し、再試行ボタンの `onPressed` を
+  `_errorKind` に応じて「同じ test で `_selectTest` をやり直す」か
+  「`_submit` する」かに振り分ける
+  （`test: 'retrying a list-load failure reloads the list, not an upload'`）。
