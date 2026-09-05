@@ -323,6 +323,67 @@ void main() {
     expect(find.text('list失敗'), findsNothing);
   });
 
+  testWidgets('a superseded test-list request cannot overwrite a newer one', (
+    tester,
+  ) async {
+    final firstRequestCompleter = Completer<List<SubmissionResponse>>();
+    var test1CallCount = 0;
+    final dependencies = AppDependencies(
+      listTests: () async => [
+        _test(id: 'test-1', name: '国語 第1回'),
+        _test(id: 'test-2', name: '算数 第1回'),
+      ],
+      listSubmissions: (testId) {
+        if (testId == 'test-2') return Future.value(const []);
+        test1CallCount++;
+        // The first A→B→A cycle's *original* request to test-1: left
+        // pending, to be resolved (stale) only after a second request for
+        // test-1 has already landed fresh data below.
+        if (test1CallCount == 1) return firstRequestCompleter.future;
+        return Future.value([_submission(id: 'fresh')]);
+      },
+    );
+
+    await tester.pumpWidget(
+      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
+    );
+    await tester.pumpAndSettle();
+
+    // Select A: its list request starts and never resolves (yet), so from
+    // here until the completer below fires, the loading spinner's
+    // indeterminate animation never settles on its own -- pump(duration)
+    // throughout instead of pumpAndSettle(), which would hang.
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('国語 第1回').last);
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Switch to B (resolves immediately).
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pump(const Duration(milliseconds: 300)); // dropdown open
+    await tester.tap(find.text('算数 第1回').last);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Switch back to A: a *second*, independent request for test-1, which
+    // resolves immediately with fresh data.
+    await tester.tap(find.byKey(const Key('test-picker')));
+    await tester.pump(const Duration(milliseconds: 300)); // dropdown open
+    await tester.tap(find.text('国語 第1回').last);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.byType(ListTile), findsOneWidget);
+
+    // The original (now superseded) request for A finally resolves, with
+    // a stale, empty snapshot. It must not wipe out the fresh data that
+    // already landed, nor touch the loading state.
+    firstRequestCompleter.complete(const []);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ListTile), findsOneWidget);
+  });
+
   testWidgets('submitting the student-label field with Enter uploads', (
     tester,
   ) async {

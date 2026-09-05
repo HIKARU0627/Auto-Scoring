@@ -61,6 +61,11 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
   late Future<List<TestSummary>> _testsFuture;
   String? _selectedTestId;
 
+  // Bumped at the start of every _selectTest call; a call only applies its
+  // result (or clears _loadingSubmissions) if it's still the most recently
+  // issued one when it resolves -- see _selectTest.
+  int _selectTestRequestId = 0;
+
   List<SubmissionResponse> _submissions = const [];
   bool _loadingSubmissions = false;
 
@@ -98,6 +103,15 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
       !_isSubmitting && _selectedTestId != null && _pickedFilePath != null;
 
   Future<void> _selectTest(String? testId) async {
+    // A→B→A leaves two in-flight requests for the same testId "A" (the
+    // original one, and the new one from switching back) -- comparing
+    // against _selectedTestId alone can't tell those apart, since it's "A"
+    // for both by the time either resolves. Each call gets its own strictly
+    // increasing id instead; only the most recently issued one is allowed to
+    // apply its result or clear the loading flag, so an older, superseded
+    // request can't clobber a newer one's data (or its loading state) no
+    // matter which order their responses actually arrive in.
+    final requestId = ++_selectTestRequestId;
     setState(() {
       _selectedTestId = testId;
       _submissions = const [];
@@ -114,7 +128,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     final fetchStartSeq = _localUpdateSeq;
     try {
       final submissions = await widget.dependencies.listSubmissions(testId);
-      if (!mounted || _selectedTestId != testId) return;
+      if (!mounted || requestId != _selectTestRequestId) return;
       setState(
         () => _submissions = _mergeFetchedSubmissions(
           current: _submissions,
@@ -124,13 +138,13 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
         ),
       );
     } on SidecarApiException catch (error) {
-      if (!mounted || _selectedTestId != testId) return;
+      if (!mounted || requestId != _selectTestRequestId) return;
       setState(() {
         _errorMessage = error.message;
         _errorKind = _ErrorKind.listLoad;
       });
     } finally {
-      if (mounted && _selectedTestId == testId) {
+      if (mounted && requestId == _selectTestRequestId) {
         setState(() => _loadingSubmissions = false);
       }
     }
