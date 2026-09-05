@@ -416,21 +416,19 @@ class SqlAlchemyJobRepository:
         )
         return [m.job_from_row(row) for row in rows]
 
-    def mark_usable(self, job_id: str, *, usable: bool) -> None:
+    def mark_usable(self, job_id: str, *, usable: bool, expected_state: JobState) -> bool:
         result = cast(
             CursorResult[Any],
             self._session.execute(
                 update(JobRow)
-                .where(
-                    JobRow.id == job_id,
-                    JobRow.state.in_([JobState.SUCCEEDED, JobState.FAILED]),
-                )
+                .where(JobRow.id == job_id, JobRow.state == expected_state)
                 .values(usable=usable)
             ),
         )
         row = self._session.get(JobRow, job_id)
         if row is not None and result.rowcount == 1:
             self._session.expire(row)
+        return result.rowcount == 1
 
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
         # FAILED is not terminal here: FAILED -> QUEUED is a valid retry

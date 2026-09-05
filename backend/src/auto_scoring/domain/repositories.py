@@ -169,17 +169,30 @@ class JobRepository(Protocol):
         """
         ...
 
-    def mark_usable(self, job_id: str, *, usable: bool) -> None:
-        """Flip a terminal (``SUCCEEDED`` or ``FAILED``) job's `Job.usable`
-        bit in place.
+    def mark_usable(self, job_id: str, *, usable: bool, expected_state: JobState) -> bool:
+        """Flip a job's `Job.usable` bit in place, iff the row is still in
+        ``expected_state`` (``SUCCEEDED`` or ``FAILED``) -- the state the
+        caller itself observed before deciding to do this, exactly like
+        `save`'s compare-and-set. Returns whether the write actually
+        applied.
 
         Unlike `save`, this does not change ``state`` -- it exists for the
         "a human corrected a low-confidence or failed result and it is now
         usable" resume path (Issue #18 §4.4), which changes only this bit,
         not the job's lifecycle state (a FAILED job stays FAILED; only
-        whether its downstream effect may now proceed changes). A no-op if
-        the job is not SUCCEEDED or FAILED (the caller is expected to check
-        `Job.state` first if it needs to know whether this had any effect).
+        whether its downstream effect may now proceed changes).
+
+        The compare-and-set matters because this call and a concurrent
+        `save` (e.g. a manual retry moving the same row FAILED -> QUEUED)
+        can race: without pinning the write to the exact state the caller
+        read, this could silently mark a job usable (and this call's
+        caller could go on to release dependents on that basis) after the
+        job has already moved on to being reprocessed, or a racing `save`
+        could silently clear a `usable` this call just set (Issue #18
+        review round 3, P1 -- AGENTS.md "invariants は UI ではなく実制約で"
+        applies to the transaction, not just the column, here). The caller
+        is expected to retry from a fresh read on ``False``, the same as
+        it would for `JobSaveConflict` from `save`.
         """
         ...
 
