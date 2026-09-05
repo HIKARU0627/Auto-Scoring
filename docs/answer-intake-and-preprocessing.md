@@ -634,3 +634,67 @@ _selectTestRequestId` に置き換え）
   `PdfCorruptedError` に変換する（`is_encrypted`/`page_count`/
   `page_geometry` に対して既に使っているパターンと同じ）
   （`test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error`）。
+
+## 19. 7回目のレビュー指摘への対応
+
+- **アップロードを読み込む前に intake 容量を確保する（重大）**:
+  `intake_lock`（6 回目の対応）は render/DB フェーズだけを直列化するが、
+  それより前の「アップロード本文をメモリへ読み込む」処理（async ハンドラ
+  自身、event loop 上）は何も制限していなかった。認証済みクライアントが
+  上限付近の PDF を同時に複数アップロードすると、各リクエストが
+  `intake_lock` の順番待ちをするだけの間、それぞれが完全な `bytes` を
+  保持し続け、個々のリクエストが上限内でも合計でメモリを枯渇させ得る。
+  `create_app(..., max_concurrent_uploads=2)` で `threading.Semaphore` を
+  用意し、`_read_upload_within_limit` を呼ぶ**前**に非ブロッキングで確保
+  できなければ即座に `503` を返す（キューイングはしない。キューイングは
+  「bytes を抱えたまま待つリクエスト」を「このハンドラ内で待つリクエスト」に
+  置き換えるだけでメモリを何も改善しないため）
+  （`test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body`）。
+- **中断されたファイル確定処理を起動時に修復する**: `FinalizationError`
+  （6 回目の対応）は例外を捕捉できる場合のみ機能する。DB commit 後、
+  `_finalize` の前後でプロセスがクラッシュしたり電源が落ちたりすると、
+  例外ハンドラは一切実行されず、submission は `ai_processed`/
+  `needs_review` のままファイルだけが欠落し、同じ内容を再アップロードしても
+  `REJECT_DUPLICATE`（409）になって永久に直せなかった。
+  `adapters/submission_intake.py::repair_incomplete_submissions` を追加し、
+  `create_app()` の起動時に一度、`ai_processed`/`needs_review` の全
+  submission について期待されるファイル（`source.pdf`・各ページ preview・
+  各 answer_image crop）の存在を確認し、一つでも欠けていれば `error`
+  （`review_reason="finalization_failed"`）に戻す。あわせて、ドキュメント上は
+  「起動時に実行する」とされながら実際にはどこからも呼ばれていなかった
+  `LocalFileStore.sweep_temp`（Issue #11）も同じタイミングで呼ぶようにした。
+  この関数はファイルを再生成するわけではなく、あくまで「再試行可能な状態に
+  戻す」だけ -- 実際にファイルを埋めるには、人間が同じ PDF を再度アップロード
+  する必要がある（サイドカーはアップロード bytes をリクエスト間で永続化
+  しない）
+  （`test_repair_incomplete_submissions_moves_a_submission_with_a_missing_file_to_error`、
+  `test_starting_the_app_repairs_a_submission_left_incomplete_by_a_prior_crash`）。
+- **永続化する student label に上限を設ける**: `student_label` は Issue #11
+  導入時から長さ制限のない自由入力の nullable text だった。Flutter UI 経由
+  では短いラベルしか送られないが、API を直接叩くクライアントはリクエスト
+  サイズ上限のほぼ全てをこの 1 フィールドに詰め込め、それは生の値のまま
+  SQLite に保存され、全ての submissions 一覧応答でそのまま返る。
+  `domain/models.py::MAX_STUDENT_LABEL_LENGTH`（200）を新設し、
+  `Submission.__post_init__` で検証（domain 層）、
+  `api/app.py` の `Form(..., max_length=MAX_STUDENT_LABEL_LENGTH)` で
+  API 層でも検証（超過は綺麗な `422` になり、domain 層まで到達しない）、
+  さらに migration `0004_student_label_length.py` で
+  `ck_submissions_student_label_length`
+  （`student_label IS NULL OR length(student_label) <= 200`）を DB 制約として
+  追加した（3 層目）。0003 の重複チェックと異なり事前チェック/バックフィルは
+  行わない -- これまで上限が存在しなかったことを踏まえ、既存データが
+  超過していれば batch 再作成が `IntegrityError` で失敗するに任せる（MVP で
+  実データがまだ無い前提として許容）
+  （`test_submission_student_label_length_is_capped`、
+  `test_create_submission_rejects_an_overlong_student_label`、
+  `test_check_constraint_rejects_bad_row`）。
+- **ネイティブ file picker の失敗を捕捉する**: `_pickFile()` は
+  `await widget.pickFile()` を無防備に呼んでおり、platform channel や
+  ダイアログの失敗で例外が飛ぶと、ボタンの `onPressed` コールバックから
+  未捕捉の非同期エラーとして漏れ、エラー表示もリトライ手段もないまま画面が
+  残っていた。try/catch で囲み、`_ErrorKind.filePick` として記録して
+  共有のエラーバナー経由でメッセージと「再試行」（`_pickFile` を再度呼ぶ）を
+  提供するようにした
+  （`test: 'a native file-picker failure shows an error with a working
+retry'`）。
+  （`test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error`）。
