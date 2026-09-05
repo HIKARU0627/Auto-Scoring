@@ -136,6 +136,55 @@ def test_question_number_match_does_not_bleed_into_a_longer_number() -> None:
     assert [(e.from_question_id, e.to_question_id) for e in result.edges] == [("q10", "q2")]
 
 
+def test_overlapping_labels_resolve_to_the_longest_match() -> None:
+    """ "問1" and "問1-1" both exist as question numbers; a mention of
+    "問1-1" also satisfies "問1"'s digit-boundary pattern (the character
+    right after "問1" is "-", not a digit). Only the longest matching label
+    -- "問1-1" -- must be treated as referenced, not both (Issue #26
+    review).
+    """
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q1-1", number="問1-1", page=1, prompt_text="光合成の反応式を書け。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問1-1の答えを踏まえて考察せよ。",
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert [(e.from_question_id, e.to_question_id) for e in result.edges] == [("q1-1", "q2")]
+    assert result.unresolved == ()
+
+
+def test_overlapping_labels_without_a_signal_phrase_report_only_the_longest() -> None:
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q1-1", number="問1-1", page=1, prompt_text="光合成の反応式を書け。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問1-1と同じ形式で解答せよ。",  # bare mention, no signal phrase
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert result.edges == ()
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].question_id == "q2"
+    assert "問1-1" in result.unresolved[0].reason
+    assert "問1、" not in result.unresolved[0].reason  # "問1" must not also be reported
+
+
 def test_multi_page_reference_is_detected() -> None:
     questions = [
         QuestionInfo(

@@ -416,7 +416,10 @@ class DependencyGraph:
 
 
 def can_start_submission_processing(
-    graph: DependencyGraph | None, *, current_question_ids: Iterable[str]
+    graph: DependencyGraph | None,
+    *,
+    current_question_ids: Iterable[str],
+    active_confirmed_version: int | None,
 ) -> bool:
     """Gate for Issue #26's acceptance criterion:
 
@@ -434,7 +437,19 @@ def can_start_submission_processing(
     up-to-date read of the test's questions at the moment it wants to start
     processing; a mismatch means the graph is stale and must be reported the
     same as "not confirmed" (Issue #26 review).
+
+    A CONFIRMED graph can also simply be superseded: `/confirm` never mutates
+    or un-confirms an older version when a newer one is confirmed (each
+    version is immutable), so v1 can stay CONFIRMED with a question set that
+    still matches the test even after v2 has become the active version.
+    ``active_confirmed_version`` -- the caller's fresh read of
+    `DependencyGraphRepository.get_latest_confirmed(test_id).version` -- must
+    equal ``graph.version``, or the graph being checked is a stale, replaced
+    version rather than the one the test actually runs on now (Issue #26
+    review).
     """
     if graph is None or graph.status is not DependencyGraphStatus.CONFIRMED:
+        return False
+    if graph.version != active_confirmed_version:
         return False
     return graph.question_ids == frozenset(current_question_ids)

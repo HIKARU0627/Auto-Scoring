@@ -73,11 +73,7 @@ class ReferenceHeuristicDependencyAnalyzer:
                 continue
 
             matched_signal = next((phrase for phrase in _SIGNAL_PHRASES if phrase in text), None)
-            referenced = [
-                (number, from_id)
-                for number, from_id in by_number.items()
-                if from_id != question.question_id and _contains_question_number(text, number)
-            ]
+            referenced = _resolve_referenced_numbers(text, by_number, question.question_id)
 
             if referenced and matched_signal:
                 # A question number *and* a dependency-signal phrase both
@@ -143,8 +139,44 @@ def _question_number_pattern(number: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\d){re.escape(number)}(?!\d)")
 
 
-def _contains_question_number(text: str, number: str) -> bool:
-    return _question_number_pattern(number).search(text) is not None
+def _resolve_referenced_numbers(
+    text: str, by_number: dict[str, str], exclude_id: str
+) -> list[tuple[str, str]]:
+    """Which known question numbers `text` genuinely references.
+
+    Question numbers are arbitrary non-empty labels, so one can be a
+    substring of another with only a non-digit separator between them --
+    e.g. "問1" and "問1-1". Both patterns match inside "...問1-1を参照..."
+    ("問1"'s digit-boundary lookahead is satisfied by the following "-"), so
+    naively checking each label independently would report the text as
+    referencing *both* "問1" and "問1-1" from a single mention of "問1-1"
+    (Issue #26 review). A shorter label's match is only a genuine reference
+    if it is not itself contained inside a longer label's match at the same
+    position; a match fully swallowed by a longer label's span is resolved
+    to that longer label instead.
+    """
+    spans_by_number = {
+        number: [match.span() for match in _question_number_pattern(number).finditer(text)]
+        for number in by_number
+    }
+
+    def _is_absorbed_by_a_longer_label(number: str, span: tuple[int, int]) -> bool:
+        start, end = span
+        return any(
+            other_start <= start and end <= other_end
+            for other_number, other_spans in spans_by_number.items()
+            if len(other_number) > len(number)
+            for other_start, other_end in other_spans
+        )
+
+    referenced: list[tuple[str, str]] = []
+    for number, from_id in by_number.items():
+        if from_id == exclude_id:
+            continue
+        spans = spans_by_number[number]
+        if any(not _is_absorbed_by_a_longer_label(number, span) for span in spans):
+            referenced.append((number, from_id))
+    return referenced
 
 
 def _snippet(text: str, marker: str, radius: int = 8) -> str:

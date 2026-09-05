@@ -179,9 +179,15 @@ def test_human_correction_confirm_gates_submission_processing(
     with make_uow() as uow:
         stored = uow.dependency_graphs.get_latest("test-1")
         current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
-    assert stored is not None
+        active_confirmed = uow.dependency_graphs.get_latest_confirmed("test-1")
+    assert stored is not None and active_confirmed is not None
     assert (
-        can_start_submission_processing(stored, current_question_ids=current_question_ids) is True
+        can_start_submission_processing(
+            stored,
+            current_question_ids=current_question_ids,
+            active_confirmed_version=active_confirmed.version,
+        )
+        is True
     )
 
 
@@ -194,8 +200,14 @@ def test_draft_alone_does_not_allow_submission_processing(
     with make_uow() as uow:
         latest = uow.dependency_graphs.get_latest("test-1")
         current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
+        active_confirmed = uow.dependency_graphs.get_latest_confirmed("test-1")
     assert (
-        can_start_submission_processing(latest, current_question_ids=current_question_ids) is False
+        can_start_submission_processing(
+            latest,
+            current_question_ids=current_question_ids,
+            active_confirmed_version=active_confirmed.version if active_confirmed else None,
+        )
+        is False
     )
 
 
@@ -218,9 +230,14 @@ def test_confirmed_processing_gate_goes_stale_after_a_question_is_added(
     with make_uow() as uow:
         confirmed = uow.dependency_graphs.get_latest("test-1")
         current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
-    assert confirmed is not None
+        active_confirmed = uow.dependency_graphs.get_latest_confirmed("test-1")
+    assert confirmed is not None and active_confirmed is not None
     assert (
-        can_start_submission_processing(confirmed, current_question_ids=current_question_ids)
+        can_start_submission_processing(
+            confirmed,
+            current_question_ids=current_question_ids,
+            active_confirmed_version=active_confirmed.version,
+        )
         is True
     )
 
@@ -231,10 +248,63 @@ def test_confirmed_processing_gate_goes_stale_after_a_question_is_added(
     with make_uow() as uow:
         still_confirmed = uow.dependency_graphs.get_latest("test-1")
         current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
-    assert still_confirmed is not None
+        active_confirmed = uow.dependency_graphs.get_latest_confirmed("test-1")
+    assert still_confirmed is not None and active_confirmed is not None
     assert still_confirmed.status.value == "confirmed"  # status alone did not change
     assert (
-        can_start_submission_processing(still_confirmed, current_question_ids=current_question_ids)
+        can_start_submission_processing(
+            still_confirmed,
+            current_question_ids=current_question_ids,
+            active_confirmed_version=active_confirmed.version,
+        )
+        is False
+    )
+
+
+def test_processing_gate_rejects_a_superseded_confirmed_version(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """v1 stays CONFIRMED forever -- confirming v2 never mutates or
+    un-confirms it. Checking v1's own `status`/`question_ids` in isolation
+    would still allow it even after v2 became the test's active version, so
+    the gate must also compare against the *currently* active confirmed
+    version (Issue #26 review).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+    v1_confirm = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+    assert v1_confirm.status_code == 200, v1_confirm.text
+
+    with make_uow() as uow:
+        v1 = uow.dependency_graphs.get("test-1:v1")
+    assert v1 is not None and v1.status.value == "confirmed"
+
+    _analyze(client)
+    v2_confirm = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert v2_confirm.status_code == 200, v2_confirm.text
+
+    with make_uow() as uow:
+        v1_after_v2 = uow.dependency_graphs.get("test-1:v1")
+        current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
+        active_confirmed = uow.dependency_graphs.get_latest_confirmed("test-1")
+    assert v1_after_v2 is not None and active_confirmed is not None
+    assert v1_after_v2.status.value == "confirmed"  # v1's own status never changed
+    assert v1_after_v2.question_ids == current_question_ids  # question set never changed either
+    assert active_confirmed.version == 2
+    assert (
+        can_start_submission_processing(
+            v1_after_v2,
+            current_question_ids=current_question_ids,
+            active_confirmed_version=active_confirmed.version,
+        )
         is False
     )
 
@@ -643,8 +713,10 @@ def test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race(
         )
         uow.commit()
 
-    def _always_conflict(self: SqlAlchemyJobRepository, job: Job) -> None:
-        raise JobSaveConflict(job.id, job.state)
+    def _always_conflict(
+        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
+    ) -> None:
+        raise JobSaveConflict(job.id, expected_state)
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _always_conflict)
 

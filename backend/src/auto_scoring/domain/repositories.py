@@ -91,7 +91,20 @@ class ReviewRepository(Protocol):
 class JobRepository(Protocol):
     def add(self, job: Job) -> None: ...
     def get(self, job_id: str) -> Job | None: ...
-    def save(self, job: Job) -> None: ...
+
+    def save(self, job: Job, *, expected_state: JobState) -> None:
+        """Persist ``job`` iff the row is still in ``expected_state`` -- the
+        state the caller itself observed (e.g. from `get`) before deciding on
+        this transition, not a value re-read from the row inside `save`
+        itself. Re-reading it here would let two callers who both saw the
+        same original state both "win": the second call's freshly re-read
+        current state would already equal its own target state, skipping the
+        transition check and matching its own `WHERE` clause (Issue #26
+        review). Raises `auto_scoring.domain.models.JobSaveConflict` if the
+        row has moved on from ``expected_state``.
+        """
+        ...
+
     def list_by_state(self, state: JobState) -> list[Job]: ...
 
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:

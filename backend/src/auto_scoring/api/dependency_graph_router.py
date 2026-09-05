@@ -425,7 +425,7 @@ def build_dependency_graph_router(
                 stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
             )
             try:
-                uow.jobs.save(cancelled)
+                uow.jobs.save(cancelled, expected_state=stale_job.state)
             except JobSaveConflict:
                 # Another writer (a worker finishing this job) changed its
                 # state after we listed it as stale. Do not create a

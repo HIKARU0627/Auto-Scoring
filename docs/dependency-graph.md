@@ -141,6 +141,27 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   通過直後・atomic UPDATE実行前」というピンポイントな窓に別トランザクション
   からの競合コミットを注入する方式で決定的に再現している
   （`test_job_save_raises_conflict_when_the_row_changes_between_read_and_write`）。
+- 上記の初版の `Job.save()` にはさらに別の穴があった（レビュー指摘）:
+  `save()` 自身が `self._session.get(JobRow, job.id)` でCASの比較対象となる
+  `current_state` を都度再読み込みしていたため、2つのworkerが両方とも同じ
+  QUEUEDのjobを読んで両方ともRUNNINGへ遷移させようとすると、後から実行される
+  方の`save()`は「先勝ちが既にRUNNINGへ書き込んだ後の行」を再読み込みして
+  `current_state = RUNNING` を得る。後勝ち呼び出し自身の遷移先も同じRUNNING
+  なので `job.state is not current_state` が偽になり `ensure_job_transition`
+  の呼び出し自体がスキップされ、続く `WHERE state = 'running'` は
+  先勝ちが作った行にそのまま一致してしまう -- 後勝ちが一度も観測していない
+  状態を「たまたま今のDB状態と一致した」というだけで書き込みに成功したこと
+  になり、2つのworkerが同じjobを同時にclaimできてしまう。CASの本質は
+  「呼び出し元が読んだ時点の状態」を条件にすることなので、`save()` の中で
+  DBを再読み込みして条件を作るのではなく、呼び出し元に `expected_state`
+  （`get()` で読んだ、`transitioned_to()` を呼ぶ前のjobの`state`）を明示的に
+  引数で渡させ、それを唯一の比較対象にするよう変更した。これにより後勝ちの
+  `WHERE state = 'queued'` はもう今のDB行（RUNNING）に一致せず、正しく
+  `JobSaveConflict` になる。テストでは2つの別々の`uow`でそれぞれ同じ
+  QUEUED状態を読み取り、片方を保存した後にもう片方を保存させて後者が確実に
+  負けることを検証している
+  （`test_job_save_rejects_the_second_of_two_workers_racing_to_claim_the_same_job`、
+  修正前は`DID NOT RAISE JobSaveConflict`で失敗することを確認済み）。
 
 ### 追加の不変条件（レビュー指摘で強化）
 
@@ -177,10 +198,10 @@ from_question_id, to_question_id)` の複合主キー（レビュー指摘）。
 
 ### Submission処理のゲート
 
-`can_start_submission_processing(graph, *, current_question_ids)` が唯一の
-ゲート関数: `graph` が `None`（未分析・分析失敗を含む）か、
-`DependencyGraphStatus.CONFIRMED` でなければ `False`。人間未確認のDRAFTや
-分析失敗はここで一律にブロックされる。
+`can_start_submission_processing(graph, *, current_question_ids,
+active_confirmed_version)` が唯一のゲート関数: `graph` が `None`（未分析・
+分析失敗を含む）か、`DependencyGraphStatus.CONFIRMED` でなければ `False`。
+人間未確認のDRAFTや分析失敗はここで一律にブロックされる。
 
 CONFIRMEDというgraph自身の状態だけでは不十分（レビュー指摘）: `confirm()`
 後のgraphは不変だが、testの設問集合はconfirm後も変更されうる。confirm後に
@@ -194,6 +215,22 @@ CONFIRMEDというgraph自身の状態だけでは不十分（レビュー指摘
 `test_processing_is_blocked_when_a_question_was_removed_after_confirming`、
 および `test_dependency_graph_api.py` の
 `test_confirmed_processing_gate_goes_stale_after_a_question_is_added`）。
+
+`status`/`question_ids` の一致だけでもまだ不十分（レビュー指摘）:
+「バージョンと不変性」節の通りCONFIRMED後のバージョンは不変で、v2が
+confirmされてもv1は書き換わらずCONFIRMEDのまま残る。設問が一切変わって
+いなければv1の`question_ids`も最新の設問集合と一致し続けるため、`status`と
+`question_ids`だけを見るゲートはv2がアクティブになった後もv1に対して
+`True`を返し続けてしまう -- v2の確定で明示的に無効化されたはずのv1に対して
+新しいsubmission処理を開始できてしまう。そこで呼び出し側が
+`DependencyGraphRepository.get_latest_confirmed(test_id)` で読んだ最新の
+アクティブなconfirmed versionを `active_confirmed_version` として渡し、
+`graph.version` との一致を追加条件にする。テストでは、v1をconfirmした後に
+同じ設問集合のままv2をconfirmし、v1自身の`status`/`question_ids`は変化
+していないにもかかわらずゲートが`False`を返すことを検証している
+（`test_processing_is_blocked_when_a_newer_version_is_the_active_confirmed_one`、
+`test_dependency_graph_api.py` の
+`test_processing_gate_rejects_a_superseded_confirmed_version`）。
 
 ### 候補生成: ヒューリスティック analyzer
 
@@ -230,6 +267,24 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
 - 将来 `AIProvider` ベースの analyzer に差し替える場合も、`DependencyAnalyzer`
   を実装する新しいadapterを `build_dependency_graph_router(..., analyzer=...)`
   に渡すだけでよい。
+- 設問番号は任意の非空文字列を許容するため、一方が他方の接頭辞になり得る
+  （例:「問1」と「問1-1」）。`_question_number_pattern` の数字境界チェック
+  （`(?<!\d)…(?!\d)`）は「問1」を「問10」の内部にマッチさせない一方で、
+  「問1-1」中の「問1」は直後が数字でない`-`なので単独でもマッチしてしまう
+  --「問1-1」への言及テキストが「問1」と「問1-1」の両方への参照として二重に
+  検出され、両方から高確信度edgeが発行されてしまっていた（レビュー指摘）。
+  `_resolve_referenced_numbers` は各番号のマッチ位置（span）を全て集め、
+  ある番号のマッチが**より長い**番号のマッチに完全に包含されている場合は
+  その出現を「本当の参照ではなく、より長いラベルの一部」として除外する
+  （＝最長一致のみを参照として採用する）。同じ番号が他の位置で単独に出現し
+  ていれば、その出現は依然として有効な参照として扱われる。テストでは
+  「問1」と「問1-1」が両方存在するとき、「問1-1」への言及が「問1-1」だけを
+  参照と判定すること（シグナル表現ありのedgeケース、無しのunresolvedケース
+  の両方）を検証している
+  （`test_overlapping_labels_resolve_to_the_longest_match`、
+  `test_overlapping_labels_without_a_signal_phrase_report_only_the_longest`、
+  修正前はどちらも「問1」と「問1-1」の両方が参照として検出されることを
+  確認済み）。
 
 ### API・DB配線
 

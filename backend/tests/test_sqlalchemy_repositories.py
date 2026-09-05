@@ -177,7 +177,7 @@ def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
         uow.commit()
 
     with seeded() as uow, pytest.raises(InvalidStateTransition):
-        uow.jobs.save(make_job(state=JobState.SUCCEEDED))
+        uow.jobs.save(make_job(state=JobState.SUCCEEDED), expected_state=JobState.QUEUED)
 
 
 def test_job_save_raises_conflict_when_the_row_changes_between_read_and_write(
@@ -206,7 +206,8 @@ def test_job_save_raises_conflict_when_the_row_changes_between_read_and_write(
                 stale = concurrent_uow.jobs.get("job-1")
                 assert stale is not None
                 concurrent_uow.jobs.save(
-                    stale.transitioned_to(JobState.CANCELLED, updated_at=at(5))
+                    stale.transitioned_to(JobState.CANCELLED, updated_at=at(5)),
+                    expected_state=stale.state,
                 )
                 concurrent_uow.commit()
         return result
@@ -220,12 +221,57 @@ def test_job_save_raises_conflict_when_the_row_changes_between_read_and_write(
         assert job is not None
         completed = job.transitioned_to(JobState.SUCCEEDED, updated_at=at(10))
         with pytest.raises(JobSaveConflict):
-            uow.jobs.save(completed)
+            uow.jobs.save(completed, expected_state=job.state)
 
     with seeded() as uow:
         final = uow.jobs.get("job-1")
     assert final is not None
     assert final.state is JobState.CANCELLED
+
+
+def test_job_save_rejects_the_second_of_two_workers_racing_to_claim_the_same_job(
+    seeded: UowFactory,
+) -> None:
+    """Two workers both read the same QUEUED job and both decide to move it
+    to RUNNING. By the time the second worker's `save()` executes, the row
+    already holds RUNNING -- coincidentally the very state the second worker
+    is also trying to write. A `save()` that re-reads "current state" from
+    the row itself (rather than using what the caller actually observed)
+    would see its own target state already matching that re-read value, skip
+    the transition check, and match its own ``WHERE state = 'running'``
+    against the first worker's write -- silently letting both workers claim
+    the same job (Issue #26 review). Passing each worker's own
+    `expected_state` (QUEUED, what it actually read) keeps the second
+    worker's ``WHERE state = 'queued'`` from matching the now-RUNNING row.
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(make_job(state=JobState.QUEUED))
+        uow.commit()
+
+    with seeded() as uow_a:
+        job_a = uow_a.jobs.get("job-1")
+    with seeded() as uow_b:
+        job_b = uow_b.jobs.get("job-1")
+    assert job_a is not None and job_b is not None
+
+    with seeded() as uow_a:
+        uow_a.jobs.save(
+            job_a.transitioned_to(JobState.RUNNING, updated_at=at(5)),
+            expected_state=job_a.state,
+        )
+        uow_a.commit()
+
+    with seeded() as uow_b, pytest.raises(JobSaveConflict):
+        uow_b.jobs.save(
+            job_b.transitioned_to(JobState.RUNNING, updated_at=at(6)),
+            expected_state=job_b.state,
+        )
+
+    with seeded() as uow:
+        final = uow.jobs.get("job-1")
+    assert final is not None
+    assert final.attempts == 1  # only the winner's transitioned_to() attempt was recorded
 
 
 def test_list_incomplete_for_stale_versions_filters_correctly(seeded: UowFactory) -> None:

@@ -264,34 +264,35 @@ class SqlAlchemyJobRepository:
         row = self._session.get(JobRow, job_id)
         return m.job_from_row(row) if row is not None else None
 
-    def save(self, job: Job) -> None:
-        """Compare-and-set on the state this call read, not a blind PK update.
+    def save(self, job: Job, *, expected_state: JobState) -> None:
+        """Compare-and-set on ``expected_state`` -- the state the *caller*
+        observed before deciding on this transition -- not a state this call
+        re-reads from the row itself.
 
-        A worker's own in-memory `ensure_job_transition` check only proves the
-        move was legal against whatever this session happened to read -- it
-        says nothing about whether another writer changed the row *since*
-        that read. A plain ORM ``UPDATE`` (mutate the loaded object, flush)
-        matches on primary key only, so it would silently overwrite regardless
-        of what the row actually holds by the time the statement executes
-        (e.g. a stale RUNNING read, followed by another transaction
-        committing CANCELLED, followed by this call's flush finally landing --
-        Issue #26 review). Including ``state == current_state`` in the
-        ``WHERE`` makes SQLite re-evaluate that condition against the row's
-        real state at execution time, so a lost race raises `JobSaveConflict`
-        instead of corrupting whichever write actually won.
+        Re-reading "current state" from the row inside `save()` (the
+        previous implementation) reopens the exact race it was meant to
+        close: if two workers both read the same job as QUEUED and both
+        decide to move it to RUNNING, whichever `save()` runs second would
+        re-read the row *after* the first has already committed RUNNING, see
+        its own freshly re-read ``current_state`` already equal to its own
+        target state (RUNNING), skip the `ensure_job_transition` check
+        entirely (``job.state is not current_state`` is false), and then its
+        own ``WHERE state = 'running'`` would match the row the first writer
+        just produced -- silently "succeeding" a claim this call never
+        actually observed permission for (Issue #26 review). Requiring the
+        caller to pass the state it read via `get()` before calling
+        `Job.transitioned_to(...)` ties the compare-and-set to what was
+        actually observed, so the second worker's ``WHERE state = 'queued'``
+        no longer matches and it correctly loses the race.
         """
-        row = self._session.get(JobRow, job.id)
-        if row is None:
-            raise LookupError(f"job {job.id!r} not found")
-        current_state = JobState(row.state)
-        if job.state is not current_state:
-            ensure_job_transition(current_state, job.state)
+        if job.state is not expected_state:
+            ensure_job_transition(expected_state, job.state)
 
         result = cast(
             CursorResult[Any],
             self._session.execute(
                 update(JobRow)
-                .where(JobRow.id == job.id, JobRow.state == current_state)
+                .where(JobRow.id == job.id, JobRow.state == expected_state)
                 .values(
                     state=job.state,
                     attempts=job.attempts,
@@ -302,9 +303,13 @@ class SqlAlchemyJobRepository:
                 )
             ),
         )
+        row = self._session.get(JobRow, job.id)
         if result.rowcount != 1:
-            raise JobSaveConflict(job.id, current_state)
-        self._session.expire(row)
+            if row is None:
+                raise LookupError(f"job {job.id!r} not found")
+            raise JobSaveConflict(job.id, expected_state)
+        if row is not None:
+            self._session.expire(row)
 
     def list_by_state(self, state: JobState) -> list[Job]:
         rows = self._session.scalars(

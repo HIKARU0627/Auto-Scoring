@@ -206,18 +206,33 @@ def test_confirmed_graph_cannot_carry_unresolved_questions() -> None:
 # Submission-processing gate
 # --------------------------------------------------------------------------- #
 def test_processing_is_blocked_without_a_graph() -> None:
-    assert can_start_submission_processing(None, current_question_ids=["q1"]) is False
+    assert (
+        can_start_submission_processing(
+            None, current_question_ids=["q1"], active_confirmed_version=None
+        )
+        is False
+    )
 
 
 def test_processing_is_blocked_while_draft() -> None:
     draft = _draft(["q1"])
-    assert can_start_submission_processing(draft, current_question_ids=["q1"]) is False
+    assert (
+        can_start_submission_processing(
+            draft, current_question_ids=["q1"], active_confirmed_version=None
+        )
+        is False
+    )
 
 
 def test_processing_is_allowed_once_confirmed() -> None:
     draft = _draft(["q1"])
     confirmed = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
-    assert can_start_submission_processing(confirmed, current_question_ids=["q1"]) is True
+    assert (
+        can_start_submission_processing(
+            confirmed, current_question_ids=["q1"], active_confirmed_version=1
+        )
+        is True
+    )
 
 
 def test_processing_is_blocked_when_a_question_was_added_after_confirming() -> None:
@@ -228,13 +243,39 @@ def test_processing_is_blocked_when_a_question_was_added_after_confirming() -> N
     """
     draft = _draft(["q1"])
     confirmed = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
-    assert can_start_submission_processing(confirmed, current_question_ids=["q1", "q2"]) is False
+    assert (
+        can_start_submission_processing(
+            confirmed, current_question_ids=["q1", "q2"], active_confirmed_version=1
+        )
+        is False
+    )
 
 
 def test_processing_is_blocked_when_a_question_was_removed_after_confirming() -> None:
     draft = _draft(["q1", "q2"])
     confirmed = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
-    assert can_start_submission_processing(confirmed, current_question_ids=["q1"]) is False
+    assert (
+        can_start_submission_processing(
+            confirmed, current_question_ids=["q1"], active_confirmed_version=1
+        )
+        is False
+    )
+
+
+def test_processing_is_blocked_when_a_newer_version_is_the_active_confirmed_one() -> None:
+    """v1 stays CONFIRMED forever once confirmed -- `/confirm` never mutates
+    or un-confirms an older version when v2 is confirmed later. Checking v1's
+    own `status`/`question_ids` alone would still say "go ahead" even though
+    v2 is now the version the test actually runs on (Issue #26 review).
+    """
+    draft = _draft(["q1"])
+    confirmed_v1 = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
+    assert (
+        can_start_submission_processing(
+            confirmed_v1, current_question_ids=["q1"], active_confirmed_version=2
+        )
+        is False
+    )
 
 
 # --------------------------------------------------------------------------- #
