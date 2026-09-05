@@ -66,6 +66,14 @@ async def test_rejects_via_content_length_header_before_reading_body() -> None:
 async def test_rejects_a_streamed_body_with_no_content_length_header() -> None:
     """No Content-Length (or one that understates reality, e.g. chunked
     transfer-encoding) still gets caught, by counting bytes as they stream in.
+
+    Critically, ``recording`` (the wrapped app) must never be invoked here:
+    an earlier version only detected the overflow *from inside* the wrapped
+    app's own body-reading call (by raising out of a wrapped ``receive``),
+    which for a real FastAPI multipart endpoint meant FastAPI's own
+    blanket ``except Exception`` around ``request.form()`` caught it first
+    and turned it into a generic 400 instead of the 413 asserted below ever
+    reaching the client.
     """
     recording = _RecordingApp()
     middleware = MaxBodySizeMiddleware(recording, max_bytes=10)
@@ -78,7 +86,49 @@ async def test_rejects_a_streamed_body_with_no_content_length_header() -> None:
 
     sent = await _run(middleware, _http_scope(), receive)
 
+    assert recording.called is False
     assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 413
+
+
+class _SwallowingApp:
+    """Mimics FastAPI's ``request.form()``: catches *any* exception raised
+    while reading the body and turns it into its own, different response --
+    exactly the behavior that broke the earlier ``_BodyTooLarge``-raising
+    design (the 413 this middleware meant to send never reached the client).
+    """
+
+    def __init__(self) -> None:
+        self.called = False
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        self.called = True
+        try:
+            while True:
+                message = await receive()
+                if not message.get("more_body", False):
+                    break
+        except Exception:
+            await send({"type": "http.response.start", "status": 400, "headers": []})
+            await send({"type": "http.response.body", "body": b"generic error"})
+            return
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+
+async def test_streamed_overflow_yields_413_even_if_the_wrapped_app_swallows_exceptions() -> None:
+    swallowing = _SwallowingApp()
+    middleware = MaxBodySizeMiddleware(swallowing, max_bytes=10)
+
+    chunks = [b"0123456789", b"one-more-chunk-past-the-limit"]
+
+    async def receive() -> Message:
+        chunk = chunks.pop(0)
+        return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
+
+    sent = await _run(middleware, _http_scope(), receive)
+
+    assert swallowing.called is False
     assert sent[0]["status"] == 413
 
 

@@ -21,19 +21,28 @@ from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
-class _BodyTooLarge(Exception):
-    """Internal signal: the request body exceeded the configured limit."""
-
-
 class MaxBodySizeMiddleware:
     """Rejects any request whose body exceeds ``max_bytes`` with ``413``.
 
     Fast path: a well-formed ``Content-Length`` header is checked before a
     single byte of the body is read. Slow path (no header, or one that
-    understates the true size -- e.g. chunked transfer-encoding): bytes are
-    counted as ``http.request`` messages arrive, aborting as soon as the
-    running total exceeds ``max_bytes``, before the wrapped app (and its
-    multipart parser) ever sees them.
+    understates the true size -- e.g. chunked transfer-encoding): this
+    middleware itself drains and buffers ``http.request`` messages up to
+    ``max_bytes`` + 1, deciding *before* the wrapped app is ever invoked --
+    not by raising once the app is already mid-parse.
+
+    That "decide first, then either reject or replay" shape is deliberate:
+    an earlier version wrapped ``receive`` and raised once the running total
+    went over the limit, from *inside* the wrapped app's own body-reading
+    call. For a multipart request that call is FastAPI's
+    ``await request.form()``, which wraps its own body-parsing step in a
+    blanket ``except Exception: raise HTTPException(400, ...)`` -- so the
+    413 this middleware meant to send never reached the client; FastAPI's
+    own handler swallowed it into a generic 400 first
+    (``docs/answer-intake-and-preprocessing.md`` documents the 413). Nothing
+    can distinguish "raised by us" from "raised by anything else" once it is
+    the *wrapped app* that is doing the raising, so the only reliable fix is
+    to never let the wrapped app start until the size is known good.
     """
 
     def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
@@ -50,21 +59,30 @@ class MaxBodySizeMiddleware:
             await _send_413(send)
             return
 
+        buffered: list[Message] = []
         total = 0
-
-        async def guarded_receive() -> Message:
-            nonlocal total
+        while True:
             message = await receive()
-            if message["type"] == "http.request":
-                total += len(message.get("body") or b"")
-                if total > self._max_bytes:
-                    raise _BodyTooLarge
-            return message
+            buffered.append(message)
+            if message["type"] != "http.request":
+                # e.g. the client disconnected mid-body; nothing more to read.
+                break
+            total += len(message.get("body") or b"")
+            if total > self._max_bytes:
+                await _send_413(send)
+                return
+            if not message.get("more_body", False):
+                break
 
-        try:
-            await self._app(scope, guarded_receive, send)
-        except _BodyTooLarge:
-            await _send_413(send)
+        buffered_iter = iter(buffered)
+
+        async def replay_receive() -> Message:
+            try:
+                return next(buffered_iter)
+            except StopIteration:
+                return await receive()
+
+        await self._app(scope, replay_receive, send)
 
 
 def _declared_content_length(scope: Scope) -> int | None:
