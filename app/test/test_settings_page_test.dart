@@ -303,6 +303,59 @@ void main() {
   );
 
   testWidgets(
+    'the dependency-graph analyze button stays enabled once confirmed, to '
+    'start a new version',
+    (tester) async {
+      // A confirmed graph is immutable, but `/dependency-graph/analyze`
+      // always starts a new, higher-versioned draft rather than touching it
+      // -- a reviewer who spots a bad edge after confirming must still be
+      // able to re-run analysis (Issue #16 review round 3).
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async =>
+            _dependencyGraph(status: 'confirmed'),
+      );
+
+      await _pumpSettings(
+        tester,
+        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
+      );
+
+      final analyzeButton = tester.widget<FilledButton>(
+        find.byKey(const Key('analyze-dependency-graph-button')),
+      );
+      expect(analyzeButton.onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'parallel-execution layers are recomputed from the working edge set, '
+    'not the stale server snapshot',
+    (tester) async {
+      // The fixture's `layers` field always reports two separate layers
+      // (test-1:1, then test-1:2) regardless of `edges` -- standing in for
+      // a real server response that goes stale the moment a reviewer edits
+      // an edge. With no edges, the two questions are independent and
+      // belong in the same layer; the settings screen must show that
+      // freshly-computed answer, not the stale two-layer snapshot.
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(
+        tester,
+        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
+      );
+
+      expect(find.text('第1層: test-1:1, test-1:2'), findsOneWidget);
+      expect(find.text('第2層: test-1:2'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'completing registration is only enabled once both are confirmed',
     (tester) async {
       final dependencies = AppDependencies(
