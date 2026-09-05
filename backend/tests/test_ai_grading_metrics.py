@@ -409,6 +409,31 @@ def test_descriptor_key_folds_negative_zero_temperature_to_positive_zero() -> No
     assert descriptor_key(negative_zero) == descriptor_key(positive_zero)
 
 
+def test_descriptor_key_strips_whitespace_from_string_fields() -> None:
+    """Code review finding: ``_DescriptorInput`` strips surrounding
+    whitespace from string fields (``_NonBlankStr``), but a directly
+    constructed ``ProviderDescriptor`` keeps it -- the same real
+    configuration (``model=" model-a "`` vs ``model="model-a"``) must not
+    serialize to two different keys depending on which path built it."""
+    padded = ProviderDescriptor(
+        provider="test",
+        model=" model-a ",
+        version=" v1 ",
+        prompt_version=" p1 ",
+        temperature=0.0,
+        structured_output_mode=" json_schema ",
+    )
+    trimmed = ProviderDescriptor(
+        provider="test",
+        model="model-a",
+        version="v1",
+        prompt_version="p1",
+        temperature=0.0,
+        structured_output_mode="json_schema",
+    )
+    assert descriptor_key(padded) == descriptor_key(trimmed)
+
+
 def test_calibration_rates_flag_overconfident_wrong_answers() -> None:
     """docs/poc-2-ai-grading.md section 8.1: a high-confidence wrong answer
     must be distinguishable from a low-confidence wrong answer."""
@@ -491,9 +516,22 @@ def _input_mapping(**overrides: object) -> dict[str, object]:
         "max_score": 5,
         "ocr_clean": "答案テキスト",
         "ocr_noisy": None,
+        "answer_image_ref": "sha256:0" * 8,
     }
     defaults.update(overrides)
     return defaults
+
+
+def test_input_record_requires_an_answer_image_reference() -> None:
+    """Code review finding: every grading call is supposed to receive the
+    cropped answer image alongside OCR text; without a recorded reference
+    (content hash or external pointer, never the image itself), two
+    candidates silently graded against different crops would still look
+    like a valid same-data comparison."""
+    with pytest.raises(ValidationError):
+        GradingInputRecord.from_mapping(
+            {k: v for k, v in _input_mapping().items() if k != "answer_image_ref"}
+        )
 
 
 def test_input_record_accepts_a_blank_ocr_clean_for_an_unanswered_question() -> None:
@@ -572,47 +610,54 @@ def test_from_mapping_rejects_score_as_string() -> None:
 
 
 def _load_fixture_outcomes() -> list[SampleOutcome]:
+    """Mirror ``report.py``'s loader: one submission file holds a non-empty
+    ``questions`` array (business-rules-and-evaluation-data.md section 6.3:
+    one answer sheet commonly spans several questions), not a single
+    top-level ``ground_truth``/``input``/``recorded`` (code review finding)."""
     outcomes: list[SampleOutcome] = []
     for path in sorted(_FIXTURES.glob("*.json")):
         raw = json.loads(path.read_text(encoding="utf-8"))
-        truth = GradingGroundTruth.from_mapping(raw["ground_truth"])
         subject = raw["subject"]
-        for provider, variants in raw.get("recorded", {}).items():
-            for variant, cell in variants.items():
-                latency_raw = cell.get("latency_seconds")
-                latency_seconds = float(latency_raw) if latency_raw is not None else None
-                descriptor_raw = cell["descriptor"]
-                descriptor = ProviderDescriptor(
-                    provider=provider,
-                    model=str(descriptor_raw["model"]),
-                    version=descriptor_raw.get("version"),
-                    prompt_version=str(descriptor_raw["prompt_version"]),
-                    temperature=float(descriptor_raw["temperature"]),
-                    structured_output_mode=str(descriptor_raw["structured_output_mode"]),
-                )
-                config_key = descriptor_key(descriptor)
-                try:
-                    parsed = parse_ai_grading_result(json.dumps(cell["response"]))
-                except ValidationError:
-                    response = None
-                else:
-                    response = grading_response_from_result(
-                        parsed,
-                        descriptor=descriptor,
-                        latency_seconds=latency_seconds if latency_seconds is not None else 0.0,
-                    )
-                outcomes.append(
-                    evaluate_sample(
-                        truth,
-                        response,
-                        subject=subject,
+        for question in raw["questions"]:
+            truth = GradingGroundTruth.from_mapping(question["ground_truth"])
+            for provider, variants in question.get("recorded", {}).items():
+                for variant, cell in variants.items():
+                    latency_raw = cell.get("latency_seconds")
+                    latency_seconds = float(latency_raw) if latency_raw is not None else None
+                    descriptor_raw = cell["descriptor"]
+                    descriptor = ProviderDescriptor(
                         provider=provider,
-                        config_key=config_key,
-                        input_variant=variant,
-                        cost_usd=cell.get("cost_usd"),
-                        latency_seconds=latency_seconds,
+                        model=str(descriptor_raw["model"]),
+                        version=descriptor_raw.get("version"),
+                        prompt_version=str(descriptor_raw["prompt_version"]),
+                        temperature=float(descriptor_raw["temperature"]),
+                        structured_output_mode=str(descriptor_raw["structured_output_mode"]),
                     )
-                )
+                    config_key = descriptor_key(descriptor)
+                    try:
+                        parsed = parse_ai_grading_result(json.dumps(cell["response"]))
+                    except ValidationError:
+                        response = None
+                    else:
+                        response = grading_response_from_result(
+                            parsed,
+                            descriptor=descriptor,
+                            latency_seconds=(
+                                latency_seconds if latency_seconds is not None else 0.0
+                            ),
+                        )
+                    outcomes.append(
+                        evaluate_sample(
+                            truth,
+                            response,
+                            subject=subject,
+                            provider=provider,
+                            config_key=config_key,
+                            input_variant=variant,
+                            cost_usd=cell.get("cost_usd"),
+                            latency_seconds=latency_seconds,
+                        )
+                    )
     return outcomes
 
 

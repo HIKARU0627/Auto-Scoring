@@ -208,6 +208,18 @@ class GradingInputRecord(BaseModel):
     ``ocr_clean`` would make one blank real answer abort validation for the
     entire dataset, since every sample is validated up front (code review
     finding).
+
+    ``answer_image_ref`` identifies the cropped answer-region image every
+    grading call is supposed to receive alongside the OCR text
+    (docs/poc-2-ai-grading.md section 2.1; ``ai_provider.GradingRequest.
+    answer_image``) -- a content hash (e.g. ``"sha256:<hex>"``) or an
+    external, out-of-repo reference, never the image bytes themselves
+    (business-rules-and-evaluation-data.md section 6.7: real answer images
+    are never committed). Without it, a recorded sample cannot show whether
+    every candidate was actually run against the *same* crop: two candidates
+    silently graded against different or stale crops would still look like
+    a same-data comparison, but their Recognition Confidence numbers would
+    not be measuring the same input (code review finding).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -218,6 +230,7 @@ class GradingInputRecord(BaseModel):
     max_score: int = Field(ge=0)
     ocr_clean: str
     ocr_noisy: str | None = None
+    answer_image_ref: _NonBlankStr
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> GradingInputRecord:

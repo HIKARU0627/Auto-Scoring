@@ -17,19 +17,31 @@ licensed exam material) stays outside the repo
 
 ## File shape
 
-Each `sample-*.json` is one graded question, with recorded (invented)
-provider output for every `(provider, input_variant)` cell. `ground_truth`
-follows the wire schema `business-rules-and-evaluation-data.md` section 6.3
-documents for a real human-grader label file (`questionId` / `score` /
-`maxScore` / `criteria[].{id,result}` / `source`, plus the optional `comment`
-/ `annotations` / `handwritingQuality` / `layoutType`), so a real label file
-produced per that section can be loaded as-is -- `subject` is deliberately a
-sibling of `ground_truth`, not a field inside it, since section 6.3's
-per-answer label schema has no `subject` field (it is test-level metadata,
-section 6.1). A `ground_truth` model that instead invented its own field
-names and forbade the documented ones rejected every correctly-formed real
-label file outright, making the real-data harness impossible to run at all
-(code review finding).
+Each `sample-*.json` is one *submission* (one real answer sheet --
+business-rules-and-evaluation-data.md section 6.3: "1 答案 = 1 JSON ファイル"),
+holding a non-empty `questions[]` array -- one entry per graded question,
+since one real submission commonly spans several questions (section 6.2:
+"60 答案・のべ 300 設問以上" means ~5 questions per submission on average).
+An earlier version of this loader read exactly one `ground_truth`/`input`
+per file, which could only represent "one answer sheet = one question" --
+an undocumented split from the decision record's actual file format that
+could never consume the required 60 submissions / 300+ questions without
+silently multiplying files per real answer sheet (code review finding;
+AGENTS.md "Source of truth"). Each `questions[]` entry carries its own
+`ground_truth` + `input`, with recorded (invented) provider output for
+every `(provider, input_variant)` cell.
+
+`ground_truth` follows the wire schema `business-rules-and-evaluation-data.md`
+section 6.3 documents for a real human-grader label file (`questionId` /
+`score` / `maxScore` / `criteria[].{id,result}` / `source`, plus the optional
+`comment` / `annotations` / `handwritingQuality` / `layoutType`), so a real
+label file produced per that section can be loaded as-is -- `subject` is
+deliberately a sibling of `questions`, not a field inside each
+`ground_truth`, since section 6.3's per-question item list has no `subject`
+field (it is test-level metadata, section 6.1). A `ground_truth` model that
+instead invented its own field names and forbade the documented ones
+rejected every correctly-formed real label file outright, making the
+real-data harness impossible to run at all (code review finding).
 
 `source` is required and must be the literal `"human"` -- section 6.3's
 label procedure always attaches it to a genuine label, and it is the one
@@ -38,56 +50,73 @@ response mistakenly fed in as if it were ground truth (an omitted or
 `"ai"` `source` is rejected; code review finding).
 
 `submissionId` is likewise a required, non-blank sibling field: section 6.3
-identifies each real answer sheet by a non-PII `submissionId`, and one real
-submission commonly spans several questions, each its own sample file here.
-Without it the harness cannot tell "30 distinct submissions" (section 6.2's
-minimum dataset size) apart from "30 questions on 6 submissions" --
-`questionId` alone identifies which question, not which answer sheet it
-came from (code review finding). The aggregate report includes a distinct-
-submission count per subject for exactly this coverage check.
+identifies each real answer sheet by a non-PII `submissionId`. Without it
+the harness cannot tell "30 distinct submissions" (section 6.2's minimum
+dataset size) apart from "30 questions on 6 submissions" -- `questionId`
+alone identifies which question, not which answer sheet it came from (code
+review finding). It is stripped of surrounding whitespace before being
+counted, the same as a provider id: `"sub-1"` and `" sub-1 "` can only mean
+the same submission, and counting them as two would overstate coverage
+against the 30-per-subject minimum (code review finding). The aggregate
+report includes a distinct-submission count per subject for exactly this
+coverage check.
 
 ```jsonc
 {
   "subject": "arbitrary subject label",
   "submissionId": "opaque id, no PII -- identifies the answer sheet, not the question",
-  "ground_truth": {
-    "questionId": "opaque id, no PII",
-    "score": 15,
-    "maxScore": 20,
-    "criteria": [{ "id": "c1", "result": "pass | partial | fail" }],
-    "source": "human",
-    "comment": "optional -- 確定コメント",
-    "annotations": [],
-    "handwritingQuality": "optional -- clean | normal | messy",
-    "layoutType": "optional"
-  },
-  "input": {
-    "prompt_text": "...",
-    "model_answer": "...",
-    "rubric_text": "...",
-    "max_score": 20,
-    "ocr_clean": "human-corrected reading of the answer (may be \"\" -- the student left the question blank)",
-    "ocr_noisy": "a plausible OCR misreading of the same answer (hand-authored -- no OCR pipeline exists yet, Issue #19); may also be \"\""
-  },
-  "recorded": {
-    "<provider name>": {
-      "ocr_clean": {
-        "response": "<raw AIGradingResult JSON, or an intentionally invalid object>",
-        "descriptor": {
-          "model": "...",
-          "version": "... or null",
-          "prompt_version": "...",
-          "temperature": 0.0,
-          "structured_output_mode": "json_schema | tool_use | ..."
-        },
-        "latency_seconds": 1.1,
-        "cost_usd": 0.0009
+  "questions": [
+    {
+      "ground_truth": {
+        "questionId": "opaque id, no PII",
+        "score": 15,
+        "maxScore": 20,
+        "criteria": [{ "id": "c1", "result": "pass | partial | fail" }],
+        "source": "human",
+        "comment": "optional -- 確定コメント",
+        "annotations": [],
+        "handwritingQuality": "optional -- clean | normal | messy",
+        "layoutType": "optional"
       },
-      "ocr_noisy": { "...": "..." }
+      "input": {
+        "prompt_text": "...",
+        "model_answer": "...",
+        "rubric_text": "...",
+        "max_score": 20,
+        "ocr_clean": "human-corrected reading of the answer (may be \"\" -- the student left the question blank)",
+        "ocr_noisy": "a plausible OCR misreading of the same answer (hand-authored -- no OCR pipeline exists yet, Issue #19); may also be \"\"",
+        "answer_image_ref": "a content hash (\"sha256:<hex>\") or external, out-of-repo reference to the cropped answer image -- never the image itself"
+      },
+      "recorded": {
+        "<provider name>": {
+          "ocr_clean": {
+            "response": "<raw AIGradingResult JSON, or an intentionally invalid object>",
+            "descriptor": {
+              "model": "...",
+              "version": "... or null",
+              "prompt_version": "...",
+              "temperature": 0.0,
+              "structured_output_mode": "json_schema | tool_use | ..."
+            },
+            "latency_seconds": 1.1,
+            "cost_usd": 0.0009
+          },
+          "ocr_noisy": { "...": "..." }
+        }
+      }
     }
-  }
+  ]
 }
 ```
+
+`input.answer_image_ref` is required and non-blank: every grading call is
+supposed to receive the cropped answer-region image alongside the OCR text
+(docs/poc-2-ai-grading.md section 2.1), and a recorded sample with no
+reference to *which* image was used cannot show whether every candidate was
+actually run against the same crop -- a candidate silently graded against a
+stale or different crop would still look like a valid same-data comparison
+(code review finding). Never the image bytes themselves
+(business-rules-and-evaluation-data.md section 6.7).
 
 `ocr_clean` and `ocr_noisy` are always evaluated as separate cells (never
 averaged together): the harness records `recognition.confidence` and
@@ -146,7 +175,28 @@ entirely blank name, so `"gemini"` and `"gemini "` would otherwise count as
 two separate candidates for the same real provider, letting one
 inconsistently-spelled key alone satisfy the >= 2 comparison gate (code
 review finding). Two different raw keys that normalize to the same id are
-rejected outright rather than silently merged.
+rejected outright rather than silently merged. For any `--dataset` other
+than these bundled fixtures, the normalized id must also be one of the
+canonical candidate ids docs/poc-2-ai-grading.md section 2 defines
+(`gemini` / `claude` / `gpt`, case-sensitive) -- whitespace normalization
+alone does not catch a case difference, so `"gemini"` and `"Gemini"` would
+otherwise still count as two separate candidates for the same real service
+(code review finding). These fixtures are an explicit, documented exception
+to that check, since `synthetic-a`/`synthetic-b` are intentionally
+placeholder names, not real vendor ids.
+
+A cell may instead record `{"unavailable": true, "latency_seconds": ...,
+"cost_usd": ...}` (no `response`) for a call attempt that exhausted retries
+against a persistent failure (docs/poc-2-ai-grading.md section 7.2:
+"恒常的な 429 / quota 超過は失敗として記録し、推測で埋めない"). This is
+counted separately from "pending" in the aggregate report: a call that was
+attempted and failed is not the same as one nobody has tried yet, and
+folding the two together would silently drop a persistently-unreliable
+provider's failures from the report, making it look better than it is (code
+review finding). An "unavailable" cell is never scored and never joins a
+same-data comparison cohort (it has no `descriptor`/`config_key` to bucket
+by), and a cell may not record both `response` and `unavailable: true` at
+once -- that combination makes the harness raise.
 
 Every provider's `recorded` entry may only use the two recognized
 input-variant keys (`ocr_clean` / `ocr_noisy`) -- an unrecognized key (a
@@ -203,7 +253,13 @@ directly with the Python int literal `0` produces the same `config` as the
 same value loaded through this JSON boundary (which becomes `0.0`) -- two
 equivalent configurations must not split into separate metric buckets just
 because of which code path constructed the descriptor (code review
-finding).
+finding). The string fields (`model`/`version`/`prompt_version`/
+`structured_output_mode`) are normalized the same way (whitespace-stripped)
+before serialization: this JSON boundary already strips them while parsing,
+but a directly-constructed `ProviderDescriptor` (as a real adapter's
+`describe()` would build) keeps any surrounding whitespace, so the same
+real configuration could otherwise produce two different keys depending on
+which path built it (code review finding).
 
 `latency_seconds` / `cost_usd` are validated as finite, non-negative numbers
 before they reach any aggregate -- a negative, non-finite (`nan`/`inf`), or

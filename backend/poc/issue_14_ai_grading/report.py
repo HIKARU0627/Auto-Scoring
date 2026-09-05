@@ -5,53 +5,72 @@ Usage::
 
     uv run python poc/issue_14_ai_grading/report.py [--dataset DIR] [--out FILE]
 
-Every ``*.json`` under ``DIR`` is one graded question (see
-``tests/fixtures/ai_grading/README.md`` for the shape)::
+Every ``*.json`` under ``DIR`` is one real answer sheet ("1 答案 = 1 JSON
+ファイル", business-rules-and-evaluation-data.md section 6.3) -- one
+``submissionId`` commonly answers several questions (section 6.2's "60 答案
+・のべ 300 設問以上"), so one file holds a non-empty ``questions`` array, one
+entry per graded question (see ``tests/fixtures/ai_grading/README.md`` for
+the shape)::
 
     {
       "subject": "...",
-      "submissionId": "opaque id, no PII -- identifies the answer sheet, not the question",
-      "ground_truth": {...},
-      "input": {...},
-      "recorded": {
-        "<provider>": {
-          "ocr_clean": {
-            "response": {...},
-            "descriptor": {
-              "model": "...",
-              "version": "... or null",
-              "prompt_version": "...",
-              "temperature": 0.0,
-              "structured_output_mode": "json_schema"
-            },
-            "latency_seconds": 1.1,
-            "cost_usd": 0.0008
-          },
-          "ocr_noisy": {...}
+      "submissionId": "opaque id, no PII -- identifies the answer sheet",
+      "questions": [
+        {
+          "ground_truth": {...},
+          "input": {...},
+          "recorded": {
+            "<provider>": {
+              "ocr_clean": {
+                "response": {...},
+                "descriptor": {
+                  "model": "...",
+                  "version": "... or null",
+                  "prompt_version": "...",
+                  "temperature": 0.0,
+                  "structured_output_mode": "json_schema"
+                },
+                "latency_seconds": 1.1,
+                "cost_usd": 0.0008
+              },
+              "ocr_noisy": {...}
+            }
+          }
         }
-      }
+      ]
     }
+
+An earlier version of this loader read exactly one ``ground_truth``/``input``
+per file, which could only represent "1 answer sheet = 1 question" -- an
+undocumented split from the decision record's actual file format, and one
+that could never consume the required 60 submissions / 300+ questions
+without silently multiplying files per real answer sheet (code review
+finding; AGENTS.md "Source of truth"). Each ``questions[]`` entry is
+validated exactly as a single-question file previously was.
 
 ``ground_truth`` follows the wire schema business-rules-and-evaluation-data.md
 section 6.3 documents for a real human-grader label file (``questionId`` /
 ``score`` / ``maxScore`` / ``criteria[].{id,result}``, plus optional
 ``comment`` / ``annotations`` / ``handwritingQuality`` / ``layoutType`` /
 ``source``) so a real label file produced per that section can be used as-is
--- ``subject`` (which subject this question belongs to) is deliberately a
-sibling of ``ground_truth``, not a field inside it, since section 6.3's
-per-answer label schema has no such field (code review finding: a
-``ground_truth`` model that instead invented its own field names and forbade
-the documented ones rejected every correctly-formed real label file, making
-the real-data harness impossible to run at all).
+-- ``subject`` (which subject this submission belongs to) is deliberately a
+sibling of ``questions``, not a field inside each ``ground_truth``, since
+section 6.3's per-question item list has no such field (code review finding:
+a ``ground_truth`` model that instead invented its own field names and
+forbade the documented ones rejected every correctly-formed real label file,
+making the real-data harness impossible to run at all).
 
-``submissionId`` is likewise a sibling field, required and non-blank: section
-6.3 identifies each real answer sheet by a non-PII ``submissionId``, and one
-real submission commonly spans several questions, each its own sample file
-here. Without it, the harness cannot tell "30 distinct submissions" (section
-6.2's minimum dataset size) apart from "30 questions on 6 submissions" --
-``questionId`` alone identifies which question, not which answer sheet it
-came from (code review finding). The aggregate report includes a distinct-
-submission count per subject for exactly this coverage check.
+``submissionId`` is likewise a required, non-blank, whitespace-normalized
+sibling field: section 6.3 identifies each real answer sheet by a non-PII
+``submissionId``, and the harness needs it to tell "30 distinct submissions"
+(section 6.2's minimum dataset size) apart from "30 questions on 6
+submissions" -- ``questionId`` alone identifies which question, not which
+answer sheet it came from (code review finding). It is stripped of
+surrounding whitespace before being counted, the same as a provider id (see
+below): ``"sub-1"`` and ``" sub-1 "`` can only mean the same submission, and
+counting them as two would overstate coverage against the 30-per-subject
+minimum (code review finding). The aggregate report includes a
+distinct-submission count per subject for exactly this coverage check.
 
 ``DIR`` defaults to the committed synthetic fixtures, so the command runs with
 no credentials and no dataset and reproduces a secret-free aggregate table
@@ -84,22 +103,44 @@ placeholder rather than echoed (code review finding). An unrecognized
 ``recorded`` input-variant key is rejected the same way, without echoing
 the key itself (see below).
 
+``input.answer_image_ref`` is required and non-blank: every grading call is
+supposed to receive the cropped answer-region image alongside the OCR text
+(docs/poc-2-ai-grading.md section 2.1), and a recorded sample with no
+reference to *which* image was used cannot show whether every candidate was
+actually run against the same crop -- a candidate silently graded against a
+stale or different crop would still look like a valid same-data comparison
+(code review finding). This is a content hash (``"sha256:<hex>"``) or an
+external, out-of-repo reference, never the image bytes themselves
+(business-rules-and-evaluation-data.md section 6.7).
+
 The expected comparison matrix is every provider seen anywhere in the dataset
 times both input variants (``ocr_clean`` / ``ocr_noisy``) -- not just the
 cells a given sample happens to define. A cell missing from that matrix (no
-``recorded[provider][variant]`` entry at all, or one with no ``response`` key)
-is "pending", never silently skipped. The PoC requires comparing at least 2
-candidates *on the same data, on the same input variant* (docs/poc-2-ai-grading.md
-section 2): an empty or all-pending ``recorded`` entry does not count as a
-candidate, and neither does a pair of providers recorded only on disjoint
-samples, or recorded on the same sample but under different variants
-(provider A only on ``ocr_clean``, provider B only on ``ocr_noisy``) -- ``clean``
-and ``noisy`` are different evaluation modes (section 2.1), so that is still
-not a comparison. A recorded ``ocr_noisy`` response for a sample whose
-``input.ocr_noisy`` is ``null`` (no noisy-OCR variant was ever authored) is
-rejected the same way: it cannot be a real same-data comparison either. All
-of these are refused outright rather than printed as if the comparison were
-complete (code review finding).
+``recorded[provider][variant]`` entry at all, or one with no ``response`` key
+and no ``unavailable`` marker) is "pending", never silently skipped. The PoC
+requires comparing at least 2 candidates *on the same data, on the same
+input variant* (docs/poc-2-ai-grading.md section 2): an empty or all-pending
+``recorded`` entry does not count as a candidate, and neither does a pair of
+providers recorded only on disjoint samples, or recorded on the same sample
+but under different variants (provider A only on ``ocr_clean``, provider B
+only on ``ocr_noisy``) -- ``clean`` and ``noisy`` are different evaluation
+modes (section 2.1), so that is still not a comparison. A recorded
+``ocr_noisy`` response for a sample whose ``input.ocr_noisy`` is ``null`` (no
+noisy-OCR variant was ever authored) is rejected the same way: it cannot be
+a real same-data comparison either. All of these are refused outright rather
+than printed as if the comparison were complete (code review finding).
+
+A cell may instead record ``{"unavailable": true, "latency_seconds": ...,
+"cost_usd": ...}`` (no ``response``) for a call attempt that exhausted
+retries against a persistent failure (docs/poc-2-ai-grading.md section 7.2:
+"恒常的な 429 / quota 超過は失敗として記録し、推測で埋めない"). This is
+counted separately from "pending": a call that was attempted and failed is
+not the same as one nobody has tried yet, and folding the two together would
+silently drop a persistently-unreliable provider's failures from the report,
+making it look better than it is (code review finding). An "unavailable"
+cell is never scored and never joins a same-data comparison cohort (it has
+no ``descriptor``/``config_key`` to bucket by), and a cell may not record
+both ``response`` and ``unavailable: true`` at once.
 
 The dataset-wide overlap check above only gates whether the dataset has
 *any* real comparison at all -- it does not mean every recorded cell for a
@@ -132,7 +173,15 @@ as two separate candidates for the same real provider, letting a single
 inconsistently-spelled key satisfy the >= 2 comparison gate on its own
 (code review finding). Two different raw keys that normalize to the same
 id are rejected outright, rather than silently merged, since either
-resolution could hide a real inconsistency in the dataset.
+resolution could hide a real inconsistency in the dataset. For any
+``--dataset`` other than the bundled synthetic fixtures, the normalized id
+must also be one of the canonical candidate ids docs/poc-2-ai-grading.md
+section 2 defines (``gemini`` / ``claude`` / ``gpt``, case-sensitive):
+whitespace normalization alone does not catch a case difference, so
+``"gemini"`` and ``"Gemini"`` would otherwise still count as two separate
+candidates for the same real service (code review finding). The bundled
+fixtures are an explicit exception, since they intentionally use placeholder
+names (``synthetic-a`` / ``synthetic-b``) that are not real vendor ids.
 
 A provider's ``recorded`` entry may only use the two recognized input-variant
 keys (``ocr_clean`` / ``ocr_noisy``) -- an unrecognized key (a typo such as
@@ -152,15 +201,15 @@ version / temperature / structured-output mode) is parsed and strictly
 validated by :func:`auto_scoring.domain.ai_provider.parse_provider_descriptor`
 -- never coerced (code review finding: a naive ``str()``/``float()`` cast
 would turn ``model: null`` into the literal string ``"None"``, or
-``temperature: true`` into ``1.0``) -- and is required on every non-pending
-cell (even one that turns out to be a schema violation): two cells for the
-same ``provider`` name recorded under different settings -- including a
-prompt template edit alone -- are aggregated as separate buckets, keyed on
-:func:`auto_scoring.domain.ai_provider.descriptor_key`, never pooled
-(Issue #14 "再現条件"). ``cost_usd`` / ``latency_seconds`` are validated as
-finite, non-negative numbers before they reach any aggregate (code review
-finding): a negative, non-finite, or non-numeric recorded value raises
-rather than silently skewing the adoption-gate metrics.
+``temperature: true`` into ``1.0``) -- and is required on every non-pending,
+non-``unavailable`` cell (even one that turns out to be a schema violation):
+two cells for the same ``provider`` name recorded under different settings
+-- including a prompt template edit alone -- are aggregated as separate
+buckets, keyed on :func:`auto_scoring.domain.ai_provider.descriptor_key`,
+never pooled (Issue #14 "再現条件"). ``cost_usd`` / ``latency_seconds`` are
+validated as finite, non-negative numbers before they reach any aggregate
+(code review finding): a negative, non-finite, or non-numeric recorded value
+raises rather than silently skewing the adoption-gate metrics.
 
 Only counts and averaged scores are printed. Provider response bodies (and
 any real answer text they might embed) are read only long enough to compute
@@ -173,6 +222,7 @@ import argparse
 import json
 import math
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -209,6 +259,11 @@ _INPUT_VARIANTS = ("ocr_clean", "ocr_noisy")
 #: 利用可能な最低2候補を...比較する").
 _MINIMUM_PROVIDERS = 2
 
+#: The exact candidate ids docs/poc-2-ai-grading.md section 2 defines. Real
+#: (non-bundled-fixture) ``--dataset`` runs must use exactly these, case
+#: sensitively -- see :func:`_validate_canonical_provider_ids`.
+_CANONICAL_PROVIDER_IDS = frozenset({"gemini", "claude", "gpt"})
+
 
 class _InvalidGroundTruth(Exception):
     """A recorded sample's ``ground_truth`` block fails strict validation."""
@@ -238,34 +293,40 @@ class _InvalidInput(Exception):
 
 
 class _InvalidSubject(Exception):
-    """A sample's top-level ``subject`` field is missing or blank.
+    """A submission's top-level ``subject`` field is missing or blank.
 
-    ``subject`` lives alongside ``ground_truth``/``input``/``recorded``, not
-    inside ``ground_truth`` itself: business-rules-and-evaluation-data.md
-    section 6.3's per-answer human-label schema has no ``subject`` field (it
-    is test-level metadata, section 6.1), so :class:`GradingGroundTruth`
-    cannot carry it without rejecting every correctly-formed real label file
-    (code review finding). The harness still needs it to bucket the results
-    table by 教科 (section 3.3), so it is read as a sibling field instead.
+    ``subject`` lives alongside ``questions``, not inside each
+    ``ground_truth``: business-rules-and-evaluation-data.md section 6.3's
+    per-question label schema has no ``subject`` field (it is test-level
+    metadata, section 6.1), so :class:`GradingGroundTruth` cannot carry it
+    without rejecting every correctly-formed real label file (code review
+    finding). The harness still needs it to bucket the results table by
+    教科 (section 3.3), so it is read as a sibling field instead.
     """
 
 
 class _InvalidSubmissionId(Exception):
-    """A sample's top-level ``submissionId`` field is missing or blank.
+    """A submission's top-level ``submissionId`` field is missing or blank.
 
     business-rules-and-evaluation-data.md section 6.3: one answer sheet is
-    one JSON file, identified by a non-PII ``submissionId`` -- one real
-    submission (a student's answered sheet) commonly spans several
-    questions, each recorded as its own sample file here, so ``questionId``
-    alone cannot tell "30 distinct submissions" (section 6.2's minimum
-    dataset size) apart from "30 questions on 6 submissions". Without a
+    one JSON file, identified by a non-PII ``submissionId``. Without a
     validated, dataset-wide submission identity, the harness has no way to
-    establish -- or even report -- real coverage against that minimum (code
-    review finding). Not part of :class:`GradingGroundTruth` for the same
-    reason ``subject`` is not (section 6.3's per-answer item list does not
-    include it, so this model would otherwise be validating a fabricated
-    field the documented schema itself never mentions): it is read as a
-    sibling field, alongside ``subject``.
+    establish -- or even report -- real coverage against the section 6.2
+    minimum (30 distinct submissions per subject) (code review finding). Not
+    part of :class:`GradingGroundTruth` for the same reason ``subject`` is
+    not: it is read as a sibling field, alongside ``subject``.
+    """
+
+
+class _InvalidSubmission(Exception):
+    """A submission file's top-level ``questions`` field is missing, not a
+    list, empty, or contains a non-object entry.
+
+    One real answer sheet commonly spans several questions
+    (business-rules-and-evaluation-data.md section 6.2: "60 答案・のべ 300
+    設問以上"), so one submission file must hold a non-empty list of
+    per-question ``ground_truth``/``input``/``recorded`` entries, not just
+    one (code review finding).
     """
 
 
@@ -273,14 +334,40 @@ class _InvalidRecordedVariant(Exception):
     """A provider's ``recorded`` entry has an input-variant key outside
     :data:`_INPUT_VARIANTS` (e.g. a typo like ``"ocr_nosiy"``).
 
-    ``_load_cell``/``_providers_with_response_by_variant`` only ever look up
-    the fixed ``ocr_clean``/``ocr_noisy`` keys by name -- a typo'd key is
-    never matched by either lookup, so the recorded response under it would
+    ``_load_cell``/``_responder_configs_by_variant`` only ever look up the
+    fixed ``ocr_clean``/``ocr_noisy`` keys by name -- a typo'd key is never
+    matched by either lookup, so the recorded response under it would
     otherwise be silently ignored: the expected cell stays "pending" and the
     harness can exit 0 printing an incomplete aggregate, even though a real
     response for that (provider, variant) was actually recorded (AGENTS.md
     "Verification"; code review finding).
     """
+
+
+class _InvalidProviderId(Exception):
+    """Two different raw ``recorded`` provider keys normalize to the same
+    id (e.g. ``"gemini"`` and ``"gemini "``), a key is blank once whitespace
+    is stripped, or (for a real, non-bundled-fixture ``--dataset``) a
+    normalized id is not one of the canonical candidate ids
+    docs/poc-2-ai-grading.md section 2 defines.
+
+    ``ProviderDescriptor.__post_init__`` only rejects an entirely blank
+    provider name -- it does not strip surrounding whitespace from an
+    otherwise non-blank one, so ``"gemini"`` and ``"gemini "`` remain two
+    distinct strings there and would count as two separate candidates for
+    the >= 2 same-data comparison gate, when they can only ever mean the
+    same real provider. Whitespace normalization alone still does not catch
+    a case difference (``"gemini"`` vs ``"Gemini"``), which is why real runs
+    are further checked against the fixed candidate id set (code review
+    finding). Silently merging an inconsistent key would just as silently
+    hide it, so all of these are rejected outright instead.
+    """
+
+
+class _InvalidRecordedCell(Exception):
+    """A recorded ``(provider, input_variant)`` cell has an internally
+    inconsistent shape -- e.g. both a ``response`` and ``unavailable: true``
+    at once, which cannot both be true of the same call attempt."""
 
 
 #: Placeholder standing in for an ``extra_forbidden`` error's own ``loc``
@@ -322,7 +409,9 @@ def _sanitize_validation_error(exc: ValidationError) -> str:
     return "; ".join(parts) if parts else "validation failed"
 
 
-def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) -> ProviderDescriptor:
+def _descriptor_from_cell(
+    cell: dict[str, Any], *, provider: str, path: Path | str
+) -> ProviderDescriptor:
     raw = cell.get("descriptor")
     if raw is None:
         raise _InvalidDescriptor(
@@ -340,7 +429,9 @@ def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) ->
         ) from None
 
 
-def _validated_measurement(value: object, *, field: str, provider: str, path: Path) -> float | None:
+def _validated_measurement(
+    value: object, *, field: str, provider: str, path: Path | str
+) -> float | None:
     """Validate one recorded ``cost_usd``/``latency_seconds`` value.
 
     Never embeds the raw recorded ``value`` in a raised message: it comes
@@ -367,31 +458,74 @@ def _validated_measurement(value: object, *, field: str, provider: str, path: Pa
     return number
 
 
-def _load_cell(
-    cell: dict[str, Any] | None, *, provider: str, path: Path
-) -> tuple[GradingResponse | None, str | None, float | None, float | None, bool]:
+@dataclass(frozen=True, kw_only=True)
+class _CellResult:
+    """One parsed ``(provider, input_variant)`` cell -- see :func:`_load_cell`."""
+
+    response: GradingResponse | None
+    config_key: str | None
+    cost_usd: float | None
+    latency_seconds: float | None
+    is_pending: bool
+    is_unavailable: bool
+
+
+def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) -> _CellResult:
     """Parse one recorded ``(provider, input_variant)`` cell.
 
-    Returns ``(GradingResponse | None, config_key, cost_usd, latency_seconds,
-    pending)``. ``pending`` is true when the cell is entirely absent or has
-    no ``response`` key; a malformed ``response`` yields ``(None, config_key,
-    cost, latency, False)`` -- a schema violation, not a pending measurement.
-    ``descriptor`` (and so ``config_key``) is required as soon as a
-    ``response`` key is present, even if that response goes on to fail
-    schema validation, so schema-violating cells are still bucketed by the
-    configuration that produced them. ``latency_seconds`` is read independent
-    of whether the response parsed, and is ``None`` (not a fabricated
-    ``0.0``) when the cell records none.
+    A cell is one of three states:
+
+    * **pending** -- entirely absent, or present with neither a ``response``
+      nor an ``unavailable`` marker. Expected but not yet recorded.
+    * **unavailable** -- ``{"unavailable": true, ...}``, no ``response``: a
+      call attempt that exhausted retries against a persistent failure
+      (docs/poc-2-ai-grading.md section 7.2). Explicitly recorded, not
+      silently indistinguishable from "never attempted" (code review
+      finding) -- never scored, never bucketed by ``config_key`` (there is
+      no successful response to attribute a descriptor to).
+    * **attempted** -- a ``response`` key is present: parsed and validated;
+      a malformed response is a schema violation, not a pending measurement.
+      ``descriptor`` (and so ``config_key``) is required as soon as
+      ``response`` is present, even if that response goes on to fail schema
+      validation, so schema-violating cells are still bucketed by the
+      configuration that produced them.
+
+    A cell with *both* ``response`` and ``unavailable: true`` is rejected: a
+    call attempt cannot have both succeeded and failed. ``latency_seconds``/
+    ``cost_usd`` are read independent of which state the cell is in, and are
+    ``None`` (not a fabricated ``0.0``) when the cell records none.
     """
-    if cell is None or "response" not in cell:
-        cost_usd = (
-            None
-            if cell is None
-            else _validated_measurement(
-                cell.get("cost_usd"), field="cost_usd", provider=provider, path=path
-            )
+    if cell is None:
+        return _CellResult(
+            response=None,
+            config_key=None,
+            cost_usd=None,
+            latency_seconds=None,
+            is_pending=True,
+            is_unavailable=False,
         )
-        return None, None, cost_usd, None, True
+
+    has_response = "response" in cell
+    is_unavailable = cell.get("unavailable") is True
+    if has_response and is_unavailable:
+        raise _InvalidRecordedCell(
+            f"{path}: provider {provider!r} has both a 'response' and "
+            "'unavailable: true' recorded for the same cell -- a call attempt cannot "
+            "both have succeeded and failed"
+        )
+
+    if not has_response and not is_unavailable:
+        cost_usd = _validated_measurement(
+            cell.get("cost_usd"), field="cost_usd", provider=provider, path=path
+        )
+        return _CellResult(
+            response=None,
+            config_key=None,
+            cost_usd=cost_usd,
+            latency_seconds=None,
+            is_pending=True,
+            is_unavailable=False,
+        )
 
     cost_usd = _validated_measurement(
         cell.get("cost_usd"), field="cost_usd", provider=provider, path=path
@@ -399,35 +533,253 @@ def _load_cell(
     latency_seconds = _validated_measurement(
         cell.get("latency_seconds"), field="latency_seconds", provider=provider, path=path
     )
+
+    if is_unavailable:
+        return _CellResult(
+            response=None,
+            config_key=None,
+            cost_usd=cost_usd,
+            latency_seconds=latency_seconds,
+            is_pending=False,
+            is_unavailable=True,
+        )
+
     descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
     config_key = descriptor_key(descriptor)
 
     try:
         parsed = parse_ai_grading_result(json.dumps(cell["response"]))
     except ValidationError:
-        return None, config_key, cost_usd, latency_seconds, False
+        return _CellResult(
+            response=None,
+            config_key=config_key,
+            cost_usd=cost_usd,
+            latency_seconds=latency_seconds,
+            is_pending=False,
+            is_unavailable=False,
+        )
 
     response = grading_response_from_result(
         parsed, descriptor=descriptor, latency_seconds=latency_seconds or 0.0
     )
-    return response, config_key, cost_usd, latency_seconds, False
+    return _CellResult(
+        response=response,
+        config_key=config_key,
+        cost_usd=cost_usd,
+        latency_seconds=latency_seconds,
+        is_pending=False,
+        is_unavailable=False,
+    )
 
 
-class _InvalidProviderId(Exception):
-    """Two different raw ``recorded`` provider keys normalize to the same
-    id (e.g. ``"gemini"`` and ``"gemini "``), or a key is blank once
-    whitespace is stripped.
+@dataclass(frozen=True, kw_only=True)
+class _ParsedSample:
+    """One question's validated ``subject`` + ``submissionId`` +
+    ``ground_truth`` + ``input``, plus its raw ``recorded`` dict (still
+    unparsed -- ``_load_cell`` handles that per provider/variant cell).
 
-    ``ProviderDescriptor.__post_init__`` only rejects an entirely blank
-    provider name -- it does not strip surrounding whitespace from an
-    otherwise non-blank one, so ``"gemini"`` and ``"gemini "`` remain two
-    distinct strings there and would count as two separate candidates for
-    the >= 2 same-data comparison gate, when they can only ever mean the
-    same real provider (docs/poc-2-ai-grading.md section 2 defines a fixed
-    candidate identity). Silently merging them would just as silently hide
-    an inconsistently-spelled key, so this is rejected outright instead
+    ``path`` is a display locator (the submission file, plus which
+    ``questions[]`` entry) used only for messages -- never for file I/O.
+    """
+
+    path: str
+    subject: str
+    submission_id: str
+    truth: GradingGroundTruth
+    input_record: GradingInputRecord
+    recorded: dict[str, dict[str, Any]]
+
+
+def _load_subject(raw: dict[str, Any], *, path: Path) -> str:
+    subject = raw.get("subject")
+    if not isinstance(subject, str) or not subject.strip():
+        raise _InvalidSubject(
+            f"{path}: submission has no non-blank top-level 'subject' field (needed to "
+            "bucket this question's metrics by 教科, docs/poc-2-ai-grading.md section 3.3)"
+        )
+    return subject
+
+
+def _load_submission_id(raw: dict[str, Any], *, path: Path) -> str:
+    """Validate and return this file's ``submissionId``, whitespace-stripped.
+
+    Stripped before being returned (not just checked): two files whose
+    ``submissionId`` differ only by surrounding whitespace (``"sub-1"`` vs
+    ``" sub-1 "``) can only mean the same submission, and counting them as
+    two would overstate the section 6.2 per-subject submission coverage
+    (code review finding; mirrors :func:`_normalized_provider_id`).
+    """
+    submission_id = raw.get("submissionId")
+    if not isinstance(submission_id, str) or not submission_id.strip():
+        raise _InvalidSubmissionId(
+            f"{path}: submission has no non-blank top-level 'submissionId' field "
+            "(business-rules-and-evaluation-data.md section 6.3: each real answer sheet "
+            "is identified by a non-PII submissionId) -- needed to tell distinct "
+            "submissions apart from distinct questions for the section 6.2 "
+            "minimum-dataset-size check"
+        )
+    return submission_id.strip()
+
+
+def _load_questions(raw: dict[str, Any], *, path: Path) -> list[dict[str, Any]]:
+    """Validate and return this submission file's per-question entry list.
+
+    business-rules-and-evaluation-data.md section 6.3: one real answer
+    sheet -- one JSON file -- commonly spans several questions (section
+    6.2's "60 答案・のべ 300 設問以上"). A loader that only ever reads one
+    ``ground_truth``/``input`` per file cannot consume that many questions
+    without an undocumented one-file-per-question split, and so cannot
+    actually claim to follow the real-data layout (code review finding).
+    Each element is one question's ``ground_truth`` + ``input`` (+
+    ``recorded``), validated the same way a single-question file previously
+    was.
+    """
+    questions = raw.get("questions")
+    if not isinstance(questions, list) or not questions:
+        raise _InvalidSubmission(
+            f"{path}: submission has no non-empty top-level 'questions' array -- one "
+            "submission file holds one or more per-question ground_truth/input/recorded "
+            "entries (business-rules-and-evaluation-data.md section 6.3; section 6.2's "
+            "60-submission/300-question dataset size)"
+        )
+    for index, question in enumerate(questions):
+        if not isinstance(question, dict):
+            raise _InvalidSubmission(
+                f"{path}: 'questions[{index}]' must be an object, got {type(question).__name__}"
+            )
+    return questions
+
+
+def _load_ground_truth(raw: dict[str, Any], *, path: Path | str) -> GradingGroundTruth:
+    try:
+        return GradingGroundTruth.from_mapping(raw["ground_truth"])
+    except ValidationError as exc:
+        raise _InvalidGroundTruth(
+            f"{path}: invalid 'ground_truth' block ({_sanitize_validation_error(exc)})"
+        ) from None
+
+
+def _load_input_record(
+    raw: dict[str, Any], *, truth: GradingGroundTruth, path: Path | str
+) -> GradingInputRecord:
+    """Parse this question's ``input`` block and cross-check it against ``truth``.
+
+    Raises :class:`_InvalidInput` if ``input`` is missing, fails strict
+    validation, disagrees with ``ground_truth`` (e.g. a different
+    ``max_score``), or if any provider has a recorded ``ocr_noisy`` response
+    while this sample's ``input.ocr_noisy`` is ``null``: a same-data
+    comparison requires the underlying question material -- including which
+    OCR variants actually exist -- to match, not just the final score
     (code review finding).
     """
+    if "input" not in raw:
+        raise _InvalidInput(f"{path}: question has no 'input' block to validate against")
+    try:
+        input_record = GradingInputRecord.from_mapping(raw["input"])
+    except ValidationError as exc:
+        raise _InvalidInput(
+            f"{path}: invalid 'input' block ({_sanitize_validation_error(exc)})"
+        ) from None
+    try:
+        validate_input_matches_truth(input_record, truth)
+    except ValueError as exc:
+        raise _InvalidInput(f"{path}: {exc}") from None
+
+    if input_record.ocr_noisy is None:
+        for provider, variants in raw.get("recorded", {}).items():
+            cell = variants.get("ocr_noisy")
+            if isinstance(cell, dict) and "response" in cell:
+                raise _InvalidInput(
+                    f"{path}: provider {provider!r} has a recorded 'ocr_noisy' response, "
+                    "but this sample's input.ocr_noisy is null -- no noisy-OCR variant was "
+                    "authored for this sample, so a recorded noisy-variant response cannot "
+                    "be a real same-data comparison"
+                )
+    return input_record
+
+
+def _validate_recorded_variant_keys(
+    recorded: dict[str, dict[str, Any]], *, path: Path | str
+) -> None:
+    """Reject a provider's ``recorded`` entry with an input-variant key
+    outside :data:`_INPUT_VARIANTS`, instead of silently ignoring it.
+
+    ``_load_cell``/``_responder_configs_by_variant`` only ever look up the
+    fixed ``ocr_clean``/``ocr_noisy`` keys by name, never iterate whatever
+    keys happen to be present -- so a typo'd key (e.g. ``"ocr_nosiy"``
+    instead of ``"ocr_noisy"``) is never matched by either lookup. Without
+    this check, a real recorded response under that key would simply never
+    be found: the expected cell stays "pending" forever, and the harness can
+    exit 0 printing an incomplete aggregate as if the dataset had been fully
+    reported (code review finding).
+    """
+    for provider, variants in recorded.items():
+        if not isinstance(variants, dict):
+            raise _InvalidRecordedVariant(
+                f"{path}: provider {provider!r}'s recorded entry must be an object "
+                f"keyed by input variant ({_INPUT_VARIANTS}), got {type(variants).__name__}"
+            )
+        unknown = sorted(set(variants) - set(_INPUT_VARIANTS))
+        if unknown:
+            # Never echo the unknown key(s) themselves: they are untrusted
+            # ``--dataset`` content the same as any other key or value, and
+            # a malformed real dataset could put student text or a secret in
+            # a mistyped key (AGENTS.md "Security"; code review finding).
+            raise _InvalidRecordedVariant(
+                f"{path}: provider {provider!r} has {len(unknown)} recorded response(s) "
+                f"under {len(unknown)} unrecognized input-variant key(s) -- only "
+                f"{_INPUT_VARIANTS} are recognized (this looks like a typo; a response "
+                "recorded there would otherwise be silently ignored rather than counted). "
+                "The unrecognized key(s) are not shown here."
+            )
+
+
+def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
+    """Parse and validate every submission file's questions.
+
+    Called before the harness decides whether the dataset has anything to
+    report (including the "every ``recorded`` is ``{}``" staged-pilot case):
+    a dataset made of nothing but malformed or inconsistent samples must not
+    exit 0 as if it were valid, uninspected evidence (code review finding).
+    """
+    parsed: list[_ParsedSample] = []
+    for path in files:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        subject = _load_subject(raw, path=path)
+        submission_id = _load_submission_id(raw, path=path)
+        questions = _load_questions(raw, path=path)
+        for index, question in enumerate(questions):
+            locator = f"{path}#{index}"
+            _validate_recorded_variant_keys(question.get("recorded", {}), path=locator)
+            truth = _load_ground_truth(question, path=locator)
+            input_record = _load_input_record(question, truth=truth, path=locator)
+            parsed.append(
+                _ParsedSample(
+                    path=locator,
+                    subject=subject,
+                    submission_id=submission_id,
+                    truth=truth,
+                    input_record=input_record,
+                    recorded=question.get("recorded", {}),
+                )
+            )
+    return parsed
+
+
+def _submission_coverage(samples: list[_ParsedSample]) -> dict[str, int]:
+    """Distinct ``submissionId`` count per ``subject``, for the section 6.2
+    minimum-dataset-size check ("各教科 30 答案以上").
+
+    Computed from every validated sample regardless of whether any provider
+    has recorded a response yet: a project owner staging real ground truth
+    ahead of credentials still needs to see real submission coverage, not
+    just a question/file count that could overstate it (one submission
+    commonly spans several questions).
+    """
+    submissions_by_subject: dict[str, set[str]] = {}
+    for sample in samples:
+        submissions_by_subject.setdefault(sample.subject, set()).add(sample.submission_id)
+    return {subject: len(ids) for subject, ids in submissions_by_subject.items()}
 
 
 def _normalized_provider_id(raw: str) -> str:
@@ -465,8 +817,30 @@ def _canonical_providers(samples: list[_ParsedSample]) -> dict[str, str]:
     return raw_for_normalized
 
 
-#: One parsed ``(provider, input_variant)`` cell -- see ``_load_cell``.
-_CellResult = tuple[GradingResponse | None, str | None, float | None, float | None, bool]
+def _validate_canonical_provider_ids(providers: Iterable[str], *, dataset: Path) -> None:
+    """Real ``--dataset`` runs must use exactly the candidate ids
+    docs/poc-2-ai-grading.md section 2 defines (case-sensitive) -- the
+    bundled synthetic fixtures (``_DEFAULT_DATASET``) are an explicit,
+    documented exception, since they intentionally use placeholder names
+    (``synthetic-a`` / ``synthetic-b``) that are not real vendor identifiers.
+
+    Whitespace normalization alone (:func:`_canonical_providers`) does not
+    catch a case difference: ``"gemini"`` and ``"Gemini"`` would still count
+    as two separate candidates for the same real service, letting one
+    service satisfy the >= 2 comparison gate on its own (code review
+    finding).
+    """
+    if dataset.resolve() == _DEFAULT_DATASET.resolve():
+        return
+    unknown = sorted(set(providers) - _CANONICAL_PROVIDER_IDS)
+    if unknown:
+        raise _InvalidProviderId(
+            f"provider id(s) {unknown} are not among the canonical candidate ids "
+            f"{sorted(_CANONICAL_PROVIDER_IDS)} (docs/poc-2-ai-grading.md section 2) -- a "
+            "normalized-but-non-canonical id (e.g. a case difference) could let one real "
+            "service masquerade as two separate candidates. Rename the 'recorded' key to "
+            "the canonical id."
+        )
 
 
 def _parse_cell_grid(
@@ -501,8 +875,8 @@ def _parse_cell_grid(
 def _responder_configs_by_variant(
     cells_for_sample: dict[str, dict[str, _CellResult]],
 ) -> dict[str, set[tuple[str, str]]]:
-    """``(provider, config_key)`` pairs with an actual (non-pending) response
-    for one sample, split by input variant.
+    """``(provider, config_key)`` pairs with an actual, attempted (non-pending,
+    non-``unavailable``) response for one sample, split by input variant.
 
     Split by variant, not merged: a provider recorded only on ``ocr_clean``
     and another recorded only on ``ocr_noisy`` for the same sample have
@@ -516,20 +890,16 @@ def _responder_configs_by_variant(
     are different candidates for same-data-comparison purposes too, so a
     provider that quietly switches configuration between samples must not
     still "match" across those samples by name alone (code review finding;
-    docs/poc-2-ai-grading.md section 3.3's config-bucket separation).
+    docs/poc-2-ai-grading.md section 3.3's config-bucket separation). An
+    ``unavailable`` cell has no ``config_key`` to bucket by, so it never
+    contributes here -- it neither is, nor prevents, a same-data comparison.
     """
     by_variant: dict[str, set[tuple[str, str]]] = {variant: set() for variant in _INPUT_VARIANTS}
     for provider, by_variant_cell in cells_for_sample.items():
-        for variant, (
-            _response,
-            config_key,
-            _cost,
-            _latency,
-            is_pending,
-        ) in by_variant_cell.items():
-            if not is_pending:
-                assert config_key is not None
-                by_variant[variant].add((provider, config_key))
+        for variant, result in by_variant_cell.items():
+            if not result.is_pending and not result.is_unavailable:
+                assert result.config_key is not None
+                by_variant[variant].add((provider, result.config_key))
     return by_variant
 
 
@@ -570,176 +940,13 @@ def _comparable_provider_configs(
     return overlapping
 
 
-@dataclass(frozen=True, kw_only=True)
-class _ParsedSample:
-    """One sample's validated ``subject`` + ``submissionId`` + ``ground_truth``
-    + ``input``, plus its raw ``recorded`` dict (still unparsed --
-    ``_load_cell`` handles that per provider/variant cell)."""
-
-    path: Path
-    subject: str
-    submission_id: str
-    truth: GradingGroundTruth
-    input_record: GradingInputRecord
-    recorded: dict[str, dict[str, Any]]
-
-
-def _load_subject(raw: dict[str, Any], *, path: Path) -> str:
-    subject = raw.get("subject")
-    if not isinstance(subject, str) or not subject.strip():
-        raise _InvalidSubject(
-            f"{path}: sample has no non-blank top-level 'subject' field (needed to bucket "
-            "this question's metrics by 教科, docs/poc-2-ai-grading.md section 3.3)"
-        )
-    return subject
-
-
-def _load_submission_id(raw: dict[str, Any], *, path: Path) -> str:
-    submission_id = raw.get("submissionId")
-    if not isinstance(submission_id, str) or not submission_id.strip():
-        raise _InvalidSubmissionId(
-            f"{path}: sample has no non-blank top-level 'submissionId' field "
-            "(business-rules-and-evaluation-data.md section 6.3: each real answer is "
-            "identified by a non-PII submissionId) -- needed to tell distinct submissions "
-            "(answer sheets) apart from distinct questions for the section 6.2 "
-            "minimum-dataset-size check"
-        )
-    return submission_id
-
-
-def _load_ground_truth(raw: dict[str, Any], *, path: Path) -> GradingGroundTruth:
-    try:
-        return GradingGroundTruth.from_mapping(raw["ground_truth"])
-    except ValidationError as exc:
-        raise _InvalidGroundTruth(
-            f"{path}: invalid 'ground_truth' block ({_sanitize_validation_error(exc)})"
-        ) from None
-
-
-def _load_input_record(
-    raw: dict[str, Any], *, truth: GradingGroundTruth, path: Path
-) -> GradingInputRecord:
-    """Parse this sample's ``input`` block and cross-check it against ``truth``.
-
-    Raises :class:`_InvalidInput` if ``input`` is missing, fails strict
-    validation, disagrees with ``ground_truth`` (e.g. a different
-    ``max_score``), or if any provider has a recorded ``ocr_noisy`` response
-    while this sample's ``input.ocr_noisy`` is ``null``: a same-data
-    comparison requires the underlying question material -- including which
-    OCR variants actually exist -- to match, not just the final score
-    (code review finding).
-    """
-    if "input" not in raw:
-        raise _InvalidInput(f"{path}: sample has no 'input' block to validate against")
-    try:
-        input_record = GradingInputRecord.from_mapping(raw["input"])
-    except ValidationError as exc:
-        raise _InvalidInput(
-            f"{path}: invalid 'input' block ({_sanitize_validation_error(exc)})"
-        ) from None
-    try:
-        validate_input_matches_truth(input_record, truth)
-    except ValueError as exc:
-        raise _InvalidInput(f"{path}: {exc}") from None
-
-    if input_record.ocr_noisy is None:
-        for provider, variants in raw.get("recorded", {}).items():
-            cell = variants.get("ocr_noisy")
-            if isinstance(cell, dict) and "response" in cell:
-                raise _InvalidInput(
-                    f"{path}: provider {provider!r} has a recorded 'ocr_noisy' response, "
-                    "but this sample's input.ocr_noisy is null -- no noisy-OCR variant was "
-                    "authored for this sample, so a recorded noisy-variant response cannot "
-                    "be a real same-data comparison"
-                )
-    return input_record
-
-
-def _validate_recorded_variant_keys(recorded: dict[str, dict[str, Any]], *, path: Path) -> None:
-    """Reject a provider's ``recorded`` entry with an input-variant key
-    outside :data:`_INPUT_VARIANTS`, instead of silently ignoring it.
-
-    ``_load_cell``/``_providers_with_response_by_variant`` only ever look up
-    the fixed ``ocr_clean``/``ocr_noisy`` keys by name, never iterate
-    whatever keys happen to be present -- so a typo'd key (e.g.
-    ``"ocr_nosiy"`` instead of ``"ocr_noisy"``) is never matched by either
-    lookup. Without this check, a real recorded response under that key
-    would simply never be found: the expected cell stays "pending" forever,
-    and the harness can exit 0 printing an incomplete aggregate as if the
-    dataset had been fully reported (code review finding).
-    """
-    for provider, variants in recorded.items():
-        if not isinstance(variants, dict):
-            raise _InvalidRecordedVariant(
-                f"{path}: provider {provider!r}'s recorded entry must be an object "
-                f"keyed by input variant ({_INPUT_VARIANTS}), got {type(variants).__name__}"
-            )
-        unknown = sorted(set(variants) - set(_INPUT_VARIANTS))
-        if unknown:
-            # Never echo the unknown key(s) themselves: they are untrusted
-            # ``--dataset`` content the same as any other key or value, and
-            # a malformed real dataset could put student text or a secret in
-            # a mistyped key (AGENTS.md "Security"; code review finding).
-            raise _InvalidRecordedVariant(
-                f"{path}: provider {provider!r} has {len(unknown)} recorded response(s) "
-                f"under {len(unknown)} unrecognized input-variant key(s) -- only "
-                f"{_INPUT_VARIANTS} are recognized (this looks like a typo; a response "
-                "recorded there would otherwise be silently ignored rather than counted). "
-                "The unrecognized key(s) are not shown here."
-            )
-
-
-def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
-    """Parse and validate every file's ``ground_truth`` and ``input`` block.
-
-    Called before the harness decides whether the dataset has anything to
-    report (including the "every ``recorded`` is ``{}``" staged-pilot case):
-    a dataset made of nothing but malformed or inconsistent samples must not
-    exit 0 as if it were valid, uninspected evidence (code review finding).
-    """
-    parsed: list[_ParsedSample] = []
-    for path in files:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        _validate_recorded_variant_keys(raw.get("recorded", {}), path=path)
-        subject = _load_subject(raw, path=path)
-        submission_id = _load_submission_id(raw, path=path)
-        truth = _load_ground_truth(raw, path=path)
-        input_record = _load_input_record(raw, truth=truth, path=path)
-        parsed.append(
-            _ParsedSample(
-                path=path,
-                subject=subject,
-                submission_id=submission_id,
-                truth=truth,
-                input_record=input_record,
-                recorded=raw.get("recorded", {}),
-            )
-        )
-    return parsed
-
-
-def _submission_coverage(samples: list[_ParsedSample]) -> dict[str, int]:
-    """Distinct ``submissionId`` count per ``subject``, for the section 6.2
-    minimum-dataset-size check ("各教科 30 答案以上").
-
-    Computed from every validated sample regardless of whether any provider
-    has recorded a response yet: a project owner staging real ground truth
-    ahead of credentials still needs to see real submission coverage, not
-    just a question/file count that could overstate it (one submission
-    commonly spans several questions, each its own sample file here).
-    """
-    submissions_by_subject: dict[str, set[str]] = {}
-    for sample in samples:
-        submissions_by_subject.setdefault(sample.subject, set()).add(sample.submission_id)
-    return {subject: len(ids) for subject, ids in submissions_by_subject.items()}
-
-
 def _load_samples(
     dataset: Path,
-) -> tuple[list[SampleOutcome], int, int, int, dict[str, int]]:
+) -> tuple[list[SampleOutcome], int, int, int, int, dict[str, int]]:
     """Return ``(evaluated outcomes, pending-cell count, files with no
     provider recorded anywhere in the dataset, excluded-cell count,
-    distinct-submission count per subject)`` from every ``*.json``.
+    unavailable-cell count, distinct-submission count per subject)`` from
+    every ``*.json``.
 
     The third count covers a real-data pilot staged ahead of any
     ``AIProvider`` call (ground truth transcribed, ``recorded`` left ``{}``
@@ -768,6 +975,12 @@ def _load_samples(
     silently blend a compared sample with an uncompared one. It is still
     counted (never silently dropped), same as ``pending``/``staged``.
 
+    The fifth count ("unavailable") covers a call attempt explicitly
+    recorded as failed (``{"unavailable": true, ...}``, docs/poc-2-ai-grading.md
+    section 7.2) -- distinct from "pending" (never attempted) so a
+    persistently-unreliable provider's failures cannot silently vanish from
+    the report (code review finding).
+
     Raises unless at least :data:`_MINIMUM_PROVIDERS` distinct providers
     each have a real recorded response on a *shared sample and input
     variant* (see :func:`_comparable_provider_configs`): the PoC requires
@@ -784,18 +997,17 @@ def _load_samples(
     submission_coverage = _submission_coverage(samples)
 
     raw_for_normalized = _canonical_providers(samples)
+    _validate_canonical_provider_ids(raw_for_normalized, dataset=dataset)
     if not raw_for_normalized:
-        return [], 0, len(files), 0, submission_coverage
+        return [], 0, len(files), 0, 0, submission_coverage
 
     cell_grid = _parse_cell_grid(samples, raw_for_normalized)
     pending = sum(
         1
         for cells_for_sample in cell_grid
         for by_variant_cell in cells_for_sample.values()
-        for _response, _config_key, _cost_usd, _latency_seconds, is_pending in (
-            by_variant_cell.values()
-        )
-        if is_pending
+        for result in by_variant_cell.values()
+        if result.is_pending
     )
 
     responders_by_sample = [_responder_configs_by_variant(cells) for cells in cell_grid]
@@ -817,37 +1029,35 @@ def _load_samples(
 
     outcomes: list[SampleOutcome] = []
     excluded = 0
+    unavailable = 0
     for sample, cells_for_sample, by_variant in zip(
         samples, cell_grid, responders_by_sample, strict=True
     ):
         for provider in sorted(cells_for_sample):
             by_variant_cell = cells_for_sample[provider]
-            for variant, (
-                response,
-                config_key,
-                cost_usd,
-                latency_seconds,
-                is_pending,
-            ) in by_variant_cell.items():
-                if is_pending:
+            for variant, result in by_variant_cell.items():
+                if result.is_pending:
                     continue
-                assert config_key is not None  # only None when is_pending
+                if result.is_unavailable:
+                    unavailable += 1
+                    continue
+                assert result.config_key is not None  # only None when pending/unavailable
                 if by_variant[variant] != comparable:
                     excluded += 1
                     continue
                 outcomes.append(
                     evaluate_sample(
                         sample.truth,
-                        response,
+                        result.response,
                         subject=sample.subject,
                         provider=provider,
-                        config_key=config_key,
+                        config_key=result.config_key,
                         input_variant=variant,
-                        cost_usd=cost_usd,
-                        latency_seconds=latency_seconds,
+                        cost_usd=result.cost_usd,
+                        latency_seconds=result.latency_seconds,
                     )
                 )
-    return outcomes, pending, 0, excluded, submission_coverage
+    return outcomes, pending, 0, excluded, unavailable, submission_coverage
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -859,7 +1069,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    outcomes, pending, staged, excluded, submission_coverage = _load_samples(args.dataset)
+    outcomes, pending, staged, excluded, unavailable, submission_coverage = _load_samples(
+        args.dataset
+    )
     table = to_markdown_table(summarize_by_provider(outcomes))
     notes = ""
     if pending:
@@ -878,6 +1090,12 @@ def main(argv: list[str] | None = None) -> int:
             f"has no matching cohort of comparable candidates there, so it is not a "
             f"same-data comparison and is never pooled into that candidate's own metrics): "
             f"{excluded}\n"
+        )
+    if unavailable:
+        notes += (
+            f"\nunavailable (a call attempt exhausted retries against a persistent failure "
+            f"and was explicitly recorded as such, docs/poc-2-ai-grading.md section 7.2 -- "
+            f"never scored, never silently folded into 'pending'): {unavailable}\n"
         )
     if submission_coverage:
         coverage_lines = "\n".join(

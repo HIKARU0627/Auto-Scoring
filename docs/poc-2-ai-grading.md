@@ -51,27 +51,31 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 
 `backend/tests/fixtures/ai_grading/README.md` のスキーマに従う。
 
-| フィールド                      | 内容                                                                 |
-| ------------------------------- | -------------------------------------------------------------------- |
-| `subject`（サンプル直下）       | 教科ラベル。`ground_truth` の**外側**の兄弟フィールド（§3.8 参照）   |
-| `submissionId`（サンプル直下）  | 必須・非空白。答案（提出物）を識別する不透明 ID（§3.11 参照）        |
-| `ground_truth.questionId`       | 個人を特定しない不透明 ID                                            |
-| `ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）               |
-| `ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠） |
-| `ground_truth.source`           | 必須。文字列リテラル `"human"` のみ受理（§1.3・§3.9 参照）           |
-| `input.prompt_text`             | 設問文                                                               |
-| `input.model_answer`            | 模範解答                                                             |
-| `input.rubric_text`             | 採点基準・配点                                                       |
-| `input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト。空文字可）       |
-| `input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト。空文字可）   |
+| フィールド                                  | 内容                                                                 |
+| ------------------------------------------- | -------------------------------------------------------------------- |
+| `subject`（サンプル直下）                   | 教科ラベル。`questions[]` の**外側**の兄弟フィールド（§3.8 参照）    |
+| `submissionId`（サンプル直下）              | 必須・非空白。答案（提出物）を識別する不透明 ID（§3.11・§3.12 参照） |
+| `questions[]`（サンプル直下）               | 必須・非空配列。1 答案に含まれる設問ごとのラベル群（§3.12 参照）     |
+| `questions[].ground_truth.questionId`       | 個人を特定しない不透明 ID                                            |
+| `questions[].ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）               |
+| `questions[].ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠） |
+| `questions[].ground_truth.source`           | 必須。文字列リテラル `"human"` のみ受理（§1.3・§3.9 参照）           |
+| `questions[].input.prompt_text`             | 設問文                                                               |
+| `questions[].input.model_answer`            | 模範解答                                                             |
+| `questions[].input.rubric_text`             | 採点基準・配点                                                       |
+| `questions[].input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト。空文字可）       |
+| `questions[].input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト。空文字可）   |
+| `questions[].input.answer_image_ref`        | 必須・非空白。答案画像の content hash または外部参照（§3.12 参照）   |
 
 `ground_truth` は決定書 §6.3 が定める実際の人間採点ラベルファイルの
 ワイヤ形式（`questionId`/`score`/`maxScore`/`criteria[].{id,result}`/
 `source` に加え、任意項目 `comment`/`annotations`/`handwritingQuality`/
 `layoutType`）に**そのまま**準拠する（§3.8）。`submissionId` は決定書 §6.3
 が「1 答案 = 1 JSON ファイル（個人情報を含まない `submissionId` で識別）」
-と定める答案（提出物）の識別子で、`subject` 同様 `ground_truth` の外側の
-兄弟フィールドとする（§3.11）。
+と定める答案（提出物）の識別子で、`subject` 同様 `questions[]` の外側の
+兄弟フィールドとする（§3.11）。1 つの答案（`submissionId`）は複数設問に
+またがるため（§6.2「のべ 300 設問以上」）、`ground_truth`/`input`/
+`recorded` は `questions[]` 配列の各要素として持つ（§3.12）。
 
 ### 1.3 正解ラベル作成（決定書 §6.3）
 
@@ -549,6 +553,72 @@ variant_keys` が未知の input variant キーをメッセージに含めてい
 既知のフィールド名・インデックスであり安全）。`_validate_recorded_
 variant_keys` のメッセージも、未知キーの件数のみを報告し、キー自体は
 一切含めないよう修正した。
+
+### 3.12 ファイル形式の正本一致・画像 identity・失敗呼び出し・provider 正規ID
+
+**文書化された submission ごとのラベル形式を読み込む**: §3.11 で
+`submissionId` を追加したものの、その時点でもハーネスは依然として
+「1 サンプルファイル = 1 設問」の構造しか読めなかった。しかし決定書
+§6.3「1 答案 = 1 JSON ファイル」・§6.2「60 答案・のべ 300 設問以上」を
+文字どおり読むと、1 つの答案ファイルは**複数の設問ラベルを含む**はずで
+あり（60 答案から 300 設問超が生じるのは平均約 5 設問/答案という計算に
+なるため）、「1 ファイル = 1 設問」という以前の構造は、正本のファイル
+形式とは異なる、文書化されていない分割方法だった（コードレビュー指摘。
+AGENTS.md「Source of truth」）。この不一致は致命的で、正本どおりに作成
+された実ラベルファイル（1 答案分の複数設問を含む）をそのままでは一切
+読み込めず、必要な 60 答案・300 設問という規模をこのハーネスで消費できな
+かった。
+
+修正: サンプルファイルの直下に必須の `questions[]` 配列を追加し、各要素が
+これまでの単一ファイルと同じ `ground_truth`/`input`/`recorded` を持つ
+（`subject`/`submissionId` はファイル直下の兄弟フィールドのまま、複数
+`questions[]` 要素で共有する）。`_load_all_samples` はこの配列の各要素を
+個別の設問サンプルとしてパース・検証する（§3.7 の全件事前検証の方針は
+維持: 検証は `questions[]` の各要素に対して行う）。合成フィクスチャ・実
+データ pilot（本書 §6、リポジトリ外）は現状 1 答案あたり 1 設問のみの
+書き起こしのため、`questions[]` は単一要素の配列として更新した。`/tmp` で
+1 つの答案ファイルに 2 設問を含むデータセットを構成し、両方の設問が
+正しく集計されることを確認した。
+
+**記録済み input に解答画像の identity を含める**: 採点呼び出しは全て
+cropped 画像を含むはずである（§2.1）にもかかわらず、記録済み `input` は
+画像への言及を一切持たなかった。候補が誤って異なる／古い crop に対して
+実行されても、記録された JSON からはそれを検出できず、Recognition
+Confidence の結果が実際には同一データでない可能性があるにもかかわらず、
+ハーネスは same-data 比較として報告してしまっていた（コードレビュー
+指摘）。修正: `GradingInputRecord` に必須・非空白の `answer_image_ref`
+フィールドを追加した。画像本体を記録するのではなく、content hash
+（例: `"sha256:<hex>"`）またはリポジトリ外の参照文字列のみを記録する
+（決定書 §6.7: 実際の答案画像はコミットしない）。合成フィクスチャには
+架空のハッシュ文字列、実データ pilot には既存の `_pilot_metadata.
+sample_ref`（PDF ファイル名・ページ・設問番号）を転記した。
+
+**利用不能な呼び出しを pending ではなく明示的に記録する**: §7.2 は
+「恒常的な 429 / quota 超過は失敗として記録し、推測で埋めない」と定めるが、
+以前の実装では応答が存在しないセルは全て「pending（未試行）」として扱われ
+ていた。これでは「まだ一度も呼んでいない」ことと「呼んだが持続的に失敗
+した」ことを区別できず、信頼性の低い provider の失敗呼び出しが集計から
+消え、実際より良い結果に見えかねなかった（コードレビュー指摘）。修正:
+セルに `{"unavailable": true, "latency_seconds": ..., "cost_usd": ...}`
+（`response` キーなし）という明示的な失敗状態を追加した。これは `pending`
+とは別に `unavailable` として集計・報告し（採点対象にはせず、
+`config_key` を持たないため same-data 比較のコホートにも参加しない）、
+`response` と `unavailable: true` を同時に持つセルは矛盾として拒否する。
+`/tmp` で 2 設問中 1 設問だけ provider が unavailable なデータセットを
+構成し、`unavailable: 1` として `pending`・`excluded` とは別にカウント
+されることを確認した。
+
+**正規の provider 候補 ID を強制する**: `_canonical_providers`（§3.11）に
+よる正規化は前後の空白を除去するだけで、大文字小文字の違い（`"gemini"`
+と `"Gemini"`）は捉えられない。決定書は候補 ID を `gemini`/`claude`/`gpt`
+と固定している（§2）ため、実データでの run（`--dataset` が同梱の合成
+フィクスチャ以外を指す場合）では、正規化後の ID がこの固定集合のいずれか
+と完全一致（大文字小文字区別）することを追加で検証する。合成フィクスチャ
+モード（`--dataset` 省略時の既定パス）はこの検証から明示的に除外する
+（`synthetic-a`/`synthetic-b` は実ベンダー ID ではない架空のプレース
+ホルダであるため）。`/tmp` で非デフォルトデータセットに `"Gemini"`
+（大文字始まり）を記録したデータセットを構成し、正しく拒否されることを
+確認した。
 
 ---
 

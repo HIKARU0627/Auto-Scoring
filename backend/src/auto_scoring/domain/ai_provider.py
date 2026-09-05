@@ -134,6 +134,23 @@ def _normalized_temperature(temperature: float) -> float:
     return 0.0 if value == 0.0 else value
 
 
+def _normalized_str(value: str) -> str:
+    """Normalize a descriptor string field so ``descriptor_key`` is stable
+    regardless of how the ``ProviderDescriptor`` was constructed.
+
+    ``_DescriptorInput`` parses these fields through ``_NonBlankStr``
+    (``StringConstraints(strip_whitespace=True, ...)``), which strips
+    surrounding whitespace -- but ``ProviderDescriptor`` is a plain
+    ``dataclass``, so a directly-constructed instance (e.g.
+    ``model=" model-a "``) keeps it. Without normalizing here too, the same
+    adapter configuration would serialize to two different keys depending on
+    which path constructed the descriptor, splitting one configuration into
+    two metric buckets (code review finding; mirrors
+    ``_normalized_temperature``).
+    """
+    return value.strip()
+
+
 def descriptor_key(descriptor: ProviderDescriptor) -> str:
     """Stable, collision-free identifier for one reproducibility configuration.
 
@@ -153,11 +170,11 @@ def descriptor_key(descriptor: ProviderDescriptor) -> str:
     """
     return json.dumps(
         [
-            descriptor.model,
-            descriptor.version,
-            descriptor.prompt_version,
+            _normalized_str(descriptor.model),
+            _normalized_str(descriptor.version) if descriptor.version is not None else None,
+            _normalized_str(descriptor.prompt_version),
             _normalized_temperature(descriptor.temperature),
-            descriptor.structured_output_mode,
+            _normalized_str(descriptor.structured_output_mode),
         ],
         ensure_ascii=False,
     )
