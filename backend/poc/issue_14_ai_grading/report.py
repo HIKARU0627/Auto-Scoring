@@ -15,7 +15,13 @@ Every ``*.json`` under ``DIR`` is one graded question (see
         "<provider>": {
           "ocr_clean": {
             "response": {...},
-            "descriptor": {...},
+            "descriptor": {
+              "model": "...",
+              "version": "... or null",
+              "prompt_version": "...",
+              "temperature": 0.0,
+              "structured_output_mode": "json_schema"
+            },
             "latency_seconds": 1.1,
             "cost_usd": 0.0008
           },
@@ -36,20 +42,26 @@ times both input variants (``ocr_clean`` / ``ocr_noisy``) -- not just the
 cells a given sample happens to define. A cell missing from that matrix (no
 ``recorded[provider][variant]`` entry at all, or one with no ``response`` key)
 is "pending", never silently skipped. The PoC requires comparing at least 2
-candidates (docs/poc-2-ai-grading.md section 2): a dataset that has only ever
-recorded one provider name is refused outright, rather than printing a
-complete-looking table for a single candidate (code review finding).
+candidates *on the same data* (docs/poc-2-ai-grading.md section 2): an empty
+or all-pending ``recorded`` entry does not count as a candidate, and two
+providers recorded only on disjoint samples (never together on one question)
+do not count as a comparison either -- both are refused outright rather than
+printed as if the comparison were complete (code review finding).
 
 A cell whose raw JSON fails
 :func:`auto_scoring.domain.ai_grading.parse_ai_grading_result` is a schema
 violation and is scored as such -- never as a free-text-parsed guess
-(Issue #14 acceptance). A cell's ``descriptor`` (model / version / temperature
-/ structured-output mode) is read from the recorded data itself, never
-fabricated here, and is required on every non-pending cell (even one that
-turns out to be a schema violation): two cells for the same ``provider`` name
-recorded under different settings are aggregated as separate buckets, keyed
-on :func:`auto_scoring.domain.ai_provider.descriptor_key`, never pooled
-(Issue #14 "再現条件").
+(Issue #14 acceptance). A cell's ``descriptor`` (model / version / prompt
+version / temperature / structured-output mode) is read from the recorded
+data itself, never fabricated here, and is required on every non-pending
+cell (even one that turns out to be a schema violation): two cells for the
+same ``provider`` name recorded under different settings -- including a
+prompt template edit alone -- are aggregated as separate buckets, keyed on
+:func:`auto_scoring.domain.ai_provider.descriptor_key`, never pooled
+(Issue #14 "再現条件"). ``cost_usd`` / ``latency_seconds`` are validated as
+finite, non-negative numbers before they reach any aggregate (code review
+finding): a negative, non-finite, or non-numeric recorded value raises
+rather than silently skewing the adoption-gate metrics.
 
 Only counts and averaged scores are printed. Provider response bodies (and
 any real answer text they might embed) are read only long enough to compute
@@ -60,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -103,16 +116,47 @@ def _descriptor_from_cell(cell: dict[str, Any], *, provider: str, path: Path) ->
     if raw is None:
         raise _MissingDescriptor(
             f"{path}: provider {provider!r} has a recorded response but no 'descriptor' "
-            "(model/version/temperature/structured_output_mode) -- cannot be reproduced "
-            "or safely bucketed (Issue #14 '再現条件'). Add a descriptor object to this cell."
+            "(model/version/prompt_version/temperature/structured_output_mode) -- cannot "
+            "be reproduced or safely bucketed (Issue #14 '再現条件'). Add a descriptor "
+            "object to this cell."
         )
     return ProviderDescriptor(
         provider=provider,
         model=str(raw["model"]),
         version=None if raw.get("version") is None else str(raw["version"]),
+        prompt_version=str(raw["prompt_version"]),
         temperature=float(raw["temperature"]),
         structured_output_mode=str(raw["structured_output_mode"]),
     )
+
+
+class _InvalidMeasurement(Exception):
+    """A recorded ``cost_usd`` or ``latency_seconds`` value is not a finite,
+    non-negative number.
+
+    Both fields cross the ``--dataset`` trust boundary the same as any other
+    recorded value: a negative cost, a bool masquerading as a number
+    (``bool`` is a Python ``int`` subclass, so ``float(True) == 1.0`` would
+    otherwise pass silently), a string, or a non-finite float (``nan`` /
+    ``inf``) must be rejected before it reaches the adoption-gate metrics,
+    not coerced or fed into ``statistics.fmean`` as-is (code review finding).
+    """
+
+
+def _validated_measurement(value: object, *, field: str, provider: str, path: Path) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _InvalidMeasurement(
+            f"{path}: provider {provider!r} has a non-numeric {field!r}: {value!r}"
+        )
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise _InvalidMeasurement(
+            f"{path}: provider {provider!r} has an invalid {field!r} "
+            f"(must be finite and >= 0): {value!r}"
+        )
+    return number
 
 
 def _load_cell(
@@ -132,12 +176,21 @@ def _load_cell(
     ``0.0``) when the cell records none.
     """
     if cell is None or "response" not in cell:
-        cost_usd = None if cell is None else cell.get("cost_usd")
+        cost_usd = (
+            None
+            if cell is None
+            else _validated_measurement(
+                cell.get("cost_usd"), field="cost_usd", provider=provider, path=path
+            )
+        )
         return None, None, cost_usd, None, True
 
-    cost_usd = cell.get("cost_usd")
-    latency_raw = cell.get("latency_seconds")
-    latency_seconds = float(latency_raw) if latency_raw is not None else None
+    cost_usd = _validated_measurement(
+        cell.get("cost_usd"), field="cost_usd", provider=provider, path=path
+    )
+    latency_seconds = _validated_measurement(
+        cell.get("latency_seconds"), field="latency_seconds", provider=provider, path=path
+    )
     descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
     config_key = descriptor_key(descriptor)
 
@@ -153,17 +206,57 @@ def _load_cell(
 
 
 def _all_providers(files: list[Path]) -> set[str]:
-    """Every provider name recorded anywhere in the dataset.
+    """Every provider name recorded anywhere in the dataset (raw ``recorded``
+    dict keys, including an empty or all-pending entry).
 
     This -- not the keys present in any single file -- defines the expected
     comparison matrix, so a provider missing from one sample's ``recorded``
-    still shows up as a pending cell for that sample.
+    still shows up as a pending cell for that sample. It is deliberately
+    *not* used to decide whether the dataset qualifies as a real comparison
+    (see :func:`_providers_with_overlapping_recordings`): an empty
+    ``"claude": {}`` placeholder, or a provider recorded only on samples no
+    other provider ever touched, is a key here but must not count as a
+    second candidate being compared (code review finding).
     """
     providers: set[str] = set()
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
         providers.update(raw.get("recorded", {}).keys())
     return providers
+
+
+def _providers_with_response_in_file(raw: dict[str, Any]) -> set[str]:
+    """Providers that have an actual (non-pending) ``response`` recorded
+    somewhere in this one file, for at least one input variant."""
+    providers: set[str] = set()
+    for provider, variants in raw.get("recorded", {}).items():
+        if any(isinstance(cell, dict) and "response" in cell for cell in variants.values()):
+            providers.add(provider)
+    return providers
+
+
+def _providers_with_overlapping_recordings(files: list[Path]) -> set[str]:
+    """Providers that qualify as one side of a real, same-data comparison.
+
+    A provider qualifies only if it has recorded an actual response (not
+    just an empty or all-pending ``recorded`` entry) *and* shares at least
+    one sample with another such provider -- i.e. there is at least one
+    question both providers were actually run against. Two providers each
+    recorded only on disjoint samples are never compared on the same data,
+    so neither counts (code review finding: `len(providers) >= 2` on raw
+    dict keys passed even when the dataset had an empty placeholder entry,
+    or two providers that never appeared together on one question).
+    """
+    per_file: list[set[str]] = []
+    for path in files:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        per_file.append(_providers_with_response_in_file(raw))
+
+    overlapping: set[str] = set()
+    for providers_in_file in per_file:
+        if len(providers_in_file) >= _MINIMUM_PROVIDERS:
+            overlapping.update(providers_in_file)
+    return overlapping
 
 
 def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
@@ -175,11 +268,13 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     dataset-wide) -- distinct from "pending" cells, which are expected
     (some other sample recorded that provider) but missing for this one.
 
-    Raises ``SystemExit`` if the dataset has recorded exactly one provider
-    (not zero -- that is the "nothing recorded yet" case above, and not
-    two-or-more): the PoC requires comparing >= 2 candidates on the same
-    data, so a single-candidate dataset is refused outright rather than
-    printed as if the comparison were complete (code review finding).
+    Raises ``SystemExit`` unless at least
+    :data:`_MINIMUM_PROVIDERS` providers each have a real recorded response
+    on a *shared* sample (see :func:`_providers_with_overlapping_recordings`):
+    the PoC requires comparing candidates on the same data, so a dataset
+    where only one provider (or several, but never together on one
+    question) has actually been run is refused outright rather than printed
+    as if the comparison were complete (code review finding).
     """
     files = sorted(dataset.glob("*.json"))
     if not files:
@@ -188,12 +283,17 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
     providers = _all_providers(files)
     if not providers:
         return [], 0, len(files)
-    if len(providers) < _MINIMUM_PROVIDERS:
+
+    comparable = _providers_with_overlapping_recordings(files)
+    if len(comparable) < _MINIMUM_PROVIDERS:
         raise SystemExit(
-            f"only {len(providers)} provider(s) recorded ({sorted(providers)}) -- "
-            f"PoC 2 requires comparing >= {_MINIMUM_PROVIDERS} candidates on the same data "
-            "(docs/poc-2-ai-grading.md section 2). Refusing to report a single-candidate "
-            "result as a comparison; record at least one more provider before re-running."
+            f"only {len(comparable)} provider(s) have a real recorded response on a "
+            f"shared sample ({sorted(comparable)}) -- PoC 2 requires comparing >= "
+            f"{_MINIMUM_PROVIDERS} candidates on the same data (docs/poc-2-ai-grading.md "
+            "section 2). Refusing to report a result that is not a same-data comparison; "
+            "an empty/placeholder provider entry, or providers recorded only on disjoint "
+            "samples, do not count. Record at least one more provider on a shared sample "
+            "before re-running."
         )
 
     outcomes: list[SampleOutcome] = []

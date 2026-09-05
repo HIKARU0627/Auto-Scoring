@@ -25,10 +25,12 @@ from auto_scoring.domain.ai_provider import (
     SchemaViolation,
     grading_response_from_result,
 )
+from auto_scoring.domain.models import AnnotationKind
 
 _VALID_REQUEST = GradingRequest(
     question_id="q1",
     prompt_text="設問文",
+    answer_image=b"\x89PNG\r\n\x1a\n",
     ocr_text="答案テキスト",
     model_answer="模範解答",
     rubric_text="採点基準",
@@ -71,6 +73,7 @@ class AIProviderContract:
             GradingRequest(
                 question_id="with-annotations",
                 prompt_text="設問文",
+                answer_image=b"\x89PNG\r\n\x1a\n",
                 ocr_text="行く",
                 model_answer="模範解答",
                 rubric_text="採点基準",
@@ -79,7 +82,27 @@ class AIProviderContract:
         )
         assert response.annotations
         assert response.annotations[0].target == "行く"
-        assert response.annotations[0].type == "correction"
+        assert response.annotations[0].type == AnnotationKind.UNDERLINE
+
+    def test_grade_receives_the_answer_image(self, provider: AIProvider) -> None:
+        """simplified-design-specification.md section 9.1 lists both the
+        answer image and the OCR text as inputs; a real adapter needs the
+        image to derive a meaningful Recognition Confidence from handwriting
+        (Issue #14 review: "採点リクエストに解答画像自体を含める")."""
+        request = GradingRequest(
+            question_id="q1",
+            prompt_text="設問文",
+            answer_image=b"\x89PNG\r\n\x1a\nnot-really-a-png",
+            ocr_text="答案テキスト",
+            model_answer="模範解答",
+            rubric_text="採点基準",
+            max_score=5,
+        )
+        assert isinstance(request.answer_image, bytes)
+        assert request.answer_image
+        # The port must accept a request carrying a real image without
+        # requiring special-casing by callers.
+        provider.grade(request)
 
     def test_schema_violation_never_falls_back_to_free_text_parsing(
         self, provider: AIProvider
@@ -92,6 +115,7 @@ class AIProviderContract:
                 GradingRequest(
                     question_id="malformed",
                     prompt_text="設問文",
+                    answer_image=b"\x89PNG\r\n\x1a\n",
                     ocr_text="答案テキスト",
                     model_answer="模範解答",
                     rubric_text="採点基準",
@@ -113,6 +137,7 @@ class _ReplayAIProvider:
             provider=self.name,
             model="replay-fixture",
             version="test",
+            prompt_version="replay-prompt-v1",
             temperature=0.0,
             structured_output_mode="json_schema",
         )
@@ -137,7 +162,7 @@ class _ReplayAIProvider:
                     "comment": "概ね良好です。",
                     "rationale": "criterion c1を充足するため4点とした。",
                     "annotations": [
-                        {"target": request.ocr_text, "type": "correction", "comment": "過去形"}
+                        {"target": request.ocr_text, "type": "underline", "comment": "過去形"}
                     ],
                 }
             )

@@ -23,11 +23,17 @@ wrong question count as matching a 4/5 truth label).
 
 Every outcome also carries a ``config_key`` (see
 :func:`auto_scoring.domain.ai_provider.descriptor_key`): two recordings under
-the same ``provider`` name but a different model / version / temperature /
-structured-output mode are aggregated into separate buckets, never pooled
-(code review finding: pooling could let a passing and a failing
+the same ``provider`` name but a different model / version / prompt version /
+temperature / structured-output mode are aggregated into separate buckets,
+never pooled (code review finding: pooling could let a passing and a failing
 configuration average out to something that looks like it cleared the
 adoption gate).
+
+``criterion_agreement_rate`` is computed against every *labeled*
+ground-truth criterion, not just the ones a response happens to return: a
+response that omits a hard criterion counts as disagreeing on it, rather
+than shrinking the denominator and inflating the rate towards 100%
+(code review finding).
 """
 
 from __future__ import annotations
@@ -280,13 +286,15 @@ def evaluate_sample(
             cost_usd=cost_usd,
         )
 
-    truth_by_id = {c.criterion_id: c.outcome for c in truth.criteria}
-    matches = sum(
-        1
-        for c in response.criteria
-        if c.criterion_id in truth_by_id and truth_by_id[c.criterion_id] == c.outcome
-    )
-    total = sum(1 for c in response.criteria if c.criterion_id in truth_by_id)
+    # Denominator is every *labeled* ground-truth criterion, not whatever the
+    # response happened to return: a response that silently omits a hard
+    # criterion must not shrink the denominator and inflate its agreement
+    # rate to 100% (code review finding). A criterion the human labeler did
+    # not record at all (not in ``truth.criteria``) is still ignored, same
+    # as before -- only labeled criteria enter the denominator.
+    response_by_id = {c.criterion_id: c.outcome for c in response.criteria}
+    total = len(truth.criteria)
+    matches = sum(1 for c in truth.criteria if response_by_id.get(c.criterion_id) == c.outcome)
 
     return SampleOutcome(
         provider=provider,
@@ -398,6 +406,17 @@ def _fmt(value: float | None, digits: int = 3) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+def _escape_markdown_cell(value: str) -> str:
+    """Escape a literal ``|`` so it cannot be mistaken for a column separator.
+
+    ``config_key`` (see ``auto_scoring.domain.ai_provider.descriptor_key``)
+    always contains ``|`` characters; inserted verbatim into a Markdown
+    table row, each one opens extra cells and shifts every following column
+    (code review finding).
+    """
+    return value.replace("|", "\\|")
+
+
 def _fmt_count(measured: int, total: int) -> str:
     """Render "measured/total", flagging partial coverage the reader must not
     mistake for a complete measurement (code review finding)."""
@@ -424,7 +443,7 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
                 (
                     summary.subject,
                     summary.provider,
-                    summary.config_key,
+                    _escape_markdown_cell(summary.config_key),
                     summary.input_variant,
                     str(summary.samples),
                     _fmt(summary.exact_match_rate),

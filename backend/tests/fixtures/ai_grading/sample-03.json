@@ -32,6 +32,7 @@
         "descriptor": {
           "model": "synthetic-model-a",
           "version": "2026-01-pilot",
+          "prompt_version": "synthetic-prompt-v1",
           "temperature": 0.0,
           "structured_output_mode": "json_schema"
         },
@@ -53,6 +54,7 @@
         "descriptor": {
           "model": "synthetic-model-a",
           "version": "2026-01-pilot",
+          "prompt_version": "synthetic-prompt-v1",
           "temperature": 0.0,
           "structured_output_mode": "json_schema"
         },
@@ -76,6 +78,7 @@
         "descriptor": {
           "model": "synthetic-model-b",
           "version": "2026-01-pilot",
+          "prompt_version": "synthetic-prompt-v1",
           "temperature": 0.2,
           "structured_output_mode": "tool_use"
         },
@@ -97,6 +100,7 @@
         "descriptor": {
           "model": "synthetic-model-b",
           "version": "2026-01-pilot",
+          "prompt_version": "synthetic-prompt-v1",
           "temperature": 0.2,
           "structured_output_mode": "tool_use"
         },

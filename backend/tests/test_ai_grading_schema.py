@@ -118,12 +118,19 @@ def test_duplicate_criterion_ids_are_rejected() -> None:
 
 def test_annotation_never_carries_coordinates() -> None:
     """section 12.1: AI returns target + type (+ optional comment), never x/y/rect."""
-    result = _parse(
-        {"annotations": [{"target": "行く", "type": "correction", "comment": "過去形"}]}
-    )
+    result = _parse({"annotations": [{"target": "行く", "type": "underline", "comment": "過去形"}]})
     assert result.annotations[0].target == "行く"
     with pytest.raises(ValidationError):
-        _parse({"annotations": [{"target": "行く", "type": "correction", "x": 0.1, "y": 0.2}]})
+        _parse({"annotations": [{"target": "行く", "type": "underline", "x": 0.1, "y": 0.2}]})
+
+
+def test_annotation_type_outside_the_fixed_set_is_rejected() -> None:
+    """business-rules-and-evaluation-data.md section 2 (5) fixes the MVP
+    Annotation kinds; a provider returning an unsupported type (even
+    section 12.1's own illustrative "correction") is a schema violation,
+    not a value to accept and fail on later at persistence/rendering time."""
+    with pytest.raises(ValidationError):
+        _parse({"annotations": [{"target": "行く", "type": "correction"}]})
 
 
 def test_malformed_json_is_a_validation_error_not_a_silent_default() -> None:
@@ -182,7 +189,7 @@ def test_whitespace_only_question_id_is_rejected() -> None:
 
 def test_whitespace_only_annotation_target_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        _parse({"annotations": [{"target": "  ", "type": "correction"}]})
+        _parse({"annotations": [{"target": "  ", "type": "underline"}]})
 
 
 def test_recognition_text_may_be_empty_for_an_unreadable_region() -> None:

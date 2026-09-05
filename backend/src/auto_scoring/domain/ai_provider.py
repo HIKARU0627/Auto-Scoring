@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from auto_scoring.domain.ai_grading import AIGradingResult
-from auto_scoring.domain.models import CriterionOutcome
+from auto_scoring.domain.models import AnnotationKind, CriterionOutcome
 
 
 class SchemaViolation(Exception):
@@ -51,11 +51,20 @@ class ProviderUnavailable(Exception):
 
 @dataclass(frozen=True, kw_only=True)
 class ProviderDescriptor:
-    """Reproducibility record for one grading call (Issue #14 "再現条件")."""
+    """Reproducibility record for one grading call (Issue #14 "再現条件").
+
+    ``prompt_version`` is required, not optional: a prompt template edit with
+    the same model/version/temperature/structured_output_mode is still a
+    different configuration and must not be pooled with the old one (code
+    review finding). It is a short, stable tag or content hash for the exact
+    prompt template used -- never the prompt text itself (no student content,
+    no risk of drifting into a huge cache key).
+    """
 
     provider: str
     model: str
     version: str | None
+    prompt_version: str
     temperature: float
     structured_output_mode: str
 
@@ -64,14 +73,14 @@ def descriptor_key(descriptor: ProviderDescriptor) -> str:
     """Stable identifier for one reproducibility configuration.
 
     Two recordings under the same ``provider`` name but a different model,
-    version, temperature, or structured-output mode are two different
-    configurations and must never be pooled into the same metrics bucket
-    (code review finding: a passing and a failing configuration averaged
-    together can look like an overall pass). Callers key aggregation on this,
-    not on ``provider`` alone.
+    version, prompt version, temperature, or structured-output mode are two
+    different configurations and must never be pooled into the same metrics
+    bucket (code review finding: a passing and a failing configuration
+    averaged together can look like an overall pass). Callers key
+    aggregation on this, not on ``provider`` alone.
     """
     return (
-        f"{descriptor.model}|{descriptor.version}|"
+        f"{descriptor.model}|{descriptor.version}|{descriptor.prompt_version}|"
         f"{descriptor.temperature}|{descriptor.structured_output_mode}"
     )
 
@@ -80,6 +89,14 @@ def descriptor_key(descriptor: ProviderDescriptor) -> str:
 class GradingRequest:
     """Everything sent for one question. Holds no student-identifying data
     (business-rules-and-evaluation-data.md section 2 (2)).
+
+    ``answer_image`` is the cropped answer-region image for this question
+    only (never a full page, never other questions -- decision record
+    section 2 (2)), sent alongside ``ocr_text`` per
+    simplified-design-specification.md section 9.1 ("生徒答案画像" and "OCR
+    結果" are both listed inputs): a real adapter needs the image itself to
+    derive a meaningful Recognition Confidence from handwriting, not just the
+    OCR text PoC 1 already extracted.
 
     ``ocr_text`` is deliberately the only per-call OCR variant: the PoC
     harness issues one request with the human-corrected reading and a second
@@ -90,6 +107,7 @@ class GradingRequest:
 
     question_id: str
     prompt_text: str
+    answer_image: bytes
     ocr_text: str
     model_answer: str
     rubric_text: str
@@ -116,7 +134,7 @@ class GradingAnnotationCandidate:
     """
 
     target: str
-    type: str
+    type: AnnotationKind
     comment: str | None
 
 

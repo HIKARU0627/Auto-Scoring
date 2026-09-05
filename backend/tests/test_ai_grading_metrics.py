@@ -34,6 +34,7 @@ _DESCRIPTOR = ProviderDescriptor(
     provider="test",
     model="test",
     version=None,
+    prompt_version="prompt-v1",
     temperature=0.0,
     structured_output_mode="json_schema",
 )
@@ -43,6 +44,7 @@ _OTHER_DESCRIPTOR = ProviderDescriptor(
     provider="test",
     model="test",
     version=None,
+    prompt_version="prompt-v1",
     temperature=0.9,
     structured_output_mode="tool_use",
 )
@@ -126,6 +128,37 @@ def test_criterion_mismatch_is_counted_not_averaged_away() -> None:
     outcome = _evaluate(_truth(), response)
     assert outcome.criterion_matches == 1
     assert outcome.criterion_total == 2
+
+
+def test_omitted_labeled_criterion_counts_as_a_mismatch_not_a_smaller_denominator() -> None:
+    """Code review finding: truth has c1 and c2 labeled, but the response
+    only returns c1 (correctly). The denominator must stay 2 (every labeled
+    ground-truth criterion), not shrink to 1 -- otherwise a provider could
+    clear the 85% criterion-agreement gate just by omitting hard criteria."""
+    response = _response(
+        criteria=[
+            {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+        ]
+    )
+    outcome = _evaluate(_truth(), response)
+    assert outcome.criterion_total == 2
+    assert outcome.criterion_matches == 1
+
+
+def test_unlabeled_response_criterion_is_ignored_not_penalized() -> None:
+    """A criterion id the human labeler never recorded (not in
+    ``truth.criteria``) must not affect the denominator either way --
+    only labeled criteria are counted."""
+    response = _response(
+        criteria=[
+            {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+            {"id": "c2", "result": "fail", "confidence": 0.6, "rationale": "根拠2"},
+            {"id": "c-unlabeled", "result": "pass", "confidence": 0.9, "rationale": "根拠3"},
+        ]
+    )
+    outcome = _evaluate(_truth(), response)
+    assert outcome.criterion_total == 2
+    assert outcome.criterion_matches == 2
 
 
 def test_schema_violation_sample_is_excluded_from_exact_match_not_scored_as_wrong() -> None:
@@ -254,6 +287,21 @@ def test_same_provider_different_config_are_separate_buckets() -> None:
     assert summaries[_OTHER_CONFIG].exact_match_rate == pytest.approx(0.0)
 
 
+def test_prompt_version_alone_changes_the_config_key() -> None:
+    """Code review finding: a prompt template edit with the same model,
+    version, temperature, and structured-output mode is still a different,
+    non-reproducible configuration and must key a separate bucket."""
+    same_everything_else = ProviderDescriptor(
+        provider="test",
+        model=_DESCRIPTOR.model,
+        version=_DESCRIPTOR.version,
+        prompt_version="prompt-v2",
+        temperature=_DESCRIPTOR.temperature,
+        structured_output_mode=_DESCRIPTOR.structured_output_mode,
+    )
+    assert descriptor_key(same_everything_else) != _CONFIG
+
+
 def test_calibration_rates_flag_overconfident_wrong_answers() -> None:
     """docs/poc-2-ai-grading.md section 8.1: a high-confidence wrong answer
     must be distinguishable from a low-confidence wrong answer."""
@@ -344,6 +392,7 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
                     provider=provider,
                     model=str(descriptor_raw["model"]),
                     version=descriptor_raw.get("version"),
+                    prompt_version=str(descriptor_raw["prompt_version"]),
                     temperature=float(descriptor_raw["temperature"]),
                     structured_output_mode=str(descriptor_raw["structured_output_mode"]),
                 )
@@ -404,3 +453,20 @@ def test_markdown_table_renders_header_and_rows() -> None:
     assert "概算cost(USD/1000問)" in table
     assert "config" in table
     assert "計測件数" in table
+
+
+def test_markdown_table_escapes_pipes_in_config_key_so_columns_stay_aligned() -> None:
+    """Code review finding: ``config_key`` always contains literal ``|``
+    characters (it is ``model|version|prompt_version|temperature|mode``);
+    inserted verbatim into a Markdown table row, each one opens extra cells
+    and shifts every following column out of alignment."""
+    outcome = _evaluate(_truth(), _response())
+    table = to_markdown_table(summarize_by_provider([outcome]))
+    header_row, _divider, data_row = table.splitlines()
+    # Cells are always joined with " | " (space-pipe-space); an escaped
+    # ``\|`` inside a cell's own value has no surrounding spaces, so
+    # splitting on the literal delimiter still recovers the true columns.
+    header_cells = header_row.strip("|").split(" | ")
+    data_cells = data_row.strip("|").split(" | ")
+    assert len(header_cells) == len(data_cells)
+    assert "\\|" in data_row

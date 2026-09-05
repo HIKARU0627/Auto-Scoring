@@ -96,22 +96,43 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 トークン最適化・モデル固有の JSON モードに依存したパースを本実装しない」に従い、
 実測して確定するのは本 PoC のクローズ時）。
 
-ハーネス（`report.py`）はこれを機械的にも強制する: データセット全体で観測された
-provider 名が 1 種類以下の場合、`evaluated cells: 0` の空表を「比較完了」であるかの
-ように出力せず、非ゼロ終了で明示的に拒否する（§4.2・§7.3 参照。コードレビュー
-指摘: 単一候補の結果を比較結果として報告してはならない）。
+ハーネス（`report.py`）はこれを機械的にも強制する: データセット全体で
+「実際の応答が記録された provider」が 2 種類未満の場合、`evaluated cells: 0`
+の空表を「比較完了」であるかのように出力せず、非ゼロ終了で明示的に拒否する
+（§4.2・§7.3 参照）。単に `recorded` の辞書キーの数を数えるのではなく、
+**同じ答案（サンプル）上で** 2 candidate 以上が実際に応答を記録している
+かどうかを見る: 空の `"claude": {}` のようなプレースホルダは候補として
+数えず、2 candidate が互いに素な答案にしか応答を持たない場合（一度も
+同じ設問で両方が採点していない場合）も比較とはみなさない（コードレビュー
+指摘: 単一候補の結果、または実際には同一データ上で比較されていない結果を、
+比較結果として報告してはならない）。
 
 ### 2.1 評価モード（Issue #14「OCR正解文字とOCR誤認文字を分けて入力し、Recognition ConfidenceとGrading Confidenceを混同しない」）
 
-| モード      | 入力                                                 | 測る狙い                                        |
-| ----------- | ---------------------------------------------------- | ----------------------------------------------- |
-| `ocr_clean` | 問題文 + 模範解答 + 採点基準 + 人手正解 OCR テキスト | OCR が完全に正しい前提での採点精度              |
-| `ocr_noisy` | 同上 + OCR が誤読しうる箇所を模したテキスト          | OCR 誤りが Grading Confidence・判定に与える影響 |
+| モード      | 入力                                                                                | 測る狙い                                        |
+| ----------- | ----------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `ocr_clean` | 問題文 + 答案画像（設問領域切り出し） + 模範解答 + 採点基準 + 人手正解 OCR テキスト | OCR が完全に正しい前提での採点精度              |
+| `ocr_noisy` | 同上 + OCR が誤読しうる箇所を模したテキスト                                         | OCR 誤りが Grading Confidence・判定に与える影響 |
 
 `ocr_clean` と `ocr_noisy` は常に別セルとして評価する（平均を混ぜない）。
 どちらのモードでも、AI 応答の `recognition.confidence` と `grading.confidence`
 は別フィールド・別集計列として扱い、一方が高いことをもう一方が高いことの
 根拠にしない（簡易設計書 §10「文字認識 98% / 採点判断 63%」の例）。
+
+`AIProvider.grade()` に渡す `GradingRequest` は、答案画像（`answer_image`。
+当該設問の回答欄領域のみを切り出したもの。決定書 §2 (2) によりページ全体・
+他設問・生徒識別情報は含めない）と OCR テキスト（`ocr_text`）の**両方**を
+持つ（簡易設計書 §9.1「生徒答案画像」「OCR結果」）。OCR テキストだけでは、
+実アダプタが手書きから意味のある Recognition Confidence を導出できない
+（コードレビュー指摘）。
+
+応答側の `annotations[].type` は
+`業務ルール決定書 §2 (5)` が固定した MVP の Annotation 種別
+（`circle`/`cross`/`triangle`/`score`/`comment`/`underline`/`box`）のみを
+受理する。簡易設計書 §12.1 の例示 JSON（`"type": "correction"`）はこの
+固定セット確定前の説明用の値であり、そのままでは schema violation になる
+（コードレビュー指摘: 未対応の type を受理すると、永続化・PDF 描画の段階で
+初めて失敗する）。
 
 ---
 
@@ -123,7 +144,7 @@ provider 名が 1 種類以下の場合、`evaluated cells: 0` の空表を「�
 | --------------------- | ----------------------------------------------------------------------------------- | ----------------------- |
 | 完全一致率            | AI の `score` が人間の `score` と完全に一致する割合                                 | `evaluate_sample`       |
 | 許容点差内率          | `abs(AI score - 人間 score) <= tolerance` を満たす割合（既定 tolerance=1点）        | `evaluate_sample`       |
-| criterion 別一致率    | AI が返した criterion のうち、正解ラベルと `result` が一致する割合                  | `evaluate_sample`       |
+| criterion 別一致率    | 正解ラベルに存在する criterion のうち、応答の `result` が一致する割合（§3.4 参照）  | `evaluate_sample`       |
 | schema violation 率   | `AIGradingResult` のスキーマ検証に失敗した応答の割合                                | `evaluate_sample`       |
 | 対応不一致率          | 応答の `questionId`/`maxScore` が正解ラベルと対応しない割合（§3.1 参照）            | `evaluate_sample`       |
 | 平均 Recognition Conf | `recognition.confidence` の平均（Grading Conf とは別集計）                          | `summarize_by_provider` |
@@ -176,13 +197,34 @@ schema violation とは別に `mismatch_rate` として集計する。latency・
 ### 3.3 provider の設定（config）ごとの分離
 
 同じ `provider` 名でも、記録された `descriptor`（model / version /
-temperature / structured_output_mode）が異なれば**別の bucket**として集計する
-（`auto_scoring.domain.ai_provider.descriptor_key`）。同じ provider 名の下で
-設定違いの記録を 1 行にプールすると、片方が採用基準を満たし片方が満たさない
-場合でも平均としては通過して見えてしまう（コードレビュー指摘）。結果表の
-`config` 列にこの識別子（`model|version|temperature|structured_output_mode`）
-がそのまま表示される。schema violation で終わった記録も、失敗する前に
-`descriptor` を読み取ってから集計するため、どの設定が失敗したかが追跡できる。
+**prompt_version** / temperature / structured_output_mode）が異なれば**別の
+bucket**として集計する（`auto_scoring.domain.ai_provider.descriptor_key`）。
+採点プロンプトのテンプレートだけを変更し、model・version・temperature・
+structured_output_mode が同じままでも、別の再現不能な設定として扱う
+（コードレビュー指摘: プロンプト版数を含めないと、プロンプトを変えた前後の
+結果が同じ bucket にプールされ、再現できない）。`prompt_version` は
+プロンプトテキスト自体ではなく、そのテンプレートを指す短い版数タグまたは
+ハッシュ値とする（答案本文や長大なプロンプト全文を識別子に含めない）。
+
+同じ provider 名の下で設定違いの記録を 1 行にプールすると、片方が採用基準を
+満たし片方が満たさない場合でも平均としては通過して見えてしまう
+（コードレビュー指摘）。結果表の `config` 列にこの識別子
+（`model|version|prompt_version|temperature|structured_output_mode`）が
+表示される（内部の `|` はセル区切りと混同されないよう `\|` にエスケープ
+して描画するため、そのまま Markdown として貼り付けても列がずれない）。
+schema violation で終わった記録も、失敗する前に `descriptor` を読み取って
+から集計するため、どの設定が失敗したかが追跡できる。
+
+### 3.4 criterion 一致率の分母（正解ラベル基準）
+
+criterion 一致率の分母は**正解ラベルに存在する criterion の数**であり、
+応答が返した criterion の数ではない（コードレビュー指摘）。正解ラベルに
+`c1`・`c2` があるのに、応答が `c1` しか返さない場合、分母を 2 のまま保ち、
+`c2` は「応答なし＝不一致」として扱う。応答の `c1` だけを分母にして
+「100% 一致」と報告すると、provider は難しい criterion を省略するだけで
+85% 以上の採用ゲート（§8.1）を通過できてしまう。逆に、正解ラベルに
+存在しない criterion（意図的に記録されなかった人間ラベル）を応答が
+追加で返しても、分母にも分子にも数えず無視する。
 
 ---
 
@@ -227,12 +269,14 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 いなければ「pending」として明示し、単に走査対象から漏れて比較が完了した
 ように見えることを防ぐ（Issue #14 受入条件: 最低 2 候補・両入力モード）。
 
-データセット全体を通じて記録された provider 名が **1 種類以下**の場合、
-ハーネスは集計表を出さず `SystemExit`（非ゼロ終了）で明示的に拒否する
-（コードレビュー指摘: 単一候補しか記録されていないのに `evaluated cells: 0`
-の空表が正常終了し、あたかも比較が完了したかのように見えてしまう不具合の
-修正）。実データ収集の途中で 1 候補分しか live-provider 呼び出しをまだ
-終えていない場合は、2 候補目を記録してから再実行する。
+データセット全体を通じて「同じ答案上で実際に応答を記録した provider」が
+**2 種類未満**の場合、ハーネスは集計表を出さず `SystemExit`（非ゼロ終了）で
+明示的に拒否する（コードレビュー指摘: 単一候補しか記録されていないのに
+`evaluated cells: 0` の空表が正常終了し、あたかも比較が完了したかのように
+見えてしまう不具合の修正。空のプレースホルダ entry や、互いに素な答案にしか
+応答がない 2 候補も、この判定では候補として数えない）。実データ収集の途中で
+1 候補分しか live-provider 呼び出しをまだ終えていない場合、または 2 候補が
+まだ同じ答案で揃っていない場合は、条件を満たしてから再実行する。
 
 ---
 
@@ -262,19 +306,20 @@ evaluated cells: 12
 
 | 教科 | provider | config | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | latency計測件数 | 概算cost(USD/1000問) | cost計測件数 | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.700 | 1.100 | 2/2 | 0.65 | 2/2 | 0.000 | - |
-| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.900 | 1.300 | 2/2 | 0.65 | 2/2 | - | - |
-| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.500 | 0.900 | 2/2 | 0.25 | 2/2 | 0.000 | - |
-| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.000 | 1.400 | 2/2 | 0.25 | 2/2 | - | 1.000 |
-| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
-| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|0.0\|json_schema | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
-| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
-| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|0.2\|tool_use | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
+| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.700 | 1.100 | 2/2 | 0.65 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.900 | 1.300 | 2/2 | 0.65 | 2/2 | - | - |
+| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.500 | 0.900 | 2/2 | 0.25 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.000 | 1.400 | 2/2 | 0.25 | 2/2 | - | 1.000 |
+| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-a | synthetic-model-a\|2026-01-pilot\|synthetic-prompt-v1\|0.0\|json_schema | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | synthetic-model-b\|2026-01-pilot\|synthetic-prompt-v1\|0.2\|tool_use | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
 ```
 
-`config` 列は `model|version|temperature|structured_output_mode`
-（`descriptor_key`）で、本合成データではフィクスチャに埋め込んだ架空の設定
-（`synthetic-model-a`/`synthetic-model-b`）をそのまま表示している。`latency
+`config` 列は `model|version|prompt_version|temperature|structured_output_mode`
+（`descriptor_key`。表示時は `|` を `\|` にエスケープする）で、本合成データ
+ではフィクスチャに埋め込んだ架空の設定（`synthetic-model-a`/
+`synthetic-model-b`、`synthetic-prompt-v1`）をそのまま表示している。`latency
 計測件数`・`cost計測件数` はすべて `n/n`（bucket の全件で計測済み）で、
 本合成データには計測欠損を意図的に混ぜていない。
 
@@ -373,8 +418,11 @@ evaluated cells: 12
 | `gpt`    | `AUTO_SCORING_OPENAI_API_KEY` + `AUTO_SCORING_OPENAI_MODEL`       |
 
 温度は `AUTO_SCORING_AI_GRADING_TEMPERATURE`（既定 0.0）で全候補共通に揃え、
-再現性を確保する（Issue #14「再現条件」）。外部送信は**生徒識別情報を除いた
-設問単位データだけ**に限定する（決定書 §2 (2)）。可能なら各サービスの
+再現性を確保する（Issue #14「再現条件」）。プロンプトテンプレートは
+バージョン管理し、`ProviderDescriptor.prompt_version` に版数タグまたは
+ハッシュ値を記録する（§3.3）。外部送信は**生徒識別情報を除いた設問単位
+データ（当該設問の答案画像切り出し + OCR テキスト + 問題文 + 模範解答 +
+採点基準）だけ**に限定する（決定書 §2 (2)）。可能なら各サービスの
 データ保持オプトアウト／ゼロデータ保持を有効にする（決定書 §6.6）。
 
 ### 7.2 rate limit 時の扱い（暫定。最終値は §3 E = Issue で確定）
@@ -392,10 +440,12 @@ evaluated cells: 12
   ローカル／手動実行のマーカー付きテストにする）。
 - `poc/issue_14_ai_grading/report.py` の live-provider パス（設問 →
   `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）。
-  録画する各セルには `descriptor`（model/version/temperature/
-  structured_output_mode）を必ず含める。ハーネスはこの記録済みメタデータを
-  読むだけで、`provider` 名から決め打ちしない（Issue #14「再現条件」。
-  同じ provider 名でも設定が違う録画は区別できなければならない）。
+  録画する各セルには `descriptor`（model/version/**prompt_version**/
+  temperature/structured_output_mode）を必ず含める。ハーネスはこの記録済み
+  メタデータを読むだけで、`provider` 名から決め打ちしない（Issue #14
+  「再現条件」。同じ provider 名でも設定が違う録画は区別できなければ
+  ならない）。`latency_seconds`/`cost_usd` は有限かつ非負でなければ
+  ハーネスが録画時点で拒否する（§3.2）。
 
 実測・選定後は §10 に従い、不採用アダプタを削除して採用アダプタだけを MVP へ
 昇格する。

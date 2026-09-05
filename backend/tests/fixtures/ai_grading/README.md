@@ -45,6 +45,7 @@ provider output for every `(provider, input_variant)` cell:
         "descriptor": {
           "model": "...",
           "version": "... or null",
+          "prompt_version": "...",
           "temperature": 0.0,
           "structured_output_mode": "json_schema | tool_use | ..."
         },
@@ -70,6 +71,15 @@ entry at all, or an entry with no `response` key) is "pending" in the
 harness's output, never silently skipped, so an incomplete real dataset
 cannot look like a completed comparison.
 
+The harness additionally requires at least 2 providers to each have a real
+recorded response **on a shared sample** before it will report anything: an
+empty or all-pending `"<provider>": {}` placeholder does not count as a
+candidate, and two providers recorded only on disjoint samples (never
+together on one question) do not count as a comparison either. A dataset
+that does not meet this bar makes `report.py` exit non-zero with a message
+naming which providers *did* qualify, rather than printing a table as if
+the comparison were complete.
+
 A `recorded` entry whose `response` is missing a required field (see
 `auto_scoring.domain.ai_grading.AIGradingResult`) is a deliberate
 schema-violation fixture: the harness must count it toward
@@ -82,7 +92,13 @@ wrong question as an accidental match.
 
 `descriptor` is required on every cell that has a `response` -- the harness
 reads it instead of fabricating one, so two cells recorded under different
-settings for the same `provider` name stay distinguishable
+settings (including a prompt-template edit alone, tracked via
+`prompt_version`) for the same `provider` name stay distinguishable
 (Issue #14 "再現条件"). A cell that intentionally demonstrates a schema
 violation may omit `descriptor` (it is never reached, since the response
 fails to parse before `descriptor` is read).
+
+`latency_seconds` / `cost_usd` are validated as finite, non-negative numbers
+before they reach any aggregate -- a negative, non-finite (`nan`/`inf`), or
+non-numeric (string, boolean) recorded value makes the harness raise rather
+than silently skew the adoption-gate metrics.

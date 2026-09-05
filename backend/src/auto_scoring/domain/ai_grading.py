@@ -24,6 +24,13 @@ Design decisions this schema encodes:
   Confidence to all be schema-validated.
 * ``annotations`` never carry coordinates (section 12.1): the AI returns a
   ``target`` word/phrase and a ``type``; placement is the app's job.
+  ``type`` is restricted to :class:`~auto_scoring.domain.models.AnnotationKind`,
+  the fixed MVP set (business-rules-and-evaluation-data.md section 2 (5)):
+  section 12.1's own illustrative JSON (``"type": "correction"``) predates
+  that fixed set and is not itself a valid value -- a provider must return
+  one of the enum's members (e.g. ``"underline"``) or the response is a
+  schema violation, never silently accepted as an unsupported type that
+  would fail later at persistence or rendering time.
 * ``comment`` reuses the same character cap as human-confirmed annotation
   comments (``domain.models.MAX_COMMENT_CHARS``,
   business-rules-and-evaluation-data.md section 2 (6): "全角 120 文字").
@@ -41,7 +48,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from auto_scoring.domain.models import MAX_COMMENT_CHARS, CriterionOutcome
+from auto_scoring.domain.models import MAX_COMMENT_CHARS, AnnotationKind, CriterionOutcome
 
 #: A required string that must contain more than just whitespace. Plain
 #: ``min_length=1`` accepts ``" "``; this also strips before checking length.
@@ -98,7 +105,7 @@ class AnnotationCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     target: _NonBlankStr
-    type: _NonBlankStr
+    type: AnnotationKind
     comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)] | None = None
 
 
