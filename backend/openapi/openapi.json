@@ -655,6 +655,7 @@
     },
     "/jobs/{job_id}/cancel": {
       "post": {
+        "description": "For a QUEUED/BLOCKED/FAILED job, `queue_service.cancel_job`\nitself already wrote CANCELLED before returning -- 200 with that\nresult is accurate. For a RUNNING job, it only *requests*\ncancellation and hands back the pre-cancellation snapshot (still\n``state: RUNNING``): the actual write is owned by whichever worker\ntask is processing it, and happens moments later, asynchronously\n(`JobQueueService.cancel_job`'s own docstring). Answering 200 with\nthat stale snapshot would read as \"nothing happened\"; 202 says the\nrequest was accepted but not yet applied (review round 6, P2).",
         "operationId": "cancel_job_jobs__job_id__cancel_post",
         "parameters": [
           {

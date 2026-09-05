@@ -22,6 +22,8 @@ Method | HTTP request | Description
 
 Cancel Job
 
+For a QUEUED/BLOCKED/FAILED job, `queue_service.cancel_job` itself already wrote CANCELLED before returning -- 200 with that result is accurate. For a RUNNING job, it only *requests* cancellation and hands back the pre-cancellation snapshot (still ``state: RUNNING``): the actual write is owned by whichever worker task is processing it, and happens moments later, asynchronously (`JobQueueService.cancel_job`'s own docstring). Answering 200 with that stale snapshot would read as \"nothing happened\"; 202 says the request was accepted but not yet applied (review round 6, P2).
+
 ### Example
 ```dart
 import 'package:auto_scoring_api/api.dart';

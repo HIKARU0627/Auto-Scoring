@@ -21,7 +21,7 @@ class JobsApi {
   const JobsApi(this._dio, this._serializers);
 
   /// Cancel Job
-  ///
+  /// For a QUEUED/BLOCKED/FAILED job, &#x60;queue_service.cancel_job&#x60; itself already wrote CANCELLED before returning -- 200 with that result is accurate. For a RUNNING job, it only *requests* cancellation and hands back the pre-cancellation snapshot (still &#x60;&#x60;state: RUNNING&#x60;&#x60;): the actual write is owned by whichever worker task is processing it, and happens moments later, asynchronously (&#x60;JobQueueService.cancel_job&#x60;&#39;s own docstring). Answering 200 with that stale snapshot would read as \&quot;nothing happened\&quot;; 202 says the request was accepted but not yet applied (review round 6, P2).
   ///
   /// Parameters:
   /// * [jobId]
