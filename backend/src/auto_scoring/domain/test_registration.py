@@ -48,6 +48,12 @@ class IncompleteRegionsError(TestRegistrationError):
     """The confirmed regions contain no question at all."""
 
 
+class CrossPageRegionError(TestRegistrationError):
+    """A question's area regions are not all on the same page as its
+    `QUESTION` region.
+    """
+
+
 #: Matches a run of digits that is not itself part of a negative number or a
 #: decimal (e.g. rejects the "5" inside "-5" or "5.5" -- a bare `\d+` search
 #: would extract a positive integer out of both and let an invalid score
@@ -69,6 +75,36 @@ def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:
 def _combined_text(regions: Sequence[Region]) -> str | None:
     texts = [region.text.strip() for region in regions if region.text and region.text.strip()]
     return "\n".join(texts) if texts else None
+
+
+def _require_same_page(
+    number: str, question_region: Region, *area_region_groups: Sequence[Region]
+) -> None:
+    """`Question.page` (`domain.models.Question`) is a single page, and its
+    `answer_area`/`score_area`/`comment_area` rects carry no page of their
+    own -- they are only ever interpreted against `question.page`
+    (`adapters.submission_intake` crops `answer_area` out of exactly that
+    page's rendered image). A reviewer can still place an `ANSWER_AREA` /
+    `SCORE` / `ANNOTATION_AREA` region on a different page than its
+    `QUESTION` region -- the documented fallback for a question whose
+    *prompt* spans two pages (docs/test-registration.md's "設問本文が
+    ページをまたぐ場合") -- but doing so would silently crop every
+    submission against the wrong page's geometry using coordinates that
+    were actually drawn on a different page (Issue #16 review). Represent
+    a genuinely multi-page question is out of scope here (same doc's
+    "未設計"); reject the mismatch instead so it surfaces as a confirm-time
+    error the reviewer can fix via `PUT /profile`, not a silently corrupt
+    crop.
+    """
+    for regions in area_region_groups:
+        for region in regions:
+            if region.page_index != question_region.page_index:
+                raise CrossPageRegionError(
+                    f"question {number!r}'s {region.kind.value} region is on page "
+                    f"{region.page_index + 1}, but its QUESTION region is on page "
+                    f"{question_region.page_index + 1}; areas must be on the same "
+                    "page as their question"
+                )
 
 
 def _extract_points(score_regions: Sequence[Region]) -> int | None:
@@ -132,6 +168,15 @@ def build_questions_and_rubrics(
         question_region = question_regions[0]
 
         score_regions = kinds.get(RegionKind.SCORE, [])
+        answer_regions = kinds.get(RegionKind.ANSWER_AREA, [])
+        annotation_regions = kinds.get(RegionKind.ANNOTATION_AREA, [])
+        model_answer_regions = kinds.get(RegionKind.MODEL_ANSWER, [])
+        rubric_regions = kinds.get(RegionKind.RUBRIC, [])
+
+        _require_same_page(
+            number, question_region, answer_regions, score_regions, annotation_regions
+        )
+
         points = _extract_points(score_regions)
         if points is None:
             raise InvalidScoreError(
@@ -139,11 +184,6 @@ def build_questions_and_rubrics(
             )
         if points <= 0:
             raise InvalidScoreError(f"question {number!r} has a non-positive score: {points}")
-
-        answer_regions = kinds.get(RegionKind.ANSWER_AREA, [])
-        annotation_regions = kinds.get(RegionKind.ANNOTATION_AREA, [])
-        model_answer_regions = kinds.get(RegionKind.MODEL_ANSWER, [])
-        rubric_regions = kinds.get(RegionKind.RUBRIC, [])
 
         question_id = f"{test_id}:{number}"
         questions.append(

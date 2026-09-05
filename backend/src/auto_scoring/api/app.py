@@ -26,6 +26,7 @@ from auto_scoring.adapters.submission_intake import (
     intake_submission,
     repair_incomplete_submissions,
 )
+from auto_scoring.adapters.test_intake import repair_incomplete_test_registrations
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
@@ -225,10 +226,15 @@ def create_app(
         # catches that failure when the process is alive to raise it) leaves
         # that submission stuck: recorded as complete, some files missing,
         # and no way to retry it. repair_incomplete_submissions covers that
-        # other half.
+        # other half. repair_incomplete_test_registrations covers the same
+        # crash window for test registration (Issue #16 review): a `Test`
+        # row committed before its two PDFs both finished writing, with no
+        # `error` state to retry into and no endpoint able to find or
+        # remove it otherwise.
         store.sweep_temp()
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             repair_incomplete_submissions(uow, store)
+            repair_incomplete_test_registrations(uow, store)
 
     engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()

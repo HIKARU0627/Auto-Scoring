@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from io import BytesIO
 from pathlib import Path
 
@@ -14,9 +15,44 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf import PdfiumPypdfEngine
 from auto_scoring.adapters.test_intake import register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
+from auto_scoring.domain.pdf_intake import PdfGeometryError
 from tests.support import at
 
 _ENGINE = PdfiumPypdfEngine()
+
+
+class _BadGeometryPdfEngine:
+    """Delegates to a real `PdfEngine`, but `page_geometry` always raises --
+    standing in for a PDF whose CropBox/MediaBox don't intersect, or whose
+    `/Rotate` isn't a multiple of 90 (`PageGeometry.__post_init__`).
+    """
+
+    def __init__(self, delegate: PdfEngine) -> None:
+        self._delegate = delegate
+
+    def page_count(self, source: Path) -> int:
+        return self._delegate.page_count(source)
+
+    def is_encrypted(self, source: Path) -> bool:
+        return self._delegate.is_encrypted(source)
+
+    def page_geometry(self, source: Path, page_index: int) -> PageGeometry:
+        raise ValueError("crop dimensions must be positive")
+
+    def render_page_png(self, source: Path, page_index: int, *, scale: float) -> bytes:
+        return self._delegate.render_page_png(source, page_index, scale=scale)
+
+    def stamp_markers(
+        self,
+        source: Path,
+        destination: Path,
+        markers: Mapping[int, Sequence[NormalizedPoint]],
+        *,
+        mark_size_pt: float = 8.0,
+    ) -> None:
+        self._delegate.stamp_markers(source, destination, markers, mark_size_pt=mark_size_pt)
 
 
 def _pdf_bytes(*, pages: int = 1) -> bytes:
@@ -108,6 +144,38 @@ def test_a_finalization_failure_does_not_leave_orphaned_files(
 
     assert len(written_test_ids) == 1
     assert not (store.root / "tests" / written_test_ids[0]).exists()
+
+
+def test_rejects_a_pdf_with_invalid_page_geometry(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Page count alone doesn't catch a CropBox/MediaBox that don't
+    intersect or an invalid `/Rotate` -- without validating geometry at
+    intake, registration would persist the test anyway and only discover
+    the problem the first time `/profile/analyze` calls `page_geometry`
+    and hits an unhandled 500 (Issue #16 review round 4).
+    """
+    with (
+        SqlAlchemyUnitOfWork(session_factory) as uow,
+        pytest.raises(PdfGeometryError),
+    ):
+        register_test(
+            uow,
+            store,
+            _BadGeometryPdfEngine(_ENGINE),
+            name="国語",
+            subject=None,
+            model_answer_filename="model-answer.pdf",
+            model_answer_mime="application/pdf",
+            model_answer_data=_pdf_bytes(),
+            manual_filename="manual.pdf",
+            manual_mime="application/pdf",
+            manual_data=_pdf_bytes(),
+            now=at(),
+        )
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.tests.list_all() == []
 
 
 def test_happy_path_registers_a_draft_test(

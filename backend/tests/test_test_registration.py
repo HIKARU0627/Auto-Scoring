@@ -9,6 +9,7 @@ import pytest
 
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
 from auto_scoring.domain.test_registration import (
+    CrossPageRegionError,
     DuplicateQuestionNumberError,
     IncompleteRegionsError,
     InvalidScoreError,
@@ -35,9 +36,9 @@ def _region(
 def test_builds_one_question_from_its_regions() -> None:
     regions = [
         _region(RegionKind.QUESTION, "1", page_index=1, text="問1"),
-        _region(RegionKind.ANSWER_AREA, "1"),
-        _region(RegionKind.ANNOTATION_AREA, "1"),
-        _region(RegionKind.SCORE, "1", text="5点"),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=1),
+        _region(RegionKind.ANNOTATION_AREA, "1", page_index=1),
+        _region(RegionKind.SCORE, "1", page_index=1, text="5点"),
         _region(RegionKind.MODEL_ANSWER, "1", text="光合成は葉緑体で行われる"),
         _region(RegionKind.RUBRIC, "1", text="葉緑体という語を含む"),
     ]
@@ -163,4 +164,42 @@ def test_no_questions_at_all_is_rejected() -> None:
     regions = [_region(RegionKind.ANSWER_AREA, "orphan")]
 
     with pytest.raises(IncompleteRegionsError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_an_answer_area_on_a_different_page_than_its_question_is_rejected() -> None:
+    """`Question.page` is a single page, and `answer_area` carries no page
+    of its own -- `adapters.submission_intake` crops it out of exactly
+    `question.page`'s rendered image. An ANSWER_AREA confirmed on a
+    different page than its QUESTION would silently crop every submission
+    against the wrong page's geometry (Issue #16 review round 4).
+    """
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=1),
+        _region(RegionKind.SCORE, "1", page_index=0, text="5点"),
+    ]
+
+    with pytest.raises(CrossPageRegionError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_a_score_region_on_a_different_page_than_its_question_is_rejected() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
+        _region(RegionKind.SCORE, "1", page_index=1, text="5点"),
+    ]
+
+    with pytest.raises(CrossPageRegionError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_an_annotation_area_on_a_different_page_than_its_question_is_rejected() -> None:
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
+        _region(RegionKind.SCORE, "1", page_index=0, text="5点"),
+        _region(RegionKind.ANNOTATION_AREA, "1", page_index=1),
+    ]
+
+    with pytest.raises(CrossPageRegionError):
         build_questions_and_rubrics("test-1", regions)

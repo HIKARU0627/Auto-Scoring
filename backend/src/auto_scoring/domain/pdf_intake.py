@@ -41,6 +41,17 @@ class PdfCorruptedError(PdfIntakeError):
     """The PDF could not be parsed (truncated, malformed, not really a PDF)."""
 
 
+class PdfGeometryError(PdfIntakeError):
+    """A page's geometry (CropBox/MediaBox intersection, rotation) is invalid.
+
+    Page count alone doesn't catch this -- `PdfEngine.page_geometry` raises a
+    bare `ValueError` for it, which would otherwise only surface the first
+    time something downstream (e.g. `/profile/analyze`) actually reads the
+    page's geometry, as an unhandled 500 against an already-persisted,
+    unusable test (Issue #16 review).
+    """
+
+
 class PdfPageLimitExceededError(PdfIntakeError):
     """The PDF has more pages than :attr:`IntakeLimits.max_pages` allows."""
 

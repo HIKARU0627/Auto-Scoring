@@ -214,6 +214,34 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   ページ境界で必ずblockを打ち切るようにした（本文の後半はどのblockにも属さなく
   なる—§未決事項参照）。
 
+## レビュー対応（PRラウンド4）
+
+- **設問の各領域を同一ページに限定する**: `Question.page`は単一のページで、
+  `answer_area`/`score_area`/`comment_area`は自身のページを持たず常に
+  `question.page`に対して解釈される（`adapters.submission_intake`は
+  `answer_area`を`question.page`の画像からcropする）。レビュアーが
+  `ANSWER_AREA`/`SCORE`/`ANNOTATION_AREA`regionを対応する`QUESTION`と異なる
+  ページに置くと、別ページ用の座標で誤ったページをcropしてしまっていた。
+  `build_questions_and_rubrics`が`CrossPageRegionError`（422）で拒否するよう
+  にした。ページをまたぐ設問そのものの表現は引き続き未設計（下記「未決事項」）。
+- **依存関係edgeの`provides`をレビュアーが選択できるようにする**: 手動追加した
+  edgeは常に`recognized_text`固定で、編集ダイアログも`provides`を表示・編集
+  できなかった。`_EdgeEditDialog`に非空必須のprovisionチェックボックスを追加
+  した。
+- **中断されたPDF finalizationからtest登録を回復可能にする**: `Test`行のcommit
+  後、両方のPDFがディスクに書き込まれる前にプロセスが終了すると、
+  `FinalizationError`の補償（同一プロセス内のみ動作）が実行されず、PDFが
+  欠けたdraftが永久に残り、どのendpointからも削除・再試行できなかった。
+  `repair_incomplete_test_registrations`を起動時sweepに追加し、登録PDFが
+  欠けている`draft`テストを削除する（`Submission`と異なり`Test`にリトライ用の
+  `error`状態は無いため、再試行は新規idでの再登録になる）。
+- **test永続化前にpage geometryを検証する**: ページ数の検証だけでは、CropBox/
+  MediaBoxの交差が無効だったり`/Rotate`が90度単位でないPDFを検出できず、登録が
+  それを受理・永続化してしまっていた（`/profile/analyze`が初めて
+  `page_geometry`を呼んだ時に未捕捉の`ValueError`が500になり、使用不能なdraft
+  が残っていた）。intake時に全ページの`page_geometry`を検証し、失敗を
+  `PdfGeometryError`（400）に変換するようにした。
+
 ## 未決事項
 
 - PDFオーバーレイでのregion視覚編集（上記「UI設計」）。
@@ -224,7 +252,12 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   `PUT /profile` での手動追加にフォールバックする設計だが、フォールバック発生率は
   未計測。
 - 設問本文がページをまたぐ場合、後半（次ページの行）は自動検出の対象にならない
-  （上記「PDFiumの呼び出しを直列化する」の下、ページ境界分割を参照）。人間が
-  `PUT /profile`で次ページ側の回答欄領域を手動追加する必要がある。ページをまたぐ
-  領域そのものをどう表現するか（複数regionを1設問に束ねる、regionに
-  複数ページのbboxを持たせる等）は未設計。
+  （上記「PDFiumの呼び出しを直列化する」の下、ページ境界分割を参照）。かつては
+  人間が`PUT /profile`で次ページ側に回答欄領域を手動追加するfallbackを想定して
+  いたが、`Question.page`が単一ページ・各areaがpageを持たない現行モデルでは
+  それは誤ったページのcropを招くため、`build_questions_and_rubrics`が
+  `CrossPageRegionError`で拒否するようにした（上記「レビュー対応（PRラウンド
+  4）」参照）。ページをまたぐ領域そのものをどう表現するか（複数regionを1設問に
+  束ねる、regionに複数ページのbboxを持たせ、`Question`/`NormalizedRect`側も
+  ページ単位に拡張する等）は未設計のまま——今のところ、ページをまたぐ設問は
+  QUESTION regionと同じページ内に収まるよう手動で調整してもらう必要がある。

@@ -20,12 +20,13 @@ from uuid import uuid4
 from auto_scoring.adapters.atomic import FinalizationError, transactional_operation
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
-from auto_scoring.domain.models import ScoringMethod, Test
+from auto_scoring.domain.models import ScoringMethod, Test, TestStatus
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
     PdfCorruptedError,
     PdfEncryptedError,
+    PdfGeometryError,
     validate_page_count,
     validate_upload_bytes,
 )
@@ -43,6 +44,20 @@ def _validate_one_pdf(pdf_engine: PdfEngine, path: Path, limits: IntakeLimits) -
     except Exception as exc:
         raise PdfCorruptedError(f"could not parse PDF: {exc}") from exc
     validate_page_count(page_count, limits)
+    # Page count alone doesn't catch every malformed PDF: a page whose
+    # CropBox/MediaBox don't intersect, or whose /Rotate is not a multiple
+    # of 90, makes `PdfEngine.page_geometry` raise a `ValueError` (see
+    # `adapters.pdf.pdfium_pypdf_engine.PageGeometry`'s own validation) --
+    # but nothing here called it, so registration would persist the test
+    # anyway and only discover the problem the first time `/profile/analyze`
+    # calls `page_geometry` and gets an unhandled 500, leaving an unusable
+    # draft behind (Issue #16 review). Validate every page now, while
+    # intake can still reject it as a normal `PdfIntakeError` instead.
+    for page_index in range(page_count):
+        try:
+            pdf_engine.page_geometry(path, page_index)
+        except ValueError as exc:
+            raise PdfGeometryError(f"page {page_index + 1} has invalid geometry: {exc}") from exc
 
 
 def register_test(
@@ -120,3 +135,48 @@ def register_test(
             raise
 
     return test
+
+
+def repair_incomplete_test_registrations(
+    uow: SqlAlchemyUnitOfWork, store: LocalFileStore
+) -> list[str]:
+    """Delete any `DRAFT` test whose registration PDF(s) are missing on disk.
+
+    `register_test`'s own `FinalizationError` handler above already
+    compensates for a failed PDF write within the same request/process --
+    but a process crash or power loss between `transactional_operation`'s DB
+    commit and those file writes completing leaves the same broken state
+    with no exception handler ever running to notice, exactly like
+    `submission_intake.repair_incomplete_submissions` covers for submissions
+    (see its own docstring). Unlike a `Submission`, `Test` has no
+    intermediate `error` state to move into: a test missing either
+    registration PDF cannot be analyzed at all, so (matching what
+    `register_test`'s own compensation above already does) the only usable
+    recovery is to delete the row outright -- the client's next step is to
+    submit the two PDFs again, which mints a fresh id anyway. Call this once
+    at startup (`api/app.py::create_app`), the same way
+    `LocalFileStore.sweep_temp`/`repair_incomplete_submissions` catch what a
+    prior run left in this state before it could shut down cleanly.
+
+    Only ever considers `DRAFT` tests: a test cannot reach `READY` without
+    both PDFs already having been readable (`/profile/analyze` reads them
+    directly), so a `READY` test missing either file would be a different,
+    later problem this sweep does not attempt to diagnose.
+
+    Returns the ids removed this way.
+    """
+    removed: list[str] = []
+    for test in uow.tests.list_all():
+        if test.status is not TestStatus.DRAFT:
+            continue
+        expected_paths = (
+            store.test_model_answer_pdf_path(test.id),
+            store.test_manual_pdf_path(test.id),
+        )
+        if all(path.is_file() for path in expected_paths):
+            continue
+        uow.tests.delete(test.id)
+        uow.commit()
+        store.delete_test(test.id)
+        removed.append(test.id)
+    return removed

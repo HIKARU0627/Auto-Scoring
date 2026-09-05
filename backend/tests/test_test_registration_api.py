@@ -678,3 +678,62 @@ class TestCompleteRegistration:
 
         response = client.post(f"/tests/{test_id}/complete-registration", headers=_auth())
         assert response.status_code == 409
+
+
+def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
+    data_root: Path,
+) -> None:
+    """`create_app()` runs a startup repair sweep (api/app.py) for exactly
+    the case a caught `FinalizationError` can't cover: a `Test` row
+    committed successfully in a *previous* process, one of whose two PDFs
+    never actually reached disk before that process died. Unlike a
+    `Submission`, a `Test` has no `error` state to move into -- the only
+    usable recovery is removing the row outright (Issue #16 review round
+    4). Simulate the crash by deleting a PDF after a normal successful
+    registration, then create a fresh app instance against the same
+    data_root (as a restart would) and confirm the sweep removes the
+    now-unusable draft before the app ever serves a request.
+    """
+    first_app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    first_client = TestClient(first_app)
+    test_id = _register_test(first_client)
+
+    LocalFileStore(data_root).test_manual_pdf_path(test_id).unlink()
+
+    restarted_app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    restarted_client = TestClient(restarted_app)
+
+    fetched = restarted_client.get(f"/tests/{test_id}", headers=_auth())
+    assert fetched.status_code == 404
+
+    listed = restarted_client.get("/test-registrations", headers=_auth())
+    assert listed.json() == []
+
+
+def test_starting_the_app_leaves_a_healthy_draft_test_alone(data_root: Path) -> None:
+    """The repair sweep must not touch a `DRAFT` test whose PDFs are simply
+    still waiting for review -- only one whose files are actually missing.
+    """
+    app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    test_id = _register_test(TestClient(app))
+
+    restarted_app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    fetched = TestClient(restarted_app).get(f"/tests/{test_id}", headers=_auth())
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "draft"
