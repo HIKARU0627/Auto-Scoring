@@ -2498,3 +2498,33 @@ async def test_retry_job_save_loses_to_a_concurrent_aba_cycle(
     assert job is not None
     assert job.state is JobState.QUEUED
     assert job.attempts == 2
+
+
+async def test_submit_submission_does_not_re_enqueue_an_existing_queued_job(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: a repeat, idempotent submit_submission call for a submission
+    whose job already exists and is still QUEUED must not push its id onto
+    the in-memory dispatch queue again -- otherwise a client's repeated
+    retries (or just polling) would grow that queue with an ever-larger
+    pile of redundant, eventually-no-op signals, delaying unrelated
+    submissions' genuinely new work sitting behind them in the same FIFO
+    queue.
+
+    The service is deliberately never `start()`-ed: no worker ever exists
+    to claim the job, so it stays QUEUED (not RUNNING) for the whole test
+    -- exactly the state a repeat call must not re-signal.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+
+    service.submit_submission(submission_id="sub-1")
+    assert service._queue.qsize() == 1
+    assert [j.state for j in service.list_for_submission("sub-1")] == [JobState.QUEUED]
+
+    # Repeat, idempotent calls for the same submission -- the job already
+    # exists (still QUEUED, never claimed) and there is nothing new to
+    # create, so nothing should ever be pushed onto the queue again.
+    for _ in range(5):
+        service.submit_submission(submission_id="sub-1")
+    assert service._queue.qsize() == 1

@@ -492,14 +492,19 @@ class JobQueueService:
         additional requirement: Submission内DAGスケジューリング).
 
         Idempotent: if jobs already exist for this submission under the
-        active graph version, this creates nothing new and only re-enqueues
-        whichever of them are still QUEUED (see
-        ``uq_jobs_submission_question_graph_version``). Two concurrent calls
-        for the same submission can both observe "no existing job" for the
-        same question and both try to insert one; the loser's `add()` raises
-        `IntegrityError` on that same unique constraint (review round 1,
-        P2), so the whole attempt is retried from a fresh read rather than
-        surfacing a raw 500.
+        active graph version, this creates nothing new and does not touch
+        them at all (see ``uq_jobs_submission_question_graph_version``) --
+        including not re-enqueuing an existing one even if it is still
+        QUEUED, so a repeat call (a client retry, or just polling) never
+        grows the in-memory dispatch queue with an ever-larger pile of
+        redundant, eventually-no-op signals for the same jobs (review round
+        9, P2; `start`'s own QUEUED sweep is what actually recovers a job
+        that ends up with no live signal, not this idempotent re-check).
+        Two concurrent calls for the same submission can both observe "no
+        existing job" for the same question and both try to insert one; the
+        loser's `add()` raises `IntegrityError` on that same unique
+        constraint (review round 1, P2), so the whole attempt is retried
+        from a fresh read rather than surfacing a raw 500.
         """
         for _attempt in range(_MAX_SUBMIT_ATTEMPTS):
             try:
@@ -543,8 +548,24 @@ class JobQueueService:
             for plan in plan_submission_jobs(graph):
                 existing_job = existing.get(plan.question_id)
                 if existing_job is not None:
-                    if existing_job.state is JobState.QUEUED:
-                        newly_queued.append(existing_job.id)
+                    # Deliberately not re-enqueued even if it is still
+                    # QUEUED: every job this method creates is enqueued
+                    # once, right below, when it is created, and a repeat
+                    # `submit_submission` call for the same submission
+                    # (idempotent -- a client retry, or just polling)
+                    # otherwise pushed the same id onto the in-memory queue
+                    # again on every single call, with nothing ever
+                    # deduplicating pending signals. `_run_one`'s own claim
+                    # CAS would just no-op each duplicate harmlessly, but
+                    # not before a DB lookup for it that unboundedly grows
+                    # with repeat calls and can delay unrelated
+                    # submissions' genuinely new work sitting behind it in
+                    # the same FIFO queue (review round 9, P2). Nothing
+                    # else needs this fallback dispatch either: `start`'s
+                    # own QUEUED sweep already re-enqueues any job that
+                    # ends up without a live in-process signal for
+                    # whatever reason (a restart, or a worker's own crash
+                    # recovery -- review round 8, P1).
                     continue
                 job = Job(
                     id=str(uuid4()),
