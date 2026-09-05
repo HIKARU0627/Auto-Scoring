@@ -1,4 +1,5 @@
 @Tags(['sidecar'])
+@Timeout(Duration(minutes: 3))
 library;
 
 import 'dart:convert';
@@ -51,34 +52,63 @@ void main() {
   //    package:test hook" class of issues).
   //
   // Neither of those was the whole story, though: even with both fixed,
-  // this file can still take on the order of a minute to become healthy on
-  // some local Windows runs, independent of anything above. Isolated to
-  // `_waitUntilHealthy` retrying a real HTTP GET that times out (not
-  // "connection refused") against a socket the sidecar itself confirms it
-  // is listening on a moment later -- consistent with local real-time
-  // antivirus/network-inspection interference on a freshly spawned,
-  // unrecognized child process rather than an application bug (this machine
-  // has Windows Defender real-time protection enabled and no third-party
-  // AV). CI runs on hosted `windows-latest` runners, a different
-  // environment where this has not been observed to reproduce.
+  // this file can still take on the order of a minute to become healthy,
+  // both on some local Windows runs *and* on GitHub Actions' hosted
+  // `windows-latest` runners (confirmed by a real CI failure -- this is not
+  // only a local-machine quirk). Isolated locally to `_waitUntilHealthy`
+  // retrying a real HTTP GET that times out (not "connection refused")
+  // against a socket the sidecar itself confirms it is listening on a
+  // moment later -- consistent with real-time antivirus/network-inspection
+  // interference on a freshly spawned, unrecognized child process (Windows
+  // Defender's real-time protection is on by default on GitHub's hosted
+  // Windows runners too, and would treat a just-built, unsigned executable
+  // with more scrutiny than one it has already scanned). Two mitigations,
+  // neither a fix for the interference itself (out of this repo's control):
+  //
+  // * `@Timeout(Duration(minutes: 3))` above replaces package:test's
+  //   default 30-second per-test timeout, which was the immediate cause of
+  //   the CI failure: it fired on the *first* test to call `ensureSidecar`
+  //   well before the shared spawn (delayed, not hung -- it did eventually
+  //   finish) could complete, and every following test then repeated the
+  //   same 30-second wait against the still-pending shared `Future`,
+  //   compounding a startup delay into a hard failure. `_readHandshake` and
+  //   `_waitUntilHealthy` below give the delayed startup itself a
+  //   correspondingly longer budget to actually succeed in.
+  // * `startSidecar` now drains and records the sidecar's stdout/stderr as
+  //   they arrive, and prints everything captured so far if either helper
+  //   times out -- previously, a slow or failed startup left zero
+  //   diagnostic output in the test log (as happened in that CI run: the
+  //   failure was visible, but nothing about *why* the process was slow to
+  //   respond was ever captured).
   Future<SidecarConnection> startSidecar() async {
     tempDir = await Directory.systemTemp.createTemp('sidecar_it_');
     final handshakeFile = File('${tempDir!.path}/handshake.json');
 
-    sidecar = await Process.start(sidecarExe, [
+    final process = await Process.start(sidecarExe, [
       '--handshake-file',
       handshakeFile.path,
       '--app-data-dir',
       '${tempDir!.path}/app-data',
     ]);
+    sidecar = process;
 
-    final handshake = await _readHandshake(handshakeFile);
-    final started = SidecarConnection(
-      baseUrl: 'http://${handshake['host']}:${handshake['port']}',
-      token: handshake['token'] as String,
-    );
-    await _waitUntilHealthy(SidecarApiClient(started));
-    return started;
+    final output = StringBuffer();
+    process.stdout.transform(utf8.decoder).listen(output.write);
+    process.stderr.transform(utf8.decoder).listen(output.write);
+
+    try {
+      final handshake = await _readHandshake(handshakeFile);
+      final started = SidecarConnection(
+        baseUrl: 'http://${handshake['host']}:${handshake['port']}',
+        token: handshake['token'] as String,
+      );
+      await _waitUntilHealthy(SidecarApiClient(started));
+      return started;
+    } catch (_) {
+      // ignore: avoid_print
+      print('sidecar stdout/stderr captured so far:\n$output');
+      rethrow;
+    }
   }
 
   Future<SidecarConnection>? startingSidecar;
@@ -273,7 +303,8 @@ Future<void> _deleteWithRetry(Directory dir) async {
 }
 
 Future<Map<String, dynamic>> _readHandshake(File file) async {
-  for (var attempt = 0; attempt < 60; attempt++) {
+  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  while (DateTime.now().isBefore(deadline)) {
     if (file.existsSync() && file.lengthSync() > 0) {
       return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
     }
@@ -284,7 +315,14 @@ Future<Map<String, dynamic>> _readHandshake(File file) async {
 
 Future<void> _waitUntilHealthy(SidecarApiClient client) async {
   try {
-    for (var attempt = 0; attempt < 40; attempt++) {
+    // Generous on purpose: writing the handshake file only proves the
+    // process itself started, not that create_app()'s migrations have
+    // finished and uvicorn is actually accepting connections yet, and both
+    // that work and this health check's own request/response can be
+    // delayed well past what a healthy machine would need -- see the
+    // antivirus/network-inspection note on `startSidecar` above.
+    final deadline = DateTime.now().add(const Duration(minutes: 2));
+    while (DateTime.now().isBefore(deadline)) {
       if (await client.isHealthy()) return;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
