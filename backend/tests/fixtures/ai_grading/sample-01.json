@@ -9,7 +9,8 @@
       { "id": "c2", "result": "pass" },
       { "id": "c3", "result": "partial" },
       { "id": "c4", "result": "fail" }
-    ]
+    ],
+    "source": "human"
   },
   "input": {
     "prompt_text": "（合成データ）役職Aと役職Bの関係を、相互の役割・任期に留意して100字以内で説明せよ。",

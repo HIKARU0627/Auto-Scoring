@@ -238,3 +238,17 @@ def test_descriptor_rejects_a_non_finite_or_negative_temperature(temperature: fl
     kwargs["temperature"] = temperature
     with pytest.raises(ValueError):
         ProviderDescriptor(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("temperature", [True, False])
+def test_descriptor_rejects_a_bool_temperature(temperature: bool) -> None:
+    """Code review finding: ``bool`` is a subclass of Python's ``int``, so
+    ``math.isfinite(True)`` and ``True >= 0`` both pass silently -- a real
+    adapter constructing ``ProviderDescriptor`` directly (bypassing the
+    ``--dataset`` JSON boundary, where strict-mode already rejects a JSON
+    ``true``/``false`` here) must not be able to record a bare bool as its
+    temperature either."""
+    kwargs = dict(_VALID_DESCRIPTOR_KWARGS)
+    kwargs["temperature"] = temperature
+    with pytest.raises(ValueError):
+        ProviderDescriptor(**kwargs)  # type: ignore[arg-type]

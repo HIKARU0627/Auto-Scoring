@@ -82,6 +82,16 @@ rejected the same way: it cannot be a real same-data comparison either. All
 of these are refused outright rather than printed as if the comparison were
 complete (code review finding).
 
+The dataset-wide overlap check above only gates whether the dataset has
+*any* real comparison at all -- it does not mean every recorded cell for a
+qualifying provider is safe to aggregate. A provider can overlap with
+another on one sample while also carrying extra recorded responses on
+samples nobody else ever answered; those extra cells are excluded from the
+aggregate one sample-and-variant at a time (never pooled into that
+provider's own metrics as if they were part of a same-data comparison),
+and counted separately as "excluded" rather than silently dropped (code
+review finding).
+
 A cell whose raw JSON fails
 :func:`auto_scoring.domain.ai_grading.parse_ai_grading_result` is a schema
 violation and is scored as such -- never as a free-text-parsed guess
@@ -295,30 +305,31 @@ def _load_cell(
     return response, config_key, cost_usd, latency_seconds, False
 
 
-def _all_providers(files: list[Path]) -> set[str]:
+def _all_providers(samples: list[_ParsedSample]) -> set[str]:
     """Every provider name recorded anywhere in the dataset (raw ``recorded``
     dict keys, including an empty or all-pending entry).
 
-    This -- not the keys present in any single file -- defines the expected
-    comparison matrix, so a provider missing from one sample's ``recorded``
-    still shows up as a pending cell for that sample. It is deliberately
-    *not* used to decide whether the dataset qualifies as a real comparison
-    (see :func:`_providers_with_overlapping_recordings`): an empty
-    ``"claude": {}`` placeholder, or a provider recorded only on samples no
-    other provider ever touched (or under a different input variant), is a
-    key here but must not count as a second candidate being compared
-    (code review finding).
+    This -- not the keys present in any single sample -- defines the
+    expected comparison matrix, so a provider missing from one sample's
+    ``recorded`` still shows up as a pending cell for that sample. It is
+    deliberately *not* used to decide whether the dataset qualifies as a
+    real comparison (see :func:`_providers_with_overlapping_recordings`): an
+    empty ``"claude": {}`` placeholder, or a provider recorded only on
+    samples no other provider ever touched (or under a different input
+    variant), is a key here but must not count as a second candidate being
+    compared (code review finding).
     """
     providers: set[str] = set()
-    for path in files:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        providers.update(raw.get("recorded", {}).keys())
+    for sample in samples:
+        providers.update(sample.recorded.keys())
     return providers
 
 
-def _providers_with_response_by_variant(raw: dict[str, Any]) -> dict[str, set[str]]:
-    """Providers that have an actual (non-pending) ``response`` recorded in
-    this one file, split by input variant.
+def _providers_with_response_by_variant(
+    recorded: dict[str, dict[str, Any]],
+) -> dict[str, set[str]]:
+    """Providers that have an actual (non-pending) ``response`` recorded for
+    one sample, split by input variant.
 
     Split by variant, not merged: a provider recorded only on ``ocr_clean``
     and another recorded only on ``ocr_noisy`` for the same sample have
@@ -328,7 +339,7 @@ def _providers_with_response_by_variant(raw: dict[str, Any]) -> dict[str, set[st
     (code review finding).
     """
     by_variant: dict[str, set[str]] = {variant: set() for variant in _INPUT_VARIANTS}
-    for provider, variants in raw.get("recorded", {}).items():
+    for provider, variants in recorded.items():
         for variant in _INPUT_VARIANTS:
             cell = variants.get(variant)
             if isinstance(cell, dict) and "response" in cell:
@@ -336,8 +347,9 @@ def _providers_with_response_by_variant(raw: dict[str, Any]) -> dict[str, set[st
     return by_variant
 
 
-def _providers_with_overlapping_recordings(files: list[Path]) -> set[str]:
-    """Providers that qualify as one side of a real, same-data comparison.
+def _providers_with_overlapping_recordings(samples: list[_ParsedSample]) -> set[str]:
+    """Providers that qualify as one side of a real, same-data comparison,
+    used only to decide whether the dataset has *any* real comparison at all.
 
     A provider qualifies only if it has recorded an actual response (not
     just an empty or all-pending ``recorded`` entry) *and* shares at least
@@ -350,11 +362,19 @@ def _providers_with_overlapping_recordings(files: list[Path]) -> set[str]:
     placeholder entry, two providers that never appeared together on one
     question, or two providers recorded on the same question but under
     different input variants).
+
+    This is a dataset-wide existence check only (the gate in
+    :func:`_load_samples`) -- it does *not* mean every recorded cell for a
+    qualifying provider is safe to aggregate: see the per-sample,
+    per-variant check in :func:`_load_samples`'s own loop (code review
+    finding: a provider that overlaps with another on one sample, but also
+    has extra recorded responses on samples nobody else answered, must not
+    have *those* extra responses pooled into its own aggregate metrics as if
+    they too were part of a same-data comparison).
     """
     overlapping: set[str] = set()
-    for path in files:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        by_variant = _providers_with_response_by_variant(raw)
+    for sample in samples:
+        by_variant = _providers_with_response_by_variant(sample.recorded)
         for providers_in_variant in by_variant.values():
             if len(providers_in_variant) >= _MINIMUM_PROVIDERS:
                 overlapping.update(providers_in_variant)
@@ -458,14 +478,27 @@ def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
     return parsed
 
 
-def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
+def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int, int]:
     """Return ``(evaluated outcomes, pending-cell count, files with no
-    provider recorded anywhere in the dataset)`` from every ``*.json``.
+    provider recorded anywhere in the dataset, excluded-cell count)`` from
+    every ``*.json``.
 
     The third count covers a real-data pilot staged ahead of any
     ``AIProvider`` call (ground truth transcribed, ``recorded`` left ``{}``
     dataset-wide) -- distinct from "pending" cells, which are expected
     (some other sample recorded that provider) but missing for this one.
+
+    The fourth count ("excluded") covers a real recorded response whose
+    *own* ``(sample, input_variant)`` has no second provider recorded there
+    -- so, even though a dataset-wide pair of providers overlaps somewhere
+    else in the dataset (the :func:`_providers_with_overlapping_recordings`
+    gate below), *this particular* response has no same-data comparison
+    partner. Such a cell is never added to ``outcomes``: pooling it into its
+    provider's aggregate metrics would silently blend a compared sample with
+    an uncompared one, skewing that provider's own exact-match / criterion /
+    confidence rates using data no other candidate was ever run against
+    (code review finding). It is still counted (never silently dropped),
+    same as ``pending``/``staged``.
 
     Raises unless at least :data:`_MINIMUM_PROVIDERS` providers each have a
     real recorded response on a *shared sample and input variant* (see
@@ -481,11 +514,11 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
 
     samples = _load_all_samples(files)
 
-    providers = _all_providers(files)
+    providers = _all_providers(samples)
     if not providers:
-        return [], 0, len(files)
+        return [], 0, len(files), 0
 
-    comparable = _providers_with_overlapping_recordings(files)
+    comparable = _providers_with_overlapping_recordings(samples)
     if len(comparable) < _MINIMUM_PROVIDERS:
         raise SystemExit(
             f"only {len(comparable)} provider(s) have a real recorded response on a "
@@ -500,7 +533,13 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
 
     outcomes: list[SampleOutcome] = []
     pending = 0
+    excluded = 0
     for sample in samples:
+        # Per-sample, per-variant overlap -- distinct from the dataset-wide
+        # ``comparable`` gate above: a provider can be part of the dataset's
+        # overall comparison (via some *other* sample) while still having no
+        # comparison partner on *this* sample/variant (code review finding).
+        responders_by_variant = _providers_with_response_by_variant(sample.recorded)
         for provider in sorted(providers):
             cells_for_provider = sample.recorded.get(provider, {})
             for variant in _INPUT_VARIANTS:
@@ -512,6 +551,9 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
                     pending += 1
                     continue
                 assert config_key is not None  # only None when is_pending
+                if len(responders_by_variant[variant]) < _MINIMUM_PROVIDERS:
+                    excluded += 1
+                    continue
                 outcomes.append(
                     evaluate_sample(
                         sample.truth,
@@ -524,7 +566,7 @@ def _load_samples(dataset: Path) -> tuple[list[SampleOutcome], int, int]:
                         latency_seconds=latency_seconds,
                     )
                 )
-    return outcomes, pending, 0
+    return outcomes, pending, 0, excluded
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -536,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    outcomes, pending, staged = _load_samples(args.dataset)
+    outcomes, pending, staged, excluded = _load_samples(args.dataset)
     table = to_markdown_table(summarize_by_provider(outcomes))
     notes = ""
     if pending:
@@ -548,6 +590,12 @@ def main(argv: list[str] | None = None) -> int:
         notes += (
             f"\nstaged ground truth with no provider recorded anywhere in the dataset "
             f"(no AIProvider call made yet): {staged}\n"
+        )
+    if excluded:
+        notes += (
+            f"\nexcluded (a real response was recorded, but its sample+input-variant has "
+            f"no second provider recorded there, so it is not a same-data comparison and is "
+            f"never pooled into that provider's own metrics): {excluded}\n"
         )
     report = f"# PoC 2 AI grading aggregate\n\nevaluated cells: {len(outcomes)}\n{notes}\n{table}\n"
 

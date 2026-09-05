@@ -43,7 +43,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -134,6 +134,16 @@ class GradingGroundTruth(BaseModel):
     correction sheet -- see the PoC 2 doc's real-data pilot caveat; an
     incomplete ``criteria`` list does not affect ``score`` /
     ``max_score`` accuracy.
+
+    ``source`` is required and must be the literal ``"human"`` --
+    business-rules-and-evaluation-data.md section 6.3's label procedure
+    always attaches ``source: "human"`` to a genuine label, and this is the
+    one field that lets the harness tell a real human-grader label apart
+    from, say, an AI-generated response mistakenly fed in as if it were
+    ground truth. Making it optional and unconstrained would accept a label
+    with no ``source`` (or ``source: "ai"``) as if it were human-graded,
+    silently scoring an AI response against itself and producing a
+    meaningless, potentially circular agreement rate (code review finding).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -153,7 +163,7 @@ class GradingGroundTruth(BaseModel):
     annotations: tuple[dict[str, Any], ...] = ()
     handwriting_quality: Annotated[str | None, Field(alias="handwritingQuality")] = None
     layout_type: Annotated[str | None, Field(alias="layoutType")] = None
-    source: str | None = None
+    source: Literal["human"]
 
     @model_validator(mode="after")
     def _validate_invariants(self) -> GradingGroundTruth:
@@ -189,6 +199,15 @@ class GradingInputRecord(BaseModel):
     like a valid same-data comparison). ``ocr_noisy`` may be ``None``: a
     real-data pilot sample staged before a noisy-OCR variant was authored
     (docs/poc-2-ai-grading.md section 6.2) still has a valid ``input``.
+
+    ``ocr_clean``/``ocr_noisy`` are plain ``str``, not ``_NonBlankStr``: a
+    student can leave a question blank, and the correct OCR (or
+    hand-transcribed) reading of a blank answer is itself an empty string --
+    the same legitimate "unreadable/nothing here" sentinel
+    ``ai_grading.RecognitionOutput.text`` already allows. Rejecting an empty
+    ``ocr_clean`` would make one blank real answer abort validation for the
+    entire dataset, since every sample is validated up front (code review
+    finding).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -197,8 +216,8 @@ class GradingInputRecord(BaseModel):
     model_answer: _NonBlankStr
     rubric_text: _NonBlankStr
     max_score: int = Field(ge=0)
-    ocr_clean: _NonBlankStr
-    ocr_noisy: _NonBlankStr | None = None
+    ocr_clean: str
+    ocr_noisy: str | None = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> GradingInputRecord:

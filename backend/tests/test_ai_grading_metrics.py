@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_grading_metrics import (
     GradingGroundTruth,
+    GradingInputRecord,
     SampleOutcome,
     evaluate_sample,
     summarize_by_provider,
@@ -82,6 +83,7 @@ def _truth(**overrides: object) -> GradingGroundTruth:
             {"id": "c1", "result": "pass"},
             {"id": "c2", "result": "fail"},
         ],
+        "source": "human",
     }
     defaults.update(overrides)
     return GradingGroundTruth.from_mapping(defaults)
@@ -379,17 +381,23 @@ def test_calibration_rate_is_none_when_no_sample_falls_in_the_band() -> None:
 
 def test_ground_truth_rejects_score_exceeding_max_score() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping({"questionId": "q", "score": 6, "maxScore": 5})
+        GradingGroundTruth.from_mapping(
+            {"questionId": "q", "score": 6, "maxScore": 5, "source": "human"}
+        )
 
 
 def test_ground_truth_rejects_negative_score() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping({"questionId": "q", "score": -1, "maxScore": 5})
+        GradingGroundTruth.from_mapping(
+            {"questionId": "q", "score": -1, "maxScore": 5, "source": "human"}
+        )
 
 
 def test_ground_truth_rejects_blank_question_id() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping({"questionId": "   ", "score": 1, "maxScore": 5})
+        GradingGroundTruth.from_mapping(
+            {"questionId": "   ", "score": 1, "maxScore": 5, "source": "human"}
+        )
 
 
 def test_ground_truth_rejects_duplicate_criterion_ids() -> None:
@@ -403,8 +411,61 @@ def test_ground_truth_rejects_duplicate_criterion_ids() -> None:
                     {"id": "c1", "result": "pass"},
                     {"id": "c1", "result": "fail"},
                 ],
+                "source": "human",
             }
         )
+
+
+def test_ground_truth_requires_source_field() -> None:
+    """Code review finding: an omitted ``source`` used to be accepted (the
+    field was optional and unconstrained), so a real label file with no
+    provenance -- or an AI-generated response mistakenly fed in as if it
+    were ground truth -- would be scored as if it were a genuine human
+    label, producing a meaningless or circular agreement rate."""
+    with pytest.raises(ValidationError):
+        GradingGroundTruth.from_mapping({"questionId": "q", "score": 1, "maxScore": 5})
+
+
+def test_ground_truth_rejects_a_non_human_source() -> None:
+    with pytest.raises(ValidationError):
+        GradingGroundTruth.from_mapping(
+            {"questionId": "q", "score": 1, "maxScore": 5, "source": "ai"}
+        )
+
+
+def _input_mapping(**overrides: object) -> dict[str, object]:
+    defaults: dict[str, object] = {
+        "prompt_text": "設問文",
+        "model_answer": "模範解答",
+        "rubric_text": "採点基準",
+        "max_score": 5,
+        "ocr_clean": "答案テキスト",
+        "ocr_noisy": None,
+    }
+    defaults.update(overrides)
+    return defaults
+
+
+def test_input_record_accepts_a_blank_ocr_clean_for_an_unanswered_question() -> None:
+    """Code review finding: a student can leave a question blank, and the
+    correct OCR/transcribed reading of that blank answer is itself an empty
+    string -- rejecting it would make one blank real answer abort validation
+    for the entire dataset, since every sample is validated up front."""
+    record = GradingInputRecord.from_mapping(_input_mapping(ocr_clean=""))
+    assert record.ocr_clean == ""
+
+
+def test_input_record_accepts_a_blank_ocr_noisy_too() -> None:
+    record = GradingInputRecord.from_mapping(_input_mapping(ocr_clean="答案", ocr_noisy=""))
+    assert record.ocr_noisy == ""
+
+
+def test_input_record_still_rejects_a_blank_prompt_text() -> None:
+    """Only the OCR fields (a legitimate "nothing was written" sentinel) are
+    exempt from the non-blank check -- authored content like the question
+    prompt is never legitimately blank."""
+    with pytest.raises(ValidationError):
+        GradingInputRecord.from_mapping(_input_mapping(prompt_text=""))
 
 
 def test_ground_truth_accepts_the_documented_real_human_label_schema() -> None:
@@ -439,19 +500,25 @@ def test_from_mapping_does_not_truncate_a_non_integer_score() -> None:
     4.9 to 4. A non-integer score in the dataset is a malformed label, not a
     rounding problem."""
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping({"questionId": "q", "score": 4.9, "maxScore": 5})
+        GradingGroundTruth.from_mapping(
+            {"questionId": "q", "score": 4.9, "maxScore": 5, "source": "human"}
+        )
 
 
 def test_from_mapping_does_not_stringify_a_missing_field() -> None:
     """Code review finding: ``str(data[...])`` used to turn a missing/``None``
     value into the literal string ``"None"``."""
     with pytest.raises((ValidationError, KeyError)):
-        GradingGroundTruth.from_mapping({"questionId": None, "score": 1, "maxScore": 5})
+        GradingGroundTruth.from_mapping(
+            {"questionId": None, "score": 1, "maxScore": 5, "source": "human"}
+        )
 
 
 def test_from_mapping_rejects_score_as_string() -> None:
     with pytest.raises(ValidationError):
-        GradingGroundTruth.from_mapping({"questionId": "q", "score": "4", "maxScore": 5})
+        GradingGroundTruth.from_mapping(
+            {"questionId": "q", "score": "4", "maxScore": 5, "source": "human"}
+        )
 
 
 def _load_fixture_outcomes() -> list[SampleOutcome]:

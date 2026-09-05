@@ -97,6 +97,18 @@ class ProviderDescriptor:
                 raise ValueError(f"ProviderDescriptor.{field_name} must be a non-blank string")
         if self.version is not None and not self.version.strip():
             raise ValueError("ProviderDescriptor.version must not be a whitespace-only string")
+        # ``bool`` is a subclass of Python's ``int`` (and so of ``float`` for
+        # arithmetic purposes), so ``math.isfinite(True)`` and ``True >= 0``
+        # both pass silently -- checked explicitly, before the numeric check,
+        # so a directly-constructed descriptor cannot record a bare ``True``/
+        # ``False`` as its temperature when the ``--dataset`` JSON boundary
+        # (``_DescriptorInput``, strict-mode) would already reject the same
+        # value (code review finding).
+        if isinstance(self.temperature, bool):
+            raise ValueError(
+                f"ProviderDescriptor.temperature must be a number, not a bool, "
+                f"got {self.temperature!r}"
+            )
         if not math.isfinite(self.temperature) or self.temperature < 0:
             raise ValueError(
                 f"ProviderDescriptor.temperature must be finite and >= 0, got {self.temperature!r}"

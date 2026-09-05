@@ -57,16 +57,17 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 | `ground_truth.questionId`       | 個人を特定しない不透明 ID                                            |
 | `ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）               |
 | `ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠） |
+| `ground_truth.source`           | 必須。文字列リテラル `"human"` のみ受理（§1.3・§3.9 参照）           |
 | `input.prompt_text`             | 設問文                                                               |
 | `input.model_answer`            | 模範解答                                                             |
 | `input.rubric_text`             | 採点基準・配点                                                       |
-| `input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト）                 |
-| `input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト）             |
+| `input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト。空文字可）       |
+| `input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト。空文字可）   |
 
 `ground_truth` は決定書 §6.3 が定める実際の人間採点ラベルファイルの
-ワイヤ形式（`questionId`/`score`/`maxScore`/`criteria[].{id,result}` に加え、
-任意項目 `comment`/`annotations`/`handwritingQuality`/`layoutType`/`source`）
-に**そのまま**準拠する（§3.8）。
+ワイヤ形式（`questionId`/`score`/`maxScore`/`criteria[].{id,result}`/
+`source` に加え、任意項目 `comment`/`annotations`/`handwritingQuality`/
+`layoutType`）に**そのまま**準拠する（§3.8）。
 
 ### 1.3 正解ラベル作成（決定書 §6.3）
 
@@ -117,6 +118,19 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 同じ答案でも異なる入力モードにしか応答がない結果を、比較結果として報告
 してはならない）。
 
+このデータセット全体でのゲートは「比較が一件も存在しない」ことを防ぐ
+だけであり、それだけでは「ある candidate の全セルを集計してよい」ことには
+ならない。ある provider が**あるサンプル**で別の provider と重なりつつ、
+**誰も応答していない別サンプル**にも追加の応答を持つ場合がありうる
+（コードレビュー指摘）。そのため集計本体（`_load_samples` の最終ループ）
+は、データセット全体のゲートとは別に、**サンプル・入力モードごとに**
+「その `(sample, input_variant)` に実際に応答した provider が 2 者以上
+いるか」を再チェックする。満たさない場合、その応答は実在するにもかかわらず
+（`pending` ではないにもかかわらず）その provider 自身の集計には算入せず、
+`excluded`（除外）として別途カウントする。これにより、ある provider の
+全体的な完全一致率・criterion 一致率・Confidence 平均が、実際には比較
+されていないサンプルの結果で歪められることを防ぐ。
+
 ### 2.1 評価モード（Issue #14「OCR正解文字とOCR誤認文字を分けて入力し、Recognition ConfidenceとGrading Confidenceを混同しない」）
 
 | モード      | 入力                                                                                | 測る狙い                                        |
@@ -128,6 +142,15 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 どちらのモードでも、AI 応答の `recognition.confidence` と `grading.confidence`
 は別フィールド・別集計列として扱い、一方が高いことをもう一方が高いことの
 根拠にしない（簡易設計書 §10「文字認識 98% / 採点判断 63%」の例）。
+
+`input.ocr_clean`/`ocr_noisy` は空文字を許容する（`_NonBlankStr` を課さない）:
+生徒が設問を空欄のまま提出した場合、正しい OCR（または書き起こし）結果は
+空文字そのものであり、`ai_grading.RecognitionOutput.text` が同じ理由で
+空文字を許容しているのと同じ扱いである。全サンプルが事前に一括検証される
+ため、これを拒否すると 1 件の空欄回答だけで実データセット全体の検証が
+中断してしまう（コードレビュー指摘）。空文字を許容しないのは `prompt_text`/
+`model_answer`/`rubric_text`（著作された内容であり、正当に空欄になることは
+ない）のみ。
 
 `AIProvider.grade()` に渡す `GradingRequest` は、答案画像（`answer_image`。
 当該設問の回答欄領域のみを切り出したもの。決定書 §2 (2) によりページ全体・
@@ -368,6 +391,46 @@ provider の有無に関わらずハーネスを停止させる。
 更新済み。§6.2 に記載のとおり、実データ pilot でこの変更後もハーネスを
 再実行し、`staged: 5` が変わらず得られることを確認した（P1-1 の実地
 検証）。
+
+### 3.9 provenance・空欄・比較セルの再検証（実データ運用で表面化した問題）
+
+**同じサンプルで比較されたセルだけを集計する**: §2 で述べたデータセット
+全体の「provider 2 者以上が重なっているか」というゲートは、ある provider
+の集計対象セル**全て**が本当に比較済みであることまでは保証しない。
+provider A がサンプル X で provider B と重なりつつ、誰も応答していない
+別サンプル Y にも応答を追加で持つ場合、以前の実装はこの Y の応答も
+黙って provider A 自身の集計（完全一致率など）に含めてしまっていた
+（コードレビュー指摘）。`_load_samples` の集計ループは、データセット
+全体のゲートとは別に **サンプル・入力モードごとに** 2 者以上の実応答が
+あるかを再チェックし、満たさない実応答は `outcomes` に追加せず、
+`excluded`（除外）として別途カウントする（`pending`/`staged` と同様、
+黙って捨てない）。`/tmp` で「A・B がサンプル X で重なるが、A だけが
+サンプル Y にも応答を持つ」データセットを作り、Y の応答が
+`evaluated cells` に含まれず `excluded: 1` として報告されることを確認した。
+
+**`ocr_clean`/`ocr_noisy` の空文字を許容する**: §2.1 のとおり、生徒が
+設問を空欄のまま提出した場合の正しい OCR 結果は空文字そのものである。
+以前は `_NonBlankStr` がこれを拒否しており、全サンプルが事前に一括検証
+される設計（§3.7）と組み合わさって、実データ中のたった 1 件の空欄回答が
+データセット全体の検証を中断させてしまっていた（コードレビュー指摘）。
+
+**`ground_truth.source` は `"human"` を必須とする**: §1.3・§6.3 の正解
+ラベル作成手順は必ず `source: "human"` を付す。以前この項目は任意かつ
+無制約だったため、`source` を省略した、あるいは `"ai"` と設定したラベルも
+そのまま人間の正解ラベルとして受理され、AI の応答を誤って正解ラベルとして
+読み込んでしまうと、自己参照的あるいは無意味な一致率を生みかねなかった
+（コードレビュー指摘）。`source` を欠く、または `"human"` 以外の値を持つ
+`ground_truth` はハーネスを停止させる。
+
+**`ProviderDescriptor` の `temperature` に真偽値を許さない**: Python の
+`bool` は `int`（したがって数値として `float`）のサブクラスであるため、
+`temperature=True` は「有限かつ 0 以上」という数値チェックを素通りして
+しまう。`--dataset` の JSON 境界（`_DescriptorInput`、strict モード）は
+`temperature: true` を既に拒否しているにもかかわらず、実アダプタが
+`ProviderDescriptor` を直接構築する経路（§3.3）ではこのチェックが
+なかったため、この経路のみ真偽値の temperature を静かに記録できてしまって
+いた（コードレビュー指摘）。数値チェックの前に真偽値を明示的に拒否する
+ことで、両方の経路が同じ不変条件を守るようにした。
 
 ---
 

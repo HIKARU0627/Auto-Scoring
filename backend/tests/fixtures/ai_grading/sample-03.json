@@ -4,7 +4,8 @@
     "questionId": "poc2-synth-03",
     "score": 10,
     "maxScore": 10,
-    "criteria": [{ "id": "d1", "result": "pass" }]
+    "criteria": [{ "id": "d1", "result": "pass" }],
+    "source": "human"
   },
   "input": {
     "prompt_text": "（合成データ）出来事Yが起きた年を答えよ。",

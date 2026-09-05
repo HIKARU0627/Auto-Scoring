@@ -7,7 +7,8 @@
     "criteria": [
       { "id": "k1", "result": "fail" },
       { "id": "k2", "result": "pass" }
-    ]
+    ],
+    "source": "human"
   },
   "input": {
     "prompt_text": "（合成データ）文化圏Xの東西への伝播について100字以内で説明せよ。",

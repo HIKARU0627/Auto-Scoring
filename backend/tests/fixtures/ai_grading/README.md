@@ -21,15 +21,21 @@ Each `sample-*.json` is one graded question, with recorded (invented)
 provider output for every `(provider, input_variant)` cell. `ground_truth`
 follows the wire schema `business-rules-and-evaluation-data.md` section 6.3
 documents for a real human-grader label file (`questionId` / `score` /
-`maxScore` / `criteria[].{id,result}`, plus the optional `comment` /
-`annotations` / `handwritingQuality` / `layoutType` / `source`), so a real
-label file produced per that section can be loaded as-is -- `subject` is
-deliberately a sibling of `ground_truth`, not a field inside it, since
-section 6.3's per-answer label schema has no `subject` field (it is
-test-level metadata, section 6.1). A `ground_truth` model that instead
-invented its own field names and forbade the documented ones rejected every
-correctly-formed real label file outright, making the real-data harness
-impossible to run at all (code review finding).
+`maxScore` / `criteria[].{id,result}` / `source`, plus the optional `comment`
+/ `annotations` / `handwritingQuality` / `layoutType`), so a real label file
+produced per that section can be loaded as-is -- `subject` is deliberately a
+sibling of `ground_truth`, not a field inside it, since section 6.3's
+per-answer label schema has no `subject` field (it is test-level metadata,
+section 6.1). A `ground_truth` model that instead invented its own field
+names and forbade the documented ones rejected every correctly-formed real
+label file outright, making the real-data harness impossible to run at all
+(code review finding).
+
+`source` is required and must be the literal `"human"` -- section 6.3's
+label procedure always attaches it to a genuine label, and it is the one
+field that tells a real human-grader label apart from an AI-generated
+response mistakenly fed in as if it were ground truth (an omitted or
+`"ai"` `source` is rejected; code review finding).
 
 ```jsonc
 {
@@ -39,19 +45,19 @@ impossible to run at all (code review finding).
     "score": 15,
     "maxScore": 20,
     "criteria": [{ "id": "c1", "result": "pass | partial | fail" }],
+    "source": "human",
     "comment": "optional -- 確定コメント",
     "annotations": [],
     "handwritingQuality": "optional -- clean | normal | messy",
-    "layoutType": "optional",
-    "source": "human"
+    "layoutType": "optional"
   },
   "input": {
     "prompt_text": "...",
     "model_answer": "...",
     "rubric_text": "...",
     "max_score": 20,
-    "ocr_clean": "human-corrected reading of the answer",
-    "ocr_noisy": "a plausible OCR misreading of the same answer (hand-authored -- no OCR pipeline exists yet, Issue #19)"
+    "ocr_clean": "human-corrected reading of the answer (may be \"\" -- the student left the question blank)",
+    "ocr_noisy": "a plausible OCR misreading of the same answer (hand-authored -- no OCR pipeline exists yet, Issue #19); may also be \"\""
   },
   "recorded": {
     "<provider name>": {
@@ -98,6 +104,18 @@ not meet this bar makes `report.py` exit non-zero with a message naming
 which providers *did* qualify, rather than printing a table as if the
 comparison were complete.
 
+That dataset-wide check only gates whether the dataset has *any* real
+comparison at all -- it is not enough to make every one of a qualifying
+provider's cells safe to aggregate. A provider can overlap with another on
+one sample while also carrying extra recorded responses on samples nobody
+else ever answered; those extra responses are excluded one
+`(sample, input_variant)` at a time and reported as a separate "excluded"
+count, never silently pooled into that provider's own metrics as if they too
+were part of a same-data comparison (code review finding: an earlier version
+only checked overlap dataset-wide, so a provider's solo responses on
+disjoint samples still got scored into its own aggregate exact-match/
+criterion/confidence rates).
+
 Each sample's `input` block is parsed and cross-checked against its
 `ground_truth` (`max_score` must agree) before any of that sample's
 `recorded` cells are scored -- a same-data comparison requires the
@@ -129,7 +147,11 @@ it can be told apart from a different configuration's violations -- Issue #14
 never reached" and could omit `descriptor` -- that was never actually true of
 the loader's read order and would have crashed the whole run). A malformed
 `descriptor` value (`model: null`, `temperature: true`, a blank string, ...)
-is rejected rather than silently cast into something plausible-looking. The
+is rejected rather than silently cast into something plausible-looking --
+this holds even for a directly-constructed `ProviderDescriptor` (bypassing
+this JSON boundary entirely), since `bool` is a subclass of Python's `int`
+and would otherwise pass the finite/non-negative check silently (code
+review finding). The
 `config` column this produces is a JSON-array encoding of the five fields,
 not a `"|"`-joined string -- a naive join would let two different
 configurations collide whenever a field value itself contains `"|"`.
