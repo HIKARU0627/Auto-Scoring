@@ -33,6 +33,7 @@ from auto_scoring.domain.pdf_intake import IntakeLimits
 from auto_scoring.domain.test_registration import (
     build_questions_and_rubrics as _real_build_questions_and_rubrics,
 )
+from tests.support import make_test
 
 _TOKEN = "test-registration-token"
 
@@ -716,6 +717,39 @@ def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
 
     listed = restarted_client.get("/test-registrations", headers=_auth())
     assert listed.json() == []
+
+
+def test_starting_the_app_leaves_a_pre_migration_test_alone(data_root: Path) -> None:
+    """Migration 0008 backfills `status='draft'` onto every pre-existing
+    `Test` row -- none of which were ever registered through
+    `register_test`, so none of them have the two PDFs this Issue's
+    registration flow writes. The repair sweep must never treat "no PDFs on
+    disk" alone as "an interrupted registration" for such a row: an earlier
+    version of this sweep did exactly that and deleted every pre-existing
+    test -- cascading to its Questions and Submissions -- on the first
+    startup after upgrading a production database past that migration
+    (Issue #16 review round 5, data loss).
+    """
+    # Runs migrations (via create_app) without ever calling register_test --
+    # the DB then holds exactly what upgrading a pre-0008 database would
+    # look like: a `Test` row with no registration marker and no PDFs.
+    create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        uow.tests.add(make_test(id="legacy-test", name="移行前のテスト"))
+        uow.commit()
+
+    restarted_app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+    )
+    fetched = TestClient(restarted_app).get("/tests/legacy-test", headers=_auth())
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "draft"
 
 
 def test_starting_the_app_leaves_a_healthy_draft_test_alone(data_root: Path) -> None:

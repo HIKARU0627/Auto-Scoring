@@ -62,6 +62,16 @@ class CrossPageRegionError(TestRegistrationError):
 #: the match not be preceded by `-`/`.`/another digit, nor followed by `.`.
 _SCORE_NUMBER_PATTERN = re.compile(r"(?<![-.\d])\d+(?!\.)")
 
+#: `QuestionRow.points`/`RubricCriterionRow.max_points` (db/orm.py) are both
+#: SQLite `INTEGER` columns, which store at most a signed 64-bit value.
+#: Python's own `int` has no such ceiling, so a `SCORE` region whose text
+#: contains a larger positive run of digits would otherwise sail through
+#: every check below and only fail once `uow.questions.add()` hands it to
+#: the sqlite3 driver, as an unhandled `OverflowError` (500) instead of a
+#: normal 422 (Issue #16 review round 5, AGENTS.md "Validate every input
+#: that crosses a trust boundary").
+_MAX_SQLITE_INTEGER = 2**63 - 1
+
 
 def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:
     """`NormalizedBBox` (x0/y0/x1/y1, Issue #15) -> `NormalizedRect` (x/y/width/height,
@@ -184,6 +194,8 @@ def build_questions_and_rubrics(
             )
         if points <= 0:
             raise InvalidScoreError(f"question {number!r} has a non-positive score: {points}")
+        if points > _MAX_SQLITE_INTEGER:
+            raise InvalidScoreError(f"question {number!r} has a score too large to store: {points}")
 
         question_id = f"{test_id}:{number}"
         questions.append(

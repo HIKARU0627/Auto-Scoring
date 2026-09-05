@@ -242,6 +242,38 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   が残っていた）。intake時に全ページの`page_geometry`を検証し、失敗を
   `PdfGeometryError`（400）に変換するようにした。
 
+## レビュー対応（PRラウンド5）
+
+- **クラッシュ復旧時に移行済みの既存testを保護する**: PRラウンド4の
+  `repair_incomplete_test_registrations`は「登録PDFがディスクに無い」ことだけを
+  中断registrationの判定基準にしていた。migration 0008は本Issue以前から存在する
+  全`Test`行に`status='draft'`をバックフィルするが、それらは`register_test`を
+  一度も通っていないためPDFを持ったことが無い。本番環境でmigration 0008を含む
+  このリリースへアップグレードした初回起動で、この判定が既存testを全て
+  「中断されたregistration」と誤分類し、連鎖してQuestionsとSubmissionsごと
+  削除してしまうデータ消失バグだった。`register_test`がDB commit前に
+  `.registration-marker`という永続マーカーファイルを書き込むようにし（一度
+  書いたら削除しない）、sweepはこのマーカーを持つ`draft`testのみを中断
+  registrationの候補にするよう変更した——マーカーの無い行は本Issue以前からの
+  行として常に保護される。アップグレード経路（マーカーもPDFも無い既存行が
+  再起動後も残ること）を回帰テストで検証した。
+- **SQLiteに保存する前にscoreの範囲を制限する**: `QuestionRow.points`/
+  `RubricCriterionRow.max_points`はSQLiteの符号付き64bit `INTEGER`列だが、
+  `_extract_points`の`int()`にはそのような上限が無く、`uow.questions.add()`が
+  未捕捉の`OverflowError`（500）を送出していた。`build_questions_and_rubrics`
+  で`2**63 - 1`を超えるscoreを`InvalidScoreError`（422）として拒否するように
+  した。
+- **設定画面から戻った後にtest statusを更新する**: `TestListPage`はdraft test
+  を開いて`TestSettingsPage`へpushした後、その結果を無視していたため、
+  登録完了後に戻ってもタイルが手動refreshするまで「下書き」のままだった。
+  pushをawaitし、戻った後に一覧を再取得するようにした（あわせて、
+  `_reload`の`setState(() => _testsFuture = future)`が代入式の戻り値
+  （`Future`自体）を返してしまいFlutterが例外を投げる既存の潜在バグも修正した）。
+- **非有限の座標値を拒否する**: `_RegionEditDialog`で`double.tryParse('NaN')`は
+  非nullの`double.nan`を返すため、範囲・順序比較が全てfalseになりバリデーション
+  をすり抜けていた。パースした座標が全て有限であることを明示的に要求するように
+  した。
+
 ## 未決事項
 
 - PDFオーバーレイでのregion視覚編集（上記「UI設計」）。

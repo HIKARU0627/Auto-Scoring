@@ -13,12 +13,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from auto_scoring.adapters.atomic import FinalizationError
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf import PdfiumPypdfEngine
-from auto_scoring.adapters.test_intake import register_test
+from auto_scoring.adapters.test_intake import register_test, repair_incomplete_test_registrations
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import PdfGeometryError
-from tests.support import at
+from tests.support import at, make_test
 
 _ENGINE = PdfiumPypdfEngine()
 
@@ -201,3 +201,69 @@ def test_happy_path_registers_a_draft_test(
     assert store.test_manual_pdf_path(test.id).exists()
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.tests.get(test.id) is not None
+    # `repair_incomplete_test_registrations` relies on this marker to tell a
+    # test created through this flow apart from one that predates it
+    # entirely (Issue #16 review round 5) -- a normal registration must
+    # leave it behind.
+    assert (store.test_dir(test.id) / ".registration-marker").is_file()
+
+
+def test_repair_leaves_a_pre_existing_test_without_the_marker_alone(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Migration 0008 backfills `status='draft'` onto every `Test` row that
+    predates this Issue's PDF-based registration flow, none of which ever
+    went through `register_test` -- so none of them have its registration
+    marker, and none of them ever had PDFs to begin with. An earlier version
+    of this sweep used "PDFs missing" alone as its trigger, which classified
+    every such pre-existing row as an interrupted registration and deleted
+    it -- cascading to its Questions and Submissions -- on the first startup
+    after upgrading a production database past that migration (Issue #16
+    review round 5, data loss).
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id="legacy-test"))
+        uow.commit()
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        removed = repair_incomplete_test_registrations(uow, store)
+
+    assert removed == []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.tests.get("legacy-test") is not None
+
+
+def test_repair_removes_a_marked_test_left_incomplete_by_a_prior_crash(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Unlike the pre-existing-row case above, a test that *does* carry the
+    registration marker but is still missing a PDF really did go through
+    `register_test` and really was interrupted -- the sweep must still
+    catch that (this is `repair_incomplete_test_registrations` itself,
+    isolated from the process-crash simulation
+    `test_a_finalization_failure_does_not_leave_a_permanently_broken_draft`
+    already covers via a failing `write_atomic`).
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="国語",
+            subject=None,
+            model_answer_filename="model-answer.pdf",
+            model_answer_mime="application/pdf",
+            model_answer_data=_pdf_bytes(),
+            manual_filename="manual.pdf",
+            manual_mime="application/pdf",
+            manual_data=_pdf_bytes(),
+            now=at(),
+        )
+    store.test_manual_pdf_path(test.id).unlink()
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        removed = repair_incomplete_test_registrations(uow, store)
+
+    assert removed == [test.id]
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.tests.get(test.id) is None

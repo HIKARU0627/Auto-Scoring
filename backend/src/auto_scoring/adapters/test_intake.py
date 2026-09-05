@@ -31,6 +31,21 @@ from auto_scoring.domain.pdf_intake import (
     validate_upload_bytes,
 )
 
+#: Marks a `Test` directory as having gone through `register_test` at least
+#: once -- written before the DB commit, never removed. Its only purpose is
+#: to let `repair_incomplete_test_registrations` tell a test created by
+#: *this* Issue's PDF-based registration flow apart from one that predates
+#: it entirely (migration 0008 backfills `status='draft'` onto every
+#: pre-existing row, none of which were ever registered with PDFs -- see
+#: that function's own docstring). A permanent tag, not a "still pending"
+#: flag: once both PDFs are also on disk, the row is a normal, complete
+#: registration regardless of whether this file is still there.
+_REGISTRATION_MARKER_FILENAME = ".registration-marker"
+
+
+def _registration_marker_path(store: LocalFileStore, test_id: str) -> Path:
+    return store.test_dir(test_id) / _REGISTRATION_MARKER_FILENAME
+
 
 def _validate_one_pdf(pdf_engine: PdfEngine, path: Path, limits: IntakeLimits) -> None:
     try:
@@ -109,6 +124,13 @@ def register_test(
             default_scoring_method=ScoringMethod.ADDITIVE,
             created_at=now,
         )
+        # Written before the DB commit below (and independent of the two
+        # PDFs' own staged writes) so it exists even if this attempt gets no
+        # further than that commit -- see `_REGISTRATION_MARKER_FILENAME`'s
+        # docstring for why `repair_incomplete_test_registrations` needs
+        # this signal to exist regardless of whether the PDFs ever reach
+        # disk.
+        store.write_atomic(_registration_marker_path(store, test.id), b"")
         try:
             with transactional_operation(uow, store) as staged:
                 uow.tests.add(test)
@@ -140,7 +162,8 @@ def register_test(
 def repair_incomplete_test_registrations(
     uow: SqlAlchemyUnitOfWork, store: LocalFileStore
 ) -> list[str]:
-    """Delete any `DRAFT` test whose registration PDF(s) are missing on disk.
+    """Delete any `DRAFT` test that went through `register_test` but whose
+    registration PDF(s) are missing on disk.
 
     `register_test`'s own `FinalizationError` handler above already
     compensates for a failed PDF write within the same request/process --
@@ -158,6 +181,17 @@ def repair_incomplete_test_registrations(
     `LocalFileStore.sweep_temp`/`repair_incomplete_submissions` catch what a
     prior run left in this state before it could shut down cleanly.
 
+    Gated on `_REGISTRATION_MARKER_FILENAME`, not merely "PDFs missing" --
+    migration 0008 backfills `status='draft'` onto every `Test` row that
+    predates this Issue's PDF-based registration flow, none of which were
+    ever registered with PDFs to begin with. An earlier version of this
+    function used "PDFs missing" alone as the trigger, which classified
+    every such pre-existing row as an interrupted registration and deleted
+    it -- cascading to its Questions and Submissions -- on the first
+    startup after upgrading a production database past that migration
+    (Issue #16 review round 5, data-loss). Only a row the marker's own
+    docstring says went through `register_test` is ever a candidate here.
+
     Only ever considers `DRAFT` tests: a test cannot reach `READY` without
     both PDFs already having been readable (`/profile/analyze` reads them
     directly), so a `READY` test missing either file would be a different,
@@ -168,6 +202,8 @@ def repair_incomplete_test_registrations(
     removed: list[str] = []
     for test in uow.tests.list_all():
         if test.status is not TestStatus.DRAFT:
+            continue
+        if not _registration_marker_path(store, test.id).is_file():
             continue
         expected_paths = (
             store.test_model_answer_pdf_path(test.id),

@@ -160,6 +160,22 @@ def test_zero_score_is_rejected() -> None:
         build_questions_and_rubrics("test-1", regions)
 
 
+def test_a_score_too_large_for_sqlites_integer_column_is_rejected() -> None:
+    """`QuestionRow.points` is a SQLite `INTEGER` (signed 64-bit); Python's
+    `int` has no such ceiling. Without this check, a score this large would
+    pass every check here and only fail once `uow.questions.add()` hands it
+    to the sqlite3 driver, as an unhandled `OverflowError` (500) instead of
+    a normal 422 (Issue #16 review round 5).
+    """
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="99999999999999999999点"),
+    ]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
 def test_no_questions_at_all_is_rejected() -> None:
     regions = [_region(RegionKind.ANSWER_AREA, "orphan")]
 
