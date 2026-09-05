@@ -181,8 +181,11 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   error_code、blocked_on_question_id等）。
 - `GET  /jobs/{job_id}` -- 単一Jobの詳細。
 - `POST /jobs/{job_id}/retry` -- `FAILED`のJobを`QUEUED`へ戻し再投入する。
-- `POST /jobs/{job_id}/cancel` -- `QUEUED`/`BLOCKED`/`FAILED`は即座に、
-  `RUNNING`は実行中タスクへcancel要求を送った上で`CANCELLED`にする。
+- `POST /jobs/{job_id}/cancel` -- `QUEUED`/`BLOCKED`/`FAILED`は即座に
+  `CANCELLED`にして200を返す。`RUNNING`は実行中タスクへcancel要求を
+  送るだけで、実際の`CANCELLED`書き込みはそのworker task自身が数瞬後に
+  行うため、202とcancel前のスナップショット（`state: "running"`）を
+  返す（review round 6, P2）。
 - `POST /submissions/{submission_id}/questions/{question_id}/resume` -- 上記
   「人間による再開」の暫定エンドポイント。
 
@@ -534,3 +537,50 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   ようにした -- 残りが0以下ならこれまで通り即座にQUEUEDへ、残りがあれば
   行はFAILEDのまま`_schedule_retry`（既存のbackoffタイマー機構、
   `_pending_retries`に追跡される）へその残り時間だけを渡す。
+
+## レビュー第6round（Codex）で修正した点
+
+- **承認の書き込みをABA状態サイクルから保護する**（P1）:
+  `mark_usable`のcompare-and-setは`state`しか見ていなかったが、FAILEDは
+  行き止まりではない（retryで`FAILED -> QUEUED -> RUNNING -> FAILED`と
+  一周できる）。`/resume`がFAILEDのattemptを読み取ってから書き込むまでの
+  間に、並行するretryがこの一周を完了させると、`state`述語は（同じ
+  `FAILED`のまま）再び一致してしまい、古いattemptに対する人間の承認が、
+  実際には全く別の・未レビューの新しいattemptへ適用されてしまい得た。
+  `JobRepository.mark_usable`に`expected_attempts`を追加し、CASの
+  `WHERE`へ`attempts == expected_attempts`も加えた。`attempts`は
+  `RUNNING`への遷移でしか変化しないため、`FAILED`へ戻るどんな一周を
+  経てもattemptsは必ず変わっており、`_requeue_after_backoff`が既に
+  stale backoffタイマーの判別に使っているのと同じ性質を、ここでも
+  ABAサイクル検知に転用した形になる。CASが負ければ通常のcompare-and-set
+  失敗と同じくfresh readからやり直され、その時点の実際のattemptに対して
+  改めて判断される。
+- **graph再発行をまたいで承認済みの失敗を保持する**（P1）:
+  `mark_usable`でFAILED jobをusableとマークしても、
+  `list_incomplete_for_stale_versions`は状態が`FAILED`である限り依然
+  として「未完了」として選択してしまっていた。その後confirmが新しい
+  graphを確定すると、この承認済みjobをキャンセル・再発行し
+  （`reissue_job_for_graph_version`の置き換えは常に`usable`をリセット
+  する）、既に解放済みの後続はもはや存在しない承認に対して処理を継続
+  または完了したままになり得た -- `retry_job`/`cancel_job`が既に明示的
+  に拒否しているのと同じ不整合（round 4/5）。`usable`が非nullのFAILED
+  行を「スケジューリング上の終端」（`question_statuses`が既にそう扱って
+  いる状態と同じ）として扱うことにし、2箇所を修正した:
+  `list_incomplete_for_stale_versions`のSQLで`FAILED AND usable IS NULL`
+  の場合のみ対象にする、および`dependency_graph_router.confirm`の
+  無効化リトライループ自体にも`require_usable_unset=True`を渡し
+  `_still_needs_invalidation`ヘルパーがFAILED+usable設定済みを終端扱い
+  するようにする -- 前者が主な防御線、後者は初回一覧取得とcancellation
+  CASの間の極めて狭い窓（その間に承認が着地するケース）を閉じる二重の
+  防御線になっている。
+- **running jobに対してキャンセル後の状態を返す**（P2）:
+  `POST /jobs/{job_id}/cancel`は、対象がRUNNINGの場合`cancel_job`が
+  実行中taskへcancel要求を送るだけで、実際の`RUNNING -> CANCELLED`
+  書き込みはそのworker task自身（`_finalize_cancelled`）が数瞬後に
+  非同期で行う。以前はこの場合もHTTP 200とcancel前のスナップショット
+  （`state: "running"`）を返しており、docs/job-queue.md（本ドキュメント）
+  が説明する挙動と裏腹に「何も起きていない」ように見えてしまっていた。
+  RUNNINGブランチの場合のみレスポンスを202（Accepted）に変更した --
+  bodyは引き続き同じ`JobResponse`（cancel前のスナップショット）だが、
+  ステータスコード自体が「受理されたが、まだ適用されていない」ことを
+  示す。
