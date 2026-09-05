@@ -8,12 +8,14 @@ integration test" Issue #17 asks for.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from pypdf import PdfWriter
 
+from auto_scoring.adapters.atomic import FinalizationError
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf import PdfiumPypdfEngine
@@ -30,15 +32,18 @@ from auto_scoring.domain.models import (
     Question,
     SubmissionState,
 )
+from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
+    PdfCorruptedError,
     PdfEncryptedError,
     PdfInvalidTypeError,
     PdfPageLimitExceededError,
     PdfPageTooLargeError,
     StagedOutputTooLargeError,
 )
-from tests.support import at, make_question, make_test
+from tests.support import at, make_job, make_question, make_test
 
 _ENGINE = PdfiumPypdfEngine()
 _PREPROCESSOR = OpenCvImagePreprocessor()
@@ -445,6 +450,134 @@ def test_retry_reuses_the_errored_submission(
         assert len(uow.answer_images.list_for_submission(first.submission.id)) == 1
 
 
+def test_finalization_failure_marks_error_and_a_retry_heals_the_missing_file(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulates a disk-full/permissions failure that hits partway through
+    writing staged files -- after the DB transaction already committed the
+    submission as ai_processed. That can't be rolled back, so the row must
+    not be left stuck there: it should end up in ``error`` (with a reason
+    identifying why), and re-uploading the identical PDF afterward must be
+    recognized as a retry that heals the specific file that never reached
+    disk, not rejected as a duplicate of a "successful" row that's actually
+    missing data.
+    """
+    q1 = make_question(id="q-1", page=1, answer_area=NormalizedRect(x=0, y=0, width=1, height=1))
+    _seed_test_with_questions(make_uow, questions=[q1])
+    data = _pdf_bytes(pages=1)
+
+    real_write_atomic = LocalFileStore.write_atomic
+
+    def failing_write_atomic(self: LocalFileStore, path: Path, write_data: bytes) -> Path:
+        if path.name == "source.pdf":
+            raise OSError("simulated disk-full failure")
+        return real_write_atomic(self, path, write_data)
+
+    monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
+
+    with make_uow() as uow, pytest.raises(FinalizationError):
+        intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        submissions = uow.submissions.list_for_test("test-1")
+    assert len(submissions) == 1
+    failed = submissions[0]
+    assert failed.state is SubmissionState.ERROR
+    assert failed.review_reason == "finalization_failed"
+    source_path = store.root / failed.source_pdf_path
+    assert not source_path.exists()
+    # The page preview was staged (and written) before source.pdf failed.
+    assert store.submission_page_image_path(failed.id, 1).exists()
+
+    monkeypatch.setattr(LocalFileStore, "write_atomic", real_write_atomic)
+
+    with make_uow() as uow:
+        retried = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(seconds=2),
+        )
+
+    assert retried.is_retry is True
+    assert retried.submission.id == failed.id
+    assert retried.submission.state is SubmissionState.AI_PROCESSED
+    assert source_path.read_bytes() == data
+
+
+def test_reintake_of_an_errored_submission_with_downstream_processing_is_rejected(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """An errored submission that already has downstream data attached (here,
+    a queued job -- standing in for a later OCR/AI grading issue) must not be
+    silently retried in place: in-place retry only replaces answer_images, so
+    that would leave the job (and any recognition/grade/review rows) orphaned
+    against a freshly regenerated set of images. Re-uploading the identical
+    PDF is reported the same as any other non-retryable duplicate instead.
+    """
+    q1 = make_question(id="q-1", page=1, answer_area=NormalizedRect(x=0, y=0, width=1, height=1))
+    _seed_test_with_questions(make_uow, questions=[q1])
+    data = _pdf_bytes(pages=1)
+
+    with make_uow() as uow:
+        first = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        uow.jobs.add(make_job(submission_id=first.submission.id))
+        uow.submissions.set_state(first.submission.id, SubmissionState.ERROR)
+        uow.commit()
+
+    with make_uow() as uow, pytest.raises(DuplicateSubmissionError) as excinfo:
+        intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a-again.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(seconds=2),
+        )
+    assert excinfo.value.existing_submission_id == first.submission.id
+
+    with make_uow() as uow:
+        submission = uow.submissions.get(first.submission.id)
+    assert submission is not None
+    assert submission.state is SubmissionState.ERROR  # untouched by the rejected retry
+
+
 def test_concurrent_retry_is_reported_as_a_race_loss(
     make_uow: Callable[[], SqlAlchemyUnitOfWork],
     store: LocalFileStore,
@@ -630,6 +763,74 @@ def test_decoded_output_exceeding_the_staged_size_cap_is_rejected(
             declared_mime=None,
             data=_pdf_bytes(pages=1),
             limits=tiny_staged_limits,
+            now=at(),
+        )
+
+    with make_uow() as uow:
+        assert uow.submissions.list_for_test("test-1") == []
+    assert not (store.root / "submissions").exists()
+
+
+class _RenderFailingPdfEngine:
+    """Delegates to a real ``PdfEngine`` but fails to render one specific
+    page -- standing in for a PDF whose page tree/geometry pypdf considers
+    entirely valid (so every earlier check passes) but whose content stream
+    only the renderer itself rejects.
+    """
+
+    def __init__(self, delegate: PdfEngine, *, fails_on_page_index: int) -> None:
+        self._delegate = delegate
+        self._fails_on_page_index = fails_on_page_index
+
+    def page_count(self, source: Path) -> int:
+        return self._delegate.page_count(source)
+
+    def is_encrypted(self, source: Path) -> bool:
+        return self._delegate.is_encrypted(source)
+
+    def page_geometry(self, source: Path, page_index: int) -> PageGeometry:
+        return self._delegate.page_geometry(source, page_index)
+
+    def render_page_png(self, source: Path, page_index: int, *, scale: float) -> bytes:
+        if page_index == self._fails_on_page_index:
+            raise RuntimeError("simulated PDFium render failure")
+        return self._delegate.render_page_png(source, page_index, scale=scale)
+
+    def stamp_markers(
+        self,
+        source: Path,
+        destination: Path,
+        markers: Mapping[int, Sequence[NormalizedPoint]],
+        *,
+        mark_size_pt: float = 8.0,
+    ) -> None:
+        self._delegate.stamp_markers(source, destination, markers, mark_size_pt=mark_size_pt)
+
+
+def test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """A page can pass every check done from its page tree/geometry (which is
+    all pypdf ever looks at) and still fail only when PDFium actually tries
+    to render it -- an unsupported/malformed content stream, say. That must
+    surface as the documented bad-PDF rejection (PdfCorruptedError, mapped to
+    400), not an unhandled exception (500), and must leave no DB row or file
+    behind, same as any other rejection caught before this point.
+    """
+    _seed_test_with_questions(make_uow, questions=[])
+    failing_engine = _RenderFailingPdfEngine(_ENGINE, fails_on_page_index=0)
+
+    with make_uow() as uow, pytest.raises(PdfCorruptedError):
+        intake_submission(
+            uow,
+            store,
+            failing_engine,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=_pdf_bytes(pages=1),
+            limits=_LIMITS,
             now=at(),
         )
 
