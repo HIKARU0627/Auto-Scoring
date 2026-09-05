@@ -405,7 +405,14 @@ class JobQueueService:
             await asyncio.gather(self._retry_scheduler_task, return_exceptions=True)
             self._retry_scheduler_task = None
         self._retry_heap = []
-        self._retry_added.clear()
+        # Replaced, not just `.clear()`-ed: an `asyncio.Event` binds to
+        # whichever loop is running the first time something awaits it, and
+        # `clear()` does not undo that binding. A later `start()` may run on
+        # an entirely different event loop (same reasoning as `_loop`
+        # above), and the next `_retry_scheduler_loop` awaiting this same
+        # Event object while the heap is empty would otherwise raise
+        # "... is bound to a different event loop" (review round 8, P2).
+        self._retry_added = asyncio.Event()
 
     async def _worker_loop(self) -> None:
         while True:
