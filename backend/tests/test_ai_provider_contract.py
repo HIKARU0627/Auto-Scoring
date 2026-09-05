@@ -62,6 +62,25 @@ class AIProviderContract:
         assert 0.0 <= response.grading_confidence <= 1.0
         assert 0 <= response.score <= response.max_score
 
+    def test_grade_preserves_annotation_candidates(self, provider: AIProvider) -> None:
+        """simplified-design-specification.md section 12.1: the app places
+        annotation candidates on the PDF, so the AIProvider port must not
+        drop them (Issue #14 review: "provider応答内のannotation候補を保持
+        する")."""
+        response = provider.grade(
+            GradingRequest(
+                question_id="with-annotations",
+                prompt_text="設問文",
+                ocr_text="行く",
+                model_answer="模範解答",
+                rubric_text="採点基準",
+                max_score=5,
+            )
+        )
+        assert response.annotations
+        assert response.annotations[0].target == "行く"
+        assert response.annotations[0].type == "correction"
+
     def test_schema_violation_never_falls_back_to_free_text_parsing(
         self, provider: AIProvider
     ) -> None:
@@ -117,7 +136,9 @@ class _ReplayAIProvider:
                     ],
                     "comment": "概ね良好です。",
                     "rationale": "criterion c1を充足するため4点とした。",
-                    "annotations": [],
+                    "annotations": [
+                        {"target": request.ocr_text, "type": "correction", "comment": "過去形"}
+                    ],
                 }
             )
 

@@ -27,20 +27,34 @@ Design decisions this schema encodes:
 * ``comment`` reuses the same character cap as human-confirmed annotation
   comments (``domain.models.MAX_COMMENT_CHARS``,
   business-rules-and-evaluation-data.md section 2 (6): "全角 120 文字").
+* Every model is ``strict=True``: a provider sending ``"score": "4"`` or
+  ``"confidence": "0.8"`` (a string standing in for a number) is a schema
+  violation, not a value to coerce. Required text fields
+  (``question_id`` / ``comment`` / ``rationale`` / criterion ``id`` /
+  ``rationale`` / annotation ``target`` / ``type``) also reject a
+  whitespace-only string, since ``min_length`` alone would let one through.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from auto_scoring.domain.models import MAX_COMMENT_CHARS, CriterionOutcome
+
+#: A required string that must contain more than just whitespace. Plain
+#: ``min_length=1`` accepts ``" "``; this also strips before checking length.
+_NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class RecognitionOutput(BaseModel):
     """What the AI believes the OCR text says, and how sure it is (section 9.2)."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    #: Not a ``_NonBlankStr``: an unreadable region is a legitimate empty
+    #: string, matching ``domain.ocr.OcrResult`` (never a guessed value).
     text: str
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -52,7 +66,7 @@ class GradingOutput(BaseModel):
     confidences must never be read from the same field.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, populate_by_name=True)
 
     score: int = Field(ge=0)
     max_score: int = Field(ge=0, alias="maxScore")
@@ -68,12 +82,12 @@ class GradingOutput(BaseModel):
 class CriterionResultOutput(BaseModel):
     """One rubric criterion's outcome, confidence, and required rationale."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    id: str = Field(min_length=1)
+    id: _NonBlankStr
     result: CriterionOutcome
     confidence: float = Field(ge=0.0, le=1.0)
-    rationale: str = Field(min_length=1)
+    rationale: _NonBlankStr
 
 
 class AnnotationCandidate(BaseModel):
@@ -81,24 +95,24 @@ class AnnotationCandidate(BaseModel):
     ``type`` (+ optional comment) only -- placement is decided by the app.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    target: str = Field(min_length=1)
-    type: str = Field(min_length=1)
-    comment: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
+    target: _NonBlankStr
+    type: _NonBlankStr
+    comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)] | None = None
 
 
 class AIGradingResult(BaseModel):
     """The full structured output for one question (section 9.2 example)."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, populate_by_name=True)
 
-    question_id: str = Field(min_length=1, alias="questionId")
+    question_id: Annotated[_NonBlankStr, Field(alias="questionId")]
     recognition: RecognitionOutput
     grading: GradingOutput
     criteria: tuple[CriterionResultOutput, ...] = Field(min_length=1)
-    comment: str = Field(min_length=1, max_length=MAX_COMMENT_CHARS)
-    rationale: str = Field(min_length=1)
+    comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)]
+    rationale: _NonBlankStr
     annotations: tuple[AnnotationCandidate, ...] = ()
 
     @model_validator(mode="after")

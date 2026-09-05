@@ -37,6 +37,12 @@
           "rationale": "配点表のc1・c2は充足、c3は部分的、c4は断定不足のため不合格とした。",
           "annotations": []
         },
+        "descriptor": {
+          "model": "synthetic-model-a",
+          "version": "2026-01-pilot",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema"
+        },
         "latency_seconds": 1.1,
         "cost_usd": 0.0008
       },
@@ -54,6 +60,12 @@
           "comment": "OCRの誤字（がら）を勘案しても評価は大きく変わらないが、確認推奨。",
           "rationale": "文字誤りにより読み取り信頼度は下がったが、採点根拠となる語句は維持されているため配点はclean版とほぼ同等とした。",
           "annotations": []
+        },
+        "descriptor": {
+          "model": "synthetic-model-a",
+          "version": "2026-01-pilot",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema"
         },
         "latency_seconds": 1.3,
         "cost_usd": 0.0008
@@ -83,6 +95,12 @@
           "comment": "文字化けの影響で一部評価を厳しめにした。",
           "rationale": "OCRノイズにより判定を保守的に倒した。",
           "annotations": []
+        },
+        "descriptor": {
+          "model": "synthetic-model-b",
+          "version": "2026-01-pilot",
+          "temperature": 0.2,
+          "structured_output_mode": "tool_use"
         },
         "latency_seconds": 1.4,
         "cost_usd": 0.0003

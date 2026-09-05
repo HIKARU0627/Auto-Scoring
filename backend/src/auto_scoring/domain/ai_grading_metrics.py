@@ -12,17 +12,35 @@ averaged scores leave this module (Issue #14 verification: "secretと答案
 Recognition Confidence and Grading Confidence are kept in separate fields and
 separate summary columns throughout -- never averaged together (section 10;
 Issue #14: "Recognition ConfidenceとGrading Confidenceを混同しない").
+
+A recorded response is only ever scored against the ground-truth label it
+actually answers: ``evaluate_sample`` rejects (as ``mismatched``, distinct
+from a schema violation) a response whose ``question_id`` or ``max_score``
+does not match the label it is being compared against, so an answer to a
+different question can never register as an accidental exact match
+(code review finding: comparing raw scores alone let a 4/100 answer to the
+wrong question count as matching a 4/5 truth label).
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import fmean
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from auto_scoring.domain.ai_provider import GradingResponse
 from auto_scoring.domain.models import CriterionOutcome
+
+#: Grading Confidence at/above this counts as "high confidence" for the
+#: calibration gate (docs/poc-2-ai-grading.md section 8.1).
+_HIGH_CONFIDENCE_THRESHOLD = 0.8
+
+#: Grading Confidence below this counts as "low confidence" for the same gate.
+_LOW_CONFIDENCE_THRESHOLD = 0.5
 
 _COLUMNS = (
     "教科",
@@ -35,28 +53,35 @@ _COLUMNS = (
     "平均Recognition Conf",
     "平均Grading Conf",
     "schema違反率",
+    "対応不一致率",
     "p50 latency(s)",
-    "概算cost(USD)",
+    "p95 latency(s)",
+    "概算cost(USD/1000問)",
+    "高Conf誤り率(>=0.8)",
+    "低Conf誤り率(<0.5)",
 )
 
+#: A required string that must contain more than just whitespace. Plain
+#: ``min_length=1`` accepts ``" "``; this also strips before checking length.
+_NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
-@dataclass(frozen=True, kw_only=True)
-class CriterionGroundTruth:
-    """Human label for one rubric criterion (business rules section 6.3)."""
 
-    criterion_id: str
+class CriterionGroundTruth(BaseModel):
+    """Human label for one rubric criterion (business rules section 6.3).
+
+    Strict + non-blank-checked: an external ``--dataset`` file is untrusted
+    input, same as a provider response (code review finding: silent coercion
+    of a malformed label -- e.g. a blank id -- would produce metrics that
+    look valid but are not).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    criterion_id: _NonBlankStr
     outcome: CriterionOutcome
 
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> CriterionGroundTruth:
-        return cls(
-            criterion_id=str(data["criterion_id"]),
-            outcome=CriterionOutcome(str(data["outcome"])),
-        )
 
-
-@dataclass(frozen=True, kw_only=True)
-class GradingGroundTruth:
+class GradingGroundTruth(BaseModel):
     """Human label for one graded question (business rules section 6.3).
 
     Holds no student-identifying data: ``question_id`` and ``test_id`` are
@@ -67,23 +92,36 @@ class GradingGroundTruth:
     ``max_score`` accuracy.
     """
 
-    question_id: str
-    subject: str
-    test_id: str
-    score: int
-    max_score: int
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    question_id: _NonBlankStr
+    subject: _NonBlankStr
+    test_id: _NonBlankStr
+    score: int = Field(ge=0)
+    max_score: int = Field(ge=0)
     criteria: tuple[CriterionGroundTruth, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_invariants(self) -> GradingGroundTruth:
+        if self.score > self.max_score:
+            raise ValueError(f"score {self.score} exceeds max_score {self.max_score}")
+        ids = [c.criterion_id for c in self.criteria]
+        if len(ids) != len(set(ids)):
+            raise ValueError("criteria contains duplicate criterion_id")
+        return self
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> GradingGroundTruth:
-        return cls(
-            question_id=str(data["question_id"]),
-            subject=str(data["subject"]),
-            test_id=str(data["test_id"]),
-            score=int(data["score"]),
-            max_score=int(data["max_score"]),
-            criteria=tuple(CriterionGroundTruth.from_mapping(c) for c in data.get("criteria", ())),
-        )
+        """Parse and validate a ground-truth mapping loaded from ``--dataset`` JSON.
+
+        Goes through the JSON-validation code path (``model_validate_json``,
+        not ``model_validate`` on the raw ``dict``) so ``strict=True`` still
+        accepts a JSON array for ``criteria`` -- JSON has no tuple literal,
+        so pydantic treats a list as valid input for a tuple field even in
+        strict mode; only scalar coercion (e.g. the string ``"4"`` for an
+        ``int`` field) is rejected.
+        """
+        return cls.model_validate_json(json.dumps(data, ensure_ascii=False))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -93,12 +131,19 @@ class SampleOutcome:
     ``schema_violation`` samples carry no ``response`` -- the provider's raw
     output failed :func:`auto_scoring.domain.ai_grading.parse_ai_grading_result`
     and must not be scored as if it were a real grade (Issue #14 acceptance).
+
+    ``mismatched`` samples carry a schema-*valid* response that does not
+    correspond to the ground-truth label it was evaluated against (different
+    ``question_id`` and/or ``max_score``) -- also never scored as a real
+    grade, and reported separately from a schema violation so the two
+    failure modes are not conflated.
     """
 
     provider: str
     input_variant: str  # "ocr_clean" | "ocr_noisy"
     subject: str
     schema_violation: bool
+    mismatched: bool
     exact_match: bool | None
     within_tolerance: bool | None
     criterion_matches: int
@@ -123,9 +168,12 @@ class BucketSummary:
     mean_recognition_confidence: float | None
     mean_grading_confidence: float | None
     schema_violation_rate: float
+    mismatch_rate: float
     latency_p50: float | None
     latency_p95: float | None
     mean_cost_usd: float | None
+    high_confidence_wrong_rate: float | None
+    low_confidence_wrong_rate: float | None
 
 
 def evaluate_sample(
@@ -136,6 +184,7 @@ def evaluate_sample(
     input_variant: str,
     tolerance: int = 1,
     cost_usd: float | None = None,
+    latency_seconds: float | None = None,
 ) -> SampleOutcome:
     """Score one recorded ``response`` against its human ``truth`` label.
 
@@ -144,6 +193,16 @@ def evaluate_sample(
     -- that sample counts toward ``schema_violation_rate`` and contributes no
     exact-match / within-tolerance / criterion data (Issue #14 acceptance: a
     schema violation is never scored as if it were a valid grade).
+
+    A schema-*valid* ``response`` whose ``question_id`` or ``max_score``
+    does not match ``truth`` is rejected the same way, as ``mismatched``:
+    comparing only the raw ``score`` values would let an answer to a
+    different question register as an accidental exact match.
+
+    ``latency_seconds`` is taken as given, independent of whether ``response``
+    parsed -- a failed or mismatched call still took real time, and a cell
+    with no recorded measurement is genuinely unknown, not a fabricated 0s
+    (code review finding).
     """
     if response is None:
         return SampleOutcome(
@@ -151,13 +210,31 @@ def evaluate_sample(
             input_variant=input_variant,
             subject=truth.subject,
             schema_violation=True,
+            mismatched=False,
             exact_match=None,
             within_tolerance=None,
             criterion_matches=0,
             criterion_total=0,
             recognition_confidence=None,
             grading_confidence=None,
-            latency_seconds=None,
+            latency_seconds=latency_seconds,
+            cost_usd=cost_usd,
+        )
+
+    if response.question_id != truth.question_id or response.max_score != truth.max_score:
+        return SampleOutcome(
+            provider=provider,
+            input_variant=input_variant,
+            subject=truth.subject,
+            schema_violation=False,
+            mismatched=True,
+            exact_match=None,
+            within_tolerance=None,
+            criterion_matches=0,
+            criterion_total=0,
+            recognition_confidence=None,
+            grading_confidence=None,
+            latency_seconds=latency_seconds,
             cost_usd=cost_usd,
         )
 
@@ -174,13 +251,14 @@ def evaluate_sample(
         input_variant=input_variant,
         subject=truth.subject,
         schema_violation=False,
+        mismatched=False,
         exact_match=response.score == truth.score,
         within_tolerance=abs(response.score - truth.score) <= tolerance,
         criterion_matches=matches,
         criterion_total=total,
         recognition_confidence=response.recognition_confidence,
         grading_confidence=response.grading_confidence,
-        latency_seconds=response.latency_seconds,
+        latency_seconds=latency_seconds,
         cost_usd=cost_usd,
     )
 
@@ -197,6 +275,11 @@ def _mean_or_none(values: Sequence[float]) -> float | None:
     return fmean(values) if values else None
 
 
+def _wrong_rate(samples: Sequence[SampleOutcome]) -> float | None:
+    """Fraction of ``samples`` that did not exact-match (``None`` if empty)."""
+    return fmean(float(not bool(s.exact_match)) for s in samples) if samples else None
+
+
 def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummary]:
     """Group per-sample outcomes by (subject, provider, input_variant) and average each."""
     by_bucket: dict[tuple[str, str, str], list[SampleOutcome]] = {}
@@ -208,15 +291,32 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
     for key in sorted(by_bucket):
         subject, provider, input_variant = key
         group = by_bucket[key]
-        scored = [s for s in group if not s.schema_violation]
+        # Correctness / criterion / confidence stats only make sense for a
+        # response that both parsed and answers the right question.
+        scored = [s for s in group if not s.schema_violation and not s.mismatched]
         recognition = [
             s.recognition_confidence for s in scored if s.recognition_confidence is not None
         ]
         grading = [s.grading_confidence for s in scored if s.grading_confidence is not None]
-        latencies = [s.latency_seconds for s in scored if s.latency_seconds is not None]
+        # Latency and cost reflect the call itself, independent of whether
+        # the response was structurally valid -- computed over the full
+        # group, not just ``scored`` (code review finding).
+        latencies = [s.latency_seconds for s in group if s.latency_seconds is not None]
         costs = [s.cost_usd for s in group if s.cost_usd is not None]
         criterion_total = sum(s.criterion_total for s in scored)
         criterion_matches = sum(s.criterion_matches for s in scored)
+        high_confidence = [
+            s
+            for s in scored
+            if s.grading_confidence is not None
+            and s.grading_confidence >= _HIGH_CONFIDENCE_THRESHOLD
+        ]
+        low_confidence = [
+            s
+            for s in scored
+            if s.grading_confidence is not None and s.grading_confidence < _LOW_CONFIDENCE_THRESHOLD
+        ]
+        mean_cost = _mean_or_none(costs)
 
         summaries.append(
             BucketSummary(
@@ -236,9 +336,12 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
                 mean_recognition_confidence=_mean_or_none(recognition),
                 mean_grading_confidence=_mean_or_none(grading),
                 schema_violation_rate=fmean(float(s.schema_violation) for s in group),
+                mismatch_rate=fmean(float(s.mismatched) for s in group),
                 latency_p50=_percentile(latencies, 0.50),
                 latency_p95=_percentile(latencies, 0.95),
-                mean_cost_usd=_mean_or_none(costs),
+                mean_cost_usd=mean_cost,
+                high_confidence_wrong_rate=_wrong_rate(high_confidence),
+                low_confidence_wrong_rate=_wrong_rate(low_confidence),
             )
         )
     return summaries
@@ -249,12 +352,19 @@ def _fmt(value: float | None, digits: int = 3) -> str:
 
 
 def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
-    """Render bucket summaries as a Markdown table (the docs "結果表")."""
+    """Render bucket summaries as a Markdown table (the docs "結果表").
+
+    Cost is rendered per 1,000 questions (``mean_cost_usd * 1000``) to match
+    the unit the adoption gate is written in
+    (docs/poc-2-ai-grading.md section 8.1: "概算 cost: <= 3 USD / 1,000
+    設問"); the internal ``mean_cost_usd`` stays per-question.
+    """
     rows = [
         "| " + " | ".join(_COLUMNS) + " |",
         "| " + " | ".join(["---"] * len(_COLUMNS)) + " |",
     ]
     for summary in summaries:
+        cost_per_1k = None if summary.mean_cost_usd is None else summary.mean_cost_usd * 1000
         rows.append(
             "| "
             + " | ".join(
@@ -269,8 +379,12 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
                     _fmt(summary.mean_recognition_confidence),
                     _fmt(summary.mean_grading_confidence),
                     _fmt(summary.schema_violation_rate),
+                    _fmt(summary.mismatch_rate),
                     _fmt(summary.latency_p50),
-                    _fmt(summary.mean_cost_usd, digits=5),
+                    _fmt(summary.latency_p95),
+                    _fmt(cost_per_1k, digits=2),
+                    _fmt(summary.high_confidence_wrong_rate),
+                    _fmt(summary.low_confidence_wrong_rate),
                 )
             )
             + " |"

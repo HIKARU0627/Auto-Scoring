@@ -29,6 +29,12 @@
           "rationale": "模範解答と完全に一致するため満点とした。",
           "annotations": []
         },
+        "descriptor": {
+          "model": "synthetic-model-a",
+          "version": "2026-01-pilot",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema"
+        },
         "latency_seconds": 0.7,
         "cost_usd": 0.0005
       },
@@ -61,6 +67,12 @@
           "rationale": "模範解答と一致。",
           "annotations": []
         },
+        "descriptor": {
+          "model": "synthetic-model-b",
+          "version": "2026-01-pilot",
+          "temperature": 0.2,
+          "structured_output_mode": "tool_use"
+        },
         "latency_seconds": 0.5,
         "cost_usd": 0.0002
       },
@@ -75,6 +87,12 @@
           "comment": "文字が判読しづらいため要確認としました。",
           "rationale": "低い認識信頼度を反映し部分点にとどめた。",
           "annotations": []
+        },
+        "descriptor": {
+          "model": "synthetic-model-b",
+          "version": "2026-01-pilot",
+          "temperature": 0.2,
+          "structured_output_mode": "tool_use"
         },
         "latency_seconds": 1.0,
         "cost_usd": 0.0002

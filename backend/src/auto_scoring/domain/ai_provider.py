@@ -91,6 +91,20 @@ class GradingCriterionOutcome:
 
 
 @dataclass(frozen=True, kw_only=True)
+class GradingAnnotationCandidate:
+    """One AI-proposed annotation, mapped from the validated AI response.
+
+    Carries no coordinates (simplified-design-specification.md section 12.1):
+    placement is decided by the app from ``target`` (and, once Issue #19's
+    OCR pipeline exists, that text's bounding box), never guessed by the AI.
+    """
+
+    target: str
+    type: str
+    comment: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
 class GradingResponse:
     """Validated grading result for one question, plus the metadata the PoC
     harness needs to compute latency / cost / agreement metrics without
@@ -105,6 +119,7 @@ class GradingResponse:
     rationale: str
     comment: str
     criteria: tuple[GradingCriterionOutcome, ...]
+    annotations: tuple[GradingAnnotationCandidate, ...]
     descriptor: ProviderDescriptor
     latency_seconds: float
 
@@ -137,6 +152,10 @@ def grading_response_from_result(
                 rationale=c.rationale,
             )
             for c in result.criteria
+        ),
+        annotations=tuple(
+            GradingAnnotationCandidate(target=a.target, type=a.type, comment=a.comment)
+            for a in result.annotations
         ),
         descriptor=descriptor,
         latency_seconds=latency_seconds,

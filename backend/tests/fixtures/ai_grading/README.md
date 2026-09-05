@@ -40,7 +40,17 @@ provider output for every `(provider, input_variant)` cell:
   },
   "recorded": {
     "<provider name>": {
-      "ocr_clean": { "<raw AIGradingResult JSON, or an intentionally invalid object>": "...", "latency_seconds": 1.1, "cost_usd": 0.0009 },
+      "ocr_clean": {
+        "response": "<raw AIGradingResult JSON, or an intentionally invalid object>",
+        "descriptor": {
+          "model": "...",
+          "version": "... or null",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema | tool_use | ..."
+        },
+        "latency_seconds": 1.1,
+        "cost_usd": 0.0009
+      },
       "ocr_noisy": { "...": "..." }
     }
   }
@@ -53,7 +63,26 @@ averaged together): the harness records `recognition.confidence` and
 reader never mistakes "text was read cleanly" for "the grade is trustworthy"
 (simplified-design-specification.md section 10).
 
-A `recorded` entry that is missing a required field (see
+The **expected comparison matrix** is every provider name recorded anywhere
+in the dataset, times both `ocr_clean` and `ocr_noisy` -- not just whatever
+keys a given sample happens to define. A cell missing from that matrix (no
+entry at all, or an entry with no `response` key) is "pending" in the
+harness's output, never silently skipped, so an incomplete real dataset
+cannot look like a completed comparison.
+
+A `recorded` entry whose `response` is missing a required field (see
 `auto_scoring.domain.ai_grading.AIGradingResult`) is a deliberate
 schema-violation fixture: the harness must count it toward
-`schema_violation_rate`, never score it as a real grade.
+`schema_violation_rate`, never score it as a real grade. A `response` that
+parses but answers a different question (`questionId` or `maxScore` not
+matching this file's `ground_truth`) is a deliberate "mismatched" fixture --
+counted toward `mismatch_rate`, and likewise never scored as a real grade,
+since comparing raw scores alone could otherwise count an answer to the
+wrong question as an accidental match.
+
+`descriptor` is required on every cell that has a `response` -- the harness
+reads it instead of fabricating one, so two cells recorded under different
+settings for the same `provider` name stay distinguishable
+(Issue #14 "再現条件"). A cell that intentionally demonstrates a schema
+violation may omit `descriptor` (it is never reached, since the response
+fails to parse before `descriptor` is read).

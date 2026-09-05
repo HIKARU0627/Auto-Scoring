@@ -33,6 +33,12 @@
           "rationale": "配点表のk2のみ充足するため加点は最小限とした。",
           "annotations": []
         },
+        "descriptor": {
+          "model": "synthetic-model-a",
+          "version": "2026-01-pilot",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema"
+        },
         "latency_seconds": 1.0,
         "cost_usd": 0.0007
       },
@@ -48,6 +54,12 @@
           "comment": "OCR誤字（美祢）により東方の影響例が判別できず、要確認としました。",
           "rationale": "誤字により本来passとすべき箇所をfailへ倒した保守的判定。",
           "annotations": []
+        },
+        "descriptor": {
+          "model": "synthetic-model-a",
+          "version": "2026-01-pilot",
+          "temperature": 0.0,
+          "structured_output_mode": "json_schema"
         },
         "latency_seconds": 1.1,
         "cost_usd": 0.0007
@@ -67,6 +79,12 @@
           "rationale": "k2充足に加え論述の網羅性をやや高く評価した。",
           "annotations": []
         },
+        "descriptor": {
+          "model": "synthetic-model-b",
+          "version": "2026-01-pilot",
+          "temperature": 0.2,
+          "structured_output_mode": "tool_use"
+        },
         "latency_seconds": 1.6,
         "cost_usd": 0.0002
       },
@@ -82,6 +100,12 @@
           "comment": "テキストの破損により採点できません。",
           "rationale": "OCRノイズを過大評価し、実際には読み取れる内容まで一律0点とした。高いgrading confidenceにもかかわらず不当な0点になっている点に注意。",
           "annotations": []
+        },
+        "descriptor": {
+          "model": "synthetic-model-b",
+          "version": "2026-01-pilot",
+          "temperature": 0.2,
+          "structured_output_mode": "tool_use"
         },
         "latency_seconds": 0.8,
         "cost_usd": 0.0002

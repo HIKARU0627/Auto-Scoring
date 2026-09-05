@@ -114,16 +114,18 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 
 すべて**人間の正解ラベルから**算出する（`domain/ai_grading_metrics.py`）。
 
-| 指標                  | 定義                                                                         | 関数                    |
-| --------------------- | ---------------------------------------------------------------------------- | ----------------------- |
-| 完全一致率            | AI の `score` が人間の `score` と完全に一致する割合                          | `evaluate_sample`       |
-| 許容点差内率          | `abs(AI score - 人間 score) <= tolerance` を満たす割合（既定 tolerance=1点） | `evaluate_sample`       |
-| criterion 別一致率    | AI が返した criterion のうち、正解ラベルと `result` が一致する割合           | `evaluate_sample`       |
-| schema violation 率   | `AIGradingResult` のスキーマ検証に失敗した応答の割合                         | `evaluate_sample`       |
-| 平均 Recognition Conf | `recognition.confidence` の平均（Grading Conf とは別集計）                   | `summarize_by_provider` |
-| 平均 Grading Conf     | `grading.confidence` の平均（Recognition Conf とは別集計）                   | `summarize_by_provider` |
-| latency               | 1 設問あたりの応答時間（p50 / p95）                                          | `summarize_by_provider` |
-| 概算 cost             | 1 設問あたりの API 料金（各社公開単価 × 実リクエスト数、USD）                | `summarize_by_provider` |
+| 指標                  | 定義                                                                                | 関数                    |
+| --------------------- | ----------------------------------------------------------------------------------- | ----------------------- |
+| 完全一致率            | AI の `score` が人間の `score` と完全に一致する割合                                 | `evaluate_sample`       |
+| 許容点差内率          | `abs(AI score - 人間 score) <= tolerance` を満たす割合（既定 tolerance=1点）        | `evaluate_sample`       |
+| criterion 別一致率    | AI が返した criterion のうち、正解ラベルと `result` が一致する割合                  | `evaluate_sample`       |
+| schema violation 率   | `AIGradingResult` のスキーマ検証に失敗した応答の割合                                | `evaluate_sample`       |
+| 対応不一致率          | 応答の `questionId`/`maxScore` が正解ラベルと対応しない割合（§3.1 参照）            | `evaluate_sample`       |
+| 平均 Recognition Conf | `recognition.confidence` の平均（Grading Conf とは別集計）                          | `summarize_by_provider` |
+| 平均 Grading Conf     | `grading.confidence` の平均（Recognition Conf とは別集計）                          | `summarize_by_provider` |
+| latency               | 1 設問あたりの応答時間（p50 / p95。応答の妥当性を問わず全呼び出しから算出）         | `summarize_by_provider` |
+| 概算 cost             | 1,000 設問あたりの API 料金（各社公開単価 × 実リクエスト数、USD。§8.1 と同じ単位）  | `summarize_by_provider` |
+| 高/低 Conf 誤り率     | Grading Confidence ≥0.8 / <0.5 の集団それぞれで完全一致しなかった割合（較正ゲート） | `summarize_by_provider` |
 
 `tolerance <= 1 点差` を既定とする（設問の配点が小さい場合は採用判断時に見直す）。
 集計は `summarize_by_provider()` が (教科, provider, 入力モード) ごとに平均し、
@@ -135,6 +137,18 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 （`None` 扱い）、`schema_violation_rate` にのみ計上する。誤って「0 点」として
 不一致率を悪化させることも、逆に無視して精度を過大評価することもしない
 （Issue #14 受入条件）。
+
+### 3.1 対応不一致（mismatch）の扱い
+
+応答が schema 検証を通っても、その `questionId` が今比較している正解ラベルと
+異なる、または `maxScore` が正解ラベルの `max_score` と食い違う場合は、
+`score` の値だけを見て偶然一致しているように見えても**完全一致として数えない**。
+例えば別設問への回答（4/100）が配点 5 点の正解ラベル（4/5）と比較され、
+生の点数だけを見ると「一致」に見えてしまうケースを防ぐための分類で、
+schema violation とは別に `mismatch_rate` として集計する。latency・概算 cost
+は対応不一致でも実際に呼び出しが発生している以上そのまま計上するが、
+完全一致率・許容点差内率・criterion 一致率・Confidence 平均には算入しない
+（`evaluate_sample` の `mismatched` フラグ）。
 
 ---
 
@@ -167,10 +181,17 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 
 `--dataset` に本 PoC の予備調査データ（§6、5 件）を指定すると、現時点では
 `recorded`（AI 応答）が空のため **`evaluated cells: 0`** と
-**`staged ground truth with no provider cell at all: 5`** が出力される
-（credentials 未整備を推測で埋めない設計。§6.2 参照）。実 AI 呼び出しの
-live-provider パスは、credentials が揃い次第、**Issue #14 を閉じる前に本 PoC へ
-追加する**（§7.3）。呼び出し時も request/response 本文はログに残さない。
+**`staged ground truth with no provider recorded anywhere in the dataset: 5`**
+が出力される（credentials 未整備を推測で埋めない設計。§6.2 参照）。実 AI
+呼び出しの live-provider パスは、credentials が揃い次第、**Issue #14 を閉じる
+前に本 PoC へ追加する**（§7.3）。呼び出し時も request/response 本文はログに
+残さない。
+
+ハーネスが比較対象とする provider × 入力モードの組は、データセット全体に
+一度でも記録された provider 名 × `ocr_clean`/`ocr_noisy` の全組み合わせ
+（期待される比較マトリクス）である。ある答案でその組がまだ記録されて
+いなければ「pending」として明示し、単に走査対象から漏れて比較が完了した
+ように見えることを防ぐ（Issue #14 受入条件: 最低 2 候補・両入力モード）。
 
 ---
 
@@ -181,7 +202,8 @@ live-provider パスは、credentials が揃い次第、**Issue #14 を閉じる
 - §4.1 の pytest が全て pass する（スキーマ検証・contract test・メトリクスが
   人手ラベルから算出されている、schema violation が正しく検知される）。
 - §4.2（予備調査データ、`recorded` 空）は `evaluated cells: 0` /
-  `staged ... : 5` を出し、非ゼロ終了やクラッシュをしない。
+  `staged ground truth with no provider recorded anywhere in the dataset: 5`
+  を出し、非ゼロ終了やクラッシュをしない。
 - 実データ評価（credentials 整備後）では、`ocr_noisy` 入力で
   Recognition Confidence が下がる一方、Grading Confidence・criterion 一致率が
   それに連動して不当に変化しない（＝OCR誤りとAI採点判断の混同がない）ことが
@@ -197,31 +219,42 @@ live-provider パスは、credentials が揃い次第、**Issue #14 を閉じる
 # uv run python poc/issue_14_ai_grading/report.py の出力（合成データ / 参考値のみ）
 evaluated cells: 12
 
-| 教科 | provider | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | p50 latency(s) | 概算cost(USD) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| synthetic-history | synthetic-a | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.700 | 0.00065 |
-| synthetic-history | synthetic-a | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 1.300 | 0.00065 |
-| synthetic-history | synthetic-b | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.500 | 0.00025 |
-| synthetic-history | synthetic-b | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 1.000 | 0.00025 |
-| synthetic-world-history | synthetic-a | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 1.000 | 0.00070 |
-| synthetic-world-history | synthetic-a | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 1.100 | 0.00070 |
-| synthetic-world-history | synthetic-b | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 1.600 | 0.00020 |
-| synthetic-world-history | synthetic-b | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.800 | 0.00020 |
+| 教科 | provider | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | 概算cost(USD/1000問) | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| synthetic-history | synthetic-a | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.700 | 1.100 | 0.65 | 0.000 | - |
+| synthetic-history | synthetic-a | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.900 | 1.300 | 0.65 | - | - |
+| synthetic-history | synthetic-b | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.500 | 0.900 | 0.25 | 0.000 | - |
+| synthetic-history | synthetic-b | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.000 | 1.400 | 0.25 | - | 1.000 |
+| synthetic-world-history | synthetic-a | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 0.70 | - | - |
+| synthetic-world-history | synthetic-a | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 0.70 | - | - |
+| synthetic-world-history | synthetic-b | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 0.20 | - | - |
+| synthetic-world-history | synthetic-b | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 0.20 | 1.000 | - |
 ```
 
 合成データの `synthetic-b`/`synthetic-world-history`/`ocr_noisy` セルは、
 「Recognition Confidence が低いのに Grading Confidence が高いまま、実際には
 読み取れる内容を一律 0 点にした」という、Grading Confidence の較正不良を
 意図的に再現した例である（`tests/fixtures/ai_grading/sample-02.json` の
-`synthetic-b`/`ocr_noisy`）。これは本物のモデル挙動ではなく、メトリクスが
-この種の不整合を検出できることを示すためのフィクスチャ。
+`synthetic-b`/`ocr_noisy`）。この行の「高Conf誤り率」が 1.000（完全一致 0 件を
+高 Confidence で出した）であることが、まさに §8.1 の較正ゲートが検出すべき
+逆転パターンである。これは本物のモデル挙動ではなく、メトリクスがこの種の
+不整合を検出できることを示すためのフィクスチャ。
+
+「対応不一致率」（`mismatch_rate`）は本合成データではすべて 0（`questionId`/
+`maxScore` が正解ラベルと一致しないセルを作っていない）。この列が非ゼロに
+なるのは、応答が別の設問へのものだったり点数スケールが食い違ったりした
+場合で、その場合も完全一致率・許容点差内率へは加算しない
+（`evaluate_sample` が `mismatched` として別集計するため）。cost は
+採用ゲート（§8.1）と同じ単位（設問 1,000 問あたり USD）で表示する。
 
 ### 6.2 実データ予備調査（pilot） — 統計的な採用根拠にはならない
 
-`C:\Users\ZEROPRO\Downloads\添削データ` にある、日本史・世界史の添削模擬課題
-（各教科 1 テスト・問 1 のみ）から、実際の設問文・模範解答・採点基準・
-添削サンプル（人間添削者による実採点）を本エージェントが直接読み、
-個人情報を除去したうえで手作業で書き起こした。件数は次のとおり。
+プロジェクトオーナーが用意した、日本史・世界史の添削模擬課題の資料
+（論理パス `"<提供元ローカル環境>/添削データ/"` 配下、決定書 §6.5 に準じ
+本書には絶対パスを記載しない）から、各教科 1 テスト・問 1 のみを対象に、
+実際の設問文・模範解答・採点基準・添削サンプル（人間添削者による実採点）
+を本エージェントが直接読み、個人情報を除去したうえで手作業で書き起こした。
+件数は次のとおり。
 
 | 教科   | テスト数 | 設問数       | 答案数（添削サンプル件数） | 決定書 §6.2 下限         |
 | ------ | -------- | ------------ | -------------------------- | ------------------------ |
@@ -312,6 +345,10 @@ evaluated cells: 12
   ローカル／手動実行のマーカー付きテストにする）。
 - `poc/issue_14_ai_grading/report.py` の live-provider パス（設問 →
   `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）。
+  録画する各セルには `descriptor`（model/version/temperature/
+  structured_output_mode）を必ず含める。ハーネスはこの記録済みメタデータを
+  読むだけで、`provider` 名から決め打ちしない（Issue #14「再現条件」。
+  同じ provider 名でも設定が違う録画は区別できなければならない）。
 
 実測・選定後は §10 に従い、不採用アダプタを削除して採用アダプタだけを MVP へ
 昇格する。
@@ -326,12 +363,13 @@ evaluated cells: 12
 主目的のため）。schema violation は 1 件でも自由文救済してはならず、率として
 低いことを求める。
 
-| 指標                 | 閾値  |
-| -------------------- | ----- |
-| 完全一致率           | ≥ 60% |
-| 許容点差内率（±1点） | ≥ 90% |
-| criterion 別一致率   | ≥ 85% |
-| schema violation 率  | ≤ 1%  |
+| 指標                 | 閾値                                                                          |
+| -------------------- | ----------------------------------------------------------------------------- |
+| 完全一致率           | ≥ 60%                                                                         |
+| 許容点差内率（±1点） | ≥ 90%                                                                         |
+| criterion 別一致率   | ≥ 85%                                                                         |
+| schema violation 率  | ≤ 1%                                                                          |
+| 対応不一致率         | 0%（1 件でも発生したら harness/adapter 側の実装不良として原因調査を優先する） |
 
 共通条件:
 
@@ -347,16 +385,19 @@ evaluated cells: 12
 
 ### 8.2 結果表（実測は本 PoC クローズ時に記入）
 
-| provider         | 教科   | 入力        | 完全一致率 | 許容点差内率 | criterion一致率 | schema違反率 | p50 latency | cost/1k | 平均Recognition Conf | 平均Grading Conf |
-| ---------------- | ------ | ----------- | ---------- | ------------ | --------------- | ------------ | ----------- | ------- | -------------------- | ---------------- |
-| `gemini`         | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `gemini`         | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `gemini`         | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `gemini`         | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `claude` / `gpt` | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `claude` / `gpt` | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `claude` / `gpt` | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
-| `claude` / `gpt` | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_       | _TBD_   | _TBD_                | _TBD_            |
+`uv run python poc/issue_14_ai_grading/report.py` の実データ実行結果をそのまま
+貼り付ける（列は `to_markdown_table` の出力に準拠。cost は 1,000 設問あたり）。
+
+| provider         | 教科   | 入力        | 完全一致率 | 許容点差内率 | criterion一致率 | schema違反率 | 対応不一致率 | p50 latency | p95 latency | cost/1k | 平均Recognition Conf | 平均Grading Conf | 高Conf誤り率 | 低Conf誤り率 |
+| ---------------- | ------ | ----------- | ---------- | ------------ | --------------- | ------------ | ------------ | ----------- | ----------- | ------- | -------------------- | ---------------- | ------------ | ------------ |
+| `gemini`         | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `gemini`         | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `gemini`         | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `gemini`         | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+| `claude` / `gpt` | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_   | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
 
 ### 8.3 人間採点との不一致例（実測後に記入）
 

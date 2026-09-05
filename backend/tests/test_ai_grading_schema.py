@@ -129,3 +129,65 @@ def test_annotation_never_carries_coordinates() -> None:
 def test_malformed_json_is_a_validation_error_not_a_silent_default() -> None:
     with pytest.raises(ValidationError):
         parse_ai_grading_result("{not valid json")
+
+
+def test_score_as_string_is_not_coerced() -> None:
+    """strict=True: a provider sending "score": "4" is a violation, not a 4."""
+    with pytest.raises(ValidationError):
+        _parse({"grading": {"score": "4", "maxScore": 5, "confidence": 0.85}})
+
+
+def test_confidence_as_string_is_not_coerced() -> None:
+    with pytest.raises(ValidationError):
+        _parse({"grading": {"score": 4, "maxScore": 5, "confidence": "0.85"}})
+
+
+def test_max_score_as_string_is_not_coerced() -> None:
+    with pytest.raises(ValidationError):
+        _parse({"grading": {"score": 4, "maxScore": "5", "confidence": 0.85}})
+
+
+@pytest.mark.parametrize("field", ["comment", "rationale"])
+def test_whitespace_only_top_level_field_is_rejected(field: str) -> None:
+    with pytest.raises(ValidationError):
+        _parse({field: "   　  "})
+
+
+def test_whitespace_only_criterion_id_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _parse(
+            {
+                "criteria": [
+                    {"id": "  ", "result": "pass", "confidence": 0.9, "rationale": "a"},
+                ]
+            }
+        )
+
+
+def test_whitespace_only_criterion_rationale_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _parse(
+            {
+                "criteria": [
+                    {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "   "},
+                ]
+            }
+        )
+
+
+def test_whitespace_only_question_id_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _parse({"questionId": "   "})
+
+
+def test_whitespace_only_annotation_target_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _parse({"annotations": [{"target": "  ", "type": "correction"}]})
+
+
+def test_recognition_text_may_be_empty_for_an_unreadable_region() -> None:
+    """Unlike comment/rationale, recognition.text is not a _NonBlankStr: an
+    empty string is the legitimate sentinel for "nothing recognised"
+    (mirrors domain.ocr.OcrResult, not a value to reject)."""
+    result = _parse({"recognition": {"text": "", "confidence": 0.1}})
+    assert result.recognition.text == ""
