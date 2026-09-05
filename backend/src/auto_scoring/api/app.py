@@ -179,13 +179,13 @@ def create_app(
     engine creation/disposal, or the startup repair sweep for it -- the
     caller owns that database's whole lifecycle. ``store`` (used by the
     submission/test routes below regardless) still comes from ``data_root``
-    as usual either way. It also means the lifespan below never takes the
+    as usual either way. It also means this function never takes the
     data-root lock (see ``auto_scoring.adapters.data_root_lock``): a test
     fixture's session_factory has no real, shared ``data_root`` to protect
     two instances from racing over, and existing tests deliberately build
     more than one `create_app` against the same ``data_root`` fixture to
-    simulate a process restart (never concurrently -- only one has its
-    lifespan actually running at a time).
+    simulate a process restart -- releasing the lock (see below) before the
+    next one is built.
 
     ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
     parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
@@ -214,27 +214,54 @@ def create_app(
     # repairing files under `store`, which has nothing to do with whatever
     # database that session_factory actually points at) would be wrong.
     owns_session_factory = session_factory is None
-    db_engine = None
     if owns_session_factory:
-        db_url = sqlite_url(store.database_path())
-        upgrade(db_url, "head")
-        db_engine = create_sqlite_engine(db_url)
-        session_factory = build_session_factory(db_engine)
-    assert session_factory is not None  # either supplied, or just built above
+        # Taken here, before migrations/sweep_temp/repair below ever touch
+        # this data_root -- not merely later, at ASGI lifespan startup
+        # (review round 9, P1's original placement, and the very gap review
+        # round 10, P1 flagged: `api/sidecar.py`'s `run()` already binds its
+        # socket and writes its handshake file before ever calling this
+        # function, so a second sidecar process against a data_root a live
+        # process already owns would otherwise run every step below --
+        # deleting *.part files the first process may still be writing,
+        # marking its in-flight submissions erroneous -- before this
+        # function, let alone its lifespan, ever got a chance to fail).
+        lock_handle_holder["handle"] = acquire_data_root_lock(root)
+    db_engine = None
+    try:
+        if owns_session_factory:
+            db_url = sqlite_url(store.database_path())
+            upgrade(db_url, "head")
+            db_engine = create_sqlite_engine(db_url)
+            session_factory = build_session_factory(db_engine)
+        assert session_factory is not None  # either supplied, or just built above
+
+        if owns_session_factory:
+            # Startup crash recovery. sweep_temp was always documented as "run
+            # it on startup" (its own docstring) but was never actually wired
+            # up anywhere; it only removes interrupted writes' leftover
+            # *.part files, not the DB side of the same problem -- a prior
+            # run that crashed or lost power between a submission's DB commit
+            # and the file writes that follow it (adapters.atomic.
+            # FinalizationError only catches that failure when the process is
+            # alive to raise it) leaves that submission stuck: recorded as
+            # complete, some files missing, and no way to retry it.
+            # repair_incomplete_submissions covers that other half.
+            store.sweep_temp()
+            with SqlAlchemyUnitOfWork(session_factory) as uow:
+                repair_incomplete_submissions(uow, store)
+    except BaseException:
+        # Nothing below this point has run yet, so nothing else needs
+        # unwinding -- but this function's caller (or a test) may go on to
+        # retry it, or build a second `create_app` against a *different*
+        # data_root, in the same process, and must not find this data_root
+        # still locked because a failed attempt never released it.
+        handle = lock_handle_holder.pop("handle", None)
+        if handle is not None:
+            handle.close()
+        raise
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        # Only when this function owns the database's whole lifecycle --
-        # not for a caller-supplied session_factory (tests), which has no
-        # real data_root of its own to protect. Two sidecar processes
-        # sharing the same --app-data-dir would otherwise both run this
-        # same service.start()'s crash-recovery sweep against RUNNING jobs
-        # the *other*, still-alive process is actually processing --
-        # reissuing one lets both a duplicate provider call happen and the
-        # owning process's own eventual finalize lose its compare-and-set,
-        # silently discarding real, completed work (review round 9, P1).
-        if owns_session_factory:
-            lock_handle_holder["handle"] = acquire_data_root_lock(root)
         service = queue_service_holder["queue_service"]
         await service.start()
         try:
@@ -258,7 +285,7 @@ def create_app(
     app.state.queue_service = queue_service
 
     if scratch is not None:
-        # The startup repair query below (and every other DB access this app
+        # The startup repair query above (and every other DB access this app
         # ever makes) leaves at least one connection sitting in db_engine's
         # pool -- SQLAlchemy does not close a pooled connection until the
         # engine itself is disposed. On Windows, that connection holds the
@@ -267,30 +294,28 @@ def create_app(
         # whole temp app-data directory instead of removing it. Dispose the
         # engine (if this function created one) before cleaning up the
         # directory it lives in.
+        #
+        # The data-root lock handle (see above) holds `root / ".lock"` open
+        # the exact same way -- a caller that builds this app but never
+        # drives its lifespan (this scratch-cleanup path exists precisely
+        # for those callers: real production runs always pass an explicit
+        # data_root instead) would otherwise still be holding it open when
+        # this fires, and Windows refuses to remove a directory containing
+        # an open file just the same as it refuses to remove one containing
+        # an open database (review round 10, P1). Close it here too, before
+        # `temp_dir.cleanup()`.
         temp_dir = scratch
         engine_to_dispose = db_engine
 
         def _cleanup_scratch() -> None:
             if engine_to_dispose is not None:
                 engine_to_dispose.dispose()
+            handle = lock_handle_holder.pop("handle", None)
+            if handle is not None:
+                handle.close()
             temp_dir.cleanup()
 
         atexit.register(_cleanup_scratch)
-
-    if owns_session_factory:
-        # Startup crash recovery. sweep_temp was always documented as "run it
-        # on startup" (its own docstring) but was never actually wired up
-        # anywhere; it only removes interrupted writes' leftover *.part
-        # files, not the DB side of the same problem -- a prior run that
-        # crashed or lost power between a submission's DB commit and the
-        # file writes that follow it (adapters.atomic.FinalizationError only
-        # catches that failure when the process is alive to raise it) leaves
-        # that submission stuck: recorded as complete, some files missing,
-        # and no way to retry it. repair_incomplete_submissions covers that
-        # other half.
-        store.sweep_temp()
-        with SqlAlchemyUnitOfWork(session_factory) as uow:
-            repair_incomplete_submissions(uow, store)
 
     engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()

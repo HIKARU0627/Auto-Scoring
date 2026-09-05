@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from types import TracebackType
 
 import pytest
 from fastapi.testclient import TestClient
@@ -52,23 +54,84 @@ def test_each_app_has_its_own_random_token() -> None:
     assert create_app().state.api_token != create_app().state.api_token
 
 
-def test_a_second_lifespan_on_the_same_data_root_fails_to_start(tmp_path: Path) -> None:
-    """Issue #18 review round 9, P1: two sidecar processes launched against
-    the same --app-data-dir must not both actually start processing jobs --
-    the second one's own start() would otherwise run its crash-recovery
-    sweep against RUNNING jobs the first, still-alive one is actually
-    processing, letting a duplicate provider call happen and the owning
+def test_a_second_create_app_on_the_same_data_root_fails_to_start(tmp_path: Path) -> None:
+    """Issue #18 review round 9, P1 / round 10, P1: two sidecar processes
+    launched against the same --app-data-dir must not both touch it -- a
+    second process running migrations/sweep_temp/repair (or, if it got
+    that far, start()'s own crash-recovery sweep) against a data_root the
+    first, still-alive process actually owns could delete *.part files the
+    first process is still writing, mark its in-flight submissions
+    erroneous, or let a duplicate provider call happen and the owning
     process's own eventual finalize lose its compare-and-set, silently
-    discarding real, completed work. The data-root lock (acquired only
-    while a lifespan with an owned session_factory is actually running --
-    see create_app's docstring) makes the second lifespan fail outright
-    instead.
+    discarding real, completed work.
+
+    The data-root lock is acquired synchronously inside create_app() itself
+    (round 10, P1), before migrations/sweep_temp/repair ever run -- not
+    merely later, at ASGI lifespan startup (round 9, P1's original
+    placement, which left every one of those steps unprotected: by the
+    time api/sidecar.py's run() reaches create_app(), it has already bound
+    its socket and written its handshake file, well before any lifespan
+    exists to fail in). So the second create_app() call itself fails
+    outright, without even reaching TestClient/uvicorn.
     """
     first_app = create_app(api_token=_TOKEN, data_root=tmp_path)
-    with TestClient(first_app):
-        second_app = create_app(api_token=_TOKEN, data_root=tmp_path)
-        with pytest.raises(DataRootLockedError), TestClient(second_app):
-            pass
+    with TestClient(first_app), pytest.raises(DataRootLockedError):
+        create_app(api_token=_TOKEN, data_root=tmp_path)
+
+
+def test_a_second_create_app_fails_before_any_lifespan_ever_runs(tmp_path: Path) -> None:
+    """Issue #18 review round 10, P1: before this fix, the data-root lock
+    was only acquired inside the ASGI lifespan (review round 9, P1's
+    original placement), so it protected nothing until a lifespan actually
+    ran. create_app() itself -- migrations, sweep_temp,
+    repair_incomplete_submissions -- ran fully unprotected for every
+    caller that never drives a lifespan at all, which is exactly what
+    api/sidecar.py's run() does: it calls create_app() well before handing
+    the result to uvicorn, whose lifespan only starts once the server
+    itself starts serving. No TestClient/lifespan is used here at all --
+    the second create_app() call must still fail on construction alone.
+    """
+    first_app = create_app(api_token=_TOKEN, data_root=tmp_path)
+    with pytest.raises(DataRootLockedError):
+        create_app(api_token=_TOKEN, data_root=tmp_path)
+    assert first_app.state.api_token == _TOKEN  # the first app is unaffected
+
+
+def test_a_failed_create_app_releases_its_data_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #18 review round 10, P1: create_app() takes the data-root lock
+    before running migrations, so a migration failure (or anything else
+    that fails before this function returns) must release it again --
+    otherwise a single failed attempt would strand the lock held for the
+    rest of the process, and even a caller that fixes whatever failed and
+    retries create_app() against the same data_root would wrongly find it
+    "in use by another instance".
+
+    The failed call's traceback is deliberately kept referenced (``held_tb``)
+    across the retry below: a traceback keeps every frame it passed through
+    alive, including the failed create_app() call's own locals -- among
+    them the lock handle itself, which would otherwise most likely already
+    be closed by plain CPython reference counting once that frame is
+    discarded, regardless of whether create_app() ever explicitly closes
+    it. Holding the traceback is what makes this test actually exercise
+    create_app()'s own explicit release rather than incidentally passing
+    on CPython's collection timing either way.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated migration failure")
+
+    monkeypatch.setattr("auto_scoring.api.app.upgrade", _boom)
+    held_tb: TracebackType | None = None
+    try:
+        create_app(api_token=_TOKEN, data_root=tmp_path)
+    except RuntimeError:
+        held_tb = sys.exc_info()[2]
+    assert held_tb is not None
+
+    monkeypatch.undo()  # restore the real upgrade() for the retry below
+    create_app(api_token=_TOKEN, data_root=tmp_path)  # must not raise DataRootLockedError
 
 
 def test_default_temp_app_data_dir_cleanup_disposes_the_engine_first(
