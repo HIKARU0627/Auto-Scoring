@@ -395,7 +395,28 @@ class JobQueueService:
             item = await self._queue.get()
             if item is _STOP or self._closing:
                 return
-            await self._run_one(cast(str, item))
+            job_id = cast(str, item)
+            try:
+                await self._run_one(job_id)
+            except Exception:
+                # _run_one already absorbs a processor bug and a lost
+                # compare-and-set (JobSaveConflict); this is the backstop
+                # for anything else it doesn't specifically expect -- most
+                # plausibly a transient SQLAlchemy OperationalError (e.g. a
+                # SQLite busy-timeout) while claiming or finalizing this job.
+                # Nothing else in the pool ever replaces a dead worker task,
+                # so letting this propagate out of the loop would shrink the
+                # pool by one permanently; at max_concurrency=1 that stops
+                # every future job until the next process restart (review
+                # round 7, P1). The job this iteration was processing may be
+                # left RUNNING with nothing tracking it -- `start`'s own
+                # RUNNING sweep recovers it on the next restart the same way
+                # it recovers a job orphaned by an actual process kill. Log
+                # and move on to the next queued item instead of dying.
+                logger.exception(
+                    "worker failed to process a job; continuing",
+                    extra={"job_id": job_id},
+                )
 
     def enqueue(self, job_id: str) -> None:
         """Push an already-QUEUED job's id onto the in-memory queue.
