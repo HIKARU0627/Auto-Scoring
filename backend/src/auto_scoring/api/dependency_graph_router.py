@@ -62,6 +62,19 @@ from auto_scoring.domain.models import (
 #: sustained contention.
 _MAX_VERSION_ALLOCATION_ATTEMPTS = 5
 
+#: Bound on retries when a stale job's invalidation compare-and-set (see
+#: `confirm`) loses a race against another writer (a worker claiming a
+#: QUEUED job as RUNNING, a backoff-driven FAILED -> QUEUED requeue)
+#: changing its state between our initial listing and this write.
+_MAX_STALE_JOB_INVALIDATION_ATTEMPTS = 5
+
+#: The states `JobRepository.list_incomplete_for_stale_versions` selects on
+#: -- if a stale job's invalidation compare-and-set loses a race and a
+#: fresh re-read still shows one of these, the job has not genuinely
+#: finished and must still be invalidated against its *current* state, not
+#: skipped (see `confirm`).
+_INCOMPLETE_JOB_STATES = (JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED, JobState.FAILED)
+
 
 def _now() -> datetime:
     """A naive UTC timestamp, matching how SQLite's DateTime column round-trips.
@@ -468,37 +481,58 @@ def build_dependency_graph_router(
         reissued: list[Job] = []
         cancelled_running_job_ids: list[str] = []
         for submission_id, stale_jobs in stale_jobs_by_submission.items():
-            pairs: list[tuple[Job, Job, Job]] = []
-            for stale_job in stale_jobs:
-                cancelled, replacement = reissue_job_for_graph_version(
-                    stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
-                )
-                pairs.append((stale_job, cancelled, replacement))
-
-            # First pass: attempt every stale job's cancellation, keeping
-            # only the replacements whose CAS actually won. A CAS can lose
-            # if the job genuinely completed (or was cancelled) for real,
-            # via a normal worker, between our initial listing above and
-            # this write.
+            # First pass: invalidate every stale job, keeping only the
+            # replacements whose cancellation actually won. A compare-and-
+            # set can lose because the job genuinely finished (SUCCEEDED)
+            # or was cancelled for real, via a normal worker, between our
+            # initial listing above and this write -- but it can *also*
+            # lose because the job merely moved to a different, still-
+            # incomplete state in that same window (a worker claimed a
+            # QUEUED job as RUNNING, or a backoff-driven requeue moved a
+            # FAILED job back to QUEUED). Treating every lost CAS as "it
+            # finished" used to skip invalidating that second kind, leaving
+            # it free to run to completion against the now-superseded graph
+            # version -- bypassing whatever dependency the newly confirmed
+            # version added, in violation of docs/dependency-graph.md's
+            # stale-job invalidation requirement (review round 5, P1). Each
+            # job's invalidation now retries against a fresh re-read, and
+            # only gives up once that re-read shows a genuinely terminal
+            # state.
             accepted_replacements: list[Job] = []
-            for stale_job, cancelled, replacement in pairs:
-                try:
-                    uow.jobs.save(cancelled, expected_state=stale_job.state)
-                except JobSaveConflict:
-                    # Another writer (a worker finishing this job for real)
-                    # changed its state after we listed it as stale. Do not
-                    # create a replacement for it -- the job we meant to
-                    # cancel no longer exists in the state we read, so a
-                    # duplicate QUEUED/BLOCKED replacement would risk
-                    # double-processing the same work.
-                    continue
-                if stale_job.state is JobState.RUNNING:
-                    # This write only flipped the DB row; the in-process
-                    # task (if any, possibly in a different JobQueueService
-                    # instance than whichever confirmed this) still needs a
-                    # separate signal to actually stop (review round 2, P1).
-                    cancelled_running_job_ids.append(stale_job.id)
-                accepted_replacements.append(replacement)
+            for stale_job in stale_jobs:
+                current = stale_job
+                for _attempt in range(_MAX_STALE_JOB_INVALIDATION_ATTEMPTS):
+                    cancelled, replacement = reissue_job_for_graph_version(
+                        current, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
+                    )
+                    try:
+                        uow.jobs.save(cancelled, expected_state=current.state)
+                    except JobSaveConflict:
+                        refreshed = uow.jobs.get(current.id)
+                        if refreshed is None or refreshed.state not in _INCOMPLETE_JOB_STATES:
+                            # Genuinely finished (or vanished) for real in
+                            # the meantime -- nothing left to invalidate.
+                            break
+                        current = refreshed
+                        continue
+                    if current.state is JobState.RUNNING:
+                        # This write only flipped the DB row; the in-process
+                        # task (if any, possibly in a different
+                        # JobQueueService instance than whichever confirmed
+                        # this) still needs a separate signal to actually
+                        # stop (review round 2, P1).
+                        cancelled_running_job_ids.append(current.id)
+                    accepted_replacements.append(replacement)
+                    break
+                else:
+                    raise HTTPException(
+                        409,
+                        detail=(
+                            f"job {stale_job.id!r} could not be invalidated for the newly "
+                            f"confirmed dependency graph v{confirmed.version} -- its state kept "
+                            "changing concurrently; please retry /confirm"
+                        ),
+                    )
 
             # Second pass: decide readiness from the *actual* resulting job
             # set -- every job for this submission as it stands right now,
