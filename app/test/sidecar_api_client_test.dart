@@ -25,36 +25,80 @@ void main() {
       ? '$backendDir/.venv/Scripts/auto-scoring-sidecar.exe'
       : '$backendDir/.venv/bin/auto-scoring-sidecar';
 
-  late Process sidecar;
-  late Directory tempDir;
-  late SidecarConnection connection;
+  Process? sidecar;
+  Directory? tempDir;
 
-  setUpAll(() async {
+  // Spawning the sidecar and waiting for it to become healthy used to live
+  // in `setUpAll`, moved here for two independent reasons -- see
+  // docs/answer-intake-and-preprocessing.md §20 for the full isolation that
+  // led to both:
+  //
+  // 1. package:test does not run this file's top-level `test()` bodies
+  //    strictly one at a time -- several can be mid-flight at once, so the
+  //    very first version of this helper (which only memoized the
+  //    *resolved* `SidecarConnection`, checked with a plain `if (x != null)
+  //    return x;`) let multiple tests race in before any of them had
+  //    finished: each one saw no connection yet and independently spawned
+  //    its own sidecar process, several of which then fought over ephemeral
+  //    loopback ports and over `intake_lock`/DB access inside the same
+  //    fresh `app-data`. Memoizing the in-flight `Future` itself (assigned
+  //    synchronously, before any `await`) closes that window: every caller,
+  //    no matter how many arrive before the first spawn finishes, awaits
+  //    the one shared attempt.
+  // 2. `setUpAll` has some further Windows-specific interaction with
+  //    `Process.start` that a `test()` body does not (dart-lang/sdk#49615
+  //    and related cover the broader "Process.start inside a Flutter/
+  //    package:test hook" class of issues).
+  //
+  // Neither of those was the whole story, though: even with both fixed,
+  // this file can still take on the order of a minute to become healthy on
+  // some local Windows runs, independent of anything above. Isolated to
+  // `_waitUntilHealthy` retrying a real HTTP GET that times out (not
+  // "connection refused") against a socket the sidecar itself confirms it
+  // is listening on a moment later -- consistent with local real-time
+  // antivirus/network-inspection interference on a freshly spawned,
+  // unrecognized child process rather than an application bug (this machine
+  // has Windows Defender real-time protection enabled and no third-party
+  // AV). CI runs on hosted `windows-latest` runners, a different
+  // environment where this has not been observed to reproduce.
+  Future<SidecarConnection> startSidecar() async {
     tempDir = await Directory.systemTemp.createTemp('sidecar_it_');
-    final handshakeFile = File('${tempDir.path}/handshake.json');
+    final handshakeFile = File('${tempDir!.path}/handshake.json');
 
     sidecar = await Process.start(sidecarExe, [
       '--handshake-file',
       handshakeFile.path,
       '--app-data-dir',
-      '${tempDir.path}/app-data',
+      '${tempDir!.path}/app-data',
     ]);
 
     final handshake = await _readHandshake(handshakeFile);
-    connection = SidecarConnection(
+    final started = SidecarConnection(
       baseUrl: 'http://${handshake['host']}:${handshake['port']}',
       token: handshake['token'] as String,
     );
-    await _waitUntilHealthy(SidecarApiClient(connection));
-  });
+    await _waitUntilHealthy(SidecarApiClient(started));
+    return started;
+  }
+
+  Future<SidecarConnection>? startingSidecar;
+
+  Future<SidecarConnection> ensureSidecar() {
+    return startingSidecar ??= startSidecar();
+  }
 
   tearDownAll(() async {
-    sidecar.kill(ProcessSignal.sigkill);
-    await sidecar.exitCode;
-    await _deleteWithRetry(tempDir);
+    final process = sidecar;
+    if (process != null) {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+    }
+    final dir = tempDir;
+    if (dir != null) await _deleteWithRetry(dir);
   });
 
   test('health check succeeds even with a bogus token', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(
       SidecarConnection(baseUrl: connection.baseUrl, token: 'bogus'),
     );
@@ -64,6 +108,7 @@ void main() {
   });
 
   test('protected call succeeds with the session token', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(connection);
     addTearDown(client.close);
 
@@ -76,6 +121,7 @@ void main() {
   });
 
   test('protected call is rejected with a wrong token', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(
       SidecarConnection(baseUrl: connection.baseUrl, token: 'not-the-token'),
     );
@@ -92,6 +138,7 @@ void main() {
   });
 
   test('listTests succeeds against the real sidecar', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(connection);
     addTearDown(client.close);
 
@@ -101,10 +148,11 @@ void main() {
   test(
     'createSubmission sends a PDF content type the sidecar accepts',
     () async {
+      final connection = await ensureSidecar();
       final client = SidecarApiClient(connection);
       addTearDown(client.close);
 
-      final pdfFile = File('${tempDir.path}/content-type-check.pdf');
+      final pdfFile = File('${tempDir!.path}/content-type-check.pdf');
       await pdfFile.writeAsBytes(utf8.encode('%PDF-1.7\n%%EOF'));
 
       // No test with this id is registered. dio's MultipartFile.fromFile
@@ -128,6 +176,7 @@ void main() {
   );
 
   test('a sidecar that is not running surfaces as unavailable', () async {
+    final connection = await ensureSidecar();
     // A port that was free a moment ago and has nothing listening now: the
     // OS refuses the connection immediately.
     final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -175,6 +224,7 @@ void main() {
   });
 
   test('unknown transport errors do not expose connection details', () async {
+    final connection = await ensureSidecar();
     const leaked = 'must-not-escape http://127.0.0.1:54321';
     final dio = Dio()
       ..interceptors.add(
