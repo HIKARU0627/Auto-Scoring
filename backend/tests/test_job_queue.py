@@ -24,7 +24,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
 )
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
-from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobState
+from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
 from auto_scoring.jobs.clock import Clock
 from auto_scoring.jobs.queue import JobQueueService
 from auto_scoring.jobs.settings import QueueSettings
@@ -783,3 +783,298 @@ async def test_mark_question_usable_resolves_the_active_graph_version(
     assert qa_v1 is not None and qa_v1.usable is False  # untouched: stale version
     assert qa_v2 is not None and qa_v2.usable is True  # the active version's job is flipped
     assert qb_v2 is not None and qb_v2.state is JobState.QUEUED  # released
+
+
+# --------------------------------------------------------------------------- #
+# Review round 2 regressions
+# --------------------------------------------------------------------------- #
+def test_queue_settings_validates_retry_config_at_construction() -> None:
+    """P2: a bad retry setting must fail at QueueSettings() construction,
+    not lazily at the first job's failure inside _retry_policy_for (which
+    would leave a RUNNING row already committed, stuck until a restart)."""
+    with pytest.raises(ValueError):
+        QueueSettings(initial_backoff_seconds=-1.0)
+    with pytest.raises(ValueError):
+        QueueSettings(backoff_multiplier=0.5)
+    with pytest.raises(ValueError):
+        QueueSettings(max_backoff_seconds=0.1, initial_backoff_seconds=1.0)
+
+
+async def test_a_retryable_failed_job_is_recovered_at_startup(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P1: a job left FAILED (retryable error_code, attempts remaining) when
+    the process was killed mid-backoff must be requeued at the next
+    startup -- its in-process backoff timer died with the process, so
+    nothing else would ever wake it up again.
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                last_error="timed out",
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        await _wait_until(lambda: _state(service, "job-1") is JobState.SUCCEEDED)
+    finally:
+        await service.shutdown()
+    job = service.get_job("job-1")
+    assert job is not None
+    assert job.attempts == 2  # requeued, then one more RUNNING attempt
+    assert len(processor.calls) == 1
+
+
+async def test_startup_does_not_recover_a_permanent_or_exhausted_failed_job(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    version = _seed(session_factory, question_ids=["qa", "qb"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="permanent",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.PERMANENT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="exhausted",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.FAILED,
+                attempts=3,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        await asyncio.sleep(0.05)
+    finally:
+        await service.shutdown()
+    assert _state(service, "permanent") is JobState.FAILED
+    assert _state(service, "exhausted") is JobState.FAILED
+    assert processor.calls == []
+
+
+async def test_mark_question_usable_resumes_a_failed_prerequisite(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P1: a human can approve/correct a FAILED prerequisite's downstream
+    effect too, not only a low-confidence SUCCEEDED one -- mark_usable must
+    not require SUCCEEDED.
+    """
+    _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.PERMANENT
+        )
+    )
+    # qb should succeed once released -- only qa is meant to fail here.
+    processor.script(
+        "sub-1", "qb", [ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)]
+    )
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_a = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_a) is JobState.FAILED)
+
+        service.mark_question_usable(submission_id="sub-1", question_id="qa")
+        job_b = _job_id_for_question(service, "sub-1", "qb")
+        await _wait_until(lambda: _state(service, job_b) is JobState.SUCCEEDED)
+    finally:
+        await service.shutdown()
+    job_a_final = service.get_job(job_a)
+    assert job_a_final is not None
+    assert job_a_final.state is JobState.FAILED  # still an honest record: it really failed
+    assert job_a_final.usable is True
+
+
+async def test_mark_question_usable_falls_back_to_a_stale_version_with_no_active_job(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P1: confirm only reissues jobs that were still incomplete when the
+    graph advanced (Issue #26); a question whose job had already reached a
+    terminal state under an older version is never reissued, so the active
+    version can have no row for it at all even though the question is very
+    much still part of the active graph. mark_question_usable must fall
+    back to the most recent terminal job for that question at any version,
+    or such a question could never be resumed and its dependents would stay
+    BLOCKED permanently.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id="test-1"))
+        uow.questions.add(make_question(id="qa", test_id="test-1", number="qa"))
+        uow.questions.add(make_question(id="qb", test_id="test-1", number="qb"))
+        uow.submissions.add(make_submission(id="sub-1", test_id="test-1"))
+        edge = _edge("qa", "qb")
+        v1 = DependencyGraph.from_candidates(
+            id="test-1:v1",
+            test_id="test-1",
+            version=1,
+            question_ids=["qa", "qb"],
+            edges=[edge],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(v1)
+        assert (
+            uow.dependency_graphs.try_confirm(v1.confirm(edges=[edge], confirmed_at=at())) is True
+        )
+        v2 = DependencyGraph.from_candidates(
+            id="test-1:v2",
+            test_id="test-1",
+            version=2,
+            question_ids=["qa", "qb"],
+            edges=[edge],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(v2)
+        assert (
+            uow.dependency_graphs.try_confirm(v2.confirm(edges=[edge], confirmed_at=at())) is True
+        )
+
+        # v1's qa job succeeded but was locked -- never reissued to v2 since
+        # it was already terminal (not "incomplete") when v2 was confirmed.
+        uow.jobs.add(
+            Job(
+                id="job-qa-v1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.SUCCEEDED,
+                usable=False,
+                dependency_graph_version=1,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        # v2's qb job: blocked on qa, at the active version -- no v2 job
+        # exists for qa at all.
+        uow.jobs.add(
+            Job(
+                id="job-qb-v2",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="qa",
+                dependency_graph_version=2,
+                created_at=at(seconds=10),
+                updated_at=at(seconds=10),
+            )
+        )
+        uow.commit()
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    service.mark_question_usable(submission_id="sub-1", question_id="qa")
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        qa_v1 = uow.jobs.get("job-qa-v1")
+        qb_v2 = uow.jobs.get("job-qb-v2")
+    assert qa_v1 is not None and qa_v1.usable is True
+    assert qb_v2 is not None and qb_v2.state is JobState.QUEUED
+
+
+async def test_cancel_job_retries_after_a_compare_and_set_conflict(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P2: if another writer changes a job's state between cancel_job's read
+    and its compare-and-set write, that must be retried from a fresh read,
+    not surfaced as an unhandled JobSaveConflict/500.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_that_conflicts_once(
+        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
+    ) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise JobSaveConflict(job.id, expected_state)
+        real_save(self, job, expected_state=expected_state)
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once)
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    cancelled = service.cancel_job("job-1")
+
+    assert calls["count"] == 2
+    assert cancelled.state is JobState.CANCELLED
+    final = service.get_job("job-1")
+    assert final is not None
+    assert final.state is JobState.CANCELLED
+
+
+async def test_worker_count_is_bounded_regardless_of_backlog_size(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: a large recovered/submitted backlog must not create one task per
+    job -- only max_concurrency worker tasks should ever exist, however many
+    jobs are queued at once.
+    """
+    question_ids = [f"q{i}" for i in range(50)]
+    _seed(session_factory, question_ids=question_ids)
+    hold = asyncio.Event()
+    processor = FakeJobProcessor(hold_event=hold)
+    service = JobQueueService(
+        session_factory, processor, settings=QueueSettings(max_concurrency=2), clock=clock
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        await _wait_until(lambda: processor.current_concurrency == 2)
+        assert len(service._workers) == 2
+    finally:
+        hold.set()
+        await service.shutdown()

@@ -9,6 +9,7 @@ deterministic.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Iterator
 from datetime import datetime
@@ -20,11 +21,16 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
-from auto_scoring.domain.dependency_graph import DependencyEdge, DependencyProvision
+from auto_scoring.domain.dependency_graph import (
+    DependencyEdge,
+    DependencyGraph,
+    DependencyProvision,
+)
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
-from auto_scoring.domain.models import ErrorCategory
+from auto_scoring.domain.models import ErrorCategory, Job
 from tests.fakes import FakeClock, FakeJobProcessor
 from tests.support import (
+    at,
     make_question,
     make_submission,
     make_test,
@@ -249,3 +255,89 @@ def test_resume_endpoint_releases_a_dependent_locked_by_low_confidence(
 def test_endpoints_require_a_bearer_token(client: TestClient) -> None:
     response = client.get("/submissions/sub-1/jobs")
     assert response.status_code == 401
+
+
+class _BlocksFirstCallThenSucceeds:
+    """Blocks forever on the first `process` call (until `hold` is set, or
+    the task is cancelled); every later call succeeds immediately.
+
+    Used only by the stale-running-task-cancellation test below: the
+    reissued replacement for the same question would otherwise also block
+    on a shared `hold_event` that the test never sets, hanging
+    `JobQueueService.shutdown` forever (`shutdown` deliberately never
+    force-cancels workers). Isolating "block" to the first call only lets
+    the replacement complete normally once enqueued.
+    """
+
+    def __init__(self) -> None:
+        self.hold = asyncio.Event()
+        self.calls: list[Job] = []
+        self.current_concurrency = 0
+        self._blocked_once = False
+
+    async def process(self, job: Job) -> ProcessingResult:
+        self.current_concurrency += 1
+        self.calls.append(job)
+        try:
+            if not self._blocked_once:
+                self._blocked_once = True
+                await self.hold.wait()
+            return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
+        finally:
+            self.current_concurrency -= 1
+
+
+def test_confirming_a_new_version_cancels_a_stale_running_jobs_task(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Issue #18 review round 2, P1: a stale job that is RUNNING when a new
+    dependency-graph version is confirmed must have its actual in-process
+    task cancelled too, not just its DB row flipped to CANCELLED (confirm's
+    own write already does that regardless of this fix) -- otherwise the
+    external provider call keeps going indefinitely. Observed via the fake
+    processor's own concurrency counter, which only drops back to 0 once the
+    task's `await hold.wait()` is actually interrupted by cancellation --
+    the DB row alone can't distinguish a real cancel from a silently-still-
+    running task.
+    """
+    processor = _BlocksFirstCallThenSucceeds()
+    app = create_app(api_token=_TOKEN, session_factory=session_factory, job_processor=processor)
+    with TestClient(app) as client:
+        _seed_confirmed(session_factory, question_ids=["qa"])
+        created = client.post("/submissions/sub-1/jobs", headers=_AUTH).json()
+        job_id = created[0]["id"]
+        _wait_until_job_state(client, job_id, "running")
+        assert processor.current_concurrency == 1
+
+        # A human re-analyzes and confirms v2 while qa's job is still
+        # RUNNING under v1.
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            draft_v2 = DependencyGraph.from_candidates(
+                id="test-1:v2", test_id="test-1", version=2, question_ids=["qa"], created_at=at()
+            )
+            uow.dependency_graphs.save(draft_v2)
+            uow.commit()
+        confirm_response = client.post(
+            "/tests/test-1/dependency-graph/confirm",
+            json={"version": 2, "edges": []},
+            headers=_AUTH,
+        )
+        assert confirm_response.status_code == 200, confirm_response.text
+
+        deadline = time.monotonic() + 2.0
+        while processor.current_concurrency != 0:
+            if time.monotonic() > deadline:
+                raise AssertionError(
+                    "the stale RUNNING job's task was never cancelled -- it is still "
+                    "awaiting the processor"
+                )
+            time.sleep(0.01)
+
+        # The reissued replacement (a fresh job for qa at v2) should still
+        # have gone on to complete normally through the same queue.
+        replacement = next(
+            job
+            for job in client.get("/submissions/sub-1/jobs", headers=_AUTH).json()
+            if job["dependency_graph_version"] == 2
+        )
+        _wait_until_job_state(client, replacement["id"], "succeeded")
