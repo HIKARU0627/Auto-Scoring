@@ -46,7 +46,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
     UnresolvedQuestion,
 )
-from auto_scoring.domain.models import reissue_job_for_graph_version
+from auto_scoring.domain.models import JobSaveConflict, reissue_job_for_graph_version
 
 #: Bound on retries when two concurrent /analyze calls race for the same
 #: next version number (see `analyze` below). Each retry re-reads the latest
@@ -424,7 +424,15 @@ def build_dependency_graph_router(
             cancelled, replacement = reissue_job_for_graph_version(
                 stale_job, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
             )
-            uow.jobs.save(cancelled)
+            try:
+                uow.jobs.save(cancelled)
+            except JobSaveConflict:
+                # Another writer (a worker finishing this job) changed its
+                # state after we listed it as stale. Do not create a
+                # replacement for it -- the job we meant to cancel no longer
+                # exists in the state we read, so a duplicate QUEUED
+                # replacement would risk double-processing the same work.
+                continue
             uow.jobs.add(replacement)
 
         uow.commit()

@@ -44,6 +44,7 @@ from auto_scoring.domain.models import (
     GradeResult,
     GradingSource,
     Job,
+    JobSaveConflict,
     JobState,
     Question,
     RecognitionResult,
@@ -264,18 +265,46 @@ class SqlAlchemyJobRepository:
         return m.job_from_row(row) if row is not None else None
 
     def save(self, job: Job) -> None:
+        """Compare-and-set on the state this call read, not a blind PK update.
+
+        A worker's own in-memory `ensure_job_transition` check only proves the
+        move was legal against whatever this session happened to read -- it
+        says nothing about whether another writer changed the row *since*
+        that read. A plain ORM ``UPDATE`` (mutate the loaded object, flush)
+        matches on primary key only, so it would silently overwrite regardless
+        of what the row actually holds by the time the statement executes
+        (e.g. a stale RUNNING read, followed by another transaction
+        committing CANCELLED, followed by this call's flush finally landing --
+        Issue #26 review). Including ``state == current_state`` in the
+        ``WHERE`` makes SQLite re-evaluate that condition against the row's
+        real state at execution time, so a lost race raises `JobSaveConflict`
+        instead of corrupting whichever write actually won.
+        """
         row = self._session.get(JobRow, job.id)
         if row is None:
             raise LookupError(f"job {job.id!r} not found")
         current_state = JobState(row.state)
         if job.state is not current_state:
             ensure_job_transition(current_state, job.state)
-        row.state = job.state
-        row.attempts = job.attempts
-        row.max_attempts = job.max_attempts
-        row.last_error = job.last_error
-        row.blocked_on_question_id = job.blocked_on_question_id
-        row.updated_at = job.updated_at
+
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(JobRow)
+                .where(JobRow.id == job.id, JobRow.state == current_state)
+                .values(
+                    state=job.state,
+                    attempts=job.attempts,
+                    max_attempts=job.max_attempts,
+                    last_error=job.last_error,
+                    blocked_on_question_id=job.blocked_on_question_id,
+                    updated_at=job.updated_at,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            raise JobSaveConflict(job.id, current_state)
+        self._session.expire(row)
 
     def list_by_state(self, state: JobState) -> list[Job]:
         rows = self._session.scalars(
@@ -352,7 +381,6 @@ class SqlAlchemyDependencyGraphRepository:
         _, children = m.dependency_graph_rows(graph)
         for child in children:
             child.graph_id = existing.id
-            child.id = f"{existing.id}:{child.from_question_id}:{child.to_question_id}"
         self._session.add_all(children)
         self._session.flush()
 

@@ -7,13 +7,16 @@ from collections.abc import Callable
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from auto_scoring.adapters import sqlalchemy_repositories
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import (
     GradingSource,
     InvalidStateTransition,
+    JobSaveConflict,
     JobState,
     Score,
     SubmissionState,
+    ensure_job_transition,
 )
 from tests.support import (
     at,
@@ -175,6 +178,54 @@ def test_job_save_rejects_illegal_transition(seeded: UowFactory) -> None:
 
     with seeded() as uow, pytest.raises(InvalidStateTransition):
         uow.jobs.save(make_job(state=JobState.SUCCEEDED))
+
+
+def test_job_save_raises_conflict_when_the_row_changes_between_read_and_write(
+    seeded: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulates the race directly: another transaction commits a state
+    change to this job in the narrow window between `save()`'s own read (plus
+    its in-Python transition check) and its atomic write. A plain ORM update
+    (PK-only ``WHERE``) would silently overwrite that already-committed
+    change; the compare-and-set must instead detect it and raise (Issue #26
+    review: e.g. `/confirm` cancelling a job the instant before a worker
+    reports it succeeded).
+    """
+    with seeded() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(make_job(state=JobState.RUNNING))
+        uow.commit()
+
+    injected = {"done": False}
+
+    def _cancel_concurrently_then_check(current: JobState, target: JobState) -> JobState:
+        result = ensure_job_transition(current, target)
+        if not injected["done"]:
+            injected["done"] = True
+            with seeded() as concurrent_uow:
+                stale = concurrent_uow.jobs.get("job-1")
+                assert stale is not None
+                concurrent_uow.jobs.save(
+                    stale.transitioned_to(JobState.CANCELLED, updated_at=at(5))
+                )
+                concurrent_uow.commit()
+        return result
+
+    monkeypatch.setattr(
+        sqlalchemy_repositories, "ensure_job_transition", _cancel_concurrently_then_check
+    )
+
+    with seeded() as uow:
+        job = uow.jobs.get("job-1")
+        assert job is not None
+        completed = job.transitioned_to(JobState.SUCCEEDED, updated_at=at(10))
+        with pytest.raises(JobSaveConflict):
+            uow.jobs.save(completed)
+
+    with seeded() as uow:
+        final = uow.jobs.get("job-1")
+    assert final is not None
+    assert final.state is JobState.CANCELLED
 
 
 def test_list_incomplete_for_stale_versions_filters_correctly(seeded: UowFactory) -> None:

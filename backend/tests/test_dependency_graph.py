@@ -206,17 +206,35 @@ def test_confirmed_graph_cannot_carry_unresolved_questions() -> None:
 # Submission-processing gate
 # --------------------------------------------------------------------------- #
 def test_processing_is_blocked_without_a_graph() -> None:
-    assert can_start_submission_processing(None) is False
+    assert can_start_submission_processing(None, current_question_ids=["q1"]) is False
 
 
 def test_processing_is_blocked_while_draft() -> None:
-    assert can_start_submission_processing(_draft(["q1"])) is False
+    draft = _draft(["q1"])
+    assert can_start_submission_processing(draft, current_question_ids=["q1"]) is False
 
 
 def test_processing_is_allowed_once_confirmed() -> None:
     draft = _draft(["q1"])
     confirmed = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
-    assert can_start_submission_processing(confirmed) is True
+    assert can_start_submission_processing(confirmed, current_question_ids=["q1"]) is True
+
+
+def test_processing_is_blocked_when_a_question_was_added_after_confirming() -> None:
+    """A confirmed graph's `status` never changes on its own, but the test's
+    own question set can -- a question added afterwards must still block
+    processing even though `status` still reads CONFIRMED (Issue #26
+    review).
+    """
+    draft = _draft(["q1"])
+    confirmed = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
+    assert can_start_submission_processing(confirmed, current_question_ids=["q1", "q2"]) is False
+
+
+def test_processing_is_blocked_when_a_question_was_removed_after_confirming() -> None:
+    draft = _draft(["q1", "q2"])
+    confirmed = draft.confirm(edges=[], confirmed_at=CONFIRMED_AT)
+    assert can_start_submission_processing(confirmed, current_question_ids=["q1"]) is False
 
 
 # --------------------------------------------------------------------------- #

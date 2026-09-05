@@ -112,6 +112,35 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   スケジューラ）はこのIssueの対象外のまま（後続のジョブキューIssue）だが、
   「既存jobがある場合に無効化・再作成する」動作自体は完全にテスト済み
   （`test_dependency_graph_api.py` の「Job invalidation」節）。
+- 上記のstale job再発行ループが1個ずつ `uow.jobs.save(cancelled)` を呼ぶ間、
+  ワーカーが同じjobを別トランザクションでSUCCEEDED等へ進めている可能性が
+  ある（レビュー指摘）。`save()` は後述の楽観的並行制御でこれを検知して
+  `JobSaveConflict` を送出するので、再発行ループはそれを捕捉した場合だけ
+  「そのjobについては新versionの複製jobを作らない」（`continue`）。理由:
+  ワーカーが既に完了させたjobをこちらが割り込んでCANCELLEDへ上書きするのは
+  誤りで、かつ完了済みjobに対して新versionの複製jobを重複作成する必要も
+  無い（ワーカー側の完了処理が別途正しく進む）。テストでは
+  `SqlAlchemyJobRepository.save` をモンキーパッチして常に
+  `JobSaveConflict` を送出させ、confirmそのものは200で成功しつつ、対象job
+  が変更されず複製QUEUED jobも作られないことを検証している
+  （`test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race`）。
+- `Job.save()` 自体も、他のリポジトリのCAS群と同じ理由でORM属性変更+flushの
+  素朴なUPDATEから `UPDATE ... WHERE id = :id AND state = :current_state`
+  という compare-and-set に変更した（レビュー指摘）。以前の実装はPKだけの
+  `WHERE` でUPDATEしていたため、「読んでから遷移チェック→書く」の間に別の
+  書き手（ワーカーの完了報告、上記の再発行ループ等）が同じ行を更新すると、
+  後から書いた側が黙って上書きしてしまうレースがあった。CASが `rowcount == 0`
+  を見たら、その行は自分が読んだ時点の状態から既に変わっている
+  （＝他の書き手が先に勝った）とわかるので、`JobSaveConflict`（新設の
+  `DomainError` サブクラス。`InvalidStateTransition` --
+  「この遷移は状態機械として禁止」--とは区別され、こちらは「状態機械として
+  正当な遷移だが、読み取り後に別の書き手が既にこの行を動かしていた」を表す）
+  を送出する。テストは `Session.get` がSQLiteドライバの都合上その場で最新の
+  コミット済み状態を返してしまう（identity mapのキャッシュに頼れない）ため、
+  `ensure_job_transition` を一時的にモンキーパッチして「実際の遷移チェック
+  通過直後・atomic UPDATE実行前」というピンポイントな窓に別トランザクション
+  からの競合コミットを注入する方式で決定的に再現している
+  （`test_job_save_raises_conflict_when_the_row_changes_between_read_and_write`）。
 
 ### 追加の不変条件（レビュー指摘で強化）
 
@@ -132,12 +161,39 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   （例: `"   "`）も同様に「テキスト無し」として扱う -- Pythonの文字列は
   空白のみでもtruthyなので、`strip()` してから空判定しないとこのケースが
   すり抜けて「独立」と誤判定されてしまう。
+- `dependency_edges` の主キーは合成`id`ではなく `(graph_id,
+from_question_id, to_question_id)` の複合主キー（レビュー指摘）。以前は
+  `f"{graph.id}:{edge.from_question_id}:{edge.to_question_id}"` という
+  区切り文字`:`連結の合成idを使っていたが、設問idそのものに`:`が含まれる
+  場合（例: `from_question_id="a:b", to_question_id="c"` と
+  `from_question_id="a", to_question_id="b:c"`）に異なる2本のedgeが同じ
+  文字列に折り畳まれて衝突しうる。複合主キーはこの種の区切り文字衝突を
+  エンコーディングの工夫ではなく構造的に排除する。テストでは実際にこの
+  衝突パターンを持つ2本のedgeを保存し、両方が別々の行として残ることを
+  検証している
+  （`test_edge_rows_do_not_collide_when_question_ids_contain_the_separator`、
+  修正前は `UNIQUE constraint failed: dependency_edges.id` で失敗すること
+  を確認済み）。
 
 ### Submission処理のゲート
 
-`can_start_submission_processing(graph)` が唯一のゲート関数: `graph` が
-`None`（未分析・分析失敗を含む）か、`DependencyGraphStatus.CONFIRMED` でなけ
-れば `False`。人間未確認のDRAFTや分析失敗はここで一律にブロックされる。
+`can_start_submission_processing(graph, *, current_question_ids)` が唯一の
+ゲート関数: `graph` が `None`（未分析・分析失敗を含む）か、
+`DependencyGraphStatus.CONFIRMED` でなければ `False`。人間未確認のDRAFTや
+分析失敗はここで一律にブロックされる。
+
+CONFIRMEDというgraph自身の状態だけでは不十分（レビュー指摘）: `confirm()`
+後のgraphは不変だが、testの設問集合はconfirm後も変更されうる。confirm後に
+設問が追加/削除されると、graphの`status`は永遠にCONFIRMEDのままなのに
+`question_ids`はもうtestを正しく表していない。そこで呼び出し側がその時点の
+最新の設問集合を `current_question_ids` として渡し、`graph.question_ids`
+との一致を追加条件にする -- 不一致ならCONFIRMEDでも`False`を返す。
+テストでは、confirm後に設問を追加/削除した場合にそれぞれ`False`になる
+ことを検証している
+（`test_processing_is_blocked_when_a_question_was_added_after_confirming`、
+`test_processing_is_blocked_when_a_question_was_removed_after_confirming`、
+および `test_dependency_graph_api.py` の
+`test_confirmed_processing_gate_goes_stale_after_a_question_is_added`）。
 
 ### 候補生成: ヒューリスティック analyzer
 
@@ -188,6 +244,27 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   ため今後追加されるルーターも同じ `session_factory` を再利用できる。
 - OpenAPIスキーマ書き出し（`auto_scoring.api.openapi_schema`）はDartクライア
   ント生成のためインメモリSQLiteでルート形状だけを持つアプリを組み立てる。
+- `migrations/` と `alembic.ini` は開発者の利便性のため `backend/` 直下
+  （`src/auto_scoring` の外）に置いているが、wheelのビルド対象は
+  `src/auto_scoring` だけなので、そのままではwheelインストール後に
+  `auto-scoring-sidecar`（起動時に `upgrade(db_url, "head")` を呼ぶ）が
+  マイグレーションを見つけられずUvicorn起動前に落ちてしまう（レビュー
+  指摘）。`backend/pyproject.toml` の `[tool.hatch.build.targets.wheel]` に
+  `force-include = { "migrations" = "auto_scoring/migrations", "alembic.ini"
+= "auto_scoring/alembic.ini" }` を追加し、wheel内の `auto_scoring/` 配下
+  にも同梱する。`db/migrator.py` はパッケージ内配置
+  （`Path(__file__).resolve().parent.parent / "migrations"`）とソースツリー
+  配置（`backend/migrations`）の両方を試し、存在する方を使う -- 開発時は
+  ソースツリー版、wheelインストール後はパッケージ同梱版が使われ、両者が
+  同一インストールで共存することはない。`alembic.ini` も同様に両方の場所
+  を探す（見つからなければ `Config(file_=None)` でも `script_location`/
+  `sqlalchemy.url` を明示設定するので動作に支障は無い）。
+  実際に `uv build --wheel` でwheelを作り、`unzip`でファイル一覧を確認
+  （`auto_scoring/alembic.ini`、`auto_scoring/migrations/env.py`、
+  `versions/*.py` が全て含まれ `__pycache__` は含まれないこと）、さらに
+  そのwheelを隔離venvへインストールして `backend/` ソースツリーが存在
+  しないディレクトリから `upgrade("sqlite:///test.sqlite", "head")` を実行
+  し `current_revision` がheadと一致することまで確認済み。
 
 ## 検証
 

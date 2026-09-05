@@ -55,21 +55,17 @@ def upgrade() -> None:
 
     op.create_table(
         "dependency_edges",
-        sa.Column("id", sa.String(), primary_key=True),
         sa.Column(
             "graph_id",
             sa.String(),
             sa.ForeignKey("dependency_graphs.id", ondelete="CASCADE"),
-            nullable=False,
+            primary_key=True,
         ),
-        sa.Column("from_question_id", sa.String(), nullable=False),
-        sa.Column("to_question_id", sa.String(), nullable=False),
+        sa.Column("from_question_id", sa.String(), primary_key=True),
+        sa.Column("to_question_id", sa.String(), primary_key=True),
         sa.Column("provides", sa.JSON(), nullable=False),
         sa.Column("rationale", sa.String(), nullable=False),
         sa.Column("confidence", sa.Float(), nullable=True),
-        sa.UniqueConstraint(
-            "graph_id", "from_question_id", "to_question_id", name="uq_dependency_edges_pair"
-        ),
         sa.CheckConstraint(
             "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
             name="ck_dependency_edges_confidence_range",

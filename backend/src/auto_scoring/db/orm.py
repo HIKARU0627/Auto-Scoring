@@ -324,14 +324,20 @@ class DependencyGraphRow(Base):
 
 
 class DependencyEdgeRow(Base):
+    """One edge of one dependency-graph version.
+
+    Primary key is the composite ``(graph_id, from_question_id,
+    to_question_id)`` -- there is no synthetic ``id``. A synthetic id built by
+    joining the three parts with a separator (e.g. ``f"{graph_id}:{a}:{b}"``)
+    can collide: question ids are only required to be non-empty (see
+    ``domain.models._require_non_empty``), so ``from="a:b", to="c"`` and
+    ``from="a", to="b:c"`` would produce the identical joined string even
+    though they are different, otherwise-valid edges (Issue #26 review). The
+    composite key sidesteps the whole class of separator-collision bugs.
+    """
+
     __tablename__ = "dependency_edges"
     __table_args__ = (
-        UniqueConstraint(
-            "graph_id",
-            "from_question_id",
-            "to_question_id",
-            name="uq_dependency_edges_pair",
-        ),
         CheckConstraint(
             "confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)",
             name="ck_dependency_edges_confidence_range",
@@ -339,12 +345,11 @@ class DependencyEdgeRow(Base):
         Index("ix_dependency_edges_graph_id", "graph_id"),
     )
 
-    id: Mapped[str] = _pk()
     graph_id: Mapped[str] = mapped_column(
-        ForeignKey("dependency_graphs.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("dependency_graphs.id", ondelete="CASCADE"), primary_key=True
     )
-    from_question_id: Mapped[str] = mapped_column(String, nullable=False)
-    to_question_id: Mapped[str] = mapped_column(String, nullable=False)
+    from_question_id: Mapped[str] = mapped_column(String, primary_key=True)
+    to_question_id: Mapped[str] = mapped_column(String, primary_key=True)
     provides: Mapped[list[DependencyProvision]] = mapped_column(JSON, nullable=False, default=list)
     rationale: Mapped[str] = mapped_column(String, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

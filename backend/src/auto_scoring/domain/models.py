@@ -58,6 +58,27 @@ class InvalidCoordinate(DomainError):
     """A normalized coordinate fell outside ``0..1`` (or its rect left the page)."""
 
 
+class JobSaveConflict(DomainError):
+    """A `Job` row changed state after it was read, before this save could apply.
+
+    Distinct from `InvalidStateTransition`: that means "this state machine
+    forbids this move"; this means "some other writer already moved the row
+    since we last read it", detected by the compare-and-set in
+    `JobRepository.save` (Issue #26 review: without this, a worker's
+    completion write -- validated in Python against a stale read -- could
+    silently overwrite a `CANCELLED` another transaction had already
+    committed, since a plain ORM ``UPDATE`` matches on primary key only).
+    """
+
+    def __init__(self, job_id: str, expected_state: object) -> None:
+        super().__init__(
+            f"job {job_id!r}: expected state {expected_state!s} no longer matches "
+            "the persisted row; it was changed by another writer"
+        )
+        self.job_id = job_id
+        self.expected_state = expected_state
+
+
 # --------------------------------------------------------------------------- #
 # Enumerations
 # --------------------------------------------------------------------------- #

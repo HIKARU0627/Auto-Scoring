@@ -385,7 +385,6 @@ def dependency_graph_rows(
     )
     children = [
         DependencyEdgeRow(
-            id=f"{graph.id}:{edge.from_question_id}:{edge.to_question_id}",
             graph_id=graph.id,
             from_question_id=edge.from_question_id,
             to_question_id=edge.to_question_id,

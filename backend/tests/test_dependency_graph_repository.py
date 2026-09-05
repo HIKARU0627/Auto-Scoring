@@ -64,6 +64,49 @@ def test_draft_graph_round_trips(seeded: UowFactory) -> None:
     assert {(e.from_question_id, e.to_question_id) for e in loaded.edges} == {("q-1", "q-2")}
 
 
+def test_edge_rows_do_not_collide_when_question_ids_contain_the_separator(
+    seeded: UowFactory,
+) -> None:
+    """`from="a:b", to="c"` and `from="a", to="b:c"` must save as two distinct
+    edges even though a naive `f"{graph_id}:{from}:{to}"` synthetic id would
+    join both into the identical string (Issue #26 review: the edge table's
+    primary key is the composite ``(graph_id, from_question_id,
+    to_question_id)``, not a separator-joined id).
+    """
+    edge_1 = DependencyEdge(
+        from_question_id="a:b",
+        to_question_id="c",
+        provides=(DependencyProvision.RECOGNIZED_TEXT,),
+        rationale="rationale-1",
+    )
+    edge_2 = DependencyEdge(
+        from_question_id="a",
+        to_question_id="b:c",
+        provides=(DependencyProvision.RECOGNIZED_TEXT,),
+        rationale="rationale-2",
+    )
+    graph = DependencyGraph.from_candidates(
+        id="test-1:v1",
+        test_id="test-1",
+        version=1,
+        question_ids=["a", "b", "c", "a:b", "b:c"],
+        edges=[edge_1, edge_2],
+        created_at=at(),
+    )
+
+    with seeded() as uow:
+        uow.dependency_graphs.save(graph)
+        uow.commit()
+
+    with seeded() as uow:
+        loaded = uow.dependency_graphs.get("test-1:v1")
+    assert loaded is not None
+    assert {(e.from_question_id, e.to_question_id) for e in loaded.edges} == {
+        ("a:b", "c"),
+        ("a", "b:c"),
+    }
+
+
 def test_saving_the_same_version_twice_replaces_the_draft_in_place(seeded: UowFactory) -> None:
     with seeded() as uow:
         uow.dependency_graphs.save(_draft(edges=[_edge("q-1", "q-2")]))

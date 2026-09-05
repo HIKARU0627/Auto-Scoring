@@ -145,6 +145,14 @@ app-data/
 
 - `backend/alembic.ini` + `backend/migrations/`。`auto_scoring.db.migrator` が
   Python から呼び出す薄いラッパー（`upgrade` / `downgrade` / `current_revision`）。
+  この2つはソースツリー直下（`backend/`）に置いた開発者向けの配置で、
+  `pyproject.toml` の `force-include` で wheel には `auto_scoring/migrations` /
+  `auto_scoring/alembic.ini` としても同梱する（Issue #26）。`db/migrator.py` は
+  パッケージ内配置とソースツリー配置の両方を試し、存在する方を使う --
+  `auto-scoring-sidecar` コンソールスクリプトはインストール済みの
+  `auto_scoring` パッケージだけが存在する環境（`backend/` ソースツリーは無い）
+  で起動時に `upgrade(db_url, "head")` を呼ぶため、パッケージ内蔵が無いと
+  Uvicorn 起動前に落ちる（詳細: `docs/dependency-graph.md`）。
 - リビジョン:
   - `0001_initial_schema` — 10 個のコアテーブル一式。
   - `0002_operation_log` — 削除操作の監査ログテーブルを追加（§5 参照）。

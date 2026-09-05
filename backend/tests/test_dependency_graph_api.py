@@ -16,11 +16,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from auto_scoring.adapters.sqlalchemy_repositories import SqlAlchemyDependencyGraphRepository
+from auto_scoring.adapters.sqlalchemy_repositories import (
+    SqlAlchemyDependencyGraphRepository,
+    SqlAlchemyJobRepository,
+)
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.dependency_graph import DependencyGraph, can_start_submission_processing
-from auto_scoring.domain.models import JobState, Rubric, RubricCriterion
+from auto_scoring.domain.models import Job, JobSaveConflict, JobState, Rubric, RubricCriterion
 from tests.support import make_job, make_question, make_submission, make_test
 
 _TOKEN = "dag-test-token"
@@ -175,8 +178,11 @@ def test_human_correction_confirm_gates_submission_processing(
 
     with make_uow() as uow:
         stored = uow.dependency_graphs.get_latest("test-1")
+        current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
     assert stored is not None
-    assert can_start_submission_processing(stored) is True
+    assert (
+        can_start_submission_processing(stored, current_question_ids=current_question_ids) is True
+    )
 
 
 def test_draft_alone_does_not_allow_submission_processing(
@@ -187,7 +193,50 @@ def test_draft_alone_does_not_allow_submission_processing(
 
     with make_uow() as uow:
         latest = uow.dependency_graphs.get_latest("test-1")
-    assert can_start_submission_processing(latest) is False
+        current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
+    assert (
+        can_start_submission_processing(latest, current_question_ids=current_question_ids) is False
+    )
+
+
+def test_confirmed_processing_gate_goes_stale_after_a_question_is_added(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """A confirmed graph's own `status` never changes on its own, but a
+    question added to the test afterwards must still block processing --
+    otherwise a job could be started against a DAG missing a real question of
+    the test indefinitely (Issue #26 review).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        confirmed = uow.dependency_graphs.get_latest("test-1")
+        current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
+    assert confirmed is not None
+    assert (
+        can_start_submission_processing(confirmed, current_question_ids=current_question_ids)
+        is True
+    )
+
+    with make_uow() as uow:
+        uow.questions.add(make_question(id="q2", test_id="test-1", number="問2"))
+        uow.commit()
+
+    with make_uow() as uow:
+        still_confirmed = uow.dependency_graphs.get_latest("test-1")
+        current_question_ids = {q.id for q in uow.questions.list_for_test("test-1")}
+    assert still_confirmed is not None
+    assert still_confirmed.status.value == "confirmed"  # status alone did not change
+    assert (
+        can_start_submission_processing(still_confirmed, current_question_ids=current_question_ids)
+        is False
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -569,6 +618,50 @@ def test_confirming_when_nothing_is_stale_creates_no_extra_jobs(
     with make_uow() as uow:
         assert uow.jobs.list_by_state(JobState.QUEUED) == []
         assert uow.jobs.list_by_state(JobState.CANCELLED) == []
+
+
+def test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race(
+    client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If cancelling a stale job conflicts (e.g. a worker changed its state
+    in the meantime), /confirm must not crash and must not create a
+    duplicate replacement for that job -- it should simply leave it alone
+    and still succeed for the graph itself (Issue #26 review).
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(id="job-v1-running", state=JobState.RUNNING, dependency_graph_version=1)
+        )
+        uow.commit()
+
+    def _always_conflict(self: SqlAlchemyJobRepository, job: Job) -> None:
+        raise JobSaveConflict(job.id, job.state)
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _always_conflict)
+
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        job = uow.jobs.get("job-v1-running")
+        queued = uow.jobs.list_by_state(JobState.QUEUED)
+    assert job is not None
+    assert job.state is JobState.RUNNING  # untouched: the cancel attempt conflicted
+    assert queued == []  # no duplicate replacement was created for it
 
 
 def test_confirming_unknown_version_is_not_found(client: TestClient, make_uow: UowFactory) -> None:

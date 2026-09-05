@@ -23,7 +23,7 @@ FastAPI, SQLAlchemy, or any external SDK).
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -415,12 +415,26 @@ class DependencyGraph:
         )
 
 
-def can_start_submission_processing(graph: DependencyGraph | None) -> bool:
+def can_start_submission_processing(
+    graph: DependencyGraph | None, *, current_question_ids: Iterable[str]
+) -> bool:
     """Gate for Issue #26's acceptance criterion:
 
     "人間未確認または分析失敗のgraphではSubmissionのOCR/AI採点を開始できない".
     ``None`` covers both "no graph was ever produced" (analysis failure) and
     "not analyzed yet"; anything short of a human-confirmed graph blocks
     processing.
+
+    A CONFIRMED graph is not enough by itself: once confirmed it is immutable
+    (see `confirm`), but the test's own question set is not -- a question
+    added or removed afterwards (`QuestionRepository.add` has no notion of
+    invalidating an existing confirmed graph) would leave a graph whose
+    `question_ids` no longer describes the test, yet whose `status` still
+    reads CONFIRMED forever. ``current_question_ids`` is the caller's
+    up-to-date read of the test's questions at the moment it wants to start
+    processing; a mismatch means the graph is stale and must be reported the
+    same as "not confirmed" (Issue #26 review).
     """
-    return graph is not None and graph.status is DependencyGraphStatus.CONFIRMED
+    if graph is None or graph.status is not DependencyGraphStatus.CONFIRMED:
+        return False
+    return graph.question_ids == frozenset(current_question_ids)
