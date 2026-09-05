@@ -468,13 +468,6 @@ def build_dependency_graph_router(
         reissued: list[Job] = []
         cancelled_running_job_ids: list[str] = []
         for submission_id, stale_jobs in stale_jobs_by_submission.items():
-            stale_ids = {job.id for job in stale_jobs}
-            baseline = [
-                job
-                for job in uow.jobs.list_for_submission(submission_id)
-                if job.id not in stale_ids
-            ]
-
             pairs: list[tuple[Job, Job, Job]] = []
             for stale_job in stale_jobs:
                 cancelled, replacement = reissue_job_for_graph_version(
@@ -482,19 +475,22 @@ def build_dependency_graph_router(
                 )
                 pairs.append((stale_job, cancelled, replacement))
 
-            tentative_jobs = baseline + [replacement for _, _, replacement in pairs]
-            statuses = question_statuses(tentative_jobs)
-
+            # First pass: attempt every stale job's cancellation, keeping
+            # only the replacements whose CAS actually won. A CAS can lose
+            # if the job genuinely completed (or was cancelled) for real,
+            # via a normal worker, between our initial listing above and
+            # this write.
+            accepted_replacements: list[Job] = []
             for stale_job, cancelled, replacement in pairs:
                 try:
                     uow.jobs.save(cancelled, expected_state=stale_job.state)
                 except JobSaveConflict:
-                    # Another writer (a worker finishing this job) changed
-                    # its state after we listed it as stale. Do not create a
-                    # replacement for it -- the job we meant to cancel no
-                    # longer exists in the state we read, so a duplicate
-                    # QUEUED/BLOCKED replacement would risk double-
-                    # processing the same work.
+                    # Another writer (a worker finishing this job for real)
+                    # changed its state after we listed it as stale. Do not
+                    # create a replacement for it -- the job we meant to
+                    # cancel no longer exists in the state we read, so a
+                    # duplicate QUEUED/BLOCKED replacement would risk
+                    # double-processing the same work.
                     continue
                 if stale_job.state is JobState.RUNNING:
                     # This write only flipped the DB row; the in-process
@@ -502,6 +498,21 @@ def build_dependency_graph_router(
                     # instance than whichever confirmed this) still needs a
                     # separate signal to actually stop (review round 2, P1).
                     cancelled_running_job_ids.append(stale_job.id)
+                accepted_replacements.append(replacement)
+
+            # Second pass: decide readiness from the *actual* resulting job
+            # set -- every job for this submission as it stands right now,
+            # not a snapshot computed before we knew which cancellations
+            # would win. A tentative snapshot (baseline + every candidate
+            # replacement, win or lose) would still show a "PENDING"
+            # placeholder for a stale job whose CAS lost above -- but that
+            # job did not get a replacement (skipped, right above) *and* it
+            # already finished for real in the past, so no future
+            # completion event will ever come along to release a dependent
+            # left BLOCKED on that stale placeholder (review round 3, P1).
+            fresh_jobs = uow.jobs.list_for_submission(submission_id)
+            statuses = question_statuses(fresh_jobs)
+            for replacement in accepted_replacements:
                 if replacement.question_id is not None:
                     readiness = evaluate_readiness(confirmed, replacement.question_id, statuses)
                     if not readiness.ready:

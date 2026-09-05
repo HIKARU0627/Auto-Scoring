@@ -33,6 +33,8 @@ from auto_scoring.jobs.queue import (
     JobNotFoundError,
     JobNotRetryableError,
     JobQueueService,
+    JobResumeConflictError,
+    JobRetryConflictError,
     SubmissionJobCreationConflictError,
     SubmissionNotReadyError,
 )
@@ -113,6 +115,8 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
             queue_service.mark_question_usable(submission_id=submission_id, question_id=question_id)
         except JobNotFoundError as error:
             raise HTTPException(404, detail=str(error)) from error
+        except JobResumeConflictError as error:
+            raise HTTPException(409, detail=str(error)) from error
 
     @router.get("/jobs/{job_id}", response_model=JobResponse)
     def get_job(job_id: str) -> JobResponse:
@@ -128,6 +132,8 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
         except JobNotFoundError as error:
             raise HTTPException(404, detail=str(error)) from error
         except JobNotRetryableError as error:
+            raise HTTPException(409, detail=str(error)) from error
+        except JobRetryConflictError as error:
             raise HTTPException(409, detail=str(error)) from error
 
     @router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
