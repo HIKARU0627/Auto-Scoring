@@ -217,6 +217,33 @@ def test_cancel_endpoint_cancels_a_blocked_job(session_factory: sessionmaker[Ses
         assert response.json()["state"] == "cancelled"
 
 
+def test_cancel_endpoint_returns_202_for_a_running_job(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Issue #18 review round 6, P2: cancelling a RUNNING job only
+    *requests* cancellation -- the actual RUNNING -> CANCELLED write
+    happens asynchronously, moments later, owned by the worker's own task,
+    not this call. Answering 200 with that stale "still running" snapshot
+    would read as if nothing happened; 202 signals the request was accepted
+    but is not yet applied.
+    """
+    hold = asyncio.Event()
+    processor = FakeJobProcessor(hold_event=hold)
+    app = create_app(api_token=_TOKEN, session_factory=session_factory, job_processor=processor)
+    with TestClient(app) as client:
+        _seed_confirmed(session_factory, question_ids=["qa"])
+        created = client.post("/submissions/sub-1/jobs", headers=_AUTH).json()
+        job_id = created[0]["id"]
+        _wait_until_job_state(client, job_id, "running")
+
+        response = client.post(f"/jobs/{job_id}/cancel", headers=_AUTH)
+        assert response.status_code == 202
+        assert response.json()["state"] == "running"  # pre-cancellation snapshot, not stale 200
+
+        hold.set()  # let the worker notice the cancellation and finalize it
+        _wait_until_job_state(client, job_id, "cancelled")
+
+
 def test_cancel_endpoint_rejects_an_already_succeeded_job(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

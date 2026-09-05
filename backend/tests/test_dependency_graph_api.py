@@ -849,6 +849,68 @@ def test_confirm_retries_invalidation_when_a_stale_job_merely_moved_to_another_i
     assert replacements[0].state is JobState.QUEUED  # a replacement was still created
 
 
+def test_confirm_does_not_invalidate_an_approved_failed_job(
+    client: TestClient, make_uow: UowFactory
+) -> None:
+    """Issue #18 review round 6, P1: confirming a new dependency-graph
+    version must not cancel/reissue a FAILED job whose usable bit a human
+    already approved via mark_question_usable -- a dependent may already be
+    running or done on the strength of that approval, and reissuing it here
+    would silently clear that approval (`reissue_job_for_graph_version`'s
+    replacement always resets `usable`), leaving the dependent to keep
+    processing against an approval that, per the DB, no longer exists. This
+    is the same inconsistency `retry_job`/`cancel_job` already refuse to
+    create (review rounds 4/5) -- an approved FAILED job is, for this
+    purpose, as terminal as SUCCEEDED/CANCELLED.
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1), ("q2", "問2", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(
+                id="job-q1-v1",
+                question_id="q1",
+                state=JobState.FAILED,
+                usable=True,
+                dependency_graph_version=1,
+            )
+        )
+        uow.jobs.add(
+            make_job(
+                id="job-q2-v1",
+                question_id="q2",
+                state=JobState.QUEUED,
+                dependency_graph_version=1,
+            )
+        )
+        uow.commit()
+
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        jobs = uow.jobs.list_for_submission("sub-1")
+    q1_final = next(j for j in jobs if j.question_id == "q1")
+    q2_replacements = [j for j in jobs if j.question_id == "q2" and j.dependency_graph_version == 2]
+    assert q1_final.id == "job-q1-v1"
+    assert q1_final.state is JobState.FAILED  # untouched -- never cancelled/reissued
+    assert q1_final.usable is True  # approval preserved
+    assert len(q2_replacements) == 1  # still genuinely incomplete -- invalidated as usual
+    assert q2_replacements[0].state is JobState.QUEUED
+
+
 def test_confirming_a_new_version_with_an_added_edge_blocks_the_new_dependent(
     client: TestClient, make_uow: UowFactory
 ) -> None:

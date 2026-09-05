@@ -1146,7 +1146,12 @@ async def test_mark_question_usable_aborts_when_a_concurrent_retry_changes_the_j
     calls = {"count": 0}
 
     def _mark_usable_racing_a_concurrent_retry(
-        self: SqlAlchemyJobRepository, job_id: str, *, usable: bool, expected_state: JobState
+        self: SqlAlchemyJobRepository,
+        job_id: str,
+        *,
+        usable: bool,
+        expected_state: JobState,
+        expected_attempts: int,
     ) -> bool:
         calls["count"] += 1
         if calls["count"] == 1:
@@ -1159,7 +1164,13 @@ async def test_mark_question_usable_aborts_when_a_concurrent_retry_changes_the_j
                 requeued = job.transitioned_to(JobState.QUEUED, updated_at=at())
                 inner.jobs.save(requeued, expected_state=JobState.FAILED)
                 inner.commit()
-        return real_mark_usable(self, job_id, usable=usable, expected_state=expected_state)
+        return real_mark_usable(
+            self,
+            job_id,
+            usable=usable,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+        )
 
     monkeypatch.setattr(
         SqlAlchemyJobRepository, "mark_usable", _mark_usable_racing_a_concurrent_retry
@@ -1742,7 +1753,12 @@ async def test_retry_job_loses_to_a_concurrent_approval_that_lands_mid_write(
             # standing the way a genuinely concurrent commit would.
             with SqlAlchemyUnitOfWork(session_factory) as inner:
                 assert (
-                    inner.jobs.mark_usable(job.id, usable=True, expected_state=JobState.FAILED)
+                    inner.jobs.mark_usable(
+                        job.id,
+                        usable=True,
+                        expected_state=JobState.FAILED,
+                        expected_attempts=job.attempts,
+                    )
                     is True
                 )
                 inner.commit()
@@ -1869,3 +1885,110 @@ async def test_start_preserves_remaining_backoff_instead_of_requeuing_immediatel
     # slept, never the full 100s (defeats the point) and never 0 (an
     # immediate requeue).
     assert clock.sleep_calls == [60.0]
+
+
+# --------------------------------------------------------------------------- #
+# Review round 6 regressions
+# --------------------------------------------------------------------------- #
+async def test_mark_usable_does_not_apply_a_stale_approval_across_a_full_aba_retry_cycle(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: mark_question_usable's compare-and-set on `state` alone cannot
+    tell a FAILED row it read apart from a *different*, later FAILED row --
+    FAILED is not a dead end, so a concurrent retry can complete a whole
+    FAILED -> QUEUED -> RUNNING -> FAILED cycle (a fresh, unreviewed
+    attempt) in the window between this call's read and its write, and the
+    state predicate alone would match again. Pinning the CAS to `attempts`
+    too must make that first attempt lose instead of silently applying an
+    approval read for the earlier attempt to the later, unreviewed one --
+    the retry that follows then correctly re-evaluates against the fresh
+    (current) attempt.
+    """
+    version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=5,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.BLOCKED,
+                blocked_on_question_id="qa",
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_mark_usable = SqlAlchemyJobRepository.mark_usable
+    calls = {"count": 0}
+
+    def _mark_usable_after_a_full_aba_retry_cycle(
+        self: SqlAlchemyJobRepository,
+        job_id: str,
+        *,
+        usable: bool,
+        expected_state: JobState,
+        expected_attempts: int,
+    ) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            # Simulate a concurrent retry_job completing a full cycle back
+            # to FAILED -- a brand new, unreviewed attempt -- in the window
+            # between this call's own read (attempts=1) and its write.
+            # Independently committed so it survives this call's own uow
+            # rolling back on a lost CAS.
+            with SqlAlchemyUnitOfWork(session_factory) as inner:
+                job = inner.jobs.get(job_id)
+                assert job is not None
+                requeued = job.transitioned_to(JobState.QUEUED, updated_at=at(seconds=1))
+                inner.jobs.save(requeued, expected_state=JobState.FAILED)
+                running = requeued.transitioned_to(JobState.RUNNING, updated_at=at(seconds=2))
+                inner.jobs.save(running, expected_state=JobState.QUEUED)
+                failed_again = running.transitioned_to(
+                    JobState.FAILED,
+                    updated_at=at(seconds=3),
+                    error_code=ErrorCategory.TIMEOUT,
+                )
+                inner.jobs.save(failed_again, expected_state=JobState.RUNNING)
+                inner.commit()
+        return real_mark_usable(
+            self,
+            job_id,
+            usable=usable,
+            expected_state=expected_state,
+            expected_attempts=expected_attempts,
+        )
+
+    monkeypatch.setattr(
+        SqlAlchemyJobRepository, "mark_usable", _mark_usable_after_a_full_aba_retry_cycle
+    )
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    service.mark_question_usable(submission_id="sub-1", question_id="qa")
+
+    assert calls["count"] == 2  # the first attempt lost to the ABA cycle and had to be retried
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        qa_final = uow.jobs.get("job-qa")
+        qb_final = uow.jobs.get("job-qb")
+    assert qa_final is not None
+    assert qa_final.attempts == 2  # approved against the current attempt, not the stale one
+    assert qa_final.usable is True
+    assert qb_final is not None
+    assert qb_final.state is JobState.QUEUED  # released on the strength of the fresh approval
