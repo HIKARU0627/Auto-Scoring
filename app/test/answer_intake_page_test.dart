@@ -129,6 +129,53 @@ void main() {
     expect(find.text('取込完了: 処理済み'), findsOneWidget);
   });
 
+  testWidgets(
+    'a native file-picker failure shows an error with a working retry',
+    (tester) async {
+      var pickAttempts = 0;
+      Future<PickedPdfFile?> flakyPick() async {
+        pickAttempts++;
+        if (pickAttempts == 1) {
+          throw PlatformException(code: 'picker_failed');
+        }
+        return const PickedPdfFile(
+          path: 'C:/tmp/student-a.pdf',
+          name: 'student-a.pdf',
+        );
+      }
+
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          AnswerIntakePage(dependencies: dependencies, pickFile: flakyPick),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pumpAndSettle();
+
+      expect(pickAttempts, 1);
+      expect(find.textContaining('ファイルの選択に失敗しました'), findsOneWidget);
+      expect(find.text('未選択'), findsOneWidget);
+
+      await tester.tap(find.text('再試行'));
+      await tester.pumpAndSettle();
+
+      expect(pickAttempts, 2);
+      expect(find.textContaining('ファイルの選択に失敗しました'), findsNothing);
+      expect(find.text('student-a.pdf'), findsOneWidget);
+    },
+  );
+
   testWidgets('surfaces a duplicate submission as a friendly message', (
     tester,
   ) async {

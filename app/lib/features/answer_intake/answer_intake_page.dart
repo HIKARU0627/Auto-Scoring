@@ -52,7 +52,7 @@ class AnswerIntakePage extends StatefulWidget {
 /// Which operation an [_AnswerIntakePageState._errorMessage] came from, so
 /// the error banner's retry button can retry *that* operation instead of
 /// always retrying the upload.
-enum _ErrorKind { listLoad, submit }
+enum _ErrorKind { listLoad, filePick, submit }
 
 class _AnswerIntakePageState extends State<AnswerIntakePage> {
   final _studentLabelController = TextEditingController();
@@ -151,15 +151,29 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
   }
 
   Future<void> _pickFile() async {
-    final picked = await widget.pickFile();
-    if (!mounted) return;
-    if (picked == null) return;
-    setState(() {
-      _pickedFilePath = picked.path;
-      _pickedFileName = picked.name;
-      _errorMessage = null;
-      _errorKind = null;
-    });
+    try {
+      final picked = await widget.pickFile();
+      if (!mounted) return;
+      if (picked == null) return;
+      setState(() {
+        _pickedFilePath = picked.path;
+        _pickedFileName = picked.name;
+        _errorMessage = null;
+        _errorKind = null;
+      });
+    } catch (error) {
+      // widget.pickFile() talks to a native platform channel/dialog, which
+      // can fail (an OS-level error, a denied permission, ...). Left
+      // uncaught, that would leak out of this button's onPressed callback
+      // as an unhandled async error, leaving the screen showing no error
+      // and no way to retry -- exactly the state every other failure path
+      // here (list load, submit) already avoids.
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'ファイルの選択に失敗しました: $error';
+        _errorKind = _ErrorKind.filePick;
+      });
+    }
   }
 
   Future<void> _submit() async {
@@ -351,6 +365,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     final VoidCallback? retry = switch (_errorKind) {
       _ErrorKind.listLoad =>
         _loadingSubmissions ? null : () => _selectTest(_selectedTestId),
+      _ErrorKind.filePick => _isSubmitting ? null : _pickFile,
       _ErrorKind.submit || null => _canSubmit ? _submit : null,
     };
     return Card(
