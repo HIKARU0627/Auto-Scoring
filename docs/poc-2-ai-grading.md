@@ -701,6 +701,71 @@ unavailable か」のどちらの判定にも該当せず、黙って `pending` 
 （コードレビュー指摘）。修正: この検証を `response` または
 `unavailable: true` のどちらかを持つセル全てに適用するよう拡張した。
 
+### 3.14 ファイルをまたいだ重複・矛盾セル・正規化タイミング・key 漏洩の最終確認
+
+**ファイルをまたいだ重複 submission ID を拒否する**: 決定書 §6.3 は
+「1 答案 = 1 JSON ファイル」と定めるが、以前の実装は正規化後の
+`(subject, submissionId)` の組がデータセット全体で一意であることを検証
+していなかった。2 つのファイルが誤って同じ組を再利用すると、両方の
+ファイルの全設問が独立したサンプルとしてパースされ、全 provider の
+メトリクスに二重にプールされてしまう一方、`_submission_coverage` はその
+ID を 1 回しかカウントしないため、実際には重複した答案がカバレッジ数値を
+増やさないまま各種集計だけを歪めてしまっていた（コードレビュー指摘）。
+修正: `_load_all_samples` がファイルをまたいで見た `(subject,
+submissionId)` の組を保持し、2 回目の出現でハーネスを停止させる。`/tmp`
+で同じ `(subject, submissionId)` を持つ 2 つのファイルを構成し、正しく
+拒否されることを確認した。
+
+**メタデータのみのセルを pending 扱いにせず拒否する**: 記録者が
+`descriptor`・`latency_seconds`・`cost_usd` を書き込みつつ `response` と
+`unavailable: true` の両方を省略した場合、以前の実装はこれを黙って
+`pending`（未試行）として扱い、`descriptor` と `latency` を破棄した上で、
+この呼び出しを provider の latency/cost/unavailable メトリクスから除外
+してしまっていた。矛盾した記録済みデータを黙って受理することは
+AGENTS.md の trust-boundary ルールに反する（コードレビュー指摘）。修正:
+`_validate_cell_shape` が `descriptor`/`latency_seconds`/`cost_usd` の
+いずれかを持ちながら `response` も `unavailable: true` も持たないセルを
+拒否するようにした。`/tmp` でこの矛盾したセルを構成し、正しく拒否される
+ことを確認した。
+
+**データセット全体のチェック前に subject ラベルを正規化する**: 決定書
+どおり `submissionId`/`testId` は前後の空白を除去してから返すように
+なっていたが、`subject` だけはこの正規化を欠いていた。`"history"` と
+`" history "` のような表記ゆれのあるファイルは別々の bucket として集計
+され、本来 1 つの `subject` に属するはずの `testId` の一意性チェック
+（`_validate_single_test_per_subject`）をすり抜けてしまいかねなかった
+（コードレビュー指摘）。修正: `_load_subject` も `.strip()` した値を返す
+ようにした。`/tmp` で `"history"` と `" history "` を使う 2 つのファイル
+を構成し、両者が 1 つの `subject`（distinct submissions: 2）として集計
+され、`testId` の一意性チェックが正しくこの統合後の `subject` に対して
+働くことを確認した。
+
+**例外から非正規の provider ID を redact する**: 実データセットが不正な
+provider key（正規候補 ID 集合に含まれない ID）を含む場合、以前の実装は
+その ID をそのまま例外メッセージに埋め込んでいた。secret や生徒名などの
+個人情報が誤ってこの JSON key として使われていた場合、terminal や CI
+ログに漏洩しかねない（コードレビュー指摘。AGENTS.md「Security」）。他の
+未知 JSON key（`extra_forbidden` の `loc` や `_validate_recorded_
+variant_keys` の未知 input variant キー）に既に適用されている redaction
+方針に合わせ、`_validate_canonical_provider_ids` と `_canonical_
+providers`（正規化衝突検出）の両方のメッセージから実際の provider key を
+除去し、件数と許可 ID 集合のみを報告するよう修正した。`/tmp` で
+`TOP_SECRET_STUDENT_NAME_LEAK` という provider key を含むデータセットを
+構成し、この文字列が出力・traceback のどこにも現れないことを確認した。
+
+**provider contract で空の annotation リストを許容する**: 再利用可能な
+`AIProviderContract` mixin の `test_grade_preserves_annotation_candidates`
+は、汎用の request に対して特定の annotation（`target="行く"`、
+`type=underline`）が必ず返ることを要求していた。しかし `AIGradingResult.
+annotations` は明示的に空タプルを許容しており、実際のアダプタが汎用
+request に対して annotation を一切提案しないことは仕様上正当であるため、
+この contract test は将来の準拠アダプタを非決定的に失敗させかねなかった
+（コードレビュー指摘）。修正: このテストを `AIProviderContract` から
+`_ReplayAIProvider` 専用の standalone テスト
+（`test_replay_provider_preserves_annotation_candidates`）へ移し、
+「provider が実際に annotation を返した場合にそれが保持される」という
+plumbing の確認に限定した（全 provider に annotation 生成を要求しない）。
+
 ---
 
 ## 4. repro command

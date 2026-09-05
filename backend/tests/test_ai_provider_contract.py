@@ -84,26 +84,6 @@ class AIProviderContract:
         response = provider.grade(_VALID_REQUEST)
         assert isinstance(response.recognition_text, str)
 
-    def test_grade_preserves_annotation_candidates(self, provider: AIProvider) -> None:
-        """simplified-design-specification.md section 12.1: the app places
-        annotation candidates on the PDF, so the AIProvider port must not
-        drop them (Issue #14 review: "provider応答内のannotation候補を保持
-        する")."""
-        response = provider.grade(
-            GradingRequest(
-                question_id="with-annotations",
-                prompt_text="設問文",
-                answer_image=b"\x89PNG\r\n\x1a\n",
-                ocr_text="行く",
-                model_answer="模範解答",
-                rubric_text="採点基準",
-                max_score=5,
-            )
-        )
-        assert response.annotations
-        assert response.annotations[0].target == "行く"
-        assert response.annotations[0].type == AnnotationKind.UNDERLINE
-
     def test_grade_receives_the_answer_image(self, provider: AIProvider) -> None:
         """simplified-design-specification.md section 9.1 lists both the
         answer image and the OCR text as inputs; a real adapter needs the
@@ -201,6 +181,39 @@ class TestReplayAIProviderContract(AIProviderContract):
     @pytest.fixture
     def provider(self) -> _ReplayAIProvider:
         return _ReplayAIProvider()
+
+
+def test_replay_provider_preserves_annotation_candidates() -> None:
+    """simplified-design-specification.md section 12.1: the app places
+    annotation candidates on the PDF, so the ``AIProvider`` port must not
+    drop them (Issue #14 review: "provider応答内のannotation候補を保持
+    する").
+
+    Deliberately *not* part of ``AIProviderContract`` (code review finding):
+    that mixin runs against every future real adapter too, and a generic
+    request gives no guarantee a conforming model will propose any
+    annotation for it -- ``AIGradingResult.annotations`` explicitly defaults
+    to an empty tuple. Requiring a non-empty, specific annotation there
+    would make a spec-compliant adapter fail non-deterministically. This
+    replays ``_ReplayAIProvider``'s own known canned payload instead, to
+    check the plumbing preserves annotations when a provider *does* return
+    them.
+    """
+    provider = _ReplayAIProvider()
+    response = provider.grade(
+        GradingRequest(
+            question_id="with-annotations",
+            prompt_text="設問文",
+            answer_image=b"\x89PNG\r\n\x1a\n",
+            ocr_text="行く",
+            model_answer="模範解答",
+            rubric_text="採点基準",
+            max_score=5,
+        )
+    )
+    assert response.annotations
+    assert response.annotations[0].target == "行く"
+    assert response.annotations[0].type == AnnotationKind.UNDERLINE
 
 
 def test_grading_response_from_result_preserves_a_corrected_recognition_text() -> None:

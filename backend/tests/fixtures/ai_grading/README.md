@@ -59,7 +59,19 @@ counted, the same as a provider id: `"sub-1"` and `" sub-1 "` can only mean
 the same submission, and counting them as two would overstate coverage
 against the 30-per-subject minimum (code review finding). The aggregate
 report includes a distinct-submission count per subject for exactly this
-coverage check.
+coverage check. `subject` is stripped of surrounding whitespace the same
+way, and *before* every dataset-wide check runs: `"history"` and
+`" history "` can only mean the same subject, and treating them as two
+would both split that subject's coverage/metrics in two and let two
+different `testId` values slip past the one-test-per-subject check below
+as if they belonged to different subjects (code review finding).
+
+No two files may reuse the same normalized `(subject, submissionId)` pair
+either -- section 6.3 defines one answer sheet as one JSON file, so two
+files claiming the same submission would have every one of both files'
+questions parsed and pooled into every provider's metrics as if they were
+independent answers, while the distinct-submission coverage count above
+still counts that id only once (code review finding).
 
 `testId` is likewise a required, non-blank, whitespace-normalized sibling
 field (business-rules-and-evaluation-data.md section 6.1 metadata: テストID
@@ -200,7 +212,13 @@ alone does not catch a case difference, so `"gemini"` and `"Gemini"` would
 otherwise still count as two separate candidates for the same real service
 (code review finding). These fixtures are an explicit, documented exception
 to that check, since `synthetic-a`/`synthetic-b` are intentionally
-placeholder names, not real vendor ids.
+placeholder names, not real vendor ids. A raw provider key -- whether it
+collides after normalization or fails the canonical-id check -- is never
+echoed in the raised message: it is a `recorded` JSON key, the same
+untrusted content as any other key or value, and a malformed real dataset
+could have a secret or real student text there by mistake (AGENTS.md
+"Security"; code review finding). Only the offending count and the allowed
+canonical ids are reported.
 
 A cell may instead record `{"unavailable": true, "descriptor": {...},
 "latency_seconds": ..., "cost_usd": ...}` (no `response`) for a call
@@ -242,7 +260,14 @@ ordinary pending and the harness could exit 0 using only the other cells,
 as if the dataset had been fully and correctly reported (code review
 finding; AGENTS.md trust-boundary validation). A non-object cell value
 previously reached a `.get()` call directly and failed with an unhandled
-`TypeError` instead of a clear validation error.
+`TypeError` instead of a clear validation error. A cell that records
+`descriptor`/`latency_seconds`/`cost_usd` (evidence a call was attempted)
+while omitting both `response` and `unavailable: true` is rejected the same
+way: it is not a genuinely pending cell (one nobody has tried yet), but a
+contradictory one whose outcome was never recorded, and silently accepting
+it would drop that attempt's descriptor/latency entirely and exclude the
+call from every provider latency/cost/unavailability metric (code review
+finding).
 
 Each sample's `input` block is parsed and cross-checked against its
 `ground_truth` (`max_score` must agree) before any of that sample's

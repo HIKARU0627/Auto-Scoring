@@ -87,7 +87,18 @@ spans more than one distinct ``testId`` (code review finding).
 Within one submission, every ``questions[]`` entry must have a distinct
 ``ground_truth.questionId`` -- a duplicate (e.g. a copy-paste mistake) would
 otherwise be parsed as two independent samples and double-count that
-question's weight in every aggregate (code review finding).
+question's weight in every aggregate (code review finding). Across the
+whole dataset, no two files may reuse the same normalized
+``(subject, submissionId)`` pair either: one answer sheet is one JSON file
+(section 6.3), so two files claiming the same submission would have every
+one of both files' questions parsed and pooled into every provider's
+metrics as if they were independent answers, while the distinct-submission
+coverage count still counts that id only once (code review finding).
+``subject`` (like ``submissionId``/``testId``) is stripped of surrounding
+whitespace before this and every other check runs, so ``"history"`` and
+``" history "`` are treated as the one subject they can only mean, rather
+than silently splitting one subject's coverage and metrics into two
+buckets (code review finding).
 
 ``DIR`` defaults to the committed synthetic fixtures, so the command runs with
 no credentials and no dataset and reproduces a secret-free aggregate table
@@ -166,11 +177,13 @@ it really is (code review finding).
 Every recorded cell's own shape is validated up front too: an unrecognized
 field (a typo such as ``"respnose"`` instead of ``"response"``), a
 non-boolean ``"unavailable"`` marker (e.g. the string ``"true"``), a
-non-object cell value, or a cell recording both ``response`` and
-``unavailable: true`` at once are all rejected outright, rather than
-silently misclassified as an ordinary pending cell and reported as if the
-dataset were complete (code review finding; AGENTS.md trust-boundary
-validation).
+non-object cell value, a cell recording both ``response`` and
+``unavailable: true`` at once, or a cell recording ``descriptor``/
+``latency_seconds``/``cost_usd`` (evidence a call was attempted) while
+omitting both ``response`` and ``unavailable: true`` are all rejected
+outright, rather than silently misclassified as an ordinary pending cell
+and reported as if the dataset were complete (code review finding;
+AGENTS.md trust-boundary validation).
 
 The dataset-wide overlap check above only gates whether the dataset has
 *any* real comparison at all -- it does not mean every recorded cell for a
@@ -211,7 +224,14 @@ whitespace normalization alone does not catch a case difference, so
 ``"gemini"`` and ``"Gemini"`` would otherwise still count as two separate
 candidates for the same real service (code review finding). The bundled
 fixtures are an explicit exception, since they intentionally use placeholder
-names (``synthetic-a`` / ``synthetic-b``) that are not real vendor ids.
+names (``synthetic-a`` / ``synthetic-b``) that are not real vendor ids. A
+raw provider key -- whether it collides after normalization or fails the
+canonical-id check -- is never echoed in the raised message: it is a
+``recorded`` JSON *key*, the same untrusted ``--dataset`` content as any
+other key or value, and a malformed real dataset could have a secret or
+real student text there by mistake (AGENTS.md "Security"; code review
+finding). Only the offending count and the allowed canonical ids are
+reported.
 
 A provider's ``recorded`` entry may only use the two recognized input-variant
 keys (``ocr_clean`` / ``ocr_noisy``) -- an unrecognized key (a typo such as
@@ -336,7 +356,9 @@ class _InvalidSubject(Exception):
 
 
 class _InvalidSubmissionId(Exception):
-    """A submission's top-level ``submissionId`` field is missing or blank.
+    """A submission's top-level ``submissionId`` field is missing or blank,
+    or the same normalized ``(subject, submissionId)`` pair is reused by
+    more than one file.
 
     business-rules-and-evaluation-data.md section 6.3: one answer sheet is
     one JSON file, identified by a non-PII ``submissionId``. Without a
@@ -345,6 +367,14 @@ class _InvalidSubmissionId(Exception):
     minimum (30 distinct submissions per subject) (code review finding). Not
     part of :class:`GradingGroundTruth` for the same reason ``subject`` is
     not: it is read as a sibling field, alongside ``subject``.
+
+    Two files that reuse the same ``(subject, submissionId)`` would have
+    every one of both files' questions parsed and pooled into every
+    provider's metrics as if they were separate, independent answers, while
+    :func:`_submission_coverage` still counts that id only once -- a real
+    duplicated answer sheet would silently double a submission's weight in
+    every aggregate without inflating the coverage count that is supposed
+    to reflect it (code review finding).
     """
 
 
@@ -648,13 +678,24 @@ class _ParsedSample:
 
 
 def _load_subject(raw: dict[str, Any], *, path: Path) -> str:
+    """Validate and return this file's ``subject``, whitespace-stripped.
+
+    Stripped before being returned (not just checked), mirroring
+    :func:`_load_submission_id`/:func:`_load_test_id`: two files whose
+    ``subject`` differs only by surrounding whitespace (``"history"`` vs
+    ``" history "``) can only mean the same subject, and returning the raw,
+    unstripped value would split what should be one subject's coverage and
+    metrics into two buckets, and could let two different ``testId`` values
+    slip past :func:`_validate_single_test_per_subject` as if they belonged
+    to different subjects (code review finding).
+    """
     subject = raw.get("subject")
     if not isinstance(subject, str) or not subject.strip():
         raise _InvalidSubject(
             f"{path}: submission has no non-blank top-level 'subject' field (needed to "
             "bucket this question's metrics by 教科, docs/poc-2-ai-grading.md section 3.3)"
         )
-    return subject
+    return subject.strip()
 
 
 def _load_submission_id(raw: dict[str, Any], *, path: Path) -> str:
@@ -806,7 +847,14 @@ def _validate_cell_shape(cell: object, *, provider: str, variant: str, path: Pat
     had been fully and correctly reported (code review finding; AGENTS.md
     trust-boundary validation). A non-object cell value (e.g. a bare string)
     previously reached a ``.get()`` call directly and failed with an
-    unhandled ``TypeError`` instead of a clear validation error.
+    unhandled ``TypeError`` instead of a clear validation error. A cell that
+    records ``descriptor``/``latency_seconds``/``cost_usd`` (evidence a call
+    was actually attempted) but omits both ``response`` and
+    ``unavailable: true`` is rejected the same way: it is not a genuinely
+    pending cell (one nobody has tried yet), but a contradictory one whose
+    outcome was never recorded, and silently accepting it would drop that
+    attempt's descriptor/latency entirely and exclude the call from every
+    provider latency/cost/unavailability metric (code review finding).
     """
     if cell is None:
         return  # absent cell -- legitimately pending
@@ -839,6 +887,17 @@ def _validate_cell_shape(cell: object, *, provider: str, variant: str, path: Pat
             "'unavailable: true' recorded for the same cell -- a call attempt cannot "
             "both have succeeded and failed"
         )
+    if "response" not in cell and cell.get("unavailable") is not True:
+        attempt_evidence = sorted({"descriptor", "latency_seconds", "cost_usd"} & set(cell))
+        if attempt_evidence:
+            raise _InvalidRecordedCell(
+                f"{path}: provider {provider!r}'s {variant!r} cell has {attempt_evidence} "
+                "recorded but neither a 'response' nor 'unavailable: true' -- this looks "
+                "like a call that was attempted (someone recorded its descriptor/latency/"
+                "cost) but never had its outcome recorded, not a genuinely pending cell "
+                "that simply has not been tried yet. A truly pending cell should be "
+                "entirely absent, or an empty object."
+            )
 
 
 def _validate_recorded_cells(recorded: dict[str, dict[str, Any]], *, path: Path | str) -> None:
@@ -890,10 +949,23 @@ def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
     exit 0 as if it were valid, uninspected evidence (code review finding).
     """
     parsed: list[_ParsedSample] = []
+    seen_submissions: dict[tuple[str, str], Path] = {}
     for path in files:
         raw = json.loads(path.read_text(encoding="utf-8"))
         subject = _load_subject(raw, path=path)
         submission_id = _load_submission_id(raw, path=path)
+        submission_key = (subject, submission_id)
+        earlier_path = seen_submissions.get(submission_key)
+        if earlier_path is not None:
+            raise _InvalidSubmissionId(
+                f"{path}: reuses the same (subject, submissionId) as {earlier_path} -- "
+                "business-rules-and-evaluation-data.md section 6.3 defines one answer "
+                "sheet as one JSON file, so two files must never claim the same "
+                "submission (a real duplicate would double that submission's weight in "
+                "every provider metric without inflating the coverage count meant to "
+                "reflect it)"
+            )
+        seen_submissions[submission_key] = path
         test_id = _load_test_id(raw, path=path)
         questions = _load_questions(raw, path=path)
         seen_question_ids: set[str] = set()
@@ -990,10 +1062,14 @@ def _canonical_providers(samples: list[_ParsedSample]) -> dict[str, str]:
                 )
             existing = raw_for_normalized.get(normalized)
             if existing is not None and existing != raw_key:
+                # Never echo the two colliding keys themselves: they are
+                # untrusted ``--dataset`` content the same as any other key
+                # or value (AGENTS.md "Security"; code review finding).
                 raise _InvalidProviderId(
-                    f"{sample.path}: provider keys {existing!r} and {raw_key!r} both "
-                    f"normalize to {normalized!r} -- this looks like an inconsistently "
-                    "spelled duplicate of the same provider, not two distinct candidates"
+                    f"{sample.path}: two different 'recorded' provider keys normalize to "
+                    "the same id -- this looks like an inconsistently spelled duplicate of "
+                    "the same provider, not two distinct candidates. The keys themselves "
+                    "are not shown here."
                 )
             raw_for_normalized[normalized] = raw_key
     return raw_for_normalized
@@ -1016,12 +1092,18 @@ def _validate_canonical_provider_ids(providers: Iterable[str], *, dataset: Path)
         return
     unknown = sorted(set(providers) - _CANONICAL_PROVIDER_IDS)
     if unknown:
+        # Never echo the offending id(s) themselves: a malformed real
+        # dataset could have a secret or student text as a 'recorded' key
+        # by mistake, and this is the same untrusted --dataset trust
+        # boundary as any other key or value (AGENTS.md "Security"; code
+        # review finding).
         raise _InvalidProviderId(
-            f"provider id(s) {unknown} are not among the canonical candidate ids "
-            f"{sorted(_CANONICAL_PROVIDER_IDS)} (docs/poc-2-ai-grading.md section 2) -- a "
-            "normalized-but-non-canonical id (e.g. a case difference) could let one real "
-            "service masquerade as two separate candidates. Rename the 'recorded' key to "
-            "the canonical id."
+            f"{len(unknown)} provider id(s) recorded in this dataset are not among the "
+            f"canonical candidate ids {sorted(_CANONICAL_PROVIDER_IDS)} "
+            "(docs/poc-2-ai-grading.md section 2) -- a normalized-but-non-canonical id "
+            "(e.g. a case difference) could let one real service masquerade as two "
+            "separate candidates. Rename the 'recorded' key(s) to the canonical id. The "
+            "offending id(s) are not shown here."
         )
 
 
