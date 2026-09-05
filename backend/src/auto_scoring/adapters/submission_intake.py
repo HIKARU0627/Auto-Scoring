@@ -285,7 +285,15 @@ def _write_submission(
         # so a large page count doesn't multiply the sidecar's memory use.
         answer_images: list[AnswerImage] = []
         for page in range(1, page_count + 1):
-            raw_png = pdf_engine.render_page_png(scratch_path, page - 1, scale=RENDER_SCALE)
+            # A page can have a page tree and geometry pypdf/page_geometry
+            # (both checked earlier) consider entirely valid, yet still carry
+            # a malformed or unsupported content stream that only PDFium's
+            # renderer actually rejects. Left uncaught, that surfaces as an
+            # unhandled 500 instead of the documented bad-PDF rejection.
+            try:
+                raw_png = pdf_engine.render_page_png(scratch_path, page - 1, scale=RENDER_SCALE)
+            except Exception as exc:
+                raise PdfCorruptedError(f"could not render page {page}: {exc}") from exc
             preview = image_preprocessor.preprocess_page(raw_png)
             staged.add(store.submission_page_image_path(submission_id, page), preview.png_bytes)
             for question in questions_by_page.get(page, ()):
