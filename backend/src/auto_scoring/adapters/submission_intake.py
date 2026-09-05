@@ -32,7 +32,7 @@ from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 
-from auto_scoring.adapters.atomic import StagedFiles, transactional_operation
+from auto_scoring.adapters.atomic import FinalizationError, StagedFiles, transactional_operation
 from auto_scoring.adapters.image.opencv_preprocessor import crop_normalized_rect
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -222,6 +222,25 @@ def intake_submission(
             if winner is None:
                 raise
             raise DuplicateSubmissionError(winner.id) from exc
+        except FinalizationError:
+            # _write_submission's own transaction already committed the
+            # submission as ai_processed/needs_review before this file write
+            # failed (disk full, permissions, ...) -- that can't be rolled
+            # back, so the row is otherwise stuck: decide_reintake would see
+            # a non-error state and report a future re-upload of the same
+            # PDF as REJECT_DUPLICATE, with no way to ever finish writing the
+            # files that are missing. Move it to ERROR in a fresh commit so
+            # the next upload of the same content is recognized as
+            # RETRY_EXISTING instead -- which, unlike a normal retry, must be
+            # able to re-stage *every* file including source.pdf, since any
+            # one of them (not just the ones a normal retry re-renders) could
+            # be the one that never made it to disk (see is_retry handling in
+            # _write_submission).
+            uow.submissions.mark_intake_outcome(
+                submission_id, SubmissionState.ERROR, "finalization_failed"
+            )
+            uow.commit()
+            raise
 
         return SubmissionIntakeResult(
             submission=final, answer_images=tuple(answer_images), is_retry=is_retry
@@ -303,11 +322,18 @@ def _write_submission(
 
         source_pdf_full_path = store.submission_source_pdf_path(submission_id)
         source_pdf_path = str(source_pdf_full_path.relative_to(store.root)).replace("\\", "/")
-        # A retry reuses the exact bytes already on disk for this submission (the
-        # reintake decision only allows RETRY_EXISTING for an identical content
-        # hash) -- Issue #17's reintake policy never rewrites the source PDF, so
-        # only a brand-new submission stages one.
-        if not is_retry:
+        # A retry reuses the exact bytes already on disk for this submission
+        # (the reintake decision only allows RETRY_EXISTING for an identical
+        # content hash) -- Issue #17's reintake policy never rewrites the
+        # source PDF, so a normal retry skips re-staging it. But a retry can
+        # also be *healing* a prior attempt whose file finalization partially
+        # failed (see FinalizationError handling in intake_submission), in
+        # which case source.pdf specifically -- unlike the page previews and
+        # question crops below, which every retry unconditionally
+        # re-renders and re-stages anyway -- might never have reached disk at
+        # all. Stage it whenever it's actually missing, retry or not, so
+        # that case can still be fully repaired.
+        if not is_retry or not source_pdf_full_path.is_file():
             staged.add(source_pdf_full_path, data)
 
         if is_retry:

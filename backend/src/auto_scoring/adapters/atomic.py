@@ -7,8 +7,11 @@ then are they written (each one atomically, via
 the Unit of Work is rolled back and nothing is written — so a failed
 database transaction leaves neither half-inserted rows nor stray files (issue
 #11 verification, fault injection). SQLite and the filesystem do not share a
-transaction: a file-write failure after the commit is propagated for recovery,
-but cannot roll the committed database transaction back.
+transaction: a file-write failure after the commit is propagated as
+:class:`FinalizationError` -- the DB row is already committed and cannot be
+rolled back, so the caller must compensate (see
+``adapters.submission_intake``'s handling of it) rather than assume atomicity
+held across both stores.
 """
 
 from __future__ import annotations
@@ -21,6 +24,21 @@ from pathlib import Path
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.pdf_intake import StagedOutputTooLargeError
+
+
+class FinalizationError(Exception):
+    """A staged file failed to write *after* the DB transaction committed.
+
+    Unlike every other failure mode of ``transactional_operation`` (which
+    rolls back and leaves nothing behind), this one can't be undone: the DB
+    write already happened. The caller is responsible for compensating --
+    typically by moving the now-inconsistent row to a state a human or a
+    retry can act on -- since ``atomic.py`` has no notion of what "retryable"
+    means for whatever domain object it just staged files for.
+    """
+
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(f"failed to write staged files after DB commit: {original}")
 
 
 @dataclass
@@ -63,4 +81,7 @@ def transactional_operation(
         uow.rollback()
         staged._discard()
         raise
-    staged._finalize()
+    try:
+        staged._finalize()
+    except BaseException as exc:
+        raise FinalizationError(exc) from exc
