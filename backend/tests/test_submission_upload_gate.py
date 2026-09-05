@@ -29,14 +29,16 @@ class _RecordingApp:
         await send({"type": "http.response.body", "body": b"ok"})
 
 
-def _upload_scope(*, authorization: str | None = None) -> Scope:
+def _upload_scope(
+    *, authorization: str | None = None, path: str = "/tests/test-1/submissions"
+) -> Scope:
     headers: list[tuple[bytes, bytes]] = []
     if authorization is not None:
         headers.append((b"authorization", authorization.encode()))
     return {
         "type": "http",
         "method": "POST",
-        "path": "/tests/test-1/submissions",
+        "path": path,
         "headers": headers,
     }
 
@@ -110,6 +112,36 @@ async def test_allows_an_authenticated_request_within_capacity_and_releases_it_a
     assert sent[0]["status"] == 201
     # Released after the wrapped app finished, not held forever.
     assert capacity.acquire(blocking=False)
+
+
+async def test_rejects_an_unauthenticated_test_registration_before_touching_the_body() -> None:
+    """Issue #16 review: `POST /tests` carries two independently-limited
+    PDFs in one multipart body -- just as much unauthenticated body as an
+    answer upload can -- so it must be gated the same way, not left to the
+    ordinary `require_token` dependency (which only runs after FastAPI has
+    already spooled the body).
+    """
+    recording = _RecordingApp()
+    middleware = SubmissionUploadGateMiddleware(
+        recording, api_token=_TOKEN, capacity=threading.Semaphore(1)
+    )
+
+    sent = await _run(middleware, _upload_scope(path="/tests"))
+
+    assert recording.called is False
+    assert sent[0]["status"] == 401
+
+
+async def test_rejects_test_registration_when_capacity_is_exhausted() -> None:
+    recording = _RecordingApp()
+    capacity = threading.Semaphore(1)
+    capacity.acquire()  # simulate one in-flight upload already holding the slot
+    middleware = SubmissionUploadGateMiddleware(recording, api_token=_TOKEN, capacity=capacity)
+
+    sent = await _run(middleware, _upload_scope(authorization=f"Bearer {_TOKEN}", path="/tests"))
+
+    assert recording.called is False
+    assert sent[0]["status"] == 503
 
 
 async def test_ignores_requests_outside_the_submission_upload_route() -> None:

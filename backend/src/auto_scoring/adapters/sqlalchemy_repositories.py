@@ -119,6 +119,10 @@ class SqlAlchemyQuestionRepository:
         )
         return [m.question_from_row(row) for row in rows]
 
+    def delete_for_test(self, test_id: str) -> None:
+        self._session.execute(delete(QuestionRow).where(QuestionRow.test_id == test_id))
+        self._session.flush()
+
 
 class SqlAlchemyRubricRepository:
     def __init__(self, session: Session) -> None:

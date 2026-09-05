@@ -1,5 +1,5 @@
-"""ASGI middleware that gates the submission-upload route before FastAPI ever
-parses its multipart body.
+"""ASGI middleware that gates multipart-upload routes before FastAPI ever
+parses their body.
 
 FastAPI resolves a path operation's dependencies (auth) and its body
 parameters (``File``/``Form``, via ``await request.form()``) together, as
@@ -18,9 +18,10 @@ parser memory/temp-disk usage (``AGENTS.md`` "Validate every input that
 crosses a trust boundary"; "機能レベルのrate limiting").
 
 This middleware checks both at the true ASGI ``receive`` boundary, before a
-single byte of the body is read, and only for this one route -- other
-protected routes (``/score``, ``/tests``, ...) have no body worth gating and
-keep going through the ordinary ``require_token`` dependency.
+single byte of the body is read, and only for the routes named by
+``_GATED_ROUTES`` below -- other protected routes (``/score``, ``GET
+/tests``, ...) have no body worth gating and keep going through the
+ordinary ``require_token`` dependency.
 """
 
 from __future__ import annotations
@@ -32,8 +33,22 @@ import threading
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-#: Matches exactly the create_submission route, ``POST /tests/{test_id}/submissions``.
-_UPLOAD_PATH = re.compile(r"^/tests/[^/]+/submissions$")
+#: (method, path pattern) pairs this middleware protects. Both routes accept
+#: a multipart body FastAPI would otherwise spool before any auth/capacity
+#: check runs: ``POST /tests/{test_id}/submissions`` (one answer PDF) and
+#: ``POST /tests`` (Issue #16 registration: two independently-limited PDFs
+#: in one request, so it can carry just as much unauthenticated body as an
+#: answer upload can).
+_GATED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("POST", re.compile(r"^/tests/[^/]+/submissions$")),
+    ("POST", re.compile(r"^/tests$")),
+)
+
+
+def _is_gated(method: str, path: str) -> bool:
+    return any(
+        method == gated_method and pattern.match(path) for gated_method, pattern in _GATED_ROUTES
+    )
 
 
 class SubmissionUploadGateMiddleware:
@@ -41,8 +56,7 @@ class SubmissionUploadGateMiddleware:
     before it, or its body, ever reaches FastAPI's routing/dependency
     resolution.
 
-    Any request that isn't a ``POST`` to the submission-upload path is
-    passed through untouched.
+    Any request not matching ``_GATED_ROUTES`` is passed through untouched.
     """
 
     def __init__(self, app: ASGIApp, *, api_token: str, capacity: threading.Semaphore) -> None:
@@ -51,11 +65,7 @@ class SubmissionUploadGateMiddleware:
         self._capacity = capacity
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] != "http"
-            or scope["method"] != "POST"
-            or not _UPLOAD_PATH.match(scope["path"])
-        ):
+        if scope["type"] != "http" or not _is_gated(scope["method"], scope["path"]):
             await self._app(scope, receive, send)
             return
 

@@ -127,6 +127,39 @@ def _minimal_regions(*, label: str = "1", score_text: str = "5点") -> list[dict
 
 
 class TestCreateTest:
+    def test_requires_auth(self, client: TestClient, data_root: Path) -> None:
+        """Rejected by SubmissionUploadGateMiddleware at the ASGI boundary,
+        before FastAPI ever spools the two-PDF multipart body (Issue #16
+        review) -- see test_submission_upload_gate.py for the unit-level
+        proof this happens before the body is read.
+        """
+        response = client.post(
+            "/tests",
+            data={"name": "国語"},
+            files={
+                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
+                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
+            },
+        )
+        assert response.status_code == 401
+
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            assert uow.tests.list_all() == []
+
+    def test_list_test_registrations_includes_drafts_and_ready_tests(
+        self, client: TestClient
+    ) -> None:
+        """Issue #16 review: `GET /tests` (answer intake) only lists `ready`
+        tests, so a `draft` test needs a different way to be found again
+        (e.g. after leaving TestSettingsPage or restarting the app).
+        """
+        test_id = _register_test(client)
+
+        response = client.get("/test-registrations", headers=_auth())
+        assert response.status_code == 200
+        statuses = {entry["id"]: entry["status"] for entry in response.json()}
+        assert statuses == {test_id: "draft"}
+
     def test_registers_a_draft_test(self, client: TestClient) -> None:
         test_id = _register_test(client)
         response = client.get(f"/tests/{test_id}", headers=_auth())
@@ -236,6 +269,30 @@ class TestProfileReviewAndConfirm:
             headers=_auth(),
             json={"regions": _minimal_regions(score_text="配点未定")},
         )
+        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        assert response.status_code == 422
+
+    def test_confirm_rejects_a_blank_question_label(self, client: TestClient) -> None:
+        """A blank/whitespace-only QUESTION label passes Region/Profile
+        validation (`label` is just a plain `str`) but fails once
+        `Question(number=...)` itself validates it -- that raises the
+        broader `DomainError`, not the narrower `TestRegistrationError`,
+        and must still become a 422, not an unhandled 500 (Issue #16
+        review).
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        regions = [
+            _region(region_id="question-blank", kind="question", label="   ", text="問1"),
+            _region(
+                region_id="score-blank",
+                kind="score",
+                label="   ",
+                text="5点",
+                bbox=(0.6, 0.1, 0.7, 0.2),
+            ),
+        ]
+        client.put(f"/tests/{test_id}/profile", headers=_auth(), json={"regions": regions})
         response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
         assert response.status_code == 422
 
@@ -360,6 +417,54 @@ class TestProfileReviewAndConfirm:
 
         with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
             assert len(uow.questions.list_for_test(test_id)) == 1
+
+    def test_confirm_reconciles_a_changed_region_set_on_retry(
+        self, client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A retry must not just skip ids that already exist -- it must end
+        up with *exactly* the question set the confirmed profile describes.
+        If the reviewer edited the (still-draft) profile between the failed
+        attempt and the retry (here: dropped question 2 entirely), the stale
+        row from the first attempt must not survive (Issue #16 review: a
+        `ready` test would otherwise be graded against a question the
+        confirmed profile no longer has).
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        two_questions = _minimal_regions(label="1") + _minimal_regions(label="2")
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": two_questions},
+        )
+
+        real_write_atomic = LocalFileStore.write_atomic
+
+        def failing_write_atomic(self: LocalFileStore, path: Path, data: bytes) -> Path:
+            if path.name == "profile.json":
+                raise OSError("simulated disk-full failure")
+            return real_write_atomic(self, path, data)
+
+        monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
+        with pytest.raises(OSError):
+            client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            assert {q.number for q in uow.questions.list_for_test(test_id)} == {"1", "2"}
+
+        # The profile is still draft (the file write never succeeded) --
+        # drop question 2 before retrying.
+        monkeypatch.setattr(LocalFileStore, "write_atomic", real_write_atomic)
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions(label="1")},
+        )
+        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        assert response.status_code == 200, response.text
+
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            assert {q.number for q in uow.questions.list_for_test(test_id)} == {"1"}
 
 
 class TestCompleteRegistration:

@@ -67,6 +67,20 @@ class QuestionRepository(Protocol):
     def get(self, question_id: str) -> Question | None: ...
     def list_for_test(self, test_id: str) -> list[Question]: ...
 
+    def delete_for_test(self, test_id: str) -> None:
+        """Remove every question for ``test_id`` (and, via ``ON DELETE
+        CASCADE``, its rubric).
+
+        Used by profile confirmation to reconcile the test's question set
+        with a freshly-built one, rather than only inserting ids that don't
+        already exist. A profile can only be confirmed once (a
+        second `/profile/confirm` on an already-confirmed profile is
+        rejected before this would ever run), so no downstream submission
+        processing can have started against these rows yet -- it is always
+        safe to rebuild them from scratch on a (re)confirm.
+        """
+        ...
+
 
 class RubricRepository(Protocol):
     def add(self, rubric: Rubric) -> None: ...

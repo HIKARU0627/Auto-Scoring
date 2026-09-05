@@ -36,6 +36,7 @@ Registration flow (simplified-design-specification.md §6, docs/test-registratio
 from __future__ import annotations
 
 import threading
+from asyncio import to_thread
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -66,7 +67,7 @@ from auto_scoring.domain.profile import (
     Region,
     RegionKind,
 )
-from auto_scoring.domain.test_registration import TestRegistrationError, build_questions_and_rubrics
+from auto_scoring.domain.test_registration import build_questions_and_rubrics
 
 _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
@@ -263,6 +264,40 @@ def build_test_registration_router(
                 detail=f"test {test_id!r} has no profile yet; run /profile/analyze first",
             ) from exc
 
+    def _register_test_locked(
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        name: str,
+        subject: str | None,
+        model_answer_filename: str,
+        model_answer_mime: str | None,
+        model_answer_data: bytes,
+        manual_filename: str,
+        manual_mime: str | None,
+        manual_data: bytes,
+        now: datetime,
+    ) -> Test:
+        # Holds `pdfium_lock` for the PDF-validation calls inside
+        # register_test (page_count/is_encrypted) -- see
+        # build_test_registration_router's docstring for why this must be
+        # the same lock the answer-intake pipeline uses.
+        with lock:
+            return register_test(
+                uow,
+                store,
+                pdf_engine,
+                name=name,
+                subject=subject,
+                model_answer_filename=model_answer_filename,
+                model_answer_mime=model_answer_mime,
+                model_answer_data=model_answer_data,
+                manual_filename=manual_filename,
+                manual_mime=manual_mime,
+                manual_data=manual_data,
+                limits=limits,
+                now=now,
+            )
+
     @router.post("/tests", response_model=TestResponse, status_code=status.HTTP_201_CREATED)
     async def create_test(
         name: str = Form(...),
@@ -279,28 +314,26 @@ def build_test_registration_router(
         except PdfIntakeError as exc:
             raise _pdf_intake_http_exception(exc) from exc
         try:
-            # Holds `pdfium_lock` for the PDF-validation calls inside
-            # register_test (page_count/is_encrypted) -- see the docstring
-            # above for why this must be the same lock the answer-intake
-            # pipeline uses.
-            with lock:
-                test = register_test(
-                    uow,
-                    store,
-                    pdf_engine,
-                    name=name,
-                    subject=subject,
-                    model_answer_filename=(model_answer.filename or "")[
-                        :MAX_ORIGINAL_FILENAME_LENGTH
-                    ],
-                    model_answer_mime=model_answer.content_type,
-                    model_answer_data=model_answer_data,
-                    manual_filename=(manual.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
-                    manual_mime=manual.content_type,
-                    manual_data=manual_data,
-                    limits=limits,
-                    now=_now(),
-                )
+            # PDF parsing/validation and the DB+file write are synchronous,
+            # blocking work that can take a while for a large PDF; running
+            # it inline here would stall this whole (single-worker) event
+            # loop -- even /healthz -- for as long as it (or a submission
+            # intake holding the same `lock`) takes (Issue #16 review, same
+            # reasoning as api.app.create_app's own `_run_intake`). Offload
+            # it to a worker thread instead.
+            test = await to_thread(
+                _register_test_locked,
+                uow,
+                name=name,
+                subject=subject,
+                model_answer_filename=(model_answer.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
+                model_answer_mime=model_answer.content_type,
+                model_answer_data=model_answer_data,
+                manual_filename=(manual.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
+                manual_mime=manual.content_type,
+                manual_data=manual_data,
+                now=_now(),
+            )
         except PdfIntakeError as exc:
             raise _pdf_intake_http_exception(exc) from exc
         except FinalizationError as exc:
@@ -312,6 +345,19 @@ def build_test_registration_router(
                 detail=f"could not save the registered PDFs to disk: {exc}",
             ) from exc
         return TestResponse.from_domain(test)
+
+    @router.get("/test-registrations", response_model=list[TestResponse])
+    def list_test_registrations(uow: SqlAlchemyUnitOfWork = uow_dependency) -> list[TestResponse]:
+        """Every test regardless of status (draft or ready), for the テスト
+        設定画面's own entry point.
+
+        `GET /tests` (api.app, answer intake's test picker) only returns
+        `ready` tests -- a `draft` test has no other way to be found again
+        once its `TestSettingsPage` is closed (Issue #16 review: leaving
+        registration mid-way, or restarting the app, must not make an
+        already-uploaded, persisted draft unreachable).
+        """
+        return [TestResponse.from_domain(test) for test in uow.tests.list_all()]
 
     @router.get("/tests/{test_id}", response_model=TestResponse)
     def get_test(test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency) -> TestResponse:
@@ -412,24 +458,33 @@ def build_test_registration_router(
             questions, rubrics = build_questions_and_rubrics(
                 test_id, confirmed.regions, default_scoring_method=test.default_scoring_method
             )
-        except TestRegistrationError as exc:
+        except DomainError as exc:
+            # `build_questions_and_rubrics` raises `TestRegistrationError`
+            # for a business-rule violation (duplicate number, bad score,
+            # ...), but a malformed region (e.g. a blank question label)
+            # only fails once `Question(...)` itself validates it, raising
+            # the broader `DomainError` -- catching only the narrower type
+            # let that case fall through as an unhandled 500 (Issue #16
+            # review).
             raise HTTPException(422, detail=str(exc)) from exc
 
-        # Idempotent DB write: if a prior confirm attempt committed these
-        # rows but then failed on the profile_store.save() below (DB commit
-        # succeeded, file write didn't), a retry must not re-INSERT rows
-        # that already exist -- `build_questions_and_rubrics` derives the
-        # same deterministic ids from the same confirmed regions every time,
-        # so a plain re-add would hit the `uq_questions_test_number`/primary
-        # key UNIQUE constraint and the registration would be stuck unable
-        # to ever complete (Issue #16 review).
-        existing_question_ids = {q.id for q in uow.questions.list_for_test(test_id)}
+        # Reconcile, not insert-if-missing: a retry after a prior confirm
+        # attempt that committed the DB write but then failed on
+        # profile_store.save() below (DB succeeded, file didn't) must end up
+        # with *exactly* this question/rubric set, not a stale one left
+        # over from an earlier attempt -- e.g. a since-removed question, or
+        # one whose points/areas/model_answer changed, would otherwise keep
+        # its old row forever (Issue #16 review: a `ready` test would then
+        # be graded against data that no longer matches its confirmed
+        # profile). Deleting and rebuilding is safe here: this handler
+        # already rejects confirming an already-CONFIRMED profile above, so
+        # no downstream submission processing can have started against
+        # these rows yet.
+        uow.questions.delete_for_test(test_id)
         for question in questions:
-            if question.id not in existing_question_ids:
-                uow.questions.add(question)
+            uow.questions.add(question)
         for rubric in rubrics:
-            if rubric.question_id not in existing_question_ids:
-                uow.rubrics.add(rubric)
+            uow.rubrics.add(rubric)
         uow.commit()
 
         # If this fails (e.g. disk full), the Question/Rubric rows above are
