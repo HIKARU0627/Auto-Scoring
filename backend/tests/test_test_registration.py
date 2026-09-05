@@ -13,6 +13,7 @@ from auto_scoring.domain.test_registration import (
     DuplicateQuestionNumberError,
     IncompleteRegionsError,
     InvalidScoreError,
+    QuestionNumberTooLongError,
     build_questions_and_rubrics,
 )
 
@@ -173,6 +174,40 @@ def test_a_score_too_large_for_sqlites_integer_column_is_rejected() -> None:
     ]
 
     with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_a_score_with_thousands_of_digits_is_rejected_as_invalid_not_a_crash() -> None:
+    """A `SCORE` region text with far more digits than any legitimate score
+    needs must not reach `int()` at all -- Python's own int-string
+    conversion has a digit-count limit (4300 by default) and raises a bare
+    `ValueError` past it, which `confirm_profile` would not translate into
+    its usual 422 (Issue #16 review round 6).
+    """
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="9" * 5000 + "点"),
+    ]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_a_question_number_too_long_for_a_safe_filename_is_rejected() -> None:
+    """`Question.id` (`f"{test_id}:{number}"`) becomes a filename component
+    (hex-encoded, then wrapped in `write_atomic`'s own temp-file name) --
+    an unbounded, human-editable label could push it past Windows' 255-byte
+    filename-component limit, only failing much later when a submission
+    with an answer area tries to finalize against an already-confirmed,
+    immutable profile (Issue #16 review round 6).
+    """
+    long_number = "1" * 41
+    regions = [
+        _region(RegionKind.QUESTION, long_number, text="問1"),
+        _region(RegionKind.SCORE, long_number, text="5点"),
+    ]
+
+    with pytest.raises(QuestionNumberTooLongError):
         build_questions_and_rubrics("test-1", regions)
 
 

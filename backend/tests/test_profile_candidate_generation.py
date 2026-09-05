@@ -178,6 +178,28 @@ class TestManualDerivedRegions:
         assert rubric.page_index == model_block.page_index
         assert score.page_index == model_block.page_index
 
+    @pytest.mark.parametrize("score_text", ["-5点", "5.5点"])
+    def test_a_negative_or_decimal_score_mention_produces_no_score_region(
+        self, score_text: str
+    ) -> None:
+        """A bare `\\d+` would pull "5" out of "-5点"/"5.5点" as if it were
+        the real score -- a candidate that looks like a plausible, valid
+        value but is actually silently wrong. No SCORE region at all (for a
+        human to fill in via `PUT /profile`) is safer than one carrying that
+        wrong number (Issue #16 review round 6).
+        """
+        model_block = pcg._QuestionBlock(
+            number="1", page_index=0, heading=_line("問1", 72, 700, 300, 720), body=[]
+        )
+        manual_block = pcg._QuestionBlock(
+            number="1",
+            page_index=0,
+            heading=_line("問1 採点基準", 72, 700, 300, 720),
+            body=[_line(score_text, 72, 650, 300, 670)],
+        )
+        regions = pcg._manual_derived_regions([model_block], [_A4], [manual_block])
+        assert [region.kind for region in regions] == [RegionKind.RUBRIC]
+
     def test_manual_block_with_no_matching_model_question_is_skipped(self) -> None:
         model_block = pcg._QuestionBlock(
             number="1", page_index=0, heading=_line("問1", 72, 700, 300, 720), body=[]
@@ -203,6 +225,29 @@ class TestManualDerivedRegions:
         )
         regions = pcg._manual_derived_regions([model_block], [_A4], [manual_block])
         assert [region.kind for region in regions] == [RegionKind.RUBRIC]
+
+
+class TestRectToBbox:
+    def test_clips_a_rect_extending_beyond_the_page(self) -> None:
+        """PDFium can report a text rectangle that extends beyond the
+        page's own CropBox (content clipped/hidden by the viewer but still
+        present in the extraction) -- `y1=900` here exceeds `_A4`'s own
+        842pt crop_height, and `x0=-10` sits left of the page entirely.
+        Normalizing that verbatim would land outside 0..1, which
+        `NormalizedBBox` rejects (Issue #16 review round 6).
+        """
+        bbox = pcg._rect_to_bbox((-10, 700, 300, 900), _A4)
+        assert 0.0 <= bbox.x0 < bbox.x1 <= 1.0
+        assert 0.0 <= bbox.y0 < bbox.y1 <= 1.0
+
+    def test_clips_a_rect_entirely_off_the_page_without_collapsing(self) -> None:
+        """Entirely to the right of the page: both corners normalize past
+        1.0 and would clip to the exact same value, which `NormalizedBBox`
+        would otherwise reject as having no area.
+        """
+        bbox = pcg._rect_to_bbox((600, 700, 650, 750), _A4)
+        assert 0.0 <= bbox.x0 < bbox.x1 <= 1.0
+        assert 0.0 <= bbox.y0 < bbox.y1 <= 1.0
 
 
 class TestPlaceholderBboxBelow:

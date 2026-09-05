@@ -54,13 +54,32 @@ class CrossPageRegionError(TestRegistrationError):
     """
 
 
+class QuestionNumberTooLongError(TestRegistrationError):
+    """A question's number/label is too long to become part of a safe
+    on-disk filename (see `_MAX_QUESTION_NUMBER_BYTES`).
+    """
+
+
 #: Matches a run of digits that is not itself part of a negative number or a
 #: decimal (e.g. rejects the "5" inside "-5" or "5.5" -- a bare `\d+` search
 #: would extract a positive integer out of both and let an invalid score
 #: through `int(match.group())` without ever reaching the non-positive check
 #: below, defeating the "配点不正を拒否する" acceptance criterion). Requires
-#: the match not be preceded by `-`/`.`/another digit, nor followed by `.`.
-_SCORE_NUMBER_PATTERN = re.compile(r"(?<![-.\d])\d+(?!\.)")
+#: the match not be preceded by `-`/`.`/another digit, nor followed by `.`/
+#: another digit. The `{1,19}` bound (19 == len(str(2**63 - 1))) additionally
+#: guarantees `int(match.group())` never sees more digits than a legitimate
+#: score could ever need: without it, a region whose text happened to
+#: contain a run of thousands of digits would make `int()` itself raise
+#: `ValueError` (Python's int-string conversion has its own digit-count
+#: limit) before `build_questions_and_rubrics` ever reaches its own
+#: `_MAX_SQLITE_INTEGER` check below -- and `confirm_profile` only
+#: translates `DomainError` into a 422, so that `ValueError` would surface
+#: as an unhandled 500 instead of the expected `InvalidScoreError` (Issue
+#: #16 review round 6). A run longer than 19 digits simply produces no
+#: match at all (every possible sub-run either isn't yet at the real
+#: boundary or doesn't start at one), which `_extract_points` already
+#: treats as "no valid score".
+_SCORE_NUMBER_PATTERN = re.compile(r"(?<![-.\d])\d{1,19}(?![.\d])")
 
 #: `QuestionRow.points`/`RubricCriterionRow.max_points` (db/orm.py) are both
 #: SQLite `INTEGER` columns, which store at most a signed 64-bit value.
@@ -71,6 +90,21 @@ _SCORE_NUMBER_PATTERN = re.compile(r"(?<![-.\d])\d+(?!\.)")
 #: normal 422 (Issue #16 review round 5, AGENTS.md "Validate every input
 #: that crosses a trust boundary").
 _MAX_SQLITE_INTEGER = 2**63 - 1
+
+#: `Question.id` (`f"{test_id}:{number}"`) becomes a filename component --
+#: hex-encoded (doubling its UTF-8 byte length) by
+#: `LocalFileStore.submission_question_image_path`, itself then wrapped in
+#: a temp-file name of its own (a leading ".", that encoded name, a 32-char
+#: `uuid4().hex`, and a ".part" suffix) by `write_atomic` -- all of which
+#: must fit within Windows' 255-character filename-*component* limit. A
+#: 32-char hex `test_id` alone already spends much of that budget; an
+#: unbounded, human-editable `number` (profile confirm accepts any string
+#: as `Region.label`) could push the final encoded name past the limit,
+#: only failing the first time a submission with an answer area tries to
+#: finalize -- by which point the profile is already immutable (Issue #16
+#: review round 6). Bounded in UTF-8 bytes, not characters: a multi-byte
+#: character costs more of the shared budget than an ASCII one.
+_MAX_QUESTION_NUMBER_BYTES = 40
 
 
 def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:
@@ -174,6 +208,12 @@ def build_questions_and_rubrics(
             raise DuplicateQuestionNumberError(
                 f"question number {number!r} has {len(question_regions)} QUESTION regions; "
                 "expected exactly one"
+            )
+        number_bytes = len(number.encode("utf-8"))
+        if number_bytes > _MAX_QUESTION_NUMBER_BYTES:
+            raise QuestionNumberTooLongError(
+                f"question number {number!r} is {number_bytes} bytes, "
+                f"exceeding the {_MAX_QUESTION_NUMBER_BYTES}-byte limit"
             )
         question_region = question_regions[0]
 

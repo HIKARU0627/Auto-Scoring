@@ -274,6 +274,51 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   をすり抜けていた。パースした座標が全て有限であることを明示的に要求するように
   した。
 
+## レビュー対応（PRラウンド6）
+
+- **旧テストのアップグレード経路（grandfathering）**: PRラウンド5は
+  `repair_incomplete_test_registrations`による誤削除は防いだが、migration
+  0008がバックフィルする既存test自体は`draft`のまま、`ready`専用ゲート
+  （`GET /tests`・`intake_submission`）から永久に締め出されていた——登録PDFも
+  profileも持たない以上、本Issueが導入したconfirm/readyフローを通って`ready`
+  になる手段が無い。本Issue以前は`draft`/`ready`の区別自体が存在せず、答案取込は
+  どのtestも無条件に受理していたため、既存行は旧契約の下で既に「使用可能」
+  だった。migration 0008のバックフィル値を`draft`から`ready`に変更し、既存行を
+  旧来通り無条件に使用可能な状態へgrandfatherした（`server_default`は
+  一時的なものなので、以後の新規登録の既定値には一切影響しない）。0007時点の
+  スキーマへ直接test行を挿入してアップグレードし、`status='ready'`になることを
+  検証する回帰テストを追加した。
+- **候補生成でも不正なscore構文を拒否する**: `profile_candidate_generation`の
+  `_SCORE_PATTERN`は`\d+`のみで`-5点`/`5.5点`から`5`だけを抜き出してしまい、
+  確定時の厳格な`_SCORE_NUMBER_PATTERN`とは非対称だった。候補生成の時点で
+  レビュアーに誤った値を提示しないよう、同じ符号/小数点境界を`_SCORE_PATTERN`
+  にも適用した（該当行にマッチしなくなり、SCORE regionは生成されず人間が
+  手動入力する）。
+- **抽出したテキスト矩形を表示ページにクリップする**: PDFiumはCropBoxの外側に
+  はみ出した/隠れたテキストの矩形をそのまま返すことがあり、正規化すると0未満・
+  1超の座標になって`NormalizedBBox`が`ValueError`を送出していた
+  （`analyze_profile`はこれを変換せず500になる）。`_rect_to_bbox`が座標を
+  `0..1`にクリップし、クリップの結果面積がゼロに潰れた場合は極小サイズへ
+  ずらして正の面積を保つようにした。
+- **設問ラベルの長さを制限する**: `Question.id`（`f"{test_id}:{number}"`）は
+  `LocalFileStore.submission_question_image_path`でhexエンコードされ
+  （UTF-8バイト長が倍になる）、`write_atomic`が更にUUID付きの一時ファイル名で
+  包む。Windowsのファイル名コンポーネント上限（255文字）に対し、32文字の
+  test IDだけで大半を使ってしまうため、無制限のラベル（`Region.label`は
+  profile APIで無制限）が約74 ASCII文字を超えると、profile確定後・答案の
+  finalization時に初めて失敗する不変な状態になっていた。`number`のUTF-8
+  バイト長を`_MAX_QUESTION_NUMBER_BYTES`（40バイト、安全マージンを取って
+  上記上限より十分小さい値）で制限し、`QuestionNumberTooLongError`（422）で
+  拒否するようにした。
+- **巨大すぎるscore文字列を`int()`呼び出し前に拒否する**: 桁数無制限の
+  `_SCORE_NUMBER_PATTERN`は、数千桁のSCORE region textに対し
+  `int(match.group())`自体がPythonの整数文字列変換の桁数上限
+  （既定4300桁）を超えて`ValueError`を送出し得た（`confirm_profile`は
+  `DomainError`しか変換しないため500になる）。パターンをSQLite上限の桁数
+  （19桁、`len(str(2**63 - 1))`）に制限し、それより長い数字列は
+  マッチ自体しないようにした（`_extract_points`は「score無し」として扱い、
+  通常通り`InvalidScoreError`になる）。
+
 ## 未決事項
 
 - PDFオーバーレイでのregion視覚編集（上記「UI設計」）。

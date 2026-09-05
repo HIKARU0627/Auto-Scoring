@@ -55,8 +55,16 @@ _QUESTION_NUMBER_PATTERN = re.compile(r"(?:問|大問)\s*(\d+)")
 
 #: Matches a marking-manual score mention like "5点" or "10 点満点". The
 #: captured group becomes the `SCORE` region's text (parsed as an int by
-#: `domain.test_registration._extract_points`).
-_SCORE_PATTERN = re.compile(r"(\d+)\s*点")
+#: `domain.test_registration._extract_points`). Excludes a digit run
+#: immediately preceded by `-`/`.`/another digit -- a bare `\d+` would pull
+#: "5" out of "-5点" or "5.5点" as if it were the real score, silently
+#: offering a plausible-looking but wrong candidate value instead of no
+#: match at all (the same boundary `domain.test_registration
+#: ._SCORE_NUMBER_PATTERN` applies at confirm time -- this just applies it
+#: earlier, before an unreviewed value even becomes a candidate, so a
+#: reviewer who accepts candidates without editing every field can't ship a
+#: silently-wrong score, Issue #16 review round 6).
+_SCORE_PATTERN = re.compile(r"(?<![-.\d])(\d+)\s*点")
 
 #: Placeholder height (normalized) for a manual-derived region anchored under
 #: a question heading -- purely a starting position for human review to move.
@@ -75,9 +83,32 @@ class _QuestionBlock:
     body: list[TextLine]
 
 
+#: Minimum width/height `_rect_to_bbox` nudges a clipped-to-nothing bbox
+#: apart to -- small enough to be visually negligible once a human is
+#: reviewing/moving it, large enough that `NormalizedBBox`'s own
+#: positive-area check never rejects it.
+_MIN_CLIPPED_BBOX_SIZE = 1e-6
+
+
+def _clip_unit(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
 def _rect_to_bbox(rect_pt: RectPt, geometry: PageGeometry) -> NormalizedBBox:
     """PDF user-space rectangle -> normalized bbox (see `profile_detection.rect_to_bbox`,
     duplicated here to avoid a cross-import between the two candidate-generation modules).
+
+    Clipped to the displayed page (`0..1`): a valid PDF can contain text
+    that PDFium's own text-rect extraction reports slightly outside the
+    page's `CropBox` (e.g. clipped or hidden content still present in the
+    extraction) -- normalizing that verbatim can land outside `0..1`, which
+    `NormalizedBBox` rejects with a `ValueError` `analyze_profile` doesn't
+    translate, turning one such line into an unhandled 500 for the whole
+    analysis (Issue #16 review round 6). A region a human can still
+    review/move is safer than aborting the whole run over one line. If
+    clipping collapses a side to zero width/height (the rect was entirely
+    off-page on that axis), nudge it apart by `_MIN_CLIPPED_BBOX_SIZE`
+    rather than let `NormalizedBBox` reject the degenerate box outright.
     """
     x0, y0, x1, y1 = rect_pt
     corners = (
@@ -89,7 +120,15 @@ def _rect_to_bbox(rect_pt: RectPt, geometry: PageGeometry) -> NormalizedBBox:
     for point in corners:
         xs.append(point.x)
         ys.append(point.y)
-    return NormalizedBBox(x0=min(xs), y0=min(ys), x1=max(xs), y1=max(ys))
+    x0_n, x1_n = _clip_unit(min(xs)), _clip_unit(max(xs))
+    y0_n, y1_n = _clip_unit(min(ys)), _clip_unit(max(ys))
+    if x1_n <= x0_n:
+        x0_n = max(0.0, x0_n - _MIN_CLIPPED_BBOX_SIZE)
+        x1_n = min(1.0, x0_n + 2 * _MIN_CLIPPED_BBOX_SIZE)
+    if y1_n <= y0_n:
+        y0_n = max(0.0, y0_n - _MIN_CLIPPED_BBOX_SIZE)
+        y1_n = min(1.0, y0_n + 2 * _MIN_CLIPPED_BBOX_SIZE)
+    return NormalizedBBox(x0=x0_n, y0=y0_n, x1=x1_n, y1=y1_n)
 
 
 def _page_geometries(engine: PdfEngine, source: Path, page_count: int) -> list[PageGeometry]:

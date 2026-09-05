@@ -171,6 +171,52 @@ def test_backfills_pre_existing_submission_metadata_on_upgrade(db_url: str, db_p
     assert loaded["missing-file"].page_count == 1
 
 
+def test_backfills_pre_existing_tests_as_ready_on_upgrade(db_url: str) -> None:
+    """A `Test` row from before 0008 (``status`` didn't exist, and neither
+    did the two-PDF registration flow it gates) must come out the other
+    side ``ready``, not ``draft``.
+
+    Before 0008, answer intake accepted a submission for any test
+    unconditionally; afterward, ``GET /tests`` and ``intake_submission``
+    both reject anything short of ``ready``. Such a row never had -- and,
+    lacking registration PDFs, can never retroactively earn -- a profile or
+    dependency graph to confirm, so backfilling it to ``draft`` would make
+    it permanently unusable for new submissions with no way to recover
+    (Issue #16 review round 6).
+    """
+    upgrade(db_url, "0007")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                    "VALUES ('legacy-test', 'n', 'additive', '2026-01-01')"
+                )
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            status = conn.execute(
+                text("SELECT status FROM tests WHERE id = 'legacy-test'")
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert status == "ready"
+
+    session_factory = build_session_factory(create_sqlite_engine(db_url))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        loaded = uow.tests.get("legacy-test")
+    assert loaded is not None
+    assert loaded.status.value == "ready"
+
+
 def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
     db_url: str, db_path: Path
 ) -> None:
