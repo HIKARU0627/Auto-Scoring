@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from auto_scoring.adapters.data_root_lock import DataRootLockedError
 from auto_scoring.api.app import create_app
 
 _TOKEN = "test-token-value"
@@ -49,6 +50,25 @@ def test_score_rejects_wrong_token() -> None:
 
 def test_each_app_has_its_own_random_token() -> None:
     assert create_app().state.api_token != create_app().state.api_token
+
+
+def test_a_second_lifespan_on_the_same_data_root_fails_to_start(tmp_path: Path) -> None:
+    """Issue #18 review round 9, P1: two sidecar processes launched against
+    the same --app-data-dir must not both actually start processing jobs --
+    the second one's own start() would otherwise run its crash-recovery
+    sweep against RUNNING jobs the first, still-alive one is actually
+    processing, letting a duplicate provider call happen and the owning
+    process's own eventual finalize lose its compare-and-set, silently
+    discarding real, completed work. The data-root lock (acquired only
+    while a lifespan with an owned session_factory is actually running --
+    see create_app's docstring) makes the second lifespan fail outright
+    instead.
+    """
+    first_app = create_app(api_token=_TOKEN, data_root=tmp_path)
+    with TestClient(first_app):
+        second_app = create_app(api_token=_TOKEN, data_root=tmp_path)
+        with pytest.raises(DataRootLockedError), TestClient(second_app):
+            pass
 
 
 def test_default_temp_app_data_dir_cleanup_disposes_the_engine_first(

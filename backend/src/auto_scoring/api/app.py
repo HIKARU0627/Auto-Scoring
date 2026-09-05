@@ -10,12 +10,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring import __version__
+from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
 from auto_scoring.adapters.local_storage import LocalFileStore
@@ -177,7 +179,13 @@ def create_app(
     engine creation/disposal, or the startup repair sweep for it -- the
     caller owns that database's whole lifecycle. ``store`` (used by the
     submission/test routes below regardless) still comes from ``data_root``
-    as usual either way.
+    as usual either way. It also means the lifespan below never takes the
+    data-root lock (see ``auto_scoring.adapters.data_root_lock``): a test
+    fixture's session_factory has no real, shared ``data_root`` to protect
+    two instances from racing over, and existing tests deliberately build
+    more than one `create_app` against the same ``data_root`` fixture to
+    simulate a process restart (never concurrently -- only one has its
+    lifespan actually running at a time).
 
     ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
     parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
@@ -190,18 +198,7 @@ def create_app(
     that need to drive it directly instead.
     """
     queue_service_holder: dict[str, JobQueueService] = {}
-
-    @asynccontextmanager
-    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        service = queue_service_holder["queue_service"]
-        await service.start()
-        try:
-            yield
-        finally:
-            await service.shutdown()
-
-    app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
-    app.state.api_token = api_token or generate_token()
+    lock_handle_holder: dict[str, IO[bytes]] = {}
 
     scratch: tempfile.TemporaryDirectory[str] | None = None
     if data_root is not None:
@@ -224,6 +221,32 @@ def create_app(
         db_engine = create_sqlite_engine(db_url)
         session_factory = build_session_factory(db_engine)
     assert session_factory is not None  # either supplied, or just built above
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Only when this function owns the database's whole lifecycle --
+        # not for a caller-supplied session_factory (tests), which has no
+        # real data_root of its own to protect. Two sidecar processes
+        # sharing the same --app-data-dir would otherwise both run this
+        # same service.start()'s crash-recovery sweep against RUNNING jobs
+        # the *other*, still-alive process is actually processing --
+        # reissuing one lets both a duplicate provider call happen and the
+        # owning process's own eventual finalize lose its compare-and-set,
+        # silently discarding real, completed work (review round 9, P1).
+        if owns_session_factory:
+            lock_handle_holder["handle"] = acquire_data_root_lock(root)
+        service = queue_service_holder["queue_service"]
+        await service.start()
+        try:
+            yield
+        finally:
+            await service.shutdown()
+            handle = lock_handle_holder.pop("handle", None)
+            if handle is not None:
+                handle.close()
+
+    app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
+    app.state.api_token = api_token or generate_token()
 
     queue_service = JobQueueService(
         session_factory,
