@@ -679,6 +679,16 @@
             },
             "description": "Successful Response"
           },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResponse"
+                }
+              }
+            },
+            "description": "Cancellation requested for a RUNNING job; not yet applied -- the body is the pre-cancellation snapshot (still `\"state\": \"running\"`). The actual CANCELLED write happens moments later, asynchronously."
+          },
           "422": {
             "content": {
               "application/json": {

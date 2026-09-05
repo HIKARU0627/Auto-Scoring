@@ -143,7 +143,28 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
         except JobRetryRejectedError as error:
             raise HTTPException(409, detail=str(error)) from error
 
-    @router.post("/jobs/{job_id}/cancel", response_model=JobResponse)
+    @router.post(
+        "/jobs/{job_id}/cancel",
+        response_model=JobResponse,
+        responses={
+            # FastAPI/OpenAPI only ever advertise the response_model's 200
+            # (plus a validation-error 422) unless a non-default status is
+            # declared explicitly -- the handler's runtime `response.
+            # status_code = 202` below is otherwise invisible to the
+            # generated schema, leaving any contract-driven client/validator
+            # unable to model this accepted-but-pending outcome at all
+            # (review round 7, P2).
+            202: {
+                "model": JobResponse,
+                "description": (
+                    "Cancellation requested for a RUNNING job; not yet applied -- "
+                    "the body is the pre-cancellation snapshot (still "
+                    '`"state": "running"`). The actual CANCELLED write happens '
+                    "moments later, asynchronously."
+                ),
+            }
+        },
+    )
     def cancel_job(job_id: str, response: Response) -> JobResponse:
         """For a QUEUED/BLOCKED/FAILED job, `queue_service.cancel_job`
         itself already wrote CANCELLED before returning -- 200 with that
