@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from auto_scoring.domain.models import Job
 from auto_scoring.jobs.queue import (
     JobCancelConflictError,
+    JobCancelRejectedError,
     JobNotCancellableError,
     JobNotFoundError,
     JobNotRetryableError,
@@ -148,6 +149,8 @@ def build_jobs_router(queue_service: JobQueueService) -> APIRouter:
         except JobNotCancellableError as error:
             raise HTTPException(409, detail=str(error)) from error
         except JobCancelConflictError as error:
+            raise HTTPException(409, detail=str(error)) from error
+        except JobCancelRejectedError as error:
             raise HTTPException(409, detail=str(error)) from error
 
     return router

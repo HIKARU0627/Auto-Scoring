@@ -113,6 +113,20 @@ class JobCancelConflictError(Exception):
         self.job_id = job_id
 
 
+class JobCancelRejectedError(Exception):
+    """`cancel_job` refused a FAILED job whose downstream effect a human
+    already approved via `mark_question_usable` -- see `cancel_job`."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            f"job {job_id!r} has already been approved via /resume; cancelling it would clear "
+            "that approval while its already-released dependents keep running against an "
+            "outcome that no longer has any record -- cancel the dependents first if this "
+            "attempt really needs to be invalidated"
+        )
+        self.job_id = job_id
+
+
 class JobNotRetryableError(Exception):
     def __init__(self, job_id: str, state: JobState) -> None:
         super().__init__(f"job {job_id!r} is {state!s}; only a FAILED job can be retried")
@@ -218,10 +232,16 @@ class JobQueueService:
         retry attempts left: if the process was killed while a job was
         sleeping out its backoff (`_pending_retries`), that in-process timer
         died with it, and nothing else would ever wake the job up again
-        (review round 2, P1).
+        (review round 2, P1). A restart during a *long* backoff (a large
+        rate-limit delay, say) must not skip the rest of it, though -- the
+        remaining wait is derived from ``updated_at`` (bumped exactly when
+        the FAILED transition was persisted) and a fresh, `_pending_retries`-
+        tracked timer picks up only what is left, same as an in-process
+        backoff would have (review round 5, P2).
         """
         self._loop = asyncio.get_running_loop()
         to_enqueue: list[str] = []
+        to_schedule_backoff: list[tuple[str, float, int]] = []
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             for job in uow.jobs.list_by_state(JobState.RUNNING):
                 recovered = recover_running_job(job, at=self._clock.now())
@@ -252,6 +272,19 @@ class JobQueueService:
                     or job.usable is not None
                 ):
                     continue
+                retry_policy = self._retry_policy_for(job)
+                full_delay = retry_policy.delay_seconds(job.attempts)
+                elapsed = (self._clock.now() - job.updated_at).total_seconds()
+                remaining = max(0.0, full_delay - elapsed)
+                if remaining > 0:
+                    # Requeuing immediately would let a quick restart during
+                    # a long backoff (e.g. a 429's rate-limit delay) hit the
+                    # provider again right away, defeating the exponential
+                    # delay this job was already sleeping out. Leave the row
+                    # FAILED for now; a timer for only what's left is
+                    # scheduled below, once this transaction has committed.
+                    to_schedule_backoff.append((job.id, remaining, job.attempts))
+                    continue
                 requeued = job.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
                 try:
                     uow.jobs.save(requeued, expected_state=JobState.FAILED)
@@ -271,6 +304,8 @@ class JobQueueService:
         ]
         for job_id in to_enqueue:
             self.enqueue(job_id)
+        for job_id, remaining, attempts in to_schedule_backoff:
+            self._schedule_retry(job_id, remaining, expected_attempts=attempts)
 
     async def shutdown(self) -> None:
         """Stop the worker pool and wait for in-flight jobs to reach a
@@ -582,6 +617,18 @@ class JobQueueService:
         released dependent to match -- letting the retry through would leave
         it processing (or having processed) an outcome this job is about to
         replace with an unknown one (review round 4, P2).
+
+        That check alone only covers ``usable`` as read *before* this call's
+        own write -- a concurrent `mark_question_usable` call can still read
+        FAILED, decide to approve, and commit ``usable=True`` in the window
+        between this call's own read above and its `save` below; `save`'s
+        ``WHERE`` only looked at `state`, which `mark_usable` never touches,
+        so it would still match and silently clear the just-granted
+        approval (review round 5, P1). Passing ``require_usable_unset=True``
+        adds ``usable IS NULL`` to that same compare-and-set, so a
+        `mark_usable` that wins the race in that window makes this `save`
+        lose instead -- the retry then re-reads fresh (below) and correctly
+        rejects via the check above.
         """
         for _attempt in range(_MAX_RETRY_ATTEMPTS):
             with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -594,7 +641,9 @@ class JobQueueService:
                     raise JobRetryRejectedError(job_id)
                 requeued = job.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
                 try:
-                    uow.jobs.save(requeued, expected_state=JobState.FAILED)
+                    uow.jobs.save(
+                        requeued, expected_state=JobState.FAILED, require_usable_unset=True
+                    )
                 except JobSaveConflict:
                     continue  # re-read the fresh state and retry the decision
                 uow.commit()
@@ -608,6 +657,21 @@ class JobQueueService:
         state concurrently, instead of letting `JobSaveConflict` surface as
         an unhandled 500 (review round 2, P2). Raises `JobCancelConflictError`
         if the race keeps losing after several attempts.
+
+        Refuses (`JobCancelRejectedError`) a FAILED job whose ``usable`` is
+        already set, mirroring `retry_job`'s own guard: a human approved
+        this failure's downstream effect via `mark_question_usable`, and
+        any dependent released on its strength may already be queued or
+        running. `transitioned_to` would clear `usable` on this
+        FAILED -> CANCELLED transition without ever re-blocking that
+        already-released dependent, leaving it to keep processing against a
+        prerequisite now recorded as cancelled (review round 5, P2). The
+        write itself also passes ``require_usable_unset=True`` to close the
+        same race `retry_job` closes: a concurrent `mark_usable` committing
+        between this call's own read and its write would otherwise still
+        let a state-only compare-and-set through, since `mark_usable` never
+        touches `state` (review round 5, P1 applied here by the same
+        reasoning).
         """
         for _attempt in range(_MAX_CANCEL_ATTEMPTS):
             with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -616,6 +680,8 @@ class JobQueueService:
                     raise JobNotFoundError(job_id)
                 if job.state in (JobState.SUCCEEDED, JobState.CANCELLED):
                     raise JobNotCancellableError(job_id, job.state)
+                if job.state is JobState.FAILED and job.usable is not None:
+                    raise JobCancelRejectedError(job_id)
                 if job.state is JobState.RUNNING:
                     self.cancel_running_task(job_id)
                     # The running worker's own CancelledError handler
@@ -628,7 +694,7 @@ class JobQueueService:
                     JobState.CANCELLED, updated_at=self._clock.now(), error="cancelled by user"
                 )
                 try:
-                    uow.jobs.save(cancelled, expected_state=job.state)
+                    uow.jobs.save(cancelled, expected_state=job.state, require_usable_unset=True)
                 except JobSaveConflict:
                     continue  # re-read the fresh state and retry the decision
                 uow.commit()
