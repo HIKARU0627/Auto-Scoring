@@ -245,6 +245,19 @@ class GradingRequest:
     with a plausible OCR misreading of the same answer, so Recognition
     Confidence (a PoC 1 / OCRProvider concern) is never computed from, or
     blended into, this request's Grading Confidence output.
+
+    Invariants are enforced at construction (mirrors
+    ``ProviderDescriptor.__post_init__``): a real adapter builds this
+    directly, bypassing any pydantic boundary, so a blank ``question_id``/
+    ``prompt_text``/``model_answer``/``rubric_text``, an empty
+    ``answer_image``, or a negative ``max_score`` must be impossible to
+    construct at all, not merely caught later by whatever happens to read
+    the request (code review finding: the plain type annotations alone did
+    not stop a caller from building one of these and sending it to a real
+    provider adapter as if it were valid). ``ocr_text`` is deliberately
+    exempt: an empty string is the legitimate reading of a question the
+    student left blank (mirrors
+    ``ai_grading_metrics.GradingInputRecord.ocr_clean``).
     """
 
     question_id: str
@@ -254,6 +267,20 @@ class GradingRequest:
     model_answer: str
     rubric_text: str
     max_score: int
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("question_id", self.question_id),
+            ("prompt_text", self.prompt_text),
+            ("model_answer", self.model_answer),
+            ("rubric_text", self.rubric_text),
+        ):
+            if not value.strip():
+                raise ValueError(f"GradingRequest.{field_name} must be a non-blank string")
+        if not self.answer_image:
+            raise ValueError("GradingRequest.answer_image must not be empty")
+        if self.max_score < 0:
+            raise ValueError(f"GradingRequest.max_score must be >= 0, got {self.max_score!r}")
 
 
 @dataclass(frozen=True, kw_only=True)

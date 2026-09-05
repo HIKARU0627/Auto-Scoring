@@ -51,21 +51,22 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 
 `backend/tests/fixtures/ai_grading/README.md` のスキーマに従う。
 
-| フィールド                                  | 内容                                                                 |
-| ------------------------------------------- | -------------------------------------------------------------------- |
-| `subject`（サンプル直下）                   | 教科ラベル。`questions[]` の**外側**の兄弟フィールド（§3.8 参照）    |
-| `submissionId`（サンプル直下）              | 必須・非空白。答案（提出物）を識別する不透明 ID（§3.11・§3.12 参照） |
-| `questions[]`（サンプル直下）               | 必須・非空配列。1 答案に含まれる設問ごとのラベル群（§3.12 参照）     |
-| `questions[].ground_truth.questionId`       | 個人を特定しない不透明 ID                                            |
-| `questions[].ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）               |
-| `questions[].ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠） |
-| `questions[].ground_truth.source`           | 必須。文字列リテラル `"human"` のみ受理（§1.3・§3.9 参照）           |
-| `questions[].input.prompt_text`             | 設問文                                                               |
-| `questions[].input.model_answer`            | 模範解答                                                             |
-| `questions[].input.rubric_text`             | 採点基準・配点                                                       |
-| `questions[].input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト。空文字可）       |
-| `questions[].input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト。空文字可）   |
-| `questions[].input.answer_image_ref`        | 必須・非空白。答案画像の content hash または外部参照（§3.12 参照）   |
+| フィールド                                  | 内容                                                                   |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| `subject`（サンプル直下）                   | 教科ラベル。`questions[]` の**外側**の兄弟フィールド（§3.8 参照）      |
+| `submissionId`（サンプル直下）              | 必須・非空白。答案（提出物）を識別する不透明 ID（§3.11・§3.12 参照）   |
+| `testId`（サンプル直下）                    | 必須・非空白。テストを識別する不透明 ID。1 教科=1 testId（§3.13 参照） |
+| `questions[]`（サンプル直下）               | 必須・非空配列。1 答案に含まれる設問ごとのラベル群（§3.12 参照）       |
+| `questions[].ground_truth.questionId`       | 個人を特定しない不透明 ID                                              |
+| `questions[].ground_truth.score`/`maxScore` | 人間採点者による設問ごとの確定得点・満点（正解ラベル）                 |
+| `questions[].ground_truth.criteria`         | criterion ごとの `id`/`result`（`pass`/`partial`/`fail`。§6.3 準拠）   |
+| `questions[].ground_truth.source`           | 必須。文字列リテラル `"human"` のみ受理（§1.3・§3.9 参照）             |
+| `questions[].input.prompt_text`             | 設問文                                                                 |
+| `questions[].input.model_answer`            | 模範解答                                                               |
+| `questions[].input.rubric_text`             | 採点基準・配点                                                         |
+| `questions[].input.ocr_clean`               | OCR 正解文字（人手で正しく書き起こした答案テキスト。空文字可）         |
+| `questions[].input.ocr_noisy`               | OCR 誤認文字（OCR が誤読しうる箇所を模した答案テキスト。空文字可）     |
+| `questions[].input.answer_image_ref`        | 必須・非空白。答案画像の content hash または外部参照（§3.12 参照）     |
 
 `ground_truth` は決定書 §6.3 が定める実際の人間採点ラベルファイルの
 ワイヤ形式（`questionId`/`score`/`maxScore`/`criteria[].{id,result}`/
@@ -199,6 +200,7 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 | criterion 別一致率    | 正解ラベルに存在する criterion のうち、応答の `result` が一致する割合（§3.4 参照）  | `evaluate_sample`       |
 | schema violation 率   | `AIGradingResult` のスキーマ検証に失敗した応答の割合                                | `evaluate_sample`       |
 | 対応不一致率          | 応答の `questionId`/`maxScore` が正解ラベルと対応しない割合（§3.1 参照）            | `evaluate_sample`       |
+| unavailable 率        | 呼び出しが持続的に失敗し `unavailable` として明示的に記録された割合（§3.13 参照）   | `evaluate_sample`       |
 | 平均 Recognition Conf | `recognition.confidence` の平均（Grading Conf とは別集計）                          | `summarize_by_provider` |
 | 平均 Grading Conf     | `grading.confidence` の平均（Recognition Conf とは別集計）                          | `summarize_by_provider` |
 | latency               | 1 設問あたりの応答時間（p50 / p95。応答の妥当性を問わず全呼び出しから算出）         | `summarize_by_provider` |
@@ -620,6 +622,85 @@ sample_ref`（PDF ファイル名・ページ・設問番号）を転記した�
 （大文字始まり）を記録したデータセットを構成し、正しく拒否されることを
 確認した。
 
+### 3.13 unavailable の帰属・test identity・信頼境界のセル形状検証
+
+**provider 性能メトリクスに unavailable attempt を含める**: §3.12 で
+`unavailable` を `pending`/`excluded` とは別に集計するようにしたが、
+その実装は `latency_seconds`/`cost_usd` を読み取った直後にセルを破棄し、
+グローバルな件数カウンタを増やすだけだった。文書化された指標（本節冒頭の
+表）は「全呼び出しを対象とする」latency p50/p95・cost 列を謳っている
+にもかかわらず、これでは最も遅く失敗した呼び出しが除外され、繰り返し
+長い timeout を起こす provider がかえって速く・安価に見えてしまう
+（コードレビュー指摘）。修正: `_load_cell` は `unavailable` セルにも
+`descriptor` を要求し（実応答と同様に）、`config_key` を計算する。
+`_load_samples` の集計ループはこの `config_key` を使って
+`evaluate_sample(..., unavailable=True)` を呼び出し、`SampleOutcome` に
+新設した `unavailable` フラグ（`schema_violation`/`mismatched` とは
+別物、採点対象からは除外されるが `latency_seconds`/`cost_usd` は集計対象
+のまま）として記録する。結果表には新しい `unavailable率` 列を追加した。
+`/tmp` で claude に 60 秒の `unavailable` attempt を記録したデータセットを
+構成し、claude の行の `p50/p95 latency` が正しく `60.000` として、
+`unavailable率` が `1.000` として表示されることを確認した。
+
+**結果をプールする前に test identity を追跡する**: 決定書 §6.1 は
+テスト単位のメタデータとして「テストID、教科、...」を挙げ、本 PoC の
+評価設計は「2 教科 × 各 1 テスト」（§6.2）を前提とする。しかし結果表は
+`(subject, provider, config, input_variant)` のみでバケット化しており、
+`testId` を一切見ていなかったため、データセットが誤って同じ教科ラベルの
+下に 2 つの異なるテストの答案を含んでいても、それらは rubric や難易度が
+異なりうるにもかかわらず同じバケットにプールされてしまっていた
+（コードレビュー指摘）。修正: サンプルファイル直下に必須の `testId` を
+追加し（`subject`/`submissionId` と同様に前後空白を正規化）、
+`_validate_single_test_per_subject` で「1 つの `subject` に対応する
+`testId` は必ず 1 種類のみ」を検証する。合成フィクスチャ・実データ
+pilot（本書 §6、リポジトリ外）ともにこの新フィールドを追加し、
+`synthetic-history`（sample-01・sample-03）はどちらも同じ `testId` を
+共有するようにした。`/tmp` で同じ教科に異なる `testId` を持つ 2 つの
+答案ファイルを構成し、正しく拒否されることを確認した。
+
+**不正な記録済みセルのフィールドを拒否する**: `respnose` のような
+タイプミスや `"unavailable": "true"`（文字列。真偽値ではない）のような
+不正なマーカーを含むセルは、以前の実装では「response を持つか」「
+unavailable か」のどちらの判定にも該当せず、黙って `pending` に分類
+されてしまっていた。ハーネスは他の正しいセルだけを使って正常終了し得る
+（コードレビュー指摘。AGENTS.md の trust-boundary ルール）。また非
+オブジェクトのセル値（例: 文字列）は `.get()` 呼び出しで偶発的な
+`TypeError` を起こしていた。修正: `_validate_cell_shape` を新設し、
+セルが `response`/`descriptor`/`latency_seconds`/`cost_usd`/`unavailable`
+以外のフィールドを持たないこと、`unavailable` が存在する場合は厳密な
+真偽値であること、セル自体がオブジェクトであることを検証する。`/tmp` で
+`respnose` のタイプミス・文字列 `"true"` の `unavailable` をそれぞれ含む
+データセットを構成し、どちらも正しく拒否される（未知のフィールド名自体は
+メッセージに含まれない）ことを確認した。
+
+**submission ごとに重複した設問 ID を拒否する**: 1 つの submission の
+`questions[]` 配列が同じ `ground_truth.questionId` を 2 回含む場合、以前は
+両方のエントリがそのまま追加され、後で 2 つの独立した評価済みセルとして
+カウントされてしまっていた。コピー&ペーストのミスがその設問の重みを
+不当に増幅し、全ての集計を歪めかねなかった（コードレビュー指摘）。修正:
+`_load_all_samples` は 1 submission 内で見た `questionId` の集合を保持し、
+2 回目の出現でハーネスを停止させる。`/tmp` で同じ `questionId` を 2 回
+含む submission ファイルを構成し、正しく拒否されることを確認した。
+
+**`GradingRequest` 構築時に不変条件を強制する**: `ai_provider.py` の
+`GradingRequest`（本番の `AIProvider` アダプタが直接構築する公開 domain
+型）は、`ProviderDescriptor` と異なり構築時の不変条件チェックを持たず、
+空白の設問 ID・prompt・模範解答・採点基準や、空の `answer_image`、負の
+`max_score` を型注釈だけでは防げなかった（コードレビュー指摘）。修正:
+`ProviderDescriptor.__post_init__` と同じパターンで `GradingRequest` にも
+`__post_init__` を追加し、これらの値を構築時に拒否する。`ocr_text` のみ
+例外とし、空文字列（生徒が設問を空欄のまま提出した場合の正しい読み取り
+結果）を許容する（`GradingInputRecord.ocr_clean` と同じ扱い）。
+
+**noisy input の無い unavailable セルを拒否する**: §3.9 で追加した
+「`input.ocr_noisy` が `null` のときに `response` を持つ `ocr_noisy` セル
+を拒否する」チェックは、新しくサポートされた `unavailable` 状態を
+見ていなかった。そのため、noisy バリアントの入力が一度も作成されて
+いないサンプルでも、`{"unavailable": true}` は受理され、実際には存在
+しない入力に対する provider outage としてカウントされてしまっていた
+（コードレビュー指摘）。修正: この検証を `response` または
+`unavailable: true` のどちらかを持つセル全てに適用するよう拡張した。
+
 ---
 
 ## 4. repro command
@@ -704,16 +785,16 @@ distinct submissions (answers, by submissionId) per subject -- decision record s
   synthetic-history: 2
   synthetic-world-history: 1
 
-| 教科 | provider | config | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | p50 latency(s) | p95 latency(s) | latency計測件数 | 概算cost(USD/1000問) | cost計測件数 | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| synthetic-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.900 | 1.080 | 2/2 | 0.65 | 2/2 | 0.000 | - |
-| synthetic-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 1.100 | 1.280 | 2/2 | 0.65 | 2/2 | - | - |
-| synthetic-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.700 | 0.880 | 2/2 | 0.25 | 2/2 | 0.000 | - |
-| synthetic-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 1.200 | 1.380 | 2/2 | 0.25 | 2/2 | - | 1.000 |
-| synthetic-world-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
-| synthetic-world-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
-| synthetic-world-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
-| synthetic-world-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
+| 教科 | provider | config | 入力 | 件数 | 完全一致率 | 許容点差内率 | criterion一致率 | 平均Recognition Conf | 平均Grading Conf | schema違反率 | 対応不一致率 | unavailable率 | p50 latency(s) | p95 latency(s) | latency計測件数 | 概算cost(USD/1000問) | cost計測件数 | 高Conf誤り率(>=0.8) | 低Conf誤り率(<0.5) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| synthetic-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.975 | 0.920 | 0.000 | 0.000 | 0.000 | 0.900 | 1.080 | 2/2 | 0.65 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_noisy | 2 | 0.000 | 1.000 | 1.000 | 0.620 | 0.780 | 0.500 | 0.000 | 0.000 | 1.100 | 1.280 | 2/2 | 0.65 | 2/2 | - | - |
+| synthetic-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_clean | 2 | 1.000 | 1.000 | 1.000 | 0.990 | 0.950 | 0.500 | 0.000 | 0.000 | 0.700 | 0.880 | 2/2 | 0.25 | 2/2 | 0.000 | - |
+| synthetic-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_noisy | 2 | 0.000 | 0.500 | 0.600 | 0.475 | 0.510 | 0.000 | 0.000 | 0.000 | 1.200 | 1.380 | 2/2 | 0.25 | 2/2 | - | 1.000 |
+| synthetic-world-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_clean | 1 | 1.000 | 1.000 | 1.000 | 0.950 | 0.700 | 0.000 | 0.000 | 0.000 | 1.000 | 1.000 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-a | ["synthetic-model-a", "2026-01-pilot", "synthetic-prompt-v1", 0.0, "json_schema"] | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.550 | 0.500 | 0.000 | 0.000 | 0.000 | 1.100 | 1.100 | 1/1 | 0.70 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_clean | 1 | 0.000 | 0.000 | 1.000 | 0.950 | 0.650 | 0.000 | 0.000 | 0.000 | 1.600 | 1.600 | 1/1 | 0.20 | 1/1 | - | - |
+| synthetic-world-history | synthetic-b | ["synthetic-model-b", "2026-01-pilot", "synthetic-prompt-v1", 0.2, "tool_use"] | ocr_noisy | 1 | 0.000 | 0.000 | 0.500 | 0.500 | 0.900 | 0.000 | 0.000 | 0.000 | 0.800 | 0.800 | 1/1 | 0.20 | 1/1 | 1.000 | - |
 ```
 
 `config` 列は `model`/`version`/`prompt_version`/`temperature`/

@@ -299,3 +299,48 @@ def test_descriptor_rejects_a_bool_temperature(temperature: bool) -> None:
     kwargs["temperature"] = temperature
     with pytest.raises(ValueError):
         ProviderDescriptor(**kwargs)  # type: ignore[arg-type]
+
+
+_VALID_REQUEST_KWARGS: dict[str, object] = {
+    "question_id": "q1",
+    "prompt_text": "設問文",
+    "answer_image": b"\x89PNG\r\n\x1a\n",
+    "ocr_text": "答案テキスト",
+    "model_answer": "模範解答",
+    "rubric_text": "採点基準",
+    "max_score": 5,
+}
+
+
+@pytest.mark.parametrize("field", ["question_id", "prompt_text", "model_answer", "rubric_text"])
+def test_grading_request_rejects_a_blank_required_field_at_construction(field: str) -> None:
+    """Code review finding: a real adapter builds ``GradingRequest`` directly,
+    bypassing any pydantic boundary -- a blank field must be impossible to
+    construct, not merely rejected when it happens to arrive some other way."""
+    kwargs = dict(_VALID_REQUEST_KWARGS)
+    kwargs[field] = "   "
+    with pytest.raises(ValueError):
+        GradingRequest(**kwargs)  # type: ignore[arg-type]
+
+
+def test_grading_request_accepts_a_blank_ocr_text() -> None:
+    """An empty ``ocr_text`` is the legitimate reading of a question the
+    student left blank -- unlike the other text fields, it must not be
+    rejected (mirrors ``GradingInputRecord.ocr_clean``)."""
+    kwargs = dict(_VALID_REQUEST_KWARGS)
+    kwargs["ocr_text"] = ""
+    GradingRequest(**kwargs)  # type: ignore[arg-type]
+
+
+def test_grading_request_rejects_an_empty_answer_image() -> None:
+    kwargs = dict(_VALID_REQUEST_KWARGS)
+    kwargs["answer_image"] = b""
+    with pytest.raises(ValueError):
+        GradingRequest(**kwargs)  # type: ignore[arg-type]
+
+
+def test_grading_request_rejects_a_negative_max_score() -> None:
+    kwargs = dict(_VALID_REQUEST_KWARGS)
+    kwargs["max_score"] = -1
+    with pytest.raises(ValueError):
+        GradingRequest(**kwargs)  # type: ignore[arg-type]

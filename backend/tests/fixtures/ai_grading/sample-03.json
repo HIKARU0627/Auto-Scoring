@@ -1,6 +1,7 @@
 {
   "subject": "synthetic-history",
   "submissionId": "poc2-synth-submission-03",
+  "testId": "poc2-synthetic-test-history",
   "questions": [
     {
       "ground_truth": {

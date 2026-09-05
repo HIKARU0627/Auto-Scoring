@@ -70,6 +70,7 @@ _COLUMNS = (
     "平均Grading Conf",
     "schema違反率",
     "対応不一致率",
+    "unavailable率",
     "p50 latency(s)",
     "p95 latency(s)",
     "latency計測件数",
@@ -271,6 +272,18 @@ class SampleOutcome:
     grade, and reported separately from a schema violation so the two
     failure modes are not conflated.
 
+    ``unavailable`` samples carry no response because the call attempt
+    itself never completed (a persistent 429/quota failure that exhausted
+    retries, docs/poc-2-ai-grading.md section 7.2) -- distinct from both
+    ``schema_violation`` (a response came back but failed validation) and
+    ``mismatched`` (a schema-valid response for the wrong question), so a
+    provider's unreliability is never conflated with either kind of bad
+    response. Like the other two, it is never scored as a real grade, but
+    still contributes ``latency_seconds``/``cost_usd`` to its bucket: the
+    call still took time and may have cost money, and dropping that
+    measurement would let a provider with frequent long-timeout failures
+    look faster and cheaper than it really is (code review finding).
+
     ``config_key`` (see
     :func:`auto_scoring.domain.ai_provider.descriptor_key`) is required: a
     sample is only ever produced from a cell whose reproducibility metadata
@@ -284,6 +297,7 @@ class SampleOutcome:
     subject: str
     schema_violation: bool
     mismatched: bool
+    unavailable: bool
     exact_match: bool | None
     within_tolerance: bool | None
     criterion_matches: int
@@ -322,6 +336,7 @@ class BucketSummary:
     mean_grading_confidence: float | None
     schema_violation_rate: float
     mismatch_rate: float
+    unavailable_rate: float
     latency_p50: float | None
     latency_p95: float | None
     latency_measured: int
@@ -342,6 +357,7 @@ def evaluate_sample(
     tolerance: int = 1,
     cost_usd: float | None = None,
     latency_seconds: float | None = None,
+    unavailable: bool = False,
 ) -> SampleOutcome:
     """Score one recorded ``response`` against its human ``truth`` label.
 
@@ -357,9 +373,16 @@ def evaluate_sample(
     same provider name but different model/version/temperature/output-mode
     settings must end up in different buckets, not pooled together.
 
-    ``response`` is ``None`` when the provider's raw output was rejected by
-    schema validation (:class:`~auto_scoring.domain.ai_provider.SchemaViolation`)
-    -- that sample counts toward ``schema_violation_rate`` and contributes no
+    ``unavailable=True`` marks a call attempt that never produced a response
+    at all (docs/poc-2-ai-grading.md section 7.2) -- distinct from
+    ``response=None`` meaning "a response came back but failed schema
+    validation". ``response`` is ignored (and should be ``None``) when
+    ``unavailable`` is set.
+
+    ``response`` is otherwise ``None`` when the provider's raw output was
+    rejected by schema validation
+    (:class:`~auto_scoring.domain.ai_provider.SchemaViolation`) -- that
+    sample counts toward ``schema_violation_rate`` and contributes no
     exact-match / within-tolerance / criterion data (Issue #14 acceptance: a
     schema violation is never scored as if it were a valid grade).
 
@@ -369,10 +392,29 @@ def evaluate_sample(
     different question register as an accidental exact match.
 
     ``latency_seconds`` is taken as given, independent of whether ``response``
-    parsed -- a failed or mismatched call still took real time, and a cell
-    with no recorded measurement is genuinely unknown, not a fabricated 0s
-    (code review finding).
+    parsed -- a failed, mismatched, or unavailable call still took real time,
+    and a cell with no recorded measurement is genuinely unknown, not a
+    fabricated 0s (code review finding).
     """
+    if unavailable:
+        return SampleOutcome(
+            provider=provider,
+            config_key=config_key,
+            input_variant=input_variant,
+            subject=subject,
+            schema_violation=False,
+            mismatched=False,
+            unavailable=True,
+            exact_match=None,
+            within_tolerance=None,
+            criterion_matches=0,
+            criterion_total=0,
+            recognition_confidence=None,
+            grading_confidence=None,
+            latency_seconds=latency_seconds,
+            cost_usd=cost_usd,
+        )
+
     if response is None:
         return SampleOutcome(
             provider=provider,
@@ -381,6 +423,7 @@ def evaluate_sample(
             subject=subject,
             schema_violation=True,
             mismatched=False,
+            unavailable=False,
             exact_match=None,
             within_tolerance=None,
             criterion_matches=0,
@@ -399,6 +442,7 @@ def evaluate_sample(
             subject=subject,
             schema_violation=False,
             mismatched=True,
+            unavailable=False,
             exact_match=None,
             within_tolerance=None,
             criterion_matches=0,
@@ -426,6 +470,7 @@ def evaluate_sample(
         subject=subject,
         schema_violation=False,
         mismatched=False,
+        unavailable=False,
         exact_match=response.score == truth.score,
         within_tolerance=abs(response.score - truth.score) <= tolerance,
         criterion_matches=matches,
@@ -484,8 +529,11 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
         subject, provider, config_key, input_variant = key
         group = by_bucket[key]
         # Correctness / criterion / confidence stats only make sense for a
-        # response that both parsed and answers the right question.
-        scored = [s for s in group if not s.schema_violation and not s.mismatched]
+        # response that both parsed and answers the right question -- an
+        # unavailable attempt (no response at all) is excluded the same way.
+        scored = [
+            s for s in group if not s.schema_violation and not s.mismatched and not s.unavailable
+        ]
         recognition = [
             s.recognition_confidence for s in scored if s.recognition_confidence is not None
         ]
@@ -531,6 +579,7 @@ def summarize_by_provider(samples: Iterable[SampleOutcome]) -> list[BucketSummar
                 mean_grading_confidence=_mean_or_none(grading),
                 schema_violation_rate=fmean(float(s.schema_violation) for s in group),
                 mismatch_rate=fmean(float(s.mismatched) for s in group),
+                unavailable_rate=fmean(float(s.unavailable) for s in group),
                 latency_p50=_percentile(latencies, 0.50),
                 latency_p95=_percentile(latencies, 0.95),
                 latency_measured=len(latencies),
@@ -596,6 +645,7 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
                     _fmt(summary.mean_grading_confidence),
                     _fmt(summary.schema_violation_rate),
                     _fmt(summary.mismatch_rate),
+                    _fmt(summary.unavailable_rate),
                     _fmt(summary.latency_p50),
                     _fmt(summary.latency_p95),
                     _fmt_count(summary.latency_measured, summary.samples),

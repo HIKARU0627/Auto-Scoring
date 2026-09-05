@@ -61,10 +61,27 @@ against the 30-per-subject minimum (code review finding). The aggregate
 report includes a distinct-submission count per subject for exactly this
 coverage check.
 
+`testId` is likewise a required, non-blank, whitespace-normalized sibling
+field (business-rules-and-evaluation-data.md section 6.1 metadata: テストID
+alongside 教科). This PoC's evaluation design is exactly one test per
+subject (section 6.2: "2 教科 x 各 1 テスト"), and the results table buckets
+only by (subject, provider, config, input_variant) -- not by `testId` -- so
+a dataset that accidentally mixes two different tests' submissions under
+the same subject label would otherwise be silently pooled into one
+same-data comparison bucket, even though the two tests' rubric or
+difficulty may differ. The harness rejects a dataset where one subject
+spans more than one distinct `testId` (code review finding).
+
+Within one submission, every `questions[]` entry must have a distinct
+`ground_truth.questionId` -- a duplicate (e.g. a copy-paste mistake) would
+otherwise be parsed as two independent samples and double-count that
+question's weight in every aggregate (code review finding).
+
 ```jsonc
 {
   "subject": "arbitrary subject label",
   "submissionId": "opaque id, no PII -- identifies the answer sheet, not the question",
+  "testId": "opaque id -- identifies which test this submission belongs to",
   "questions": [
     {
       "ground_truth": {
@@ -185,18 +202,24 @@ otherwise still count as two separate candidates for the same real service
 to that check, since `synthetic-a`/`synthetic-b` are intentionally
 placeholder names, not real vendor ids.
 
-A cell may instead record `{"unavailable": true, "latency_seconds": ...,
-"cost_usd": ...}` (no `response`) for a call attempt that exhausted retries
-against a persistent failure (docs/poc-2-ai-grading.md section 7.2:
-"恒常的な 429 / quota 超過は失敗として記録し、推測で埋めない"). This is
-counted separately from "pending" in the aggregate report: a call that was
-attempted and failed is not the same as one nobody has tried yet, and
-folding the two together would silently drop a persistently-unreliable
-provider's failures from the report, making it look better than it is (code
-review finding). An "unavailable" cell is never scored and never joins a
-same-data comparison cohort (it has no `descriptor`/`config_key` to bucket
-by), and a cell may not record both `response` and `unavailable: true` at
-once -- that combination makes the harness raise.
+A cell may instead record `{"unavailable": true, "descriptor": {...},
+"latency_seconds": ..., "cost_usd": ...}` (no `response`) for a call
+attempt that exhausted retries against a persistent failure
+(docs/poc-2-ai-grading.md section 7.2: "恒常的な 429 / quota 超過は失敗と
+して記録し、推測で埋めない"). This is counted separately from "pending" in
+the aggregate report: a call that was attempted and failed is not the same
+as one nobody has tried yet, and folding the two together would silently
+drop a persistently-unreliable provider's failures from the report, making
+it look better than it is (code review finding). Unlike a truly pending
+cell, `descriptor` is required here too (the same as a real response), so
+an "unavailable" cell's `latency_seconds`/`cost_usd` are still attributed
+to, and aggregated under, the `(provider, config_key)` bucket that was
+attempted -- an earlier version discarded these measurements after only
+counting the attempt, letting a provider with frequent long-timeout
+failures look faster and cheaper than it really is in the results table
+(code review finding). A cell may not record both `response` and
+`unavailable: true` at once -- that combination makes the harness raise, as
+does any unrecognized field on the cell (see below).
 
 Every provider's `recorded` entry may only use the two recognized
 input-variant keys (`ocr_clean` / `ocr_noisy`) -- an unrecognized key (a
@@ -207,6 +230,19 @@ would otherwise never be found, leaving its cell "pending" forever while
 the harness still exits 0 as if the aggregate were complete (code review
 finding). The unrecognized key itself is never echoed in the raised
 message (see below).
+
+Each individual cell's own shape is validated too: only `response` /
+`descriptor` / `latency_seconds` / `cost_usd` / `unavailable` are
+recognized fields, `unavailable` must be a strict boolean (not e.g. the
+string `"true"`), and the cell itself must be an object. A typo like
+`"respnose"` instead of `"response"`, or a non-boolean `unavailable`
+marker, previously satisfied neither the "has a response" nor the "is
+unavailable" check, so a real recorded attempt was silently classified as
+ordinary pending and the harness could exit 0 using only the other cells,
+as if the dataset had been fully and correctly reported (code review
+finding; AGENTS.md trust-boundary validation). A non-object cell value
+previously reached a `.get()` call directly and failed with an unhandled
+`TypeError` instead of a clear validation error.
 
 Each sample's `input` block is parsed and cross-checked against its
 `ground_truth` (`max_score` must agree) before any of that sample's
@@ -270,8 +306,12 @@ the same untrusted `--dataset` file as everything else, and a malformed
 dataset could put arbitrary text there by mistake (code review finding).
 
 A `recorded.<provider>.ocr_noisy` entry is rejected if this sample's
-`input.ocr_noisy` is `null` -- a noisy-variant response with no corresponding
-noisy input was never a real same-data comparison (code review finding).
+`input.ocr_noisy` is `null` -- a noisy-variant *attempt* (a `response` or an
+`unavailable: true` marker) with no corresponding noisy input was never a
+real same-data comparison, since calling a provider requires a noisy input
+to have existed in the first place; an "unavailable" marker recorded
+against a variant that was never authored cannot be a real provider outage
+against real input either (code review finding).
 Every sample's `ground_truth` and `input` are parsed and validated up front,
 across *all* files, before the harness even checks whether any provider has
 a real recorded response -- a dataset where every sample is still `"recorded":

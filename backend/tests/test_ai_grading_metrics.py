@@ -179,6 +179,41 @@ def test_schema_violation_sample_is_excluded_from_exact_match_not_scored_as_wron
     assert outcome.within_tolerance is None
 
 
+def test_unavailable_sample_is_distinct_from_schema_violation_and_mismatch() -> None:
+    """docs/poc-2-ai-grading.md section 7.2: a call attempt that exhausted
+    retries against a persistent failure must be its own outcome, not
+    conflated with "a response came back but failed validation" (code
+    review finding)."""
+    outcome = _evaluate(_truth(), None, unavailable=True)
+    assert outcome.unavailable is True
+    assert outcome.schema_violation is False
+    assert outcome.mismatched is False
+    assert outcome.exact_match is None
+    assert outcome.within_tolerance is None
+
+
+def test_unavailable_sample_still_preserves_latency_and_cost() -> None:
+    """Code review finding: an earlier version dropped an unavailable
+    attempt's latency/cost entirely, letting a provider with frequent
+    long-timeout failures look faster and cheaper than it really is."""
+    outcome = _evaluate(_truth(), None, unavailable=True, latency_seconds=32.0, cost_usd=0.01)
+    assert outcome.unavailable is True
+    assert outcome.latency_seconds == pytest.approx(32.0)
+    assert outcome.cost_usd == pytest.approx(0.01)
+
+
+def test_unavailable_rate_is_aggregated_and_excluded_from_scoring() -> None:
+    outcomes = [
+        _evaluate(_truth(), None, unavailable=True, latency_seconds=32.0),
+        _evaluate(_truth(), _response(), latency_seconds=1.0),
+    ]
+    summary = summarize_by_provider(outcomes)[0]
+    assert summary.unavailable_rate == pytest.approx(0.5)
+    assert summary.schema_violation_rate == pytest.approx(0.0)
+    assert summary.exact_match_rate == pytest.approx(1.0)  # only the real response scores
+    assert summary.latency_measured == 2  # both attempts' latency still counted
+
+
 def test_response_to_a_different_question_is_mismatched_not_an_accidental_match() -> None:
     """Code review finding: a response answering a different question (a
     4/100 grade) must never register as matching a 4/5 truth label just

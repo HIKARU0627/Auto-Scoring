@@ -1,6 +1,7 @@
 {
   "subject": "synthetic-world-history",
   "submissionId": "poc2-synth-submission-02",
+  "testId": "poc2-synthetic-test-world-history",
   "questions": [
     {
       "ground_truth": {

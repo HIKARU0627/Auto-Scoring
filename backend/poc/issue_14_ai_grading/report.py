@@ -15,6 +15,7 @@ the shape)::
     {
       "subject": "...",
       "submissionId": "opaque id, no PII -- identifies the answer sheet",
+      "testId": "opaque id -- identifies which test this submission belongs to",
       "questions": [
         {
           "ground_truth": {...},
@@ -71,6 +72,22 @@ below): ``"sub-1"`` and ``" sub-1 "`` can only mean the same submission, and
 counting them as two would overstate coverage against the 30-per-subject
 minimum (code review finding). The aggregate report includes a
 distinct-submission count per subject for exactly this coverage check.
+
+``testId`` is likewise a required, non-blank, whitespace-normalized sibling
+field (business-rules-and-evaluation-data.md section 6.1 metadata: テストID
+alongside 教科). This PoC's evaluation design is exactly one test per
+subject (section 6.2: "2 教科 x 各 1 テスト"), and the results table buckets
+only by (subject, provider, config, input_variant) -- not by ``testId`` --
+so a dataset that accidentally mixes two different tests' submissions under
+the same subject label would otherwise be silently pooled into one
+same-data comparison bucket, even though the two tests' rubric or
+difficulty may differ. The harness rejects a dataset where one subject
+spans more than one distinct ``testId`` (code review finding).
+
+Within one submission, every ``questions[]`` entry must have a distinct
+``ground_truth.questionId`` -- a duplicate (e.g. a copy-paste mistake) would
+otherwise be parsed as two independent samples and double-count that
+question's weight in every aggregate (code review finding).
 
 ``DIR`` defaults to the committed synthetic fixtures, so the command runs with
 no credentials and no dataset and reproduces a secret-free aggregate table
@@ -130,17 +147,30 @@ noisy-OCR variant was ever authored) is rejected the same way: it cannot be
 a real same-data comparison either. All of these are refused outright rather
 than printed as if the comparison were complete (code review finding).
 
-A cell may instead record ``{"unavailable": true, "latency_seconds": ...,
-"cost_usd": ...}`` (no ``response``) for a call attempt that exhausted
-retries against a persistent failure (docs/poc-2-ai-grading.md section 7.2:
-"恒常的な 429 / quota 超過は失敗として記録し、推測で埋めない"). This is
-counted separately from "pending": a call that was attempted and failed is
-not the same as one nobody has tried yet, and folding the two together would
-silently drop a persistently-unreliable provider's failures from the report,
-making it look better than it is (code review finding). An "unavailable"
-cell is never scored and never joins a same-data comparison cohort (it has
-no ``descriptor``/``config_key`` to bucket by), and a cell may not record
-both ``response`` and ``unavailable: true`` at once.
+A cell may instead record ``{"unavailable": true, "descriptor": {...},
+"latency_seconds": ..., "cost_usd": ...}`` (no ``response``) for a call
+attempt that exhausted retries against a persistent failure
+(docs/poc-2-ai-grading.md section 7.2: "恒常的な 429 / quota 超過は失敗と
+して記録し、推測で埋めない"). This is counted separately from "pending": a
+call that was attempted and failed is not the same as one nobody has tried
+yet, and folding the two together would silently drop a
+persistently-unreliable provider's failures from the report, making it look
+better than it is (code review finding). Unlike a truly pending cell, an
+"unavailable" one requires a ``descriptor`` (the same as a real response),
+so its ``latency_seconds``/``cost_usd`` are still attributed to, and
+aggregated under, the ``(provider, config_key)`` bucket that was attempted
+-- an earlier version discarded these measurements entirely, letting a
+provider with frequent long-timeout failures look faster and cheaper than
+it really is (code review finding).
+
+Every recorded cell's own shape is validated up front too: an unrecognized
+field (a typo such as ``"respnose"`` instead of ``"response"``), a
+non-boolean ``"unavailable"`` marker (e.g. the string ``"true"``), a
+non-object cell value, or a cell recording both ``response`` and
+``unavailable: true`` at once are all rejected outright, rather than
+silently misclassified as an ordinary pending cell and reported as if the
+dataset were complete (code review finding; AGENTS.md trust-boundary
+validation).
 
 The dataset-wide overlap check above only gates whether the dataset has
 *any* real comparison at all -- it does not mean every recorded cell for a
@@ -320,13 +350,32 @@ class _InvalidSubmissionId(Exception):
 
 class _InvalidSubmission(Exception):
     """A submission file's top-level ``questions`` field is missing, not a
-    list, empty, or contains a non-object entry.
+    list, empty, contains a non-object entry, or contains two entries with
+    the same ``ground_truth.questionId``.
 
     One real answer sheet commonly spans several questions
     (business-rules-and-evaluation-data.md section 6.2: "60 答案・のべ 300
     設問以上"), so one submission file must hold a non-empty list of
     per-question ``ground_truth``/``input``/``recorded`` entries, not just
-    one (code review finding).
+    one (code review finding). A duplicate ``questionId`` within that list
+    (a copy-paste mistake) would otherwise be parsed as two independent
+    samples and double-count that question's weight in every aggregate
+    (code review finding).
+    """
+
+
+class _InvalidTestId(Exception):
+    """A submission's top-level ``testId`` field is missing or blank, or one
+    ``subject`` spans more than one distinct ``testId`` across the dataset.
+
+    business-rules-and-evaluation-data.md section 6.1 lists テストID as
+    per-test metadata alongside 教科 (subject), and this PoC's evaluation
+    design is exactly one test per subject (section 6.2: "2 教科 x 各 1
+    テスト"). ``summarize_by_provider`` buckets only by (subject, provider,
+    config, input_variant) -- not by ``testId`` -- so two different tests
+    accidentally recorded under the same subject label would be silently
+    pooled into one same-data comparison bucket even though their rubric or
+    difficulty may differ (code review finding).
     """
 
 
@@ -412,10 +461,20 @@ def _sanitize_validation_error(exc: ValidationError) -> str:
 def _descriptor_from_cell(
     cell: dict[str, Any], *, provider: str, path: Path | str
 ) -> ProviderDescriptor:
+    """Read and strictly validate a cell's ``descriptor``.
+
+    Required on every attempted cell -- a ``response`` *or* an
+    ``unavailable: true`` marker -- not just a successfully-parsed response:
+    even a call that failed (schema violation or unavailable) still needs
+    to be attributed to the configuration that was attempted, so its
+    latency/cost measurements are aggregated under the right
+    ``(provider, config_key)`` bucket rather than a globally
+    unattributed count (code review finding).
+    """
     raw = cell.get("descriptor")
     if raw is None:
         raise _InvalidDescriptor(
-            f"{path}: provider {provider!r} has a recorded response but no 'descriptor' "
+            f"{path}: provider {provider!r} has a recorded cell but no 'descriptor' "
             "(model/version/prompt_version/temperature/structured_output_mode) -- cannot "
             "be reproduced or safely bucketed (Issue #14 '再現条件'). Add a descriptor "
             "object to this cell."
@@ -473,7 +532,9 @@ class _CellResult:
 def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) -> _CellResult:
     """Parse one recorded ``(provider, input_variant)`` cell.
 
-    A cell is one of three states:
+    A cell is one of three states (its shape is already validated by
+    :func:`_validate_cell_shape` before this runs, so a typo'd or
+    self-contradictory cell never reaches here):
 
     * **pending** -- entirely absent, or present with neither a ``response``
       nor an ``unavailable`` marker. Expected but not yet recorded.
@@ -481,8 +542,11 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
       call attempt that exhausted retries against a persistent failure
       (docs/poc-2-ai-grading.md section 7.2). Explicitly recorded, not
       silently indistinguishable from "never attempted" (code review
-      finding) -- never scored, never bucketed by ``config_key`` (there is
-      no successful response to attribute a descriptor to).
+      finding). ``descriptor`` (and so ``config_key``) is required here too,
+      the same as an attempted response: even a failed call is attributable
+      to the configuration that was tried, so its latency/cost still
+      aggregate under that ``(provider, config_key)`` bucket instead of
+      vanishing from every provider-level metric (code review finding).
     * **attempted** -- a ``response`` key is present: parsed and validated;
       a malformed response is a schema violation, not a pending measurement.
       ``descriptor`` (and so ``config_key``) is required as soon as
@@ -490,10 +554,9 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
       validation, so schema-violating cells are still bucketed by the
       configuration that produced them.
 
-    A cell with *both* ``response`` and ``unavailable: true`` is rejected: a
-    call attempt cannot have both succeeded and failed. ``latency_seconds``/
-    ``cost_usd`` are read independent of which state the cell is in, and are
-    ``None`` (not a fabricated ``0.0``) when the cell records none.
+    ``latency_seconds``/``cost_usd`` are read independent of which state the
+    cell is in, and are ``None`` (not a fabricated ``0.0``) when the cell
+    records none.
     """
     if cell is None:
         return _CellResult(
@@ -507,12 +570,6 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
 
     has_response = "response" in cell
     is_unavailable = cell.get("unavailable") is True
-    if has_response and is_unavailable:
-        raise _InvalidRecordedCell(
-            f"{path}: provider {provider!r} has both a 'response' and "
-            "'unavailable: true' recorded for the same cell -- a call attempt cannot "
-            "both have succeeded and failed"
-        )
 
     if not has_response and not is_unavailable:
         cost_usd = _validated_measurement(
@@ -533,19 +590,18 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
     latency_seconds = _validated_measurement(
         cell.get("latency_seconds"), field="latency_seconds", provider=provider, path=path
     )
+    descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
+    config_key = descriptor_key(descriptor)
 
     if is_unavailable:
         return _CellResult(
             response=None,
-            config_key=None,
+            config_key=config_key,
             cost_usd=cost_usd,
             latency_seconds=latency_seconds,
             is_pending=False,
             is_unavailable=True,
         )
-
-    descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
-    config_key = descriptor_key(descriptor)
 
     try:
         parsed = parse_ai_grading_result(json.dumps(cell["response"]))
@@ -574,7 +630,7 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
 
 @dataclass(frozen=True, kw_only=True)
 class _ParsedSample:
-    """One question's validated ``subject`` + ``submissionId`` +
+    """One question's validated ``subject`` + ``submissionId`` + ``testId`` +
     ``ground_truth`` + ``input``, plus its raw ``recorded`` dict (still
     unparsed -- ``_load_cell`` handles that per provider/variant cell).
 
@@ -585,6 +641,7 @@ class _ParsedSample:
     path: str
     subject: str
     submission_id: str
+    test_id: str
     truth: GradingGroundTruth
     input_record: GradingInputRecord
     recorded: dict[str, dict[str, Any]]
@@ -619,6 +676,31 @@ def _load_submission_id(raw: dict[str, Any], *, path: Path) -> str:
             "minimum-dataset-size check"
         )
     return submission_id.strip()
+
+
+def _load_test_id(raw: dict[str, Any], *, path: Path) -> str:
+    """Validate and return this file's ``testId``, whitespace-stripped.
+
+    business-rules-and-evaluation-data.md section 6.1 lists テストID as
+    per-test metadata alongside 教科 (subject), and this PoC's evaluation
+    design is exactly one test per subject (section 6.2: "2 教科 x 各 1
+    テスト"). Without a validated test identity, a dataset that accidentally
+    mixes two different tests' submissions under the same subject label
+    would be silently pooled into one same-data comparison bucket, even
+    though the two tests' rubric or difficulty may differ (code review
+    finding). See :func:`_validate_single_test_per_subject` for the
+    cross-sample check this enables.
+    """
+    test_id = raw.get("testId")
+    if not isinstance(test_id, str) or not test_id.strip():
+        raise _InvalidTestId(
+            f"{path}: submission has no non-blank top-level 'testId' field "
+            "(business-rules-and-evaluation-data.md section 6.1 metadata: テストID -- "
+            "this PoC's evaluation design is exactly one test per subject, section 6.2) "
+            "-- needed to detect a dataset that accidentally mixes two different tests' "
+            "submissions under the same subject label into one same-data comparison bucket"
+        )
+    return test_id.strip()
 
 
 def _load_questions(raw: dict[str, Any], *, path: Path) -> list[dict[str, Any]]:
@@ -666,11 +748,16 @@ def _load_input_record(
 
     Raises :class:`_InvalidInput` if ``input`` is missing, fails strict
     validation, disagrees with ``ground_truth`` (e.g. a different
-    ``max_score``), or if any provider has a recorded ``ocr_noisy`` response
-    while this sample's ``input.ocr_noisy`` is ``null``: a same-data
-    comparison requires the underlying question material -- including which
-    OCR variants actually exist -- to match, not just the final score
-    (code review finding).
+    ``max_score``), or if any provider has a recorded ``ocr_noisy`` attempt
+    (a ``response`` *or* an ``unavailable: true`` marker) while this
+    sample's ``input.ocr_noisy`` is ``null``: a same-data comparison
+    requires the underlying question material -- including which OCR
+    variants actually exist -- to match, not just the final score (code
+    review finding). An ``unavailable`` noisy-variant attempt counts here
+    too: calling a provider requires a noisy input to have existed in the
+    first place, so an "unavailable" marker recorded against a variant that
+    was never authored cannot be a real provider outage against real input
+    either (code review finding).
     """
     if "input" not in raw:
         raise _InvalidInput(f"{path}: question has no 'input' block to validate against")
@@ -688,21 +775,76 @@ def _load_input_record(
     if input_record.ocr_noisy is None:
         for provider, variants in raw.get("recorded", {}).items():
             cell = variants.get("ocr_noisy")
-            if isinstance(cell, dict) and "response" in cell:
+            if isinstance(cell, dict) and ("response" in cell or cell.get("unavailable") is True):
                 raise _InvalidInput(
-                    f"{path}: provider {provider!r} has a recorded 'ocr_noisy' response, "
-                    "but this sample's input.ocr_noisy is null -- no noisy-OCR variant was "
-                    "authored for this sample, so a recorded noisy-variant response cannot "
-                    "be a real same-data comparison"
+                    f"{path}: provider {provider!r} has a recorded 'ocr_noisy' attempt "
+                    "(response or unavailable), but this sample's input.ocr_noisy is null "
+                    "-- no noisy-OCR variant was authored for this sample, so a recorded "
+                    "noisy-variant attempt cannot be a real same-data comparison"
                 )
     return input_record
 
 
-def _validate_recorded_variant_keys(
-    recorded: dict[str, dict[str, Any]], *, path: Path | str
-) -> None:
+#: Fields a recorded cell may contain. An unrecognized field (a typo such as
+#: ``"respnose"`` instead of ``"response"``) is rejected outright rather than
+#: silently misclassifying the cell -- see :func:`_validate_cell_shape`.
+_KNOWN_CELL_KEYS = frozenset(
+    {"response", "descriptor", "latency_seconds", "cost_usd", "unavailable"}
+)
+
+
+def _validate_cell_shape(cell: object, *, provider: str, variant: str, path: Path | str) -> None:
+    """Reject a recorded ``(provider, input_variant)`` cell whose shape is
+    internally inconsistent, instead of silently misclassifying it.
+
+    A cell with an unrecognized field -- a typo such as ``"respnose"``
+    instead of ``"response"``, or a non-boolean ``"unavailable": "true"``
+    (the string, not ``true``) -- previously satisfied neither the "has a
+    response" nor the "is unavailable" check in :func:`_load_cell`, so a
+    real recorded attempt was silently classified as ordinary "pending" and
+    the harness could exit 0 using only the other cells, as if the dataset
+    had been fully and correctly reported (code review finding; AGENTS.md
+    trust-boundary validation). A non-object cell value (e.g. a bare string)
+    previously reached a ``.get()`` call directly and failed with an
+    unhandled ``TypeError`` instead of a clear validation error.
+    """
+    if cell is None:
+        return  # absent cell -- legitimately pending
+    if not isinstance(cell, dict):
+        raise _InvalidRecordedCell(
+            f"{path}: provider {provider!r}'s {variant!r} cell must be an object, got "
+            f"{type(cell).__name__}"
+        )
+    unknown = sorted(set(cell) - _KNOWN_CELL_KEYS)
+    if unknown:
+        # Never echo the unknown field name(s) themselves -- untrusted
+        # ``--dataset`` content the same as any other key or value (AGENTS.md
+        # "Security"; code review finding).
+        raise _InvalidRecordedCell(
+            f"{path}: provider {provider!r}'s {variant!r} cell has {len(unknown)} "
+            f"unrecognized field(s) -- only {sorted(_KNOWN_CELL_KEYS)} are recognized (a "
+            "typo such as 'respnose' would otherwise leave a real recorded attempt "
+            "silently classified as pending). The unrecognized field name(s) are not "
+            "shown here."
+        )
+    if "unavailable" in cell and not isinstance(cell["unavailable"], bool):
+        raise _InvalidRecordedCell(
+            f"{path}: provider {provider!r}'s {variant!r} cell has a non-boolean "
+            f"'unavailable' marker (got {type(cell['unavailable']).__name__}) -- expected "
+            'a strict true/false, not e.g. the string "true"'
+        )
+    if "response" in cell and cell.get("unavailable") is True:
+        raise _InvalidRecordedCell(
+            f"{path}: provider {provider!r} has both a 'response' and "
+            "'unavailable: true' recorded for the same cell -- a call attempt cannot "
+            "both have succeeded and failed"
+        )
+
+
+def _validate_recorded_cells(recorded: dict[str, dict[str, Any]], *, path: Path | str) -> None:
     """Reject a provider's ``recorded`` entry with an input-variant key
-    outside :data:`_INPUT_VARIANTS`, instead of silently ignoring it.
+    outside :data:`_INPUT_VARIANTS`, or an individual cell with an
+    inconsistent shape, instead of silently misclassifying either.
 
     ``_load_cell``/``_responder_configs_by_variant`` only ever look up the
     fixed ``ocr_clean``/``ocr_noisy`` keys by name, never iterate whatever
@@ -732,6 +874,11 @@ def _validate_recorded_variant_keys(
                 "recorded there would otherwise be silently ignored rather than counted). "
                 "The unrecognized key(s) are not shown here."
             )
+        for variant in _INPUT_VARIANTS:
+            if variant in variants:
+                _validate_cell_shape(
+                    variants[variant], provider=provider, variant=variant, path=path
+                )
 
 
 def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
@@ -747,17 +894,27 @@ def _load_all_samples(files: list[Path]) -> list[_ParsedSample]:
         raw = json.loads(path.read_text(encoding="utf-8"))
         subject = _load_subject(raw, path=path)
         submission_id = _load_submission_id(raw, path=path)
+        test_id = _load_test_id(raw, path=path)
         questions = _load_questions(raw, path=path)
+        seen_question_ids: set[str] = set()
         for index, question in enumerate(questions):
             locator = f"{path}#{index}"
-            _validate_recorded_variant_keys(question.get("recorded", {}), path=locator)
+            _validate_recorded_cells(question.get("recorded", {}), path=locator)
             truth = _load_ground_truth(question, path=locator)
+            if truth.question_id in seen_question_ids:
+                raise _InvalidSubmission(
+                    f"{locator}: duplicate questionId {truth.question_id!r} within this "
+                    "submission's 'questions' array -- a copy-paste mistake would "
+                    "otherwise double-count this question's weight in every aggregate"
+                )
+            seen_question_ids.add(truth.question_id)
             input_record = _load_input_record(question, truth=truth, path=locator)
             parsed.append(
                 _ParsedSample(
                     path=locator,
                     subject=subject,
                     submission_id=submission_id,
+                    test_id=test_id,
                     truth=truth,
                     input_record=input_record,
                     recorded=question.get("recorded", {}),
@@ -780,6 +937,31 @@ def _submission_coverage(samples: list[_ParsedSample]) -> dict[str, int]:
     for sample in samples:
         submissions_by_subject.setdefault(sample.subject, set()).add(sample.submission_id)
     return {subject: len(ids) for subject, ids in submissions_by_subject.items()}
+
+
+def _validate_single_test_per_subject(samples: list[_ParsedSample]) -> None:
+    """Reject a dataset where one ``subject`` spans more than one ``testId``.
+
+    ``summarize_by_provider`` buckets only by (subject, provider, config,
+    input_variant) -- not by ``testId`` -- so two different tests
+    accidentally recorded under the same subject label would be silently
+    pooled into one same-data comparison bucket even though their rubric or
+    difficulty may differ (business-rules-and-evaluation-data.md section
+    6.1: exactly one test per subject in this PoC's evaluation design;
+    code review finding).
+    """
+    test_ids_by_subject: dict[str, set[str]] = {}
+    for sample in samples:
+        test_ids_by_subject.setdefault(sample.subject, set()).add(sample.test_id)
+    for subject, test_ids in test_ids_by_subject.items():
+        if len(test_ids) > 1:
+            raise _InvalidTestId(
+                f"subject {subject!r} spans {len(test_ids)} different testId values "
+                f"({sorted(test_ids)}) -- this PoC's evaluation design is exactly one "
+                "test per subject (business-rules-and-evaluation-data.md section 6.2); "
+                "pooling submissions from different tests under one subject bucket could "
+                "mix different rubrics/difficulty into one misleading adoption metric"
+            )
 
 
 def _normalized_provider_id(raw: str) -> str:
@@ -875,8 +1057,8 @@ def _parse_cell_grid(
 def _responder_configs_by_variant(
     cells_for_sample: dict[str, dict[str, _CellResult]],
 ) -> dict[str, set[tuple[str, str]]]:
-    """``(provider, config_key)`` pairs with an actual, attempted (non-pending,
-    non-``unavailable``) response for one sample, split by input variant.
+    """``(provider, config_key)`` pairs with an actual, attempted
+    (non-pending) cell for one sample, split by input variant.
 
     Split by variant, not merged: a provider recorded only on ``ocr_clean``
     and another recorded only on ``ocr_noisy`` for the same sample have
@@ -891,13 +1073,17 @@ def _responder_configs_by_variant(
     provider that quietly switches configuration between samples must not
     still "match" across those samples by name alone (code review finding;
     docs/poc-2-ai-grading.md section 3.3's config-bucket separation). An
-    ``unavailable`` cell has no ``config_key`` to bucket by, so it never
-    contributes here -- it neither is, nor prevents, a same-data comparison.
+    ``unavailable`` cell now has a real ``config_key`` too (``_load_cell``
+    requires a ``descriptor`` for it, the same as a real response), so it
+    contributes here exactly like a schema-violating response does: a
+    persistently-unreliable provider's failed attempts are still
+    attributable to (and can still gate or exclude) a same-data comparison,
+    rather than being invisible to it (code review finding).
     """
     by_variant: dict[str, set[tuple[str, str]]] = {variant: set() for variant in _INPUT_VARIANTS}
     for provider, by_variant_cell in cells_for_sample.items():
         for variant, result in by_variant_cell.items():
-            if not result.is_pending and not result.is_unavailable:
+            if not result.is_pending:
                 assert result.config_key is not None
                 by_variant[variant].add((provider, result.config_key))
     return by_variant
@@ -979,7 +1165,16 @@ def _load_samples(
     recorded as failed (``{"unavailable": true, ...}``, docs/poc-2-ai-grading.md
     section 7.2) -- distinct from "pending" (never attempted) so a
     persistently-unreliable provider's failures cannot silently vanish from
-    the report (code review finding).
+    the report (code review finding). Unlike an earlier version, an
+    unavailable attempt is not simply discarded after being counted here: it
+    is also passed to :func:`~auto_scoring.domain.ai_grading_metrics.
+    evaluate_sample` (``unavailable=True``) so its ``latency_seconds``/
+    ``cost_usd`` are attributed to the ``(provider, config_key)`` bucket
+    that was attempted and aggregated into that bucket's p50/p95 latency and
+    cost columns -- an earlier version dropped these measurements after
+    incrementing only this top-line count, letting a provider with frequent
+    long-timeout failures look faster and cheaper than it really is in the
+    per-provider table (code review finding).
 
     Raises unless at least :data:`_MINIMUM_PROVIDERS` distinct providers
     each have a real recorded response on a *shared sample and input
@@ -994,6 +1189,7 @@ def _load_samples(
         raise SystemExit("no *.json samples found in dataset")
 
     samples = _load_all_samples(files)
+    _validate_single_test_per_subject(samples)
     submission_coverage = _submission_coverage(samples)
 
     raw_for_normalized = _canonical_providers(samples)
@@ -1040,8 +1236,7 @@ def _load_samples(
                     continue
                 if result.is_unavailable:
                     unavailable += 1
-                    continue
-                assert result.config_key is not None  # only None when pending/unavailable
+                assert result.config_key is not None  # only None when pending
                 if by_variant[variant] != comparable:
                     excluded += 1
                     continue
@@ -1055,6 +1250,7 @@ def _load_samples(
                         input_variant=variant,
                         cost_usd=result.cost_usd,
                         latency_seconds=result.latency_seconds,
+                        unavailable=result.is_unavailable,
                     )
                 )
     return outcomes, pending, 0, excluded, unavailable, submission_coverage
