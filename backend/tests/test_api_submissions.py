@@ -325,3 +325,60 @@ def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) ->
         assert elapsed < 0.5
         intake_thread.join(timeout=5)
         assert intake_done.is_set()
+
+
+def test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body(
+    data_root: Path,
+) -> None:
+    """intake_lock (see api/app.py) only serializes the render/DB phase of
+    intake, which runs in a worker thread -- it says nothing about the
+    upload body read that happens first, in the async handler itself. Left
+    unbounded, N concurrent requests near max_size_bytes could each hold a
+    full in-memory `bytes` object while merely waiting their turn at that
+    lock, and the aggregate could exhaust memory even though every request
+    individually stays within its own limit. With capacity reserved for
+    exactly one upload, a second concurrent request must be rejected (503)
+    immediately -- not queued behind the first, and not accepted and then
+    left to read its body before failing.
+    """
+    app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+        pdf_engine=_SlowPdfEngine(PdfiumPypdfEngine(), delay_seconds=1.0),
+        max_concurrent_uploads=1,
+    )
+    _seed_test(data_root)
+
+    with TestClient(app) as client:
+        first_started = threading.Event()
+        first_responses: list[int] = []
+
+        def _run_first() -> None:
+            first_started.set()
+            response = client.post(
+                "/tests/test-1/submissions",
+                headers=_auth(),
+                files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+            )
+            first_responses.append(response.status_code)
+
+        first_thread = threading.Thread(target=_run_first)
+        first_thread.start()
+        first_started.wait(timeout=5)
+        time.sleep(0.2)  # let the first request acquire capacity and start rendering
+
+        second = client.post(
+            "/tests/test-1/submissions",
+            headers=_auth(),
+            files={"file": ("b.pdf", _pdf_bytes(), "application/pdf")},
+        )
+
+        first_thread.join(timeout=5)
+
+    assert second.status_code == 503
+    assert first_responses == [201]
+
+    # The rejected request never got far enough to create a row.
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        assert len(uow.submissions.list_for_test("test-1")) == 1
