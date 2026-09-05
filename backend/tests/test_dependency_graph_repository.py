@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 import pytest
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 
+from auto_scoring.adapters import sqlalchemy_repositories
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.dependency_graph import (
     DependencyEdge,
@@ -150,6 +154,54 @@ def test_confirming_persists_and_locks_the_version(seeded: UowFactory) -> None:
             uow.dependency_graphs.save(_draft(edges=[]))
 
 
+def test_save_reports_a_conflict_when_confirmation_races_ahead_of_a_draft_overwrite(
+    seeded: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`save()`'s early "is it CONFIRMED?" check only proves the row was
+    DRAFT *when this call read it*; it says nothing about whether another
+    transaction confirms the row afterwards but before this call's own
+    write executes. Without an atomic ``WHERE status = 'draft'`` on the
+    actual UPDATE, this call would still delete the confirmed edges and
+    write its own (stale, pre-confirm) status back over CONFIRMED --
+    silently un-confirming a graph a human already signed off on (Issue #26
+    review). Injects the concurrent confirm directly between `save()`'s read
+    and its atomic write via a monkeypatch on `update`, the same technique
+    used for the other CAS races in this codebase.
+    """
+    with seeded() as uow:
+        uow.dependency_graphs.save(_draft())
+        uow.commit()
+
+    with seeded() as reader_uow:
+        stale_draft = reader_uow.dependency_graphs.get("test-1:v1")
+        assert stale_draft is not None
+
+        injected = {"done": False}
+
+        def _confirm_concurrently_then_update(table: Any) -> Any:
+            if not injected["done"]:
+                injected["done"] = True
+                with seeded() as confirming_uow:
+                    to_confirm = confirming_uow.dependency_graphs.get("test-1:v1")
+                    assert to_confirm is not None
+                    confirmed = to_confirm.confirm(edges=[_edge("q-1", "q-2")], confirmed_at=at(5))
+                    assert confirming_uow.dependency_graphs.try_confirm(confirmed) is True
+                    confirming_uow.commit()
+            return update(table)
+
+        monkeypatch.setattr(sqlalchemy_repositories, "update", _confirm_concurrently_then_update)
+
+        regenerated = _draft(edges=[], created_at=at(10))  # as if /analyze re-ran
+        with pytest.raises(DependencyGraphError):
+            reader_uow.dependency_graphs.save(regenerated)
+
+    with seeded() as uow:
+        stored = uow.dependency_graphs.get("test-1:v1")
+    assert stored is not None
+    assert stored.status is DependencyGraphStatus.CONFIRMED
+    assert {(e.from_question_id, e.to_question_id) for e in stored.edges} == {("q-1", "q-2")}
+
+
 def test_try_confirm_lets_only_one_racing_confirm_win(seeded: UowFactory) -> None:
     """Two reviewers who both read the same DRAFT before either wrote must
     not both succeed -- the second's `try_confirm` must lose cleanly, and the
@@ -289,4 +341,51 @@ def test_get_latest_with_no_graph_returns_none(seeded: UowFactory) -> None:
 def test_unknown_test_id_is_rejected_by_foreign_key(make_uow: UowFactory) -> None:
     with make_uow() as uow, pytest.raises(Exception):  # noqa: B017 - IntegrityError from SQLite FK
         uow.dependency_graphs.save(_draft(test_id="missing-test", id="missing-test:v1"))
+        uow.commit()
+
+
+def test_confirmed_status_without_confirmed_at_is_rejected_by_check_constraint(
+    seeded: UowFactory,
+) -> None:
+    """`DependencyGraph.__post_init__` requires CONFIRMED <=> confirmed_at is
+    set; a row bypassing the domain (repair, import, direct SQL) must not be
+    able to violate that pairing, or `_hydrate` would raise
+    `DependencyGraphError` on every later GET/list of it (Issue #26 review).
+    """
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.CONFIRMED,
+                question_ids=["q-1", "q-2"],
+                unresolved=[],
+                created_at=at(),
+                confirmed_at=None,
+            )
+        )
+        uow.commit()
+
+
+def test_draft_status_with_confirmed_at_is_rejected_by_check_constraint(
+    seeded: UowFactory,
+) -> None:
+    from auto_scoring.db.orm import DependencyGraphRow
+
+    with pytest.raises(IntegrityError), seeded() as uow:
+        uow.session.add(
+            DependencyGraphRow(
+                id="test-1:v1",
+                test_id="test-1",
+                version=1,
+                status=DependencyGraphStatus.DRAFT,
+                question_ids=["q-1", "q-2"],
+                unresolved=[],
+                created_at=at(),
+                confirmed_at=at(5),
+            )
+        )
         uow.commit()

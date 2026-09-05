@@ -168,6 +168,46 @@ def test_confirmed_dependency_graph_row_requires_empty_unresolved(db_url: str) -
         engine.dispose()
 
 
+def test_dependency_graph_status_confirmed_at_pairing_is_enforced(db_url: str) -> None:
+    """DB-level mirror of `DependencyGraph.__post_init__`'s CONFIRMED <=>
+    confirmed_at-is-set invariant (Issue #26 review): a row bypassing the
+    domain layer (repair, import, direct SQL) must not be able to insert
+    status='confirmed' with confirmed_at=NULL, nor status='draft' with a
+    non-null confirmed_at, or `DependencyGraph.from_dict` raises on every
+    later GET/list of that row.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        confirmed_without_timestamp = text(
+            "INSERT INTO dependency_graphs "
+            "(id, test_id, version, status, question_ids, unresolved, created_at, confirmed_at) "
+            "VALUES ('t:v1', 't', 1, 'confirmed', '[\"q1\"]', '[]', '2026-01-01', NULL)"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(confirmed_without_timestamp)
+
+        draft_with_timestamp = text(
+            "INSERT INTO dependency_graphs "
+            "(id, test_id, version, status, question_ids, unresolved, created_at, confirmed_at) "
+            "VALUES ('t:v2', 't', 2, 'draft', '[\"q1\"]', '[]', '2026-01-01', '2026-01-01')"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(draft_with_timestamp)
+    finally:
+        conn.close()
+        engine.dispose()
+
+
 def test_job_dependency_graph_version_must_be_positive(db_url: str) -> None:
     upgrade(db_url, "head")
     engine = create_sqlite_engine(db_url)

@@ -53,11 +53,12 @@ class ReferenceHeuristicDependencyAnalyzer:
             # (e.g. an override of "   ") is truthy as a plain string and
             # would otherwise slip past `if part` and make `text` itself
             # falsely non-empty after the join.
-            text = " ".join(
+            fields = [
                 part.strip()
                 for part in (question.prompt_text, question.model_answer, question.rubric_text)
                 if part and part.strip()
-            )
+            ]
+            text = " ".join(fields)
             if not text:
                 # No prompt/model-answer/rubric text to analyze at all. This
                 # is not "no dependency" -- it is "cannot tell" -- so it must
@@ -75,17 +76,38 @@ class ReferenceHeuristicDependencyAnalyzer:
             matched_signal = next((phrase for phrase in _SIGNAL_PHRASES if phrase in text), None)
             referenced = _resolve_referenced_numbers(text, by_number, question.question_id)
 
-            if referenced and matched_signal:
+            # A question number and a dependency-signal phrase must appear
+            # together in the *same* source field (prompt/model-answer/
+            # rubric) to become an edge -- not merely somewhere each in the
+            # combined text. Without this, a bare label mention in one field
+            # (e.g. prompt: "問1と比較する") and an unrelated signal phrase
+            # in another (e.g. rubric: "根拠に基づいて採点する") would each
+            # make their own field-wide check true, and the two independent,
+            # unrelated statements would be stitched into a false edge that
+            # the signal phrase was never actually modifying (Issue #26
+            # review).
+            locally_referenced: list[tuple[str, str]] = []
+            for field in fields:
+                if not any(phrase in field for phrase in _SIGNAL_PHRASES):
+                    continue
+                for candidate in _resolve_referenced_numbers(
+                    field, by_number, question.question_id
+                ):
+                    if candidate not in locally_referenced:
+                        locally_referenced.append(candidate)
+
+            if locally_referenced:
                 # A question number *and* a dependency-signal phrase both
-                # present: this is the only case that becomes an edge. A bare
-                # label mention with no such phrase is common between
-                # genuinely independent questions (e.g. both discuss "問1"
-                # for unrelated reasons) and must not be promoted to a
-                # candidate edge -- doing so risked handing `from_candidates`
-                # a spurious cycle, which raises before any draft is saved
-                # and leaves nothing for a human to review/fix (Issue #26
-                # review; docs/dependency-graph.md "候補生成").
-                for number, from_id in referenced:
+                # present in the same field: this is the only case that
+                # becomes an edge. A bare label mention with no such phrase
+                # is common between genuinely independent questions (e.g.
+                # both discuss "問1" for unrelated reasons) and must not be
+                # promoted to a candidate edge -- doing so risked handing
+                # `from_candidates` a spurious cycle, which raises before any
+                # draft is saved and leaves nothing for a human to
+                # review/fix (Issue #26 review; docs/dependency-graph.md
+                # "候補生成").
+                for number, from_id in locally_referenced:
                     edges.append(
                         DependencyEdge(
                             from_question_id=from_id,

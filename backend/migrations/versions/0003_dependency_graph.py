@@ -50,6 +50,16 @@ def upgrade() -> None:
             "status != 'confirmed' OR json_array_length(unresolved) = 0",
             name="ck_dependency_graphs_confirmed_has_no_unresolved",
         ),
+        # Mirrors DependencyGraph.__post_init__: CONFIRMED <=> confirmed_at is
+        # set. Without this, a row written outside the domain layer (repair,
+        # import, direct SQL) with status='confirmed' and confirmed_at=NULL
+        # (or the reverse) would be accepted by the DB but rejected by
+        # `DependencyGraph`'s own constructor on hydration, turning every
+        # GET/list of that row into a 500 (Issue #26 review).
+        sa.CheckConstraint(
+            "(status = 'confirmed') = (confirmed_at IS NOT NULL)",
+            name="ck_dependency_graphs_confirmed_at_matches_status",
+        ),
     )
     op.create_index("ix_dependency_graphs_test_id", "dependency_graphs", ["test_id"])
 

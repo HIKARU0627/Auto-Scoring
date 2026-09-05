@@ -185,6 +185,56 @@ def test_overlapping_labels_without_a_signal_phrase_report_only_the_longest() ->
     assert "問1、" not in result.unresolved[0].reason  # "問1" must not also be reported
 
 
+def test_a_bare_mention_and_an_unrelated_signal_in_another_field_do_not_combine() -> None:
+    """A bare number mention in `prompt_text` and a dependency-signal phrase
+    that independently appears in `rubric_text` (about something else
+    entirely) must not be stitched together into a false edge -- the signal
+    phrase was never actually modifying the reference to "問1" (Issue #26
+    review). Each field's own signal-phrase check must be local to that
+    field, not to the fields concatenated together.
+    """
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問1と比較して論じよ。",  # bare mention, no signal phrase here
+            rubric_text="採点は答案の根拠に基づいて行うこと。",  # signal phrase, no number here
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert result.edges == ()
+    assert len(result.unresolved) == 1
+    assert result.unresolved[0].question_id == "q2"
+    assert "問1" in result.unresolved[0].reason
+
+
+def test_signal_phrase_in_the_same_field_as_the_reference_still_becomes_an_edge() -> None:
+    """Sanity check alongside the above: a signal phrase genuinely modifying
+    the reference (same field) must still produce an edge -- the fix must
+    not over-correct into never producing edges when other fields are also
+    populated.
+    """
+    questions = [
+        QuestionInfo(
+            question_id="q1", number="問1", page=1, prompt_text="光合成について説明せよ。"
+        ),
+        QuestionInfo(
+            question_id="q2",
+            number="問2",
+            page=1,
+            prompt_text="問1の答えを踏まえて論じよ。",  # number + signal, same field
+            rubric_text="採点は答案の根拠に基づいて行うこと。",  # unrelated signal, other field
+        ),
+    ]
+    result = _ANALYZER.analyze(questions)
+    assert [(e.from_question_id, e.to_question_id) for e in result.edges] == [("q1", "q2")]
+    assert result.unresolved == ()
+
+
 def test_multi_page_reference_is_detected() -> None:
     questions = [
         QuestionInfo(

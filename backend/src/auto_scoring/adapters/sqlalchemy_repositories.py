@@ -347,9 +347,24 @@ class SqlAlchemyDependencyGraphRepository:
         """Upsert on ``(test_id, version)``.
 
         Inserts a new row when this version has never been saved. When it
-        has, the existing row's edges are replaced and its status/unresolved
-        fields updated -- unless it is already CONFIRMED, in which case this
-        raises: a confirmed version is immutable (see `DependencyGraph.confirm`).
+        has, the existing row is overwritten -- unless it is already
+        CONFIRMED, in which case this raises: a confirmed version is
+        immutable (see `DependencyGraph.confirm`).
+
+        The overwrite itself is a compare-and-set (``WHERE status =
+        'draft'``), not a blind PK update: the early ``existing.status``
+        check above only proves the row was DRAFT *when this call read it*,
+        and says nothing about whether another transaction (`try_confirm`)
+        confirmed it in the meantime. Without the ``WHERE``, this call's
+        edge-delete-then-unconditional-UPDATE would still run against a row
+        that has since become CONFIRMED, deleting its reviewed edges and
+        writing this call's (stale, pre-confirm) status back over CONFIRMED
+        -- silently un-confirming a graph a human already signed off on
+        (Issue #26 review; the same class of bug `try_confirm` and
+        `JobRepository.save` were already hardened against). A rowcount of 0
+        means the row moved on since the read above; report it as the same
+        `DependencyGraphError` as the early check rather than corrupting
+        whichever write actually won.
         """
         existing = self._session.scalars(
             select(DependencyGraphRow).where(
@@ -372,17 +387,36 @@ class SqlAlchemyDependencyGraphRepository:
                 "and cannot be overwritten; save a new version instead"
             )
 
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(DependencyGraphRow)
+                .where(
+                    DependencyGraphRow.id == existing.id,
+                    DependencyGraphRow.status == DependencyGraphStatus.DRAFT,
+                )
+                .values(
+                    status=graph.status,
+                    question_ids=sorted(graph.question_ids),
+                    unresolved=[u.to_dict() for u in graph.unresolved],
+                    created_at=graph.created_at,
+                    confirmed_at=graph.confirmed_at,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            raise DependencyGraphError(
+                f"dependency graph {graph.test_id!r} v{graph.version} was confirmed by another "
+                "request while this save was in flight and cannot be overwritten"
+            )
+        self._session.expire(existing)
+
         for edge_row in self._session.scalars(
             select(DependencyEdgeRow).where(DependencyEdgeRow.graph_id == existing.id)
         ):
             self._session.delete(edge_row)
         self._session.flush()  # old edges gone before the new ones land
 
-        existing.status = graph.status
-        existing.question_ids = sorted(graph.question_ids)
-        existing.unresolved = [u.to_dict() for u in graph.unresolved]
-        existing.created_at = graph.created_at
-        existing.confirmed_at = graph.confirmed_at
         _, children = m.dependency_graph_rows(graph)
         for child in children:
             child.graph_id = existing.id

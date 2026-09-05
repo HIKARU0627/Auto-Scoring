@@ -96,6 +96,25 @@ COUNT(*) FROM questions WHERE test_id=...` が期待件数と一致し、かつ�
   `False` になることを検証し（repository層）、API層でも
   `try_confirm` をモンキーパッチして「アプリ層チェック通過後・書き込み前」
   の窓を強制的に再現し409になることを確認している。
+- `try_confirm` とは別に、`DependencyGraphRepository.save`（DRAFTを保存
+  し直す通常のupsert経路）にも同種のTOCTOUがあった（レビュー指摘）:
+  `save` は読み取り時点で行がCONFIRMEDでないことを確認するだけで、その後の
+  「confirmed edgesを含む古いedge行を削除 → ORM属性を直接変更してflush」は
+  無条件だった。この読み取りと書き込みの間に別トランザクションが
+  `try_confirm` でこの行をCONFIRMEDへ進めると、`save`側はそれを知らずに
+  確定済みedgeを削除し、PKだけのUPDATEで`status`を（confirm前に読んだ、
+  DRAFTのままの）呼び出し元のgraphの値へ書き戻してしまう -- 人間が確定した
+  はずのgraphが黙って未確定に戻る。修正として、`save`の実際の書き込みも
+  `try_confirm`と同じ設計のcompare-and-set（`UPDATE ... WHERE id = :id AND
+status = 'draft'`）にし、`rowcount != 1`（＝読み取り後に他がconfirmした）
+  なら`DependencyGraphError`を送出して何も書き換えない。edge行の削除も
+  このUPDATEが成功した後にのみ行うよう順序を変更した（以前はUPDATEの前に
+  削除しており、CASが失敗しても確定済みedgeが既に消えているおそれがあった）。
+  テストでは`update`をモンキーパッチして「`save`の読み取り後・atomic UPDATE
+  実行前」の窓に別トランザクションの`try_confirm`を注入し、`save`が
+  `DependencyGraphError`を送出しつつ確定済みgraphのstatus/edgesが一切
+  変化しないことを検証している
+  （`test_save_reports_a_conflict_when_confirmation_races_ahead_of_a_draft_overwrite`）。
 - 受入条件「確定graphを変更した場合はversionを更新し、古いgraphで未完了の採点
   jobを無効化・再作成できるようにする」は実装済み: `Job` に
   `dependency_graph_version`（そのjobがどの確定バージョンに対して発行された
@@ -171,6 +190,24 @@ current_version)` で「今の確定バージョンと異なるバージョン�
   `can_start_submission_processing` が誤って `True` を返さないようDBレベル
   （`ck_dependency_graphs_confirmed_has_no_unresolved`、SQLiteの
   `json_array_length`使用）でも二重に保護する。
+- 同様に `__post_init__` は「CONFIRMEDなのに `confirmed_at` が無い」「DRAFT
+  なのに `confirmed_at` が設定されている」という組み合わせも拒否するが、
+  修復・インポート等がdomain層を経由せず直接SQLでこの不整合な行を書き込む
+  可能性があり、これまではDB側に対応する制約が無かった（レビュー指摘）。
+  そのような行は書き込み自体は成功してしまうのに、後続の `GET`/`list` が
+  `_hydrate` → `DependencyGraph.from_dict` の呼び出しで
+  `DependencyGraphError` を送出し、その行に触れるたび500になる。ORMメタ
+  データ（`db/orm.py` の `DependencyGraphRow.__table_args__`）と migration
+  （`0003_dependency_graph.py`）の両方に
+  `ck_dependency_graphs_confirmed_at_matches_status`
+  （`(status = 'confirmed') = (confirmed_at IS NOT NULL)`）というCHECK制約
+  を追加し、書き込み時点でSQLiteが拒否するようにした -- 片方だけに足すと
+  `test_head_schema_matches_orm_metadata`（`alembic check`）がドリフトを
+  検知して落ちるため、常に両方同時に直す。テストでは`DependencyGraphRow`を
+  直接構築してこの不整合な2パターン（CONFIRMED+confirmed_at=NULL、
+  DRAFT+confirmed_at設定済み）を試み、両方とも`IntegrityError`になること
+  をORMメタデータ側（`test_dependency_graph_repository.py`）とmigration適用
+  後の生SQL側（`test_migrations.py`）の両方で検証している。
 - cycle検出はKahnのアルゴリズムが行き詰まった残りノード全部ではなく、
   Tarjanの強連結成分（SCC）でサイクルに実際に参加しているノードだけを
   `CycleDetectedError.cycle_question_ids` に含める。例えば `q1<->q2` の
@@ -285,6 +322,29 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   `test_overlapping_labels_without_a_signal_phrase_report_only_the_longest`、
   修正前はどちらも「問1」と「問1-1」の両方が参照として検出されることを
   確認済み）。
+- シグナル表現と設問番号への参照は、結合された全文中のどこかに両方存在す
+  るだけでなく、**同じ入力フィールド**（`prompt_text`／`model_answer`／
+  `rubric_text` のいずれか一つ）内に共起することを要求する（レビュー
+  指摘）。以前は3フィールドを結合した`text`全体に対して「番号への参照が
+  ある」「シグナル表現がある」をそれぞれ独立に判定していたため、例えば
+  `prompt_text`に「問1と比較する」という単なる言及があり、`rubric_text`に
+  無関係な「根拠に基づいて採点する」が含まれるだけで、両方のグローバル
+  チェックがtrueになり、シグナルが実際には「問1」を修飾していなくても
+  confidence 0.8のedgeを発行してしまっていた。相互参照の場合はこれが
+  スプリアスな2-cycleを作り、`/analyze`がdraftを保存せず422を返してしまう
+  （「候補生成」冒頭の設計方針と矛盾）。修正として、`analyze`は3フィールド
+  を`fields`のリストとして保持し、`fields`の**各要素ごとに**
+  `_resolve_referenced_numbers`とシグナル表現の有無を判定し、両方が同じ
+  フィールド内で真になった番号だけを`locally_referenced`としてedge化する。
+  結合済み`text`に対するグローバルな`referenced`/`matched_signal`は、
+  「番号への言及はあるが同一フィールド内にシグナルが無い」場合の
+  unresolved理由づけにのみ引き続き使う。テストでは、prompt/rubricを分けた
+  上記の反例でedgeが作られずunresolvedになること、および番号とシグナルが
+  同じフィールド内にある通常ケースでは引き続きedgeになること（他の
+  フィールドに無関係なシグナルが混ざっていても）を検証している
+  （`test_a_bare_mention_and_an_unrelated_signal_in_another_field_do_not_combine`、
+  `test_signal_phrase_in_the_same_field_as_the_reference_still_becomes_an_edge`、
+  修正前は前者が誤ってedgeを1件生成することを確認済み）。
 
 ### API・DB配線
 

@@ -308,6 +308,26 @@ class DependencyGraphRow(Base):
             "status != 'confirmed' OR json_array_length(unresolved) = 0",
             name="ck_dependency_graphs_confirmed_has_no_unresolved",
         ),
+        # Mirrors DependencyGraph.__post_init__'s status/confirmed_at pairing
+        # (CONFIRMED <=> confirmed_at IS NOT NULL) at the DB layer too, so a
+        # row written outside the domain (repair, import, direct SQL) can't
+        # produce a state `_hydrate` refuses to load -- `DependencyGraph`'s
+        # own constructor raises `DependencyGraphError` for exactly this
+        # mismatch, which would otherwise surface as a 500 on every GET/list
+        # of that row instead of being rejected at write time (Issue #26
+        # review).
+        # Mirrors DependencyGraph.__post_init__'s status/confirmed_at pairing
+        # (CONFIRMED <=> confirmed_at IS NOT NULL) at the DB layer too, so a
+        # row written outside the domain (repair, import, direct SQL) can't
+        # produce a state `_hydrate` refuses to load -- `DependencyGraph`'s
+        # own constructor raises `DependencyGraphError` for exactly this
+        # mismatch, which would otherwise surface as a 500 on every GET/list
+        # of that row instead of being rejected at write time (Issue #26
+        # review).
+        CheckConstraint(
+            "(status = 'confirmed') = (confirmed_at IS NOT NULL)",
+            name="ck_dependency_graphs_confirmed_at_matches_status",
+        ),
         Index("ix_dependency_graphs_test_id", "test_id"),
     )
 
