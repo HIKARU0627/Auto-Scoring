@@ -131,6 +131,20 @@ class JobRetryConflictError(Exception):
         self.job_id = job_id
 
 
+class JobRetryRejectedError(Exception):
+    """`retry_job` refused a FAILED job whose downstream effect a human
+    already approved via `mark_question_usable` -- see `retry_job`."""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            f"job {job_id!r} has already been approved via /resume; retrying it would clear "
+            "that approval while its already-released dependents keep running against an "
+            "outcome that is about to change -- cancel the dependents first if this attempt "
+            "really needs to be redone"
+        )
+        self.job_id = job_id
+
+
 class JobResumeConflictError(Exception):
     """`mark_question_usable` kept losing the compare-and-set race against another writer."""
 
@@ -282,6 +296,19 @@ class JobQueueService:
         *anything* once shutdown has begun, abandoning the rest of the
         backlog in the DB as still-QUEUED for `start`'s next sweep to pick
         up (review round 3, P2).
+
+        Leaves this instance ready for a later `start()` call (the same
+        service, or a second FastAPI app lifespan reusing it): any job ids
+        abandoned above, plus every worker's now-unconsumed `_STOP`
+        sentinel, are still sitting in `_queue` once the workers exit, so it
+        is replaced with a fresh, empty one rather than reused -- otherwise
+        the next `start()`'s workers would immediately dequeue a stale
+        `_STOP` (or reprocess an abandoned id out from under that start's
+        own DB-driven sweep) and exit before doing any work. `_loop` is
+        cleared too, since the next `start()` may run on an entirely
+        different event loop (review round 4, P2). Neither loses anything:
+        every job id this drops is still durably QUEUED in the DB, and
+        `start`'s own sweep re-enqueues it regardless.
         """
         if not self._workers:
             return
@@ -291,6 +318,8 @@ class JobQueueService:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers = []
         self._closing = False
+        self._queue = asyncio.Queue()
+        self._loop = None
         for task in list(self._pending_retries):
             task.cancel()
         if self._pending_retries:
@@ -436,6 +465,16 @@ class JobQueueService:
            question would 404 forever and its dependents would stay BLOCKED
            permanently (review round 2, P1).
 
+        The fallback only fires when the active version has *no row at all*
+        for ``question_id`` -- if it has one that simply isn't terminal yet
+        (QUEUED/RUNNING/BLOCKED, e.g. a concurrent `retry_job` just
+        requeued it, or `confirm` just created a fresh replacement), this
+        raises `JobResumeConflictError` instead of silently falling back to
+        a stale terminal job from an older version. Approving that stale
+        job while the real, active attempt is still pending would let a
+        dependent proceed on a prerequisite result nobody has actually
+        confirmed yet (review round 4, P2).
+
         Both SUCCEEDED and FAILED are eligible (review round 2, P1): a human
         may approve a low-confidence *success* or correct a *failure*'s
         downstream effect -- `list_for_submission` returning jobs oldest-
@@ -484,13 +523,18 @@ class JobQueueService:
 
             jobs = uow.jobs.list_for_submission(submission_id)
             terminal_states = (JobState.SUCCEEDED, JobState.FAILED)
-            at_active_version = [
+            active_version_jobs = [
                 j
                 for j in jobs
-                if j.question_id == question_id
-                and j.state in terminal_states
-                and j.dependency_graph_version == graph.version
+                if j.question_id == question_id and j.dependency_graph_version == graph.version
             ]
+            at_active_version = [j for j in active_version_jobs if j.state in terminal_states]
+            if active_version_jobs and not at_active_version:
+                # The active version does have a row for this question --
+                # it just isn't terminal yet, so falling back to an older
+                # version's stale terminal job would approve a superseded
+                # result while the real, active attempt is still pending.
+                raise JobResumeConflictError(submission_id, question_id)
             candidates = at_active_version or [
                 j for j in jobs if j.question_id == question_id and j.state in terminal_states
             ]
@@ -528,6 +572,16 @@ class JobQueueService:
         requeue) changes its state first, instead of letting
         `JobSaveConflict` surface as an unhandled 500 (review round 3, P2).
         Raises `JobRetryConflictError` if the race keeps losing.
+
+        Refuses (`JobRetryRejectedError`) a FAILED job whose ``usable`` is
+        already set: a human approved this failure's downstream effect via
+        `mark_question_usable` and any dependent that was BLOCKED on it has
+        already been released and may already be running or done.
+        `transitioned_to` unconditionally clears `usable` on this
+        FAILED -> QUEUED transition, but nothing re-blocks that already-
+        released dependent to match -- letting the retry through would leave
+        it processing (or having processed) an outcome this job is about to
+        replace with an unknown one (review round 4, P2).
         """
         for _attempt in range(_MAX_RETRY_ATTEMPTS):
             with SqlAlchemyUnitOfWork(self._session_factory) as uow:
@@ -536,6 +590,8 @@ class JobQueueService:
                     raise JobNotFoundError(job_id)
                 if job.state is not JobState.FAILED:
                     raise JobNotRetryableError(job_id, job.state)
+                if job.usable is not None:
+                    raise JobRetryRejectedError(job_id)
                 requeued = job.transitioned_to(JobState.QUEUED, updated_at=self._clock.now())
                 try:
                     uow.jobs.save(requeued, expected_state=JobState.FAILED)
