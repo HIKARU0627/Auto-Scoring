@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy.orm import Session, sessionmaker
+
+from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.dependency_graph import DependencyEdge, DependencyGraph
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
@@ -162,3 +166,35 @@ def make_job(**overrides: Any) -> Job:
     }
     values.update(overrides)
     return Job(**values)
+
+
+def seed_confirmed_dependency_graph(
+    session_factory: sessionmaker[Session],
+    *,
+    test_id: str = "test-1",
+    submission_id: str = "sub-1",
+    question_ids: list[str],
+    edges: list[DependencyEdge] | None = None,
+) -> int:
+    """Register a test with ``question_ids``, one submission, and a
+    CONFIRMED dependency graph over those questions (Issue #18's queue tests
+    need this fixture shape repeatedly). Returns the graph version.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id=test_id))
+        for qid in question_ids:
+            uow.questions.add(make_question(id=qid, test_id=test_id, number=qid))
+        uow.submissions.add(make_submission(id=submission_id, test_id=test_id))
+        draft = DependencyGraph.from_candidates(
+            id=f"{test_id}:v1",
+            test_id=test_id,
+            version=1,
+            question_ids=question_ids,
+            edges=edges or [],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(draft)
+        confirmed = draft.confirm(edges=edges or [], confirmed_at=at())
+        assert uow.dependency_graphs.try_confirm(confirmed) is True
+        uow.commit()
+    return confirmed.version
