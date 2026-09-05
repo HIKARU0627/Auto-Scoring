@@ -136,6 +136,22 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
   });
 
   Future<void> _confirmProfile() => _runGuarded(() async {
+    final regions = _editableRegions;
+    if (regions == null) return;
+    // Persist whatever the reviewer edited/added/removed *before*
+    // confirming: confirmProfile only ever sends the test id, so without
+    // this an edit made after the last explicit "保存" tap (or never saved
+    // at all) would be silently discarded and the server would confirm a
+    // stale, previously-persisted region set instead (Issue #16 review).
+    final saved = await widget.dependencies.updateProfile(
+      widget.testId,
+      regions,
+    );
+    if (!mounted) return;
+    setState(() {
+      _profile = saved;
+      _editableRegions = saved.regions.toList();
+    });
     final profile = await widget.dependencies.confirmProfile(widget.testId);
     if (!mounted) return;
     setState(() {
@@ -146,8 +162,28 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
   });
 
   Future<void> _analyzeDependencyGraph() => _runGuarded(() async {
+    // The dependency analyzer only sees 問題文 (prompt text) via an
+    // explicit override -- `Question` has no column for it yet, so unless
+    // this is passed, a dependency stated only in a question's own prompt
+    // (as opposed to the model answer or rubric, which the analyzer already
+    // reads from the confirmed Question/Rubric rows) would be invisible and
+    // the analyzer could wrongly conclude "no dependency" (Issue #16
+    // review). QUESTION regions only exist once the profile has been
+    // confirmed (that's also a prerequisite for this endpoint to find any
+    // Question rows at all), so `_profile` here always holds the confirmed
+    // set with real text.
+    final overrides = [
+      for (final region in _profile?.regions ?? const <RegionModel>[])
+        if (region.kind == RegionKind.question)
+          QuestionTextOverride(
+            (b) => b
+              ..questionId = '${widget.testId}:${region.label}'
+              ..promptText = region.text,
+          ),
+    ];
     final graph = await widget.dependencies.analyzeDependencyGraph(
       widget.testId,
+      overrides: overrides,
     );
     if (!mounted) return;
     setState(() {

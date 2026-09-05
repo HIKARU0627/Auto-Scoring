@@ -18,7 +18,7 @@ part 'update_profile_request.g.dart';
 abstract class UpdateProfileRequest
     implements Built<UpdateProfileRequest, UpdateProfileRequestBuilder> {
   @BuiltValueField(wireName: r'regions')
-  BuiltList<RegionModel>? get regions;
+  BuiltList<RegionModel> get regions;
 
   UpdateProfileRequest._();
 
@@ -49,13 +49,11 @@ class _$UpdateProfileRequestSerializer
     UpdateProfileRequest object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
-    if (object.regions != null) {
-      yield r'regions';
-      yield serializers.serialize(
-        object.regions,
-        specifiedType: const FullType(BuiltList, [FullType(RegionModel)]),
-      );
-    }
+    yield r'regions';
+    yield serializers.serialize(
+      object.regions,
+      specifiedType: const FullType(BuiltList, [FullType(RegionModel)]),
+    );
   }
 
   @override
@@ -84,10 +82,8 @@ class _$UpdateProfileRequestSerializer
         case r'regions':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType:
-                const FullType.nullable(BuiltList, [FullType(RegionModel)]),
-          ) as BuiltList<RegionModel>?;
-          if (valueDes == null) continue;
+            specifiedType: const FullType(BuiltList, [FullType(RegionModel)]),
+          ) as BuiltList<RegionModel>;
           result.regions.replace(valueDes);
           break;
         default:

@@ -8,13 +8,13 @@ part of 'update_profile_request.dart';
 
 class _$UpdateProfileRequest extends UpdateProfileRequest {
   @override
-  final BuiltList<RegionModel>? regions;
+  final BuiltList<RegionModel> regions;
 
   factory _$UpdateProfileRequest(
           [void Function(UpdateProfileRequestBuilder)? updates]) =>
       (UpdateProfileRequestBuilder()..update(updates))._build();
 
-  _$UpdateProfileRequest._({this.regions}) : super._();
+  _$UpdateProfileRequest._({required this.regions}) : super._();
   @override
   UpdateProfileRequest rebuild(
           void Function(UpdateProfileRequestBuilder) updates) =>
@@ -62,7 +62,7 @@ class UpdateProfileRequestBuilder
   UpdateProfileRequestBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
-      _regions = $v.regions?.toBuilder();
+      _regions = $v.regions.toBuilder();
       _$v = null;
     }
     return this;
@@ -86,13 +86,13 @@ class UpdateProfileRequestBuilder
     try {
       _$result = _$v ??
           _$UpdateProfileRequest._(
-            regions: _regions?.build(),
+            regions: regions.build(),
           );
     } catch (_) {
       late String _$failedField;
       try {
         _$failedField = 'regions';
-        _regions?.build();
+        regions.build();
       } catch (e) {
         throw BuiltValueNestedFieldError(
             r'UpdateProfileRequest', _$failedField, e.toString());

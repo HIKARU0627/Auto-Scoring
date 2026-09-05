@@ -660,6 +660,9 @@
             "type": "array"
           }
         },
+        "required": [
+          "regions"
+        ],
         "title": "UpdateProfileRequest",
         "type": "object"
       },

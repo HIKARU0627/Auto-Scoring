@@ -159,6 +159,8 @@ void main() {
       getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
+      // confirmProfile now saves the working copy first (Issue #16 review).
+      updateProfile: (testId, regions) async => _profile(regions: regions),
       confirmProfile: (testId) async => _profile(
         status: 'confirmed',
         regions: [
@@ -222,6 +224,44 @@ void main() {
     expect(savedRegions!.first.label, '9');
     expect(find.text('プロファイルを保存しました'), findsOneWidget);
   });
+
+  testWidgets(
+    'analyzing the dependency graph passes each confirmed QUESTION region '
+    'as a prompt-text override',
+    (tester) async {
+      List<QuestionTextOverride>? capturedOverrides;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async {
+          throw SidecarApiException(
+            SidecarErrorKind.badResponse,
+            'not found',
+            statusCode: 404,
+          );
+        },
+        analyzeDependencyGraph: (testId, {overrides = const []}) async {
+          capturedOverrides = overrides;
+          return _dependencyGraph();
+        },
+      );
+
+      await _pumpSettings(
+        tester,
+        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
+      );
+
+      await tester.tap(
+        find.byKey(const Key('analyze-dependency-graph-button')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(capturedOverrides, isNotNull);
+      expect(capturedOverrides, hasLength(1));
+      expect(capturedOverrides!.single.questionId, 'test-1:1');
+      expect(capturedOverrides!.single.promptText, '問1');
+    },
+  );
 
   testWidgets(
     'confirming the dependency graph requires reviewing edges first',
