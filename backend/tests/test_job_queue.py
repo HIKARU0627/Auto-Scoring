@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +27,7 @@ from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResul
 from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
 from auto_scoring.jobs.clock import Clock
 from auto_scoring.jobs.queue import (
+    JobCancelRejectedError,
     JobQueueService,
     JobResumeConflictError,
     JobRetryRejectedError,
@@ -1041,12 +1042,18 @@ async def test_cancel_job_retries_after_a_compare_and_set_conflict(
     calls = {"count": 0}
 
     def _save_that_conflicts_once(
-        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
         if calls["count"] == 1:
             raise JobSaveConflict(job.id, expected_state)
-        real_save(self, job, expected_state=expected_state)
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once)
 
@@ -1411,12 +1418,18 @@ async def test_retry_job_retries_after_a_compare_and_set_conflict(
     calls = {"count": 0}
 
     def _save_that_conflicts_once(
-        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
     ) -> None:
         calls["count"] += 1
         if calls["count"] == 1:
             raise JobSaveConflict(job.id, expected_state)
-        real_save(self, job, expected_state=expected_state)
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
 
     monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_that_conflicts_once)
 
@@ -1660,3 +1673,199 @@ async def test_shutdown_leaves_the_queue_clean_for_a_later_start(
         )
     finally:
         await service.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Review round 5 regressions
+# --------------------------------------------------------------------------- #
+async def test_retry_job_loses_to_a_concurrent_approval_that_lands_mid_write(
+    session_factory: sessionmaker[Session], clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P1: retry_job's own read seeing usable=None is not enough to be sure
+    no approval is landing -- a concurrent mark_question_usable call can
+    still commit usable=True in the window between that read and retry_job's
+    own write, and a state-only compare-and-set would never notice
+    (mark_usable never touches `state`). require_usable_unset=True closes
+    that window: the approval landing first makes retry's own save lose
+    instead of silently clearing it, and the retry then correctly rejects on
+    a fresh read.
+    """
+    version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.QUEUED,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_races_a_concurrent_approval(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
+    ) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            # Simulate mark_question_usable committing usable=True in the
+            # window between retry_job's own read and this write. This must
+            # be independently committed on its own unit of work -- retry_job's
+            # own `with SqlAlchemyUnitOfWork(...)` rolls back on the
+            # JobSaveConflict this call is about to raise, which would
+            # silently undo a same-session write instead of leaving it
+            # standing the way a genuinely concurrent commit would.
+            with SqlAlchemyUnitOfWork(session_factory) as inner:
+                assert (
+                    inner.jobs.mark_usable(job.id, usable=True, expected_state=JobState.FAILED)
+                    is True
+                )
+                inner.commit()
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
+
+    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _save_races_a_concurrent_approval)
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    with pytest.raises(JobRetryRejectedError):
+        service.retry_job("job-qa")
+
+    assert calls["count"] == 1  # the first save attempt lost to the approval; never retried
+    job = service.get_job("job-qa")
+    assert job is not None
+    assert job.state is JobState.FAILED  # untouched
+    assert job.usable is True  # the approval, not the retry, won
+
+
+async def test_cancel_job_rejects_an_already_approved_failed_job(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """P2: cancel_job must refuse a FAILED job whose usable bit is already
+    set, mirroring retry_job's own guard -- a human approved its downstream
+    effect via mark_question_usable, and its dependent may already be
+    queued or running on the strength of that approval. transitioned_to
+    would clear usable on this FAILED -> CANCELLED transition without ever
+    re-blocking that already-released dependent, leaving it to keep
+    processing against a prerequisite now recorded as cancelled.
+    """
+    version = _seed(session_factory, question_ids=["qa", "qb"], edges=[_edge("qa", "qb")])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-qa",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                usable=True,  # already approved by a human
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.jobs.add(
+            Job(
+                id="job-qb",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qb",
+                state=JobState.QUEUED,  # already released on the strength of the approval
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    service = JobQueueService(session_factory, FakeJobProcessor(), clock=clock)
+    with pytest.raises(JobCancelRejectedError):
+        service.cancel_job("job-qa")
+
+    job = service.get_job("job-qa")
+    assert job is not None
+    assert job.state is JobState.FAILED  # untouched
+    assert job.usable is True  # approval preserved
+
+
+async def test_start_preserves_remaining_backoff_instead_of_requeuing_immediately(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """P2: a retryable FAILED job recovered at startup must wait out only
+    what's left of its backoff, not be requeued immediately -- otherwise a
+    quick restart during a long rate-limit delay would hit the provider
+    again right away, defeating the exponential backoff this job was
+    already sleeping out before the process died.
+    """
+    version = _seed(session_factory, question_ids=["qa"])
+    settings = QueueSettings(
+        max_attempts=3,
+        initial_backoff_seconds=100.0,
+        backoff_multiplier=2.0,
+        max_backoff_seconds=200.0,
+    )
+    # The job failed (and its updated_at was bumped) at EPOCH; this
+    # "restart" happens 40s later -- 40s of the full 100s backoff for
+    # attempt 1 has already elapsed.
+    clock = FakeClock(EPOCH + timedelta(seconds=40))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            Job(
+                id="job-1",
+                kind=JobKind.GRADING,
+                submission_id="sub-1",
+                question_id="qa",
+                state=JobState.FAILED,
+                attempts=1,
+                max_attempts=3,
+                error_code=ErrorCategory.TIMEOUT,
+                dependency_graph_version=version,
+                created_at=at(),
+                updated_at=at(),
+            )
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, settings=settings, clock=clock)
+    await service.start()
+    try:
+        await _wait_until(lambda: _state(service, "job-1") is JobState.SUCCEEDED)
+    finally:
+        await service.shutdown()
+    job = service.get_job("job-1")
+    assert job is not None
+    assert job.attempts == 2
+    # Full backoff for attempt 1 is 100s; 40s had already elapsed by the
+    # time this "restart" happened -- only the remaining 60s should ever be
+    # slept, never the full 100s (defeats the point) and never 0 (an
+    # immediate requeue).
+    assert clock.sleep_calls == [60.0]

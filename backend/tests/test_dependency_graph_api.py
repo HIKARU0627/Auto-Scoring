@@ -690,13 +690,18 @@ def test_confirming_when_nothing_is_stale_creates_no_extra_jobs(
         assert uow.jobs.list_by_state(JobState.CANCELLED) == []
 
 
-def test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race(
+def test_confirm_skips_reissue_when_a_stale_job_genuinely_finished(
     client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If cancelling a stale job conflicts (e.g. a worker changed its state
-    in the meantime), /confirm must not crash and must not create a
-    duplicate replacement for that job -- it should simply leave it alone
-    and still succeed for the graph itself (Issue #26 review).
+    """If cancelling a stale job conflicts because it genuinely finished for
+    real (SUCCEEDED), via a normal worker, between confirm's initial listing
+    and this cancellation attempt, /confirm must not crash and must not
+    create a duplicate replacement for that job -- it should simply leave it
+    alone and still succeed for the graph itself (Issue #26 review).
+
+    Distinguish this from the job merely moving to a different, still-
+    incomplete state in that same window (see the round 5 test below,
+    which the fix must retry against instead of skipping).
     """
     _seed_questions(make_uow, [("q1", "問1", 1)])
     _analyze(client)
@@ -713,12 +718,40 @@ def test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race(
         )
         uow.commit()
 
-    def _always_conflict(
-        self: SqlAlchemyJobRepository, job: Job, *, expected_state: JobState
-    ) -> None:
-        raise JobSaveConflict(job.id, expected_state)
+    from sqlalchemy import update as sa_update
 
-    monkeypatch.setattr(SqlAlchemyJobRepository, "save", _always_conflict)
+    from auto_scoring.db.orm import JobRow
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_conflicts_once_after_a_real_completion(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
+    ) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            # Simulate a real worker finishing this job (SUCCEEDED) between
+            # confirm's initial listing and this cancellation attempt --
+            # same session as confirm's own uow, so no cross-connection
+            # locking is involved; confirm's own re-read right after the
+            # conflict below sees this.
+            self._session.execute(
+                sa_update(JobRow)
+                .where(JobRow.id == job.id)
+                .values(state=JobState.SUCCEEDED, usable=True)
+            )
+            raise JobSaveConflict(job.id, expected_state)
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
+
+    monkeypatch.setattr(
+        SqlAlchemyJobRepository, "save", _save_conflicts_once_after_a_real_completion
+    )
 
     _analyze(client)
     confirm_response = client.post(
@@ -732,8 +765,88 @@ def test_confirm_skips_reissue_when_cancelling_a_stale_job_loses_a_race(
         job = uow.jobs.get("job-v1-running")
         queued = uow.jobs.list_by_state(JobState.QUEUED)
     assert job is not None
-    assert job.state is JobState.RUNNING  # untouched: the cancel attempt conflicted
+    assert job.state is JobState.SUCCEEDED  # untouched: it really did finish
     assert queued == []  # no duplicate replacement was created for it
+
+
+def test_confirm_retries_invalidation_when_a_stale_job_merely_moved_to_another_incomplete_state(
+    client: TestClient, make_uow: UowFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #18 review round 5, P1: if cancelling a stale job conflicts
+    because it merely moved to a *different*, still-incomplete state (a
+    worker claimed a QUEUED job as RUNNING, or a backoff-driven requeue
+    moved a FAILED job back to QUEUED) rather than genuinely finishing, that
+    job must still be invalidated -- against its new, current state --
+    instead of being silently skipped. Skipping it would leave it free to
+    run to completion against the now-superseded graph version, bypassing
+    whatever dependency the newly confirmed version added.
+    """
+    _seed_questions(make_uow, [("q1", "問1", 1)])
+    _analyze(client)
+    client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 1, "edges": []},
+        headers=_AUTH,
+    )
+
+    with make_uow() as uow:
+        uow.submissions.add(make_submission())
+        uow.jobs.add(
+            make_job(id="job-v1-queued", state=JobState.QUEUED, dependency_graph_version=1)
+        )
+        uow.commit()
+
+    from sqlalchemy import update as sa_update
+
+    from auto_scoring.db.orm import JobRow
+
+    real_save = SqlAlchemyJobRepository.save
+    calls = {"count": 0}
+
+    def _save_conflicts_once_after_a_concurrent_claim(
+        self: SqlAlchemyJobRepository,
+        job: Job,
+        *,
+        expected_state: JobState,
+        require_usable_unset: bool = False,
+    ) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            # Simulate a worker claiming this job (QUEUED -> RUNNING)
+            # between confirm's initial listing and its first cancellation
+            # attempt -- the retry must invalidate it against *this* state,
+            # not the stale QUEUED one the first attempt was keyed on. Same
+            # session as confirm's own uow, so no cross-connection locking
+            # is involved.
+            self._session.execute(
+                sa_update(JobRow).where(JobRow.id == job.id).values(state=JobState.RUNNING)
+            )
+            raise JobSaveConflict(job.id, expected_state)
+        real_save(
+            self, job, expected_state=expected_state, require_usable_unset=require_usable_unset
+        )
+
+    monkeypatch.setattr(
+        SqlAlchemyJobRepository, "save", _save_conflicts_once_after_a_concurrent_claim
+    )
+
+    _analyze(client)
+    confirm_response = client.post(
+        "/tests/test-1/dependency-graph/confirm",
+        json={"version": 2, "edges": []},
+        headers=_AUTH,
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+
+    with make_uow() as uow:
+        old_job = uow.jobs.get("job-v1-queued")
+        replacements = [
+            j for j in uow.jobs.list_for_submission("sub-1") if j.dependency_graph_version == 2
+        ]
+    assert old_job is not None
+    assert old_job.state is JobState.CANCELLED  # invalidated against its real (RUNNING) state
+    assert len(replacements) == 1
+    assert replacements[0].state is JobState.QUEUED  # a replacement was still created
 
 
 def test_confirming_a_new_version_with_an_added_edge_blocks_the_new_dependent(
