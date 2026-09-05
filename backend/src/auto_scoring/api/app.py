@@ -27,6 +27,7 @@ from auto_scoring.adapters.submission_intake import (
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
+from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
@@ -150,9 +151,10 @@ def create_app(
     across every import/test run that omits ``data_root``.
 
     ``max_concurrent_uploads`` bounds how many ``create_submission`` requests
-    may be reading their upload body into memory at once; see the capacity
-    reservation there for why this has to happen before the read, not just
-    around the (already serialized) intake pipeline itself.
+    may have their upload body parsed/materialized at once; see
+    ``SubmissionUploadGateMiddleware`` for why that capacity has to be
+    reserved at the ASGI boundary, before FastAPI ever touches the body, not
+    inside the (already serialized) intake pipeline itself.
     """
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
     app.state.api_token = api_token or generate_token()
@@ -195,6 +197,18 @@ def create_app(
         max_bytes=limits.max_size_bytes + _MULTIPART_OVERHEAD_BYTES,
     )
 
+    # Bounds how many uploads may have their body parsed/materialized at
+    # once. Added *after* MaxBodySizeMiddleware above so it wraps outside of
+    # it (Starlette makes the most-recently-added middleware outermost) and
+    # so runs first: auth and capacity are checked before a single byte of
+    # the body is read, not just before the (already serialized) render/DB
+    # phase -- see submission_upload_gate.py.
+    app.add_middleware(
+        SubmissionUploadGateMiddleware,
+        api_token=app.state.api_token,
+        capacity=threading.Semaphore(max_concurrent_uploads),
+    )
+
     # PDFium is not safe to call concurrently from multiple threads of the
     # same process (pypdfium2's own multithreading guidance); this lock
     # serializes actual intake runs so offloading them to a worker thread
@@ -204,16 +218,6 @@ def create_app(
     # with nothing else interleaved -- so this isn't a throughput regression,
     # just the same serialization moved off the loop.
     intake_lock = threading.Lock()
-
-    # Bounds how many uploads may be materializing their body into memory at
-    # once. intake_lock above only serializes the render/DB phase (run in a
-    # worker thread); it does nothing about the read that happens *before*
-    # that, in the async handler itself, on the event loop. Without a
-    # separate cap there, N concurrent requests near max_size_bytes could
-    # each hold a full `bytes` object simultaneously while merely waiting
-    # their turn at intake_lock -- each request staying within its own
-    # per-file limit but the aggregate still exhausting memory.
-    intake_capacity = threading.Semaphore(max_concurrent_uploads)
 
     def _run_intake(
         *,
@@ -289,63 +293,49 @@ def create_app(
         file: UploadFile = File(...),
         student_label: str | None = Form(None, max_length=MAX_STUDENT_LABEL_LENGTH),
     ) -> SubmissionResponse:
-        # Reserved *before* reading a single byte of the upload -- see
-        # intake_capacity above. A non-blocking acquire rejects outright
-        # (503) instead of queuing: queuing here would just move the same
-        # unbounded pile-up from "requests holding a full buffer" to
-        # "requests blocked in this handler", without bounding memory any
-        # better.
-        if not intake_capacity.acquire(blocking=False):
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="too many submissions are being processed right now; try again shortly",
-            )
         try:
-            try:
-                data = await _read_upload_within_limit(file, limits.max_size_bytes)
-            except PdfTooLargeError as exc:
-                raise HTTPException(
-                    _PDF_INTAKE_ERROR_STATUS[PdfTooLargeError], detail=str(exc)
-                ) from exc
-            try:
-                # Rendering every page and running OpenCV preprocessing is
-                # synchronous, CPU-bound work that can take minutes for a large
-                # submission; running it inline here would block this whole
-                # (single-worker) event loop, so even /healthz and unrelated
-                # list/get requests would stall until intake finished. Offload it
-                # to a worker thread instead.
-                result = await to_thread(
-                    _run_intake,
-                    test_id=test_id,
-                    filename=file.filename or "",
-                    declared_mime=file.content_type,
-                    data=data,
-                    student_label=student_label,
-                    now=datetime.now(UTC).replace(tzinfo=None),
-                )
-            except PdfIntakeError as exc:
-                status_code = _PDF_INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
-                raise HTTPException(status_code, detail=str(exc)) from exc
-            except LookupError as exc:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-            except DuplicateSubmissionError as exc:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "message": str(exc),
-                        "existing_submission_id": exc.existing_submission_id,
-                    },
-                ) from exc
-            except SubmissionRetryConflictError as exc:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "message": str(exc),
-                        "submission_id": exc.submission_id,
-                    },
-                ) from exc
-        finally:
-            intake_capacity.release()
+            data = await _read_upload_within_limit(file, limits.max_size_bytes)
+        except PdfTooLargeError as exc:
+            raise HTTPException(
+                _PDF_INTAKE_ERROR_STATUS[PdfTooLargeError], detail=str(exc)
+            ) from exc
+        try:
+            # Rendering every page and running OpenCV preprocessing is
+            # synchronous, CPU-bound work that can take minutes for a large
+            # submission; running it inline here would block this whole
+            # (single-worker) event loop, so even /healthz and unrelated
+            # list/get requests would stall until intake finished. Offload it
+            # to a worker thread instead.
+            result = await to_thread(
+                _run_intake,
+                test_id=test_id,
+                filename=file.filename or "",
+                declared_mime=file.content_type,
+                data=data,
+                student_label=student_label,
+                now=datetime.now(UTC).replace(tzinfo=None),
+            )
+        except PdfIntakeError as exc:
+            status_code = _PDF_INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
+            raise HTTPException(status_code, detail=str(exc)) from exc
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except DuplicateSubmissionError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "message": str(exc),
+                    "existing_submission_id": exc.existing_submission_id,
+                },
+            ) from exc
+        except SubmissionRetryConflictError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "message": str(exc),
+                    "submission_id": exc.submission_id,
+                },
+            ) from exc
         return _submission_response(result.submission, is_retry=result.is_retry)
 
     app.include_router(protected)

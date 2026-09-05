@@ -89,6 +89,23 @@ def test_list_tests_returns_seeded_test(client: TestClient, data_root: Path) -> 
     assert response.json() == [{"id": "test-1", "name": "国語", "subject": None}]
 
 
+def test_create_submission_requires_auth(client: TestClient, data_root: Path) -> None:
+    """Rejected by SubmissionUploadGateMiddleware at the ASGI boundary
+    (api/submission_upload_gate.py), not by the `require_token` dependency
+    -- see test_submission_upload_gate.py for the unit-level proof that this
+    happens before the body is ever read.
+    """
+    _seed_test(data_root)
+    response = client.post(
+        "/tests/test-1/submissions",
+        files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+    )
+    assert response.status_code == 401
+
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        assert uow.submissions.list_for_test("test-1") == []
+
+
 def test_create_submission_happy_path(client: TestClient, data_root: Path) -> None:
     _seed_test(data_root)
     response = client.post(
