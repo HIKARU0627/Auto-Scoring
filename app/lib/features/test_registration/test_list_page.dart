@@ -32,7 +32,14 @@ class _TestListPageState extends State<TestListPage> {
 
   Future<void> _reload() async {
     final future = widget.dependencies.listTestRegistrations();
-    setState(() => _testsFuture = future);
+    // A block body, not `() => _testsFuture = future` -- an assignment
+    // expression evaluates to the assigned value, so an arrow body would
+    // hand `setState` a closure that returns the `Future` itself, which
+    // Flutter rejects at runtime ("setState() callback argument returned a
+    // Future").
+    setState(() {
+      _testsFuture = future;
+    });
     await future;
   }
 
@@ -85,14 +92,24 @@ class _TestListPageState extends State<TestListPage> {
                   ),
                   title: Text(test.name),
                   subtitle: Text(isReady ? '登録完了' : '下書き'),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => TestSettingsPage(
-                        dependencies: widget.dependencies,
-                        testId: test.id,
+                  onTap: () async {
+                    // Awaited, then followed by a reload: a draft opened
+                    // from here can reach `ready` on the settings screen,
+                    // and without this the tile would keep showing "下書き"
+                    // from the response this page fetched before the push
+                    // until the reviewer pulled to refresh manually (Issue
+                    // #16 review round 5).
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => TestSettingsPage(
+                          dependencies: widget.dependencies,
+                          testId: test.id,
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                    if (!mounted) return;
+                    await _reload();
+                  },
                 );
               },
             );

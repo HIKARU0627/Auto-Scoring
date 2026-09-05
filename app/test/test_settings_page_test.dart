@@ -225,6 +225,41 @@ void main() {
     expect(find.text('プロファイルを保存しました'), findsOneWidget);
   });
 
+  testWidgets('the region dialog rejects a non-finite coordinate', (
+    tester,
+  ) async {
+    final dependencies = AppDependencies(
+      getTest: (testId) async => _test(),
+      getProfile: (testId) async => _profile(),
+      getDependencyGraph: (testId) async => _dependencyGraph(),
+    );
+
+    await _pumpSettings(
+      tester,
+      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
+    );
+
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('region-tile-0')),
+        matching: find.byIcon(Icons.edit_outlined),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // `double.tryParse('NaN')` returns the non-null value `double.nan`, not
+    // `null` -- every range/ordering comparison against it is false, so
+    // without an explicit finiteness check this would silently pass
+    // validation (Issue #16 review round 5).
+    await tester.enterText(find.byKey(const Key('region-x0-field')), 'NaN');
+    await tester.tap(find.byKey(const Key('region-save-button')));
+    await tester.pump();
+
+    expect(find.text('座標は0〜1の範囲で、右下が左上より大きくなるように入力してください'), findsOneWidget);
+    // The dialog is still open -- the save was rejected, not accepted.
+    expect(find.byKey(const Key('region-save-button')), findsOneWidget);
+  });
+
   testWidgets(
     'analyzing the dependency graph passes each confirmed QUESTION region '
     'as a prompt-text override',

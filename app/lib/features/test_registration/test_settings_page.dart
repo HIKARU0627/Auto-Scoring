@@ -777,10 +777,19 @@ class _RegionEditDialogState extends State<_RegionEditDialog> {
       setState(() => _validationError = 'ページ番号は1以上の整数で入力してください');
       return;
     }
+    // `double.tryParse('NaN')` returns non-null `double.nan`, not `null` --
+    // every comparison below (`<`, `>`, `>=`) is false for NaN, so without
+    // this check the range/ordering tests would all silently pass and the
+    // invalid value would reach JSON serialization or the server instead of
+    // this dialog's own validation (Issue #16 review round 5).
     if (x0 == null ||
         y0 == null ||
         x1 == null ||
         y1 == null ||
+        !x0.isFinite ||
+        !y0.isFinite ||
+        !x1.isFinite ||
+        !y1.isFinite ||
         x0 < 0 ||
         y0 < 0 ||
         x1 > 1 ||
