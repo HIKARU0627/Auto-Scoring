@@ -76,6 +76,23 @@ _MAX_STALE_JOB_INVALIDATION_ATTEMPTS = 5
 _INCOMPLETE_JOB_STATES = (JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED, JobState.FAILED)
 
 
+def _still_needs_invalidation(job: Job) -> bool:
+    """Whether ``job`` -- freshly re-read after a lost invalidation CAS --
+    still needs to be invalidated, or has genuinely reached a resting state
+    (see `confirm`).
+
+    Mirrors `SqlAlchemyJobRepository.list_incomplete_for_stale_versions`'s
+    own definition of "incomplete": a FAILED job whose ``usable`` a human
+    already approved via `mark_question_usable` is, for this purpose, as
+    terminal as SUCCEEDED/CANCELLED -- invalidating it here would cancel
+    and replace a job whose already-released dependent has nothing left to
+    be released from (Issue #18 review round 6, P1).
+    """
+    if job.state not in _INCOMPLETE_JOB_STATES:
+        return False
+    return not (job.state is JobState.FAILED and job.usable is not None)
+
+
 def _now() -> datetime:
     """A naive UTC timestamp, matching how SQLite's DateTime column round-trips.
 
@@ -506,12 +523,15 @@ def build_dependency_graph_router(
                         current, new_version=confirmed.version, new_id=str(uuid4()), at=_now()
                     )
                     try:
-                        uow.jobs.save(cancelled, expected_state=current.state)
+                        uow.jobs.save(
+                            cancelled, expected_state=current.state, require_usable_unset=True
+                        )
                     except JobSaveConflict:
                         refreshed = uow.jobs.get(current.id)
-                        if refreshed is None or refreshed.state not in _INCOMPLETE_JOB_STATES:
-                            # Genuinely finished (or vanished) for real in
-                            # the meantime -- nothing left to invalidate.
+                        if refreshed is None or not _still_needs_invalidation(refreshed):
+                            # Genuinely finished (or vanished) for real, or
+                            # a human approved it in the meantime -- nothing
+                            # left to invalidate.
                             break
                         current = refreshed
                         continue

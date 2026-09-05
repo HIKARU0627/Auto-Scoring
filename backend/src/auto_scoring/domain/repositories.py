@@ -222,11 +222,19 @@ class JobRepository(Protocol):
         ...
 
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
-        """Jobs for ``test_id`` still QUEUED/RUNNING/BLOCKED against a
-        `dependency_graph_version` other than ``current_version`` (Issue #26:
-        superseded-graph job invalidation). Jobs never tagged with a graph
-        version (``dependency_graph_version is None``) are not "stale" by
-        this definition and are excluded.
+        """Jobs for ``test_id`` still QUEUED/RUNNING/BLOCKED, or FAILED with
+        ``usable`` unset, against a `dependency_graph_version` other than
+        ``current_version`` (Issue #26: superseded-graph job invalidation).
+        Jobs never tagged with a graph version (``dependency_graph_version
+        is None``) are not "stale" by this definition and are excluded.
+
+        A FAILED job counts as incomplete because FAILED -> QUEUED is a
+        valid retry transition -- left unlisted, it could still be retried
+        later and run against the superseded version. A FAILED job whose
+        ``usable`` a human already set via `mark_usable` is the exception:
+        that approval already released (or will release) a dependent, and
+        invalidating it here would silently clear the approval out from
+        under that dependent (Issue #18 review round 6, P1).
         """
         ...
 
