@@ -416,15 +416,23 @@ class JobQueueService:
                 # so letting this propagate out of the loop would shrink the
                 # pool by one permanently; at max_concurrency=1 that stops
                 # every future job until the next process restart (review
-                # round 7, P1). The job this iteration was processing may be
-                # left RUNNING with nothing tracking it -- `start`'s own
-                # RUNNING sweep recovers it on the next restart the same way
-                # it recovers a job orphaned by an actual process kill. Log
-                # and move on to the next queued item instead of dying.
+                # round 7, P1). Log and move on to the next queued item
+                # instead of dying.
                 logger.exception(
                     "worker failed to process a job; continuing",
                     extra={"job_id": job_id},
                 )
+                # This worker already dequeued job_id -- that in-memory
+                # dispatch signal is gone regardless of whether the failure
+                # happened before or after _run_one's own claim (QUEUED ->
+                # RUNNING) CAS committed. If it was *before* the row is
+                # still QUEUED with nothing left to ever re-signal it short
+                # of a full process restart's `start()` sweep (review round
+                # 8, P1). Restoring the signal unconditionally costs nothing
+                # if the claim actually did succeed before the failure --
+                # the next `_run_one(job_id)` simply finds it no longer
+                # QUEUED and no-ops immediately.
+                self.enqueue(job_id)
 
     def enqueue(self, job_id: str) -> None:
         """Push an already-QUEUED job's id onto the in-memory queue.
