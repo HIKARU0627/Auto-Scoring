@@ -15,6 +15,7 @@ import 'package:auto_scoring_api/src/date_serializer.dart';
 import 'package:auto_scoring_api/src/model/date.dart';
 
 import 'package:auto_scoring_api/src/model/analyze_request.dart';
+import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
@@ -22,7 +23,9 @@ import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
+import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
+import 'package:auto_scoring_api/src/model/recognition_response.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
 import 'package:auto_scoring_api/src/model/submission_response.dart';
@@ -34,6 +37,7 @@ part 'serializers.g.dart';
 
 @SerializersFor([
   AnalyzeRequest,
+  BoundingBoxResponse,
   ConfirmRequest,
   DependencyEdgeModel,
   DependencyGraphResponse,
@@ -41,7 +45,9 @@ part 'serializers.g.dart';
   HTTPValidationError,
   JobResponse,
   LocationInner,
+  ManualRecognitionRequest,
   QuestionTextOverride,
+  RecognitionResponse,
   ScoreRequest,
   ScoreResponse,
   SubmissionResponse,
@@ -53,6 +59,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltMap, [FullType(String), FullType(String)]),
         () => MapBuilder<String, String>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(BoundingBoxResponse)]),
+        () => ListBuilder<BoundingBoxResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyGraphResponse)]),
@@ -69,6 +79,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(TestSummary)]),
         () => ListBuilder<TestSummary>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(RecognitionResponse)]),
+        () => ListBuilder<RecognitionResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyEdgeModel)]),

@@ -29,6 +29,11 @@ RecognitionResult/GradeResultを永続化する具象実装は後続Issueで追�
 Protocolを実装するだけでよい。テストは`tests/fakes.py`の`FakeJobProcessor`
 （結果をスクリプト可能）を注入する。
 
+Issue #19が`auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`
+としてOCR認識半分を実装し、`create_app`の既定`job_processor`を
+`NullJobProcessor`からこれへ置き換えた（`docs/ocr-recognition-pipeline.md`）。
+採点（`AIProvider`）半分は引き続き後続Issueの対象。
+
 ### Submission内DAGスケジューリングの単位: 1 Question = 1 Job（`JobKind.GRADING`）
 
 Issue #26の確定DAGはQuestion単位の依存を表す。本Issueもこれに合わせ、

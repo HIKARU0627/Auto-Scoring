@@ -318,6 +318,13 @@ samples: 4
 昇格しないもの: 不採用候補のアダプタ、`poc/` 配下のハーネス、合成フィクスチャ。
 不採用アダプタは削除する。
 
+Issue #19（`docs/ocr-recognition-pipeline.md`）は、実アダプタの採用・実測が
+未実施のまま（§0.1・§9.3は依然未確定）、本番パイプライン（`JobProcessor`実装・
+永続化・Confidence運用・手動入力API）を`OCRProvider`ダミー実装
+（`NullOCRProvider`）の上に構築した。実アダプタの追加はここでの決定を変えない
+——採用OCRが決まり次第、そのアダプタを`OCRProviderContract`のサブクラスとして
+追加し、`create_app(ocr_provider=...)`で差し替えるだけでよい。
+
 ---
 
 ## 12. コミット禁止（決定書 §6.7 / §7.1 再掲）

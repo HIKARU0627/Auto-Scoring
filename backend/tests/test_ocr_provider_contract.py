@@ -9,6 +9,7 @@ must never move into ``src/`` (Issue #13 promotion condition).
 
 import pytest
 
+from auto_scoring.adapters.ocr.null_provider import NullOCRProvider
 from auto_scoring.domain.ocr import (
     BoundingBox,
     ConfidenceBand,
@@ -95,3 +96,17 @@ class TestStubOCRProviderContract(OCRProviderContract):
     @pytest.fixture
     def unreadable_image(self) -> bytes:
         return b"unreadable"
+
+
+class TestNullOCRProviderContract(OCRProviderContract):
+    """`NullOCRProvider` (Issue #19) is the real, shipped placeholder
+    adapter until business-rules-and-evaluation-data.md section 3 (A) is
+    decided -- it must satisfy the same contract as any real candidate."""
+
+    @pytest.fixture
+    def provider(self) -> NullOCRProvider:
+        return NullOCRProvider()
+
+    @pytest.fixture
+    def unreadable_image(self) -> bytes:
+        return b"anything -- NullOCRProvider never reads the image"

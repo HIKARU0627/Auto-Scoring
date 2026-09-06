@@ -22,6 +22,7 @@ Design decisions this module encodes (sources in `docs/`):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -51,6 +52,15 @@ MAX_ORIGINAL_FILENAME_LENGTH = 255
 #: Upper bound for a single annotation comment, in characters
 #: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
 MAX_COMMENT_CHARS = 120
+
+#: Same reasoning as ``MAX_STUDENT_LABEL_LENGTH``: a human's manual-entry
+#: recognition text (Issue #19, ``POST .../recognitions``) is the other new
+#: free-text field a client posting directly to the API could otherwise pack
+#: without bound -- stored verbatim, returned on every history read.
+#: ``migrations/versions/0010_recognition_text_length.py`` mirrors this as a
+#: DB CHECK constraint. Generous relative to any real answer-area transcript,
+#: which is what an actual OCR provider's own text is bounded by in practice.
+MAX_RECOGNIZED_TEXT_LENGTH = 10_000
 
 
 # --------------------------------------------------------------------------- #
@@ -516,6 +526,10 @@ class RecognitionResult:
         _require_non_empty("RecognitionResult.submission_id", self.submission_id)
         _require_non_empty("RecognitionResult.question_id", self.question_id)
         _require_confidence("RecognitionResult.confidence", self.confidence)
+        if len(self.text) > MAX_RECOGNIZED_TEXT_LENGTH:
+            raise DomainError(
+                f"RecognitionResult.text must be at most {MAX_RECOGNIZED_TEXT_LENGTH} characters"
+            )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -716,6 +730,21 @@ class Job:
             usable=usable if target is JobState.SUCCEEDED else None,
             updated_at=updated_at,
         )
+
+
+def find_answer_image(images: Sequence[AnswerImage], question_id: str) -> AnswerImage | None:
+    """Pick ``question_id``'s row out of one submission's `AnswerImage` list.
+
+    `AnswerImageRepository` keeps at most one row per ``(submission_id,
+    question_id)`` at a time (`replace_for_submission` deletes the old set
+    before inserting a retry's new one), so this is normally just a filter;
+    the ``created_at`` tie-break only guards against reading between that
+    delete and insert.
+    """
+    matches = [image for image in images if image.question_id == question_id]
+    if not matches:
+        return None
+    return max(matches, key=lambda image: image.created_at)
 
 
 def reissue_job_for_graph_version(

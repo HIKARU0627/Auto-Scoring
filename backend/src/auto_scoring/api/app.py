@@ -21,6 +21,7 @@ from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
 from auto_scoring.adapters.local_storage import LocalFileStore
+from auto_scoring.adapters.ocr.null_provider import NullOCRProvider
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
@@ -34,12 +35,14 @@ from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
 from auto_scoring.api.jobs_router import build_jobs_router
+from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
 from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission
+from auto_scoring.domain.ocr import OCRProvider
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
@@ -49,8 +52,9 @@ from auto_scoring.domain.pdf_intake import (
 )
 from auto_scoring.domain.scoring import clamp_score
 from auto_scoring.jobs.clock import Clock
-from auto_scoring.jobs.null_processor import NullJobProcessor
 from auto_scoring.jobs.queue import JobQueueService
+from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor
+from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from auto_scoring.jobs.settings import QueueSettings
 
 _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
@@ -147,6 +151,8 @@ def create_app(
     job_processor: JobProcessor | None = None,
     queue_settings: QueueSettings | None = None,
     clock: Clock | None = None,
+    ocr_provider: OCRProvider | None = None,
+    recognition_settings: RecognitionSettings | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -189,13 +195,22 @@ def create_app(
 
     ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
     parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
-    ``job_processor`` defaults to `auto_scoring.jobs.null_processor.
-    NullJobProcessor` (OCR/AI processing is a later issue's job); tests
+    ``job_processor`` defaults to `auto_scoring.jobs.recognition_processor.
+    RecognitionJobProcessor` (Issue #19 -- the recognition half of each
+    per-question job; AI grading is still a later issue's job, so a job this
+    default completes reports its outcome from recognition alone). Tests
     inject a fake (``tests/fakes.py``). The queue's worker pool only actually
     starts/stops via the FastAPI lifespan below, so a `TestClient` used
     without ``with`` (several existing tests do this, same as the temp-dir
     cleanup above) never runs it -- see ``app.state.queue_service`` for tests
     that need to drive it directly instead.
+
+    ``ocr_provider``/``recognition_settings`` configure that default
+    processor. ``ocr_provider`` defaults to `auto_scoring.adapters.ocr.
+    null_provider.NullOCRProvider` -- the OCR service to use is not yet
+    decided (business-rules-and-evaluation-data.md section 3 (A)); a real
+    adapter is a future issue's job, passed here once one exists. Both are
+    ignored when ``job_processor`` is supplied directly.
     """
     queue_service_holder: dict[str, JobQueueService] = {}
     lock_handle_holder: dict[str, IO[bytes]] = {}
@@ -275,9 +290,16 @@ def create_app(
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
     app.state.api_token = api_token or generate_token()
 
+    default_job_processor = RecognitionJobProcessor(
+        session_factory,
+        store,
+        ocr_provider or NullOCRProvider(),
+        settings=recognition_settings,
+        clock=clock,
+    )
     queue_service = JobQueueService(
         session_factory,
-        job_processor or NullJobProcessor(),
+        job_processor or default_job_processor,
         settings=queue_settings,
         clock=clock,
     )
@@ -480,6 +502,7 @@ def create_app(
         )
     )
     protected.include_router(build_jobs_router(queue_service))
+    protected.include_router(build_recognitions_router(session_factory, store, queue_service))
 
     app.include_router(protected)
     return app

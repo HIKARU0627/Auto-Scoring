@@ -6,8 +6,14 @@ from auto_scoring.domain.ocr import (
     BoundingBox,
     ConfidenceBand,
     OCRProvider,
+    OCRProviderError,
+    OCRRateLimitedError,
+    OCRResponseSchemaError,
     OcrResult,
+    OCRServerError,
+    OCRTimeoutError,
     OcrToken,
+    overall_confidence,
 )
 
 
@@ -79,6 +85,23 @@ def test_ocr_result_from_mapping_round_trips() -> None:
     assert result.provider == "recorded-fixture"
     assert result.tokens[0].band is ConfidenceBand.HIGH
     assert result.tokens[0].bounding_box.width == pytest.approx(0.2)
+
+
+def test_overall_confidence_is_the_minimum_token_confidence() -> None:
+    high = OcrToken("a", BoundingBox(0.0, 0.0, 0.1, 0.1), 0.9, ConfidenceBand.HIGH)
+    low = OcrToken("?", BoundingBox(0.2, 0.2, 0.1, 0.1), 0.2, ConfidenceBand.LOW)
+    assert overall_confidence(OcrResult(text="a?", tokens=(high, low))) == pytest.approx(0.2)
+
+
+def test_overall_confidence_is_zero_with_no_tokens() -> None:
+    assert overall_confidence(OcrResult(text="")) == 0.0
+
+
+@pytest.mark.parametrize(
+    "error_type", [OCRTimeoutError, OCRRateLimitedError, OCRServerError, OCRResponseSchemaError]
+)
+def test_ocr_provider_errors_are_ocr_provider_error(error_type: type[OCRProviderError]) -> None:
+    assert issubclass(error_type, OCRProviderError)
 
 
 def test_runtime_checkable_accepts_minimal_implementation() -> None:

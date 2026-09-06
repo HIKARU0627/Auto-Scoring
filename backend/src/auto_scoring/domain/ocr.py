@@ -145,9 +145,64 @@ class OCRProvider(Protocol):
     Implementations must never receive student-identifying data, and must not log
     request or response bodies (Issue #13; business-rules-and-evaluation-data.md
     section 2 (2)).
+
+    ``recognize`` returns an :class:`OcrResult` for anything the provider was
+    able to answer at all, including a low-confidence/unreadable one (see
+    :class:`OcrToken`'s docstring) -- that is not a failure. Raise one of the
+    exceptions below only when the provider could not produce a result at all
+    (Issue #19: timeout / rate limit / malformed response / any other
+    provider-side error), so callers such as
+    ``auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`` can
+    classify the failure for retry purposes
+    (``auto_scoring.domain.models.ErrorCategory``).
     """
 
     @property
     def name(self) -> str: ...
 
     def recognize(self, image: bytes, *, language: str = "ja") -> OcrResult: ...
+
+
+class OCRProviderError(Exception):
+    """Base class for a provider call that produced no :class:`OcrResult` at all.
+
+    Distinct from a low-confidence/unreadable *result* (still a successful
+    call, see :class:`OcrToken`) -- these mean the call itself did not
+    complete. Adapters must not include request/response bodies or answer
+    text in the message (AGENTS.md "Security"); callers must not either when
+    turning this into a persisted `Job.last_error` (Issue #19).
+    """
+
+
+class OCRTimeoutError(OCRProviderError):
+    """The provider did not respond within its configured timeout."""
+
+
+class OCRRateLimitedError(OCRProviderError):
+    """The provider rejected the call for exceeding a rate limit/quota."""
+
+
+class OCRServerError(OCRProviderError):
+    """The provider reported a transient server-side failure (5xx or similar)."""
+
+
+class OCRResponseSchemaError(OCRProviderError):
+    """The provider's response could not be parsed into an :class:`OcrResult`."""
+
+
+def overall_confidence(result: OcrResult) -> float:
+    """One scalar confidence for ``result``, for `RecognitionResult.confidence`
+    and the needs-review threshold check (business-rules-and-evaluation-
+    data.md section 3 (C)).
+
+    The minimum of every token's confidence, not an average: one unreadable
+    span must be enough to flag the whole question for review even if every
+    other span was read cleanly (Issue #19 acceptance: "決定済みConfidence
+    閾値未満はneeds_reviewとし自動確定しない" -- an average could hide exactly
+    the low-confidence span this rule exists to catch). ``0.0`` when nothing
+    was recognized at all (no tokens), matching
+    ``auto_scoring.domain.ocr_metrics.evaluate_sample``'s own "failed" case.
+    """
+    if not result.tokens:
+        return 0.0
+    return min(token.confidence for token in result.tokens)

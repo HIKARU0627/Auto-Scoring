@@ -83,11 +83,15 @@ Class | Method | HTTP request | Description
 [*JobsApi*](doc/JobsApi.md) | [**listSubmissionJobsSubmissionsSubmissionIdJobsGet**](doc/JobsApi.md#listsubmissionjobssubmissionssubmissionidjobsget) | **GET** /submissions/{submission_id}/jobs | List Submission Jobs
 [*JobsApi*](doc/JobsApi.md) | [**resumeQuestionSubmissionsSubmissionIdQuestionsQuestionIdResumePost**](doc/JobsApi.md#resumequestionsubmissionssubmissionidquestionsquestionidresumepost) | **POST** /submissions/{submission_id}/questions/{question_id}/resume | Resume Question
 [*JobsApi*](doc/JobsApi.md) | [**retryJobJobsJobIdRetryPost**](doc/JobsApi.md#retryjobjobsjobidretrypost) | **POST** /jobs/{job_id}/retry | Retry Job
+[*RecognitionsApi*](doc/RecognitionsApi.md) | [**createManualRecognitionSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsPost**](doc/RecognitionsApi.md#createmanualrecognitionsubmissionssubmissionidquestionsquestionidrecognitionspost) | **POST** /submissions/{submission_id}/questions/{question_id}/recognitions | Create Manual Recognition
+[*RecognitionsApi*](doc/RecognitionsApi.md) | [**getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet**](doc/RecognitionsApi.md#getanswerimagesubmissionssubmissionidquestionsquestionidanswerimageget) | **GET** /submissions/{submission_id}/questions/{question_id}/answer-image | Get Answer Image
+[*RecognitionsApi*](doc/RecognitionsApi.md) | [**listRecognitionsSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsGet**](doc/RecognitionsApi.md#listrecognitionssubmissionssubmissionidquestionsquestionidrecognitionsget) | **GET** /submissions/{submission_id}/questions/{question_id}/recognitions | List Recognitions
 
 
 ## Documentation For Models
 
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
+ - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
@@ -95,7 +99,9 @@ Class | Method | HTTP request | Description
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)
+ - [ManualRecognitionRequest](doc/ManualRecognitionRequest.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
+ - [RecognitionResponse](doc/RecognitionResponse.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
