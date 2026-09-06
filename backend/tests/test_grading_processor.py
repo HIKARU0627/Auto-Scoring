@@ -33,15 +33,21 @@ from auto_scoring.domain.job_scheduling import plan_submission_jobs
 from auto_scoring.domain.models import (
     AnnotationKind,
     AnswerImageStatus,
+    CriterionOutcome,
     ErrorCategory,
     GradingSource,
     JobKind,
     RubricCriterion,
 )
 from auto_scoring.domain.ocr import BoundingBox, ConfidenceBand, OcrResult, OcrToken
-from auto_scoring.jobs.grading_processor import GradingJobProcessor, grade_result_id
+from auto_scoring.jobs.grading_processor import (
+    GradingJobProcessor,
+    grade_result_id,
+    grading_recognition_id,
+)
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor
+from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from tests.support import (
     at,
     make_answer_image,
@@ -116,6 +122,20 @@ class _ScriptedAIProvider:
         return self._next
 
 
+#: Matches `tests.support.make_rubric()`'s default criteria ids -- the
+#: mismatch check (Issue #20 review, P1) requires a response's criteria to
+#: correspond exactly to the registered rubric, so every test that grades
+#: against the default rubric needs a response carrying these same ids.
+_DEFAULT_RUBRIC_CRITERIA = (
+    GradingCriterionOutcome(
+        criterion_id="c-1", outcome=CriterionOutcome.PASS, confidence=0.9, rationale="根拠1"
+    ),
+    GradingCriterionOutcome(
+        criterion_id="c-2", outcome=CriterionOutcome.PASS, confidence=0.9, rationale="根拠2"
+    ),
+)
+
+
 def _response(
     *,
     question_id: str = "q-1",
@@ -123,7 +143,7 @@ def _response(
     score: int = 4,
     grading_confidence: float = 0.9,
     recognition_confidence: float = 0.95,
-    criteria: tuple[GradingCriterionOutcome, ...] = (),
+    criteria: tuple[GradingCriterionOutcome, ...] = _DEFAULT_RUBRIC_CRITERIA,
     annotations: tuple[GradingAnnotationCandidate, ...] = (),
 ) -> GradingResponse:
     return GradingResponse(
@@ -532,6 +552,188 @@ async def test_confidence_threshold_is_configurable(
     assert result.usable is False  # 0.9 < the configured 0.99 threshold
 
 
+async def test_recognition_confidence_is_gated_by_the_recognition_threshold_not_grading(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ocr_provider: _ScriptedOCRProvider,
+    ai_provider: _ScriptedAIProvider,
+) -> None:
+    """Issue #20 review, P1: recognition confidence must never be compared
+    against `GradingSettings`'s threshold. A recognition confidence that
+    clears a lenient grading threshold but not the (separately configured,
+    stricter) recognition threshold must still be unusable.
+    """
+    _seed(session_factory, store)
+    ocr_provider.script(text="やや不鮮明な答案", confidence=0.7)
+    recognition = RecognitionJobProcessor(
+        session_factory, store, ocr_provider, settings=RecognitionSettings(confidence_threshold=0.9)
+    )
+    processor = GradingJobProcessor(
+        session_factory,
+        store,
+        recognition,
+        ai_provider,
+        grading_settings=GradingSettings(confidence_threshold=0.5),
+    )
+    ai_provider.script(_response(grading_confidence=0.95, recognition_confidence=0.95))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    # 0.7 clears the 0.5 grading threshold but not the 0.9 recognition
+    # threshold -- the old bug compared 0.7 against 0.5 and returned usable.
+    assert result.usable is False
+
+
+async def test_reprocessing_after_a_crash_reuses_the_persisted_recognition_threshold_check(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ocr_provider: _ScriptedOCRProvider,
+    ai_provider: _ScriptedAIProvider,
+) -> None:
+    """The idempotent-replay branch (an existing `GradeResult` already
+    persisted) must apply the same recognition-vs-grading threshold
+    separation as the first-attempt branch (Issue #20 review, P1)."""
+    _seed(session_factory, store)
+    ocr_provider.script(text="やや不鮮明な答案", confidence=0.7)
+    recognition = RecognitionJobProcessor(
+        session_factory, store, ocr_provider, settings=RecognitionSettings(confidence_threshold=0.9)
+    )
+    processor = GradingJobProcessor(
+        session_factory,
+        store,
+        recognition,
+        ai_provider,
+        grading_settings=GradingSettings(confidence_threshold=0.5),
+    )
+    ai_provider.script(_response(grading_confidence=0.95, recognition_confidence=0.95))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    first = await processor.process(job)
+    second = await processor.process(job)
+
+    assert first.usable is False
+    assert second.outcome is ProcessingOutcome.SUCCEEDED
+    assert second.usable is False
+    assert len(ai_provider.calls) == 1  # replay must not call the provider again
+
+
+async def test_the_graders_own_corrected_recognition_is_persisted_and_gates_usable(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #20 review, P1: a multimodal provider may correct the OCR
+    reading it was given (`AIProviderContract` explicitly allows this). That
+    corrected text/confidence must be persisted (not discarded) and must
+    gate `usable` -- a low grader-reported recognition confidence must not
+    be masked by a high original OCR confidence.
+    """
+    _seed(session_factory, store)  # OCR confidence is 0.96 (high)
+    ai_provider.script(
+        _response(recognition_confidence=0.2)  # the grader itself is unsure
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is False  # grader's own low recognition confidence gates it
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        grading_recognition = uow.recognitions.get(grading_recognition_id(job))
+    assert grading_recognition is not None
+    assert grading_recognition.text == "模範的な解答"  # the grader's corrected reading
+    assert grading_recognition.confidence == pytest.approx(0.2)
+    assert grading_recognition.source is GradingSource.AI
+
+
+async def test_rubric_text_includes_criterion_ids_and_scoring_method(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #20 review, P1: the provider must receive each criterion's
+    registered id (to map its response back onto the rubric) and the
+    question's scoring method (additive vs. subtractive)."""
+    _seed(session_factory, store)
+    ai_provider.script(_response())
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    await processor.process(job)
+
+    rubric_text = ai_provider.calls[0].rubric_text
+    assert "id=c-1" in rubric_text
+    assert "id=c-2" in rubric_text
+    assert "加算方式" in rubric_text  # tests.support.make_question() defaults to ADDITIVE
+
+
+async def test_response_with_an_unknown_criterion_id_is_rejected_before_persisting(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #20 review, P1: a schema-valid response whose criteria do not
+    correspond to the registered rubric (an unknown id here) must be
+    rejected before persisting, not saved as a usable candidate."""
+    _seed(session_factory, store)
+    ai_provider.script(
+        _response(
+            criteria=(
+                GradingCriterionOutcome(
+                    criterion_id="not-a-registered-criterion",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠",
+                ),
+            )
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_category is ErrorCategory.PERMANENT
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_response_omitting_a_registered_criterion_is_rejected_before_persisting(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #20 review, P1: a response that silently omits one of the
+    rubric's registered criteria (here: only c-1, never addressing c-2) is
+    rejected the same way as an unknown id -- an incomplete rubric mapping
+    must not be saved as a usable candidate."""
+    _seed(session_factory, store)
+    ai_provider.script(
+        _response(
+            criteria=(
+                GradingCriterionOutcome(
+                    criterion_id="c-1",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠1",
+                ),
+            )
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_category is ErrorCategory.PERMANENT
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
 async def test_prerequisite_context_is_built_from_the_completed_prerequisite(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
@@ -585,7 +787,27 @@ async def test_prerequisite_context_is_built_from_the_completed_prerequisite(
     assert prerequisite_result.usable is True
 
     # Now grade the dependent (q-2); its request must carry q-1's context.
-    ai_provider.script(_response(question_id="q-2"))
+    # rubric-2 registers c-3/c-4 (not the default c-1/c-2), so the response
+    # must address those exact criterion ids.
+    ai_provider.script(
+        _response(
+            question_id="q-2",
+            criteria=(
+                GradingCriterionOutcome(
+                    criterion_id="c-3",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠3",
+                ),
+                GradingCriterionOutcome(
+                    criterion_id="c-4",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠4",
+                ),
+            ),
+        )
+    )
     dependent_job = make_job(id="job-q2", kind=JobKind.GRADING, question_id="q-2")
     dependent_result = await processor.process(dependent_job)
 
@@ -594,7 +816,11 @@ async def test_prerequisite_context_is_built_from_the_completed_prerequisite(
     assert len(dependent_request.prerequisite_context) == 1
     prerequisite_answer = dependent_request.prerequisite_context[0]
     assert prerequisite_answer.question_id == "q-1"
-    assert prerequisite_answer.recognized_text == "光合成について説明する。"
+    # The grader's own (possibly corrected) reading of q-1 -- persisted as a
+    # second, more recent AI RecognitionResult (Issue #20 review, P1) -- is
+    # what q-1 was actually graded against, so it is what a dependent's
+    # context carries forward, not the original (pre-grading) OCR text.
+    assert prerequisite_answer.recognized_text == "模範的な解答"
     assert prerequisite_answer.score == 4
     assert prerequisite_answer.max_score == 5
 

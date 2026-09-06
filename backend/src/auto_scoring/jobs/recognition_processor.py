@@ -151,6 +151,21 @@ class RecognitionJobProcessor:
         self._settings = settings or RecognitionSettings()
         self._clock = clock or SystemClock()
 
+    @property
+    def confidence_threshold(self) -> float:
+        """The Recognition Confidence threshold this instance gates on.
+
+        Public so `auto_scoring.jobs.grading_processor.GradingJobProcessor`
+        (which composes this processor for the recognition half of a job)
+        can gate its own additional recognition-confidence checks -- e.g.
+        the AI grader's own corrected reading -- against the exact same,
+        single-sourced threshold, instead of a second, independently
+        configured value that could silently drift from this one (Issue #20
+        review: recognition confidence must never be compared against a
+        grading threshold or a differently-configured recognition threshold).
+        """
+        return self._settings.confidence_threshold
+
     async def process(self, job: Job) -> ProcessingResult:
         question_id = job.question_id
         if question_id is None:

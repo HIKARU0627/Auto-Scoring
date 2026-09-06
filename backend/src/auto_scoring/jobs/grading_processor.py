@@ -46,7 +46,10 @@ from auto_scoring.domain.models import (
     GradeResult,
     GradingSource,
     Job,
+    RecognitionResult,
+    RubricCriterion,
     Score,
+    ScoringMethod,
     find_answer_image,
 )
 from auto_scoring.jobs.clock import Clock, SystemClock
@@ -62,6 +65,20 @@ def grade_result_id(job: Job) -> str:
     proposal).
     """
     return f"grade:{job.id}"
+
+
+def grading_recognition_id(job: Job) -> str:
+    """Deterministic id for the `RecognitionResult` that records the AI
+    grader's *own* reading of the answer (Issue #20 review, P1): a
+    multimodal `AIProvider` may correct the OCR text it was given
+    (`AIProviderContract` explicitly allows this), and that corrected
+    reading -- with its own, possibly lower, confidence -- must not be
+    silently discarded. Distinct from `recognition_result_id(job)` (the OCR
+    pipeline's own reading, Issue #19) so both are visible side by side in
+    review history, matching simplified-design-specification.md section
+    16.5's "AI認識文字" review-UI field.
+    """
+    return f"grading-recognition:{job.id}"
 
 
 def _latest_preferring_human[T](results: Sequence[tuple[GradingSource, T]]) -> T | None:
@@ -86,11 +103,17 @@ class GradingJobProcessor:
     question's answer, persisting a `GradeResult` (source=AI, always -- Issue
     #20 acceptance: never auto-confirm) and any AI-proposed annotations.
 
-    ``usable`` on a `ProcessingResult.SUCCEEDED` outcome requires **both**
-    Recognition Confidence and Grading Confidence at/above their respective
-    thresholds (Issue #20 acceptance: "Recognition ConfidenceとGrading
-    Confidenceのどちらかが閾値未満ならneeds_reviewにする") -- a dependent
-    question stays `BLOCKED` unless both hold.
+    ``usable`` on a `ProcessingResult.SUCCEEDED` outcome requires **all
+    three** of: the OCR pipeline's own Recognition Confidence
+    (`recognition_outcome.usable`, at `RecognitionJobProcessor`'s
+    threshold), the AI grader's *own* Recognition Confidence in whatever
+    text it actually graded (`response.recognition_confidence`, at the same
+    threshold -- a multimodal provider may correct the OCR reading, and its
+    confidence in that corrected reading must gate too, not just the OCR
+    pipeline's), and Grading Confidence (at `GradingSettings`'s own,
+    separate threshold) -- Issue #20 acceptance: "Recognition Confidenceと
+    Grading Confidenceのどちらかが閾値未満ならneeds_reviewにする". A
+    dependent question stays `BLOCKED` unless all three hold.
 
     Grading is skipped -- without ever calling `AIProvider` -- when there is
     nothing to grade: no answer text at all (the recognition step itself
@@ -137,10 +160,16 @@ class GradingJobProcessor:
 
             existing_grade = uow.grades.get(grade_result_id(job))
             if existing_grade is not None:
+                # Persisted atomically with existing_grade (same commit,
+                # below) on the successful attempt that produced it.
+                existing_grading_recognition = uow.recognitions.get(grading_recognition_id(job))
+                assert existing_grading_recognition is not None
                 return ProcessingResult(
                     outcome=ProcessingOutcome.SUCCEEDED,
                     usable=(
-                        recognition.confidence >= self._settings.confidence_threshold
+                        recognition_outcome.usable
+                        and existing_grading_recognition.confidence
+                        >= self._recognition.confidence_threshold
                         and existing_grade.confidence >= self._settings.confidence_threshold
                     ),
                 )
@@ -207,7 +236,7 @@ class GradingJobProcessor:
             image = find_answer_image(images, question_id)
             assert image is not None  # the recognition step above already required this
             image_bytes = self._store.read_bytes(Path(image.image_path))
-            rubric_text = "、".join(f"{c.description}({c.max_points}点)" for c in rubric.criteria)
+            rubric_text = _rubric_text_for(question.scoring_method, rubric.criteria)
 
         request = GradingRequest(
             question_id=question_id,
@@ -236,11 +265,21 @@ class GradingJobProcessor:
         except ProviderUnavailable:
             return self._failed(ErrorCategory.PERMANENT, "call failed")
 
-        if response.question_id != question_id or response.max_score != question.points:
-            # A schema-valid response for the wrong question -- never scored
-            # as if it were a real grade (mirrors
+        rubric_criterion_ids = {c.id for c in rubric.criteria}
+        response_criterion_ids = {c.criterion_id for c in response.criteria}
+        if (
+            response.question_id != question_id
+            or response.max_score != question.points
+            or response_criterion_ids != rubric_criterion_ids
+        ):
+            # A schema-valid response for the wrong question, or one whose
+            # criteria don't correspond 1:1 to the registered rubric (an
+            # unknown criterion id, or a registered one silently omitted) --
+            # never scored as if it were a real grade (mirrors
             # `ai_grading_metrics.evaluate_sample`'s "mismatched" handling in
-            # the PoC 2 harness this pipeline adopted).
+            # the PoC 2 harness this pipeline adopted; extended per Issue #20
+            # review to also cover criteria that don't map onto the rubric,
+            # not just question_id/max_score).
             return self._failed(ErrorCategory.PERMANENT, "returned a mismatched response")
 
         now = self._clock.now()
@@ -266,8 +305,24 @@ class GradingJobProcessor:
             context=context_entries,
             created_at=now,
         )
+        # The grader's own recognition reading (Issue #20 review, P1): a
+        # multimodal provider may have corrected the OCR text it was given,
+        # and its own confidence in that reading -- not just the OCR
+        # pipeline's -- must gate `usable` and be visible in review history,
+        # never silently dropped in favor of only the pre-existing OCR
+        # RecognitionResult.
+        grading_recognition = RecognitionResult(
+            id=grading_recognition_id(job),
+            submission_id=job.submission_id,
+            question_id=question_id,
+            source=GradingSource.AI,
+            text=response.recognition_text,
+            confidence=response.recognition_confidence,
+            created_at=now,
+        )
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             uow.grades.add(grade)
+            uow.recognitions.add(grading_recognition)
             for candidate in response.annotations:
                 uow.annotations.add(
                     Annotation(
@@ -286,7 +341,8 @@ class GradingJobProcessor:
         return ProcessingResult(
             outcome=ProcessingOutcome.SUCCEEDED,
             usable=(
-                recognition.confidence >= self._settings.confidence_threshold
+                recognition_outcome.usable
+                and response.recognition_confidence >= self._recognition.confidence_threshold
                 and response.grading_confidence >= self._settings.confidence_threshold
             ),
         )
@@ -301,6 +357,26 @@ class GradingJobProcessor:
             error_category=category,
             error_message=f"{self._ai_provider.name} AI provider {reason}",
         )
+
+
+_SCORING_METHOD_LABEL = {
+    ScoringMethod.ADDITIVE: "加算方式(各criterionの得点を合計して満点内に収める)",
+    ScoringMethod.SUBTRACTIVE: "減点方式(満点から各criterionの減点を差し引く)",
+}
+
+
+def _rubric_text_for(scoring_method: ScoringMethod, criteria: Sequence[RubricCriterion]) -> str:
+    """Rubric text sent to the provider (Issue #20 review, P1): must carry
+    every criterion's registered ``id`` (not just its description/points) so
+    a real provider's response can be mapped back onto the rubric
+    unambiguously, and the question's `scoring_method` so it knows whether to
+    grade additively or apply `SUBTRACTIVE` deductions -- omitting either
+    left a real provider unable to reliably reproduce the registered rubric
+    from the description text alone.
+    """
+    lines = [f"採点方式: {_SCORING_METHOD_LABEL[scoring_method]}"]
+    lines.extend(f"- id={c.id}: {c.description}(配点{c.max_points}点)" for c in criteria)
+    return "\n".join(lines)
 
 
 def _prompt_text_for(question_number: str) -> str:

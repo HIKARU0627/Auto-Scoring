@@ -559,7 +559,7 @@ def create_app(
             pdfium_lock=intake_lock,
         )
     )
-    protected.include_router(build_recognitions_router(session_factory, store, queue_service))
+    protected.include_router(build_recognitions_router(session_factory, store))
 
     app.include_router(protected)
     return app

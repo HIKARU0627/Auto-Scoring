@@ -70,17 +70,27 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
    （後述）。
 6. `AIProvider.grade()`を呼ぶ（`asyncio.to_thread`でイベントループをブロック
    しない。ネットワーク呼び出し中はDBトランザクションを保持しない --
-   `jobs/queue.py`・`RecognitionJobProcessor`と同じ規約）。
-7. 応答の`question_id`/`max_score`が要求したものと一致しない場合は
+   `jobs/queue.py`・`RecognitionJobProcessor`と同じ規約）。rubric_textには
+   各criterionの登録済み`id`と設問の`scoring_method`（加算/減点）を含める
+   （後述「provider requestで全rubric意味論を保持する」、コードレビュー
+   指摘）。
+7. 応答の`question_id`/`max_score`が要求したものと一致しない場合、または
+   応答の`criteria[].id`の集合が登録済みrubricのcriterion id集合と完全一致
+   しない場合（未知のidを含む、または既知のidを省略している）は
    `FAILED`(`PERMANENT`)にする -- PoC 2のメトリクスハーネス
    （`ai_grading_metrics.evaluate_sample`）が「対応不一致」として実装している
-   分類を、本番パイプラインでも同じ理由で採用する: 別設問への応答をこの設問の
-   採点として保存しない。
+   分類を、本番パイプラインでも同じ理由で採用・拡張する: 別設問への応答や、
+   rubricへ確実にマッピングできない応答をこの設問の採点として保存しない
+   （コードレビュー指摘: schema上は妥当でもcriterion idが登録済みrubricと
+   食い違う応答を、そのまま高confidenceで永続化・usableにしていた）。
 8. 成功応答は`GradeResult`（`source=ai`、常に）として永続化し、応答に含まれる
    `annotations[]`も`Annotation`（`source=ai`）として保存する
    （`target`を`anchor_text`へ、座標は一切持たない -- 簡易設計書 §12.1）。
-9. `Job.usable`は「Recognition ConfidenceとGrading Confidenceの**両方**が
-   閾値以上」（後述、Issue #20受入条件）。
+   graderの認識結果（`response.recognition_text`/`recognition_confidence`）も
+   別の`RecognitionResult`（後述）として保存する。
+9. `Job.usable`は「OCR pipeline自身のRecognition Confidence、AI grader自身の
+   Recognition Confidence、Grading Confidenceの**3つすべて**が閾値以上」
+   （後述、Issue #20受入条件）。
 
 ### エラー分類: timeout / rate limit / 5xx / スキーマ不正 / 対応不一致
 
@@ -108,19 +118,48 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
 生メッセージを含めない（request/response本文（答案本文を含み得る）を含み得る
 ため、AGENTS.md「Security」）。
 
-### Confidence閾値: RecognitionとGradingの両方が閾値以上のときだけusable
+### provider requestで全rubric意味論を保持する
+
+`GradingRequest.rubric_text`は当初、各criterionの`description`と
+`max_points`のみを結合した文字列だった。登録済みcriterion `id`（応答の
+`criteria[].id`をrubricへマッピングし直すために必須）と、設問の
+`scoring_method`（`ScoringMethod.ADDITIVE`/`SUBTRACTIVE`。加算式と減点式を
+providerが区別するために必須）のどちらも欠けていた -- 実providerが接続
+された場合、outcomeをrubricへ確実にマッピングできず、減点式採点を加算式と
+取り違えるおそれがあった（コードレビュー指摘）。
+
+修正: `jobs.grading_processor._rubric_text_for`が「採点方式:
+加算方式/減点方式」の1行と、`- id=<criterion id>: <description>(配点<max_points>点)`
+という行をcriterionごとに生成する。この`id`が、次節の応答検証で使う
+「登録済みrubricのcriterion id集合」と一致することを要求する。
+
+### Confidence閾値: 3つの確信度すべてが閾値以上のときだけusable
 
 Issue #20受入条件「Recognition ConfidenceとGrading Confidenceのどちらかが
-閾値未満ならneeds_reviewにする」を文字どおり実装する: `Job.usable`は
-Recognition ConfidenceとGrading Confidenceの両方が閾値以上のときだけ
-`True`になる。
+閾値未満ならneeds_reviewにする」を実装する。`Job.usable`は次の**3つすべて**が
+閾値以上のときだけ`True`になる（コードレビュー指摘: 当初の実装はrecognition
+confidenceを`RecognitionSettings`の閾値ではなく`GradingSettings`の閾値と
+比較しており、2つの設定値が異なる場合に誤って`usable`と判定しうる不具合が
+あった）:
 
-Recognition Confidenceが低い（が0ではない、つまり回答欄画像自体は信頼できる）
-場合でも、採点そのものは試みる -- Grading Confidenceという2つ目の数値が
-実際に存在して初めて「どちらか」の比較が意味を持つため。回答欄画像が丸ごと
-信頼できない場合（`AnswerImageStatus.NEEDS_REVIEW`）は、`RecognitionJobProcessor`
-の既存の振る舞いどおり文字認識自体を試みず、採点する文字が無いため
-`GradingJobProcessor`も採点を一切試みない。
+1. OCR pipeline自身のRecognition Confidence
+   （`recognition_outcome.usable`、`RecognitionJobProcessor`が自身の
+   `RecognitionSettings.confidence_threshold`で既に判定済みの値をそのまま
+   再利用する -- `GradingJobProcessor`が独自に`RecognitionResult.confidence`
+   を読み直して別の閾値と比較することはしない）。
+2. AI grader自身のRecognition Confidence（`response.recognition_confidence`。
+   後述のとおりOCRテキストを訂正した場合の、grader自身の読み取りに対する
+   確信度）。`RecognitionJobProcessor.confidence_threshold`
+   （新設の公開プロパティ、`RecognitionSettings`と単一の情報源を共有する）
+   と比較する -- `GradingSettings`の閾値と比較しない。
+3. Grading Confidence（`response.grading_confidence`、
+   `GradingSettings.confidence_threshold`と比較）。
+
+回答欄画像が丸ごと信頼できない場合（`AnswerImageStatus.NEEDS_REVIEW`）は、
+`RecognitionJobProcessor`の既存の振る舞いどおり文字認識自体を試みず、採点する
+文字が無いため`GradingJobProcessor`も採点を一切試みない。それ以外は
+Recognition Confidenceが低くても採点そのものは試みる -- 2つ目・3つ目の数値が
+実際に存在して初めて比較が意味を持つため。
 
 閾値は`auto_scoring.jobs.grading_settings.GradingSettings`
 （`RecognitionSettings`と同じ素の`dataclass`）が持つ。Recognition Confidenceと
@@ -129,6 +168,28 @@ Grading Confidenceを混同しない（簡易設計書 §10）という方針に
 （同じ値を共有する保証はない -- 将来どちらかだけ調整できるようにするため）。
 `0.80`は業務ルール決定書 §3 (C)自身が名指す暫定値であり、本Issueが確定させた
 値ではない。
+
+### AI graderが訂正した認識結果を保持する
+
+`AIProviderContract`（PoC 2）は、マルチモーダルなproviderが与えられたOCR
+テキストを訂正して返すことを明示的に許容する
+（`test_grade_preserves_the_recognized_text`）。当初の実装はこれを
+`GradingRequest`構築後に一切参照せず、`response.recognition_text`/
+`response.recognition_confidence`を破棄していた -- レビュー担当者はAIが
+実際に採点した文字列を確認できず、graderが低いRecognition Confidenceを
+報告している場合でも（元のOCR結果が高Confidenceであれば）`usable`になり
+得た（コードレビュー指摘）。
+
+修正: 採点成功時に、graderの読み取り結果を2つ目の`RecognitionResult`
+（`source=ai`、id `grading-recognition:<job.id>`。OCR pipeline自身の結果
+`recognition:<job.id>`とは別行）として永続化し、その`confidence`を上記の
+usable判定へ組み込む。簡易設計書 §16.5の「AI認識文字」がレビューUI上
+2つの独立した項目（OCR結果とAI採点結果）になり得ることに対応する。
+
+前提設問context（後述）の`recognized_text`は、履歴の中で最も新しいAI行
+（`_latest_preferring_human`。人間確定行があればそちらを優先）を採用するため、
+前提設問が採点済みであればgraderが訂正した読み取りが渡る -- 実際に採点で
+使われた文字列の方が、採点前の生OCR結果より前提として正確なため。
 
 ### `prompt_text`のプレースホルダ（未解決事項の記録）
 
