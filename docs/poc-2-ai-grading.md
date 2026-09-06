@@ -1089,6 +1089,16 @@ OpenRouter はこの hint を実際に守るかどうかをルーティング先
 `GradingResponse` を組み立てる（Issue #14 acceptance と同じ「provider の
 自己申告を信用しない」原則）。
 
+`OpenRouterAIProvider.grade()` は request body に
+`"provider": {"data_collection": "deny"}`（OpenRouter の provider-routing
+preference。zero-data-retention/学習拒否ポリシーの upstream のみに
+ルーティングを制限する）を毎回付与する（コードレビュー指摘: 決定書は
+クラウド送信先が opt-out/ZDR を提供する場合はそれを有効にすることを
+要求しており、呼び出し元の OpenRouter アカウント自体が global に ZDR へ
+切り替えられていなくても、実際の答案 crop 画像を送る request 単位でこの
+制約を強制する必要がある）。OpenRouter が実際にこの preference を
+すべての upstream で厳密に守るかは live probe で未検証（§7.4）。
+
 OpenRouter は同じモデル slug（応答の `model` フィールド）でも、実際に
 応答を処理した upstream inference provider（応答の top-level `provider`
 フィールド）が呼び出しごとに異なりうる（フォールバック・複数 upstream
@@ -1104,7 +1114,13 @@ completion の構造・内容を検証する**前**（HTTP 応答本文を受け
 `describe()`/失敗記録が成功呼び出しとは別の（空の）bucket に分類され、
 実際の route の `schema_violation_rate` を過小評価してしまう。
 `_extract_configured_model` を呼び出し成功直後にキャッシュする Codex
-adapter の設計と同じパターン）。
+adapter の設計と同じパターン）。この fingerprint キャッシュ（`_last_route`）
+は各 `grade()` 呼び出しの**冒頭**で必ず一旦 `None` にリセットする
+（コードレビュー指摘: リセットしないと、ある呼び出しが成功して
+fingerprint をセットした後、次の呼び出しが応答本文を得る前に失敗
+〈timeout・429・非 JSON body〉した場合、`describe()` がその失敗を
+実際には一度も到達していない直前の upstream route に誤って帰属させて
+しまう）。
 
 OpenRouter の失敗の分類は 2 通りに分ける（コードレビュー指摘）:
 
@@ -1114,12 +1130,15 @@ OpenRouter の失敗の分類は 2 通りに分ける（コードレビュー指
   数値の HTTP ステータスコードを含める（呼び出し側が文書化された 429
   backoff を適用したり、恒久的な認証/設定失敗〈4xx〉と一時的なサーバー
   エラー〈5xx〉を区別できるようにするため）。
-- **構造化応答の不正**（`SchemaViolation`）: 200 かつ有効な JSON だが
+- **構造化応答の不正**（`SchemaViolation`）: 200 かつ有効な JSON だが、
+  top-level の値自体が object でない（配列・裸の scalar など）場合、
   `choices[0].message.content` が欠落・非文字列（拒否応答や response
-  envelope の変更など）、または content が `AIGradingResult` の schema
-  検証に失敗する場合。いずれも transport 自体は成功しているため、retry や
-  unavailable 率の集計ではなく、契約上の needs-review 経路
-  （`SchemaViolation`）に送る。
+  envelope の変更など）の場合、または content が `AIGradingResult` の
+  schema 検証に失敗する場合。いずれも transport 自体は成功しているため、
+  retry や unavailable 率の集計ではなく、契約上の needs-review 経路
+  （`SchemaViolation`）に送る（コードレビュー指摘: top-level が object で
+  ない場合を検証せずに `_routing_fingerprint` の `.get(...)` を呼ぶと、
+  この契約にない `AttributeError` が素通りしてしまう）。
 
 固定の採点ルール（rubric に従う・生徒の OCR/答案内の指示に従わない・
 JSON のみで応答する）は `system` role のメッセージとして送る（Codex

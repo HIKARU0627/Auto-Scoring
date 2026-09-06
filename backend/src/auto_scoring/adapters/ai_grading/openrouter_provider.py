@@ -45,6 +45,20 @@ from auto_scoring.domain.ai_provider import (
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 
+#: OpenRouter's provider-routing preference restricting a request to
+#: upstream providers whose data-collection policy is "deny" (no retention
+#: of, or training on, submitted data) -- request-level zero-data-retention
+#: enforcement. The decision record requires enabling an opt-out/ZDR option
+#: wherever a cloud AI provider offers one for content sent off-device
+#: (docs/business-rules-and-evaluation-data.md; code review finding: a
+#: real answer-image crop must not reach an upstream that may retain or
+#: train on it just because the caller's OpenRouter account itself hasn't
+#: been switched to a global zero-data-retention setting). Whether
+#: OpenRouter honours this preference for every upstream is unverified
+#: against a live call -- see the live probe in docs/poc-2-ai-grading.md
+#: section 7.4.
+_ZERO_DATA_RETENTION_PROVIDER_PREFERENCE = {"data_collection": "deny"}
+
 
 def _build_response_format() -> dict[str, object]:
     """OpenAI-compatible ``response_format`` constraining the completion to
@@ -161,6 +175,14 @@ class OpenRouterAIProvider:
         )
 
     def grade(self, request: GradingRequest) -> GradingResponse:
+        # Reset before every attempt: if this call fails before a response
+        # body is available at all (transport error, timeout, 429,
+        # non-JSON body), `describe()`/a later failure record must not
+        # keep reporting the *previous* successful call's route -- that
+        # would misattribute this attempt's unavailability to an upstream
+        # it never actually reached (code review finding).
+        self._last_route = None
+
         image_data_url = (
             f"data:image/{sniff_image_format(request.answer_image)};base64,"
             f"{base64.b64encode(request.answer_image).decode('ascii')}"
@@ -169,6 +191,7 @@ class OpenRouterAIProvider:
             "model": self._model,
             "temperature": self._temperature,
             "response_format": _build_response_format(),
+            "provider": _ZERO_DATA_RETENTION_PROVIDER_PREFERENCE,
             "messages": [
                 {"role": "system", "content": GRADING_SYSTEM_INSTRUCTIONS},
                 {
@@ -203,8 +226,18 @@ class OpenRouterAIProvider:
             raise ProviderUnavailable(f"OpenRouter request failed: {detail}") from None
         latency_seconds = time.monotonic() - started_at
 
-        # Computed before validating the completion's structure/content at
-        # all: see the `_last_route` docstring above.
+        if not isinstance(data, dict):
+            # A 2xx response whose top-level JSON value isn't even an
+            # object (an array, a bare scalar, ...) is a malformed
+            # structured response, not a transport failure --
+            # SchemaViolation routes it to the documented needs-review path
+            # (code review finding: `_routing_fingerprint`'s `.get(...)`
+            # calls would otherwise raise an uncaught AttributeError on a
+            # non-dict value).
+            raise SchemaViolation("OpenRouter response body was not a JSON object")
+
+        # Computed before validating the completion's structure/content any
+        # further: see the `_last_route` docstring above.
         self._last_route = _routing_fingerprint(data)
 
         try:

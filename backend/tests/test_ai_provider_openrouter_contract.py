@@ -236,3 +236,75 @@ def test_grading_instructions_go_through_the_system_message() -> None:
     assert messages[0] == {"role": "system", "content": GRADING_SYSTEM_INSTRUCTIONS}
     user_text = messages[1]["content"][0]["text"]
     assert "UNTRUSTED STUDENT OCR" in user_text
+
+
+def test_grade_requests_zero_data_retention() -> None:
+    """A real answer-image crop must not reach an upstream that may retain
+    or train on it just because the caller's OpenRouter account itself
+    hasn't been switched to a global zero-data-retention setting -- this
+    request-level preference must be sent on every call (code review
+    finding; decision record's opt-out/ZDR requirement)."""
+    captured: dict[str, object] = {}
+
+    def _capturing_handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        captured["provider"] = payload.get("provider")
+        return _fake_transport_handler(request)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_capturing_handler),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+    provider.grade(_VALID_REQUEST)
+
+    assert captured["provider"] == {"data_collection": "deny"}
+
+
+def test_schema_violation_when_response_body_is_not_a_json_object() -> None:
+    """A 2xx response whose top-level JSON value isn't even an object (a
+    bare array, in this case) must not let `_routing_fingerprint`'s
+    `.get(...)` calls raise an uncaught AttributeError -- it is a malformed
+    structured response, routed to SchemaViolation like any other broken
+    envelope shape (code review finding)."""
+
+    def _json_array_body(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=["not", "an", "object"])
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_json_array_body),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    with pytest.raises(SchemaViolation):
+        provider.grade(_VALID_REQUEST)
+
+
+def test_describe_does_not_report_a_stale_route_after_a_later_failure() -> None:
+    """Once a successful call has set `_last_route`, a later failed
+    attempt (here: a 429) must not leave `describe()` still reporting the
+    *previous* call's route -- that would misattribute this attempt's
+    unavailability to an upstream it never actually reached (code review
+    finding)."""
+    call_count = {"value": 0}
+
+    def _succeed_then_rate_limit(request: httpx.Request) -> httpx.Response:
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            return _fake_transport_handler(request)
+        return httpx.Response(429, json={"error": "rate limited"})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_succeed_then_rate_limit),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    provider.grade(_VALID_REQUEST)
+    assert provider.describe().version is not None
+
+    with pytest.raises(ProviderUnavailable):
+        provider.grade(_VALID_REQUEST)
+
+    assert provider.describe().version is None
