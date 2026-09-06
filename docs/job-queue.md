@@ -32,7 +32,13 @@ Protocolを実装するだけでよい。テストは`tests/fakes.py`の`FakeJob
 Issue #19が`auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`
 としてOCR認識半分を実装し、`create_app`の既定`job_processor`を
 `NullJobProcessor`からこれへ置き換えた（`docs/ocr-recognition-pipeline.md`）。
-採点（`AIProvider`）半分は引き続き後続Issueの対象。
+
+Issue #20が採点（`AIProvider`）半分を実装した
+（`auto_scoring.jobs.grading_processor.GradingJobProcessor`、
+`docs/ai-grading-pipeline.md`）。`GradingJobProcessor`は
+`RecognitionJobProcessor`を内部で合成し（OCR半分はIssue #19のまま変更なし）、
+その後にAI採点を行う -- `create_app`の既定`job_processor`は現在この
+`GradingJobProcessor`である。
 
 ### Submission内DAGスケジューリングの単位: 1 Question = 1 Job（`JobKind.GRADING`）
 

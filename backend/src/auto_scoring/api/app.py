@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring import __version__
+from auto_scoring.adapters.ai.null_provider import NullAIProvider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
@@ -43,6 +44,7 @@ from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddlewa
 from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
+from auto_scoring.domain.ai_provider import AIProvider
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
 from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission, TestStatus
@@ -56,6 +58,8 @@ from auto_scoring.domain.pdf_intake import (
 )
 from auto_scoring.domain.scoring import clamp_score
 from auto_scoring.jobs.clock import Clock
+from auto_scoring.jobs.grading_processor import GradingJobProcessor
+from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.queue import JobQueueService
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
@@ -157,6 +161,8 @@ def create_app(
     clock: Clock | None = None,
     ocr_provider: OCRProvider | None = None,
     recognition_settings: RecognitionSettings | None = None,
+    ai_provider: AIProvider | None = None,
+    grading_settings: GradingSettings | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -199,22 +205,28 @@ def create_app(
 
     ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
     parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
-    ``job_processor`` defaults to `auto_scoring.jobs.recognition_processor.
-    RecognitionJobProcessor` (Issue #19 -- the recognition half of each
-    per-question job; AI grading is still a later issue's job, so a job this
-    default completes reports its outcome from recognition alone). Tests
-    inject a fake (``tests/fakes.py``). The queue's worker pool only actually
-    starts/stops via the FastAPI lifespan below, so a `TestClient` used
-    without ``with`` (several existing tests do this, same as the temp-dir
-    cleanup above) never runs it -- see ``app.state.queue_service`` for tests
-    that need to drive it directly instead.
+    ``job_processor`` defaults to `auto_scoring.jobs.grading_processor.
+    GradingJobProcessor` (Issue #20 -- recognizes via `RecognitionJobProcessor`
+    (Issue #19) and then AI-grades via `AIProvider`, both halves of the one
+    per-question job). Tests inject a fake (``tests/fakes.py``). The queue's
+    worker pool only actually starts/stops via the FastAPI lifespan below, so
+    a `TestClient` used without ``with`` (several existing tests do this,
+    same as the temp-dir cleanup above) never runs it -- see
+    ``app.state.queue_service`` for tests that need to drive it directly
+    instead.
 
-    ``ocr_provider``/``recognition_settings`` configure that default
-    processor. ``ocr_provider`` defaults to `auto_scoring.adapters.ocr.
-    null_provider.NullOCRProvider` -- the OCR service to use is not yet
-    decided (business-rules-and-evaluation-data.md section 3 (A)); a real
-    adapter is a future issue's job, passed here once one exists. Both are
-    ignored when ``job_processor`` is supplied directly.
+    ``ocr_provider``/``recognition_settings`` and ``ai_provider``/
+    ``grading_settings`` configure that default processor's two halves.
+    ``ocr_provider`` defaults to `auto_scoring.adapters.ocr.null_provider.
+    NullOCRProvider` -- the OCR service to use is not yet decided
+    (business-rules-and-evaluation-data.md section 3 (A)). ``ai_provider``
+    defaults to `auto_scoring.adapters.ai.null_provider.NullAIProvider` for
+    the same reason -- the AI model to use is not yet decided (section 3
+    (B); docs/poc-2-ai-grading.md section 0.1). Both null adapters are
+    honest about not being configured yet (confidence 0.0, never a fabricated
+    reading/grade) rather than raising, so every question routes to needs-
+    review until a real adapter is injected. All four are ignored when
+    ``job_processor`` is supplied directly.
     """
     queue_service_holder: dict[str, JobQueueService] = {}
     lock_handle_holder: dict[str, IO[bytes]] = {}
@@ -300,11 +312,19 @@ def create_app(
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
     app.state.api_token = api_token or generate_token()
 
-    default_job_processor = RecognitionJobProcessor(
+    default_recognition_processor = RecognitionJobProcessor(
         session_factory,
         store,
         ocr_provider or NullOCRProvider(),
         settings=recognition_settings,
+        clock=clock,
+    )
+    default_job_processor = GradingJobProcessor(
+        session_factory,
+        store,
+        default_recognition_processor,
+        ai_provider or NullAIProvider(),
+        grading_settings=grading_settings,
         clock=clock,
     )
     queue_service = JobQueueService(
@@ -540,7 +560,7 @@ def create_app(
             pdfium_lock=intake_lock,
         )
     )
-    protected.include_router(build_recognitions_router(session_factory, store, queue_service))
+    protected.include_router(build_recognitions_router(session_factory, store))
     protected.include_router(build_review_router(session_factory, store))
 
     app.include_router(protected)

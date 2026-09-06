@@ -144,9 +144,19 @@ def test_manual_recognition_is_persisted_as_human_source(
     assert history[0]["id"] == body["id"]
 
 
-def test_manual_recognition_releases_a_dependent_locked_by_low_confidence(
+def test_manual_recognition_does_not_release_a_dependent_locked_by_low_confidence(
     client: TestClient, session_factory: sessionmaker[Session], processor: FakeJobProcessor
 ) -> None:
+    """Issue #20 review, P1: a corrected OCR text alone must not release a
+    dependent question. The per-question `Job` this endpoint used to mark
+    `usable` now covers both recognition *and* AI grading
+    (`GradingJobProcessor`) -- its already-persisted `GradeResult` still
+    reflects whatever was graded *before* this correction, so releasing a
+    dependent here would proceed on a grade nobody has reviewed against the
+    corrected text. Only an explicit human decision
+    (``POST .../resume``, unaffected by this change) or a future re-grade
+    may release it.
+    """
     processor.script(
         "sub-1", "qa", [ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=False)]
     )
@@ -165,8 +175,9 @@ def test_manual_recognition_releases_a_dependent_locked_by_low_confidence(
     )
     assert response.status_code == 201, response.text
 
-    body = _wait_until_job_state(client, job_b, "succeeded")
-    assert body["state"] == "succeeded"
+    time.sleep(0.2)  # give the queue a chance to (wrongly) release job_b
+    body = client.get(f"/jobs/{job_b}", headers=_AUTH).json()
+    assert body["state"] == "blocked"
 
 
 def test_manual_recognition_rejects_overlong_text(client: TestClient) -> None:

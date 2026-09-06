@@ -581,11 +581,47 @@ class RecognitionResult:
 
 
 @dataclass(frozen=True, kw_only=True)
+class GradeResultContextEntry:
+    """One prerequisite question's result used to produce a `GradeResult`
+    (Issue #20: "使用した...前提result versionをGradeResultへ記録し、前提が
+    更新された場合は古い下流結果を再利用しない").
+
+    Names the *specific* `RecognitionResult`/`GradeResult` row read for that
+    prerequisite, not just its question id -- a fresh grading attempt for the
+    same dependent question after the prerequisite has been corrected reads a
+    different row and so produces a `GradeResult` whose `context` visibly
+    differs from the old one, letting the two be told apart (append-only
+    history is what makes the old one "not reused": nothing here mutates it).
+    """
+
+    question_id: str
+    recognition_result_id: str | None = None
+    grade_result_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_non_empty("GradeResultContextEntry.question_id", self.question_id)
+        if self.recognition_result_id is None and self.grade_result_id is None:
+            raise DomainError(
+                "GradeResultContextEntry must reference at least one of "
+                "recognition_result_id/grade_result_id"
+            )
+
+
+@dataclass(frozen=True, kw_only=True)
 class GradeResult:
     """A grade for one submission-question.
 
     Append-only: the AI proposal and the human-confirmed grade are two rows,
     each with its own ``source`` and ``confidence`` (§19, §35-5).
+
+    ``provider``/``model``/``prompt_version`` are the AI reproducibility
+    triple (Issue #20 acceptance: "provider/model/prompt versionが追跡でき");
+    set only together, and only for an AI-sourced row -- a human confirmation
+    has no such call to reproduce. ``dependency_graph_version``/``context``
+    record which confirmed `DependencyGraph` version and which prerequisite
+    result rows (if any) informed this grade, so a later re-grade against an
+    updated prerequisite produces a distinguishable new row rather than being
+    confused with this one (Issue #20 additional acceptance).
     """
 
     id: str
@@ -597,6 +633,12 @@ class GradeResult:
     created_at: datetime
     criteria: tuple[CriterionResult, ...] = ()
     rationale: str | None = None
+    comment: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    prompt_version: str | None = None
+    dependency_graph_version: int | None = None
+    context: tuple[GradeResultContextEntry, ...] = ()
 
     def __post_init__(self) -> None:
         _require_non_empty("GradeResult.id", self.id)
@@ -604,6 +646,18 @@ class GradeResult:
         _require_non_empty("GradeResult.question_id", self.question_id)
         _require_confidence("GradeResult.confidence", self.confidence)
         _require_unique("GradeResult.criteria ids", [c.criterion_id for c in self.criteria])
+        if self.comment is not None and len(self.comment) > MAX_COMMENT_CHARS:
+            raise DomainError(f"GradeResult.comment exceeds {MAX_COMMENT_CHARS} characters")
+        ai_metadata = (self.provider, self.model, self.prompt_version)
+        if any(v is not None for v in ai_metadata) and any(v is None for v in ai_metadata):
+            raise DomainError(
+                "GradeResult.provider/model/prompt_version must be set together or not at all"
+            )
+        if any(v is not None and not v.strip() for v in ai_metadata):
+            raise DomainError("GradeResult.provider/model/prompt_version must not be blank")
+        if self.dependency_graph_version is not None and self.dependency_graph_version < 1:
+            raise DomainError("GradeResult.dependency_graph_version must be >= 1")
+        _require_unique("GradeResult.context question_ids", [c.question_id for c in self.context])
 
 
 _ANCHORED_KINDS = frozenset({AnnotationKind.UNDERLINE, AnnotationKind.BOX})
