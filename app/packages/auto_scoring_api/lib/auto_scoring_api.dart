@@ -16,6 +16,7 @@ export 'package:auto_scoring_api/src/api/test_registration_api.dart';
 
 export 'package:auto_scoring_api/src/model/analyze_request.dart';
 export 'package:auto_scoring_api/src/model/complete_registration_response.dart';
+export 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 export 'package:auto_scoring_api/src/model/confirm_request.dart';
 export 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 export 'package:auto_scoring_api/src/model/dependency_graph_response.dart';

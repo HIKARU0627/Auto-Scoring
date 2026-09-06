@@ -98,6 +98,19 @@
         "title": "CompleteRegistrationResponse",
         "type": "object"
       },
+      "ConfirmProfileRequest": {
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "ConfirmProfileRequest",
+        "type": "object"
+      },
       "ConfirmRequest": {
         "properties": {
           "edges": {
@@ -327,6 +340,10 @@
             "title": "Regions",
             "type": "array"
           },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -340,7 +357,8 @@
           "test_id",
           "status",
           "pages",
-          "regions"
+          "regions",
+          "revision"
         ],
         "title": "ProfileResponse",
         "type": "object"
@@ -1401,6 +1419,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {

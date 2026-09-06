@@ -10,6 +10,7 @@ import 'package:dio/dio.dart';
 
 import 'package:auto_scoring_api/src/api_util.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
+import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/profile_response.dart';
 import 'package:auto_scoring_api/src/model/test_response.dart';
@@ -200,6 +201,7 @@ class TestRegistrationApi {
   ///
   /// Parameters:
   /// * [testId]
+  /// * [confirmProfileRequest]
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -212,6 +214,7 @@ class TestRegistrationApi {
   Future<Response<ProfileResponse>>
       confirmProfileTestsTestIdProfileConfirmPost({
     required String testId,
+    required ConfirmProfileRequest confirmProfileRequest,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -238,11 +241,31 @@ class TestRegistrationApi {
         ],
         ...?extra,
       },
+      contentType: 'application/json',
       validateStatus: validateStatus,
     );
 
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(ConfirmProfileRequest);
+      _bodyData =
+          _serializers.serialize(confirmProfileRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
     final _response = await _dio.request<Object>(
       _path,
+      data: _bodyData,
       options: _options,
       cancelToken: cancelToken,
       onSendProgress: onSendProgress,

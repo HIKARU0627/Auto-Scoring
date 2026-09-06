@@ -12,6 +12,8 @@ class _$ProfileResponse extends ProfileResponse {
   @override
   final BuiltList<RegionModel> regions;
   @override
+  final int revision;
+  @override
   final String status;
   @override
   final String testId;
@@ -22,6 +24,7 @@ class _$ProfileResponse extends ProfileResponse {
   _$ProfileResponse._(
       {required this.pages,
       required this.regions,
+      required this.revision,
       required this.status,
       required this.testId})
       : super._();
@@ -38,6 +41,7 @@ class _$ProfileResponse extends ProfileResponse {
     return other is ProfileResponse &&
         pages == other.pages &&
         regions == other.regions &&
+        revision == other.revision &&
         status == other.status &&
         testId == other.testId;
   }
@@ -47,6 +51,7 @@ class _$ProfileResponse extends ProfileResponse {
     var _$hash = 0;
     _$hash = $jc(_$hash, pages.hashCode);
     _$hash = $jc(_$hash, regions.hashCode);
+    _$hash = $jc(_$hash, revision.hashCode);
     _$hash = $jc(_$hash, status.hashCode);
     _$hash = $jc(_$hash, testId.hashCode);
     _$hash = $jf(_$hash);
@@ -58,6 +63,7 @@ class _$ProfileResponse extends ProfileResponse {
     return (newBuiltValueToStringHelper(r'ProfileResponse')
           ..add('pages', pages)
           ..add('regions', regions)
+          ..add('revision', revision)
           ..add('status', status)
           ..add('testId', testId))
         .toString();
@@ -78,6 +84,10 @@ class ProfileResponseBuilder
       _$this._regions ??= ListBuilder<RegionModel>();
   set regions(ListBuilder<RegionModel>? regions) => _$this._regions = regions;
 
+  int? _revision;
+  int? get revision => _$this._revision;
+  set revision(int? revision) => _$this._revision = revision;
+
   String? _status;
   String? get status => _$this._status;
   set status(String? status) => _$this._status = status;
@@ -95,6 +105,7 @@ class ProfileResponseBuilder
     if ($v != null) {
       _pages = $v.pages.toBuilder();
       _regions = $v.regions.toBuilder();
+      _revision = $v.revision;
       _status = $v.status;
       _testId = $v.testId;
       _$v = null;
@@ -122,6 +133,8 @@ class ProfileResponseBuilder
           _$ProfileResponse._(
             pages: pages.build(),
             regions: regions.build(),
+            revision: BuiltValueNullFieldError.checkNotNull(
+                revision, r'ProfileResponse', 'revision'),
             status: BuiltValueNullFieldError.checkNotNull(
                 status, r'ProfileResponse', 'status'),
             testId: BuiltValueNullFieldError.checkNotNull(

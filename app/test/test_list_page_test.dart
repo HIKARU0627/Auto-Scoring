@@ -61,4 +61,44 @@ void main() {
     expect(find.text('登録完了'), findsOneWidget);
     expect(find.text('下書き'), findsNothing);
   });
+
+  testWidgets(
+    'a reload failure after returning from settings shows an error banner, '
+    'not an uncaught exception',
+    (tester) async {
+      // The initial load succeeds; the reload triggered by returning from
+      // the settings screen fails. `_reload` awaits that same failing
+      // Future itself (to hand it to FutureBuilder via `_testsFuture`), so
+      // if it didn't also catch it, the failure would reach this test as
+      // an unhandled async exception and fail it -- on top of whatever
+      // FutureBuilder rendered (Issue #16 review round 8).
+      var listCallCount = 0;
+      final dependencies = AppDependencies(
+        listTestRegistrations: () async {
+          listCallCount++;
+          if (listCallCount == 1) {
+            return [_test(id: 'test-1', status: 'draft')];
+          }
+          _notFound();
+        },
+        getTest: (testId) async => _test(id: testId, status: 'draft'),
+        getProfile: (testId) async => _notFound(),
+        getDependencyGraph: (testId) async => _notFound(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(home: TestListPage(dependencies: dependencies)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('test-list-tile-test-1')));
+      await tester.pumpAndSettle();
+      expect(find.byType(TestSettingsPage), findsOneWidget);
+
+      Navigator.of(tester.element(find.byType(TestSettingsPage))).pop();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('test-list-error')), findsOneWidget);
+    },
+  );
 }

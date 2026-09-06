@@ -16,6 +16,7 @@ part 'profile_response.g.dart';
 /// Properties:
 /// * [pages]
 /// * [regions]
+/// * [revision]
 /// * [status]
 /// * [testId]
 @BuiltValue()
@@ -26,6 +27,9 @@ abstract class ProfileResponse
 
   @BuiltValueField(wireName: r'regions')
   BuiltList<RegionModel> get regions;
+
+  @BuiltValueField(wireName: r'revision')
+  int get revision;
 
   @BuiltValueField(wireName: r'status')
   String get status;
@@ -68,6 +72,11 @@ class _$ProfileResponseSerializer
     yield serializers.serialize(
       object.regions,
       specifiedType: const FullType(BuiltList, [FullType(RegionModel)]),
+    );
+    yield r'revision';
+    yield serializers.serialize(
+      object.revision,
+      specifiedType: const FullType(int),
     );
     yield r'status';
     yield serializers.serialize(
@@ -118,6 +127,13 @@ class _$ProfileResponseSerializer
             specifiedType: const FullType(BuiltList, [FullType(RegionModel)]),
           ) as BuiltList<RegionModel>;
           result.regions.replace(valueDes);
+          break;
+        case r'revision':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(int),
+          ) as int;
+          result.revision = valueDes;
           break;
         case r'status':
           final valueDes = serializers.deserialize(

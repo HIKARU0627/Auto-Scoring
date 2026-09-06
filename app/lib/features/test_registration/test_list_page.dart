@@ -40,7 +40,17 @@ class _TestListPageState extends State<TestListPage> {
     setState(() {
       _testsFuture = future;
     });
-    await future;
+    try {
+      await future;
+    } catch (_) {
+      // `_testsFuture` above already carries this failure to `FutureBuilder`,
+      // which renders it as `snapshot.hasError` -- swallow it here so a
+      // normal, recoverable sidecar failure during pull-to-refresh (or
+      // returning from the settings screen) doesn't *also* surface as an
+      // unhandled async exception from this callback's own caller
+      // (`RefreshIndicator.onRefresh`, or a tile's `onTap`, neither of
+      // which awaits/catches this Future itself) (Issue #16 review round 8).
+    }
   }
 
   @override

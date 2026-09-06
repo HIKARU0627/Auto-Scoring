@@ -39,11 +39,13 @@ RegionModel _region({
 ProfileResponse _profile({
   String status = 'draft',
   List<RegionModel>? regions,
+  int revision = 1,
 }) {
   return ProfileResponse(
     (b) => b
       ..testId = 'test-1'
       ..status = status
+      ..revision = revision
       ..pages.add(
         PageFormatModel(
           (p) => p
@@ -161,7 +163,7 @@ void main() {
       getDependencyGraph: (testId) async => _dependencyGraph(),
       // confirmProfile now saves the working copy first (Issue #16 review).
       updateProfile: (testId, regions) async => _profile(regions: regions),
-      confirmProfile: (testId) async => _profile(
+      confirmProfile: (testId, {required revision}) async => _profile(
         status: 'confirmed',
         regions: [
           _region(kind: RegionKind.question, text: '問1', confirmed: true),

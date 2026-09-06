@@ -16,6 +16,7 @@ import 'package:auto_scoring_api/src/model/date.dart';
 
 import 'package:auto_scoring_api/src/model/analyze_request.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
+import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
@@ -42,6 +43,7 @@ part 'serializers.g.dart';
 @SerializersFor([
   AnalyzeRequest,
   CompleteRegistrationResponse,
+  ConfirmProfileRequest,
   ConfirmRequest,
   DependencyEdgeModel,
   DependencyGraphResponse,

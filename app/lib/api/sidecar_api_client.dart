@@ -454,17 +454,24 @@ class SidecarApiClient {
 
   /// The human confirmation step over [testId]'s current profile region set
   /// (テスト設定画面 "確定"). Turns the confirmed regions into the test's
-  /// real Question/Rubric rows. Throws [SidecarApiException] (409) if the
-  /// profile is already confirmed, or (422) if the regions don't add up to a
-  /// valid test (missing score, duplicate question number, ...).
+  /// real Question/Rubric rows. [revision] must match the profile currently
+  /// on disk (the caller's own last `getProfile`/`updateProfile`/
+  /// `analyzeProfile` response) -- otherwise another client's edit landed
+  /// in between and this throws [SidecarApiException] (409), asking the
+  /// caller to reload and re-review before confirming again. Also (409) if
+  /// the profile is already confirmed, or (422) if the regions don't add up
+  /// to a valid test (missing score, duplicate question number, ...).
   Future<ProfileResponse> confirmProfile(
     String testId, {
+    required int revision,
     CancelToken? cancelToken,
   }) async {
     try {
+      final request = ConfirmProfileRequest((b) => b.revision = revision);
       final response = await _testRegistrationApi
           .confirmProfileTestsTestIdProfileConfirmPost(
             testId: testId,
+            confirmProfileRequest: request,
             cancelToken: cancelToken,
           );
       return _requireBody(response);

@@ -3,6 +3,7 @@ README.md
 analysis_options.yaml
 doc/AnalyzeRequest.md
 doc/CompleteRegistrationResponse.md
+doc/ConfirmProfileRequest.md
 doc/ConfirmRequest.md
 doc/DefaultApi.md
 doc/DependencyEdgeModel.md
@@ -40,6 +41,7 @@ lib/src/auth/oauth.dart
 lib/src/date_serializer.dart
 lib/src/model/analyze_request.dart
 lib/src/model/complete_registration_response.dart
+lib/src/model/confirm_profile_request.dart
 lib/src/model/confirm_request.dart
 lib/src/model/date.dart
 lib/src/model/dependency_edge_model.dart

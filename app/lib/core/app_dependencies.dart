@@ -55,8 +55,10 @@ Future<ProfileResponse> _unavailableUpdateProfile(
   List<RegionModel> regions,
 ) async => _unavailable();
 
-Future<ProfileResponse> _unavailableConfirmProfile(String testId) async =>
-    _unavailable();
+Future<ProfileResponse> _unavailableConfirmProfile(
+  String testId, {
+  required int revision,
+}) async => _unavailable();
 
 Future<CompleteRegistrationResponse> _unavailableCompleteRegistration(
   String testId,
@@ -126,7 +128,11 @@ typedef UpdateProfile =
     Future<ProfileResponse> Function(String testId, List<RegionModel> regions);
 
 /// The human confirmation step over a test's current profile region set.
-typedef ConfirmProfile = Future<ProfileResponse> Function(String testId);
+/// `revision` must match the profile currently on disk (the caller's own
+/// last `getProfile`/`updateProfile`/`analyzeProfile` response), or another
+/// client's edit landed in between and this is rejected as stale.
+typedef ConfirmProfile =
+    Future<ProfileResponse> Function(String testId, {required int revision});
 
 /// The final registration gate: moves a test from `draft` to `ready` once
 /// both the profile and the dependency graph are confirmed.

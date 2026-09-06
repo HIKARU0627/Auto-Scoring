@@ -152,7 +152,14 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
       _profile = saved;
       _editableRegions = saved.regions.toList();
     });
-    final profile = await widget.dependencies.confirmProfile(widget.testId);
+    // Pinned to the revision this save just produced -- if another
+    // client's edit lands on the server before this confirm call reaches
+    // it, the server rejects it as stale instead of silently approving
+    // regions this reviewer never saw (Issue #16 review round 8).
+    final profile = await widget.dependencies.confirmProfile(
+      widget.testId,
+      revision: saved.revision,
+    );
     if (!mounted) return;
     setState(() {
       _profile = profile;

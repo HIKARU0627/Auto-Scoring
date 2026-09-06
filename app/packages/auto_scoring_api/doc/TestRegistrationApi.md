@@ -102,7 +102,7 @@ Name | Type | Description  | Notes
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **confirmProfileTestsTestIdProfileConfirmPost**
-> ProfileResponse confirmProfileTestsTestIdProfileConfirmPost(testId)
+> ProfileResponse confirmProfileTestsTestIdProfileConfirmPost(testId, confirmProfileRequest)
 
 Confirm Profile
 
@@ -112,9 +112,10 @@ import 'package:auto_scoring_api/api.dart';
 
 final api = AutoScoringApi().getTestRegistrationApi();
 final String testId = testId_example; // String | 
+final ConfirmProfileRequest confirmProfileRequest = ; // ConfirmProfileRequest | 
 
 try {
-    final response = api.confirmProfileTestsTestIdProfileConfirmPost(testId);
+    final response = api.confirmProfileTestsTestIdProfileConfirmPost(testId, confirmProfileRequest);
     print(response);
 } on DioException catch (e) {
     print('Exception when calling TestRegistrationApi->confirmProfileTestsTestIdProfileConfirmPost: $e\n');
@@ -126,6 +127,7 @@ try {
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **testId** | **String**|  | 
+ **confirmProfileRequest** | [**ConfirmProfileRequest**](ConfirmProfileRequest.md)|  | 
 
 ### Return type
 
@@ -137,7 +139,7 @@ Name | Type | Description  | Notes
 
 ### HTTP request headers
 
- - **Content-Type**: Not defined
+ - **Content-Type**: application/json
  - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)

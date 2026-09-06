@@ -91,6 +91,7 @@ Class | Method | HTTP request | Description
 
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
  - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
+ - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)

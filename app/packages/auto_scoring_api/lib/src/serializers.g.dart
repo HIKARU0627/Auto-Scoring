@@ -9,6 +9,7 @@ part of 'serializers.dart';
 Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnalyzeRequest.serializer)
       ..add(CompleteRegistrationResponse.serializer)
+      ..add(ConfirmProfileRequest.serializer)
       ..add(ConfirmRequest.serializer)
       ..add(DependencyEdgeModel.serializer)
       ..add(DependencyGraphResponse.serializer)
