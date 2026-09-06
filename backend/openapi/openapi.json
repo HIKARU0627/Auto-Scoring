@@ -40,6 +40,39 @@
         "title": "Body_create_submission_tests__test_id__submissions_post",
         "type": "object"
       },
+      "BoundingBoxResponse": {
+        "properties": {
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "number"
+          },
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "text",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "BoundingBoxResponse",
+        "type": "object"
+      },
       "ConfirmRequest": {
         "properties": {
           "edges": {
@@ -323,6 +356,20 @@
         "title": "JobResponse",
         "type": "object"
       },
+      "ManualRecognitionRequest": {
+        "properties": {
+          "text": {
+            "maxLength": 10000,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ManualRecognitionRequest",
+        "type": "object"
+      },
       "QuestionTextOverride": {
         "description": "Extracted PDF text for one question, supplied by the caller.\n\nThe MVP question record (Issue #11) does not yet store \u554f\u984c\u6587 text\nextracted from the model-answer/manual PDFs, so the analyze request\ncarries it explicitly -- once PDF text extraction exists this becomes the\ndefault and overrides stay optional.",
         "properties": {
@@ -357,6 +404,58 @@
           "question_id"
         ],
         "title": "QuestionTextOverride",
+        "type": "object"
+      },
+      "RecognitionResponse": {
+        "properties": {
+          "boxes": {
+            "items": {
+              "$ref": "#/components/schemas/BoundingBoxResponse"
+            },
+            "title": "Boxes",
+            "type": "array"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "submission_id",
+          "question_id",
+          "source",
+          "text",
+          "confidence",
+          "created_at",
+          "boxes"
+        ],
+        "title": "RecognitionResponse",
         "type": "object"
       },
       "ScoreRequest": {
@@ -942,6 +1041,184 @@
         "summary": "Create Submission Jobs",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/answer-image": {
+      "get": {
+        "operationId": "get_answer_image_submissions__submission_id__questions__question_id__answer_image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Answer Image",
+        "tags": [
+          "recognitions"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/recognitions": {
+      "get": {
+        "operationId": "list_recognitions_submissions__submission_id__questions__question_id__recognitions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RecognitionResponse"
+                  },
+                  "title": "Response List Recognitions Submissions  Submission Id  Questions  Question Id  Recognitions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Recognitions",
+        "tags": [
+          "recognitions"
+        ]
+      },
+      "post": {
+        "operationId": "create_manual_recognition_submissions__submission_id__questions__question_id__recognitions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualRecognitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecognitionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Manual Recognition",
+        "tags": [
+          "recognitions"
         ]
       }
     },
