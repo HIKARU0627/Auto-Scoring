@@ -1,0 +1,200 @@
+{
+  "subject": "synthetic-world-history",
+  "submissionId": "poc2-synth-submission-02",
+  "testId": "poc2-synthetic-test-world-history",
+  "questions": [
+    {
+      "ground_truth": {
+        "questionId": "poc2-synth-02",
+        "score": 6,
+        "maxScore": 30,
+        "criteria": [
+          {
+            "id": "k1",
+            "result": "fail"
+          },
+          {
+            "id": "k2",
+            "result": "pass"
+          }
+        ],
+        "source": "human"
+      },
+      "input": {
+        "prompt_text": "（合成データ）文化圏Xの東西への伝播について100字以内で説明せよ。",
+        "model_answer": "（合成データ）文化圏Xは西方では思想・哲学に影響を与え、東方では造形美術に影響を与え、周辺国を通じてさらに東方へ伝わった。",
+        "rubric_text": "k1: 文化圏X自体の成立過程の説明 (加点対象外) / k2: 東方での具体的な影響例を1つ以上挙げる (3点、複数該当で加点)",
+        "max_score": 30,
+        "ocr_clean": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美術の制作が始まった。",
+        "ocr_noisy": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美祢の制作が始まった。",
+        "answer_image_ref": "sha256:synthetic-answer-image-poc2-synth-02"
+      },
+      "recorded": {
+        "synthetic-a": {
+          "ocr_clean": {
+            "response": {
+              "questionId": "poc2-synth-02",
+              "recognition": {
+                "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美術の制作が始まった。",
+                "confidence": 0.95
+              },
+              "grading": {
+                "score": 6,
+                "maxScore": 30,
+                "confidence": 0.7
+              },
+              "criteria": [
+                {
+                  "id": "k1",
+                  "result": "fail",
+                  "confidence": 0.8,
+                  "rationale": "設問が求める東西伝播ではなく成立過程を述べており対象外。"
+                },
+                {
+                  "id": "k2",
+                  "result": "pass",
+                  "confidence": 0.75,
+                  "rationale": "造形美術という具体例が1つ挙げられている。"
+                }
+              ],
+              "comment": "設問が求める伝播の具体例をもう1つ増やすと加点できます。",
+              "rationale": "配点表のk2のみ充足するため加点は最小限とした。",
+              "annotations": []
+            },
+            "descriptor": {
+              "model": "synthetic-model-a",
+              "version": "2026-01-pilot",
+              "prompt_version": "synthetic-prompt-v1",
+              "temperature": 0.0,
+              "structured_output_mode": "json_schema"
+            },
+            "latency_seconds": 1.0,
+            "cost_usd": 0.0007
+          },
+          "ocr_noisy": {
+            "response": {
+              "questionId": "poc2-synth-02",
+              "recognition": {
+                "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美祢の制作が始まった。",
+                "confidence": 0.55
+              },
+              "grading": {
+                "score": 3,
+                "maxScore": 30,
+                "confidence": 0.5
+              },
+              "criteria": [
+                {
+                  "id": "k1",
+                  "result": "fail",
+                  "confidence": 0.7,
+                  "rationale": "成立過程の説明のみで加点対象外。"
+                },
+                {
+                  "id": "k2",
+                  "result": "fail",
+                  "confidence": 0.4,
+                  "rationale": "「美祢」の誤字により具体例が造形美術か判断できないと判定。"
+                }
+              ],
+              "comment": "OCR誤字（美祢）により東方の影響例が判別できず、要確認としました。",
+              "rationale": "誤字により本来passとすべき箇所をfailへ倒した保守的判定。",
+              "annotations": []
+            },
+            "descriptor": {
+              "model": "synthetic-model-a",
+              "version": "2026-01-pilot",
+              "prompt_version": "synthetic-prompt-v1",
+              "temperature": 0.0,
+              "structured_output_mode": "json_schema"
+            },
+            "latency_seconds": 1.1,
+            "cost_usd": 0.0007
+          }
+        },
+        "synthetic-b": {
+          "ocr_clean": {
+            "response": {
+              "questionId": "poc2-synth-02",
+              "recognition": {
+                "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美術の制作が始まった。",
+                "confidence": 0.95
+              },
+              "grading": {
+                "score": 9,
+                "maxScore": 30,
+                "confidence": 0.65
+              },
+              "criteria": [
+                {
+                  "id": "k1",
+                  "result": "fail",
+                  "confidence": 0.6,
+                  "rationale": "成立過程のみで加点対象外と判断。"
+                },
+                {
+                  "id": "k2",
+                  "result": "pass",
+                  "confidence": 0.6,
+                  "rationale": "造形美術の具体例あり。"
+                }
+              ],
+              "comment": "西方への影響にも触れると加点余地があります。",
+              "rationale": "k2充足に加え論述の網羅性をやや高く評価した。",
+              "annotations": []
+            },
+            "descriptor": {
+              "model": "synthetic-model-b",
+              "version": "2026-01-pilot",
+              "prompt_version": "synthetic-prompt-v1",
+              "temperature": 0.2,
+              "structured_output_mode": "tool_use"
+            },
+            "latency_seconds": 1.6,
+            "cost_usd": 0.0002
+          },
+          "ocr_noisy": {
+            "response": {
+              "questionId": "poc2-synth-02",
+              "recognition": {
+                "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美祢の制作が始まった。",
+                "confidence": 0.5
+              },
+              "grading": {
+                "score": 0,
+                "maxScore": 30,
+                "confidence": 0.9
+              },
+              "criteria": [
+                {
+                  "id": "k1",
+                  "result": "fail",
+                  "confidence": 0.9,
+                  "rationale": "文章が破損しており評価不能と判断。"
+                },
+                {
+                  "id": "k2",
+                  "result": "fail",
+                  "confidence": 0.9,
+                  "rationale": "文章が破損しており評価不能と判断。"
+                }
+              ],
+              "comment": "テキストの破損により採点できません。",
+              "rationale": "OCRノイズを過大評価し、実際には読み取れる内容まで一律0点とした。高いgrading confidenceにもかかわらず不当な0点になっている点に注意。",
+              "annotations": []
+            },
+            "descriptor": {
+              "model": "synthetic-model-b",
+              "version": "2026-01-pilot",
+              "prompt_version": "synthetic-prompt-v1",
+              "temperature": 0.2,
+              "structured_output_mode": "tool_use"
+            },
+            "latency_seconds": 0.8,
+            "cost_usd": 0.0002
+          }
+        }
+      }
+    }
+  ]
+}
