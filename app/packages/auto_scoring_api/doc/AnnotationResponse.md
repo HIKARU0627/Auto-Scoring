@@ -1,4 +1,4 @@
-# auto_scoring_api.model.RecognitionResponse
+# auto_scoring_api.model.AnnotationResponse
 
 ## Load the model package
 ```dart
@@ -8,15 +8,15 @@ import 'package:auto_scoring_api/api.dart';
 ## Properties
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
-**boxes** | [**BuiltList&lt;BoundingBoxResponse&gt;**](BoundingBoxResponse.md) |  | 
-**confidence** | **num** |  | 
+**anchorText** | **String** |  | [optional] 
+**comment** | **String** |  | [optional] 
 **createdAt** | [**DateTime**](DateTime.md) |  | 
 **id** | **String** |  | 
+**kind** | **String** |  | 
 **questionId** | **String** |  | 
+**rect** | [**NormalizedRectResponse**](NormalizedRectResponse.md) |  | [optional] 
 **source_** | **String** |  | 
-**stage** | **String** |  | 
 **submissionId** | **String** |  | 
-**text** | **String** |  | 
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
 

@@ -15,26 +15,33 @@ import 'package:auto_scoring_api/src/date_serializer.dart';
 import 'package:auto_scoring_api/src/model/date.dart';
 
 import 'package:auto_scoring_api/src/model/analyze_request.dart';
+import 'package:auto_scoring_api/src/model/annotation_response.dart';
 import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
 import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
+import 'package:auto_scoring_api/src/model/criterion_result_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
+import 'package:auto_scoring_api/src/model/grade_result_response.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
+import 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
 import 'package:auto_scoring_api/src/model/page_format_model.dart';
 import 'package:auto_scoring_api/src/model/profile_response.dart';
+import 'package:auto_scoring_api/src/model/question_response.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
 import 'package:auto_scoring_api/src/model/recognition_response.dart';
 import 'package:auto_scoring_api/src/model/region_kind.dart';
 import 'package:auto_scoring_api/src/model/region_model.dart';
+import 'package:auto_scoring_api/src/model/rubric_criterion_response.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
+import 'package:auto_scoring_api/src/model/score_value_response.dart';
 import 'package:auto_scoring_api/src/model/submission_response.dart';
 import 'package:auto_scoring_api/src/model/test_response.dart';
 import 'package:auto_scoring_api/src/model/test_summary.dart';
@@ -46,26 +53,33 @@ part 'serializers.g.dart';
 
 @SerializersFor([
   AnalyzeRequest,
+  AnnotationResponse,
   BoundingBoxResponse,
   CompleteRegistrationResponse,
   ConfirmProfileRequest,
   ConfirmRequest,
+  CriterionResultResponse,
   DependencyEdgeModel,
   DependencyGraphResponse,
   DependencyProvision,
+  GradeResultResponse,
   HTTPValidationError,
   JobResponse,
   LocationInner,
   ManualRecognitionRequest,
   NormalizedBBoxModel,
+  NormalizedRectResponse,
   PageFormatModel,
   ProfileResponse,
+  QuestionResponse,
   QuestionTextOverride,
   RecognitionResponse,
   RegionKind,
   RegionModel,
+  RubricCriterionResponse,
   ScoreRequest,
   ScoreResponse,
+  ScoreValueResponse,
   SubmissionResponse,
   TestResponse,
   TestSummary,
@@ -95,6 +109,10 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<JobResponse>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(QuestionResponse)]),
+        () => ListBuilder<QuestionResponse>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(SubmissionResponse)]),
         () => ListBuilder<SubmissionResponse>(),
       )
@@ -117,8 +135,20 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<BuiltList<String>>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(CriterionResultResponse)]),
+        () => ListBuilder<CriterionResultResponse>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(UnresolvedQuestionModel)]),
         () => ListBuilder<UnresolvedQuestionModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(GradeResultResponse)]),
+        () => ListBuilder<GradeResultResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(RubricCriterionResponse)]),
+        () => ListBuilder<RubricCriterionResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(LocationInner)]),
@@ -143,6 +173,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(String)]),
         () => ListBuilder<String>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(AnnotationResponse)]),
+        () => ListBuilder<AnnotationResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(TestResponse)]),

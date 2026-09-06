@@ -20,6 +20,8 @@ class _$RecognitionResponse extends RecognitionResponse {
   @override
   final String source_;
   @override
+  final String stage;
+  @override
   final String submissionId;
   @override
   final String text;
@@ -35,6 +37,7 @@ class _$RecognitionResponse extends RecognitionResponse {
       required this.id,
       required this.questionId,
       required this.source_,
+      required this.stage,
       required this.submissionId,
       required this.text})
       : super._();
@@ -57,6 +60,7 @@ class _$RecognitionResponse extends RecognitionResponse {
         id == other.id &&
         questionId == other.questionId &&
         source_ == other.source_ &&
+        stage == other.stage &&
         submissionId == other.submissionId &&
         text == other.text;
   }
@@ -70,6 +74,7 @@ class _$RecognitionResponse extends RecognitionResponse {
     _$hash = $jc(_$hash, id.hashCode);
     _$hash = $jc(_$hash, questionId.hashCode);
     _$hash = $jc(_$hash, source_.hashCode);
+    _$hash = $jc(_$hash, stage.hashCode);
     _$hash = $jc(_$hash, submissionId.hashCode);
     _$hash = $jc(_$hash, text.hashCode);
     _$hash = $jf(_$hash);
@@ -85,6 +90,7 @@ class _$RecognitionResponse extends RecognitionResponse {
           ..add('id', id)
           ..add('questionId', questionId)
           ..add('source_', source_)
+          ..add('stage', stage)
           ..add('submissionId', submissionId)
           ..add('text', text))
         .toString();
@@ -120,6 +126,10 @@ class RecognitionResponseBuilder
   String? get source_ => _$this._source_;
   set source_(String? source_) => _$this._source_ = source_;
 
+  String? _stage;
+  String? get stage => _$this._stage;
+  set stage(String? stage) => _$this._stage = stage;
+
   String? _submissionId;
   String? get submissionId => _$this._submissionId;
   set submissionId(String? submissionId) => _$this._submissionId = submissionId;
@@ -141,6 +151,7 @@ class RecognitionResponseBuilder
       _id = $v.id;
       _questionId = $v.questionId;
       _source_ = $v.source_;
+      _stage = $v.stage;
       _submissionId = $v.submissionId;
       _text = $v.text;
       _$v = null;
@@ -177,6 +188,8 @@ class RecognitionResponseBuilder
                 questionId, r'RecognitionResponse', 'questionId'),
             source_: BuiltValueNullFieldError.checkNotNull(
                 source_, r'RecognitionResponse', 'source_'),
+            stage: BuiltValueNullFieldError.checkNotNull(
+                stage, r'RecognitionResponse', 'stage'),
             submissionId: BuiltValueNullFieldError.checkNotNull(
                 submissionId, r'RecognitionResponse', 'submissionId'),
             text: BuiltValueNullFieldError.checkNotNull(

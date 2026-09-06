@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
+import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
 
 /// A PDF chosen from the native file picker. Kept separate from
 /// `package:file_picker`'s own `PlatformFile` so [AnswerIntakePage] can be
@@ -420,12 +421,24 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
         final submission = _submissions[index];
         final (icon, label) = _stateVisual(submission.state);
         return ListTile(
+          key: Key('submission-tile-$index'),
           leading: Icon(icon),
           title: Text(submission.studentLabel ?? submission.id),
           subtitle: Text(
             submission.reviewReason != null
                 ? '$label ・ ${submission.reviewReason}'
                 : label,
+          ),
+          // 添削レビュー画面 (Issue #21) への入口 -- テストが選ばれている限り、
+          // どの取込状態の答案でも開ける(要確認/エラーの答案ほどレビューが必要)。
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PdfReviewPage(
+                dependencies: widget.dependencies,
+                testId: _selectedTestId!,
+                submissionId: submission.id,
+              ),
+            ),
           ),
         );
       },

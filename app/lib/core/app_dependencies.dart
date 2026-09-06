@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 
 Future<bool> _stubHealthCheck() async => true;
@@ -24,6 +26,10 @@ Future<List<TestSummary>> _unavailableListTests() async => _unavailable();
 
 Future<List<SubmissionResponse>> _unavailableListSubmissions(
   String testId,
+) async => _unavailable();
+
+Future<SubmissionResponse> _unavailableGetSubmission(
+  String submissionId,
 ) async => _unavailable();
 
 Future<SubmissionResponse> _unavailableCreateSubmission({
@@ -79,6 +85,30 @@ Future<DependencyGraphResponse> _unavailableConfirmDependencyGraph(
   required List<DependencyEdgeModel> edges,
 }) async => _unavailable();
 
+Future<List<QuestionResponse>> _unavailableListQuestions(String testId) async =>
+    _unavailable();
+
+Future<Uint8List> _unavailableGetSourcePdf(String submissionId) async =>
+    _unavailable();
+
+Future<List<RecognitionResponse>> _unavailableListRecognitions(
+  String submissionId,
+  String questionId,
+) async => _unavailable();
+
+Future<List<GradeResultResponse>> _unavailableListGrades(
+  String submissionId,
+  String questionId,
+) async => _unavailable();
+
+Future<List<AnnotationResponse>> _unavailableListAnnotations(
+  String submissionId,
+  String questionId,
+) async => _unavailable();
+
+Future<List<JobResponse>> _unavailableListJobs(String submissionId) async =>
+    _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -86,6 +116,10 @@ typedef ListTests = Future<List<TestSummary>> Function();
 /// Fetches every submission already imported for [testId].
 typedef ListSubmissions =
     Future<List<SubmissionResponse>> Function(String testId);
+
+/// One submission's current intake/processing state (添削レビュー画面のstate表示).
+typedef GetSubmission =
+    Future<SubmissionResponse> Function(String submissionId);
 
 /// Uploads one answer PDF for [testId]. Re-uploading a failed submission's
 /// exact bytes retries it in place; re-uploading identical bytes for a
@@ -158,6 +192,45 @@ typedef ConfirmDependencyGraph =
       required List<DependencyEdgeModel> edges,
     });
 
+/// Every `Question` for [testId] (its profile areas + rubric) -- the
+/// 添削レビュー画面's Navigation Rail and Inspector (§16.5, Issue #21).
+typedef ListQuestions = Future<List<QuestionResponse>> Function(String testId);
+
+/// The original, unmodified answer PDF for one submission, for the `pdfrx`
+/// viewer to render underneath the annotation overlay (§13.1).
+typedef GetSourcePdf = Future<Uint8List> Function(String submissionId);
+
+/// Every `RecognitionResult` recorded for one submission-question so far
+/// (AI proposals and human corrections, oldest first).
+typedef ListRecognitions =
+    Future<List<RecognitionResponse>> Function(
+      String submissionId,
+      String questionId,
+    );
+
+/// Every `GradeResult` recorded for one submission-question so far, each with
+/// its own score, Grading Confidence, rubric criteria, and rationale.
+typedef ListGrades =
+    Future<List<GradeResultResponse>> Function(
+      String submissionId,
+      String questionId,
+    );
+
+/// Every `Annotation` recorded for one submission-question, for the PDF
+/// overlay.
+typedef ListAnnotations =
+    Future<List<AnnotationResponse>> Function(
+      String submissionId,
+      String questionId,
+    );
+
+/// Every `Job` (kind GRADING) ever created for one submission, across every
+/// question -- the per-question job's own lifecycle (queued/running/blocked/
+/// succeeded/failed/cancelled), used to tell "still processing" apart from
+/// "this attempt is done" independent of what data has been persisted so far
+/// (添削レビュー画面のpolling, Issue #21 P1 review).
+typedef ListJobs = Future<List<JobResponse>> Function(String submissionId);
+
 /// Composition-root dependency container.
 ///
 /// Features read their collaborators from here instead of constructing them,
@@ -168,6 +241,7 @@ class AppDependencies {
     this.healthCheck = _stubHealthCheck,
     this.listTests = _unavailableListTests,
     this.listSubmissions = _unavailableListSubmissions,
+    this.getSubmission = _unavailableGetSubmission,
     this.createSubmission = _unavailableCreateSubmission,
     this.createTest = _unavailableCreateTest,
     this.getTest = _unavailableGetTest,
@@ -180,6 +254,12 @@ class AppDependencies {
     this.analyzeDependencyGraph = _unavailableAnalyzeDependencyGraph,
     this.getDependencyGraph = _unavailableGetDependencyGraph,
     this.confirmDependencyGraph = _unavailableConfirmDependencyGraph,
+    this.listQuestions = _unavailableListQuestions,
+    this.getSourcePdf = _unavailableGetSourcePdf,
+    this.listRecognitions = _unavailableListRecognitions,
+    this.listGrades = _unavailableListGrades,
+    this.listAnnotations = _unavailableListAnnotations,
+    this.listJobs = _unavailableListJobs,
   });
 
   /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
@@ -187,6 +267,7 @@ class AppDependencies {
 
   final ListTests listTests;
   final ListSubmissions listSubmissions;
+  final GetSubmission getSubmission;
   final CreateSubmission createSubmission;
   final CreateTest createTest;
   final GetTest getTest;
@@ -199,4 +280,10 @@ class AppDependencies {
   final AnalyzeDependencyGraph analyzeDependencyGraph;
   final GetDependencyGraph getDependencyGraph;
   final ConfirmDependencyGraph confirmDependencyGraph;
+  final ListQuestions listQuestions;
+  final GetSourcePdf getSourcePdf;
+  final ListRecognitions listRecognitions;
+  final ListGrades listGrades;
+  final ListAnnotations listAnnotations;
+  final ListJobs listJobs;
 }

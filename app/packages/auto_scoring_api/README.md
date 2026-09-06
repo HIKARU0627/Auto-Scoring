@@ -86,6 +86,10 @@ Class | Method | HTTP request | Description
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**createManualRecognitionSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsPost**](doc/RecognitionsApi.md#createmanualrecognitionsubmissionssubmissionidquestionsquestionidrecognitionspost) | **POST** /submissions/{submission_id}/questions/{question_id}/recognitions | Create Manual Recognition
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet**](doc/RecognitionsApi.md#getanswerimagesubmissionssubmissionidquestionsquestionidanswerimageget) | **GET** /submissions/{submission_id}/questions/{question_id}/answer-image | Get Answer Image
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**listRecognitionsSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsGet**](doc/RecognitionsApi.md#listrecognitionssubmissionssubmissionidquestionsquestionidrecognitionsget) | **GET** /submissions/{submission_id}/questions/{question_id}/recognitions | List Recognitions
+[*ReviewApi*](doc/ReviewApi.md) | [**getSourcePdfSubmissionsSubmissionIdSourcePdfGet**](doc/ReviewApi.md#getsourcepdfsubmissionssubmissionidsourcepdfget) | **GET** /submissions/{submission_id}/source-pdf | Get Source Pdf
+[*ReviewApi*](doc/ReviewApi.md) | [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](doc/ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
+[*ReviewApi*](doc/ReviewApi.md) | [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](doc/ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
+[*ReviewApi*](doc/ReviewApi.md) | [**listQuestionsTestsTestIdQuestionsGet**](doc/ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**completeRegistrationTestsTestIdCompleteRegistrationPost**](doc/TestRegistrationApi.md#completeregistrationteststestidcompleteregistrationpost) | **POST** /tests/{test_id}/complete-registration | Complete Registration
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**confirmProfileTestsTestIdProfileConfirmPost**](doc/TestRegistrationApi.md#confirmprofileteststestidprofileconfirmpost) | **POST** /tests/{test_id}/profile/confirm | Confirm Profile
@@ -99,26 +103,33 @@ Class | Method | HTTP request | Description
 ## Documentation For Models
 
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
+ - [AnnotationResponse](doc/AnnotationResponse.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
  - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
  - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
+ - [CriterionResultResponse](doc/CriterionResultResponse.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
  - [DependencyProvision](doc/DependencyProvision.md)
+ - [GradeResultResponse](doc/GradeResultResponse.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)
  - [ManualRecognitionRequest](doc/ManualRecognitionRequest.md)
  - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)
+ - [NormalizedRectResponse](doc/NormalizedRectResponse.md)
  - [PageFormatModel](doc/PageFormatModel.md)
  - [ProfileResponse](doc/ProfileResponse.md)
+ - [QuestionResponse](doc/QuestionResponse.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
  - [RecognitionResponse](doc/RecognitionResponse.md)
  - [RegionKind](doc/RegionKind.md)
  - [RegionModel](doc/RegionModel.md)
+ - [RubricCriterionResponse](doc/RubricCriterionResponse.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
+ - [ScoreValueResponse](doc/ScoreValueResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
  - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)

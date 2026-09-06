@@ -10,24 +10,36 @@
 /// [SidecarApiException].
 library;
 
+import 'dart:typed_data';
+
 import 'package:auto_scoring_api/auto_scoring_api.dart';
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
     show
+        AnnotationResponse,
+        BoundingBoxResponse,
         CompleteRegistrationResponse,
+        CriterionResultResponse,
         DependencyEdgeModel,
         DependencyGraphResponse,
         DependencyProvision,
+        GradeResultResponse,
+        JobResponse,
         NormalizedBBoxModel,
+        NormalizedRectResponse,
         PageFormatModel,
         ProfileResponse,
+        QuestionResponse,
         QuestionTextOverride,
+        RecognitionResponse,
         RegionKind,
         RegionModel,
+        RubricCriterionResponse,
         ScoreRequest,
         ScoreResponse,
+        ScoreValueResponse,
         SubmissionResponse,
         TestResponse,
         TestSummary,
@@ -127,6 +139,9 @@ class SidecarApiClient {
     // createSubmission below -- it needs the longer intake timeout, not the
     // near-instant default.
     _uploadTestRegistrationApi = uploadGenerated.getTestRegistrationApi();
+    _recognitionsApi = generated.getRecognitionsApi();
+    _reviewApi = generated.getReviewApi();
+    _jobsApi = generated.getJobsApi();
   }
 
   static void _configure(
@@ -156,6 +171,9 @@ class SidecarApiClient {
   late final DefaultApi _api;
   late final TestRegistrationApi _testRegistrationApi;
   late final DependencyGraphApi _dependencyGraphApi;
+  late final RecognitionsApi _recognitionsApi;
+  late final ReviewApi _reviewApi;
+  late final JobsApi _jobsApi;
 
   /// A second Dio/client pair, configured with [intakeTimeout] instead of
   /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
@@ -566,6 +584,125 @@ class SidecarApiClient {
             cancelToken: cancelToken,
           );
       return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every `Question` for [testId] (its profile areas + rubric) -- the
+  /// 添削レビュー画面's Navigation Rail and Inspector (§16.5, Issue #21).
+  /// Throws [SidecarApiException] (404) for an unknown [testId].
+  Future<List<QuestionResponse>> listQuestions(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _reviewApi.listQuestionsTestsTestIdQuestionsGet(
+        testId: testId,
+        cancelToken: cancelToken,
+      );
+      return (response.data ?? const <QuestionResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The original, unmodified answer PDF for [submissionId] (§13.1), for the
+  /// `pdfrx` viewer to render underneath the annotation overlay. Throws
+  /// [SidecarApiException] (404) if the submission or its file is missing.
+  Future<Uint8List> getSourcePdf(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _reviewApi
+          .getSourcePdfSubmissionsSubmissionIdSourcePdfGet(
+            submissionId: submissionId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every `RecognitionResult` recorded for [submissionId]/[questionId] so
+  /// far, oldest first (AI proposals and human corrections, §19/§35-5).
+  Future<List<RecognitionResponse>> listRecognitions(
+    String submissionId,
+    String questionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _recognitionsApi
+          .listRecognitionsSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsGet(
+            submissionId: submissionId,
+            questionId: questionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <RecognitionResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every `GradeResult` recorded for [submissionId]/[questionId] so far,
+  /// oldest first -- each carries its own score, Grading Confidence, rubric
+  /// criteria, and rationale (§10, §19/§35-5).
+  Future<List<GradeResultResponse>> listGrades(
+    String submissionId,
+    String questionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _reviewApi
+          .listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet(
+            submissionId: submissionId,
+            questionId: questionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <GradeResultResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every `Annotation` recorded for [submissionId]/[questionId], for the
+  /// PDF overlay (§11-13).
+  Future<List<AnnotationResponse>> listAnnotations(
+    String submissionId,
+    String questionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _reviewApi
+          .listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet(
+            submissionId: submissionId,
+            questionId: questionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <AnnotationResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every `Job` (kind GRADING) ever created for [submissionId], across every
+  /// question and every dependency-graph version it was submitted under
+  /// (Issue #18) -- the only way to observe a per-question job's own
+  /// lifecycle (queued/running/blocked/succeeded/failed/cancelled), as
+  /// opposed to the submission's own coarse state (§16.5, P1 review).
+  Future<List<JobResponse>> listJobs(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _jobsApi
+          .listSubmissionJobsSubmissionsSubmissionIdJobsGet(
+            submissionId: submissionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <JobResponse>[]).toList();
     } on DioException catch (error) {
       throw _translate(error);
     }

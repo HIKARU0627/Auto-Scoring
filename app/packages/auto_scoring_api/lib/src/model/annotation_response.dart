@@ -3,33 +3,32 @@
 //
 
 // ignore_for_file: unused_element
-import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
-import 'package:built_collection/built_collection.dart';
+import 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
-part 'recognition_response.g.dart';
+part 'annotation_response.g.dart';
 
-/// RecognitionResponse
+/// AnnotationResponse
 ///
 /// Properties:
-/// * [boxes]
-/// * [confidence]
+/// * [anchorText]
+/// * [comment]
 /// * [createdAt]
 /// * [id]
+/// * [kind]
 /// * [questionId]
+/// * [rect]
 /// * [source_]
-/// * [stage]
 /// * [submissionId]
-/// * [text]
 @BuiltValue()
-abstract class RecognitionResponse
-    implements Built<RecognitionResponse, RecognitionResponseBuilder> {
-  @BuiltValueField(wireName: r'boxes')
-  BuiltList<BoundingBoxResponse> get boxes;
+abstract class AnnotationResponse
+    implements Built<AnnotationResponse, AnnotationResponseBuilder> {
+  @BuiltValueField(wireName: r'anchor_text')
+  String? get anchorText;
 
-  @BuiltValueField(wireName: r'confidence')
-  num get confidence;
+  @BuiltValueField(wireName: r'comment')
+  String? get comment;
 
   @BuiltValueField(wireName: r'created_at')
   DateTime get createdAt;
@@ -37,60 +36,61 @@ abstract class RecognitionResponse
   @BuiltValueField(wireName: r'id')
   String get id;
 
+  @BuiltValueField(wireName: r'kind')
+  String get kind;
+
   @BuiltValueField(wireName: r'question_id')
   String get questionId;
+
+  @BuiltValueField(wireName: r'rect')
+  NormalizedRectResponse? get rect;
 
   @BuiltValueField(wireName: r'source')
   String get source_;
 
-  @BuiltValueField(wireName: r'stage')
-  String get stage;
-
   @BuiltValueField(wireName: r'submission_id')
   String get submissionId;
 
-  @BuiltValueField(wireName: r'text')
-  String get text;
+  AnnotationResponse._();
 
-  RecognitionResponse._();
-
-  factory RecognitionResponse([void updates(RecognitionResponseBuilder b)]) =
-      _$RecognitionResponse;
+  factory AnnotationResponse([void updates(AnnotationResponseBuilder b)]) =
+      _$AnnotationResponse;
 
   @BuiltValueHook(initializeBuilder: true)
-  static void _defaults(RecognitionResponseBuilder b) => b;
+  static void _defaults(AnnotationResponseBuilder b) => b;
 
   @BuiltValueSerializer(custom: true)
-  static Serializer<RecognitionResponse> get serializer =>
-      _$RecognitionResponseSerializer();
+  static Serializer<AnnotationResponse> get serializer =>
+      _$AnnotationResponseSerializer();
 }
 
-class _$RecognitionResponseSerializer
-    implements PrimitiveSerializer<RecognitionResponse> {
+class _$AnnotationResponseSerializer
+    implements PrimitiveSerializer<AnnotationResponse> {
   @override
-  final Iterable<Type> types = const [
-    RecognitionResponse,
-    _$RecognitionResponse
-  ];
+  final Iterable<Type> types = const [AnnotationResponse, _$AnnotationResponse];
 
   @override
-  final String wireName = r'RecognitionResponse';
+  final String wireName = r'AnnotationResponse';
 
   Iterable<Object?> _serializeProperties(
     Serializers serializers,
-    RecognitionResponse object, {
+    AnnotationResponse object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
-    yield r'boxes';
-    yield serializers.serialize(
-      object.boxes,
-      specifiedType: const FullType(BuiltList, [FullType(BoundingBoxResponse)]),
-    );
-    yield r'confidence';
-    yield serializers.serialize(
-      object.confidence,
-      specifiedType: const FullType(num),
-    );
+    if (object.anchorText != null) {
+      yield r'anchor_text';
+      yield serializers.serialize(
+        object.anchorText,
+        specifiedType: const FullType.nullable(String),
+      );
+    }
+    if (object.comment != null) {
+      yield r'comment';
+      yield serializers.serialize(
+        object.comment,
+        specifiedType: const FullType.nullable(String),
+      );
+    }
     yield r'created_at';
     yield serializers.serialize(
       object.createdAt,
@@ -101,19 +101,26 @@ class _$RecognitionResponseSerializer
       object.id,
       specifiedType: const FullType(String),
     );
+    yield r'kind';
+    yield serializers.serialize(
+      object.kind,
+      specifiedType: const FullType(String),
+    );
     yield r'question_id';
     yield serializers.serialize(
       object.questionId,
       specifiedType: const FullType(String),
     );
+    if (object.rect != null) {
+      yield r'rect';
+      yield serializers.serialize(
+        object.rect,
+        specifiedType: const FullType.nullable(NormalizedRectResponse),
+      );
+    }
     yield r'source';
     yield serializers.serialize(
       object.source_,
-      specifiedType: const FullType(String),
-    );
-    yield r'stage';
-    yield serializers.serialize(
-      object.stage,
       specifiedType: const FullType(String),
     );
     yield r'submission_id';
@@ -121,17 +128,12 @@ class _$RecognitionResponseSerializer
       object.submissionId,
       specifiedType: const FullType(String),
     );
-    yield r'text';
-    yield serializers.serialize(
-      object.text,
-      specifiedType: const FullType(String),
-    );
   }
 
   @override
   Object serialize(
     Serializers serializers,
-    RecognitionResponse object, {
+    AnnotationResponse object, {
     FullType specifiedType = FullType.unspecified,
   }) {
     return _serializeProperties(serializers, object,
@@ -144,27 +146,28 @@ class _$RecognitionResponseSerializer
     Object serialized, {
     FullType specifiedType = FullType.unspecified,
     required List<Object?> serializedList,
-    required RecognitionResponseBuilder result,
+    required AnnotationResponseBuilder result,
     required List<Object?> unhandled,
   }) {
     for (var i = 0; i < serializedList.length; i += 2) {
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
-        case r'boxes':
+        case r'anchor_text':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType:
-                const FullType(BuiltList, [FullType(BoundingBoxResponse)]),
-          ) as BuiltList<BoundingBoxResponse>;
-          result.boxes.replace(valueDes);
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
+          result.anchorText = valueDes;
           break;
-        case r'confidence':
+        case r'comment':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType(num),
-          ) as num;
-          result.confidence = valueDes;
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
+          result.comment = valueDes;
           break;
         case r'created_at':
           final valueDes = serializers.deserialize(
@@ -180,12 +183,27 @@ class _$RecognitionResponseSerializer
           ) as String;
           result.id = valueDes;
           break;
+        case r'kind':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(String),
+          ) as String;
+          result.kind = valueDes;
+          break;
         case r'question_id':
           final valueDes = serializers.deserialize(
             value,
             specifiedType: const FullType(String),
           ) as String;
           result.questionId = valueDes;
+          break;
+        case r'rect':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(NormalizedRectResponse),
+          ) as NormalizedRectResponse?;
+          if (valueDes == null) continue;
+          result.rect.replace(valueDes);
           break;
         case r'source':
           final valueDes = serializers.deserialize(
@@ -194,26 +212,12 @@ class _$RecognitionResponseSerializer
           ) as String;
           result.source_ = valueDes;
           break;
-        case r'stage':
-          final valueDes = serializers.deserialize(
-            value,
-            specifiedType: const FullType(String),
-          ) as String;
-          result.stage = valueDes;
-          break;
         case r'submission_id':
           final valueDes = serializers.deserialize(
             value,
             specifiedType: const FullType(String),
           ) as String;
           result.submissionId = valueDes;
-          break;
-        case r'text':
-          final valueDes = serializers.deserialize(
-            value,
-            specifiedType: const FullType(String),
-          ) as String;
-          result.text = valueDes;
           break;
         default:
           unhandled.add(key);
@@ -224,12 +228,12 @@ class _$RecognitionResponseSerializer
   }
 
   @override
-  RecognitionResponse deserialize(
+  AnnotationResponse deserialize(
     Serializers serializers,
     Object serialized, {
     FullType specifiedType = FullType.unspecified,
   }) {
-    final result = RecognitionResponseBuilder();
+    final result = AnnotationResponseBuilder();
     final serializedList = (serialized as Iterable<Object?>).toList();
     final unhandled = <Object?>[];
     _deserializeProperties(
