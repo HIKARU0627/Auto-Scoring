@@ -14,41 +14,50 @@ from auto_scoring.api.sidecar import (
     LOOPBACK,
     Handshake,
     install_log_redaction,
-    resolve_port,
     run,
 )
 
 
-def _is_bindable(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind((LOOPBACK, port))
-        except OSError:
-            return False
-    return True
+def test_bind_socket_zero_returns_an_open_socket_on_a_free_loopback_port() -> None:
+    sock = sidecar._bind_socket(0)
+    try:
+        port = sock.getsockname()[1]
+        assert port != 0
+        # Still held by us: nothing else can have grabbed it in the meantime,
+        # which is the entire point (see _bind_socket's docstring).
+        with (
+            pytest.raises(OSError),
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other,
+        ):
+            other.bind((LOOPBACK, port))
+    finally:
+        sock.close()
 
 
-def test_resolve_port_zero_returns_free_loopback_port() -> None:
-    port = resolve_port(0)
-    assert port != 0
-    assert _is_bindable(port)
+def test_bind_socket_keeps_a_free_requested_port() -> None:
+    probe = sidecar._bind_socket(0)
+    free = probe.getsockname()[1]
+    probe.close()
+
+    sock = sidecar._bind_socket(free)
+    try:
+        assert sock.getsockname()[1] == free
+    finally:
+        sock.close()
 
 
-def test_resolve_port_keeps_a_free_requested_port() -> None:
-    free = resolve_port(0)
-    assert resolve_port(free) == free
-
-
-def test_resolve_port_falls_back_when_requested_port_is_taken() -> None:
+def test_bind_socket_falls_back_when_requested_port_is_taken() -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as held:
         held.bind((LOOPBACK, 0))
         held.listen()
         taken = held.getsockname()[1]
 
-        fallback = resolve_port(taken)
-
-    assert fallback != taken
-    assert _is_bindable(fallback)
+        sock = sidecar._bind_socket(taken)
+        try:
+            fallback = sock.getsockname()[1]
+            assert fallback != taken
+        finally:
+            sock.close()
 
 
 def test_install_log_redaction_scrubs_the_token(capsys: pytest.CaptureFixture[str]) -> None:
@@ -82,19 +91,45 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
 
     captured: dict[str, Any] = {}
 
-    def fake_uvicorn_run(app: Any, **kwargs: Any) -> None:
-        captured["app"] = app
-        captured["kwargs"] = kwargs
+    def fake_server_run(self: uvicorn.Server, sockets: list[socket.socket] | None = None) -> None:
+        captured["config"] = self.config
+        captured["sockets"] = sockets
 
-    monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
+    monkeypatch.setattr(uvicorn.Server, "run", fake_server_run)
 
     handshake_file = tmp_path / "handshake.json"
-    exit_code = run(["--handshake-file", str(handshake_file)])
+    exit_code = run(
+        [
+            "--handshake-file",
+            str(handshake_file),
+            "--app-data-dir",
+            str(tmp_path / "app-data"),
+        ]
+    )
 
     assert exit_code == 0
     payload = json.loads(handshake_file.read_text(encoding="utf-8"))
     assert payload["host"] == LOOPBACK
     assert payload["token"] == "generated-test-token"
-    assert captured["kwargs"]["host"] == LOOPBACK
-    assert captured["kwargs"]["port"] == payload["port"]
-    assert captured["app"].state.api_token == "generated-test-token"
+
+    config = captured["config"]
+    assert config.host == LOOPBACK
+    assert config.port == payload["port"]
+    assert config.app.state.api_token == "generated-test-token"
+    # The DB was created and migrated to head under --app-data-dir (Issue #26).
+    assert (tmp_path / "app-data" / "database.sqlite").is_file()
+
+    # The exact socket handed to Server.run() is bound to the same port the
+    # handshake already promised, and it is *still open* here -- proving
+    # run() never let go of it (and so never let anything else claim that
+    # port) between binding it and handing it to uvicorn. This is the
+    # regression this test exists for: the previous resolve_port()-returns-
+    # a-bare-int design closed its probe socket in that gap, and on Windows
+    # asyncio's own event loop could (and did) claim the just-freed port for
+    # itself before uvicorn's real listen socket got there.
+    sockets = captured["sockets"]
+    assert sockets is not None
+    assert len(sockets) == 1
+    assert sockets[0].getsockname()[1] == payload["port"]
+    assert sockets[0].fileno() != -1
+    sockets[0].close()

@@ -28,6 +28,26 @@ from enum import StrEnum
 
 _EPS = 1e-9
 
+#: A client posting directly to the API (bypassing the Flutter UI, which
+#: never sends more than a short label) could otherwise pack most of the
+#: request size limit into this one field -- it's stored verbatim and
+#: returned in full on every submissions-list response, so a handful of
+#: megabyte-scale labels would bloat both the database and every response's
+#: memory footprint (AGENTS.md "Validate every input that crosses a trust
+#: boundary"). ``migrations/versions/0006_student_label_length.py`` mirrors
+#: this as a DB CHECK constraint, a second line of defence.
+MAX_STUDENT_LABEL_LENGTH = 200
+
+#: Same reasoning as ``MAX_STUDENT_LABEL_LENGTH``, for the multipart upload's
+#: client-supplied filename: nothing but ``.pdf`` at the end and printable
+#: characters is required, and the whole body can be up to ~50MiB, so a
+#: client posting directly to the API could otherwise pack an arbitrarily
+#: long name into ``original_filename`` -- stored verbatim, returned on every
+#: submission response. Enforced in ``domain.pdf_intake.validate_filename``
+#: (the first, cheapest check on a fresh upload) and mirrored as a DB CHECK
+#: constraint in ``migrations/versions/0007_original_filename_length.py``.
+MAX_ORIGINAL_FILENAME_LENGTH = 255
+
 #: Upper bound for a single annotation comment, in characters
 #: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
 MAX_COMMENT_CHARS = 120
@@ -56,6 +76,27 @@ class ScoreOutOfRange(DomainError):
 
 class InvalidCoordinate(DomainError):
     """A normalized coordinate fell outside ``0..1`` (or its rect left the page)."""
+
+
+class JobSaveConflict(DomainError):
+    """A `Job` row changed state after it was read, before this save could apply.
+
+    Distinct from `InvalidStateTransition`: that means "this state machine
+    forbids this move"; this means "some other writer already moved the row
+    since we last read it", detected by the compare-and-set in
+    `JobRepository.save` (Issue #26 review: without this, a worker's
+    completion write -- validated in Python against a stale read -- could
+    silently overwrite a `CANCELLED` another transaction had already
+    committed, since a plain ORM ``UPDATE`` matches on primary key only).
+    """
+
+    def __init__(self, job_id: str, expected_state: object) -> None:
+        super().__init__(
+            f"job {job_id!r}: expected state {expected_state!s} no longer matches "
+            "the persisted row; it was changed by another writer"
+        )
+        self.job_id = job_id
+        self.expected_state = expected_state
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +173,17 @@ class ReviewAction(StrEnum):
     APPROVED = "approved"
     MODIFIED = "modified"
     REJECTED = "rejected"
+
+
+class AnswerImageStatus(StrEnum):
+    """Outcome of extracting one question's answer-area image from a submission
+    (§7.1, §24 "回答欄検出失敗"). ``NEEDS_REVIEW`` means the crop could not be
+    trusted (e.g. the submission's page count didn't match the test's
+    registered pages) and the original page image is shown to a human instead.
+    """
+
+    OK = "ok"
+    NEEDS_REVIEW = "needs_review"
 
 
 # --------------------------------------------------------------------------- #
@@ -357,19 +409,48 @@ class Rubric:
 
 @dataclass(frozen=True, kw_only=True)
 class Submission:
-    """One student's answers for a test. ``student_label`` stays local-only (§2 (13))."""
+    """One student's answers for a test. ``student_label`` stays local-only (§2 (13)).
+
+    ``source_pdf_sha256`` is the intake dedupe key (see
+    ``domain.submission_intake.decide_reintake``) and ``page_count`` is learned
+    once, at intake, so later code doesn't need to reopen the PDF just to know
+    how many pages it has. ``original_filename`` is never used as a storage
+    path (Issue #17: "path traversalと上書きを防ぐ") and is local-only, like
+    ``student_label``. ``review_reason`` records why intake routed this
+    submission to ``NEEDS_REVIEW`` (e.g. a page-count mismatch against the
+    test's registered questions), for display without re-deriving it.
+    """
 
     id: str
     test_id: str
     source_pdf_path: str
+    source_pdf_sha256: str
+    page_count: int
     created_at: datetime
     state: SubmissionState = SubmissionState.UNPROCESSED
     student_label: str | None = None
+    original_filename: str | None = None
+    review_reason: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("Submission.id", self.id)
         _require_non_empty("Submission.test_id", self.test_id)
         _require_non_empty("Submission.source_pdf_path", self.source_pdf_path)
+        _require_non_empty("Submission.source_pdf_sha256", self.source_pdf_sha256)
+        if self.page_count < 1:
+            raise DomainError("Submission.page_count must be >= 1")
+        if self.student_label is not None and len(self.student_label) > MAX_STUDENT_LABEL_LENGTH:
+            raise DomainError(
+                f"Submission.student_label must be at most {MAX_STUDENT_LABEL_LENGTH} characters"
+            )
+        if (
+            self.original_filename is not None
+            and len(self.original_filename) > MAX_ORIGINAL_FILENAME_LENGTH
+        ):
+            raise DomainError(
+                "Submission.original_filename must be at most "
+                f"{MAX_ORIGINAL_FILENAME_LENGTH} characters"
+            )
 
     def with_state(self, target: SubmissionState) -> Submission:
         """Return a copy in ``target`` state, or raise if the move is illegal."""
@@ -484,6 +565,38 @@ class Review:
 
 
 @dataclass(frozen=True, kw_only=True)
+class AnswerImage:
+    """The per-question image cropped from a submission's answer area (§7.1).
+
+    One row per ``(submission_id, question_id)`` -- a fresh submission (e.g. a
+    retry) gets its own set. ``image_path`` follows the same
+    app-data-root-relative convention as ``Submission.source_pdf_path``.
+    """
+
+    id: str
+    submission_id: str
+    question_id: str
+    page: int
+    image_path: str
+    status: AnswerImageStatus
+    created_at: datetime
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_non_empty("AnswerImage.id", self.id)
+        _require_non_empty("AnswerImage.submission_id", self.submission_id)
+        _require_non_empty("AnswerImage.question_id", self.question_id)
+        _require_non_empty("AnswerImage.image_path", self.image_path)
+        if self.page < 1:
+            raise DomainError("AnswerImage.page must be >= 1")
+        needs_review = self.status is AnswerImageStatus.NEEDS_REVIEW
+        if needs_review and not (self.reason and self.reason.strip()):
+            raise DomainError("needs_review answer image requires a reason")
+        if self.status is AnswerImageStatus.OK and self.reason is not None:
+            raise DomainError("ok answer image must not carry a reason")
+
+
+@dataclass(frozen=True, kw_only=True)
 class Job:
     """A unit of background work, persisted so it survives a restart (§3.4)."""
 
@@ -498,6 +611,11 @@ class Job:
     max_attempts: int = 3
     last_error: str | None = None
     blocked_on_question_id: str | None = None
+    #: The confirmed `DependencyGraph` version this job was queued against, if
+    #: any (Issue #26). Lets a later confirm supersede a still-incomplete job
+    #: whose dependency structure has since changed -- see
+    #: `reissue_job_for_graph_version`.
+    dependency_graph_version: int | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("Job.id", self.id)
@@ -506,6 +624,8 @@ class Job:
             raise DomainError("Job.max_attempts must be >= 1")
         if self.attempts < 0:
             raise DomainError("Job.attempts must be >= 0")
+        if self.dependency_graph_version is not None and self.dependency_graph_version < 1:
+            raise DomainError("Job.dependency_graph_version must be >= 1")
 
     def transitioned_to(
         self,
@@ -529,3 +649,38 @@ class Job:
             blocked_on_question_id=blocked_on_question_id,
             updated_at=updated_at,
         )
+
+
+def reissue_job_for_graph_version(
+    job: Job, *, new_version: int, new_id: str, at: datetime
+) -> tuple[Job, Job]:
+    """Cancel a job that was queued against a now-superseded dependency-graph
+    version, and return a fresh replacement queued against ``new_version``
+    (Issue #26 acceptance: "確定graphを変更した場合は…古いgraphで未完了の採点
+    jobを無効化・再作成できるようにする").
+
+    The replacement keeps the same ``kind``/``submission_id``/``question_id``
+    but resets attempts and ``blocked_on_question_id`` -- the new graph's
+    dependency structure may place it differently, so nothing about *how* it
+    was blocked before is assumed to still hold. The caller is expected to
+    persist both returned jobs in the same transaction as the graph
+    confirmation that triggered this (see
+    ``auto_scoring.api.dependency_graph_router``).
+    """
+    cancelled = job.transitioned_to(
+        JobState.CANCELLED,
+        updated_at=at,
+        error=f"stale: dependency graph advanced to version {new_version}",
+    )
+    replacement = replace(
+        job,
+        id=new_id,
+        state=JobState.QUEUED,
+        attempts=0,
+        last_error=None,
+        blocked_on_question_id=None,
+        dependency_graph_version=new_version,
+        created_at=at,
+        updated_at=at,
+    )
+    return cancelled, replacement

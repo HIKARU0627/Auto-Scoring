@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.sqlalchemy_repositories import (
     SqlAlchemyAnnotationRepository,
+    SqlAlchemyAnswerImageRepository,
+    SqlAlchemyDependencyGraphRepository,
     SqlAlchemyGradeResultRepository,
     SqlAlchemyJobRepository,
     SqlAlchemyQuestionRepository,
@@ -38,11 +40,13 @@ class SqlAlchemyUnitOfWork:
     questions: SqlAlchemyQuestionRepository
     rubrics: SqlAlchemyRubricRepository
     submissions: SqlAlchemySubmissionRepository
+    answer_images: SqlAlchemyAnswerImageRepository
     recognitions: SqlAlchemyRecognitionResultRepository
     grades: SqlAlchemyGradeResultRepository
     annotations: SqlAlchemyAnnotationRepository
     reviews: SqlAlchemyReviewRepository
     jobs: SqlAlchemyJobRepository
+    dependency_graphs: SqlAlchemyDependencyGraphRepository
 
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
@@ -55,11 +59,13 @@ class SqlAlchemyUnitOfWork:
         self.questions = SqlAlchemyQuestionRepository(session)
         self.rubrics = SqlAlchemyRubricRepository(session)
         self.submissions = SqlAlchemySubmissionRepository(session)
+        self.answer_images = SqlAlchemyAnswerImageRepository(session)
         self.recognitions = SqlAlchemyRecognitionResultRepository(session)
         self.grades = SqlAlchemyGradeResultRepository(session)
         self.annotations = SqlAlchemyAnnotationRepository(session)
         self.reviews = SqlAlchemyReviewRepository(session)
         self.jobs = SqlAlchemyJobRepository(session)
+        self.dependency_graphs = SqlAlchemyDependencyGraphRepository(session)
         return self
 
     def __exit__(

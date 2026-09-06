@@ -25,6 +25,14 @@ from auto_scoring.domain.pdf_geometry import (
 class PdfiumPypdfEngine:
     """Concrete :class:`~auto_scoring.domain.pdf_engine.PdfEngine`."""
 
+    def page_count(self, source: Path) -> int:
+        reader = PdfReader(str(source))
+        return len(reader.pages)
+
+    def is_encrypted(self, source: Path) -> bool:
+        reader = PdfReader(str(source))
+        return reader.is_encrypted
+
     def page_geometry(self, source: Path, page_index: int) -> PageGeometry:
         reader = PdfReader(str(source))
         page = reader.pages[page_index]

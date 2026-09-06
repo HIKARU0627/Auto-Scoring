@@ -24,6 +24,25 @@ from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 class PdfEngine(Protocol):
     """Everything the core needs from a PDF toolkit."""
 
+    def page_count(self, source: Path) -> int:
+        """Return the number of pages in ``source``.
+
+        Raises on a corrupted/unparseable file (Issue #17: "破損PDFを安全に
+        拒否する"). Implementations translate their underlying library's parse
+        error into a plain exception; callers in ``adapters`` classify it as
+        :class:`auto_scoring.domain.pdf_intake.PdfCorruptedError`.
+        """
+        ...
+
+    def is_encrypted(self, source: Path) -> bool:
+        """Return whether ``source`` requires a password to open.
+
+        The sidecar never prompts for a password (simplified-design-spec.md
+        §26: no unnecessary data handling); an encrypted PDF is rejected at
+        intake (Issue #17: "暗号化...PDFを安全に拒否する").
+        """
+        ...
+
     def page_geometry(self, source: Path, page_index: int) -> PageGeometry:
         """Return the crop box and rotation pdfium uses to display the page."""
         ...

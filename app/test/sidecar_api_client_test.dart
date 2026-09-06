@@ -1,4 +1,5 @@
 @Tags(['sidecar'])
+@Timeout(Duration(minutes: 3))
 library;
 
 import 'dart:convert';
@@ -25,34 +26,109 @@ void main() {
       ? '$backendDir/.venv/Scripts/auto-scoring-sidecar.exe'
       : '$backendDir/.venv/bin/auto-scoring-sidecar';
 
-  late Process sidecar;
-  late Directory tempDir;
-  late SidecarConnection connection;
+  Process? sidecar;
+  Directory? tempDir;
 
-  setUpAll(() async {
+  // Spawning the sidecar and waiting for it to become healthy used to live
+  // in `setUpAll`, moved here for two independent reasons -- see
+  // docs/answer-intake-and-preprocessing.md §20 for the full isolation that
+  // led to both:
+  //
+  // 1. package:test does not run this file's top-level `test()` bodies
+  //    strictly one at a time -- several can be mid-flight at once, so the
+  //    very first version of this helper (which only memoized the
+  //    *resolved* `SidecarConnection`, checked with a plain `if (x != null)
+  //    return x;`) let multiple tests race in before any of them had
+  //    finished: each one saw no connection yet and independently spawned
+  //    its own sidecar process, several of which then fought over ephemeral
+  //    loopback ports and over `intake_lock`/DB access inside the same
+  //    fresh `app-data`. Memoizing the in-flight `Future` itself (assigned
+  //    synchronously, before any `await`) closes that window: every caller,
+  //    no matter how many arrive before the first spawn finishes, awaits
+  //    the one shared attempt.
+  // 2. `setUpAll` has some further Windows-specific interaction with
+  //    `Process.start` that a `test()` body does not (dart-lang/sdk#49615
+  //    and related cover the broader "Process.start inside a Flutter/
+  //    package:test hook" class of issues).
+  //
+  // Neither of those was the whole story, though: even with both fixed,
+  // this file can still take on the order of a minute to become healthy,
+  // both on some local Windows runs *and* on GitHub Actions' hosted
+  // `windows-latest` runners (confirmed by a real CI failure -- this is not
+  // only a local-machine quirk). Isolated locally to `_waitUntilHealthy`
+  // retrying a real HTTP GET that times out (not "connection refused")
+  // against a socket the sidecar itself confirms it is listening on a
+  // moment later -- consistent with real-time antivirus/network-inspection
+  // interference on a freshly spawned, unrecognized child process (Windows
+  // Defender's real-time protection is on by default on GitHub's hosted
+  // Windows runners too, and would treat a just-built, unsigned executable
+  // with more scrutiny than one it has already scanned). Two mitigations,
+  // neither a fix for the interference itself (out of this repo's control):
+  //
+  // * `@Timeout(Duration(minutes: 3))` above replaces package:test's
+  //   default 30-second per-test timeout, which was the immediate cause of
+  //   the CI failure: it fired on the *first* test to call `ensureSidecar`
+  //   well before the shared spawn (delayed, not hung -- it did eventually
+  //   finish) could complete, and every following test then repeated the
+  //   same 30-second wait against the still-pending shared `Future`,
+  //   compounding a startup delay into a hard failure. `_readHandshake` and
+  //   `_waitUntilHealthy` below give the delayed startup itself a
+  //   correspondingly longer budget to actually succeed in.
+  // * `startSidecar` now drains and records the sidecar's stdout/stderr as
+  //   they arrive, and prints everything captured so far if either helper
+  //   times out -- previously, a slow or failed startup left zero
+  //   diagnostic output in the test log (as happened in that CI run: the
+  //   failure was visible, but nothing about *why* the process was slow to
+  //   respond was ever captured).
+  Future<SidecarConnection> startSidecar() async {
     tempDir = await Directory.systemTemp.createTemp('sidecar_it_');
-    final handshakeFile = File('${tempDir.path}/handshake.json');
+    final handshakeFile = File('${tempDir!.path}/handshake.json');
 
-    sidecar = await Process.start(sidecarExe, [
+    final process = await Process.start(sidecarExe, [
       '--handshake-file',
       handshakeFile.path,
+      '--app-data-dir',
+      '${tempDir!.path}/app-data',
     ]);
+    sidecar = process;
 
-    final handshake = await _readHandshake(handshakeFile);
-    connection = SidecarConnection(
-      baseUrl: 'http://${handshake['host']}:${handshake['port']}',
-      token: handshake['token'] as String,
-    );
-    await _waitUntilHealthy(SidecarApiClient(connection));
-  });
+    final output = StringBuffer();
+    process.stdout.transform(utf8.decoder).listen(output.write);
+    process.stderr.transform(utf8.decoder).listen(output.write);
+
+    try {
+      final handshake = await _readHandshake(handshakeFile);
+      final started = SidecarConnection(
+        baseUrl: 'http://${handshake['host']}:${handshake['port']}',
+        token: handshake['token'] as String,
+      );
+      await _waitUntilHealthy(SidecarApiClient(started));
+      return started;
+    } catch (_) {
+      // ignore: avoid_print
+      print('sidecar stdout/stderr captured so far:\n$output');
+      rethrow;
+    }
+  }
+
+  Future<SidecarConnection>? startingSidecar;
+
+  Future<SidecarConnection> ensureSidecar() {
+    return startingSidecar ??= startSidecar();
+  }
 
   tearDownAll(() async {
-    sidecar.kill(ProcessSignal.sigkill);
-    await sidecar.exitCode;
-    await tempDir.delete(recursive: true);
+    final process = sidecar;
+    if (process != null) {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+    }
+    final dir = tempDir;
+    if (dir != null) await _deleteWithRetry(dir);
   });
 
   test('health check succeeds even with a bogus token', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(
       SidecarConnection(baseUrl: connection.baseUrl, token: 'bogus'),
     );
@@ -62,6 +138,7 @@ void main() {
   });
 
   test('protected call succeeds with the session token', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(connection);
     addTearDown(client.close);
 
@@ -74,6 +151,7 @@ void main() {
   });
 
   test('protected call is rejected with a wrong token', () async {
+    final connection = await ensureSidecar();
     final client = SidecarApiClient(
       SidecarConnection(baseUrl: connection.baseUrl, token: 'not-the-token'),
     );
@@ -89,7 +167,46 @@ void main() {
     );
   });
 
+  test('listTests succeeds against the real sidecar', () async {
+    final connection = await ensureSidecar();
+    final client = SidecarApiClient(connection);
+    addTearDown(client.close);
+
+    expect(await client.listTests(), isA<List<TestSummary>>());
+  });
+
+  test(
+    'createSubmission sends a PDF content type the sidecar accepts',
+    () async {
+      final connection = await ensureSidecar();
+      final client = SidecarApiClient(connection);
+      addTearDown(client.close);
+
+      final pdfFile = File('${tempDir!.path}/content-type-check.pdf');
+      await pdfFile.writeAsBytes(utf8.encode('%PDF-1.7\n%%EOF'));
+
+      // No test with this id is registered. dio's MultipartFile.fromFile
+      // defaults to application/octet-stream when no contentType is given,
+      // and the sidecar rejects any declared type other than application/pdf
+      // (or none) with 400 -- before it even looks at test_id. Getting 404
+      // here (test not found) instead of 400 proves the upload's content
+      // type passed that check and reached the sidecar's normal pipeline.
+      await expectLater(
+        client.createSubmission(
+          testId: 'does-not-exist',
+          filePath: pdfFile.path,
+        ),
+        throwsA(
+          isA<SidecarApiException>()
+              .having((e) => e.kind, 'kind', SidecarErrorKind.badResponse)
+              .having((e) => e.statusCode, 'statusCode', 404),
+        ),
+      );
+    },
+  );
+
   test('a sidecar that is not running surfaces as unavailable', () async {
+    final connection = await ensureSidecar();
     // A port that was free a moment ago and has nothing listening now: the
     // OS refuses the connection immediately.
     final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -137,6 +254,7 @@ void main() {
   });
 
   test('unknown transport errors do not expose connection details', () async {
+    final connection = await ensureSidecar();
     const leaked = 'must-not-escape http://127.0.0.1:54321';
     final dio = Dio()
       ..interceptors.add(
@@ -168,8 +286,25 @@ void main() {
   });
 }
 
+/// Windows can hold the killed sidecar's SQLite WAL/shm files open for a
+/// moment after `sigkill`+`exitCode` return, once a test has actually written
+/// through the DB (e.g. `createSubmission`) -- a plain `dir.delete` then
+/// throws `PathAccessException` even though the process is already gone.
+Future<void> _deleteWithRetry(Directory dir) async {
+  for (var attempt = 0; attempt < 10; attempt++) {
+    try {
+      await dir.delete(recursive: true);
+      return;
+    } on FileSystemException {
+      if (attempt == 9) rethrow;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+}
+
 Future<Map<String, dynamic>> _readHandshake(File file) async {
-  for (var attempt = 0; attempt < 60; attempt++) {
+  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  while (DateTime.now().isBefore(deadline)) {
     if (file.existsSync() && file.lengthSync() > 0) {
       return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
     }
@@ -180,7 +315,14 @@ Future<Map<String, dynamic>> _readHandshake(File file) async {
 
 Future<void> _waitUntilHealthy(SidecarApiClient client) async {
   try {
-    for (var attempt = 0; attempt < 40; attempt++) {
+    // Generous on purpose: writing the handshake file only proves the
+    // process itself started, not that create_app()'s migrations have
+    // finished and uvicorn is actually accepting connections yet, and both
+    // that work and this health check's own request/response can be
+    // delayed well past what a healthy machine would need -- see the
+    // antivirus/network-inspection note on `startSidecar` above.
+    final deadline = DateTime.now().add(const Duration(minutes: 2));
+    while (DateTime.now().isBefore(deadline)) {
       if (await client.isHealthy()) return;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }

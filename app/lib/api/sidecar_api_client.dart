@@ -12,9 +12,10 @@ library;
 
 import 'package:auto_scoring_api/auto_scoring_api.dart';
 import 'package:dio/dio.dart';
+import 'package:http_parser/http_parser.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
-    show ScoreRequest, ScoreResponse;
+    show ScoreRequest, ScoreResponse, SubmissionResponse, TestSummary;
 export 'package:dio/dio.dart' show CancelToken;
 
 /// Where the sidecar is listening and the token minted for this session.
@@ -66,20 +67,55 @@ class SidecarApiException implements Exception {
       'SidecarApiException($kind, "$message", status: $statusCode)';
 }
 
+/// Raised by [SidecarApiClient.createSubmission] when the sidecar already has
+/// a submission with the same PDF content for this test (409) -- Issue #17's
+/// reintake policy (docs/answer-intake-and-preprocessing.md §2). Carries the
+/// existing submission id so the UI can point the user at it instead of just
+/// showing a generic error.
+class DuplicateSubmissionException implements Exception {
+  DuplicateSubmissionException(this.message, this.existingSubmissionId);
+
+  final String message;
+  final String existingSubmissionId;
+
+  @override
+  String toString() =>
+      'DuplicateSubmissionException("$message", existing: $existingSubmissionId)';
+}
+
 /// Thin, typed boundary over the generated sidecar client.
 class SidecarApiClient {
   SidecarApiClient(
     SidecarConnection connection, {
     Duration timeout = const Duration(seconds: 10),
+    Duration intakeTimeout = const Duration(minutes: 5),
     Dio? dio,
-  }) : _dio = dio ?? Dio() {
+    Dio? uploadDio,
+  }) : _dio = dio ?? Dio(),
+       _uploadDio = uploadDio ?? Dio() {
+    _configure(_dio, connection, timeout);
+    _configure(_uploadDio, connection, intakeTimeout);
+    // Pass an empty interceptor list so the generated client does not also
+    // register its own auth interceptors on top of ours.
+    _api = AutoScoringApi(dio: _dio, interceptors: const []).getDefaultApi();
+    _uploadApi = AutoScoringApi(
+      dio: _uploadDio,
+      interceptors: const [],
+    ).getDefaultApi();
+  }
+
+  static void _configure(
+    Dio dio,
+    SidecarConnection connection,
+    Duration timeout,
+  ) {
     final baseUrl = _validatedLoopbackBaseUrl(connection.baseUrl);
-    _dio.options
+    dio.options
       ..baseUrl = baseUrl
       ..connectTimeout = timeout
       ..sendTimeout = timeout
       ..receiveTimeout = timeout;
-    _dio.interceptors.add(
+    dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
           if (options.path != '/healthz') {
@@ -89,13 +125,21 @@ class SidecarApiClient {
         },
       ),
     );
-    // Pass an empty interceptor list so the generated client does not also
-    // register its own auth interceptors on top of ours.
-    _api = AutoScoringApi(dio: _dio, interceptors: const []).getDefaultApi();
   }
 
   final Dio _dio;
   late final DefaultApi _api;
+
+  /// A second Dio/client pair, configured with [intakeTimeout] instead of
+  /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
+  /// every page of a large answer PDF happens inside that one request before
+  /// the sidecar responds, so it needs far more headroom than the other
+  /// (near-instant) calls share -- otherwise the client reports a timeout
+  /// failure while the sidecar keeps working and commits anyway, and a
+  /// client-side retry on the same bytes would then just surface as a
+  /// confusing duplicate-submission conflict.
+  final Dio _uploadDio;
+  late final DefaultApi _uploadApi;
 
   /// Liveness probe. Never throws: an unreachable sidecar is a state the UI
   /// renders, not an error. The endpoint itself needs no auth.
@@ -140,8 +184,132 @@ class SidecarApiClient {
     }
   }
 
+  /// The registered tests available to import answers into (§16.4 test picker).
+  /// Throws [SidecarApiException] on any failure.
+  Future<List<TestSummary>> listTests({CancelToken? cancelToken}) async {
+    try {
+      final response = await _api.listTestsTestsGet(cancelToken: cancelToken);
+      return (response.data ?? const <TestSummary>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every submission imported for [testId], in intake order.
+  /// Throws [SidecarApiException] on any failure.
+  Future<List<SubmissionResponse>> listSubmissions(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _api.listSubmissionsTestsTestIdSubmissionsGet(
+        testId: testId,
+        cancelToken: cancelToken,
+      );
+      return (response.data ?? const <SubmissionResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// One submission's current intake/processing state, for polling progress.
+  /// Throws [SidecarApiException] on any failure.
+  Future<SubmissionResponse> getSubmission(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _api.getSubmissionSubmissionsSubmissionIdGet(
+        submissionId: submissionId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Upload one answer PDF for [testId] (§16.4 答案取込画面). Re-uploading the
+  /// same failed submission retries it in place; re-uploading identical bytes
+  /// for a submission that is not errored throws
+  /// [DuplicateSubmissionException] instead of silently overwriting it
+  /// (docs/answer-intake-and-preprocessing.md §2).
+  Future<SubmissionResponse> createSubmission({
+    required String testId,
+    required String filePath,
+    String? studentLabel,
+    CancelToken? cancelToken,
+  }) async {
+    final MultipartFile file;
+    try {
+      // Explicit contentType: MultipartFile.fromFile defaults to
+      // application/octet-stream when none is given, and the sidecar rejects
+      // any declared content type other than application/pdf (or none at
+      // all) -- left implicit, every real upload would be rejected before
+      // the sidecar ever looks at the bytes.
+      file = await MultipartFile.fromFile(
+        filePath,
+        contentType: MediaType('application', 'pdf'),
+      );
+    } catch (error) {
+      // Reading the picked file can fail on its own (deleted, a disconnected
+      // removable drive, permissions) before any request is even sent; that
+      // is not a DioException, so it needs converting here too, or it would
+      // reach the UI as an unhandled error instead of the retry banner every
+      // other failure gets.
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
+      final response = await _uploadApi
+          .createSubmissionTestsTestIdSubmissionsPost(
+            testId: testId,
+            file: file,
+            studentLabel: studentLabel,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      final duplicate = _duplicateSubmission(error);
+      if (duplicate != null) throw duplicate;
+      throw _translate(error);
+    }
+  }
+
+  T _requireBody<T>(Response<T> response) {
+    final body = response.data;
+    if (body == null) {
+      throw SidecarApiException(
+        SidecarErrorKind.badResponse,
+        'sidecar returned an empty body',
+        statusCode: response.statusCode,
+      );
+    }
+    return body;
+  }
+
+  DuplicateSubmissionException? _duplicateSubmission(DioException error) {
+    if (error.response?.statusCode != 409) return null;
+    final detail = error.response?.data is Map
+        ? (error.response!.data as Map)['detail']
+        : null;
+    if (detail is! Map) return null;
+    final existingId = detail['existing_submission_id'];
+    if (existingId is! String) return null;
+    final message = detail['message'];
+    return DuplicateSubmissionException(
+      message is String ? message : 'duplicate submission',
+      existingId,
+    );
+  }
+
   /// Release the underlying HTTP connections.
-  void close() => _dio.close(force: true);
+  void close() {
+    _dio.close(force: true);
+    _uploadDio.close(force: true);
+  }
 
   SidecarApiException _translate(DioException error) {
     switch (error.type) {
@@ -176,7 +344,8 @@ class SidecarApiClient {
         }
         return SidecarApiException(
           SidecarErrorKind.badResponse,
-          'sidecar returned HTTP $status',
+          _detailMessage(error.response?.data) ??
+              'sidecar returned HTTP $status',
           statusCode: status,
         );
       case DioExceptionType.badCertificate:
@@ -187,6 +356,19 @@ class SidecarApiClient {
         );
     }
   }
+}
+
+/// FastAPI's `{"detail": "..."}` (or our own `{"detail": {"message": "..."}}`
+/// shape for structured errors) -- pulls the human-readable text out so
+/// callers see *why* a request failed, not just its status code.
+String? _detailMessage(Object? data) {
+  if (data is! Map) return null;
+  final detail = data['detail'];
+  if (detail is String) return detail;
+  if (detail is Map && detail['message'] is String) {
+    return detail['message'] as String;
+  }
+  return null;
 }
 
 String _validatedLoopbackBaseUrl(String value) {

@@ -10,6 +10,9 @@ from typing import Any
 
 from auto_scoring.db.orm import (
     AnnotationRow,
+    AnswerImageRow,
+    DependencyEdgeRow,
+    DependencyGraphRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -20,9 +23,18 @@ from auto_scoring.db.orm import (
     SubmissionRow,
     TestRow,
 )
+from auto_scoring.domain.dependency_graph import (
+    DependencyEdge,
+    DependencyGraph,
+    DependencyGraphStatus,
+    DependencyProvision,
+    UnresolvedQuestion,
+)
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
+    AnswerImage,
+    AnswerImageStatus,
     BoundingBox,
     CriterionOutcome,
     CriterionResult,
@@ -183,8 +195,12 @@ def submission_to_row(submission: Submission) -> SubmissionRow:
         id=submission.id,
         test_id=submission.test_id,
         source_pdf_path=submission.source_pdf_path,
+        source_pdf_sha256=submission.source_pdf_sha256,
+        page_count=submission.page_count,
         state=submission.state,
         student_label=submission.student_label,
+        original_filename=submission.original_filename,
+        review_reason=submission.review_reason,
         created_at=submission.created_at,
     )
 
@@ -194,8 +210,41 @@ def submission_from_row(row: SubmissionRow) -> Submission:
         id=row.id,
         test_id=row.test_id,
         source_pdf_path=row.source_pdf_path,
+        source_pdf_sha256=row.source_pdf_sha256,
+        page_count=row.page_count,
         state=SubmissionState(row.state),
         student_label=row.student_label,
+        original_filename=row.original_filename,
+        review_reason=row.review_reason,
+        created_at=row.created_at,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# AnswerImage
+# --------------------------------------------------------------------------- #
+def answer_image_to_row(image: AnswerImage) -> AnswerImageRow:
+    return AnswerImageRow(
+        id=image.id,
+        submission_id=image.submission_id,
+        question_id=image.question_id,
+        page=image.page,
+        image_path=image.image_path,
+        status=image.status,
+        reason=image.reason,
+        created_at=image.created_at,
+    )
+
+
+def answer_image_from_row(row: AnswerImageRow) -> AnswerImage:
+    return AnswerImage(
+        id=row.id,
+        submission_id=row.submission_id,
+        question_id=row.question_id,
+        page=row.page,
+        image_path=row.image_path,
+        status=AnswerImageStatus(row.status),
+        reason=row.reason,
         created_at=row.created_at,
     )
 
@@ -335,6 +384,7 @@ def job_to_row(job: Job) -> JobRow:
         max_attempts=job.max_attempts,
         last_error=job.last_error,
         blocked_on_question_id=job.blocked_on_question_id,
+        dependency_graph_version=job.dependency_graph_version,
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -351,6 +401,62 @@ def job_from_row(row: JobRow) -> Job:
         max_attempts=row.max_attempts,
         last_error=row.last_error,
         blocked_on_question_id=row.blocked_on_question_id,
+        dependency_graph_version=row.dependency_graph_version,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# DependencyGraph
+# --------------------------------------------------------------------------- #
+def dependency_graph_rows(
+    graph: DependencyGraph,
+) -> tuple[DependencyGraphRow, list[DependencyEdgeRow]]:
+    parent = DependencyGraphRow(
+        id=graph.id,
+        test_id=graph.test_id,
+        version=graph.version,
+        status=graph.status,
+        question_ids=sorted(graph.question_ids),
+        unresolved=[u.to_dict() for u in graph.unresolved],
+        created_at=graph.created_at,
+        confirmed_at=graph.confirmed_at,
+    )
+    children = [
+        DependencyEdgeRow(
+            graph_id=graph.id,
+            from_question_id=edge.from_question_id,
+            to_question_id=edge.to_question_id,
+            provides=[p.value for p in edge.provides],
+            rationale=edge.rationale,
+            confidence=edge.confidence,
+        )
+        for edge in graph.edges
+    ]
+    return parent, children
+
+
+def dependency_graph_from_rows(
+    row: DependencyGraphRow, edge_rows: list[DependencyEdgeRow]
+) -> DependencyGraph:
+    return DependencyGraph(
+        id=row.id,
+        test_id=row.test_id,
+        version=row.version,
+        question_ids=frozenset(row.question_ids),
+        edges=tuple(
+            DependencyEdge(
+                from_question_id=edge.from_question_id,
+                to_question_id=edge.to_question_id,
+                provides=tuple(DependencyProvision(p) for p in edge.provides),
+                rationale=edge.rationale,
+                confidence=edge.confidence,
+            )
+            for edge in edge_rows
+        ),
+        unresolved=tuple(UnresolvedQuestion.from_dict(u) for u in row.unresolved),
+        status=DependencyGraphStatus(row.status),
+        created_at=row.created_at,
+        confirmed_at=row.confirmed_at,
     )

@@ -30,6 +30,69 @@ from uuid import uuid4
 
 _TEMP_SUFFIX = ".part"
 
+#: Windows device names reserved regardless of extension (``CON.png`` still
+#: addresses the ``CON`` device via most Win32 APIs). Checked against the
+#: segment's stem, case-insensitively.
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
+def _ensure_safe_path_segment(value: str) -> None:
+    """Reject a value that isn't safe to use as a single path segment.
+
+    Ids that end up embedded in a path here (``Question.id``, submission/test
+    ids) are only required by the domain layer to be non-empty -- nothing
+    stops a value like ``"../pages/page-1"`` from resolving, once
+    interpolated into a filename, to a completely different file elsewhere
+    under the store root. ``_ensure_within_root`` only catches escaping the
+    root entirely; it would accept a path like that since it still lands
+    inside ``app-data/``, just silently overwriting the wrong file (AGENTS.md
+    "Validate every input that crosses a trust boundary").
+
+    A colon is rejected outright rather than just "/" and "\\": on Windows, a
+    drive-relative segment like ``"C:foo"`` carries no path separator at all,
+    yet ``Path.joinpath(root, "C:foo.png")`` resolves to the same path as
+    plain ``"foo.png"`` -- two different ids would silently collide on one
+    file. Windows' reserved device names (``CON``, ``COM1``, ...) are
+    rejected too: many Win32 APIs address the device through a name like
+    that regardless of extension (``CON.png`` still means ``CON``).
+    """
+    if (
+        not value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or "\x00" in value
+        or ":" in value
+    ):
+        raise ValueError(f"unsafe path segment: {value!r}")
+    stem = value.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED_STEMS:
+        raise ValueError(f"unsafe path segment: {value!r}")
+
+
+def _encode_filename_component(value: str) -> str:
+    """Deterministically encode ``value`` for use as a filename stem.
+
+    ``Question.id`` is only required by the domain layer to be non-empty --
+    nothing stops it from containing characters Windows forbids in a
+    filename (``? * " < > | :``, checked above only when they'd also be
+    unsafe as a bare *path segment*, which ``<id>.png`` is not) or from two
+    ids differing only by case: NTFS resolves filenames case-insensitively,
+    so ``"Q-1"`` and ``"q-1"`` would address the same file on Windows even
+    though they are two distinct rows in the DB, each retry of the
+    forbidden-character case would fail finalization again, and the
+    case-collision case would silently overwrite one question's crop with
+    the other's. Hex-encoding the id's UTF-8 bytes sidesteps both: the
+    result is always composed of ``[0-9a-f]`` (always a valid filename on
+    every platform), and it is byte-exact, so differently-cased or
+    differently-punctuated inputs always encode to different strings.
+    """
+    return value.encode("utf-8").hex()
+
 
 class LocalFileStore:
     def __init__(self, root: Path | str) -> None:
@@ -49,6 +112,18 @@ class LocalFileStore:
 
     def submission_dir(self, submission_id: str) -> Path:
         return self._resolve("submissions", submission_id)
+
+    def submission_source_pdf_path(self, submission_id: str) -> Path:
+        return self._resolve("submissions", submission_id, "source.pdf")
+
+    def submission_page_image_path(self, submission_id: str, page: int) -> Path:
+        """Preprocessed full-page preview image (Issue #17 §7.1), 1-based ``page``."""
+        return self._resolve("submissions", submission_id, "pages", f"page-{page}.png")
+
+    def submission_question_image_path(self, submission_id: str, question_id: str) -> Path:
+        """Cropped answer-area image for one question of one submission."""
+        encoded = _encode_filename_component(question_id)
+        return self._resolve("submissions", submission_id, "questions", f"{encoded}.png")
 
     def exports_dir(self) -> Path:
         return self._resolve("exports")
@@ -101,6 +176,8 @@ class LocalFileStore:
 
     # -- internals ----------------------------------------------------- #
     def _resolve(self, *parts: str) -> Path:
+        for part in parts:
+            _ensure_safe_path_segment(part)
         return self._ensure_within_root(self._root.joinpath(*parts))
 
     def _ensure_within_root(self, path: Path) -> Path:

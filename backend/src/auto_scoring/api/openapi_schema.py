@@ -12,15 +12,26 @@ import json
 from pathlib import Path
 from typing import Any
 
+import auto_scoring.db.orm  # noqa: F401  (registers tables on Base.metadata)
 from auto_scoring.api.app import create_app
+from auto_scoring.db.base import Base
+from auto_scoring.db.engine import build_session_factory, create_sqlite_engine
 
 _EXPORT_TOKEN = "openapi-export-placeholder"  # deterministic, not a real credential
 SCHEMA_PATH = Path(__file__).resolve().parents[3] / "openapi" / "openapi.json"
 
 
 def schema() -> dict[str, Any]:
-    """Return the OpenAPI document for the sidecar app."""
-    return create_app(api_token=_EXPORT_TOKEN).openapi()
+    """Return the OpenAPI document for the sidecar app.
+
+    The DB-backed routes (Issue #26 dependency-graph endpoints) need a
+    `session_factory` to be mounted at all; an in-memory SQLite database is
+    enough since only the route *shapes* matter for the exported schema.
+    """
+    engine = create_sqlite_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session_factory = build_session_factory(engine)
+    return create_app(api_token=_EXPORT_TOKEN, session_factory=session_factory).openapi()
 
 
 def write_schema(path: Path = SCHEMA_PATH) -> None:
