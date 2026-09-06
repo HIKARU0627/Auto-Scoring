@@ -124,6 +124,31 @@ def test_provider_unavailable_on_non_json_response_body() -> None:
         provider.grade(_VALID_REQUEST)
 
 
+def test_provider_unavailable_on_invalid_utf8_response_body() -> None:
+    """A body containing invalid UTF-8 fails even earlier than JSON
+    parsing -- as a ``UnicodeDecodeError`` from ``httpx.Response.json()``'s
+    internal text decoding -- and must be normalized the same way as any
+    other malformed transport response, never left to escape as an
+    unclassified exception with the raw response bytes in its traceback
+    (code review finding)."""
+
+    def _invalid_utf8_body(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"\xff\xfe\x00not valid utf-8 \xfe\xff",
+            headers={"content-type": "application/json; charset=utf-8"},
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_invalid_utf8_body),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    with pytest.raises(ProviderUnavailable):
+        provider.grade(_VALID_REQUEST)
+
+
 def test_descriptor_records_the_routed_model_and_upstream_provider_as_version() -> None:
     """OpenRouter can route the same model slug through different upstream
     providers; recording only ``model`` would pool calls that actually ran

@@ -1125,11 +1125,16 @@ fingerprint をセットした後、次の呼び出しが応答本文を得る�
 OpenRouter の失敗の分類は 2 通りに分ける（コードレビュー指摘）:
 
 - **transport 失敗**（`ProviderUnavailable`）: ネットワークエラー・
-  timeout・非 2xx ステータス・200 だが非 JSON の body。エラーメッセージ
-  には response body を含めないまま、`httpx.HTTPStatusError` の場合のみ
-  数値の HTTP ステータスコードを含める（呼び出し側が文書化された 429
-  backoff を適用したり、恒久的な認証/設定失敗〈4xx〉と一時的なサーバー
-  エラー〈5xx〉を区別できるようにするため）。
+  timeout・非 2xx ステータス・200 だが非 JSON の body（不正な UTF-8 を
+  含む body も含む: `http_response.json()` は `json.JSONDecodeError` より
+  前に、内部の text decode の時点で `UnicodeDecodeError` を送出しうる。
+  コードレビュー指摘: この例外を transport 失敗の except 節に含めて
+  いないと、未分類の例外として素通りし、traceback に生の response
+  バイト列が残るおそれがある）。エラーメッセージには response body を
+  含めないまま、`httpx.HTTPStatusError` の場合のみ数値の HTTP
+  ステータスコードを含める（呼び出し側が文書化された 429 backoff を
+  適用したり、恒久的な認証/設定失敗〈4xx〉と一時的なサーバーエラー〈5xx〉
+  を区別できるようにするため）。
 - **構造化応答の不正**（`SchemaViolation`）: 200 かつ有効な JSON だが、
   top-level の値自体が object でない（配列・裸の scalar など）場合、
   `choices[0].message.content` が欠落・非文字列（拒否応答や response
@@ -1185,11 +1190,23 @@ Codex CLI 0.153.2）。公式の独立したプロトコル仕様書は見つか
   にし、ターン完了後に丸ごと削除する——コードレビュー指摘: `read-only`
   sandbox でもファイル読み取り自体は許可されたままであり、共有 temp root
   を指すと他の呼び出し・他プロセスの一時ファイルを列挙されうる。
-  `thread/start` にはさらに `config: {"shell_environment_policy":
-{"inherit": "none"}}` を渡す。これは `codex --help` が例示する
-  `-c shell_environment_policy.inherit=all` という設定キーの兄弟値と
-  推測して実装したものであり、実際の app-server 呼び出しでは未検証
-  （下記の未決事項）。`turn/start`（`input` に `text` と `localImage`
+  `thread/start` にはさらに `config` として
+  `_DISABLE_FILE_AND_SHELL_TOOLS_CONFIG`（`{"features": {"shell_tool":
+false, "unified_exec": false, "view_image": false}, "shell_environment_
+policy": {"inherit": "none"}}`）を渡す。`codex features list`（このワーク
+  ツリーの Codex CLI 0.153.2 で実行）が `shell_tool`/`unified_exec`/
+  `view_image` を stable かつ既定で有効な feature だと示しており、
+  `codex features disable <name>` の help が `-c features.<name>=false`
+  をその等価な設定 override として文書化しているため、この JSON は
+  その override を `config` object の形にしたものである（コードレビュー
+  指摘: `sandbox: "read-only"` は書き込みのみを禁止し読み取りを `cwd` へ
+  限定しない。`approvalPolicy: "never"` も既に許可された操作をブロック
+  しない。採点には tool が一切不要〈テキスト+画像1枚を渡して JSON 1つを
+  受け取るだけ〉であるため、shell/exec/画像閲覧の tool 自体を無効化する。
+  `shell_environment_policy.inherit: "none"` は前回までの防御をそのまま
+  残している）。実際の app-server 呼び出しに対してこれらの feature-disable
+  が本当に tool 呼び出しを阻止することは live probe で未検証（下記の
+  未決事項）。`turn/start`（`input` に `text` と `localImage`
   （ローカルファイルパス。答案画像は呼び出し専用の一時ディレクトリへ
   書き出してから渡し、ターン完了後にディレクトリごと削除する）、
   `outputSchema` に `_schema.strict_ai_grading_result_schema()`（§7.1.1）
@@ -1229,9 +1246,28 @@ env=None)` の既定動作は全環境変数を継承し、DB接続文字列や�
   権限変更で削除が失敗すると、grade 呼び出し自体は成功したまま学生の
   答案画像がディスク上に残り続けてしまい、決定書のクラウド payload
   非保持要件に反する）。`_cleanup_workspace()` が短い間隔で数回リトライ
-  し、それでも失敗する場合は `ResourceWarning` として表面化する（採点
-  自体は失敗させない: ファイル削除の一時的な失敗で成功した採点結果を
-  棄てるのは過剰反応であるため）。
+  し、それでも失敗する場合は標準の `logging`（`logger.error(...)`）で
+  表面化する（採点自体は失敗させない: ファイル削除の一時的な失敗で成功
+  した採点結果を棄てるのは過剰反応であるため）。`warnings.warn(...,
+ResourceWarning)` を最初に使ったが、`ResourceWarning` は Python の
+  既定の warning filter で無視されるため運用者に実際には届かない
+  （コードレビュー指摘）。
+
+**この作業で見つかった、本 Issue のスコープ外の既存の問題**: この
+`logger.error(...)` を実装する過程で、`backend/migrations/env.py` が
+`logging.config.fileConfig(config.config_file_name)` を
+`disable_existing_loggers=False` を指定せずに呼んでいる（Python の既定は
+`True`）ことを発見した。これは migration を 1 回でも実行すると、
+`alembic.ini` の `[loggers]`（`root`/`sqlalchemy`/`alembic` のみ）に列挙
+されていない、その時点で存在する**すべての**アプリケーションロガー
+（このモジュールに限らず、例えば `auto_scoring.jobs.queue` が既に使って
+いる `logger` も含む）を無効化してしまう、この PR 以前から存在する
+リポジトリ全体の問題である。`backend/tests/test_ai_provider_codex_app_
+server_contract.py` の該当テストはこれを踏まえてロガーの `disabled`
+状態を明示的に元へ戻しているが、実運用のサイドカー（起動時に migration
+を実行する）でこの `logger.error(...)` が実際に配送されることは、
+`migrations/env.py` 側の修正または live 環境での確認が別途必要であり、
+本 Issue の対象外として記録するに留める。
 
 **未決事項・リスク（無理に実装を進めず、ここに記録する）**:
 
@@ -1255,15 +1291,27 @@ env=None)` の既定動作は全環境変数を継承し、DB接続文字列や�
    本当に環境変数を継承しなくなることは live probe で未確認（§7.4）。
    受理されない・無視される場合でも、`_minimal_environment()` による
    子プロセス自体の環境最小化（上記）が主たる防御でありこれには依存しない。
-5. **tool/shell 実行自体を無効化する設定が未確認**: `read-only` sandbox は
-   ファイル読み取りと読み取り専用の shell コマンド実行を許可したままで
-   あり、`approvalPolicy: "never"` は「既に許可された操作」をブロックしない。
-   本 Issue の調査では `thread/start`/`turn/start` の生成済み JSON Schema に
-   「tool を完全に無効化する」フラグは見つからなかった。上記の環境変数
-   最小化・private workspace ディレクトリ・ネットワーク拒否の組み合わせで
-   実害の範囲を縮小しているが、tool 実行そのものを止める設定、または
-   OS レベルで分離した worker への切り替えは、本番採用判断（#35）までに
-   追加調査が必要な残存リスクとして記録する。
+5. **feature-disable による tool 無効化が live 未検証**: `read-only`
+   sandbox はファイル読み取りと読み取り専用の shell コマンド実行を
+   許可したままであり、`approvalPolicy: "never"` は「既に許可された操作」
+   をブロックしない（コードレビュー指摘）。`thread/start`/`turn/start` の
+   生成済み JSON Schema 自体には「tool を無効化する」専用フィールドは
+   ないが、`codex features list`（Codex CLI 0.153.2）は `shell_tool`/
+   `unified_exec`/`view_image` が stable・既定で有効な feature であること
+   を示しており、`codex features disable <name>` の help は
+   `-c features.<name>=false` をその等価な override として文書化して
+   いる。これに基づき `thread/start.config` へ
+   `{"features": {"shell_tool": false, "unified_exec": false,
+"view_image": false}}` を渡し、これらの tool を無効化するよう実装した
+   （`_DISABLE_FILE_AND_SHELL_TOOLS_CONFIG`）。ただし、これが実際の
+   app-server セッションに対しても同じ意味を持ち、モデルがこれらの tool
+   を本当に呼び出せなくなることは live probe で未確認（§7.4。CLI 引数
+   `-c`/`--disable` の効果と、JSON-RPC `thread/start.config` 経由で渡した
+   場合の効果が同一である保証はない）。この feature-disable が無効/
+   一部のみ有効だった場合でも、private workspace ディレクトリ・環境変数
+   最小化・ターンレベルのネットワーク拒否が多層防御として残る。OS/
+   container レベルで完全に分離した worker への切り替えは、feature-disable
+   の live 検証結果を踏まえたうえで本番採用判断（#35）までに再検討する。
 
 これらの理由により、この adapter は「オフラインの fake transport による
 contract test は green だが、実際の `codex login` 済み環境での動作確認は

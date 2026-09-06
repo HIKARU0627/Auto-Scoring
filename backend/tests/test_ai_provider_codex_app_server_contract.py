@@ -8,6 +8,7 @@ never part of this offline suite.
 """
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -315,11 +316,14 @@ def test_grade_uses_a_private_workspace_directory_not_the_shared_temp_root() -> 
     assert not os.path.exists(captured_cwd[0])  # cleaned up once the turn completes
 
 
-def test_grade_disables_the_codex_shell_environment_and_turn_network_access() -> None:
-    """Defense in depth beyond the already-minimal child-process
-    environment: Codex's own shell-tool env inheritance is turned off, and
-    the turn's sandbox policy explicitly denies network access (code
-    review finding)."""
+def test_grade_disables_the_codex_shell_and_file_tools_and_turn_network_access() -> None:
+    """`sandbox: "read-only"` only blocks writes and does not confine reads
+    to `cwd`, and `approvalPolicy: "never"` only skips approval prompts for
+    already-permitted actions -- neither stops a prompt-injected turn from
+    reading arbitrary files and returning their contents through its own
+    agent message. The thread's `shell_tool`/`unified_exec`/`view_image`
+    features must be disabled outright, and the turn's sandbox policy must
+    explicitly deny network access too (code review finding)."""
     transport = _FakeAppServerTransport()
     captured: dict[str, object] = {}
     original_request = transport.request
@@ -337,7 +341,10 @@ def test_grade_disables_the_codex_shell_environment_and_turn_network_access() ->
     provider = CodexAppServerProvider(prompt_version="v1", transport=transport)
     provider.grade(_VALID_REQUEST)
 
-    assert captured["config"] == {"shell_environment_policy": {"inherit": "none"}}
+    assert captured["config"] == {
+        "features": {"shell_tool": False, "unified_exec": False, "view_image": False},
+        "shell_environment_policy": {"inherit": "none"},
+    }
     assert captured["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
 
 
@@ -486,13 +493,23 @@ def test_cleanup_workspace_succeeds_after_a_transient_failure(
     assert not workspace.exists()
 
 
-def test_cleanup_workspace_warns_when_every_attempt_fails(
+def test_cleanup_workspace_logs_an_error_when_every_attempt_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cleanup failure must not pass silently: the student's cropped
     answer image would otherwise stay on disk indefinitely while `grade()`
     still reports success (code review finding; decision record's
-    no-local-retention requirement)."""
+    no-local-retention requirement). A ``ResourceWarning`` alone is not a
+    real operational signal -- it is ignored by Python's default warning
+    filters -- so this must go through the normal ``logging`` path instead
+    (code review finding).
+
+    Asserts directly against a handler attached to this module's own
+    logger, rather than pytest's ``caplog`` fixture: ``caplog`` relies on
+    propagation reaching a handler it attaches to the root logger, which
+    proved sensitive to other tests' global logging configuration when the
+    full suite ran (this test passed in isolation but not alongside the
+    rest of the suite)."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -500,5 +517,32 @@ def test_cleanup_workspace_warns_when_every_attempt_fails(
         raise OSError("simulated persistent lock")
 
     monkeypatch.setattr(shutil, "rmtree", _always_fails)
-    with pytest.warns(ResourceWarning, match="failed to remove"):
+
+    records: list[logging.LogRecord] = []
+    handler = logging.Handler()
+    handler.emit = records.append  # type: ignore[assignment]
+    module_logger = logging.getLogger("auto_scoring.adapters.ai_grading.codex_app_server_provider")
+    previous_level = module_logger.level
+    module_logger.addHandler(handler)
+    module_logger.setLevel(logging.DEBUG)  # a prior test's global level must not hide this
+    # A migration run elsewhere in the suite calls Alembic's `env.py`, which
+    # calls `logging.config.fileConfig(...)` without `disable_existing_
+    # loggers=False` -- Python's default there is `True`, which disables
+    # every logger that already existed (this module's included) the
+    # moment any test runs a migration. That is a pre-existing, repo-wide
+    # behavior unrelated to this Issue; only undoing its effect on this one
+    # logger, for this one test, is in scope here.
+    previous_disabled = module_logger.disabled
+    module_logger.disabled = False
+    try:
         _cleanup_workspace(str(workspace), retry_delays=(0.0, 0.0), sleep=lambda _: None)
+    finally:
+        module_logger.removeHandler(handler)
+        module_logger.setLevel(previous_level)
+        module_logger.disabled = previous_disabled
+
+    assert any(
+        record.levelno >= logging.ERROR and "failed to remove" in record.getMessage()
+        for record in records
+    )
+    assert any(str(workspace) in record.getMessage() for record in records)

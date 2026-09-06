@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import queue
 import shutil
@@ -34,7 +35,6 @@ import sys
 import tempfile
 import threading
 import time
-import warnings
 from collections.abc import Callable
 from typing import Protocol
 
@@ -56,7 +56,43 @@ from auto_scoring.domain.ai_provider import (
     grading_response_from_result,
 )
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_TURN_TIMEOUT_SECONDS = 120.0
+
+#: `thread/start.config` override disabling every Codex feature that lets
+#: the agent read the filesystem or run commands. `sandbox: "read-only"`
+#: only blocks *writes*; it does not confine reads to `cwd`, and
+#: `approvalPolicy: "never"` only skips approval prompts for actions Codex
+#: already permits -- neither stops a prompt-injected turn (the grading
+#: input -- OCR text, rubric, answer image -- is student-controlled) from
+#: reading arbitrary files the OS-level user this process runs as can see
+#: and returning their contents through its own agent message (code review
+#: finding; trust-boundary/secret-masking rule, AGENTS.md "Security").
+#: Grading needs no tool at all: one attached image and OCR text in, one
+#: JSON message out. `codex features list` (run against the locally
+#: installed CLI, Codex CLI 0.153.2) confirms `shell_tool`, `unified_exec`,
+#: and `view_image` are stable, enabled-by-default features, and `codex
+#: features disable <name>` documents `-c features.<name>=false` as the
+#: equivalent config override -- this dict is that override's JSON form.
+#: Not exercised against a live app-server call (recorded as an open
+#: question in docs/poc-2-ai-grading.md section 7.1.2); the read-only
+#: sandbox, minimal child-process environment, and private per-call
+#: workspace directory remain as defense in depth regardless of whether
+#: this succeeds in fully disabling tool access.
+_DISABLE_FILE_AND_SHELL_TOOLS_CONFIG = {
+    "features": {
+        "shell_tool": False,
+        "unified_exec": False,
+        "view_image": False,
+    },
+    # Best-effort defense in depth kept from an earlier round: even with
+    # the tools above disabled, this tells Codex's own shell-environment
+    # handling not to forward any environment variables into whatever a
+    # tool call does run (unverified against a live call -- same open
+    # question).
+    "shell_environment_policy": {"inherit": "none"},
+}
 
 #: Codex app-server's `thread/start`/`turn/start` params (per the JSON Schema
 #: this module was written against -- ``ThreadStartParams``/`TurnStartParams`)
@@ -361,8 +397,13 @@ def _cleanup_workspace(
     student's answer image on disk indefinitely, violating the no-local-
     retention requirement for this cloud-payload material (code review
     finding). A cleanup failure must not fail an otherwise-successful
-    grading call either, so a still-failing cleanup is surfaced as a
-    warning (not an exception) instead of passing silently.
+    grading call either, so a still-failing cleanup is surfaced through the
+    normal ``logging`` path (an operator-visible ERROR record, picked up by
+    whatever log aggregation/alerting the deployment already has) instead
+    of passing silently. A ``warnings.warn(..., ResourceWarning)`` was
+    tried first, but ``ResourceWarning`` is ignored by Python's default
+    warning filters -- it would never actually reach an operator (code
+    review finding).
     """
     for delay in (0.0, *retry_delays):
         if delay:
@@ -374,11 +415,12 @@ def _cleanup_workspace(
             return
         except OSError:
             continue
-    warnings.warn(
-        f"codex app-server: failed to remove temporary workspace directory "
-        f"after {len(retry_delays) + 1} attempts: {workspace_dir}",
-        ResourceWarning,
-        stacklevel=2,
+    logger.error(
+        "codex app-server: failed to remove temporary workspace directory "
+        "after %d attempts; a student answer image may remain on disk: %s",
+        len(retry_delays) + 1,
+        workspace_dir,
+        extra={"workspace_dir": workspace_dir, "attempts": len(retry_delays) + 1},
     )
 
 
@@ -505,16 +547,12 @@ class CodexAppServerProvider:
                         # image the turn's `input` carries (code review
                         # finding; see _prompt.py's module docstring).
                         "developerInstructions": GRADING_SYSTEM_INSTRUCTIONS,
-                        # Defense in depth alongside the already-minimal
-                        # child-process environment (_minimal_environment):
-                        # tell Codex's own shell tool not to forward any of
-                        # it into commands it runs (mirrors the
-                        # `shell_environment_policy.inherit` config key
-                        # `codex --help` documents; not exercised against a
-                        # live app-server call -- recorded as an open
-                        # question in docs/poc-2-ai-grading.md section
-                        # 7.1.2).
-                        "config": {"shell_environment_policy": {"inherit": "none"}},
+                        # See _DISABLE_FILE_AND_SHELL_TOOLS_CONFIG's own
+                        # docstring: removes the agent's shell/exec/
+                        # image-view tools for this thread (code review
+                        # finding), on top of the already-minimal
+                        # child-process environment (_minimal_environment).
+                        "config": _DISABLE_FILE_AND_SHELL_TOOLS_CONFIG,
                     },
                     timeout_seconds=self._turn_timeout_seconds,
                 )

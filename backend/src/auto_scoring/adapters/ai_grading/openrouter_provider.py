@@ -214,14 +214,21 @@ class OpenRouterAIProvider:
             httpx.HTTPStatusError,
             httpx.TimeoutException,
             json.JSONDecodeError,
+            UnicodeDecodeError,
         ) as exc:
             # A non-JSON body (OpenRouter outage page, proxy error, ...) must
             # not escape as an uncaught JSONDecodeError -- callers only
-            # expect SchemaViolation/ProviderUnavailable from this port. The
-            # numeric HTTP status (never the response body) is included so
-            # callers can apply the documented 429 backoff and distinguish a
-            # persistent auth/config failure from a transient server error
-            # (code review finding).
+            # expect SchemaViolation/ProviderUnavailable from this port. A
+            # body containing invalid UTF-8 fails even earlier, as a
+            # UnicodeDecodeError from `httpx.Response.json()`'s internal
+            # text decoding, before JSON parsing is ever attempted -- must
+            # be normalized the same way, never left to escape as an
+            # unclassified exception with the raw response bytes in its
+            # traceback (code review finding). The numeric HTTP status
+            # (never the response body) is included so callers can apply
+            # the documented 429 backoff and distinguish a persistent
+            # auth/config failure from a transient server error (code
+            # review finding).
             detail = _describe_http_failure(exc)
             raise ProviderUnavailable(f"OpenRouter request failed: {detail}") from None
         latency_seconds = time.monotonic() - started_at
