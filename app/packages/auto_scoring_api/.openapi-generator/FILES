@@ -2,6 +2,7 @@
 README.md
 analysis_options.yaml
 doc/AnalyzeRequest.md
+doc/BoundingBoxResponse.md
 doc/CompleteRegistrationResponse.md
 doc/ConfirmProfileRequest.md
 doc/ConfirmRequest.md
@@ -14,10 +15,13 @@ doc/HTTPValidationError.md
 doc/JobResponse.md
 doc/JobsApi.md
 doc/LocationInner.md
+doc/ManualRecognitionRequest.md
 doc/NormalizedBBoxModel.md
 doc/PageFormatModel.md
 doc/ProfileResponse.md
 doc/QuestionTextOverride.md
+doc/RecognitionResponse.md
+doc/RecognitionsApi.md
 doc/RegionKind.md
 doc/RegionModel.md
 doc/ScoreRequest.md
@@ -34,6 +38,7 @@ lib/src/api.dart
 lib/src/api/default_api.dart
 lib/src/api/dependency_graph_api.dart
 lib/src/api/jobs_api.dart
+lib/src/api/recognitions_api.dart
 lib/src/api/test_registration_api.dart
 lib/src/api_util.dart
 lib/src/auth/api_key_auth.dart
@@ -43,6 +48,7 @@ lib/src/auth/bearer_auth.dart
 lib/src/auth/oauth.dart
 lib/src/date_serializer.dart
 lib/src/model/analyze_request.dart
+lib/src/model/bounding_box_response.dart
 lib/src/model/complete_registration_response.dart
 lib/src/model/confirm_profile_request.dart
 lib/src/model/confirm_request.dart
@@ -53,10 +59,12 @@ lib/src/model/dependency_provision.dart
 lib/src/model/http_validation_error.dart
 lib/src/model/job_response.dart
 lib/src/model/location_inner.dart
+lib/src/model/manual_recognition_request.dart
 lib/src/model/normalized_b_box_model.dart
 lib/src/model/page_format_model.dart
 lib/src/model/profile_response.dart
 lib/src/model/question_text_override.dart
+lib/src/model/recognition_response.dart
 lib/src/model/region_kind.dart
 lib/src/model/region_model.dart
 lib/src/model/score_request.dart

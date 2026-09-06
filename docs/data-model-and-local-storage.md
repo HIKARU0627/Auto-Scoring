@@ -61,7 +61,7 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > マイグレーション `0005_answer_intake` により追加した。詳細は
 > [`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md)。
 >
-> `Test.status`（`draft`/`ready`、マイグレーション `0010_test_status`）は Issue #16
+> `Test.status`（`draft`/`ready`、マイグレーション `0011_test_status`）は Issue #16
 > で追加した登録ライフサイクルで、テストプロファイルと設問依存関係グラフ（Issue #26）
 > の両方が確認済みになるまで `draft` のまま一方向に留まる。詳細は
 > [`test-registration.md`](./test-registration.md)。

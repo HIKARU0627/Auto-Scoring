@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -172,11 +172,11 @@ def test_backfills_pre_existing_submission_metadata_on_upgrade(db_url: str, db_p
 
 
 def test_backfills_pre_existing_tests_as_ready_on_upgrade(db_url: str) -> None:
-    """A `Test` row from before 0010 (``status`` didn't exist, and neither
+    """A `Test` row from before 0011 (``status`` didn't exist, and neither
     did the two-PDF registration flow it gates) must come out the other
     side ``ready``, not ``draft``.
 
-    Before 0010, answer intake accepted a submission for any test
+    Before 0011, answer intake accepted a submission for any test
     unconditionally; afterward, ``GET /tests`` and ``intake_submission``
     both reject anything short of ``ready``. Such a row never had -- and,
     lacking registration PDFs, can never retroactively earn -- a profile or
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 _CHILD_TABLES = (
@@ -578,6 +578,32 @@ def test_check_constraint_rejects_bad_row(db_url: str) -> None:
         )
         with pytest.raises(IntegrityError):
             conn.execute(overlong_filename_submission)
+
+        conn.execute(
+            text(
+                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO submissions "
+                "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, "
+                "created_at) "
+                "VALUES ('s-text-len', 't', 'submissions/s-text-len/source.pdf', '"
+                + ("9" * 64)
+                + "', 1, 'unprocessed', '2026-01-01')"
+            )
+        )
+        conn.commit()
+        overlong_recognition_text = text(
+            "INSERT INTO recognition_results "
+            "(id, submission_id, question_id, source, text, confidence, boxes, created_at) "
+            "VALUES ('r-overlong', 's-text-len', 'q', 'ai', '" + ("a" * 10_001) + "', 0.5, '[]', "
+            "'2026-01-01')"
+        )
+        with pytest.raises(IntegrityError):
+            conn.execute(overlong_recognition_text)
     finally:
         conn.close()
         engine.dispose()
@@ -1101,4 +1127,7 @@ def test_migration_file_paths_exist() -> None:
         "0005_answer_intake.py",
         "0006_student_label_length.py",
         "0007_original_filename_length.py",
+        "0008_job_queue_fields.py",
+        "0009_job_usable_allows_failed.py",
+        "0010_recognition_text_length.py",
     } <= names

@@ -837,7 +837,7 @@ def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
 
 
 def test_starting_the_app_leaves_a_pre_migration_test_alone(data_root: Path) -> None:
-    """Migration 0010 backfills `status='draft'` onto every pre-existing
+    """Migration 0011 backfills `status='draft'` onto every pre-existing
     `Test` row -- none of which were ever registered through
     `register_test`, so none of them have the two PDFs this Issue's
     registration flow writes. The repair sweep must never treat "no PDFs on
@@ -848,7 +848,7 @@ def test_starting_the_app_leaves_a_pre_migration_test_alone(data_root: Path) -> 
     (Issue #16 review round 5, data loss).
     """
     # Runs migrations (via create_app) without ever calling register_test --
-    # the DB then holds exactly what upgrading a pre-0010 database would
+    # the DB then holds exactly what upgrading a pre-0011 database would
     # look like: a `Test` row with no registration marker and no PDFs.
     #
     # Wrapped in `with TestClient(...)` (not a bare `create_app(...)` call)

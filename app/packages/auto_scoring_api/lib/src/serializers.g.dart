@@ -8,6 +8,7 @@ part of 'serializers.dart';
 
 Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnalyzeRequest.serializer)
+      ..add(BoundingBoxResponse.serializer)
       ..add(CompleteRegistrationResponse.serializer)
       ..add(ConfirmProfileRequest.serializer)
       ..add(ConfirmRequest.serializer)
@@ -17,10 +18,12 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(HTTPValidationError.serializer)
       ..add(JobResponse.serializer)
       ..add(LocationInner.serializer)
+      ..add(ManualRecognitionRequest.serializer)
       ..add(NormalizedBBoxModel.serializer)
       ..add(PageFormatModel.serializer)
       ..add(ProfileResponse.serializer)
       ..add(QuestionTextOverride.serializer)
+      ..add(RecognitionResponse.serializer)
       ..add(RegionKind.serializer)
       ..add(RegionModel.serializer)
       ..add(ScoreRequest.serializer)
@@ -31,6 +34,10 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(UnresolvedQuestionModel.serializer)
       ..add(UpdateProfileRequest.serializer)
       ..add(ValidationError.serializer)
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(BoundingBoxResponse)]),
+          () => ListBuilder<BoundingBoxResponse>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(DependencyEdgeModel)]),

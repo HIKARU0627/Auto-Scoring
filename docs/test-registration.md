@@ -21,7 +21,7 @@ Issue #11時点の `Test` エンティティには状態が無かった。Issue 
 `DRAFT`）を追加し、`Test.mark_ready()` で一方向にのみ遷移させる（`READY` から
 `DRAFT` へ戻す経路は無い。再度 `mark_ready()` を呼ぶと
 `InvalidStateTransition`）。DBは `tests.status` 列（`CHECK (status IN ('draft',
-'ready'))`、マイグレーション `0010_test_status`）で同じ制約をミラーする。
+'ready'))`、マイグレーション `0011_test_status`）で同じ制約をミラーする。
 
 **`ready` になる条件**（`POST /tests/{test_id}/complete-registration`、Issue #16
 受入条件「全必須項目確認後にだけ登録完了になる」）:
@@ -256,9 +256,9 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
 
 - **クラッシュ復旧時に移行済みの既存testを保護する**: PRラウンド4の
   `repair_incomplete_test_registrations`は「登録PDFがディスクに無い」ことだけを
-  中断registrationの判定基準にしていた。migration 0010は本Issue以前から存在する
+  中断registrationの判定基準にしていた。migration 0011は本Issue以前から存在する
   全`Test`行に`status='draft'`をバックフィルするが、それらは`register_test`を
-  一度も通っていないためPDFを持ったことが無い。本番環境でmigration 0010を含む
+  一度も通っていないためPDFを持ったことが無い。本番環境でmigration 0011を含む
   このリリースへアップグレードした初回起動で、この判定が既存testを全て
   「中断されたregistration」と誤分類し、連鎖してQuestionsとSubmissionsごと
   削除してしまうデータ消失バグだった。`register_test`がDB commit前に
@@ -288,12 +288,12 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
 
 - **旧テストのアップグレード経路（grandfathering）**: PRラウンド5は
   `repair_incomplete_test_registrations`による誤削除は防いだが、migration
-  0010がバックフィルする既存test自体は`draft`のまま、`ready`専用ゲート
+  0011がバックフィルする既存test自体は`draft`のまま、`ready`専用ゲート
   （`GET /tests`・`intake_submission`）から永久に締め出されていた——登録PDFも
   profileも持たない以上、本Issueが導入したconfirm/readyフローを通って`ready`
   になる手段が無い。本Issue以前は`draft`/`ready`の区別自体が存在せず、答案取込は
   どのtestも無条件に受理していたため、既存行は旧契約の下で既に「使用可能」
-  だった。migration 0010のバックフィル値を`draft`から`ready`に変更し、既存行を
+  だった。migration 0011のバックフィル値を`draft`から`ready`に変更し、既存行を
   旧来通り無条件に使用可能な状態へgrandfatherした（`server_default`は
   一時的なものなので、以後の新規登録の既定値には一切影響しない）。0007時点の
   スキーマへ直接test行を挿入してアップグレードし、`status='ready'`になることを

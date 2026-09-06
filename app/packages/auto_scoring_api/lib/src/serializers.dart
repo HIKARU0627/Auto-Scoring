@@ -15,6 +15,7 @@ import 'package:auto_scoring_api/src/date_serializer.dart';
 import 'package:auto_scoring_api/src/model/date.dart';
 
 import 'package:auto_scoring_api/src/model/analyze_request.dart';
+import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
 import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
@@ -24,10 +25,12 @@ import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
+import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 import 'package:auto_scoring_api/src/model/page_format_model.dart';
 import 'package:auto_scoring_api/src/model/profile_response.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
+import 'package:auto_scoring_api/src/model/recognition_response.dart';
 import 'package:auto_scoring_api/src/model/region_kind.dart';
 import 'package:auto_scoring_api/src/model/region_model.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
@@ -43,6 +46,7 @@ part 'serializers.g.dart';
 
 @SerializersFor([
   AnalyzeRequest,
+  BoundingBoxResponse,
   CompleteRegistrationResponse,
   ConfirmProfileRequest,
   ConfirmRequest,
@@ -52,10 +56,12 @@ part 'serializers.g.dart';
   HTTPValidationError,
   JobResponse,
   LocationInner,
+  ManualRecognitionRequest,
   NormalizedBBoxModel,
   PageFormatModel,
   ProfileResponse,
   QuestionTextOverride,
+  RecognitionResponse,
   RegionKind,
   RegionModel,
   ScoreRequest,
@@ -77,6 +83,10 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<PageFormatModel>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(BoundingBoxResponse)]),
+        () => ListBuilder<BoundingBoxResponse>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyGraphResponse)]),
         () => ListBuilder<DependencyGraphResponse>(),
       )
@@ -91,6 +101,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(TestSummary)]),
         () => ListBuilder<TestSummary>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(RecognitionResponse)]),
+        () => ListBuilder<RecognitionResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyEdgeModel)]),
