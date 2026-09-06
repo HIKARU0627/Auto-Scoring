@@ -141,6 +141,10 @@ def build_recognitions_router(
             created_at=datetime.now(UTC).replace(tzinfo=None),
         )
         with SqlAlchemyUnitOfWork(session_factory) as uow:
+            if uow.submissions.get(submission_id) is None:
+                raise HTTPException(404, detail=f"submission {submission_id!r} not found")
+            if uow.questions.get(question_id) is None:
+                raise HTTPException(404, detail=f"question {question_id!r} not found")
             uow.recognitions.add(recognition)
             uow.commit()
         # The recognition row above is append-only history and stays valid

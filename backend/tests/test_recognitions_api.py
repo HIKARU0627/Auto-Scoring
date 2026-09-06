@@ -176,3 +176,25 @@ def test_manual_recognition_rejects_overlong_text(client: TestClient) -> None:
         headers=_AUTH,
     )
     assert response.status_code == 422
+
+
+def test_manual_recognition_returns_404_for_an_unknown_submission(client: TestClient) -> None:
+    response = client.post(
+        "/submissions/no-such-submission/questions/qa/recognitions",
+        json={"text": "手動入力"},
+        headers=_AUTH,
+    )
+    assert response.status_code == 404
+
+
+def test_manual_recognition_returns_404_for_an_unknown_question(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_confirmed(session_factory, question_ids=["qa"])
+
+    response = client.post(
+        "/submissions/sub-1/questions/no-such-question/recognitions",
+        json={"text": "手動入力"},
+        headers=_AUTH,
+    )
+    assert response.status_code == 404
