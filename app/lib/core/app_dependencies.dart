@@ -106,6 +106,9 @@ Future<List<AnnotationResponse>> _unavailableListAnnotations(
   String questionId,
 ) async => _unavailable();
 
+Future<List<JobResponse>> _unavailableListJobs(String submissionId) async =>
+    _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -221,6 +224,13 @@ typedef ListAnnotations =
       String questionId,
     );
 
+/// Every `Job` (kind GRADING) ever created for one submission, across every
+/// question -- the per-question job's own lifecycle (queued/running/blocked/
+/// succeeded/failed/cancelled), used to tell "still processing" apart from
+/// "this attempt is done" independent of what data has been persisted so far
+/// (添削レビュー画面のpolling, Issue #21 P1 review).
+typedef ListJobs = Future<List<JobResponse>> Function(String submissionId);
+
 /// Composition-root dependency container.
 ///
 /// Features read their collaborators from here instead of constructing them,
@@ -249,6 +259,7 @@ class AppDependencies {
     this.listRecognitions = _unavailableListRecognitions,
     this.listGrades = _unavailableListGrades,
     this.listAnnotations = _unavailableListAnnotations,
+    this.listJobs = _unavailableListJobs,
   });
 
   /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
@@ -274,4 +285,5 @@ class AppDependencies {
   final ListRecognitions listRecognitions;
   final ListGrades listGrades;
   final ListAnnotations listAnnotations;
+  final ListJobs listJobs;
 }

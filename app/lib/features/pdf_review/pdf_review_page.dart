@@ -67,16 +67,6 @@ class QuestionReviewState {
   bool get hasLoaded =>
       recognitions != null && grades != null && annotations != null;
 
-  /// Whether AI work has produced anything at all for this question yet.
-  /// While this is false, a cached "loaded but empty" result is provisional
-  /// -- AI processing for this specific question may simply not have
-  /// started/finished, independent of the submission's own coarse state
-  /// (which reaches `ai_processed` immediately at intake, before any
-  /// per-question job even exists -- P1 review) -- so it must not block a
-  /// later refetch, and the background poll must keep running for it.
-  bool get hasAnyAiResult =>
-      latestOcrRecognition != null || latestAiGrade != null;
-
   /// The OCR pipeline's own reading (Issue #19), or `null` if none exists
   /// yet. Kept separate from [latestGradingRecognition] and
   /// [latestHumanRecognition]: a multimodal grader may correct the OCR text
@@ -111,6 +101,30 @@ class QuestionReviewState {
   /// the `score` annotation on the PDF overlay): a human's grade overrides
   /// the AI's proposal once one exists, same precedence as the Inspector.
   GradeResultResponse? get displayGrade => latestHumanGrade ?? latestAiGrade;
+
+  /// Only the annotations belonging to [displayGrade]'s own grading attempt,
+  /// not every attempt this question has ever had. `Annotation` carries no
+  /// explicit link to the `GradeResult` it was produced alongside
+  /// (`GradingJobProcessor.process` persists both from the exact same clock
+  /// read, in the exact same transaction, but records neither row's id on
+  /// the other) -- a re-submitted question (Issue #18: a new confirmed
+  /// dependency-graph version) creates a new Job, and therefore a new grade
+  /// *and* a new set of annotations, without ever removing the old ones
+  /// (append-only history). Matching on that shared `created_at` is the
+  /// only signal available to tell attempts apart without a schema change
+  /// (P1 review) -- without it, every past attempt's marks stayed overlaid
+  /// on top of whatever score `displayGrade`/the Inspector currently show.
+  /// It also correctly hides every AI annotation once a human's own grade
+  /// supersedes the AI's (a human grade never shares its `created_at` with
+  /// an AI-authored annotation), which is exactly the "stale mark next to a
+  /// corrected score" case this exists to prevent.
+  List<AnnotationResponse> get annotationsForDisplayedAttempt {
+    final grade = displayGrade;
+    if (grade == null) return const [];
+    return (annotations ?? const <AnnotationResponse>[])
+        .where((a) => a.createdAt == grade.createdAt)
+        .toList();
+  }
 }
 
 /// The last element of [items] matching [test], or `null` if none does.
@@ -191,6 +205,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   Uint8List? _pdfBytes;
   int _questionIndex = 0;
   final Map<String, QuestionReviewState> _reviews = {};
+  List<JobResponse> _jobs = const [];
   Timer? _pollTimer;
 
   @override
@@ -217,9 +232,57 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     if (mounted) setState(() {});
   }
 
-  /// Starts polling while the *currently selected* question has no AI
-  /// result yet, and stops once it has one. Safe to call repeatedly -- it
-  /// only (re)starts the timer when the desired state actually changes.
+  /// `Job.state` values that will never change again on their own -- once a
+  /// question's job reaches one of these, nothing still running server-side
+  /// could still produce a grade for it (mirrors
+  /// `auto_scoring.domain.models.JobState`; a `FAILED` job can still be
+  /// auto-retried back to `QUEUED` by the backend's own retry policy, but
+  /// that is exactly the "not obviously still running" case the manual
+  /// refresh button exists for, same as every other terminal state here).
+  static const _terminalJobStates = {'succeeded', 'failed', 'cancelled'};
+
+  /// The most recently created `Job` for [questionId], or `null` if none has
+  /// been created yet (Issue #18: jobs are created only via an explicit
+  /// `POST .../jobs`, never automatically, and a re-submission under a new
+  /// confirmed dependency-graph version creates a second one for the same
+  /// question).
+  JobResponse? _latestJobFor(String questionId) {
+    JobResponse? latest;
+    for (final job in _jobs) {
+      if (job.questionId != questionId) continue;
+      if (latest == null || job.createdAt.isAfter(latest.createdAt)) {
+        latest = job;
+      }
+    }
+    return latest;
+  }
+
+  /// Whether [questionId]'s AI processing might still produce a grade --
+  /// polling must keep running, and a cached "loaded but no grade yet"
+  /// result must stay provisional, while this is true.
+  ///
+  /// Not simply "no grade exists yet": `GradingJobProcessor.process`
+  /// commits the OCR half's `RecognitionResult` in its own transaction
+  /// *before* ever calling the `AIProvider` for the grading half
+  /// (`jobs/grading_processor.py`) -- so a job can already be `RUNNING`,
+  /// still waiting on that provider call, with only its OCR recognition
+  /// visible so far. Stopping as soon as *any* AI output (including just
+  /// that recognition) exists would let the screen decide "done" while a
+  /// grade is still on its way, leaving 承認 permanently disabled until a
+  /// manual refresh (P1 review). This instead keeps polling until either a
+  /// grade exists, or [questionId]'s own job reports a state in
+  /// [_terminalJobStates] -- `QUEUED`/`RUNNING`/`BLOCKED`, or no job at all
+  /// yet, both mean "might still produce one".
+  bool _isAwaitingGrade(QuestionReviewState review, String questionId) {
+    if (review.latestAiGrade != null) return false;
+    final job = _latestJobFor(questionId);
+    return job == null || !_terminalJobStates.contains(job.state);
+  }
+
+  /// Starts polling while the *currently selected* question is still
+  /// [_isAwaitingGrade], and stops once it is not. Safe to call repeatedly
+  /// -- it only (re)starts the timer when the desired state actually
+  /// changes.
   ///
   /// Deliberately not keyed on `_submission.state`: intake moves a
   /// submission through `unprocessed`/`ai_processing` to `ai_processed`
@@ -229,12 +292,15 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   /// those two states, so gating polling on them means the real
   /// queued/running window is never actually observed and an
   /// initially-empty question stays cached until a manual refresh (P1
-  /// review). Whether *this* question's own AI result exists yet is the
-  /// one signal that actually tracks its job's progress.
+  /// review). Whether *this* question's own job/grade has actually finished
+  /// is the one signal that tracks its real progress.
   void _updatePolling() {
     final review = _currentReview;
+    final question = _currentQuestion;
     final shouldPoll =
-        review == null || review.loading || !review.hasAnyAiResult;
+        review == null ||
+        review.loading ||
+        (question != null && _isAwaitingGrade(review, question.id));
     if (shouldPoll == (_pollTimer != null)) return;
     if (shouldPoll) {
       _pollTimer = Timer.periodic(
@@ -265,6 +331,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       );
       if (!mounted) return;
       setState(() => _submission = submission);
+      await _refreshJobs();
       _updatePolling();
       // Silent: a background poll should not flash the loading spinner or
       // an error banner over content the reviewer is already looking at.
@@ -289,11 +356,28 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       );
       if (!mounted) return;
       setState(() => _submission = submission);
-      _updatePolling();
     } on SidecarApiException {
       // Fall through to refreshing the question data regardless.
     }
+    await _refreshJobs();
+    _updatePolling();
     await _ensureReviewLoaded(forceReload: true);
+  }
+
+  /// Best-effort refresh of every job for this submission. A failure here
+  /// must never block the submission/question refresh around it -- the Jobs
+  /// API only ever informs [_updatePolling]/[_isAwaitingGrade]'s decision,
+  /// it is never the sole source of anything the Inspector itself shows, so
+  /// a stale (or, initially, empty) [_jobs] just means "treat this
+  /// question's own job state as unknown" rather than surfacing an error.
+  Future<void> _refreshJobs() async {
+    try {
+      final jobs = await widget.dependencies.listJobs(widget.submissionId);
+      if (!mounted) return;
+      setState(() => _jobs = jobs);
+    } on SidecarApiException {
+      // Keep the last-known jobs list -- retried on the next tick/refresh.
+    }
   }
 
   QuestionResponse? get _currentQuestion =>
@@ -334,6 +418,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         _pdfBytes = pdfBytes;
         _questionIndex = 0;
       });
+      await _refreshJobs();
       _updatePolling();
       unawaited(_ensureReviewLoaded());
     } on SidecarApiException catch (error) {
@@ -368,15 +453,16 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       // see below) (P2 review).
       return;
     }
-    // A cached result with no AI output yet is not necessarily final -- AI
-    // work for this question may simply not have completed (or even
-    // started), independent of the submission's own state (see
-    // `_updatePolling`) -- so it must not block a later refetch just
-    // because `hasLoaded` happens to be true. Recomputed from the *current*
-    // cache each call (not a stored flag) so it also self-corrects if this
-    // question was last fetched from a different question's perspective
-    // (e.g. a stale entry that was never revisited) (P1 review).
-    final resultsStillMissing = existing != null && !existing.hasAnyAiResult;
+    // A cached result with no grade yet is not necessarily final -- this
+    // question's own job may simply still be running (see
+    // `_isAwaitingGrade`), independent of the submission's own state -- so
+    // it must not block a later refetch just because `hasLoaded` happens to
+    // be true. Recomputed from the *current* cache each call (not a stored
+    // flag) so it also self-corrects if this question was last fetched from
+    // a different question's perspective (e.g. a stale entry that was never
+    // revisited) (P1 review).
+    final resultsStillMissing =
+        existing != null && _isAwaitingGrade(existing, question.id);
     if (existing != null &&
         !forceReload &&
         !resultsStillMissing &&
@@ -712,8 +798,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final review = _reviews[question.id];
     if (review == null) return const [];
     final widgets = <Widget>[];
-    for (final annotation
-        in review.annotations ?? const <AnnotationResponse>[]) {
+    for (final annotation in review.annotationsForDisplayedAttempt) {
       final resolved = resolveAnnotationRect(
         annotation: annotation,
         questionScoreArea: question.scoreArea,
@@ -744,7 +829,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   List<AnnotationResponse> _fallbackAnnotationsFor(
     QuestionResponse question,
     QuestionReviewState review,
-  ) => (review.annotations ?? const <AnnotationResponse>[])
+  ) => review.annotationsForDisplayedAttempt
       .where(
         (a) =>
             resolveAnnotationRect(

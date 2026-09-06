@@ -26,6 +26,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         DependencyGraphResponse,
         DependencyProvision,
         GradeResultResponse,
+        JobResponse,
         NormalizedBBoxModel,
         NormalizedRectResponse,
         PageFormatModel,
@@ -140,6 +141,7 @@ class SidecarApiClient {
     _uploadTestRegistrationApi = uploadGenerated.getTestRegistrationApi();
     _recognitionsApi = generated.getRecognitionsApi();
     _reviewApi = generated.getReviewApi();
+    _jobsApi = generated.getJobsApi();
   }
 
   static void _configure(
@@ -171,6 +173,7 @@ class SidecarApiClient {
   late final DependencyGraphApi _dependencyGraphApi;
   late final RecognitionsApi _recognitionsApi;
   late final ReviewApi _reviewApi;
+  late final JobsApi _jobsApi;
 
   /// A second Dio/client pair, configured with [intakeTimeout] instead of
   /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
@@ -679,6 +682,27 @@ class SidecarApiClient {
             cancelToken: cancelToken,
           );
       return (response.data ?? const <AnnotationResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every `Job` (kind GRADING) ever created for [submissionId], across every
+  /// question and every dependency-graph version it was submitted under
+  /// (Issue #18) -- the only way to observe a per-question job's own
+  /// lifecycle (queued/running/blocked/succeeded/failed/cancelled), as
+  /// opposed to the submission's own coarse state (§16.5, P1 review).
+  Future<List<JobResponse>> listJobs(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _jobsApi
+          .listSubmissionJobsSubmissionsSubmissionIdJobsGet(
+            submissionId: submissionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <JobResponse>[]).toList();
     } on DioException catch (error) {
       throw _translate(error);
     }

@@ -79,6 +79,7 @@ GradeResultResponse _grade({
   String? rationale = '理由の説明が不足しています。',
   String? comment,
   List<CriterionResultResponse> criteria = const [],
+  DateTime? createdAt,
 }) => GradeResultResponse(
   (b) => b
     ..id = id
@@ -92,7 +93,7 @@ GradeResultResponse _grade({
     ..rationale = rationale
     ..comment = comment
     ..criteria.replace(criteria)
-    ..createdAt = DateTime.utc(2026, 1, 1),
+    ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
 );
 
 AnnotationResponse _annotation({
@@ -101,6 +102,7 @@ AnnotationResponse _annotation({
   String kind = 'circle',
   NormalizedRectResponse? rect,
   String? comment,
+  DateTime? createdAt,
 }) => AnnotationResponse(
   (b) => b
     ..id = id
@@ -110,7 +112,7 @@ AnnotationResponse _annotation({
     ..kind = kind
     ..rect = rect?.toBuilder()
     ..comment = comment
-    ..createdAt = DateTime.utc(2026, 1, 1),
+    ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
 );
 
 NormalizedRectResponse _rect(double x, double y, double w, double h) =>
@@ -361,6 +363,9 @@ void main() {
     final dependencies = _dependencies(
       pdfBytes: _pocA4PortraitPdf(),
       q1: _question(),
+      // Matches the annotation's default `createdAt` -- needed for it to
+      // count as belonging to the displayed grading attempt (P1 review).
+      grades: [_grade()],
       annotations: [
         _annotation(kind: 'comment', rect: null, comment: '時制表現について確認'),
       ],
@@ -390,6 +395,11 @@ void main() {
     final dependencies = _dependencies(
       pdfBytes: _pocA4PortraitPdf(),
       q1: _question(),
+      // The annotation is only shown once it belongs to a displayed grading
+      // attempt (§12, P1 review) -- its default `createdAt` matches
+      // `_grade()`'s own default, the same way a real `GradingJobProcessor`
+      // run persists both from one shared clock read.
+      grades: [_grade()],
       annotations: [_annotation(kind: 'circle', rect: mark)],
     );
 
@@ -440,6 +450,9 @@ void main() {
     final dependencies = _dependencies(
       pdfBytes: File('test/fixtures/a4-rotate-90.pdf').readAsBytesSync(),
       q1: _question(),
+      // See the unrotated case above: the annotation needs a matching
+      // `_grade()` to count as belonging to the displayed attempt.
+      grades: [_grade()],
       annotations: [_annotation(kind: 'circle', rect: mark)],
     );
 
@@ -681,6 +694,12 @@ void main() {
         pdfBytes: _pocA4PortraitPdf(),
         q1: _question(id: 'q-1', number: '1', page: 1),
         q2: _question(id: 'q-2', number: '2', page: 1),
+        // Each annotation needs a matching grade for its own question to
+        // count as belonging to the displayed attempt (P1 review).
+        grades: [
+          _grade(id: 'grade-q1', questionId: 'q-1'),
+          _grade(id: 'grade-q2', questionId: 'q-2'),
+        ],
         annotations: [
           _annotation(id: 'anno-a', questionId: 'q-1', rect: markA),
           _annotation(id: 'anno-b', questionId: 'q-2', rect: markB),
@@ -1283,6 +1302,9 @@ void main() {
               ..createdAt = DateTime.utc(2026, 1, 1),
           ),
         ],
+        // Matches the annotation's default `createdAt` -- needed for it to
+        // count as belonging to the displayed grading attempt (P1 review).
+        grades: [_grade()],
         annotations: [
           AnnotationResponse(
             (b) => b
@@ -1358,6 +1380,9 @@ void main() {
             ..scoringMethod = 'additive'
             ..scoreArea = scoreArea.toBuilder(),
         ),
+        // Matches the annotation's default `createdAt` -- needed for it to
+        // count as belonging to the displayed grading attempt (P1 review).
+        grades: [_grade()],
         annotations: [
           _annotation(
             kind: 'circle',
@@ -1446,4 +1471,127 @@ void main() {
       expect(find.text('採点AI文字認識信頼度: 85% (中)'), findsOneWidget);
     },
   );
+
+  testWidgets('keeps polling until a grade actually exists, even once this '
+      "question's OCR recognition has already landed while its job is still "
+      'running', (tester) async {
+    var gradeAvailable = false;
+    final dependencies = AppDependencies(
+      getSubmission: (_) async => _submission(state: 'ai_processed'),
+      listQuestions: (_) async => [_question()],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      // `GradingJobProcessor.process` persists the OCR recognition in its
+      // own transaction *before* ever calling the AI provider for the
+      // grading half -- so this is visible well before the job (or a
+      // grade) is actually done (P1 review).
+      listRecognitions: (_, _) async => [_recognition()],
+      listGrades: (_, _) async => gradeAvailable ? [_grade()] : const [],
+      listAnnotations: (_, _) async => const [],
+      listJobs: (_) async => [
+        JobResponse(
+          (b) => b
+            ..id = 'job-1'
+            ..kind = 'grading'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..state = 'running'
+            ..attempts = 1
+            ..maxAttempts = 3
+            ..createdAt = DateTime.utc(2026, 1, 1)
+            ..updatedAt = DateTime.utc(2026, 1, 1),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _wrap(
+        PdfReviewPage(
+          dependencies: dependencies,
+          testId: 'test-1',
+          submissionId: 'sub-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await _settlePdf(tester);
+
+    // The OCR recognition is already visible, but no grade has landed --
+    // 承認 must still be blocked; approving here would confirm a grade
+    // that was never produced.
+    expect(find.text('光合成によって酸素が発生する'), findsOneWidget);
+    final approveButton = tester.widget<FilledButton>(
+      find.byKey(const Key('review-approve-button')),
+    );
+    expect(approveButton.onPressed, isNull);
+
+    // The grading job's AI provider call finishes in the background --
+    // no submission-state change, no manual refresh, just the job
+    // finally producing a grade.
+    gradeAvailable = true;
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(seconds: 4));
+    });
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(
+      find.text('4 / 5 点'),
+      findsOneWidget,
+      reason:
+          'the background poll must keep running until a grade actually '
+          "exists, not stop just because this question's OCR recognition "
+          'landed first',
+    );
+  });
+
+  testWidgets('only overlays annotations belonging to the currently displayed '
+      'grading attempt, not a superseded one from an earlier re-submission', (
+    tester,
+  ) async {
+    final oldMark = _rect(0.2, 0.2, 0.05, 0.05);
+    final newMark = _rect(0.7, 0.7, 0.05, 0.05);
+    final oldAttempt = DateTime.utc(2026, 1, 1);
+    final newAttempt = DateTime.utc(2026, 1, 2);
+    // Two separate grading attempts (Issue #18: a re-submission under a
+    // new confirmed dependency-graph version creates a second Job, and
+    // therefore a second grade + a second set of annotations, without
+    // ever removing the first's) -- only the newer one is the "currently
+    // displayed" attempt (`displayGrade`, the latest AI grade here).
+    final dependencies = _dependencies(
+      pdfBytes: _pocA4PortraitPdf(),
+      q1: _question(),
+      grades: [
+        _grade(id: 'grade-old', awarded: 2, createdAt: oldAttempt),
+        _grade(id: 'grade-new', awarded: 4, createdAt: newAttempt),
+      ],
+      annotations: [
+        _annotation(id: 'anno-old', rect: oldMark, createdAt: oldAttempt),
+        _annotation(id: 'anno-new', rect: newMark, createdAt: newAttempt),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _wrap(
+        PdfReviewPage(
+          dependencies: dependencies,
+          testId: 'test-1',
+          submissionId: 'sub-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(find.text('4 / 5 点'), findsOneWidget); // the latest grade shown
+    expect(
+      find.byKey(const Key('annotation-anno-new')),
+      findsOneWidget,
+      reason: "only the currently displayed attempt's mark is drawn",
+    );
+    expect(
+      find.byKey(const Key('annotation-anno-old')),
+      findsNothing,
+      reason: "a superseded attempt's mark must not linger on the overlay",
+    );
+  });
 }

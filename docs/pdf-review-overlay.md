@@ -121,12 +121,32 @@ PoC 3が検証した回転・CropBox・非ゼロ原点MediaBoxの全fixtureを�
 ずっとsubmissionは既に`ai_processed`を報告しており、状態ベースの条件は
 実質的に一度もpollingを継続させない（R3レビュー指摘）。
 
-`_updatePolling()`は`QuestionReviewState.hasAnyAiResult`
+`_updatePolling()`は当初`QuestionReviewState.hasAnyAiResult`
 （`latestOcrRecognition != null || latestAiGrade != null`）が`false`である
-限りpollingを継続する方式に変更した。submissionの状態文字列を一切参照
-しない。AppBarの手動更新ボタン（`review-refresh-button`）は変更なし。
-pollingは引き続き`silent`フラグ付きで実行し、読み込み中スピナーやエラー
-バナーが定期的にちらつくのを防ぐ。
+限りpollingを継続する方式に変更したが、これも不十分だった
+（R4レビュー指摘、下記）。submissionの状態文字列は一切参照しない。
+AppBarの手動更新ボタン（`review-refresh-button`）は変更なし。pollingは
+引き続き`silent`フラグ付きで実行し、読み込み中スピナーやエラーバナーが
+定期的にちらつくのを防ぐ。
+
+**R4レビュー対応**: `GradingJobProcessor.process`はOCR認識（recognition半分）
+を独立したtransactionで先にcommitしてから、採点半分でAI providerを呼び出す
+（`jobs/grading_processor.py`）。そのため通常の採点jobが「OCR結果はcommit
+済みだがAI providerの応答をまだ待っている」状態（job状態は`running`）でも
+`latestOcrRecognition`は既に非nullになり、`hasAnyAiResult`ベースの条件は
+gradeが1件も存在しないままpollingを停止させてしまい、手動更新するまで
+画面が「未採点」のまま固まっていた。
+
+`GET /submissions/{submission_id}/jobs`（Issue #18で実装済み、本Issueでは
+新規に消費するだけ）から取得した設問ごとのJob一覧を使い、
+`_isAwaitingGrade(review, questionId)`は「gradeが存在する」または「その
+設問の最新Jobが`succeeded`/`failed`/`cancelled`のいずれか（
+`_terminalJobStates`）」のどちらかが成立するまで`true`を返す（`queued`/
+`running`/`blocked`、またはJobがまだ存在しない場合は継続）。Jobsの取得は
+submissionの取得と同様best-effort（`_refreshJobs`、失敗しても既知の一覧を
+保持するだけで画面全体は壊さない）。`FAILED`はbackendの再試行ポリシーに
+よって`QUEUED`へ自動的に戻り得るが、それは他の終端状態と同じく手動更新
+ボタンに委ねる（P1 review）。
 
 pollingが導入する race condition に対処している。
 
@@ -187,6 +207,33 @@ pollingの継続判定（2.8）も`latestOcrRecognition`の有無のみを見る
 （共通の型付けルールを型ペアごとに変えないことで推移律を保証する）。
 共通接頭部が一致してどちらかのトークン列が尽きた場合は、短い方を先とする。
 
+### 2.12 annotationは表示中のgrading試行だけに限定する（R4レビュー対応）
+
+設問は複数回グレーディングされ得る（Issue #18: 新しい確定済み依存グラフ
+version下での再submitは新しいJobを作り、`GradingJobProcessor.process`は
+そのたびに新しい`GradeResult`と新しいannotation群を追加する。append-only
+履歴のため古い試行の行は削除されない）。当初はannotation一覧を無条件に
+全件overlay/フォールバック表示していたため、Jobが再発行されると、
+Inspector/overlayが現在の`displayGrade`（最新のgrade）を示しているにも
+関わらず、過去の試行の（矛盾し得る）markがそのまま重ねて表示され続けて
+いた（R4レビュー指摘）。
+
+`Annotation`はどの`GradeResult`から生まれたかを指すidを持たない
+（`GradingJobProcessor.process`が同じtransaction・同じclock読み取り
+`now`から両方を作るだけで、互いのidを記録し合わない）。スキーマ変更を
+避け、`QuestionReviewState.annotationsForDisplayedAttempt`が
+`annotation.createdAt == displayGrade.createdAt`（両方とも同じ`now`から
+書き込まれる）で一致するものだけに絞り込む。`displayGrade`が存在しない
+（まだ一度もグレーディングが完了していない）場合は空リストを返す。
+overlay（`_buildAnnotationOverlay`）・フォールバック一覧
+（`_fallbackAnnotationsFor`）の両方がこのフィルタ済み一覧だけを参照する。
+
+この方式は、人がgradeを確定した後（`displayGrade`が`latestHumanGrade`に
+切り替わった後）は、どのAI annotationの`created_at`も人のgradeの
+`created_at`と一致し得ないため、AIの古いmarkが人の確定後の点数の隣に
+残り続けるケースも合わせて解消する（「human overrides AI」の既存方針と
+一貫した挙動）。
+
 ## 3. 追加したAPI（読み取り専用）
 
 | メソッド | パス                                                               | 用途                                                           |
@@ -232,4 +279,8 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   設問データ未読み込み時に承認/却下がブロックされること、キーボードでの
   設問移動・承認、action barのキーボード到達性、狭幅・低い高さの
   レイアウトでのoverflow無し、多数設問時のNavigation Railのスクロール、
-  を検証。
+  OCR認識が既に届いていてもgradeが無い間（Jobが`running`のまま）は
+  pollingを継続し承認もブロックされ続けること（§2.8、R4レビュー対応）、
+  複数回グレーディングされた設問で現在表示中の試行（`displayGrade`と
+  同じ`created_at`）のannotationだけがoverlayされ、古い試行のmarkが
+  残らないこと（§2.12、R4レビュー対応）、を検証。
