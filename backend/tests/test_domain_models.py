@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from auto_scoring.domain.models import (
+    MAX_COMMENT_CHARS,
     MAX_ORIGINAL_FILENAME_LENGTH,
     MAX_STUDENT_LABEL_LENGTH,
     MAX_TEST_NAME_LENGTH,
@@ -13,6 +14,7 @@ from auto_scoring.domain.models import (
     AnnotationKind,
     DomainError,
     GradeResult,
+    GradeResultContextEntry,
     GradingSource,
     InvalidCoordinate,
     InvalidStateTransition,
@@ -218,6 +220,52 @@ def test_grade_result_has_no_mutating_api() -> None:
     with pytest.raises(AttributeError):
         grade.confidence = 0.1  # type: ignore[misc]
     assert not [name for name in dir(GradeResult) if name in {"update", "set_score", "override"}]
+
+
+def test_grade_result_comment_length_is_capped() -> None:
+    with pytest.raises(DomainError):
+        make_grade(comment="a" * (MAX_COMMENT_CHARS + 1))
+
+
+def test_grade_result_comment_at_the_cap_is_accepted() -> None:
+    make_grade(comment="a" * MAX_COMMENT_CHARS)
+
+
+def test_grade_result_ai_metadata_must_be_set_together() -> None:
+    with pytest.raises(DomainError):
+        make_grade(provider="gemini", model=None, prompt_version="v1")
+
+
+def test_grade_result_ai_metadata_rejects_blank_values() -> None:
+    with pytest.raises(DomainError):
+        make_grade(provider="   ", model="m", prompt_version="v1")
+
+
+def test_grade_result_accepts_the_full_ai_metadata_triple() -> None:
+    grade = make_grade(provider="gemini", model="gemini-2.5-flash", prompt_version="v1")
+    assert grade.provider == "gemini"
+    assert grade.model == "gemini-2.5-flash"
+    assert grade.prompt_version == "v1"
+
+
+def test_grade_result_rejects_non_positive_dependency_graph_version() -> None:
+    with pytest.raises(DomainError):
+        make_grade(dependency_graph_version=0)
+
+
+def test_grade_result_context_entry_requires_at_least_one_result_reference() -> None:
+    with pytest.raises(DomainError):
+        GradeResultContextEntry(question_id="q-0")
+
+
+def test_grade_result_rejects_duplicate_context_question_ids() -> None:
+    with pytest.raises(DomainError):
+        make_grade(
+            context=(
+                GradeResultContextEntry(question_id="q-0", recognition_result_id="rec-0"),
+                GradeResultContextEntry(question_id="q-0", grade_result_id="grade-0"),
+            )
+        )
 
 
 def test_comment_annotation_requires_text() -> None:
