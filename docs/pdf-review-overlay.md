@@ -98,6 +98,17 @@ PoC 3が検証した回転・CropBox・非ゼロ原点MediaBoxの全fixtureを�
 自動テストで再検証してはいない（代表fixture1点のみ、受入条件の文言どおり）。
 残りのfixtureでの目視確認は、Windowsデスクトップビルドでの手動確認に委ねる。
 
+### 2.8 処理中submissionはpollingで更新する
+
+`unprocessed`/`ai_processing`状態のsubmissionを開いた場合、設問ごとの
+recognition/grade/annotationが空で返るのは「未処理」であって「確定した空」
+ではない。AI採点はバックエンドのjob queue（Issue #18）が設問単位で非同期に
+進めるため、レビュー画面を開いたままの間にAIが結果を出し得る。この画面は
+push通知を持たないため、3秒間隔のpolling（`Timer.periodic`、submission状態
+が処理中でなくなったら停止）と、AppBarの手動更新ボタン
+（`review-refresh-button`）の両方で追随する。pollingは`silent`フラグ付きで
+実行し、読み込み中スピナーやエラーバナーが定期的にちらつくのを防ぐ。
+
 ## 3. 追加したAPI（読み取り専用）
 
 | メソッド | パス                                                               | 用途                                         |
@@ -117,6 +128,11 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
 - `app/test/pdf_review_geometry_test.dart`: 座標変換の純関数テスト（PoC 3
   fixture再利用）。
 - `app/test/pdf_review_page_test.dart`: loading/empty/error状態、
-  認識文字・点数・根拠・rubric・2種のConfidenceの同時表示、annotationの
-  overlay配置とフォールバック、キーボードでの設問移動・承認、action barの
-  キーボード到達性、狭幅レイアウトでのoverflow無し、を検証。
+  認識文字・点数・根拠・rubric（`question.rubric`の定義自体）・2種の
+  Confidenceの同時表示、AI/human結果がsource別に区別されること、
+  annotationのoverlay配置（選択中の設問のみに限定されナビゲーション履歴に
+  依存しないこと）とフォールバック、処理中submissionが手動更新で追随する
+  こと、設問データ未読み込み時に承認/却下がブロックされること、キーボード
+  での設問移動・承認、action barのキーボード到達性、狭幅・低い高さの
+  レイアウトでのoverflow無し、多数設問時のNavigation Railのスクロール、を
+  検証。

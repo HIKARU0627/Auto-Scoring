@@ -70,12 +70,50 @@ class QuestionReviewState {
   List<AnnotationResponse> get fallbackAnnotations =>
       (annotations ?? const []).where((a) => a.rect == null).toList();
 
-  RecognitionResponse? get latestRecognition =>
-      recognitions == null || recognitions!.isEmpty ? null : recognitions!.last;
+  /// The latest AI-proposed recognition, or `null` if none exists yet.
+  /// Kept separate from [latestHumanRecognition] so the Inspector never
+  /// labels a human correction's confidence (always 1.0) as an AI
+  /// Recognition Confidence, and never loses the original AI proposal once
+  /// a human has corrected it (append-only history, §19/§35-5).
+  RecognitionResponse? get latestAiRecognition =>
+      _latestWhere(recognitions, (r) => r.source_ == 'ai');
 
-  GradeResultResponse? get latestGrade =>
-      grades == null || grades!.isEmpty ? null : grades!.last;
+  /// The latest human-entered/corrected recognition, or `null` if a human
+  /// has never touched this question yet.
+  RecognitionResponse? get latestHumanRecognition =>
+      _latestWhere(recognitions, (r) => r.source_ == 'human');
+
+  /// The latest AI-proposed grade, or `null` if none exists yet.
+  GradeResultResponse? get latestAiGrade =>
+      _latestWhere(grades, (g) => g.source_ == 'ai');
+
+  /// The latest human-confirmed/corrected grade, or `null` if a human has
+  /// never graded this question yet.
+  GradeResultResponse? get latestHumanGrade =>
+      _latestWhere(grades, (g) => g.source_ == 'human');
+
+  /// The most authoritative grade to show where only one value fits (e.g.
+  /// the `score` annotation on the PDF overlay): a human's grade overrides
+  /// the AI's proposal once one exists, same precedence as the Inspector.
+  GradeResultResponse? get displayGrade => latestHumanGrade ?? latestAiGrade;
 }
+
+/// The last element of [items] matching [test], or `null` if none does.
+/// `items` is oldest-first (server history order), so scanning from the end
+/// finds the most recent match without a full sort.
+T? _latestWhere<T>(List<T>? items, bool Function(T) test) {
+  if (items == null) return null;
+  for (var i = items.length - 1; i >= 0; i--) {
+    if (test(items[i])) return items[i];
+  }
+  return null;
+}
+
+/// Submission states where AI recognition/grading is still in flight -- a
+/// question's recognitions/grades/annotations reading back empty here is
+/// "not processed yet", not "confirmed empty", so the review screen keeps
+/// polling instead of caching that empty result as final.
+const _processingSubmissionStates = {'unprocessed', 'ai_processing'};
 
 class _PdfReviewPageState extends State<PdfReviewPage> {
   late final PdfViewerController _pdfController;
@@ -89,6 +127,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   Uint8List? _pdfBytes;
   int _questionIndex = 0;
   final Map<String, QuestionReviewState> _reviews = {};
+  Timer? _pollTimer;
 
   @override
   void initState() {
@@ -99,9 +138,67 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     _noteController.dispose();
     _noteFocusNode.dispose();
     super.dispose();
+  }
+
+  /// Starts polling while [_submission] is still being processed (so a
+  /// question that reads back empty because AI work hasn't reached it yet
+  /// is retried instead of staying stuck empty until the reviewer reopens
+  /// this page), and stops once it reaches a terminal state. Safe to call
+  /// repeatedly -- it only (re)starts the timer when the desired state
+  /// actually changes.
+  void _updatePolling() {
+    final shouldPoll = _processingSubmissionStates.contains(_submission?.state);
+    if (shouldPoll == (_pollTimer != null)) return;
+    if (shouldPoll) {
+      _pollTimer = Timer.periodic(
+        const Duration(seconds: 3),
+        (_) => _pollWhileProcessing(),
+      );
+    } else {
+      _pollTimer?.cancel();
+      _pollTimer = null;
+    }
+  }
+
+  Future<void> _pollWhileProcessing() async {
+    try {
+      final submission = await widget.dependencies.getSubmission(
+        widget.submissionId,
+      );
+      if (!mounted) return;
+      setState(() => _submission = submission);
+      _updatePolling();
+    } on SidecarApiException {
+      // Transient poll failure -- retried on the next tick rather than
+      // surfaced as an error banner.
+      return;
+    }
+    // Silent: a background poll should not flash the loading spinner or an
+    // error banner over content the reviewer is already looking at.
+    await _ensureReviewLoaded(forceReload: true, silent: true);
+  }
+
+  /// Manual "更新" action (P1 review: a submission stuck in
+  /// unprocessed/ai_processing must be refreshable without relying solely
+  /// on the background poll). Best-effort on the submission refetch -- a
+  /// failure there still lets the question data refresh below, since that
+  /// is the part a reviewer watching a stuck "処理中" state actually wants.
+  Future<void> _refreshCurrentQuestion() async {
+    try {
+      final submission = await widget.dependencies.getSubmission(
+        widget.submissionId,
+      );
+      if (!mounted) return;
+      setState(() => _submission = submission);
+      _updatePolling();
+    } on SidecarApiException {
+      // Fall through to refreshing the question data regardless.
+    }
+    await _ensureReviewLoaded(forceReload: true);
   }
 
   QuestionResponse? get _currentQuestion =>
@@ -140,6 +237,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         _pdfBytes = pdfBytes;
         _questionIndex = 0;
       });
+      _updatePolling();
       unawaited(_ensureReviewLoaded());
     } on SidecarApiException catch (error) {
       if (!mounted) return;
@@ -149,21 +247,42 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
   }
 
-  Future<void> _ensureReviewLoaded({bool forceReload = false}) async {
+  /// Fetches (or refreshes) the current question's recognitions/grades/
+  /// annotations. [silent] skips flipping [QuestionReviewState.loading]/
+  /// clearing its error and skips surfacing a fetch failure -- used by the
+  /// background poll below so a transient hiccup or the routine "still
+  /// nothing yet" tick doesn't flash the spinner or an error banner over
+  /// content the reviewer is already looking at.
+  Future<void> _ensureReviewLoaded({
+    bool forceReload = false,
+    bool silent = false,
+  }) async {
     final question = _currentQuestion;
     if (question == null) return;
     final existing = _reviews[question.id];
+    // While the submission is still being processed, a previously-fetched
+    // empty result is not yet final -- AI work for this specific question
+    // may simply not have reached it, so the cached "already loaded" state
+    // must not stick and quietly hide it from ever being retried again.
+    final stillProcessing = _processingSubmissionStates.contains(
+      _submission?.state,
+    );
     if (existing != null &&
         !forceReload &&
+        !stillProcessing &&
         !existing.loading &&
         existing.error == null &&
         existing.hasLoaded) {
       return;
     }
     final review = existing ?? QuestionReviewState();
-    review.loading = true;
-    review.error = null;
-    setState(() => _reviews[question.id] = review);
+    if (silent) {
+      _reviews[question.id] = review;
+    } else {
+      review.loading = true;
+      review.error = null;
+      setState(() => _reviews[question.id] = review);
+    }
     try {
       final recognitions = await widget.dependencies.listRecognitions(
         widget.submissionId,
@@ -185,7 +304,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         review.loading = false;
       });
     } on SidecarApiException catch (error) {
-      if (!mounted) return;
+      if (!mounted || silent) return;
       setState(() {
         review.error = error.message;
         review.loading = false;
@@ -213,14 +332,27 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
 
   void _moveQuestion(int delta) => _selectQuestion(_questionIndex + delta);
 
+  /// Whether the current question's data is fully loaded and free of a
+  /// fetch error -- approving/rejecting data the reviewer cannot actually
+  /// see yet (still loading, or the last fetch failed) would let them
+  /// unknowingly confirm content they never reviewed.
+  bool get _canDecide {
+    final review = _currentReview;
+    return review != null &&
+        !review.loading &&
+        review.error == null &&
+        review.hasLoaded;
+  }
+
   void _setDecision(ReviewDecision decision) {
-    final question = _currentQuestion;
-    if (question == null) return;
+    if (!_canDecide) return;
+    final question = _currentQuestion!;
     final review = _reviews.putIfAbsent(question.id, QuestionReviewState.new);
     setState(() => review.decision = decision);
   }
 
   void _approveAndNext() {
+    if (!_canDecide) return;
     _setDecision(ReviewDecision.approved);
     if (_questionIndex < _questions.length - 1) {
       _moveQuestion(1);
@@ -245,7 +377,17 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_appBarTitle())),
+      appBar: AppBar(
+        title: Text(_appBarTitle()),
+        actions: [
+          IconButton(
+            key: const Key('review-refresh-button'),
+            tooltip: '更新',
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadingShell ? null : _refreshCurrentQuestion,
+          ),
+        ],
+      ),
       body: _loadingShell
           ? const Center(
               key: Key('review-loading'),
@@ -307,11 +449,17 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         final narrow = constraints.maxWidth < 900;
         final rail = _buildNavigationRail(narrow: narrow);
         final inspector = _buildInspector(narrow: narrow);
+        // The narrow (stacked) layout splits height by flex ratio, not a
+        // fixed pixel size for the Inspector -- a fixed height plus the
+        // action bar could exceed a short viewport's total height (a
+        // landscape phone, a short desktop window) and overflow. Flexible
+        // shares always fit, and the Inspector already scrolls internally
+        // if its content doesn't fit its share (P2 review).
         final viewerAndInspector = narrow
             ? Column(
                 children: [
-                  Expanded(child: _buildPdfViewer()),
-                  SizedBox(height: 260, child: inspector),
+                  Expanded(flex: 3, child: _buildPdfViewer()),
+                  Expanded(flex: 2, child: inspector),
                 ],
               )
             : Row(
@@ -338,8 +486,14 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     );
   }
 
+  /// `NavigationRail` does not scroll its own destinations -- with enough
+  /// questions it simply overflows once they no longer fit the available
+  /// height. Wrapping it in `SingleChildScrollView` + `IntrinsicHeight`
+  /// (the standard workaround for this widget) lets it size to its natural
+  /// height and scroll the excess instead (P2 review), while still filling
+  /// the full available height when destinations already fit.
   Widget _buildNavigationRail({required bool narrow}) {
-    return NavigationRail(
+    final rail = NavigationRail(
       key: const Key('review-question-rail'),
       selectedIndex: _questionIndex,
       onDestinationSelected: _selectQuestion,
@@ -354,6 +508,14 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
             label: Text('問${question.number}'),
           ),
       ],
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: IntrinsicHeight(child: rail),
+        ),
+      ),
     );
   }
 
@@ -391,28 +553,32 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     );
   }
 
+  /// Only the *currently selected* question's annotations, never a
+  /// previously-visited one that happens to share this page -- rendering
+  /// every question ever loaded for this page would make the overlay depend
+  /// on navigation history (which questions were visited, and in what
+  /// order) instead of on what is actually selected right now.
   List<Widget> _buildAnnotationOverlay(int pageNumber, Size pageSize) {
+    final question = _currentQuestion;
+    if (question == null || question.page != pageNumber) return const [];
+    final review = _reviews[question.id];
+    if (review == null) return const [];
     final widgets = <Widget>[];
-    for (final question in _questions) {
-      if (question.page != pageNumber) continue;
-      final review = _reviews[question.id];
-      if (review == null) continue;
-      for (final annotation in review.placedAnnotations) {
-        final rect = normalizedRectToLocal(annotation.rect!, pageSize);
-        widgets.add(
-          Positioned(
-            key: Key('annotation-${annotation.id}'),
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-            child: _AnnotationMark(
-              annotation: annotation,
-              latestGrade: review.latestGrade,
-            ),
+    for (final annotation in review.placedAnnotations) {
+      final rect = normalizedRectToLocal(annotation.rect!, pageSize);
+      widgets.add(
+        Positioned(
+          key: Key('annotation-${annotation.id}'),
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          child: _AnnotationMark(
+            annotation: annotation,
+            displayGrade: review.displayGrade,
           ),
-        );
-      }
+        ),
+      );
     }
     return widgets;
   }
@@ -486,17 +652,23 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     QuestionResponse question,
     QuestionReviewState review,
   ) {
-    final recognition = review.latestRecognition;
-    final grade = review.latestGrade;
+    final aiRecognition = review.latestAiRecognition;
+    final humanRecognition = review.latestHumanRecognition;
+    final aiGrade = review.latestAiGrade;
+    final humanGrade = review.latestHumanGrade;
     // A question can have no AI recognition/grade yet but still carry a
-    // fallback annotation (e.g. a human-entered comment) -- the empty state
-    // below must not swallow that, or a comment routed to this fallback
-    // area (§12.4) would silently disappear for an otherwise-unprocessed
+    // fallback annotation (e.g. a human-entered comment) or a rubric
+    // definition -- the empty state below must not swallow either, or a
+    // comment routed to this fallback area (§12.4), or the question's own
+    // marking scheme, would silently disappear for an otherwise-unprocessed
     // question.
     final isEmpty =
-        recognition == null &&
-        grade == null &&
-        review.fallbackAnnotations.isEmpty;
+        aiRecognition == null &&
+        humanRecognition == null &&
+        aiGrade == null &&
+        humanGrade == null &&
+        review.fallbackAnnotations.isEmpty &&
+        question.rubric.isEmpty;
     if (isEmpty) {
       return const Text('まだAI結果がありません', key: Key('review-question-empty'));
     }
@@ -505,25 +677,40 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       children: [
         Text('AI認識文字', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 4),
-        if (recognition == null)
+        if (aiRecognition == null)
           const Text('未認識')
         else ...[
-          Text(recognition.text, key: const Key('review-recognition-text')),
+          Text(aiRecognition.text, key: const Key('review-recognition-text')),
           const SizedBox(height: 4),
           _ConfidenceBadge(
             key: const Key('review-recognition-confidence'),
             label: '文字認識信頼度',
-            confidence: recognition.confidence.toDouble(),
+            confidence: aiRecognition.confidence.toDouble(),
+          ),
+        ],
+        // A human correction never overwrites the AI's row (append-only
+        // history, §19/§35-5) -- shown as its own, clearly-labeled entry
+        // instead of silently replacing "AI認識文字" above, so a human's
+        // confidence (always 1.0) is never mistaken for the AI's.
+        if (humanRecognition != null) ...[
+          const SizedBox(height: 8),
+          _ProvenanceLabel(
+            key: const Key('review-human-recognition-label'),
+            text: '人による修正',
+          ),
+          Text(
+            humanRecognition.text,
+            key: const Key('review-human-recognition-text'),
           ),
         ],
         const Divider(height: 24),
         Text('採点', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 4),
-        if (grade == null)
+        if (aiGrade == null)
           const Text('未採点')
         else ...[
           Text(
-            '${grade.score.awarded} / ${grade.score.maximum} 点',
+            '${aiGrade.score.awarded} / ${aiGrade.score.maximum} 点',
             key: const Key('review-score'),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
@@ -531,26 +718,53 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
           _ConfidenceBadge(
             key: const Key('review-grading-confidence'),
             label: '採点信頼度',
-            confidence: grade.confidence.toDouble(),
+            confidence: aiGrade.confidence.toDouble(),
           ),
-          if (grade.rationale case final rationale?
+          if (aiGrade.rationale case final rationale?
               when rationale.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text('根拠', style: Theme.of(context).textTheme.labelLarge),
             Text(rationale, key: const Key('review-rationale')),
           ],
-          if (grade.criteria.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text('採点基準', style: Theme.of(context).textTheme.labelLarge),
-            for (final criterion in grade.criteria)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(_criterionIcon(criterion.outcome)),
-                title: Text(criterion.criterionId),
-                subtitle: Text(_criterionLabel(criterion.outcome)),
+        ],
+        if (humanGrade != null) ...[
+          const SizedBox(height: 8),
+          _ProvenanceLabel(
+            key: const Key('review-human-grade-label'),
+            text: '人による確定',
+          ),
+          Text(
+            '${humanGrade.score.awarded} / ${humanGrade.score.maximum} 点',
+            key: const Key('review-human-score'),
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+        ],
+        // The rubric's own definition (description + 配点) is shown
+        // whenever the question has one, independent of whether AI/human
+        // grading has happened yet -- outcomes below annotate it where a
+        // grade has judged that criterion, but the definition itself must
+        // never disappear just because grading hasn't reached it (P1
+        // review).
+        if (question.rubric.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text('採点基準', style: Theme.of(context).textTheme.labelLarge),
+          for (final criterion in question.rubric)
+            ListTile(
+              key: Key('rubric-criterion-${criterion.id}'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                _criterionIcon(
+                  _criterionOutcomeFor(criterion.id, review.displayGrade),
+                ),
               ),
-          ],
+              title: Text('${criterion.description}（${criterion.maxPoints}点）'),
+              subtitle: Text(
+                _criterionLabel(
+                  _criterionOutcomeFor(criterion.id, review.displayGrade),
+                ),
+              ),
+            ),
         ],
         if (review.fallbackAnnotations.isNotEmpty) ...[
           const Divider(height: 24),
@@ -604,14 +818,18 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
               const SizedBox(width: 12),
               OutlinedButton.icon(
                 key: const Key('review-reject-button'),
-                onPressed: _currentQuestion == null ? null : _reject,
+                // Disabled while the question's data is still loading (or
+                // failed to load) -- rejecting content the reviewer cannot
+                // actually see yet would silently confirm a decision made
+                // on nothing (P2 review).
+                onPressed: _canDecide ? _reject : null,
                 icon: const Icon(Icons.close),
                 label: const Text('却下 (X)'),
               ),
               const SizedBox(width: 12),
               FilledButton.icon(
                 key: const Key('review-approve-button'),
-                onPressed: _currentQuestion == null ? null : _approveAndNext,
+                onPressed: _canDecide ? _approveAndNext : null,
                 icon: const Icon(Icons.check),
                 label: const Text('承認して次へ (Enter)'),
               ),
@@ -634,19 +852,53 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   _ => (Icons.help_outline, state),
 };
 
-IconData _criterionIcon(String outcome) => switch (outcome) {
+/// The outcome a grade recorded for [criterionId], or `null` if [grade] is
+/// `null` or never judged that criterion (e.g. grading hasn't reached this
+/// question yet, or a partial/failed AI run only scored some criteria).
+String? _criterionOutcomeFor(String criterionId, GradeResultResponse? grade) {
+  if (grade == null) return null;
+  for (final result in grade.criteria) {
+    if (result.criterionId == criterionId) return result.outcome;
+  }
+  return null;
+}
+
+IconData _criterionIcon(String? outcome) => switch (outcome) {
   'pass' => Icons.check_circle_outline,
   'partial' => Icons.remove_circle_outline,
   'fail' => Icons.cancel_outlined,
+  null => Icons.hourglass_empty,
   _ => Icons.help_outline,
 };
 
-String _criterionLabel(String outcome) => switch (outcome) {
+String _criterionLabel(String? outcome) => switch (outcome) {
   'pass' => '合格',
   'partial' => '部分合格',
   'fail' => '不合格',
+  null => '未評価',
   _ => outcome,
 };
+
+/// A small "who produced this" marker (e.g. "人による修正") shown next to a
+/// human-sourced recognition/grade, so it is never confused with the AI's
+/// own proposal above it (P1 review: source must stay distinguishable).
+class _ProvenanceLabel extends StatelessWidget {
+  const _ProvenanceLabel({super.key, required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.person, size: 16),
+        const SizedBox(width: 4),
+        Text(text, style: Theme.of(context).textTheme.labelLarge),
+      ],
+    );
+  }
+}
 
 /// Numeric confidence + a textual level label + a distinct icon, so
 /// Recognition/Grading Confidence is never distinguished by color alone
@@ -692,10 +944,14 @@ class _ConfidenceBadge extends StatelessWidget {
 /// by kind, not just color, so the mark is legible without relying on color
 /// (Issue #21 acceptance criteria).
 class _AnnotationMark extends StatelessWidget {
-  const _AnnotationMark({required this.annotation, required this.latestGrade});
+  const _AnnotationMark({required this.annotation, required this.displayGrade});
 
   final AnnotationResponse annotation;
-  final GradeResultResponse? latestGrade;
+
+  /// The most authoritative grade to source the `score` mark's number from
+  /// (human overrides AI once one exists -- see
+  /// [QuestionReviewState.displayGrade]).
+  final GradeResultResponse? displayGrade;
 
   @override
   Widget build(BuildContext context) {
@@ -705,7 +961,7 @@ class _AnnotationMark extends StatelessWidget {
       'triangle' => const _ShapeMark(icon: Icons.change_history, label: '△'),
       'score' => _ShapeMark(
         icon: Icons.grade_outlined,
-        label: latestGrade == null ? '―' : '${latestGrade!.score.awarded}',
+        label: displayGrade == null ? '―' : '${displayGrade!.score.awarded}',
       ),
       // The comment text can be long -- shown as a hover tooltip, not
       // squeezed inline next to the icon like the other kinds' short labels.

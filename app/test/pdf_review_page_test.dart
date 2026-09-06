@@ -264,7 +264,15 @@ void main() {
       final dependencies = _dependencies(
         pdfBytes: _pocA4PortraitPdf(),
         q1: _question(
-          rubric: const [], // rubric criteria come from the grade below
+          rubric: [
+            RubricCriterionResponse(
+              (b) => b
+                ..id = 'c-1'
+                ..description = '主旨'
+                ..maxPoints = 3
+                ..position = 0,
+            ),
+          ],
         ),
         recognitions: [_recognition(confidence: 0.55)],
         grades: [
@@ -307,9 +315,21 @@ void main() {
         reason: 'grading rationale is shown',
       );
       expect(
-        find.text('c-1'),
+        find.byKey(const Key('rubric-criterion-c-1')),
         findsOneWidget,
-        reason: 'rubric criterion is shown',
+        reason: 'the rubric criterion definition is shown',
+      );
+      expect(
+        find.text('主旨（3点）'),
+        findsOneWidget,
+        reason:
+            'rubric description and max points are shown, not just the '
+            'criterion id',
+      );
+      expect(
+        find.text('合格'),
+        findsOneWidget,
+        reason: "the grade's outcome for this criterion is shown",
       );
 
       // Both confidences are visible side by side, distinguished by their
@@ -569,4 +589,288 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('review-inspector')), findsOneWidget);
   });
+
+  testWidgets(
+    'shows AI and human recognition/grade side by side, never mislabeling '
+    "a human correction's confidence as the AI's",
+    (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        recognitions: [
+          _recognition(id: 'rec-ai', text: 'AI認識結果', confidence: 0.6),
+          RecognitionResponse(
+            (b) => b
+              ..id = 'rec-human'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'human'
+              ..text = '人が修正した結果'
+              ..confidence = 1.0
+              ..createdAt = DateTime.utc(2026, 1, 1, 0, 1),
+          ),
+        ],
+        grades: [
+          _grade(id: 'grade-ai', awarded: 3, maximum: 5, confidence: 0.6),
+          GradeResultResponse(
+            (b) => b
+              ..id = 'grade-human'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'human'
+              ..score.awarded = 5
+              ..score.maximum = 5
+              ..score.ratio = 1.0
+              ..confidence = 1.0
+              ..criteria.replace(const [])
+              ..createdAt = DateTime.utc(2026, 1, 1, 0, 1),
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // The AI's original proposal is still visible...
+      expect(find.text('AI認識結果'), findsOneWidget);
+      expect(find.text('3 / 5 点'), findsOneWidget);
+      // ...alongside the human correction, clearly labeled as such...
+      expect(
+        find.byKey(const Key('review-human-recognition-label')),
+        findsOneWidget,
+      );
+      expect(find.text('人が修正した結果'), findsOneWidget);
+      expect(find.byKey(const Key('review-human-grade-label')), findsOneWidget);
+      expect(find.text('5 / 5 点'), findsOneWidget);
+      // ...and the only Recognition Confidence badge shown is the AI's own
+      // (60%), never a "100%" badge implying the AI was that confident.
+      expect(find.text('文字認識信頼度: 60% (低)'), findsOneWidget);
+      expect(find.textContaining('文字認識信頼度: 100%'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'the PDF overlay only ever shows the currently selected question, not '
+    'every question ever visited on the same page',
+    (tester) async {
+      final markA = _rect(0.2, 0.2, 0.05, 0.05);
+      final markB = _rect(0.7, 0.7, 0.05, 0.05);
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(id: 'q-1', number: '1', page: 1),
+        q2: _question(id: 'q-2', number: '2', page: 1),
+        annotations: [
+          _annotation(id: 'anno-a', questionId: 'q-1', rect: markA),
+          _annotation(id: 'anno-b', questionId: 'q-2', rect: markB),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('annotation-anno-a')), findsOneWidget);
+      expect(find.byKey(const Key('annotation-anno-b')), findsNothing);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('annotation-anno-a')), findsNothing);
+      expect(find.byKey(const Key('annotation-anno-b')), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Back on question 1: only its own annotation shows, not question 2's
+      // as well just because it was visited in between.
+      expect(find.byKey(const Key('annotation-anno-a')), findsOneWidget);
+      expect(find.byKey(const Key('annotation-anno-b')), findsNothing);
+    },
+  );
+
+  testWidgets('a submission stuck in ai_processing is refetched via the manual '
+      'refresh action once AI results become available', (tester) async {
+    var recognitionsAvailable = false;
+    var submissionState = 'ai_processing';
+    final dependencies = AppDependencies(
+      getSubmission: (_) async => _submission(state: submissionState),
+      listQuestions: (_) async => [_question()],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      listRecognitions: (_, _) async =>
+          recognitionsAvailable ? [_recognition()] : const [],
+      listGrades: (_, _) async => const [],
+      listAnnotations: (_, _) async => const [],
+    );
+
+    await tester.pumpWidget(
+      _wrap(
+        PdfReviewPage(
+          dependencies: dependencies,
+          testId: 'test-1',
+          submissionId: 'sub-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(
+      find.byKey(const Key('review-question-empty')),
+      findsOneWidget,
+      reason: 'nothing has landed for this question yet',
+    );
+
+    // AI work finishes in the background (outside this screen's control).
+    recognitionsAvailable = true;
+    submissionState = 'ai_processed';
+
+    await tester.tap(find.byKey(const Key('review-refresh-button')));
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(
+      find.text('光合成によって酸素が発生する'),
+      findsOneWidget,
+      reason:
+          'manual refresh must pick up results that arrived after '
+          'the initial (empty) load',
+    );
+    expect(find.text('AI処理済み'), findsOneWidget);
+  });
+
+  testWidgets('blocks 承認/却下 while the current question is still loading or '
+      'errored, so a decision is never made on unseen data', (tester) async {
+    final recognitionsCompleter = Completer<List<RecognitionResponse>>();
+    final dependencies = AppDependencies(
+      getSubmission: (_) async => _submission(),
+      listQuestions: (_) async => [_question()],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      listRecognitions: (_, _) => recognitionsCompleter.future,
+      listGrades: (_, _) async => const [],
+      listAnnotations: (_, _) async => const [],
+    );
+
+    await tester.pumpWidget(
+      _wrap(
+        PdfReviewPage(
+          dependencies: dependencies,
+          testId: 'test-1',
+          submissionId: 'sub-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(
+      find.byKey(const Key('review-question-loading')),
+      findsOneWidget,
+      reason: 'the question fetch never resolves in this test',
+    );
+    final approveButton = tester.widget<FilledButton>(
+      find.byKey(const Key('review-approve-button')),
+    );
+    final rejectButton = tester.widget<OutlinedButton>(
+      find.byKey(const Key('review-reject-button')),
+    );
+    expect(approveButton.onPressed, isNull);
+    expect(rejectButton.onPressed, isNull);
+
+    // The keyboard shortcut must be just as inert as the disabled button.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(find.byKey(const Key('review-question-loading')), findsOneWidget);
+
+    recognitionsCompleter.complete(const []);
+    await tester.pump();
+    await tester.pump();
+  });
+
+  testWidgets(
+    'the question navigation rail scrolls instead of overflowing when many '
+    'questions do not fit the available height',
+    (tester) async {
+      addTearDown(tester.view.resetPhysicalSize);
+      tester.view.physicalSize = const Size(1200, 400);
+      tester.view.devicePixelRatio = 1.0;
+
+      final questions = [
+        for (var i = 1; i <= 30; i++) _question(id: 'q-$i', number: '$i'),
+      ];
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(),
+        listQuestions: (_) async => questions,
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, _) async => const [],
+        listGrades: (_, _) async => const [],
+        listAnnotations: (_, _) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('review-question-rail')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'the narrow (stacked) layout adapts to a short viewport instead of '
+    'overflowing',
+    (tester) async {
+      addTearDown(tester.view.resetPhysicalSize);
+      tester.view.physicalSize = const Size(700, 420);
+      tester.view.devicePixelRatio = 1.0;
+
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        recognitions: [_recognition()],
+        grades: [_grade()],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('review-inspector')), findsOneWidget);
+    },
+  );
 }
