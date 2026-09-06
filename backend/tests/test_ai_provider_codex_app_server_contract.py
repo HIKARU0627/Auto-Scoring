@@ -9,13 +9,19 @@ never part of this offline suite.
 
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
+from auto_scoring.adapters.ai_grading._prompt import GRADING_SYSTEM_INSTRUCTIONS
 from auto_scoring.adapters.ai_grading.codex_app_server_provider import (
     CodexAppServerProvider,
+    _cleanup_workspace,
     _minimal_environment,
     _SubprocessAppServerTransport,
 )
@@ -61,6 +67,7 @@ class _FakeAppServerTransport:
         if method == "thread/start":
             assert params["sandbox"] == "read-only"
             assert params["approvalPolicy"] == "never"
+            assert params["developerInstructions"] == GRADING_SYSTEM_INSTRUCTIONS
             return {"thread": {"id": self._thread_id}, "model": "codex-fake-model"}
         if method == "turn/start":
             assert params["threadId"] == self._thread_id
@@ -374,3 +381,124 @@ def test_minimal_environment_only_forwards_allowlisted_names(
     assert env.get("PATH") == "/usr/bin"
     assert "AUTO_SCORING_OPENROUTER_API_KEY" not in env
     assert "DATABASE_URL" not in env
+
+
+def test_grading_instructions_go_through_developer_instructions() -> None:
+    """Fixed grading rules must be sent over the trusted
+    `developerInstructions` channel, not mixed into the same `turn/start`
+    input text as the student-controlled OCR reading (code review finding:
+    a JSON Schema alone only constrains response shape, not whether an
+    injected instruction inside the OCR text changes the awarded score)."""
+    transport = _FakeAppServerTransport()
+    captured: dict[str, object] = {}
+    original_request = transport.request
+
+    def _spying_request(
+        method: str, params: dict[str, object], *, timeout_seconds: float
+    ) -> dict[str, object]:
+        if method == "thread/start":
+            captured["developerInstructions"] = params.get("developerInstructions")
+        if method == "turn/start":
+            captured["input_text"] = params["input"][0]["text"]  # type: ignore[index]
+        return original_request(method, params, timeout_seconds=timeout_seconds)
+
+    transport.request = _spying_request  # type: ignore[method-assign]
+    provider = CodexAppServerProvider(prompt_version="v1", transport=transport)
+    provider.grade(_VALID_REQUEST)
+
+    assert captured["developerInstructions"] == GRADING_SYSTEM_INSTRUCTIONS
+    assert "UNTRUSTED STUDENT OCR" in captured["input_text"]  # type: ignore[operator]
+
+
+class _StubProcess:
+    def __init__(self, pid: int = 4242) -> None:
+        self.pid = pid
+        self.stdin = None
+        self.terminate_called = False
+        self.wait_called = False
+
+    def terminate(self) -> None:
+        self.terminate_called = True
+
+    def wait(self, timeout: float | None = None) -> None:
+        self.wait_called = True
+
+
+def test_close_kills_the_whole_process_tree_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_resolve_command` can route a `.cmd`/`.bat` npm shim through
+    `cmd.exe /c <shim>`, making `self._process` the cmd.exe wrapper rather
+    than the real app-server process; `terminate()`/`kill()` alone would
+    only end that wrapper and orphan its descendants (code review
+    finding)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    taskkill_calls: list[list[str]] = []
+
+    def _fake_run(args: list[str], **kwargs: object) -> None:
+        taskkill_calls.append(args)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    transport = _SubprocessAppServerTransport.__new__(_SubprocessAppServerTransport)
+    transport._process = _StubProcess(pid=4242)  # type: ignore[assignment]
+    transport.close()
+
+    assert taskkill_calls == [["taskkill", "/T", "/F", "/PID", "4242"]]
+    assert transport._process.terminate_called  # type: ignore[attr-defined]
+
+
+def test_close_does_not_taskkill_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    run_calls: list[object] = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: run_calls.append(a))
+
+    transport = _SubprocessAppServerTransport.__new__(_SubprocessAppServerTransport)
+    transport._process = _StubProcess()  # type: ignore[assignment]
+    transport.close()
+
+    assert run_calls == []
+
+
+def test_cleanup_workspace_succeeds_after_a_transient_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The common Windows failure mode (an antivirus scanner or another
+    process briefly holding the file open) must not be treated as
+    permanent on the first attempt (code review finding)."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "answer.png").write_bytes(b"data")
+
+    attempts = {"count": 0}
+    real_rmtree = shutil.rmtree
+
+    def _flaky_rmtree(path: str, *args: object, **kwargs: object) -> None:
+        attempts["count"] += 1
+        if attempts["count"] < 2:
+            raise OSError("simulated transient lock")
+        real_rmtree(path)
+
+    monkeypatch.setattr(shutil, "rmtree", _flaky_rmtree)
+    _cleanup_workspace(str(workspace), retry_delays=(0.0,), sleep=lambda _: None)
+
+    assert attempts["count"] == 2
+    assert not workspace.exists()
+
+
+def test_cleanup_workspace_warns_when_every_attempt_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cleanup failure must not pass silently: the student's cropped
+    answer image would otherwise stay on disk indefinitely while `grade()`
+    still reports success (code review finding; decision record's
+    no-local-retention requirement)."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def _always_fails(path: str, *args: object, **kwargs: object) -> None:
+        raise OSError("simulated persistent lock")
+
+    monkeypatch.setattr(shutil, "rmtree", _always_fails)
+    with pytest.warns(ResourceWarning, match="failed to remove"):
+        _cleanup_workspace(str(workspace), retry_delays=(0.0, 0.0), sleep=lambda _: None)

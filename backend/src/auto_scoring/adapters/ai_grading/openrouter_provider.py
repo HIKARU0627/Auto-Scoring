@@ -26,7 +26,11 @@ import time
 import httpx
 from pydantic import ValidationError
 
-from auto_scoring.adapters.ai_grading._prompt import build_grading_prompt, sniff_image_format
+from auto_scoring.adapters.ai_grading._prompt import (
+    GRADING_SYSTEM_INSTRUCTIONS,
+    build_grading_user_content,
+    sniff_image_format,
+)
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
@@ -64,6 +68,17 @@ def _build_response_format() -> dict[str, object]:
             "schema": strict_ai_grading_result_schema(),
         },
     }
+
+
+def _describe_http_failure(exc: Exception) -> str:
+    """A short, body-free description of a failed HTTP call. Includes the
+    numeric status code for an ``httpx.HTTPStatusError`` (never the response
+    body, which may echo request content) so callers can apply the
+    documented 429 backoff and tell a persistent 4xx (auth/config) apart
+    from a transient 5xx (code review finding)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTPStatusError (status {exc.response.status_code})"
+    return type(exc).__name__
 
 
 def _routing_fingerprint(data: dict[str, object]) -> str | None:
@@ -123,12 +138,23 @@ class OpenRouterAIProvider:
             timeout=timeout_seconds,
             headers={"Authorization": f"Bearer {api_key}"},
         )
+        #: Populated as soon as a response body is available (before the
+        #: completion's structure/content is validated at all), and reused
+        #: by both `describe()` and every later response descriptor -- a
+        #: schema-violating response must not be attributed to a different
+        #: (empty) route fingerprint than the successful calls against the
+        #: same actual route (code review finding: computing this only
+        #: after a successful parse left every schema-violation exception
+        #: with no way to record which model/upstream provider actually
+        #: produced the malformed output, understating that route's own
+        #: schema_violation_rate).
+        self._last_route: str | None = None
 
     def describe(self) -> ProviderDescriptor:
         return ProviderDescriptor(
             provider=self.name,
             model=self._model,
-            version=None,
+            version=self._last_route,
             prompt_version=self._prompt_version,
             temperature=self._temperature,
             structured_output_mode="json_schema",
@@ -144,13 +170,14 @@ class OpenRouterAIProvider:
             "temperature": self._temperature,
             "response_format": _build_response_format(),
             "messages": [
+                {"role": "system", "content": GRADING_SYSTEM_INSTRUCTIONS},
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": build_grading_prompt(request)},
+                        {"type": "text", "text": build_grading_user_content(request)},
                         {"type": "image_url", "image_url": {"url": image_data_url}},
                     ],
-                }
+                },
             ],
         }
 
@@ -167,18 +194,33 @@ class OpenRouterAIProvider:
         ) as exc:
             # A non-JSON body (OpenRouter outage page, proxy error, ...) must
             # not escape as an uncaught JSONDecodeError -- callers only
-            # expect SchemaViolation/ProviderUnavailable from this port.
-            raise ProviderUnavailable(f"OpenRouter request failed: {type(exc).__name__}") from None
+            # expect SchemaViolation/ProviderUnavailable from this port. The
+            # numeric HTTP status (never the response body) is included so
+            # callers can apply the documented 429 backoff and distinguish a
+            # persistent auth/config failure from a transient server error
+            # (code review finding).
+            detail = _describe_http_failure(exc)
+            raise ProviderUnavailable(f"OpenRouter request failed: {detail}") from None
         latency_seconds = time.monotonic() - started_at
+
+        # Computed before validating the completion's structure/content at
+        # all: see the `_last_route` docstring above.
+        self._last_route = _routing_fingerprint(data)
 
         try:
             content = data["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError("choices[0].message.content must be a string")
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ProviderUnavailable(
+        except (KeyError, IndexError, TypeError):
+            # A 2xx response with valid JSON but a missing/malformed
+            # completion envelope (a refusal, a changed response shape, ...)
+            # is a malformed *structured response*, not a transport failure
+            # -- SchemaViolation routes it to the documented needs-review
+            # path instead of triggering a retry/unavailable-rate count
+            # (code review finding).
+            raise SchemaViolation(
                 "OpenRouter response did not contain a chat completion message"
-            ) from exc
+            ) from None
 
         try:
             parsed_result = parse_ai_grading_result(content)
@@ -193,11 +235,10 @@ class OpenRouterAIProvider:
                 "OpenRouter response failed AIGradingResult schema validation"
             ) from None
 
-        version = _routing_fingerprint(data)
         descriptor = ProviderDescriptor(
             provider=self.name,
             model=self._model,
-            version=version,
+            version=self._last_route,
             prompt_version=self._prompt_version,
             temperature=self._temperature,
             structured_output_mode="json_schema",

@@ -30,15 +30,21 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import warnings
 from collections.abc import Callable
 from typing import Protocol
 
 from pydantic import ValidationError
 
-from auto_scoring.adapters.ai_grading._prompt import build_grading_prompt, sniff_image_format
+from auto_scoring.adapters.ai_grading._prompt import (
+    GRADING_SYSTEM_INSTRUCTIONS,
+    build_grading_user_content,
+    sniff_image_format,
+)
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
@@ -269,6 +275,24 @@ class _SubprocessAppServerTransport:
         with contextlib.suppress(OSError):
             if self._process.stdin is not None:
                 self._process.stdin.close()
+        if sys.platform == "win32":
+            # `_resolve_command` routes a `.cmd`/`.bat` npm shim through
+            # `cmd.exe /c <shim>`, so `self._process` is that cmd.exe
+            # wrapper, not the real `codex app-server` process running
+            # underneath it. `terminate()`/`kill()` below only signal the
+            # direct child (cmd.exe), orphaning its descendants -- which
+            # then keep running as a leaked worker instead of exiting (code
+            # review finding; this is exactly what this module's own
+            # development probe needed manual `taskkill /T` to clean up).
+            # `taskkill /T` ends the whole process tree regardless of how
+            # many process hops the shim itself introduces.
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(self._process.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
         self._process.terminate()
         try:
             self._process.wait(timeout=5)
@@ -318,6 +342,44 @@ def _extract_final_agent_message(turn_completed_params: dict[str, object]) -> st
             if isinstance(text, str):
                 return text
     raise SchemaViolation("codex app-server turn produced no agent message")
+
+
+def _cleanup_workspace(
+    workspace_dir: str,
+    *,
+    retry_delays: tuple[float, ...] = (0.1, 0.3, 0.9),
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Removes the private per-call workspace directory -- and the
+    student's cropped answer image inside it -- retrying briefly first.
+
+    A transient Windows failure (an antivirus scanner or another process
+    momentarily holding the file open, a permissions hiccup) is the common
+    case this guards against. Silently discarding a *persistent* failure
+    (``shutil.rmtree(..., ignore_errors=True)``) would let an
+    otherwise-successful ``grade()`` call return normally while leaving the
+    student's answer image on disk indefinitely, violating the no-local-
+    retention requirement for this cloud-payload material (code review
+    finding). A cleanup failure must not fail an otherwise-successful
+    grading call either, so a still-failing cleanup is surfaced as a
+    warning (not an exception) instead of passing silently.
+    """
+    for delay in (0.0, *retry_delays):
+        if delay:
+            sleep(delay)
+        try:
+            shutil.rmtree(workspace_dir)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            continue
+    warnings.warn(
+        f"codex app-server: failed to remove temporary workspace directory "
+        f"after {len(retry_delays) + 1} attempts: {workspace_dir}",
+        ResourceWarning,
+        stacklevel=2,
+    )
 
 
 class CodexAppServerProvider:
@@ -437,6 +499,12 @@ class CodexAppServerProvider:
                         "approvalPolicy": "never",
                         "model": self._model,
                         "ephemeral": True,
+                        # Fixed grading rules go through this trusted
+                        # instruction channel, never mixed into the same
+                        # message as the student-controlled OCR text/answer
+                        # image the turn's `input` carries (code review
+                        # finding; see _prompt.py's module docstring).
+                        "developerInstructions": GRADING_SYSTEM_INSTRUCTIONS,
                         # Defense in depth alongside the already-minimal
                         # child-process environment (_minimal_environment):
                         # tell Codex's own shell tool not to forward any of
@@ -459,7 +527,7 @@ class CodexAppServerProvider:
                     {
                         "threadId": thread_id,
                         "input": [
-                            {"type": "text", "text": build_grading_prompt(request)},
+                            {"type": "text", "text": build_grading_user_content(request)},
                             {"type": "localImage", "path": image_path},
                         ],
                         "outputSchema": strict_ai_grading_result_schema(),
@@ -487,7 +555,7 @@ class CodexAppServerProvider:
                 # (code review finding).
                 raise ProviderUnavailable("codex app-server did not respond in time") from exc
         finally:
-            shutil.rmtree(workspace_dir, ignore_errors=True)
+            _cleanup_workspace(workspace_dir)
             if thread_id is not None:
                 transport.discard_thread(thread_id)
 
@@ -522,7 +590,7 @@ class CodexAppServerProvider:
             with open(image_path, "wb") as handle:
                 handle.write(data)
         except BaseException:
-            shutil.rmtree(workspace_dir, ignore_errors=True)
+            _cleanup_workspace(workspace_dir)
             raise
         return workspace_dir, image_path
 

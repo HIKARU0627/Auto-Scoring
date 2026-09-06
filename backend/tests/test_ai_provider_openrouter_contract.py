@@ -11,8 +11,9 @@ import json
 import httpx
 import pytest
 
+from auto_scoring.adapters.ai_grading._prompt import GRADING_SYSTEM_INSTRUCTIONS
 from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
-from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable
+from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable, SchemaViolation
 
 from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
 
@@ -45,7 +46,8 @@ def _canned_chat_completion(question_id: str) -> dict[str, object]:
 
 def _fake_transport_handler(request: httpx.Request) -> httpx.Response:
     payload = json.loads(request.content)
-    user_text = payload["messages"][0]["content"][0]["text"]
+    assert payload["messages"][0]["role"] == "system"
+    user_text = payload["messages"][1]["content"][0]["text"]
     marker = 'The questionId in your response must be exactly "'
     start = user_text.index(marker) + len(marker)
     end = user_text.index('"', start)
@@ -135,3 +137,102 @@ def test_descriptor_records_the_routed_model_and_upstream_provider_as_version() 
         "model": "openrouter-routed/echo",
         "provider": "some-upstream-vendor",
     }
+
+
+def test_provider_unavailable_includes_the_http_status_code() -> None:
+    """Callers need the numeric status to apply the documented 429 backoff
+    and tell a persistent auth/config failure (4xx) apart from a transient
+    server error (5xx) (code review finding)."""
+
+    def _rate_limited(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": "rate limited"})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_rate_limited),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    with pytest.raises(ProviderUnavailable, match="429"):
+        provider.grade(_VALID_REQUEST)
+
+
+def test_schema_violation_when_response_has_no_completion_message() -> None:
+    """A 2xx response with valid JSON but a missing/malformed completion
+    envelope (a refusal, a changed response shape, ...) is a malformed
+    structured response, not a transport failure -- it must route to
+    SchemaViolation (needs-review), not ProviderUnavailable (retry/
+    unavailable-rate) (code review finding)."""
+
+    def _no_choices(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"model": "x", "choices": []})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_no_choices),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    with pytest.raises(SchemaViolation):
+        provider.grade(_VALID_REQUEST)
+
+
+def test_describe_reflects_the_route_of_a_schema_violating_call() -> None:
+    """The route fingerprint must be captured before the completion's
+    structure/content is validated at all, so a schema-violating call is
+    still attributable to the correct model/upstream-provider bucket
+    instead of leaving `describe().version` as None (code review finding:
+    otherwise a route's own schema_violation_rate would be understated by
+    every failure silently falling into an unattributed bucket)."""
+
+    def _malformed_but_valid_envelope(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "openrouter-routed/echo",
+                "provider": "some-upstream-vendor",
+                "choices": [{"message": {"role": "assistant", "content": "not json"}}],
+            },
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_malformed_but_valid_envelope),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    with pytest.raises(SchemaViolation):
+        provider.grade(_VALID_REQUEST)
+
+    assert provider.describe().version is not None
+    assert json.loads(provider.describe().version) == {  # type: ignore[arg-type]
+        "model": "openrouter-routed/echo",
+        "provider": "some-upstream-vendor",
+    }
+
+
+def test_grading_instructions_go_through_the_system_message() -> None:
+    """Fixed grading rules must be sent over the trusted `system` channel,
+    not mixed into the same user-level message as the student-controlled
+    OCR text (code review finding: a JSON Schema alone only constrains
+    response shape, not whether an injected instruction inside the OCR text
+    changes the awarded score)."""
+    captured: dict[str, object] = {}
+
+    def _capturing_handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        captured["messages"] = payload["messages"]
+        return _fake_transport_handler(request)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_capturing_handler),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+    provider.grade(_VALID_REQUEST)
+
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    assert messages[0] == {"role": "system", "content": GRADING_SYSTEM_INSTRUCTIONS}
+    user_text = messages[1]["content"][0]["text"]
+    assert "UNTRUSTED STUDENT OCR" in user_text
