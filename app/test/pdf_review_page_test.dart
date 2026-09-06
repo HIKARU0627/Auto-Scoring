@@ -73,6 +73,7 @@ GradeResultResponse _grade({
   int maximum = 5,
   double confidence = 0.88,
   String? rationale = '理由の説明が不足しています。',
+  String? comment,
   List<CriterionResultResponse> criteria = const [],
 }) => GradeResultResponse(
   (b) => b
@@ -85,6 +86,7 @@ GradeResultResponse _grade({
     ..score.ratio = awarded / maximum
     ..confidence = confidence
     ..rationale = rationale
+    ..comment = comment
     ..criteria.replace(criteria)
     ..createdAt = DateTime.utc(2026, 1, 1),
 );
@@ -485,6 +487,12 @@ void main() {
           _recognition(questionId: 'q-1', text: '設問1の答案'),
           _recognition(questionId: 'q-2', text: '設問2の答案'),
         ],
+        // An AI grade must exist before 承認 is allowed (P1 review) -- both
+        // questions need one for Enter to reach question 2 below.
+        grades: [
+          _grade(id: 'grade-q1', questionId: 'q-1'),
+          _grade(id: 'grade-q2', questionId: 'q-2'),
+        ],
       );
 
       await tester.pumpWidget(
@@ -871,6 +879,278 @@ void main() {
 
       expect(tester.takeException(), isNull);
       expect(find.byKey(const Key('review-inspector')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'shows the AI grade comment (総評コメント), distinct from the rationale',
+    (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        grades: [
+          _grade(rationale: '理由の説明が不足しています。', comment: '全体として要点は押さえられています。'),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.text('理由の説明が不足しています。'), findsOneWidget);
+      expect(find.byKey(const Key('review-grade-comment')), findsOneWidget);
+      expect(find.text('全体として要点は押さえられています。'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'ignores the 却下 shortcut while the note field has focus, so typing '
+    "'x' into it does not reject the question",
+    (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        grades: [_grade()],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-note-field')));
+      await tester.pump();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyX);
+      await tester.pump();
+
+      final rejectButton = tester.widget<OutlinedButton>(
+        find.byKey(const Key('review-reject-button')),
+      );
+      // Still enabled (not mid-decision-lockout) and, more importantly,
+      // the question was never actually rejected -- if the shortcut had
+      // fired while typing, the rail's status icon would show "rejected".
+      expect(rejectButton.onPressed, isNotNull);
+      final railIcon = tester.widget<Icon>(
+        find
+            .descendant(
+              of: find.byKey(const Key('review-question-rail')),
+              matching: find.byType(Icon),
+            )
+            .first,
+      );
+      expect(railIcon.icon, isNot(Icons.cancel_outlined));
+    },
+  );
+
+  testWidgets(
+    'blocks 承認 until an AI grade actually exists, even once the question '
+    'data has otherwise finished loading',
+    (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        recognitions: [_recognition()],
+        // No grades: recognitions/grades/annotations all resolve, so
+        // hasLoaded is true, but there is still nothing to approve.
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      final approveButton = tester.widget<FilledButton>(
+        find.byKey(const Key('review-approve-button')),
+      );
+      expect(approveButton.onPressed, isNull);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Still on the only question -- Enter did not advance past it, which
+      // it would have if approval had silently gone through.
+      expect(find.text('光合成によって酸素が発生する'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'refetches a question whose cache was captured while the submission '
+    'was still processing, even if a different question was open when '
+    'processing actually finished',
+    (tester) async {
+      var submissionState = 'ai_processing';
+      var q2Recognitions = <RecognitionResponse>[];
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(state: submissionState),
+        listQuestions: (_) async => [
+          _question(id: 'q-1', number: '1'),
+          _question(id: 'q-2', number: '2'),
+        ],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, questionId) async =>
+            questionId == 'q-2' ? q2Recognitions : const [],
+        listGrades: (_, _) async => const [],
+        listAnnotations: (_, _) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Visit question 2 while still processing -- it caches an empty
+      // result, marked provisional.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(find.byKey(const Key('review-question-empty')), findsOneWidget);
+
+      // AI work finishes while question 1 (not 2) happens to be open, and
+      // question 2's answer becomes available server-side.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      await _settlePdf(tester);
+      submissionState = 'ai_processed';
+      q2Recognitions = [_recognition(questionId: 'q-2', text: '設問2の答案')];
+      await tester.tap(find.byKey(const Key('review-refresh-button')));
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Selecting question 2 again must not show its stale, processing-time
+      // empty cache -- it has to refetch now that processing has finished.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        find.text('設問2の答案'),
+        findsOneWidget,
+        reason:
+            'question 2 must be refetched once processing has finished, '
+            'not left showing its provisional empty cache forever',
+      );
+    },
+  );
+
+  testWidgets('clears a stale fetch error once a later silent poll succeeds', (
+    tester,
+  ) async {
+    var listRecognitionsAttempt = 0;
+    var submissionState = 'ai_processing';
+    final dependencies = AppDependencies(
+      getSubmission: (_) async => _submission(state: submissionState),
+      listQuestions: (_) async => [_question()],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      listRecognitions: (_, _) async {
+        listRecognitionsAttempt++;
+        if (listRecognitionsAttempt == 1) {
+          throw SidecarApiException(SidecarErrorKind.unknown, 'boom');
+        }
+        return [_recognition()];
+      },
+      listGrades: (_, _) async => const [],
+      listAnnotations: (_, _) async => const [],
+    );
+
+    await tester.pumpWidget(
+      _wrap(
+        PdfReviewPage(
+          dependencies: dependencies,
+          testId: 'test-1',
+          submissionId: 'sub-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(find.byKey(const Key('review-question-error')), findsOneWidget);
+
+    // The next (silent, background) poll succeeds.
+    submissionState = 'ai_processed';
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(seconds: 4));
+    });
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(
+      find.byKey(const Key('review-question-error')),
+      findsNothing,
+      reason:
+          'a successful refresh must clear the earlier failure, not '
+          'leave the Inspector stuck showing it',
+    );
+    expect(find.text('光合成によって酸素が発生する'), findsOneWidget);
+  });
+
+  testWidgets(
+    'sorts question numbers naturally (1, 2, ..., 10), not lexicographically',
+    (tester) async {
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(),
+        listQuestions: (_) async => [
+          _question(id: 'q-10', number: '10'),
+          _question(id: 'q-2', number: '2'),
+          _question(id: 'q-1', number: '1'),
+        ],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, _) async => const [],
+        listGrades: (_, _) async => const [],
+        listAnnotations: (_, _) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      final rail = tester.widget<NavigationRail>(
+        find.byKey(const Key('review-question-rail')),
+      );
+      final labels = [
+        for (final destination in rail.destinations)
+          (destination.label as Text).data,
+      ];
+      expect(labels, ['問1', '問2', '問10']);
     },
   );
 }

@@ -8,6 +8,8 @@ part of 'grade_result_response.dart';
 
 class _$GradeResultResponse extends GradeResultResponse {
   @override
+  final String? comment;
+  @override
   final num confidence;
   @override
   final DateTime createdAt;
@@ -31,7 +33,8 @@ class _$GradeResultResponse extends GradeResultResponse {
       (GradeResultResponseBuilder()..update(updates))._build();
 
   _$GradeResultResponse._(
-      {required this.confidence,
+      {this.comment,
+      required this.confidence,
       required this.createdAt,
       required this.criteria,
       required this.id,
@@ -54,6 +57,7 @@ class _$GradeResultResponse extends GradeResultResponse {
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
     return other is GradeResultResponse &&
+        comment == other.comment &&
         confidence == other.confidence &&
         createdAt == other.createdAt &&
         criteria == other.criteria &&
@@ -68,6 +72,7 @@ class _$GradeResultResponse extends GradeResultResponse {
   @override
   int get hashCode {
     var _$hash = 0;
+    _$hash = $jc(_$hash, comment.hashCode);
     _$hash = $jc(_$hash, confidence.hashCode);
     _$hash = $jc(_$hash, createdAt.hashCode);
     _$hash = $jc(_$hash, criteria.hashCode);
@@ -84,6 +89,7 @@ class _$GradeResultResponse extends GradeResultResponse {
   @override
   String toString() {
     return (newBuiltValueToStringHelper(r'GradeResultResponse')
+          ..add('comment', comment)
           ..add('confidence', confidence)
           ..add('createdAt', createdAt)
           ..add('criteria', criteria)
@@ -100,6 +106,10 @@ class _$GradeResultResponse extends GradeResultResponse {
 class GradeResultResponseBuilder
     implements Builder<GradeResultResponse, GradeResultResponseBuilder> {
   _$GradeResultResponse? _$v;
+
+  String? _comment;
+  String? get comment => _$this._comment;
+  set comment(String? comment) => _$this._comment = comment;
 
   num? _confidence;
   num? get confidence => _$this._confidence;
@@ -147,6 +157,7 @@ class GradeResultResponseBuilder
   GradeResultResponseBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
+      _comment = $v.comment;
       _confidence = $v.confidence;
       _createdAt = $v.createdAt;
       _criteria = $v.criteria.toBuilder();
@@ -179,6 +190,7 @@ class GradeResultResponseBuilder
     try {
       _$result = _$v ??
           _$GradeResultResponse._(
+            comment: comment,
             confidence: BuiltValueNullFieldError.checkNotNull(
                 confidence, r'GradeResultResponse', 'confidence'),
             createdAt: BuiltValueNullFieldError.checkNotNull(

@@ -56,6 +56,25 @@ class QuestionReviewState {
   ReviewDecision decision = ReviewDecision.pending;
   String note = '';
 
+  /// Whether the data currently cached here was fetched while the
+  /// submission was still `unprocessed`/`ai_processing`. Such a fetch is
+  /// provisional -- AI work for this specific question may not have
+  /// reached it yet -- so it must be refetched once the submission reaches
+  /// a terminal state even if this question was not the one selected when
+  /// that transition happened to be observed (e.g. a background poll or a
+  /// manual refresh on a *different* question). Without this, the
+  /// "already loaded" skip in `_ensureReviewLoaded` would otherwise cache
+  /// an empty result here forever (P1 review).
+  bool fetchedWhileProcessing = false;
+
+  /// Bumped at the start of every `_ensureReviewLoaded` call for this
+  /// question; a call only applies its result if it is still the most
+  /// recently issued one by the time its fetch resolves. Without this, a
+  /// slower, superseded fetch (e.g. two overlapping poll ticks, or a manual
+  /// refresh racing the background poll) completing after a newer one could
+  /// overwrite fresher data with stale data (P2 review).
+  int fetchGeneration = 0;
+
   bool get hasLoaded =>
       recognitions != null && grades != null && annotations != null;
 
@@ -115,6 +134,18 @@ T? _latestWhere<T>(List<T>? items, bool Function(T) test) {
 /// polling instead of caching that empty result as final.
 const _processingSubmissionStates = {'unprocessed', 'ai_processing'};
 
+/// Orders question numbers the way a reviewer expects (1, 2, ..., 10), not
+/// lexicographically (which would put "10" before "2") -- `Question.number`
+/// is ordinarily a plain integer as a string. Falls back to a lexicographic
+/// compare for either side that is not one (e.g. a future non-numeric
+/// question label), so ordering degrades gracefully instead of crashing.
+int _compareQuestionNumbers(String a, String b) {
+  final aNum = int.tryParse(a);
+  final bNum = int.tryParse(b);
+  if (aNum != null && bNum != null) return aNum.compareTo(bNum);
+  return a.compareTo(b);
+}
+
 class _PdfReviewPageState extends State<PdfReviewPage> {
   late final PdfViewerController _pdfController;
   final _noteController = TextEditingController();
@@ -133,15 +164,24 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   void initState() {
     super.initState();
     _pdfController = PdfViewerController();
+    // Rebuilds so the keyboard bindings in build() can drop out while the
+    // note field has focus (see _shortcutBindings) -- FocusNode changes do
+    // not trigger a rebuild on their own.
+    _noteFocusNode.addListener(_handleNoteFocusChange);
     _loadShell();
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _noteFocusNode.removeListener(_handleNoteFocusChange);
     _noteController.dispose();
     _noteFocusNode.dispose();
     super.dispose();
+  }
+
+  void _handleNoteFocusChange() {
+    if (mounted) setState(() {});
   }
 
   /// Starts polling while [_submission] is still being processed (so a
@@ -164,7 +204,18 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
   }
 
+  /// Set for the duration of one [_pollWhileProcessing] run -- a refresh
+  /// occasionally takes longer than the 3-second tick interval (e.g. a slow
+  /// request), and without this a new tick firing mid-refresh would start a
+  /// second, overlapping fetch on top of it (P2 review). The per-question
+  /// generation counter in `_ensureReviewLoaded` also guards the data
+  /// itself, but skipping the overlapping tick here avoids the redundant
+  /// request entirely.
+  bool _pollInFlight = false;
+
   Future<void> _pollWhileProcessing() async {
+    if (_pollInFlight) return;
+    _pollInFlight = true;
     try {
       final submission = await widget.dependencies.getSubmission(
         widget.submissionId,
@@ -172,14 +223,15 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       if (!mounted) return;
       setState(() => _submission = submission);
       _updatePolling();
+      // Silent: a background poll should not flash the loading spinner or
+      // an error banner over content the reviewer is already looking at.
+      await _ensureReviewLoaded(forceReload: true, silent: true);
     } on SidecarApiException {
       // Transient poll failure -- retried on the next tick rather than
       // surfaced as an error banner.
-      return;
+    } finally {
+      _pollInFlight = false;
     }
-    // Silent: a background poll should not flash the loading spinner or an
-    // error banner over content the reviewer is already looking at.
-    await _ensureReviewLoaded(forceReload: true, silent: true);
   }
 
   /// Manual "更新" action (P1 review: a submission stuck in
@@ -228,7 +280,9 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       final sorted = questions.toList()
         ..sort((a, b) {
           final byPage = a.page.compareTo(b.page);
-          return byPage != 0 ? byPage : a.number.compareTo(b.number);
+          return byPage != 0
+              ? byPage
+              : _compareQuestionNumbers(a.number, b.number);
         });
       if (!mounted) return;
       setState(() {
@@ -264,18 +318,30 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     // empty result is not yet final -- AI work for this specific question
     // may simply not have reached it, so the cached "already loaded" state
     // must not stick and quietly hide it from ever being retried again.
+    // `existing.fetchedWhileProcessing` extends this across a *different*
+    // question having been the one open when the submission actually left
+    // the processing state -- that question's own stale, processing-time
+    // cache must still be refetched the next time it is opened, not treated
+    // as final just because the submission itself has since moved on (P1
+    // review).
     final stillProcessing = _processingSubmissionStates.contains(
       _submission?.state,
     );
     if (existing != null &&
         !forceReload &&
         !stillProcessing &&
+        !existing.fetchedWhileProcessing &&
         !existing.loading &&
         existing.error == null &&
         existing.hasLoaded) {
       return;
     }
+    // Guards against a slower, superseded fetch for this same question
+    // overwriting a newer one's result -- e.g. two poll ticks 3 seconds
+    // apart where the first is still in flight when the second starts, or
+    // a manual refresh racing the background poll (P2 review).
     final review = existing ?? QuestionReviewState();
+    final generation = ++review.fetchGeneration;
     if (silent) {
       _reviews[question.id] = review;
     } else {
@@ -296,15 +362,20 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         widget.submissionId,
         question.id,
       );
-      if (!mounted) return;
+      if (!mounted || generation != review.fetchGeneration) return;
       setState(() {
         review.recognitions = recognitions;
         review.grades = grades;
         review.annotations = annotations;
         review.loading = false;
+        // A successful refresh -- silent or not -- means the Inspector no
+        // longer needs to keep showing a fetch failure from before it (P2
+        // review): the data it was retried for is here now.
+        review.error = null;
+        review.fetchedWhileProcessing = stillProcessing;
       });
     } on SidecarApiException catch (error) {
-      if (!mounted || silent) return;
+      if (!mounted || silent || generation != review.fetchGeneration) return;
       setState(() {
         review.error = error.message;
         review.loading = false;
@@ -344,6 +415,25 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         review.hasLoaded;
   }
 
+  /// Whether the current question may be *approved*: [_canDecide], the
+  /// submission is not still being processed (three legitimately-empty list
+  /// responses during `unprocessed`/`ai_processing` would otherwise satisfy
+  /// [QuestionReviewState.hasLoaded] before AI work ever reached this
+  /// question), and an AI grade actually exists -- a confirmed review must
+  /// reference one (domain: `Review` requires `ai_grade_result_id` for
+  /// `APPROVED`), so approving before it exists would let a reviewer confirm
+  /// a result that was never produced (P1 review). 却下 has no such
+  /// requirement -- rejecting a question that never produced a usable
+  /// result is a legitimate outcome, so it stays gated on [_canDecide] alone.
+  bool get _canApprove {
+    final review = _currentReview;
+    if (!_canDecide) return false;
+    if (_processingSubmissionStates.contains(_submission?.state)) {
+      return false;
+    }
+    return review!.latestAiGrade != null;
+  }
+
   void _setDecision(ReviewDecision decision) {
     if (!_canDecide) return;
     final question = _currentQuestion!;
@@ -352,7 +442,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   }
 
   void _approveAndNext() {
-    if (!_canDecide) return;
+    if (!_canApprove) return;
     _setDecision(ReviewDecision.approved);
     if (_questionIndex < _questions.length - 1) {
       _moveQuestion(1);
@@ -372,6 +462,23 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     if (question == null) return;
     final review = _reviews.putIfAbsent(question.id, QuestionReviewState.new);
     review.note = value;
+  }
+
+  /// Empty while the note field has focus, so plain (unmodified) keys the
+  /// reviewer types into it -- including "x"/"e" and Enter for a newline --
+  /// reach the text field instead of triggering 却下/修正/承認して次へ.
+  /// `CallbackShortcuts` swallows any matching key regardless of what its
+  /// callback does, so the binding itself must be absent, not merely a
+  /// no-op, while typing (P1 review).
+  Map<ShortcutActivator, VoidCallback> get _shortcutBindings {
+    if (_noteFocusNode.hasFocus) return const {};
+    return {
+      LogicalKeySet(LogicalKeyboardKey.arrowDown): () => _moveQuestion(1),
+      LogicalKeySet(LogicalKeyboardKey.arrowUp): () => _moveQuestion(-1),
+      LogicalKeySet(LogicalKeyboardKey.enter): _approveAndNext,
+      LogicalKeySet(LogicalKeyboardKey.keyX): _reject,
+      LogicalKeySet(LogicalKeyboardKey.keyE): _focusEdit,
+    };
   }
 
   @override
@@ -401,15 +508,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
               child: Text('この設問構成にはまだ設問がありません'),
             )
           : CallbackShortcuts(
-              bindings: {
-                LogicalKeySet(LogicalKeyboardKey.arrowDown): () =>
-                    _moveQuestion(1),
-                LogicalKeySet(LogicalKeyboardKey.arrowUp): () =>
-                    _moveQuestion(-1),
-                LogicalKeySet(LogicalKeyboardKey.enter): _approveAndNext,
-                LogicalKeySet(LogicalKeyboardKey.keyX): _reject,
-                LogicalKeySet(LogicalKeyboardKey.keyE): _focusEdit,
-              },
+              bindings: _shortcutBindings,
               child: Focus(autofocus: true, child: _buildReviewBody(context)),
             ),
     );
@@ -726,6 +825,13 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
             Text('根拠', style: Theme.of(context).textTheme.labelLarge),
             Text(rationale, key: const Key('review-rationale')),
           ],
+          // AIの総評コメント (簡易設計書 §16.5「コメント」) -- 根拠 (この点数に
+          // なった理由) とは別の欄として表示する。
+          if (aiGrade.comment case final comment? when comment.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('コメント', style: Theme.of(context).textTheme.labelLarge),
+            Text(comment, key: const Key('review-grade-comment')),
+          ],
         ],
         if (humanGrade != null) ...[
           const SizedBox(height: 8),
@@ -829,7 +935,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
               const SizedBox(width: 12),
               FilledButton.icon(
                 key: const Key('review-approve-button'),
-                onPressed: _canDecide ? _approveAndNext : null,
+                onPressed: _canApprove ? _approveAndNext : null,
                 icon: const Icon(Icons.check),
                 label: const Text('承認して次へ (Enter)'),
               ),

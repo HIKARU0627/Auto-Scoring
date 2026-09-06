@@ -137,6 +137,7 @@ def test_list_grades_returns_ai_and_human_grades_with_dual_confidence(
         score=Score(awarded=4, maximum=5),
         confidence=0.88,
         rationale="理由の説明が不足しています。",
+        comment="全体として要点は押さえられています。",
         criteria=(
             CriterionResult(criterion_id="c-1", outcome=CriterionOutcome.PASS, confidence=0.97),
             CriterionResult(criterion_id="c-2", outcome=CriterionOutcome.PARTIAL, confidence=0.76),
@@ -165,6 +166,7 @@ def test_list_grades_returns_ai_and_human_grades_with_dual_confidence(
     assert ai["score"] == {"awarded": 4, "maximum": 5, "ratio": 0.8}
     assert ai["confidence"] == 0.88
     assert ai["rationale"] == "理由の説明が不足しています。"
+    assert ai["comment"] == "全体として要点は押さえられています。"
     assert [c["criterion_id"] for c in ai["criteria"]] == ["c-1", "c-2"]
     assert body[1]["source"] == "human"
     assert body[1]["score"]["awarded"] == 5

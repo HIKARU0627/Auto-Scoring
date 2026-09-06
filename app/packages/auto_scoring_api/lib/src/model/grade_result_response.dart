@@ -14,6 +14,7 @@ part 'grade_result_response.g.dart';
 /// GradeResultResponse
 ///
 /// Properties:
+/// * [comment]
 /// * [confidence]
 /// * [createdAt]
 /// * [criteria]
@@ -26,6 +27,9 @@ part 'grade_result_response.g.dart';
 @BuiltValue()
 abstract class GradeResultResponse
     implements Built<GradeResultResponse, GradeResultResponseBuilder> {
+  @BuiltValueField(wireName: r'comment')
+  String? get comment;
+
   @BuiltValueField(wireName: r'confidence')
   num get confidence;
 
@@ -82,6 +86,13 @@ class _$GradeResultResponseSerializer
     GradeResultResponse object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
+    if (object.comment != null) {
+      yield r'comment';
+      yield serializers.serialize(
+        object.comment,
+        specifiedType: const FullType.nullable(String),
+      );
+    }
     yield r'confidence';
     yield serializers.serialize(
       object.confidence,
@@ -155,6 +166,14 @@ class _$GradeResultResponseSerializer
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
+        case r'comment':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
+          result.comment = valueDes;
+          break;
         case r'confidence':
           final valueDes = serializers.deserialize(
             value,

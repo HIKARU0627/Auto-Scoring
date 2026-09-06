@@ -109,14 +109,36 @@ push通知を持たないため、3秒間隔のpolling（`Timer.periodic`、subm
 （`review-refresh-button`）の両方で追随する。pollingは`silent`フラグ付きで
 実行し、読み込み中スピナーやエラーバナーが定期的にちらつくのを防ぐ。
 
+pollingが導入する2つの race condition に対処している。
+
+- **設問ごとのキャッシュ無効化**: 処理中に訪問した設問はその時点の（空の）
+  結果を`QuestionReviewState.fetchedWhileProcessing = true`として記録する。
+  submissionが処理中でなくなった後にその設問へ戻ると、たとえ処理完了時に
+  別の設問が開かれていたとしても、このフラグにより必ず一度は再取得する。
+- **世代トークンによる直列化**: `QuestionReviewState.fetchGeneration`を
+  fetch開始のたびにインクリメントし、結果を適用する直前にまだ最新の世代か
+  確認する。3秒間隔のpollingが前回のrefresh完了より早く発火した場合（遅い
+  requestが複数並走した場合）でも、古いrequestが後から完了して新しい結果を
+  上書きしないようにする。あわせて`_pollInFlight`フラグで前のpollが
+  完了するまで次のtickを開始しない。
+
+### 2.9 keyboardショートカットはnote編集中は無効化する
+
+`note field`（修正コメント欄）がfocusを持っている間は、`CallbackShortcuts`の
+bindingsを空map（`_shortcutBindings`）にする。`CallbackShortcuts`は
+bindingsに一致するキーを、callbackの中身に関わらず無条件に「処理済み」として
+消費してしまうため、callback内でfocus判定をしても手遅れ（キー入力そのものが
+note fieldへ届かなくなる）。bindingsの登録自体をfocus状態に応じて外す方式を
+採用した。
+
 ## 3. 追加したAPI（読み取り専用）
 
-| メソッド | パス                                                               | 用途                                         |
-| -------- | ------------------------------------------------------------------ | -------------------------------------------- |
-| GET      | `/tests/{test_id}/questions`                                       | 設問一覧（各設問領域＋rubric）               |
-| GET      | `/submissions/{submission_id}/source-pdf`                          | 元答案PDFバイト列（`application/pdf`）       |
-| GET      | `/submissions/{submission_id}/questions/{question_id}/grades`      | 採点結果の履歴（AI/human、両Confidence含む） |
-| GET      | `/submissions/{submission_id}/questions/{question_id}/annotations` | annotation一覧                               |
+| メソッド | パス                                                               | 用途                                                           |
+| -------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
+| GET      | `/tests/{test_id}/questions`                                       | 設問一覧（各設問領域＋rubric）                                 |
+| GET      | `/submissions/{submission_id}/source-pdf`                          | 元答案PDFバイト列（`application/pdf`）                         |
+| GET      | `/submissions/{submission_id}/questions/{question_id}/grades`      | 採点結果の履歴（AI/human、両Confidence・AIの総評コメント含む） |
+| GET      | `/submissions/{submission_id}/questions/{question_id}/annotations` | annotation一覧                                                 |
 
 いずれも `SqlAlchemyUnitOfWork` 経由の読み取りのみで、DBへの書き込みは行わない。
 OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
@@ -131,8 +153,12 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   認識文字・点数・根拠・rubric（`question.rubric`の定義自体）・2種の
   Confidenceの同時表示、AI/human結果がsource別に区別されること、
   annotationのoverlay配置（選択中の設問のみに限定されナビゲーション履歴に
-  依存しないこと）とフォールバック、処理中submissionが手動更新で追随する
-  こと、設問データ未読み込み時に承認/却下がブロックされること、キーボード
-  での設問移動・承認、action barのキーボード到達性、狭幅・低い高さの
-  レイアウトでのoverflow無し、多数設問時のNavigation Railのスクロール、を
-  検証。
+  依存しないこと）とフォールバック、AIの総評コメント表示、note field編集中は
+  keyboardショートカットが無効化されること、AI gradeが存在するまで承認が
+  ブロックされること、処理中に訪問した設問が処理完了後に正しく再取得される
+  こと（別の設問が開かれていた場合も含む）、silent poll成功時に古いerrorが
+  クリアされること、設問番号が辞書式でなく自然順（1, 2, ..., 10）でソート
+  されること、処理中submissionが手動更新で追随すること、設問データ
+  未読み込み時に承認/却下がブロックされること、キーボードでの設問移動・
+  承認、action barのキーボード到達性、狭幅・低い高さのレイアウトでの
+  overflow無し、多数設問時のNavigation Railのスクロール、を検証。

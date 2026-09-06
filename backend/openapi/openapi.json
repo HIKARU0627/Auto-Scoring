@@ -400,6 +400,17 @@
       },
       "GradeResultResponse": {
         "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
           "confidence": {
             "title": "Confidence",
             "type": "number"

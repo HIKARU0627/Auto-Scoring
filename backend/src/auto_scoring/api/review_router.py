@@ -119,6 +119,9 @@ class GradeResultResponse(BaseModel):
     confidence: float
     criteria: list[CriterionResultResponse]
     rationale: str | None = None
+    # AIの総評コメント(簡易設計書 §16.5「コメント」、
+    # docs/ai-grading-pipeline.md「GradeResultのAI追跡情報とcontextの記録」)。
+    comment: str | None = None
     created_at: datetime
 
     @classmethod
@@ -144,6 +147,7 @@ class GradeResultResponse(BaseModel):
                 for criterion in grade.criteria
             ],
             rationale=grade.rationale,
+            comment=grade.comment,
             created_at=grade.created_at.replace(tzinfo=UTC),
         )
 
