@@ -51,6 +51,19 @@ from auto_scoring.domain.ai_provider import (
 
 _DEFAULT_TURN_TIMEOUT_SECONDS = 120.0
 
+#: Codex app-server's `thread/start`/`turn/start` params (per the JSON Schema
+#: this module was written against -- ``ThreadStartParams``/`TurnStartParams`)
+#: expose no sampling-temperature knob, unlike the direct-API/OpenRouter
+#: paths. Recording a caller-supplied value here would misrepresent it as an
+#: applied configuration when Codex never received or honoured it
+#: (docs/poc-2-ai-grading.md section 7.1 "共通"; code review finding).
+#: ``ProviderDescriptor.temperature`` is nonetheless a required
+#: field shared by every ``AIProvider`` (needed so ``descriptor_key`` -- the
+#: cross-provider reproducibility bucket key, section 3.3 -- has a value at
+#: all), so this fixed constant fills it without exposing a temperature
+#: parameter that would silently do nothing.
+_UNCONFIGURABLE_TEMPERATURE = 0.0
+
 
 class _AppServerTransport(Protocol):
     """JSON-RPC transport the provider drives. Swapped for a fake in tests
@@ -70,7 +83,14 @@ class _AppServerTransport(Protocol):
         timeout_seconds: float,
     ) -> dict[str, object]: ...
 
+    def discard_thread(self, thread_id: str) -> None: ...
+
     def close(self) -> None: ...
+
+
+def _message_belongs_to_thread(message: dict[str, object], thread_id: str) -> bool:
+    params = message.get("params")
+    return isinstance(params, dict) and params.get("threadId") == thread_id
 
 
 def _resolve_command(executable: str) -> list[str]:
@@ -195,6 +215,22 @@ class _SubprocessAppServerTransport:
                 self._notification_buffer.append(message)
             # Responses with no pending request (e.g. a stray late reply) are ignored.
 
+    def discard_thread(self, thread_id: str) -> None:
+        """Drop buffered notifications belonging to an already-finished
+        thread. Codex app-server emits many per-turn notifications besides
+        the single one (``turn/completed``) this adapter waits for (item
+        started/completed, reasoning deltas, ...); since the subprocess is
+        reused across ``grade()`` calls but each call's ephemeral thread is
+        never revisited, anything still buffered under that thread's id
+        after its turn completes is permanently irrelevant and would
+        otherwise accumulate for the lifetime of the process, making every
+        later call scan a growing backlog (code review finding)."""
+        self._notification_buffer = [
+            message
+            for message in self._notification_buffer
+            if not _message_belongs_to_thread(message, thread_id)
+        ]
+
     def close(self) -> None:
         with contextlib.suppress(OSError):
             if self._process.stdin is not None:
@@ -212,6 +248,25 @@ def _extract_thread_id(thread_start_result: dict[str, object]) -> str:
     if not isinstance(thread_id, str) or not thread_id:
         raise ProviderUnavailable("codex app-server thread/start response had no thread id")
     return thread_id
+
+
+def _extract_configured_model(thread_start_result: dict[str, object]) -> str:
+    """The model this turn will actually run against.
+
+    When the caller omits ``AUTO_SCORING_CODEX_MODEL``, ``thread/start``'s
+    ``model`` request field is ``null`` and Codex substitutes its own
+    configured default -- but ``ThreadStartResponse.model`` (a required
+    response field) always reports which model was actually selected. Using
+    a placeholder like ``"default"`` for the *response* descriptor instead
+    would let two calls that silently ran against different actual Codex
+    defaults (e.g. after a Codex CLI upgrade changes its default model) pool
+    into the same reproducibility bucket (``descriptor_key``,
+    docs/poc-2-ai-grading.md section 3.3; code review finding).
+    """
+    model = thread_start_result.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ProviderUnavailable("codex app-server thread/start response had no model")
+    return model
 
 
 def _extract_final_agent_message(turn_completed_params: dict[str, object]) -> str:
@@ -250,14 +305,12 @@ class CodexAppServerProvider:
         *,
         model: str | None = None,
         prompt_version: str,
-        temperature: float = 0.0,
         executable: str = "codex",
         turn_timeout_seconds: float = _DEFAULT_TURN_TIMEOUT_SECONDS,
         transport: _AppServerTransport | None = None,
     ) -> None:
         self._model = model
         self._prompt_version = prompt_version
-        self._temperature = temperature
         self._executable = executable
         self._turn_timeout_seconds = turn_timeout_seconds
         self._transport = transport
@@ -269,7 +322,7 @@ class CodexAppServerProvider:
             model=self._model or "default",
             version=None,
             prompt_version=self._prompt_version,
-            temperature=self._temperature,
+            temperature=_UNCONFIGURABLE_TEMPERATURE,
             structured_output_mode="json_schema",
         )
 
@@ -277,11 +330,16 @@ class CodexAppServerProvider:
         if self._transport is None:
             self._transport = _SubprocessAppServerTransport(executable=self._executable)
         if not self._initialized:
-            self._transport.request(
-                "initialize",
-                {"clientInfo": {"name": "auto-scoring-backend", "version": "0.1.0"}},
-                timeout_seconds=self._turn_timeout_seconds,
-            )
+            try:
+                self._transport.request(
+                    "initialize",
+                    {"clientInfo": {"name": "auto-scoring-backend", "version": "0.1.0"}},
+                    timeout_seconds=self._turn_timeout_seconds,
+                )
+            except TimeoutError as exc:
+                raise ProviderUnavailable(
+                    "codex app-server did not respond to initialize in time"
+                ) from exc
             self._initialized = True
         return self._transport
 
@@ -290,62 +348,79 @@ class CodexAppServerProvider:
         started_at = time.monotonic()
 
         image_path = self._write_temp_image(request.answer_image)
+        thread_id: str | None = None
         try:
-            thread_result = transport.request(
-                "thread/start",
-                {
-                    "cwd": tempfile.gettempdir(),
-                    # Grading needs no filesystem/command access; read-only +
-                    # never-approve keeps a misbehaving turn from blocking on
-                    # (or acting on) anything beyond the model call itself.
-                    "sandbox": "read-only",
-                    "approvalPolicy": "never",
-                    "model": self._model,
-                    "ephemeral": True,
-                },
-                timeout_seconds=self._turn_timeout_seconds,
-            )
-            thread_id = _extract_thread_id(thread_result)
-
-            transport.request(
-                "turn/start",
-                {
-                    "threadId": thread_id,
-                    "input": [
-                        {"type": "text", "text": build_grading_prompt(request)},
-                        {"type": "localImage", "path": image_path},
-                    ],
-                    "outputSchema": AIGradingResult.model_json_schema(by_alias=True),
-                },
-                timeout_seconds=self._turn_timeout_seconds,
-            )
-
             try:
+                thread_result = transport.request(
+                    "thread/start",
+                    {
+                        "cwd": tempfile.gettempdir(),
+                        # Grading needs no filesystem/command access; read-only +
+                        # never-approve keeps a misbehaving turn from blocking on
+                        # (or acting on) anything beyond the model call itself.
+                        "sandbox": "read-only",
+                        "approvalPolicy": "never",
+                        "model": self._model,
+                        "ephemeral": True,
+                    },
+                    timeout_seconds=self._turn_timeout_seconds,
+                )
+                resolved_model = _extract_configured_model(thread_result)
+                thread_id = _extract_thread_id(thread_result)
+
+                transport.request(
+                    "turn/start",
+                    {
+                        "threadId": thread_id,
+                        "input": [
+                            {"type": "text", "text": build_grading_prompt(request)},
+                            {"type": "localImage", "path": image_path},
+                        ],
+                        "outputSchema": AIGradingResult.model_json_schema(by_alias=True),
+                    },
+                    timeout_seconds=self._turn_timeout_seconds,
+                )
+
                 completed_params = transport.wait_for_notification(
                     "turn/completed",
                     lambda params: params.get("threadId") == thread_id,
                     timeout_seconds=self._turn_timeout_seconds,
                 )
             except TimeoutError as exc:
-                raise ProviderUnavailable(
-                    "codex app-server did not complete the turn in time"
-                ) from exc
+                # Covers every stage above (initialize already handled in
+                # _ensure_transport): a hung thread/start or turn/start must
+                # not leak the builtin TimeoutError past this port's
+                # documented ProviderUnavailable/SchemaViolation contract
+                # (code review finding).
+                raise ProviderUnavailable("codex app-server did not respond in time") from exc
         finally:
             with contextlib.suppress(OSError):
                 os.unlink(image_path)
+            if thread_id is not None:
+                transport.discard_thread(thread_id)
 
         latency_seconds = time.monotonic() - started_at
         text = _extract_final_agent_message(completed_params)
 
         try:
             parsed_result = parse_ai_grading_result(text)
-        except ValidationError as exc:
+        except ValidationError:
+            # `from None`: see the matching comment in openrouter_provider.py
+            # -- do not chain the raw ValidationError (AGENTS.md "Security").
             raise SchemaViolation(
                 "codex app-server response failed AIGradingResult schema validation"
-            ) from exc
+            ) from None
 
+        descriptor = ProviderDescriptor(
+            provider=self.name,
+            model=resolved_model,
+            version=None,
+            prompt_version=self._prompt_version,
+            temperature=_UNCONFIGURABLE_TEMPERATURE,
+            structured_output_mode="json_schema",
+        )
         return grading_response_from_result(
-            parsed_result, descriptor=self.describe(), latency_seconds=latency_seconds
+            parsed_result, descriptor=descriptor, latency_seconds=latency_seconds
         )
 
     def _write_temp_image(self, data: bytes) -> str:

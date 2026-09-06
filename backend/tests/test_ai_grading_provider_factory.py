@@ -11,6 +11,11 @@ _COMMON = {
     "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
 }
 
+_OPENROUTER_CREDENTIALS = {
+    "AUTO_SCORING_OPENROUTER_API_KEY": "key",
+    "AUTO_SCORING_OPENROUTER_MODEL": "vendor/model",
+}
+
 
 def test_create_ai_provider_selects_openrouter() -> None:
     provider = create_ai_provider(
@@ -51,3 +56,32 @@ def test_create_ai_provider_requires_the_openrouter_api_key() -> None:
 def test_create_ai_provider_requires_the_openrouter_model() -> None:
     with pytest.raises(AIProviderConfigError):
         create_ai_provider({**_COMMON, "AUTO_SCORING_OPENROUTER_API_KEY": "key"})
+
+
+@pytest.mark.parametrize("raw_temperature", ["not-a-number", "nan", "inf", "-1"])
+def test_create_ai_provider_rejects_an_invalid_openrouter_temperature(raw_temperature: str) -> None:
+    """A malformed AUTO_SCORING_AI_GRADING_TEMPERATURE must fail fast as
+    AIProviderConfigError at this trust boundary, not as an unclassified
+    ValueError or a provider that later fails to describe()/grade() (code
+    review finding)."""
+    with pytest.raises(AIProviderConfigError):
+        create_ai_provider(
+            {
+                **_COMMON,
+                **_OPENROUTER_CREDENTIALS,
+                "AUTO_SCORING_AI_GRADING_TEMPERATURE": raw_temperature,
+            }
+        )
+
+
+def test_create_ai_provider_ignores_temperature_for_codex_app_server() -> None:
+    """Codex app-server has no temperature knob (code review finding), so an
+    invalid value in this shared env var must not block selecting it."""
+    provider = create_ai_provider(
+        {
+            "AUTO_SCORING_AI_GRADING_TRANSPORT": "codex_app_server",
+            "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+            "AUTO_SCORING_AI_GRADING_TEMPERATURE": "not-a-number",
+        }
+    )
+    assert isinstance(provider, CodexAppServerProvider)

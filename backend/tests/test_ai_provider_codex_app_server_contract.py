@@ -13,7 +13,10 @@ from collections.abc import Callable
 
 import pytest
 
-from auto_scoring.adapters.ai_grading.codex_app_server_provider import CodexAppServerProvider
+from auto_scoring.adapters.ai_grading.codex_app_server_provider import (
+    CodexAppServerProvider,
+    _SubprocessAppServerTransport,
+)
 from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable, SchemaViolation
 
 from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
@@ -56,7 +59,7 @@ class _FakeAppServerTransport:
         if method == "thread/start":
             assert params["sandbox"] == "read-only"
             assert params["approvalPolicy"] == "never"
-            return {"thread": {"id": self._thread_id}}
+            return {"thread": {"id": self._thread_id}, "model": "codex-fake-model"}
         if method == "turn/start":
             assert params["threadId"] == self._thread_id
             assert "outputSchema" in params
@@ -97,6 +100,9 @@ class _FakeAppServerTransport:
         }
         assert matches(params)
         return params
+
+    def discard_thread(self, thread_id: str) -> None:
+        pass
 
     def close(self) -> None:
         self.closed = True
@@ -191,3 +197,75 @@ def test_provider_unavailable_on_notification_timeout() -> None:
     provider = CodexAppServerProvider(prompt_version="v1", transport=_TimingOutTransport())
     with pytest.raises(ProviderUnavailable):
         provider.grade(_VALID_REQUEST)
+
+
+def test_provider_unavailable_on_thread_start_timeout() -> None:
+    """A hung `thread/start` (not just a hung notification wait) must also
+    surface as ProviderUnavailable, not the builtin TimeoutError (code
+    review finding)."""
+
+    class _TimingOutOnThreadStart(_FakeAppServerTransport):
+        def request(
+            self, method: str, params: dict[str, object], *, timeout_seconds: float
+        ) -> dict[str, object]:
+            if method == "thread/start":
+                raise TimeoutError
+            return super().request(method, params, timeout_seconds=timeout_seconds)
+
+    provider = CodexAppServerProvider(prompt_version="v1", transport=_TimingOutOnThreadStart())
+    with pytest.raises(ProviderUnavailable):
+        provider.grade(_VALID_REQUEST)
+
+
+def test_descriptor_records_the_thread_start_resolved_model() -> None:
+    """When AUTO_SCORING_CODEX_MODEL is unset, Codex substitutes its own
+    default; the response descriptor must record what `thread/start`
+    actually resolved to, not a placeholder like "default" (code review
+    finding: a changed Codex default would otherwise silently pool
+    incompatible runs into the same descriptor_key)."""
+    provider = CodexAppServerProvider(prompt_version="v1", transport=_FakeAppServerTransport())
+    response = provider.grade(_VALID_REQUEST)
+    assert response.descriptor.model == "codex-fake-model"
+
+
+def test_describe_does_not_accept_a_temperature_parameter() -> None:
+    """Codex app-server's protocol has no temperature knob; the constructor
+    must not accept one that would silently do nothing (code review
+    finding)."""
+    with pytest.raises(TypeError):
+        CodexAppServerProvider(prompt_version="v1", temperature=0.5)  # type: ignore[call-arg]
+
+
+def test_grade_discards_the_thread_after_completion() -> None:
+    transport = _FakeAppServerTransport()
+    discarded: list[str] = []
+    original_discard = transport.discard_thread
+
+    def _spying_discard(thread_id: str) -> None:
+        discarded.append(thread_id)
+        original_discard(thread_id)
+
+    transport.discard_thread = _spying_discard  # type: ignore[method-assign]
+    provider = CodexAppServerProvider(prompt_version="v1", transport=transport)
+    provider.grade(_VALID_REQUEST)
+
+    assert discarded == [transport._thread_id]
+
+
+def test_subprocess_transport_discard_thread_prunes_only_that_thread() -> None:
+    """White-box check of the buffer-growth fix: notifications belonging to
+    an already-finished thread are dropped, others are kept (code review
+    finding: an unbounded buffer would otherwise make every later grade()
+    call on the reused subprocess scan a growing backlog)."""
+    transport = _SubprocessAppServerTransport.__new__(_SubprocessAppServerTransport)
+    transport._notification_buffer = [
+        {"method": "item/completed", "params": {"threadId": "t1"}},
+        {"method": "item/completed", "params": {"threadId": "t2"}},
+        {"method": "turn/completed", "params": {"threadId": "t1"}},
+    ]
+
+    transport.discard_thread("t1")
+
+    assert transport._notification_buffer == [
+        {"method": "item/completed", "params": {"threadId": "t2"}},
+    ]

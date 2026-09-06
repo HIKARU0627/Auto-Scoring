@@ -20,6 +20,7 @@ values (mirrors ``poc/issue_14_ai_grading/report.py``'s
 from __future__ import annotations
 
 import base64
+import json
 import time
 
 import httpx
@@ -129,8 +130,16 @@ class OpenRouterAIProvider:
             http_response = self._client.post("/chat/completions", json=payload)
             http_response.raise_for_status()
             data = http_response.json()
-        except (httpx.TransportError, httpx.HTTPStatusError, httpx.TimeoutException) as exc:
-            raise ProviderUnavailable(f"OpenRouter request failed: {type(exc).__name__}") from exc
+        except (
+            httpx.TransportError,
+            httpx.HTTPStatusError,
+            httpx.TimeoutException,
+            json.JSONDecodeError,
+        ) as exc:
+            # A non-JSON body (OpenRouter outage page, proxy error, ...) must
+            # not escape as an uncaught JSONDecodeError -- callers only
+            # expect SchemaViolation/ProviderUnavailable from this port.
+            raise ProviderUnavailable(f"OpenRouter request failed: {type(exc).__name__}") from None
         latency_seconds = time.monotonic() - started_at
 
         try:
@@ -144,10 +153,16 @@ class OpenRouterAIProvider:
 
         try:
             parsed_result = parse_ai_grading_result(content)
-        except ValidationError as exc:
+        except ValidationError:
+            # Do not chain the raw ValidationError (`from exc`): pydantic's
+            # `errors()` retains the actual malformed field value under
+            # `input_value`, and Python's default traceback rendering prints
+            # a chained cause's own `str()` -- which would leak that value
+            # (possibly OCR'd student content) into logs (AGENTS.md
+            # "Security", docs/poc-2-ai-grading.md section 3.7).
             raise SchemaViolation(
                 "OpenRouter response failed AIGradingResult schema validation"
-            ) from exc
+            ) from None
 
         routed_model = data.get("model")
         version = routed_model if isinstance(routed_model, str) and routed_model.strip() else None

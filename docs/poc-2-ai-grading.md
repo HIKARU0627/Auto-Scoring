@@ -1047,8 +1047,15 @@ OpenRouter は OpenAI Chat Completions 互換の HTTP API
 は #35 のスコープであり、本 Issue はこのリスクを adapter 実装と併せて記録する
 に留める。
 
-共通: 温度は `AUTO_SCORING_AI_GRADING_TEMPERATURE`（既定 0.0）でどの経路でも
-揃え、再現性を確保する（Issue #14「再現条件」）。プロンプトテンプレートの
+共通: 温度は `AUTO_SCORING_AI_GRADING_TEMPERATURE`（既定 0.0）で直接 API /
+OpenRouter の間で揃え、再現性を確保する（Issue #14「再現条件」）。**Codex
+app-server はこの設定の対象外**: `thread/start`/`turn/start` のいずれにも
+温度パラメータが存在せず（§7.1.2）、`CodexAppServerProvider` はこの環境変数
+を一切読まない・`temperature` コンストラクタ引数も持たない（コードレビュー
+指摘: 適用されない設定を受理してそのまま `ProviderDescriptor` に書き込むと、
+実際には一度も反映されていない値を「再現条件」として偽って主張してしまう）。
+`factory.create_ai_provider()` は `codex_app_server` 選択時にこの変数を検証
+も転送もしない。プロンプトテンプレートの
 版数タグは `AUTO_SCORING_AI_GRADING_PROMPT_VERSION` として設定し、
 `ProviderDescriptor.prompt_version` にそのまま記録する（§3.3。プロンプト
 本文自体や答案本文を識別子に含めない）。外部送信は**生徒識別情報を除いた
@@ -1174,19 +1181,25 @@ Codex app-server を叩く確認は次のコマンドで手動実施し、結果
 
 ```bash
 cd backend
-# backend/.env.local に AUTO_SCORING_OPENROUTER_API_KEY / _MODEL を設定してから:
-uv run python -c "
+# backend/.env.local に AUTO_SCORING_OPENROUTER_API_KEY / _MODEL を設定してから
+# (`uv run` は既定でこのファイルを読まないため --env-file で明示的に渡す):
+uv run --env-file .env.local python -c "
 from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
 from auto_scoring.domain.ai_provider import GradingRequest
-import os
+from PIL import Image
+import io, os
 
 provider = OpenRouterAIProvider(
     api_key=os.environ['AUTO_SCORING_OPENROUTER_API_KEY'],
     model=os.environ['AUTO_SCORING_OPENROUTER_MODEL'],
     prompt_version='live-probe-v1',
 )
+# 8x8の白PNG。実モデルが画像をデコードできることを要求するため、
+# PNG署名の8byteのみ(デコード不能)ではなく実際にデコード可能な画像を渡す。
+buf = io.BytesIO()
+Image.new('RGB', (8, 8), color=(255, 255, 255)).save(buf, format='PNG')
 request = GradingRequest(
-    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=b'\x89PNG\r\n\x1a\n',
+    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=buf.getvalue(),
     ocr_text='2', model_answer='2', rubric_text='正しい数値が書かれていれば5点。', max_score=5,
 )
 response = provider.grade(request)
@@ -1211,10 +1224,16 @@ cd backend
 uv run python -c "
 from auto_scoring.adapters.ai_grading.codex_app_server_provider import CodexAppServerProvider
 from auto_scoring.domain.ai_provider import GradingRequest
+from PIL import Image
+import io
 
 provider = CodexAppServerProvider(prompt_version='live-probe-v1')
+# 8x8の白PNG。PNG署名の8byteのみ(デコード不能)ではなく、Codexの画像読み込みが
+# 実際にデコードできる画像を渡す。
+buf = io.BytesIO()
+Image.new('RGB', (8, 8), color=(255, 255, 255)).save(buf, format='PNG')
 request = GradingRequest(
-    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=b'\x89PNG\r\n\x1a\n',
+    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=buf.getvalue(),
     ocr_text='2', model_answer='2', rubric_text='正しい数値が書かれていれば5点。', max_score=5,
 )
 try:

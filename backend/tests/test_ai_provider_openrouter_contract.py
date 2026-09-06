@@ -102,6 +102,25 @@ def test_provider_unavailable_on_http_error_status() -> None:
         provider.grade(_VALID_REQUEST)
 
 
+def test_provider_unavailable_on_non_json_response_body() -> None:
+    """A 200 response with a non-JSON body (an outage page, a misbehaving
+    proxy, ...) must convert to ProviderUnavailable, not leak a raw
+    json.JSONDecodeError past this port's exception contract (code review
+    finding)."""
+
+    def _html_error_page(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_html_error_page),
+        base_url="https://openrouter.test/api/v1",
+    )
+    provider = _make_provider(client)
+
+    with pytest.raises(ProviderUnavailable):
+        provider.grade(_VALID_REQUEST)
+
+
 def test_descriptor_records_the_routed_model_as_version() -> None:
     """OpenRouter can silently route a model id to a different underlying
     deployment; recording the echoed ``model`` as ``version`` keeps the
