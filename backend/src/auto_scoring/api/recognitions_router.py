@@ -158,10 +158,22 @@ def build_recognitions_router(
             created_at=datetime.now(UTC).replace(tzinfo=None),
         )
         with SqlAlchemyUnitOfWork(session_factory) as uow:
-            if uow.submissions.get(submission_id) is None:
+            submission = uow.submissions.get(submission_id)
+            if submission is None:
                 raise HTTPException(404, detail=f"submission {submission_id!r} not found")
-            if uow.questions.get(question_id) is None:
+            question = uow.questions.get(question_id)
+            if question is None:
                 raise HTTPException(404, detail=f"question {question_id!r} not found")
+            if question.test_id != submission.test_id:
+                # Both ids exist individually but belong to different
+                # tests -- inserting anyway would persist a
+                # RecognitionResult under a question this submission's
+                # test never had (review round 1, P2).
+                raise HTTPException(
+                    404,
+                    detail=f"question {question_id!r} does not belong to submission "
+                    f"{submission_id!r}'s test",
+                )
             uow.recognitions.add(recognition)
             uow.commit()
         # The recognition row above is append-only history and stays valid

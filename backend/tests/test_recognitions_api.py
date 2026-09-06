@@ -24,7 +24,7 @@ from auto_scoring.api.app import create_app
 from auto_scoring.domain.dependency_graph import DependencyEdge, DependencyProvision
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
 from tests.fakes import FakeClock, FakeJobProcessor
-from tests.support import make_answer_image
+from tests.support import make_answer_image, make_question, make_test
 from tests.support import (
     seed_confirmed_dependency_graph as _seed_confirmed,
 )
@@ -198,3 +198,29 @@ def test_manual_recognition_returns_404_for_an_unknown_question(
         headers=_AUTH,
     )
     assert response.status_code == 404
+
+
+def test_manual_recognition_rejects_a_question_from_a_different_test(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Both ids exist, but the question belongs to a different test than the
+    submission does -- inserting anyway would persist a RecognitionResult
+    under a question this submission's test never had (review round 1, P2).
+    """
+    _seed_confirmed(session_factory, question_ids=["qa"])  # test-1 / sub-1
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id="test-2", name="別のテスト"))
+        uow.questions.add(make_question(id="qb-other-test", test_id="test-2", number="qb"))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/qb-other-test/recognitions",
+        json={"text": "手動入力"},
+        headers=_AUTH,
+    )
+
+    assert response.status_code == 404
+    history = client.get(
+        "/submissions/sub-1/questions/qb-other-test/recognitions", headers=_AUTH
+    ).json()
+    assert history == []
