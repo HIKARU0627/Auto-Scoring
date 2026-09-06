@@ -12,6 +12,7 @@ export 'package:auto_scoring_api/src/model/date.dart';
 
 export 'package:auto_scoring_api/src/api/default_api.dart';
 export 'package:auto_scoring_api/src/api/dependency_graph_api.dart';
+export 'package:auto_scoring_api/src/api/jobs_api.dart';
 export 'package:auto_scoring_api/src/api/test_registration_api.dart';
 
 export 'package:auto_scoring_api/src/model/analyze_request.dart';
@@ -22,6 +23,7 @@ export 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 export 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 export 'package:auto_scoring_api/src/model/dependency_provision.dart';
 export 'package:auto_scoring_api/src/model/http_validation_error.dart';
+export 'package:auto_scoring_api/src/model/job_response.dart';
 export 'package:auto_scoring_api/src/model/location_inner.dart';
 export 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 export 'package:auto_scoring_api/src/model/page_format_model.dart';

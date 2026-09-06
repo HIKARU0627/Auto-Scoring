@@ -6,14 +6,18 @@ import atexit
 import tempfile
 import threading
 from asyncio import to_thread
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring import __version__
+from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
 from auto_scoring.adapters.local_storage import LocalFileStore
@@ -31,11 +35,13 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
+from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
+from auto_scoring.domain.job_execution import JobProcessor
 from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission, TestStatus
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -45,6 +51,10 @@ from auto_scoring.domain.pdf_intake import (
     StagedOutputTooLargeError,
 )
 from auto_scoring.domain.scoring import clamp_score
+from auto_scoring.jobs.clock import Clock
+from auto_scoring.jobs.null_processor import NullJobProcessor
+from auto_scoring.jobs.queue import JobQueueService
+from auto_scoring.jobs.settings import QueueSettings
 
 _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
@@ -137,6 +147,9 @@ def create_app(
     image_preprocessor: ImagePreprocessor | None = None,
     intake_limits: IntakeLimits | None = None,
     max_concurrent_uploads: int = 2,
+    job_processor: JobProcessor | None = None,
+    queue_settings: QueueSettings | None = None,
+    clock: Clock | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -169,10 +182,26 @@ def create_app(
     engine creation/disposal, or the startup repair sweep for it -- the
     caller owns that database's whole lifecycle. ``store`` (used by the
     submission/test routes below regardless) still comes from ``data_root``
-    as usual either way.
+    as usual either way. It also means this function never takes the
+    data-root lock (see ``auto_scoring.adapters.data_root_lock``): a test
+    fixture's session_factory has no real, shared ``data_root`` to protect
+    two instances from racing over, and existing tests deliberately build
+    more than one `create_app` against the same ``data_root`` fixture to
+    simulate a process restart -- releasing the lock (see below) before the
+    next one is built.
+
+    ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
+    parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
+    ``job_processor`` defaults to `auto_scoring.jobs.null_processor.
+    NullJobProcessor` (OCR/AI processing is a later issue's job); tests
+    inject a fake (``tests/fakes.py``). The queue's worker pool only actually
+    starts/stops via the FastAPI lifespan below, so a `TestClient` used
+    without ``with`` (several existing tests do this, same as the temp-dir
+    cleanup above) never runs it -- see ``app.state.queue_service`` for tests
+    that need to drive it directly instead.
     """
-    app = FastAPI(title="Auto-Scoring Sidecar", version=__version__)
-    app.state.api_token = api_token or generate_token()
+    queue_service_holder: dict[str, JobQueueService] = {}
+    lock_handle_holder: dict[str, IO[bytes]] = {}
 
     scratch: tempfile.TemporaryDirectory[str] | None = None
     if data_root is not None:
@@ -188,16 +217,84 @@ def create_app(
     # repairing files under `store`, which has nothing to do with whatever
     # database that session_factory actually points at) would be wrong.
     owns_session_factory = session_factory is None
-    db_engine = None
     if owns_session_factory:
-        db_url = sqlite_url(store.database_path())
-        upgrade(db_url, "head")
-        db_engine = create_sqlite_engine(db_url)
-        session_factory = build_session_factory(db_engine)
-    assert session_factory is not None  # either supplied, or just built above
+        # Taken here, before migrations/sweep_temp/repair below ever touch
+        # this data_root -- not merely later, at ASGI lifespan startup
+        # (review round 9, P1's original placement, and the very gap review
+        # round 10, P1 flagged: `api/sidecar.py`'s `run()` already binds its
+        # socket and writes its handshake file before ever calling this
+        # function, so a second sidecar process against a data_root a live
+        # process already owns would otherwise run every step below --
+        # deleting *.part files the first process may still be writing,
+        # marking its in-flight submissions erroneous -- before this
+        # function, let alone its lifespan, ever got a chance to fail).
+        lock_handle_holder["handle"] = acquire_data_root_lock(root)
+    db_engine = None
+    try:
+        if owns_session_factory:
+            db_url = sqlite_url(store.database_path())
+            upgrade(db_url, "head")
+            db_engine = create_sqlite_engine(db_url)
+            session_factory = build_session_factory(db_engine)
+        assert session_factory is not None  # either supplied, or just built above
+
+        if owns_session_factory:
+            # Startup crash recovery. sweep_temp was always documented as "run
+            # it on startup" (its own docstring) but was never actually wired
+            # up anywhere; it only removes interrupted writes' leftover
+            # *.part files, not the DB side of the same problem -- a prior
+            # run that crashed or lost power between a submission's DB commit
+            # and the file writes that follow it (adapters.atomic.
+            # FinalizationError only catches that failure when the process is
+            # alive to raise it) leaves that submission stuck: recorded as
+            # complete, some files missing, and no way to retry it.
+            # repair_incomplete_submissions covers that other half.
+            # repair_incomplete_test_registrations covers the same crash
+            # window for test registration (Issue #16 review): a `Test` row
+            # committed before its two PDFs both finished writing, with no
+            # `error` state to retry into and no endpoint able to find or
+            # remove it otherwise.
+            store.sweep_temp()
+            with SqlAlchemyUnitOfWork(session_factory) as uow:
+                repair_incomplete_submissions(uow, store)
+                repair_incomplete_test_registrations(uow, store)
+    except BaseException:
+        # Nothing below this point has run yet, so nothing else needs
+        # unwinding -- but this function's caller (or a test) may go on to
+        # retry it, or build a second `create_app` against a *different*
+        # data_root, in the same process, and must not find this data_root
+        # still locked because a failed attempt never released it.
+        handle = lock_handle_holder.pop("handle", None)
+        if handle is not None:
+            handle.close()
+        raise
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        service = queue_service_holder["queue_service"]
+        await service.start()
+        try:
+            yield
+        finally:
+            await service.shutdown()
+            handle = lock_handle_holder.pop("handle", None)
+            if handle is not None:
+                handle.close()
+
+    app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
+    app.state.api_token = api_token or generate_token()
+
+    queue_service = JobQueueService(
+        session_factory,
+        job_processor or NullJobProcessor(),
+        settings=queue_settings,
+        clock=clock,
+    )
+    queue_service_holder["queue_service"] = queue_service
+    app.state.queue_service = queue_service
 
     if scratch is not None:
-        # The startup repair query below (and every other DB access this app
+        # The startup repair query above (and every other DB access this app
         # ever makes) leaves at least one connection sitting in db_engine's
         # pool -- SQLAlchemy does not close a pooled connection until the
         # engine itself is disposed. On Windows, that connection holds the
@@ -206,35 +303,28 @@ def create_app(
         # whole temp app-data directory instead of removing it. Dispose the
         # engine (if this function created one) before cleaning up the
         # directory it lives in.
+        #
+        # The data-root lock handle (see above) holds `root / ".lock"` open
+        # the exact same way -- a caller that builds this app but never
+        # drives its lifespan (this scratch-cleanup path exists precisely
+        # for those callers: real production runs always pass an explicit
+        # data_root instead) would otherwise still be holding it open when
+        # this fires, and Windows refuses to remove a directory containing
+        # an open file just the same as it refuses to remove one containing
+        # an open database (review round 10, P1). Close it here too, before
+        # `temp_dir.cleanup()`.
         temp_dir = scratch
         engine_to_dispose = db_engine
 
         def _cleanup_scratch() -> None:
             if engine_to_dispose is not None:
                 engine_to_dispose.dispose()
+            handle = lock_handle_holder.pop("handle", None)
+            if handle is not None:
+                handle.close()
             temp_dir.cleanup()
 
         atexit.register(_cleanup_scratch)
-
-    if owns_session_factory:
-        # Startup crash recovery. sweep_temp was always documented as "run it
-        # on startup" (its own docstring) but was never actually wired up
-        # anywhere; it only removes interrupted writes' leftover *.part
-        # files, not the DB side of the same problem -- a prior run that
-        # crashed or lost power between a submission's DB commit and the
-        # file writes that follow it (adapters.atomic.FinalizationError only
-        # catches that failure when the process is alive to raise it) leaves
-        # that submission stuck: recorded as complete, some files missing,
-        # and no way to retry it. repair_incomplete_submissions covers that
-        # other half. repair_incomplete_test_registrations covers the same
-        # crash window for test registration (Issue #16 review): a `Test`
-        # row committed before its two PDFs both finished writing, with no
-        # `error` state to retry into and no endpoint able to find or
-        # remove it otherwise.
-        store.sweep_temp()
-        with SqlAlchemyUnitOfWork(session_factory) as uow:
-            repair_incomplete_submissions(uow, store)
-            repair_incomplete_test_registrations(uow, store)
 
     engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()
@@ -410,7 +500,14 @@ def create_app(
             ) from exc
         return _submission_response(result.submission, is_retry=result.is_retry)
 
-    protected.include_router(build_dependency_graph_router(session_factory))
+    protected.include_router(
+        build_dependency_graph_router(
+            session_factory,
+            on_job_reissued=lambda job: queue_service.enqueue(job.id),
+            on_stale_running_job_cancelled=queue_service.cancel_running_task,
+        )
+    )
+    protected.include_router(build_jobs_router(queue_service))
     protected.include_router(
         build_test_registration_router(
             session_factory,

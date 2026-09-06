@@ -22,6 +22,7 @@ import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
+import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 import 'package:auto_scoring_api/src/model/page_format_model.dart';
@@ -49,6 +50,7 @@ part 'serializers.g.dart';
   DependencyGraphResponse,
   DependencyProvision,
   HTTPValidationError,
+  JobResponse,
   LocationInner,
   NormalizedBBoxModel,
   PageFormatModel,
@@ -77,6 +79,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyGraphResponse)]),
         () => ListBuilder<DependencyGraphResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(JobResponse)]),
+        () => ListBuilder<JobResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(SubmissionResponse)]),

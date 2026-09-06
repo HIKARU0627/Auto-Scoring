@@ -485,6 +485,15 @@ def test_starting_the_app_repairs_a_submission_left_incomplete_by_a_prior_crash(
     file after a normal successful upload, then create a fresh app instance
     against the same data_root (as a restart would) and confirm the sweep
     moves it to error before the app ever serves a request.
+
+    The first app's usage is wrapped in ``with TestClient(...) as
+    first_client`` (not the bare ``TestClient(...)`` this test used before
+    the data-root lock existed) specifically so its lifespan runs and
+    releases that lock on exit -- otherwise building the second `create_app`
+    below, against the very same data_root a real restart would reuse,
+    would raise `DataRootLockedError` instead of simulating one (review
+    round 10, P1: the lock is now held for `create_app`'s whole data-root
+    initialization, not just while the queue's worker pool runs).
     """
     first_app = create_app(
         api_token=_TOKEN,
@@ -492,14 +501,14 @@ def test_starting_the_app_repairs_a_submission_left_incomplete_by_a_prior_crash(
         intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
     )
     _seed_test(data_root)
-    first_client = TestClient(first_app)
-    created = first_client.post(
-        "/tests/test-1/submissions",
-        headers=_auth(),
-        files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
-    )
-    assert created.status_code == 201
-    submission_id = created.json()["id"]
+    with TestClient(first_app) as first_client:
+        created = first_client.post(
+            "/tests/test-1/submissions",
+            headers=_auth(),
+            files={"file": ("a.pdf", _pdf_bytes(), "application/pdf")},
+        )
+        assert created.status_code == 201
+        submission_id = created.json()["id"]
 
     with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
         submission = uow.submissions.get(submission_id)

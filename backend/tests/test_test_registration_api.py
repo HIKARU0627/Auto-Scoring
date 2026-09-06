@@ -416,6 +416,14 @@ class TestProfileReviewAndConfirm:
         """Simulates a restart: a brand-new `create_app`/session against the
         same `data_root` must see the same profile a prior process saved
         (Issue #16 acceptance: "保存後の再起動で修正内容が復元される").
+
+        The `client` fixture's own app is never entered as a lifespan
+        context, so its data-root lock is still held at this point --
+        re-entering the same app via `with TestClient(client.app)` runs
+        that lifespan (start then stop) and releases it before the second
+        `create_app` below reuses the same data_root, matching a real
+        restart instead of raising `DataRootLockedError` (review round 10,
+        P1).
         """
         test_id = _register_test(client)
         client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
@@ -424,6 +432,8 @@ class TestProfileReviewAndConfirm:
             headers=_auth(),
             json={"regions": _minimal_regions()},
         )
+        with TestClient(client.app):
+            pass
 
         restarted_app = create_app(api_token=_TOKEN, data_root=data_root)
         restarted_client = TestClient(restarted_app)
@@ -794,14 +804,21 @@ def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
     registration, then create a fresh app instance against the same
     data_root (as a restart would) and confirm the sweep removes the
     now-unusable draft before the app ever serves a request.
+
+    The first app's usage is wrapped in ``with TestClient(...) as
+    first_client`` so its lifespan runs and releases the data-root lock on
+    exit -- otherwise building the second `create_app` below, against the
+    same data_root a real restart would reuse, would raise
+    `DataRootLockedError` instead of simulating one (review round 10, P1:
+    the lock is held for `create_app`'s whole data-root initialization).
     """
     first_app = create_app(
         api_token=_TOKEN,
         data_root=data_root,
         intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
     )
-    first_client = TestClient(first_app)
-    test_id = _register_test(first_client)
+    with TestClient(first_app) as first_client:
+        test_id = _register_test(first_client)
 
     LocalFileStore(data_root).test_manual_pdf_path(test_id).unlink()
 
@@ -820,7 +837,7 @@ def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
 
 
 def test_starting_the_app_leaves_a_pre_migration_test_alone(data_root: Path) -> None:
-    """Migration 0008 backfills `status='draft'` onto every pre-existing
+    """Migration 0010 backfills `status='draft'` onto every pre-existing
     `Test` row -- none of which were ever registered through
     `register_test`, so none of them have the two PDFs this Issue's
     registration flow writes. The repair sweep must never treat "no PDFs on
@@ -831,13 +848,22 @@ def test_starting_the_app_leaves_a_pre_migration_test_alone(data_root: Path) -> 
     (Issue #16 review round 5, data loss).
     """
     # Runs migrations (via create_app) without ever calling register_test --
-    # the DB then holds exactly what upgrading a pre-0008 database would
+    # the DB then holds exactly what upgrading a pre-0010 database would
     # look like: a `Test` row with no registration marker and no PDFs.
-    create_app(
-        api_token=_TOKEN,
-        data_root=data_root,
-        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
-    )
+    #
+    # Wrapped in `with TestClient(...)` (not a bare `create_app(...)` call)
+    # so its lifespan runs and releases the data-root lock immediately --
+    # otherwise the second `create_app` below, against the same data_root,
+    # would raise `DataRootLockedError` (review round 10, P1: `create_app`
+    # acquires that lock unconditionally, even before any TestClient exists).
+    with TestClient(
+        create_app(
+            api_token=_TOKEN,
+            data_root=data_root,
+            intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+        )
+    ):
+        pass
     with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
         uow.tests.add(make_test(id="legacy-test", name="移行前のテスト"))
         uow.commit()
@@ -855,13 +881,19 @@ def test_starting_the_app_leaves_a_pre_migration_test_alone(data_root: Path) -> 
 def test_starting_the_app_leaves_a_healthy_draft_test_alone(data_root: Path) -> None:
     """The repair sweep must not touch a `DRAFT` test whose PDFs are simply
     still waiting for review -- only one whose files are actually missing.
+
+    The first app's usage is wrapped in `with TestClient(...)` so its
+    lifespan runs and releases the data-root lock on exit -- otherwise the
+    second `create_app` below, against the same data_root, would raise
+    `DataRootLockedError` (review round 10, P1).
     """
     app = create_app(
         api_token=_TOKEN,
         data_root=data_root,
         intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
     )
-    test_id = _register_test(TestClient(app))
+    with TestClient(app) as client:
+        test_id = _register_test(client)
 
     restarted_app = create_app(
         api_token=_TOKEN,

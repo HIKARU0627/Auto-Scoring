@@ -181,7 +181,14 @@ class JobRepository(Protocol):
     def add(self, job: Job) -> None: ...
     def get(self, job_id: str) -> Job | None: ...
 
-    def save(self, job: Job, *, expected_state: JobState) -> None:
+    def save(
+        self,
+        job: Job,
+        *,
+        expected_state: JobState,
+        expected_attempts: int | None = None,
+        require_usable_unset: bool = False,
+    ) -> None:
         """Persist ``job`` iff the row is still in ``expected_state`` -- the
         state the caller itself observed (e.g. from `get`) before deciding on
         this transition, not a value re-read from the row inside `save`
@@ -191,17 +198,96 @@ class JobRepository(Protocol):
         transition check and matching its own `WHERE` clause (Issue #26
         review). Raises `auto_scoring.domain.models.JobSaveConflict` if the
         row has moved on from ``expected_state``.
+
+        ``expected_attempts``, if given, also gates the write on ``attempts
+        ==`` that value -- ``state`` alone cannot rule out an ABA cycle for
+        a non-terminal state like FAILED: a concurrent retry can complete a
+        whole FAILED -> QUEUED -> RUNNING -> FAILED cycle (a fresh,
+        unreviewed attempt, with its own new ``error_code``/``last_error``)
+        between this caller's read and its write, and the state-only CAS
+        would match again -- silently overwriting that newer attempt's
+        state with this caller's stale one instead of losing the race
+        (Issue #18 review round 9, P1). ``attempts`` only ever changes on a
+        transition through RUNNING, so it strictly changes across any such
+        cycle, the same property `mark_usable`'s own ``expected_attempts``
+        already relies on for this exact reason (review round 6, P1).
+
+        ``require_usable_unset``, if set, also gates the write on ``usable
+        IS NULL``. ``state`` alone is not always enough to serialize two
+        writers: `mark_usable` changes only `usable`, never `state`, so a
+        `save` whose *own* precondition is state-only can still commit after
+        a concurrent `mark_usable` call, silently discarding an approval the
+        caller's own read never saw (Issue #18 review round 5, P1 -- see
+        `auto_scoring.jobs.queue.JobQueueService.retry_job`, the one caller
+        that passes this).
         """
         ...
 
     def list_by_state(self, state: JobState) -> list[Job]: ...
 
+    def list_for_submission(self, submission_id: str) -> list[Job]:
+        """Every job for ``submission_id`` (any state), for progress display
+        (Issue #18: 一覧・進捗API) and for recomputing DAG readiness after one
+        question's job finishes (`auto_scoring.domain.job_scheduling.
+        question_statuses`).
+        """
+        ...
+
+    def mark_usable(
+        self, job_id: str, *, usable: bool, expected_state: JobState, expected_attempts: int
+    ) -> bool:
+        """Flip a job's `Job.usable` bit in place, iff the row is still in
+        ``expected_state`` (``SUCCEEDED`` or ``FAILED``) with ``attempts``
+        still equal to ``expected_attempts`` -- what the caller itself
+        observed before deciding to do this, exactly like `save`'s
+        compare-and-set. Returns whether the write actually applied.
+
+        Unlike `save`, this does not change ``state`` -- it exists for the
+        "a human corrected a low-confidence or failed result and it is now
+        usable" resume path (Issue #18 §4.4), which changes only this bit,
+        not the job's lifecycle state (a FAILED job stays FAILED; only
+        whether its downstream effect may now proceed changes).
+
+        The compare-and-set matters because this call and a concurrent
+        `save` (e.g. a manual retry moving the same row FAILED -> QUEUED)
+        can race: without pinning the write to the exact state the caller
+        read, this could silently mark a job usable (and this call's
+        caller could go on to release dependents on that basis) after the
+        job has already moved on to being reprocessed, or a racing `save`
+        could silently clear a `usable` this call just set (Issue #18
+        review round 3, P1 -- AGENTS.md "invariants は UI ではなく実制約で"
+        applies to the transaction, not just the column, here). The caller
+        is expected to retry from a fresh read on ``False``, the same as
+        it would for `JobSaveConflict` from `save`.
+
+        ``expected_attempts`` closes an ABA hole ``state`` alone cannot:
+        FAILED is not a dead end (retry can move it FAILED -> QUEUED ->
+        RUNNING -> FAILED again), so a concurrent retry that completes a
+        whole cycle back to FAILED between this call's read and its write
+        would make a state-only CAS match again -- applying an approval
+        read for one attempt to a completely different, unreviewed later
+        attempt. `attempts` only ever changes on a transition through
+        RUNNING, so it strictly changes across any such cycle, the same way
+        `auto_scoring.jobs.queue.JobQueueService._requeue_after_backoff`
+        already uses it to tell an earlier attempt's stale backoff timer
+        apart from a newer one (Issue #18 review round 6, P1).
+        """
+        ...
+
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
-        """Jobs for ``test_id`` still QUEUED/RUNNING/BLOCKED against a
-        `dependency_graph_version` other than ``current_version`` (Issue #26:
-        superseded-graph job invalidation). Jobs never tagged with a graph
-        version (``dependency_graph_version is None``) are not "stale" by
-        this definition and are excluded.
+        """Jobs for ``test_id`` still QUEUED/RUNNING/BLOCKED, or FAILED with
+        ``usable`` unset, against a `dependency_graph_version` other than
+        ``current_version`` (Issue #26: superseded-graph job invalidation).
+        Jobs never tagged with a graph version (``dependency_graph_version
+        is None``) are not "stale" by this definition and are excluded.
+
+        A FAILED job counts as incomplete because FAILED -> QUEUED is a
+        valid retry transition -- left unlisted, it could still be retried
+        later and run against the superseded version. A FAILED job whose
+        ``usable`` a human already set via `mark_usable` is the exception:
+        that approval already released (or will release) a dependent, and
+        invalidating it here would silently clear the approval out from
+        under that dependent (Issue #18 review round 6, P1).
         """
         ...
 

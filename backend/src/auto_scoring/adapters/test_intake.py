@@ -36,7 +36,7 @@ from auto_scoring.domain.pdf_intake import (
 #: once -- written before the DB commit, never removed. Its only purpose is
 #: to let `repair_incomplete_test_registrations` tell a test created by
 #: *this* Issue's PDF-based registration flow apart from one that predates
-#: it entirely (migration 0008 backfills `status='draft'` onto every
+#: it entirely (migration 0010 backfills `status='draft'` onto every
 #: pre-existing row, none of which were ever registered with PDFs -- see
 #: that function's own docstring). A permanent tag, not a "still pending"
 #: flag: once both PDFs are also on disk, the row is a normal, complete
@@ -213,7 +213,7 @@ def repair_incomplete_test_registrations(
     prior run left in this state before it could shut down cleanly.
 
     Gated on `_REGISTRATION_MARKER_FILENAME`, not merely "PDFs missing" --
-    migration 0008 backfills `status='draft'` onto every `Test` row that
+    migration 0010 backfills `status='draft'` onto every `Test` row that
     predates this Issue's PDF-based registration flow, none of which were
     ever registered with PDFs to begin with. An earlier version of this
     function used "PDFs missing" alone as the trigger, which classified

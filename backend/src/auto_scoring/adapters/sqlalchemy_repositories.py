@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy import CursorResult, and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 import auto_scoring.adapters._mappers as m
@@ -380,7 +380,14 @@ class SqlAlchemyJobRepository:
         row = self._session.get(JobRow, job_id)
         return m.job_from_row(row) if row is not None else None
 
-    def save(self, job: Job, *, expected_state: JobState) -> None:
+    def save(
+        self,
+        job: Job,
+        *,
+        expected_state: JobState,
+        expected_attempts: int | None = None,
+        require_usable_unset: bool = False,
+    ) -> None:
         """Compare-and-set on ``expected_state`` -- the state the *caller*
         observed before deciding on this transition -- not a state this call
         re-reads from the row itself.
@@ -400,21 +407,47 @@ class SqlAlchemyJobRepository:
         `Job.transitioned_to(...)` ties the compare-and-set to what was
         actually observed, so the second worker's ``WHERE state = 'queued'``
         no longer matches and it correctly loses the race.
+
+        ``expected_attempts`` adds ``attempts ==`` that value to the same
+        ``WHERE``: for a non-terminal state a job can return to (FAILED,
+        via a retry), ``state`` alone cannot tell the row the caller read
+        apart from a *different*, later occupant of that same state -- a
+        concurrent FAILED -> QUEUED -> RUNNING -> FAILED cycle changes
+        ``attempts`` (only ever bumped on a transition through RUNNING)
+        even though it lands back on the same ``state``, so pinning both
+        together closes the ABA hole `mark_usable`'s own
+        ``expected_attempts`` already closes for the same reason (review
+        round 6, P1; round 9, P1 applies it here too).
+
+        ``require_usable_unset`` adds ``usable IS NULL`` to that same
+        ``WHERE``: `mark_usable` never changes `state`, so without this a
+        `retry_job` call that read ``usable=None`` and this call's own
+        state-only precondition could both still commit even though
+        `mark_usable` committed ``usable=True`` in between -- this call's
+        `WHERE` never noticed, because it never looked at that column
+        (Issue #18 review round 5, P1).
         """
         if job.state is not expected_state:
             ensure_job_transition(expected_state, job.state)
 
+        conditions = [JobRow.id == job.id, JobRow.state == expected_state]
+        if expected_attempts is not None:
+            conditions.append(JobRow.attempts == expected_attempts)
+        if require_usable_unset:
+            conditions.append(JobRow.usable.is_(None))
         result = cast(
             CursorResult[Any],
             self._session.execute(
                 update(JobRow)
-                .where(JobRow.id == job.id, JobRow.state == expected_state)
+                .where(*conditions)
                 .values(
                     state=job.state,
                     attempts=job.attempts,
                     max_attempts=job.max_attempts,
                     last_error=job.last_error,
+                    error_code=job.error_code,
                     blocked_on_question_id=job.blocked_on_question_id,
+                    usable=job.usable,
                     updated_at=job.updated_at,
                 )
             ),
@@ -433,12 +466,51 @@ class SqlAlchemyJobRepository:
         )
         return [m.job_from_row(row) for row in rows]
 
+    def list_for_submission(self, submission_id: str) -> list[Job]:
+        rows = self._session.scalars(
+            select(JobRow).where(JobRow.submission_id == submission_id).order_by(JobRow.created_at)
+        )
+        return [m.job_from_row(row) for row in rows]
+
+    def mark_usable(
+        self, job_id: str, *, usable: bool, expected_state: JobState, expected_attempts: int
+    ) -> bool:
+        result = cast(
+            CursorResult[Any],
+            self._session.execute(
+                update(JobRow)
+                .where(
+                    JobRow.id == job_id,
+                    JobRow.state == expected_state,
+                    JobRow.attempts == expected_attempts,
+                )
+                .values(usable=usable)
+            ),
+        )
+        row = self._session.get(JobRow, job_id)
+        if row is not None and result.rowcount == 1:
+            self._session.expire(row)
+        return result.rowcount == 1
+
     def list_incomplete_for_stale_versions(self, test_id: str, current_version: int) -> list[Job]:
-        # FAILED is not terminal here: FAILED -> QUEUED is a valid retry
-        # transition (see `auto_scoring.domain.models._JOB_TRANSITIONS` and
-        # docs/data-model-and-local-storage.md), so a stale FAILED job left
-        # unlisted could still be retried later and run against the
-        # superseded graph version (Issue #26 review).
+        # FAILED is not terminal here in general: FAILED -> QUEUED is a
+        # valid retry transition (see `auto_scoring.domain.models.
+        # _JOB_TRANSITIONS` and docs/data-model-and-local-storage.md), so a
+        # stale FAILED job left unlisted could still be retried later and
+        # run against the superseded graph version (Issue #26 review).
+        #
+        # A FAILED job whose `usable` is already set is the one exception:
+        # a human approved its downstream effect via `mark_question_usable`
+        # (`retry_job`/`cancel_job` already refuse to touch such a job for
+        # the same reason -- review rounds 4/5), and any dependent that was
+        # BLOCKED on it may already be running or done. Treating it as
+        # "incomplete" here would let `confirm`'s reissue path cancel and
+        # replace it, silently clearing that approval while its already-
+        # released dependent keeps processing against a prerequisite that
+        # no longer has any record of ever having been approved (review
+        # round 6, P1). It is, for scheduling purposes, as terminal as
+        # SUCCEEDED/CANCELLED -- the exact same status `question_statuses`
+        # already reads it as.
         rows = self._session.scalars(
             select(JobRow)
             .join(SubmissionRow, JobRow.submission_id == SubmissionRow.id)
@@ -446,8 +518,9 @@ class SqlAlchemyJobRepository:
                 SubmissionRow.test_id == test_id,
                 JobRow.dependency_graph_version.is_not(None),
                 JobRow.dependency_graph_version != current_version,
-                JobRow.state.in_(
-                    [JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED, JobState.FAILED]
+                or_(
+                    JobRow.state.in_([JobState.QUEUED, JobState.RUNNING, JobState.BLOCKED]),
+                    and_(JobRow.state == JobState.FAILED, JobRow.usable.is_(None)),
                 ),
             )
             .order_by(JobRow.created_at)

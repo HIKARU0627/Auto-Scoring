@@ -294,7 +294,7 @@ def test_happy_path_registers_a_draft_test(
 def test_repair_leaves_a_pre_existing_test_without_the_marker_alone(
     store: LocalFileStore, session_factory: sessionmaker[Session]
 ) -> None:
-    """Migration 0008 backfills `status='draft'` onto every `Test` row that
+    """Migration 0010 backfills `status='draft'` onto every `Test` row that
     predates this Issue's PDF-based registration flow, none of which ever
     went through `register_test` -- so none of them have its registration
     marker, and none of them ever had PDFs to begin with. An earlier version
