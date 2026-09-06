@@ -104,7 +104,24 @@ def build_recognitions_router(
     matching every other router in this package."""
     router = APIRouter(tags=["recognitions"])
 
-    @router.get("/submissions/{submission_id}/questions/{question_id}/answer-image")
+    @router.get(
+        "/submissions/{submission_id}/questions/{question_id}/answer-image",
+        # response_class=Response (the plain Starlette base, media_type=None)
+        # instead of the route default JSONResponse: FastAPI otherwise still
+        # advertises an *additional* application/json: {schema: {}} content
+        # entry alongside the one declared in `responses` below (inferred
+        # from response_class.media_type), and openapi-generator picks that
+        # one first -- the generated Dart client then tried to JSON-decode
+        # the PNG bytes instead of preserving them as raw binary (review
+        # round 1, P1).
+        response_class=Response,
+        responses={
+            200: {
+                "content": {"image/png": {"schema": {"type": "string", "format": "binary"}}},
+                "description": "The cropped answer-area image.",
+            }
+        },
+    )
     def get_answer_image(submission_id: str, question_id: str) -> Response:
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             images = uow.answer_images.list_for_submission(submission_id)
