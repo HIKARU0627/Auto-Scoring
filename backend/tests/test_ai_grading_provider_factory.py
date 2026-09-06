@@ -74,6 +74,34 @@ def test_create_ai_provider_rejects_an_invalid_openrouter_temperature(raw_temper
         )
 
 
+@pytest.mark.parametrize("raw_temperature", ["2.1", "3", "100"])
+def test_create_ai_provider_rejects_an_openrouter_temperature_above_two(
+    raw_temperature: str,
+) -> None:
+    """OpenRouter/OpenAI's Chat Completions API caps sampling temperature at
+    2; a higher configured value must fail fast at configuration time, not
+    as a remote 4xx on every grading call (code review finding)."""
+    with pytest.raises(AIProviderConfigError):
+        create_ai_provider(
+            {
+                **_COMMON,
+                **_OPENROUTER_CREDENTIALS,
+                "AUTO_SCORING_AI_GRADING_TEMPERATURE": raw_temperature,
+            }
+        )
+
+
+def test_create_ai_provider_accepts_an_openrouter_temperature_of_exactly_two() -> None:
+    provider = create_ai_provider(
+        {
+            **_COMMON,
+            **_OPENROUTER_CREDENTIALS,
+            "AUTO_SCORING_AI_GRADING_TEMPERATURE": "2.0",
+        }
+    )
+    assert isinstance(provider, OpenRouterAIProvider)
+
+
 def test_create_ai_provider_ignores_temperature_for_codex_app_server() -> None:
     """Codex app-server has no temperature knob (code review finding), so an
     invalid value in this shared env var must not block selecting it."""

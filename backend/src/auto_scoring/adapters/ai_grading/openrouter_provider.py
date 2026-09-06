@@ -27,7 +27,8 @@ import httpx
 from pydantic import ValidationError
 
 from auto_scoring.adapters.ai_grading._prompt import build_grading_prompt, sniff_image_format
-from auto_scoring.domain.ai_grading import AIGradingResult, parse_ai_grading_result
+from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
+from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
     GradingRequest,
     GradingResponse,
@@ -46,19 +47,47 @@ def _build_response_format() -> dict[str, object]:
     :class:`AIGradingResult`'s wire shape (camelCase aliases, ``extra:
     forbid`` -- section 3.6 of ``docs/poc-2-ai-grading.md``).
 
-    Schema *validation* still happens locally via ``parse_ai_grading_result``
-    regardless of whether the routed-to model actually honours this hint
-    (Issue #14 acceptance: never trust a provider's own claim of
-    schema-conformance without checking).
+    Uses the strict-mode schema (``_schema.strict_ai_grading_result_schema``):
+    a strict-mode backend rejects Pydantic's own ``model_json_schema()``
+    output outright (fields with a default are missing from ``required``),
+    which would fail every call before the model ever runs (code review
+    finding). Schema *validation* still happens locally via
+    ``parse_ai_grading_result`` regardless of whether the routed-to model
+    actually honours this hint (Issue #14 acceptance: never trust a
+    provider's own claim of schema-conformance without checking).
     """
     return {
         "type": "json_schema",
         "json_schema": {
             "name": "ai_grading_result",
             "strict": True,
-            "schema": AIGradingResult.model_json_schema(by_alias=True),
+            "schema": strict_ai_grading_result_schema(),
         },
     }
+
+
+def _routing_fingerprint(data: dict[str, object]) -> str | None:
+    """Identifies the actual deployment that answered, for
+    ``ProviderDescriptor.version`` (Issue #14 "再現条件").
+
+    OpenRouter can route the same requested model slug (``data["model"]``
+    only echoes that slug back, unless OpenRouter substituted a fallback)
+    through different upstream inference providers -- the top-level
+    ``data["provider"]`` field. Recording ``model`` alone would pool calls
+    that actually ran against different upstream deployments into the same
+    reproducibility bucket (``descriptor_key``, docs/poc-2-ai-grading.md
+    section 3.3; code review finding). Encoded as a JSON object rather than
+    a delimited string for the same collision-avoidance reason
+    ``ai_provider.descriptor_key`` gives for not using ``"|"``-joins.
+    """
+    fingerprint: dict[str, str] = {}
+    routed_model = data.get("model")
+    if isinstance(routed_model, str) and routed_model.strip():
+        fingerprint["model"] = routed_model
+    upstream_provider = data.get("provider")
+    if isinstance(upstream_provider, str) and upstream_provider.strip():
+        fingerprint["provider"] = upstream_provider
+    return json.dumps(fingerprint, sort_keys=True) if fingerprint else None
 
 
 class OpenRouterAIProvider:
@@ -164,8 +193,7 @@ class OpenRouterAIProvider:
                 "OpenRouter response failed AIGradingResult schema validation"
             ) from None
 
-        routed_model = data.get("model")
-        version = routed_model if isinstance(routed_model, str) and routed_model.strip() else None
+        version = _routing_fingerprint(data)
         descriptor = ProviderDescriptor(
             provider=self.name,
             model=self._model,

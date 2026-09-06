@@ -38,6 +38,7 @@ def _canned_chat_completion(question_id: str) -> dict[str, object]:
         )
     return {
         "model": "openrouter-routed/echo",
+        "provider": "some-upstream-vendor",
         "choices": [{"message": {"role": "assistant", "content": content}}],
     }
 
@@ -121,11 +122,16 @@ def test_provider_unavailable_on_non_json_response_body() -> None:
         provider.grade(_VALID_REQUEST)
 
 
-def test_descriptor_records_the_routed_model_as_version() -> None:
-    """OpenRouter can silently route a model id to a different underlying
-    deployment; recording the echoed ``model`` as ``version`` keeps the
-    reproducibility descriptor (Issue #14 "再現条件") honest about which
-    deployment actually answered."""
+def test_descriptor_records_the_routed_model_and_upstream_provider_as_version() -> None:
+    """OpenRouter can route the same model slug through different upstream
+    providers; recording only ``model`` would pool calls that actually ran
+    against different deployments into the same reproducibility bucket
+    (code review finding). ``version`` must carry both the echoed ``model``
+    and the top-level ``provider`` fingerprint."""
     provider = _make_provider()
     response = provider.grade(_VALID_REQUEST)
-    assert response.descriptor.version == "openrouter-routed/echo"
+    assert response.descriptor.version is not None
+    assert json.loads(response.descriptor.version) == {
+        "model": "openrouter-routed/echo",
+        "provider": "some-upstream-vendor",
+    }

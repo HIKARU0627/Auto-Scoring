@@ -20,6 +20,11 @@ from auto_scoring.domain.ai_provider import AIProvider
 
 _TRANSPORT_ENV_VAR = "AUTO_SCORING_AI_GRADING_TRANSPORT"
 
+#: OpenRouter's Chat Completions API is OpenAI-compatible, and OpenAI's
+#: sampling `temperature` is documented as accepting 0-2; above 2 the
+#: request itself is invalid (code review finding).
+_OPENROUTER_MAX_TEMPERATURE = 2.0
+
 
 class AIProviderConfigError(Exception):
     """The AI-grading transport configuration is missing or invalid."""
@@ -41,7 +46,11 @@ def create_ai_provider(env: Mapping[str, str] | None = None) -> AIProvider:
             api_key=_require(values, "AUTO_SCORING_OPENROUTER_API_KEY"),
             model=_require(values, "AUTO_SCORING_OPENROUTER_MODEL"),
             prompt_version=prompt_version,
-            temperature=_parse_temperature(values),
+            # OpenRouter/OpenAI-compatible sampling temperature tops out at
+            # 2.0; accepting anything higher here would build a provider
+            # whose every grading call fails remotely as a 4xx instead of
+            # failing fast at configuration time (code review finding).
+            temperature=_parse_temperature(values, maximum=_OPENROUTER_MAX_TEMPERATURE),
         )
 
     if transport == "codex_app_server":
@@ -67,13 +76,15 @@ def _require(values: Mapping[str, str], key: str) -> str:
     return value
 
 
-def _parse_temperature(values: Mapping[str, str]) -> float:
+def _parse_temperature(values: Mapping[str, str], *, maximum: float | None = None) -> float:
     """Validate ``AUTO_SCORING_AI_GRADING_TEMPERATURE`` at this trust
     boundary (AGENTS.md "Security": validate every input that crosses a
     trust boundary) rather than letting a malformed value surface later as
     an unclassified ``ValueError`` from ``float()``, or as a non-finite/
-    negative value that ``ProviderDescriptor.__post_init__`` would reject
-    only once a real call is made (code review finding)."""
+    negative/too-large value that only fails once a real call is made --
+    either at ``ProviderDescriptor.__post_init__`` or, for a
+    provider-specific ceiling like ``maximum``, as a remote 4xx response
+    (code review finding)."""
     raw = values.get("AUTO_SCORING_AI_GRADING_TEMPERATURE", "0.0")
     try:
         value = float(raw)
@@ -84,5 +95,9 @@ def _parse_temperature(values: Mapping[str, str]) -> float:
     if not math.isfinite(value) or value < 0:
         raise AIProviderConfigError(
             f"AUTO_SCORING_AI_GRADING_TEMPERATURE must be finite and >= 0, got {value!r}"
+        )
+    if maximum is not None and value > maximum:
+        raise AIProviderConfigError(
+            f"AUTO_SCORING_AI_GRADING_TEMPERATURE must be <= {maximum}, got {value!r}"
         )
     return value

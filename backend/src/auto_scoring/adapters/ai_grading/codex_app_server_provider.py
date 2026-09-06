@@ -39,7 +39,8 @@ from typing import Protocol
 from pydantic import ValidationError
 
 from auto_scoring.adapters.ai_grading._prompt import build_grading_prompt, sniff_image_format
-from auto_scoring.domain.ai_grading import AIGradingResult, parse_ai_grading_result
+from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
+from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
     GradingRequest,
     GradingResponse,
@@ -63,6 +64,38 @@ _DEFAULT_TURN_TIMEOUT_SECONDS = 120.0
 #: all), so this fixed constant fills it without exposing a temperature
 #: parameter that would silently do nothing.
 _UNCONFIGURABLE_TEMPERATURE = 0.0
+
+#: Names (matched case-insensitively) forwarded from this process's own
+#: environment into the `codex app-server` child. `Popen(..., env=None)`
+#: (the default) inherits the ENTIRE parent environment -- including this
+#: sidecar's DB connection string and other providers' API keys (AGENTS.md
+#: "Security"). Codex's `sandbox: "read-only"` still permits running
+#: read-only shell commands, and a turn's prompt/rubric/OCR text is
+#: student-controlled: a prompt-injected turn could otherwise run something
+#: like `env`/`printenv` and echo an inherited secret back through its own
+#: agent message (code review finding). Only variables Codex itself needs
+#: to locate its config/auth and run as a normal OS process are forwarded.
+_ALLOWED_ENV_VAR_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "SYSTEMROOT",
+        "PATHEXT",
+        "CODEX_HOME",
+    }
+)
+
+
+def _minimal_environment() -> dict[str, str]:
+    return {
+        name: value for name, value in os.environ.items() if name.upper() in _ALLOWED_ENV_VAR_NAMES
+    }
 
 
 class _AppServerTransport(Protocol):
@@ -123,6 +156,7 @@ class _SubprocessAppServerTransport:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                env=_minimal_environment(),
             )
         except OSError as exc:
             raise ProviderUnavailable(f"failed to start codex app-server: {exc}") from exc
@@ -314,13 +348,21 @@ class CodexAppServerProvider:
         self._executable = executable
         self._turn_timeout_seconds = turn_timeout_seconds
         self._transport = transport
-        self._initialized = transport is not None
+        self._initialized = False
+        #: Populated from the first successful `thread/start`/`initialize`
+        #: response and reused by both `describe()` and every later
+        #: response descriptor, so a failed call recorded via `describe()`
+        #: and a later successful call are never split into different
+        #: reproducibility buckets by an inconsistent placeholder value
+        #: (code review finding).
+        self._resolved_model: str | None = None
+        self._codex_user_agent: str | None = None
 
     def describe(self) -> ProviderDescriptor:
         return ProviderDescriptor(
             provider=self.name,
-            model=self._model or "default",
-            version=None,
+            model=self._resolved_model or self._model or "default",
+            version=self._codex_user_agent,
             prompt_version=self._prompt_version,
             temperature=_UNCONFIGURABLE_TEMPERATURE,
             structured_output_mode="json_schema",
@@ -331,7 +373,7 @@ class CodexAppServerProvider:
             self._transport = _SubprocessAppServerTransport(executable=self._executable)
         if not self._initialized:
             try:
-                self._transport.request(
+                initialize_result = self._transport.request(
                     "initialize",
                     {"clientInfo": {"name": "auto-scoring-backend", "version": "0.1.0"}},
                     timeout_seconds=self._turn_timeout_seconds,
@@ -340,21 +382,54 @@ class CodexAppServerProvider:
                 raise ProviderUnavailable(
                     "codex app-server did not respond to initialize in time"
                 ) from exc
+            # `userAgent` is the CLI's own version string (confirmed via a
+            # real `initialize` call -- docs/poc-2-ai-grading.md section
+            # 7.1.2). Recording it means an upgraded, differently-behaving
+            # Codex CLI no longer pools with older runs under the same
+            # `version=None` (code review finding).
+            user_agent = initialize_result.get("userAgent")
+            if isinstance(user_agent, str) and user_agent.strip():
+                self._codex_user_agent = user_agent
             self._initialized = True
         return self._transport
 
+    def _reset_transport(self) -> None:
+        """Drop a possibly-dead transport so the next call starts a fresh
+        `codex app-server` process instead of retrying against the same
+        broken pipe / already-exited process forever (code review
+        finding)."""
+        if self._transport is not None:
+            with contextlib.suppress(Exception):
+                self._transport.close()
+        self._transport = None
+        self._initialized = False
+
     def grade(self, request: GradingRequest) -> GradingResponse:
+        try:
+            return self._grade(request)
+        except ProviderUnavailable:
+            self._reset_transport()
+            raise
+
+    def _grade(self, request: GradingRequest) -> GradingResponse:
         transport = self._ensure_transport()
         started_at = time.monotonic()
 
-        image_path = self._write_temp_image(request.answer_image)
+        workspace_dir, image_path = self._write_temp_workspace(request.answer_image)
         thread_id: str | None = None
         try:
             try:
                 thread_result = transport.request(
                     "thread/start",
                     {
-                        "cwd": tempfile.gettempdir(),
+                        # A private, per-call directory -- never the shared
+                        # global temp root -- so a prompt-injected turn's
+                        # still-permitted file reads (see class docstring)
+                        # are confined to this call's own answer image, not
+                        # every other process's or submission's temp files
+                        # (code review finding; decision record section 2
+                        # (2) per-question minimal payload boundary).
+                        "cwd": workspace_dir,
                         # Grading needs no filesystem/command access; read-only +
                         # never-approve keeps a misbehaving turn from blocking on
                         # (or acting on) anything beyond the model call itself.
@@ -362,10 +437,21 @@ class CodexAppServerProvider:
                         "approvalPolicy": "never",
                         "model": self._model,
                         "ephemeral": True,
+                        # Defense in depth alongside the already-minimal
+                        # child-process environment (_minimal_environment):
+                        # tell Codex's own shell tool not to forward any of
+                        # it into commands it runs (mirrors the
+                        # `shell_environment_policy.inherit` config key
+                        # `codex --help` documents; not exercised against a
+                        # live app-server call -- recorded as an open
+                        # question in docs/poc-2-ai-grading.md section
+                        # 7.1.2).
+                        "config": {"shell_environment_policy": {"inherit": "none"}},
                     },
                     timeout_seconds=self._turn_timeout_seconds,
                 )
                 resolved_model = _extract_configured_model(thread_result)
+                self._resolved_model = resolved_model
                 thread_id = _extract_thread_id(thread_result)
 
                 transport.request(
@@ -376,7 +462,14 @@ class CodexAppServerProvider:
                             {"type": "text", "text": build_grading_prompt(request)},
                             {"type": "localImage", "path": image_path},
                         ],
-                        "outputSchema": AIGradingResult.model_json_schema(by_alias=True),
+                        "outputSchema": strict_ai_grading_result_schema(),
+                        # Belt-and-braces on top of the thread-level
+                        # `sandbox: "read-only"`: an explicit per-turn
+                        # policy object that also disables network access,
+                        # so a prompt-injected shell command cannot exfiltrate
+                        # anything it does manage to read (code review
+                        # finding).
+                        "sandboxPolicy": {"type": "readOnly", "networkAccess": False},
                     },
                     timeout_seconds=self._turn_timeout_seconds,
                 )
@@ -394,8 +487,7 @@ class CodexAppServerProvider:
                 # (code review finding).
                 raise ProviderUnavailable("codex app-server did not respond in time") from exc
         finally:
-            with contextlib.suppress(OSError):
-                os.unlink(image_path)
+            shutil.rmtree(workspace_dir, ignore_errors=True)
             if thread_id is not None:
                 transport.discard_thread(thread_id)
 
@@ -414,7 +506,7 @@ class CodexAppServerProvider:
         descriptor = ProviderDescriptor(
             provider=self.name,
             model=resolved_model,
-            version=None,
+            version=self._codex_user_agent,
             prompt_version=self._prompt_version,
             temperature=_UNCONFIGURABLE_TEMPERATURE,
             structured_output_mode="json_schema",
@@ -423,16 +515,16 @@ class CodexAppServerProvider:
             parsed_result, descriptor=descriptor, latency_seconds=latency_seconds
         )
 
-    def _write_temp_image(self, data: bytes) -> str:
-        fd, path = tempfile.mkstemp(suffix=f".{sniff_image_format(data)}")
+    def _write_temp_workspace(self, data: bytes) -> tuple[str, str]:
+        workspace_dir = tempfile.mkdtemp(prefix="auto-scoring-codex-turn-")
+        image_path = os.path.join(workspace_dir, f"answer.{sniff_image_format(data)}")
         try:
-            with os.fdopen(fd, "wb") as handle:
+            with open(image_path, "wb") as handle:
                 handle.write(data)
         except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(path)
+            shutil.rmtree(workspace_dir, ignore_errors=True)
             raise
-        return path
+        return workspace_dir, image_path
 
     def close(self) -> None:
         if self._transport is not None:

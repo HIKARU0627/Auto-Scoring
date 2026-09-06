@@ -1070,13 +1070,34 @@ app-server はこの設定の対象外**: `thread/start`/`turn/start` のいず�
 
 `https://openrouter.ai/api/v1/chat/completions` は OpenAI 互換の
 リクエスト/レスポンス形状を使う。構造化出力は `response_format` に
-JSON Schema を渡す `json_schema` モードで指定でき、`AIGradingResult`
-（`domain/ai_grading.py`）の `model_json_schema(by_alias=True)` をそのまま
-渡せる。ただし OpenRouter はこの hint を実際に守るかどうかをルーティング先
-のモデルに委ねるため、`OpenRouterAIProvider.grade()` は応答をそのまま
-信頼せず、必ず `parse_ai_grading_result()` でローカル再検証してから
+JSON Schema を渡す `json_schema` + `strict: true` モードで指定する。
+OpenAI 互換の strict Structured Outputs は、宣言した全プロパティが
+`required` であることを要求し（optional な値は `default` ではなく
+nullable な型で表現する）、`AIGradingResult` の Pydantic スキーマは
+デフォルト値を持つフィールド（`annotations`、`AnnotationCandidate.comment`）
+をそのままでは `required` から外してしまうため、`_schema.
+strict_ai_grading_result_schema()` が生成後のスキーマを機械的に
+書き換える（すべての object node の `required` をその `properties` の
+全キーへ揃え、`default` キーワードを除去する。コードレビュー指摘: 素の
+`model_json_schema()` を渡すと strict backend がモデル実行前にスキーマ
+自体を拒否し、採点呼び出しが必ず失敗する）。OpenRouter / Codex app-server
+の両方がこの共通スキーマを使う。
+
+OpenRouter はこの hint を実際に守るかどうかをルーティング先のモデルに
+委ねるため、`OpenRouterAIProvider.grade()` は応答をそのまま信頼せず、
+必ず `parse_ai_grading_result()` でローカル再検証してから
 `GradingResponse` を組み立てる（Issue #14 acceptance と同じ「provider の
 自己申告を信用しない」原則）。
+
+OpenRouter は同じモデル slug（応答の `model` フィールド）でも、実際に
+応答を処理した upstream inference provider（応答の top-level `provider`
+フィールド）が呼び出しごとに異なりうる（フォールバック・複数 upstream
+の負荷分散）。`model` だけを `version` に記録すると、実際には異なる
+deployment で応答した呼び出しが同じ再現性 bucket にプールされてしまう
+（コードレビュー指摘）。`OpenRouterAIProvider` は `model` と `provider`
+の両方を JSON オブジェクトとして `ProviderDescriptor.version` に記録する
+（`"|"` 結合を避ける理由は `ai_provider.descriptor_key` と同じ:
+値自体に区切り文字が含まれる場合の衝突を防ぐ）。
 
 #### 7.1.2 Codex app-server プロトコル調査結果（Issue #44 指示に基づく事前調査）
 
@@ -1099,13 +1120,39 @@ Codex CLI 0.153.2）。公式の独立したプロトコル仕様書は見つか
   実際に確認して判断した（`codex_app_server_provider.py` の
   `_SubprocessAppServerTransport` はこの前提で実装している）。
 - 使用したメソッド: `initialize`（`clientInfo` のみで足りる。
-  `capabilities` は省略可）、`thread/start`（`sandbox: "read-only"`,
-  `approvalPolicy: "never"`, `ephemeral: true` で会話ごとに使い捨ての
-  スレッドを作る）、`turn/start`（`input` に `text` と `localImage`
-  （ローカルファイルパス。答案画像は一時ファイルへ書き出してから渡し、
-  ターン完了後に削除する）、`outputSchema` に
-  `AIGradingResult.model_json_schema(by_alias=True)` を渡してモデルの
-  最終メッセージを拘束する）。
+  `capabilities` は省略可。応答の `userAgent` を Codex CLI のバージョン
+  文字列として保持し、`ProviderDescriptor.version` に記録する。CLI が
+  アップグレードされて挙動が変わっても、それ以前の記録と同じ再現性
+  bucket にプールされないようにするため——コードレビュー指摘）、
+  `thread/start`（`sandbox: "read-only"`, `approvalPolicy: "never"`,
+  `ephemeral: true` で会話ごとに使い捨てのスレッドを作る。`cwd` は
+  共有のグローバル temp root（`tempfile.gettempdir()`）ではなく、この
+  呼び出し専用に作った private な一時ディレクトリ（`tempfile.mkdtemp()`）
+  にし、ターン完了後に丸ごと削除する——コードレビュー指摘: `read-only`
+  sandbox でもファイル読み取り自体は許可されたままであり、共有 temp root
+  を指すと他の呼び出し・他プロセスの一時ファイルを列挙されうる。
+  `thread/start` にはさらに `config: {"shell_environment_policy":
+{"inherit": "none"}}` を渡す。これは `codex --help` が例示する
+  `-c shell_environment_policy.inherit=all` という設定キーの兄弟値と
+  推測して実装したものであり、実際の app-server 呼び出しでは未検証
+  （下記の未決事項）。`turn/start`（`input` に `text` と `localImage`
+  （ローカルファイルパス。答案画像は呼び出し専用の一時ディレクトリへ
+  書き出してから渡し、ターン完了後にディレクトリごと削除する）、
+  `outputSchema` に `_schema.strict_ai_grading_result_schema()`（§7.1.1）
+  を渡してモデルの最終メッセージを拘束する。さらに `sandboxPolicy:
+{"type": "readOnly", "networkAccess": false}` を明示し、thread レベルの
+  `sandbox: "read-only"` に加えてこのターンのネットワークアクセスも
+  拒否する）。
+- Codex CLI が起動する `codex app-server` 子プロセスには、このサイドカー
+  プロセスの環境変数をそのまま継承させない（`subprocess.Popen(...,
+env=None)` の既定動作は全環境変数を継承し、DB接続文字列や他 provider
+  の API key を含みうる）。`_minimal_environment()` が `PATH`/`HOME`/
+  `APPDATA` 等、Codex 自身が config/auth を見つけて OS プロセスとして
+  動作するために必要な最小限の変数だけを転送する（コードレビュー指摘:
+  採点対象の設問文・OCR テキスト・rubric は生徒が制御しうる入力であり、
+  prompt injection によって（read-only sandbox でも許可されたままの）
+  shell コマンド経由で継承済み環境変数を読み取り、agent message として
+  返させる余地があるため）。
 - 採点結果は `turn/start` の応答（ack のみ）ではなく、後続の
   `turn/completed` 通知（`{"threadId", "turn": {"id", "status", "items"}}`）
   で非同期に届く。`items` のうち `type: "agentMessage"` の要素の `text` が
@@ -1126,6 +1173,22 @@ Codex CLI 0.153.2）。公式の独立したプロトコル仕様書は見つか
 3. **認証・レート制限の運用上の位置づけが未確定**: §7.0/§7.1 に記載の通り、
    個人のサブスクリプションを自動採点という非対話的・高頻度な用途に使う
    ことの契約上の扱いは未確認。本番採用可否は #35 のスコープ。
+4. **`shell_environment_policy.inherit: "none"` が未検証**: `codex --help`
+   の `-c shell_environment_policy.inherit=all` という例示から、
+   `inherit` が `"none"` も受理するキーだろうと推測して実装したが、実際の
+   app-server 呼び出しに対してこの値が受理され、Codex の shell tool が
+   本当に環境変数を継承しなくなることは live probe で未確認（§7.4）。
+   受理されない・無視される場合でも、`_minimal_environment()` による
+   子プロセス自体の環境最小化（上記）が主たる防御でありこれには依存しない。
+5. **tool/shell 実行自体を無効化する設定が未確認**: `read-only` sandbox は
+   ファイル読み取りと読み取り専用の shell コマンド実行を許可したままで
+   あり、`approvalPolicy: "never"` は「既に許可された操作」をブロックしない。
+   本 Issue の調査では `thread/start`/`turn/start` の生成済み JSON Schema に
+   「tool を完全に無効化する」フラグは見つからなかった。上記の環境変数
+   最小化・private workspace ディレクトリ・ネットワーク拒否の組み合わせで
+   実害の範囲を縮小しているが、tool 実行そのものを止める設定、または
+   OS レベルで分離した worker への切り替えは、本番採用判断（#35）までに
+   追加調査が必要な残存リスクとして記録する。
 
 これらの理由により、この adapter は「オフラインの fake transport による
 contract test は green だが、実際の `codex login` 済み環境での動作確認は
@@ -1159,6 +1222,18 @@ contract test は green だが、実際の `codex login` 済み環境での動�
   必要としない（Issue #44 検証方針）。
 - 設定 → adapter の切り替え: `factory.create_ai_provider()`
   （`backend/tests/test_ai_grading_provider_factory.py`）。
+  `AUTO_SCORING_AI_GRADING_TEMPERATURE` は有限・非負に加えて、
+  OpenRouter 選択時は OpenAI 互換の上限 2.0 も検証する
+  （コードレビュー指摘: 超過値は remote 4xx として失敗するより先に
+  config error として拒否する）。
+- 両 adapter が共有する strict-mode JSON Schema:
+  `_schema.strict_ai_grading_result_schema()`
+  （`backend/tests/test_ai_grading_strict_schema.py`。§7.1.1）。
+- Codex app-server adapter のセキュリティ強化（§7.1.2 に詳細）: 子プロセス
+  への環境変数最小化（`_minimal_environment()`）、呼び出しごとの private
+  workspace ディレクトリ、ターンレベルのネットワーク拒否
+  （`sandboxPolicy.networkAccess: false`）、死んだ transport の
+  自動リセット（次回呼び出しで新しいプロセスを起動する）。
 - `poc/issue_14_ai_grading/report.py` の live-provider パス（設問 →
   `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）
   は**未実装のまま**（#35 のスコープ。実データでの評価実施そのものが本

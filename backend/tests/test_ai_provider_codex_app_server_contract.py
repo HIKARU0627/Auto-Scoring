@@ -9,12 +9,14 @@ never part of this offline suite.
 
 import json
 import os
+import tempfile
 from collections.abc import Callable
 
 import pytest
 
 from auto_scoring.adapters.ai_grading.codex_app_server_provider import (
     CodexAppServerProvider,
+    _minimal_environment,
     _SubprocessAppServerTransport,
 )
 from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable, SchemaViolation
@@ -55,7 +57,7 @@ class _FakeAppServerTransport:
         self, method: str, params: dict[str, object], *, timeout_seconds: float
     ) -> dict[str, object]:
         if method == "initialize":
-            return {}
+            return {"userAgent": "codex-fake/9.9.9"}
         if method == "thread/start":
             assert params["sandbox"] == "read-only"
             assert params["approvalPolicy"] == "never"
@@ -269,3 +271,106 @@ def test_subprocess_transport_discard_thread_prunes_only_that_thread() -> None:
     assert transport._notification_buffer == [
         {"method": "item/completed", "params": {"threadId": "t2"}},
     ]
+
+
+def test_descriptor_records_the_codex_cli_user_agent_as_version() -> None:
+    """`initialize`'s `userAgent` is the CLI's own version identifier; an
+    upgraded, differently-behaving Codex CLI must not silently pool with
+    older runs under `version=None` (code review finding)."""
+    provider = CodexAppServerProvider(prompt_version="v1", transport=_FakeAppServerTransport())
+    response = provider.grade(_VALID_REQUEST)
+    assert response.descriptor.version == "codex-fake/9.9.9"
+    assert provider.describe().version == "codex-fake/9.9.9"
+
+
+def test_grade_uses_a_private_workspace_directory_not_the_shared_temp_root() -> None:
+    """`cwd` must be a fresh, private-per-call directory -- never the
+    shared global temp root, which a prompt-injected turn's still-permitted
+    file reads could otherwise enumerate for unrelated temp files from
+    other processes or submissions (code review finding)."""
+    transport = _FakeAppServerTransport()
+    captured_cwd: list[str] = []
+    original_request = transport.request
+
+    def _spying_request(
+        method: str, params: dict[str, object], *, timeout_seconds: float
+    ) -> dict[str, object]:
+        if method == "thread/start":
+            captured_cwd.append(params["cwd"])  # type: ignore[arg-type]
+        return original_request(method, params, timeout_seconds=timeout_seconds)
+
+    transport.request = _spying_request  # type: ignore[method-assign]
+    provider = CodexAppServerProvider(prompt_version="v1", transport=transport)
+    provider.grade(_VALID_REQUEST)
+
+    assert captured_cwd
+    assert captured_cwd[0] != tempfile.gettempdir()
+    assert not os.path.exists(captured_cwd[0])  # cleaned up once the turn completes
+
+
+def test_grade_disables_the_codex_shell_environment_and_turn_network_access() -> None:
+    """Defense in depth beyond the already-minimal child-process
+    environment: Codex's own shell-tool env inheritance is turned off, and
+    the turn's sandbox policy explicitly denies network access (code
+    review finding)."""
+    transport = _FakeAppServerTransport()
+    captured: dict[str, object] = {}
+    original_request = transport.request
+
+    def _spying_request(
+        method: str, params: dict[str, object], *, timeout_seconds: float
+    ) -> dict[str, object]:
+        if method == "thread/start":
+            captured["config"] = params.get("config")
+        if method == "turn/start":
+            captured["sandboxPolicy"] = params.get("sandboxPolicy")
+        return original_request(method, params, timeout_seconds=timeout_seconds)
+
+    transport.request = _spying_request  # type: ignore[method-assign]
+    provider = CodexAppServerProvider(prompt_version="v1", transport=transport)
+    provider.grade(_VALID_REQUEST)
+
+    assert captured["config"] == {"shell_environment_policy": {"inherit": "none"}}
+    assert captured["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
+
+
+def test_grade_resets_the_transport_after_a_provider_unavailable_error() -> None:
+    """A dead transport (exited process, broken pipe, ...) must not be
+    retried forever; the next call should build a fresh one instead of
+    reusing the same broken transport (code review finding)."""
+
+    class _AlwaysUnavailableAtThreadStart(_FakeAppServerTransport):
+        def request(
+            self, method: str, params: dict[str, object], *, timeout_seconds: float
+        ) -> dict[str, object]:
+            if method == "thread/start":
+                raise ProviderUnavailable("codex app-server process exited unexpectedly")
+            return super().request(method, params, timeout_seconds=timeout_seconds)
+
+    provider = CodexAppServerProvider(
+        prompt_version="v1", transport=_AlwaysUnavailableAtThreadStart()
+    )
+    with pytest.raises(ProviderUnavailable):
+        provider.grade(_VALID_REQUEST)
+
+    assert provider._transport is None
+    assert provider._initialized is False
+
+
+def test_minimal_environment_only_forwards_allowlisted_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `codex app-server` child process must not inherit this
+    sidecar's full environment (DB connection strings, other providers'
+    API keys, ...) -- only what Codex itself needs to run (code review
+    finding: a prompt-injected turn's still-permitted shell commands could
+    otherwise read and echo back an inherited secret)."""
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("AUTO_SCORING_OPENROUTER_API_KEY", "super-secret")
+    monkeypatch.setenv("DATABASE_URL", "postgres://secret")
+
+    env = _minimal_environment()
+
+    assert env.get("PATH") == "/usr/bin"
+    assert "AUTO_SCORING_OPENROUTER_API_KEY" not in env
+    assert "DATABASE_URL" not in env
