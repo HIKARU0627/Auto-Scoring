@@ -8,26 +8,33 @@ part of 'serializers.dart';
 
 Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnalyzeRequest.serializer)
+      ..add(AnnotationResponse.serializer)
       ..add(BoundingBoxResponse.serializer)
       ..add(CompleteRegistrationResponse.serializer)
       ..add(ConfirmProfileRequest.serializer)
       ..add(ConfirmRequest.serializer)
+      ..add(CriterionResultResponse.serializer)
       ..add(DependencyEdgeModel.serializer)
       ..add(DependencyGraphResponse.serializer)
       ..add(DependencyProvision.serializer)
+      ..add(GradeResultResponse.serializer)
       ..add(HTTPValidationError.serializer)
       ..add(JobResponse.serializer)
       ..add(LocationInner.serializer)
       ..add(ManualRecognitionRequest.serializer)
       ..add(NormalizedBBoxModel.serializer)
+      ..add(NormalizedRectResponse.serializer)
       ..add(PageFormatModel.serializer)
       ..add(ProfileResponse.serializer)
+      ..add(QuestionResponse.serializer)
       ..add(QuestionTextOverride.serializer)
       ..add(RecognitionResponse.serializer)
       ..add(RegionKind.serializer)
       ..add(RegionModel.serializer)
+      ..add(RubricCriterionResponse.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
+      ..add(ScoreValueResponse.serializer)
       ..add(SubmissionResponse.serializer)
       ..add(TestResponse.serializer)
       ..add(TestSummary.serializer)
@@ -38,6 +45,10 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(
               BuiltList, const [const FullType(BoundingBoxResponse)]),
           () => ListBuilder<BoundingBoxResponse>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(CriterionResultResponse)]),
+          () => ListBuilder<CriterionResultResponse>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(DependencyEdgeModel)]),
@@ -78,6 +89,10 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(RegionModel)]),
           () => ListBuilder<RegionModel>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(RubricCriterionResponse)]),
+          () => ListBuilder<RubricCriterionResponse>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ValidationError)]),
           () => ListBuilder<ValidationError>()))
