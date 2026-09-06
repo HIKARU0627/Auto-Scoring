@@ -118,7 +118,9 @@ def test_review_history_preserves_every_decision(seeded: UowFactory) -> None:
         uow.submissions.add(make_submission())
         uow.grades.add(make_grade(id="g-ai"))
         uow.reviews.add(make_review(id="rev-1", ai_grade_result_id="g-ai"))
-        uow.reviews.add(make_review(id="rev-2", ai_grade_result_id="g-ai", created_at=at(20)))
+        uow.reviews.add(
+            make_review(id="rev-2", version=2, ai_grade_result_id="g-ai", created_at=at(20))
+        )
         uow.commit()
 
     with seeded() as uow:

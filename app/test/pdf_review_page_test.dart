@@ -137,7 +137,13 @@ AppDependencies _dependencies({
   List<RecognitionResponse> recognitions = const [],
   List<GradeResultResponse> grades = const [],
   List<AnnotationResponse> annotations = const [],
+  List<ReviewResponse> reviews = const [],
   SubmissionResponse? submission,
+  EditReview? editReview,
+  RejectReview? rejectReview,
+  RegradeReview? regradeReview,
+  ApproveReview? approveReview,
+  UndoReview? undoReview,
 }) {
   final questions = [q1, ?q2];
   return AppDependencies(
@@ -150,8 +156,125 @@ AppDependencies _dependencies({
         grades.where((g) => g.questionId == questionId).toList(),
     listAnnotations: (submissionId, questionId) async =>
         annotations.where((a) => a.questionId == questionId).toList(),
+    listReviews: (submissionId, questionId) async =>
+        reviews.where((r) => r.questionId == questionId).toList(),
+    // Generic "it succeeded" defaults so a test exercising keyboard/button
+    // navigation doesn't need to hand-wire every action -- a test asserting
+    // something more specific (the exact request sent, a conflict) passes
+    // its own fake instead.
+    editReview:
+        editReview ??
+        (
+          submissionId,
+          questionId, {
+          required expectedVersion,
+          required scoreAwarded,
+          required scoreMaximum,
+          confidence = 1.0,
+          criteria = const [],
+          rationale,
+          comment,
+          recognizedText,
+          annotations,
+          note,
+        }) async => _reviewAction(
+          _review(
+            questionId: questionId,
+            action: 'modified',
+            version: expectedVersion + 1,
+            humanGradeResultId: 'grade-human-$questionId-$expectedVersion',
+          ),
+        ),
+    rejectReview:
+        rejectReview ??
+        (submissionId, questionId, {required expectedVersion, reason}) async =>
+            _reviewAction(
+              _review(
+                questionId: questionId,
+                action: 'rejected',
+                version: expectedVersion + 1,
+              ),
+            ),
+    regradeReview:
+        regradeReview ??
+        (submissionId, questionId, {required expectedVersion, reason}) async =>
+            _reviewAction(
+              _review(
+                questionId: questionId,
+                action: 'regrade_requested',
+                version: expectedVersion + 1,
+                regradeJobId: 'job-regrade-$questionId-$expectedVersion',
+              ),
+              jobId: 'job-regrade-$questionId-$expectedVersion',
+            ),
+    approveReview:
+        approveReview ??
+        (submissionId, questionId, {required expectedVersion, note}) async =>
+            _reviewAction(
+              _review(
+                questionId: questionId,
+                action: 'approved',
+                version: expectedVersion + 1,
+              ),
+            ),
+    undoReview:
+        undoReview ??
+        (submissionId, questionId, {required expectedVersion}) async =>
+            _reviewAction(
+              _review(
+                questionId: questionId,
+                action: 'undone',
+                version: expectedVersion + 1,
+                undoneReviewId: 'review-undone-$questionId',
+              ),
+            ),
   );
 }
+
+ReviewResponse _review({
+  String id = 'review-1',
+  String questionId = 'q-1',
+  String action = 'approved',
+  int version = 1,
+  String? aiGradeResultId = 'grade-1',
+  String? humanGradeResultId,
+  String? regradeJobId,
+  String? undoneReviewId,
+  String? note,
+  DateTime? createdAt,
+}) => ReviewResponse(
+  (b) => b
+    ..id = id
+    ..submissionId = 'sub-1'
+    ..questionId = questionId
+    ..action = action
+    ..version = version
+    ..aiGradeResultId = aiGradeResultId
+    ..humanGradeResultId = humanGradeResultId
+    ..regradeJobId = regradeJobId
+    ..undoneReviewId = undoneReviewId
+    ..note = note
+    ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
+);
+
+/// A [ReviewActionResponse] wrapping [review], for a fake
+/// edit/reject/regrade/approve/undo callback to return.
+ReviewActionResponse _reviewAction(
+  ReviewResponse review, {
+  GradeResultResponse? grade,
+  RecognitionResponseSlim? recognition,
+  List<AnnotationResponse> annotations = const [],
+  String? jobId,
+  String submissionState = 'needs_review',
+}) => ReviewActionResponse(
+  (b) => b
+    ..review = review.toBuilder()
+    ..grade = grade?.toBuilder()
+    ..recognition = recognition?.toBuilder()
+    ..annotations.replace(annotations)
+    ..jobId = jobId
+    ..submissionState = submissionState,
+);
 
 Widget _wrap(Widget child) => MaterialApp(home: child);
 
@@ -655,6 +778,18 @@ void main() {
               ..createdAt = DateTime.utc(2026, 1, 1, 0, 1),
           ),
         ],
+        // A human grade only *displays* as confirmed once a `modified`
+        // review is in effect for it (Issue #22 P1: Undo must actually
+        // revert what is displayed) -- real data from `edit_question`
+        // always carries this row alongside the human grade it produced.
+        reviews: [
+          _review(
+            action: 'modified',
+            aiGradeResultId: 'grade-ai',
+            humanGradeResultId: 'grade-human',
+            createdAt: DateTime.utc(2026, 1, 1, 0, 1),
+          ),
+        ],
       );
 
       await tester.pumpWidget(
@@ -754,6 +889,7 @@ void main() {
           recognitionsAvailable ? [_recognition()] : const [],
       listGrades: (_, _) async => const [],
       listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
     );
 
     await tester.pumpWidget(
@@ -802,6 +938,7 @@ void main() {
       listRecognitions: (_, _) => recognitionsCompleter.future,
       listGrades: (_, _) async => const [],
       listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
     );
 
     await tester.pumpWidget(
@@ -858,6 +995,7 @@ void main() {
         listRecognitions: (_, _) async => const [],
         listGrades: (_, _) async => const [],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
       );
 
       await tester.pumpWidget(
@@ -1042,6 +1180,7 @@ void main() {
             questionId == 'q-2' ? q2Recognitions : const [],
         listGrades: (_, _) async => const [],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
       );
 
       await tester.pumpWidget(
@@ -1108,6 +1247,7 @@ void main() {
       },
       listGrades: (_, _) async => const [],
       listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
     );
 
     await tester.pumpWidget(
@@ -1156,6 +1296,7 @@ void main() {
         listRecognitions: (_, _) async => const [],
         listGrades: (_, _) async => const [],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
       );
 
       await tester.pumpWidget(
@@ -1196,6 +1337,7 @@ void main() {
         listRecognitions: (_, _) async => const [],
         listGrades: (_, _) async => const [],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
       );
 
       await tester.pumpWidget(
@@ -1239,6 +1381,7 @@ void main() {
             recognitionAvailable ? [_recognition()] : const [],
         listGrades: (_, _) async => const [],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
       );
 
       await tester.pumpWidget(
@@ -1490,6 +1633,7 @@ void main() {
       listRecognitions: (_, _) async => [_recognition()],
       listGrades: (_, _) async => gradeAvailable ? [_grade()] : const [],
       listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
       listJobs: (_) async => [
         JobResponse(
           (b) => b
@@ -1713,6 +1857,7 @@ void main() {
             _grade(id: 'grade-new', awarded: 5, createdAt: newGradeCreatedAt),
         ],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
         // Issue #18: a re-submission under a new confirmed dependency-graph
         // version creates a second Job for the same question, created
         // after the previous attempt's grade.
@@ -1800,6 +1945,7 @@ void main() {
         },
         listGrades: (_, _) async => [_grade(createdAt: gradeCreatedAt)],
         listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
       );
 
       await tester.pumpWidget(
@@ -1935,5 +2081,413 @@ void main() {
           'superseded earlier attempt\'s (0.2)',
     );
     expect(localOffset.dy, closeTo(pageRect.top + 0.7 * pageRect.height, 5.0));
+  });
+
+  group('Issue #22: edit/reject/regrade/approve/undo', () {
+    testWidgets(
+      '却下 persists a Review(rejected) through the sidecar and updates the '
+      'rail status icon',
+      (tester) async {
+        String? capturedReason;
+        int? capturedExpectedVersion;
+        final reviews = <ReviewResponse>[];
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          reviews: reviews,
+          rejectReview:
+              (
+                submissionId,
+                questionId, {
+                required expectedVersion,
+                reason,
+              }) async {
+                capturedReason = reason;
+                capturedExpectedVersion = expectedVersion;
+                final review = _review(
+                  questionId: questionId,
+                  action: 'rejected',
+                  version: expectedVersion + 1,
+                  note: reason,
+                );
+                reviews.add(review);
+                return _reviewAction(review);
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+
+        await tester.enterText(
+          find.byKey(const Key('review-note-field')),
+          '手書き文字が判読できない',
+        );
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('review-reject-button')));
+        await tester.pump();
+        await _settlePdf(tester);
+
+        expect(capturedExpectedVersion, 0);
+        expect(capturedReason, '手書き文字が判読できない');
+        final railIcon = tester.widget<Icon>(
+          find
+              .descendant(
+                of: find.byKey(const Key('review-question-rail')),
+                matching: find.byType(Icon),
+              )
+              .first,
+        );
+        expect(railIcon.icon, Icons.cancel_outlined);
+      },
+    );
+
+    testWidgets('再判定 queues a fresh AI attempt through the sidecar', (
+      tester,
+    ) async {
+      int? capturedExpectedVersion;
+      final reviews = <ReviewResponse>[];
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        grades: [_grade()],
+        reviews: reviews,
+        regradeReview:
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              reason,
+            }) async {
+              capturedExpectedVersion = expectedVersion;
+              final review = _review(
+                questionId: questionId,
+                action: 'regrade_requested',
+                version: expectedVersion + 1,
+                regradeJobId: 'job-1',
+              );
+              reviews.add(review);
+              return _reviewAction(review, jobId: 'job-1');
+            },
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-regrade-button')));
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(capturedExpectedVersion, 0);
+      final railIcon = tester.widget<Icon>(
+        find
+            .descendant(
+              of: find.byKey(const Key('review-question-rail')),
+              matching: find.byType(Icon),
+            )
+            .first,
+      );
+      expect(railIcon.icon, Icons.autorenew);
+    });
+
+    testWidgets('修正 opens a dialog prefilled from the AI proposal and saves a '
+        'Review(modified) through the sidecar', (tester) async {
+      int? capturedScore;
+      String? capturedComment;
+      String? capturedText;
+      // Mutable, unlike the other lists `_dependencies` takes: the fake
+      // `editReview` below appends to these in place, so the refetch
+      // `_performReviewAction` always runs afterwards (`listGrades`/
+      // `listReviews` close over these same references) actually observes
+      // the edit, the same way the real sidecar's own history would.
+      final grades = [_grade(awarded: 3, maximum: 5)];
+      final reviews = <ReviewResponse>[];
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        recognitions: [_recognition(text: 'AI認識結果')],
+        grades: grades,
+        reviews: reviews,
+        editReview:
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              required scoreAwarded,
+              required scoreMaximum,
+              confidence = 1.0,
+              criteria = const [],
+              rationale,
+              comment,
+              recognizedText,
+              annotations,
+              note,
+            }) async {
+              capturedScore = scoreAwarded;
+              capturedComment = comment;
+              capturedText = recognizedText;
+              final grade = GradeResultResponse(
+                (b) => b
+                  ..id = 'grade-human'
+                  ..submissionId = 'sub-1'
+                  ..questionId = questionId
+                  ..source_ = 'human'
+                  ..score.awarded = scoreAwarded
+                  ..score.maximum = scoreMaximum
+                  ..score.ratio = scoreAwarded / scoreMaximum
+                  ..confidence = 1.0
+                  ..comment = comment
+                  ..criteria.replace(const [])
+                  ..createdAt = DateTime.utc(2026, 1, 2),
+              );
+              final review = _review(
+                questionId: questionId,
+                action: 'modified',
+                aiGradeResultId: 'grade-1',
+                version: expectedVersion + 1,
+                humanGradeResultId: 'grade-human',
+                createdAt: DateTime.utc(2026, 1, 2),
+              );
+              grades.add(grade);
+              reviews.add(review);
+              return _reviewAction(review, grade: grade);
+            },
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-edit-button')));
+      await tester.pumpAndSettle();
+
+      // Prefilled from the AI proposal.
+      expect(find.text('3'), findsOneWidget);
+      expect(find.text('AI認識結果'), findsWidgets);
+
+      await tester.enterText(find.byKey(const Key('edit-dialog-score')), '5');
+      await tester.enterText(
+        find.byKey(const Key('edit-dialog-comment')),
+        'よくできています',
+      );
+      await tester.tap(find.byKey(const Key('edit-dialog-save')));
+      await tester.pumpAndSettle();
+      await _settlePdf(tester);
+
+      expect(capturedScore, 5);
+      expect(capturedComment, 'よくできています');
+      expect(capturedText, 'AI認識結果');
+      expect(find.text('5 / 5 点'), findsOneWidget);
+    });
+
+    testWidgets('承認して次へ only records a fresh Review when the question is not '
+        'already confirmed -- an already-edited question just navigates', (
+      tester,
+    ) async {
+      var approveCalls = 0;
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(id: 'q-1', number: '1'),
+        q2: _question(id: 'q-2', number: '2'),
+        grades: [
+          _grade(id: 'grade-q1', questionId: 'q-1'),
+          GradeResultResponse(
+            (b) => b
+              ..id = 'grade-human-q1'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'human'
+              ..score.awarded = 5
+              ..score.maximum = 5
+              ..score.ratio = 1.0
+              ..confidence = 1.0
+              ..criteria.replace(const [])
+              ..createdAt = DateTime.utc(2026, 1, 1, 0, 1),
+          ),
+          _grade(id: 'grade-q2', questionId: 'q-2'),
+        ],
+        reviews: [
+          _review(
+            questionId: 'q-1',
+            action: 'modified',
+            aiGradeResultId: 'grade-q1',
+            humanGradeResultId: 'grade-human-q1',
+            createdAt: DateTime.utc(2026, 1, 1, 0, 1),
+          ),
+        ],
+        approveReview:
+            (submissionId, questionId, {required expectedVersion, note}) async {
+              approveCalls++;
+              return _reviewAction(
+                _review(
+                  questionId: questionId,
+                  action: 'approved',
+                  version: expectedVersion + 1,
+                ),
+              );
+            },
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.text('5 / 5 点'), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Navigated to question 2 -- but the already-confirmed question 1
+      // never triggered a second, redundant `approveReview` call.
+      expect(approveCalls, 0);
+      expect(find.text('4 / 5 点'), findsOneWidget);
+    });
+
+    testWidgets(
+      'Ctrl+Z undoes the currently-effective review as a new row, without '
+      'requiring the mouse',
+      (tester) async {
+        String? capturedTargetVersion;
+        final reviews = [
+          _review(action: 'approved', aiGradeResultId: 'grade-1'),
+        ];
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          reviews: reviews,
+          undoReview:
+              (submissionId, questionId, {required expectedVersion}) async {
+                capturedTargetVersion = expectedVersion.toString();
+                final review = _review(
+                  questionId: questionId,
+                  action: 'undone',
+                  version: expectedVersion + 1,
+                  undoneReviewId: 'review-1',
+                );
+                reviews.add(review);
+                return _reviewAction(review);
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+
+        final railIconBefore = tester.widget<Icon>(
+          find
+              .descendant(
+                of: find.byKey(const Key('review-question-rail')),
+                matching: find.byType(Icon),
+              )
+              .first,
+        );
+        expect(railIconBefore.icon, Icons.check_circle);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+        await tester.pump();
+        await _settlePdf(tester);
+
+        expect(capturedTargetVersion, '1');
+        final railIconAfter = tester.widget<Icon>(
+          find
+              .descendant(
+                of: find.byKey(const Key('review-question-rail')),
+                matching: find.byType(Icon),
+              )
+              .first,
+        );
+        expect(railIconAfter.icon, Icons.radio_button_unchecked);
+      },
+    );
+
+    testWidgets(
+      'a stale expected_version (409 conflict) surfaces a snackbar and '
+      'refreshes instead of silently doing nothing',
+      (tester) async {
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          approveReview:
+              (
+                submissionId,
+                questionId, {
+                required expectedVersion,
+                note,
+              }) async {
+                throw SidecarApiException(
+                  SidecarErrorKind.conflict,
+                  "'sub-1':'q-1': expected version 0 but the review history "
+                  'is already at 1; reload and retry',
+                );
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+
+        await tester.tap(find.byKey(const Key('review-approve-button')));
+        await tester.pump();
+        await _settlePdf(tester);
+
+        expect(find.textContaining('競合しました'), findsOneWidget);
+      },
+    );
   });
 }

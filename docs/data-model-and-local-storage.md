@@ -71,6 +71,13 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > `0012_grade_result_ai_metadata`）は Issue #20（本番 AI 採点パイプライン）で
 > 追加した AI 追跡用の列。人間確定行は全て `NULL`/空のまま。詳細は
 > [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)。
+>
+> `Review` の `version`（同時実行制御用トークン、
+> `uq_reviews_submission_question_version` で一意制約）/ `regrade_job_id` /
+> `undone_review_id`、および `action` の `regrade_requested` / `undone` 追加
+> （マイグレーション `0013_review_history_edit`）は Issue #22（レビュー画面の
+> edit/reject/regrade/approve-and-next と Undo）で追加した列。詳細は
+> [`review-edit-history.md`](./review-edit-history.md)。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、

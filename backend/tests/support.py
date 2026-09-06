@@ -149,6 +149,7 @@ def make_review(**overrides: Any) -> Review:
         "submission_id": "sub-1",
         "question_id": "q-1",
         "action": ReviewAction.APPROVED,
+        "version": 1,
         "ai_grade_result_id": "grade-1",
         "created_at": at(),
     }

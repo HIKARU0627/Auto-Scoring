@@ -86,10 +86,16 @@ Class | Method | HTTP request | Description
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**createManualRecognitionSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsPost**](doc/RecognitionsApi.md#createmanualrecognitionsubmissionssubmissionidquestionsquestionidrecognitionspost) | **POST** /submissions/{submission_id}/questions/{question_id}/recognitions | Create Manual Recognition
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet**](doc/RecognitionsApi.md#getanswerimagesubmissionssubmissionidquestionsquestionidanswerimageget) | **GET** /submissions/{submission_id}/questions/{question_id}/answer-image | Get Answer Image
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**listRecognitionsSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsGet**](doc/RecognitionsApi.md#listrecognitionssubmissionssubmissionidquestionsquestionidrecognitionsget) | **GET** /submissions/{submission_id}/questions/{question_id}/recognitions | List Recognitions
+[*ReviewApi*](doc/ReviewApi.md) | [**approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost**](doc/ReviewApi.md#approvesubmissionssubmissionidquestionsquestionidreviewapprovepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/approve | Approve
+[*ReviewApi*](doc/ReviewApi.md) | [**editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost**](doc/ReviewApi.md#editsubmissionssubmissionidquestionsquestionidrevieweditpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/edit | Edit
 [*ReviewApi*](doc/ReviewApi.md) | [**getSourcePdfSubmissionsSubmissionIdSourcePdfGet**](doc/ReviewApi.md#getsourcepdfsubmissionssubmissionidsourcepdfget) | **GET** /submissions/{submission_id}/source-pdf | Get Source Pdf
 [*ReviewApi*](doc/ReviewApi.md) | [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](doc/ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
 [*ReviewApi*](doc/ReviewApi.md) | [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](doc/ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
 [*ReviewApi*](doc/ReviewApi.md) | [**listQuestionsTestsTestIdQuestionsGet**](doc/ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
+[*ReviewApi*](doc/ReviewApi.md) | [**listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet**](doc/ReviewApi.md#listreviewssubmissionssubmissionidquestionsquestionidreviewsget) | **GET** /submissions/{submission_id}/questions/{question_id}/reviews | List Reviews
+[*ReviewApi*](doc/ReviewApi.md) | [**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](doc/ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
+[*ReviewApi*](doc/ReviewApi.md) | [**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](doc/ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
+[*ReviewApi*](doc/ReviewApi.md) | [**undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost**](doc/ReviewApi.md#undosubmissionssubmissionidquestionsquestionidreviewundopost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/undo | Undo
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**completeRegistrationTestsTestIdCompleteRegistrationPost**](doc/TestRegistrationApi.md#completeregistrationteststestidcompleteregistrationpost) | **POST** /tests/{test_id}/complete-registration | Complete Registration
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**confirmProfileTestsTestIdProfileConfirmPost**](doc/TestRegistrationApi.md#confirmprofileteststestidprofileconfirmpost) | **POST** /tests/{test_id}/profile/confirm | Confirm Profile
@@ -103,15 +109,19 @@ Class | Method | HTTP request | Description
 ## Documentation For Models
 
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
+ - [AnnotationEditRequest](doc/AnnotationEditRequest.md)
  - [AnnotationResponse](doc/AnnotationResponse.md)
+ - [ApproveReviewRequest](doc/ApproveReviewRequest.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
  - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
  - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
+ - [CriterionOutcomeRequest](doc/CriterionOutcomeRequest.md)
  - [CriterionResultResponse](doc/CriterionResultResponse.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
  - [DependencyProvision](doc/DependencyProvision.md)
+ - [EditReviewRequest](doc/EditReviewRequest.md)
  - [GradeResultResponse](doc/GradeResultResponse.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [JobResponse](doc/JobResponse.md)
@@ -123,9 +133,13 @@ Class | Method | HTTP request | Description
  - [ProfileResponse](doc/ProfileResponse.md)
  - [QuestionResponse](doc/QuestionResponse.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
+ - [ReasonedReviewRequest](doc/ReasonedReviewRequest.md)
  - [RecognitionResponse](doc/RecognitionResponse.md)
+ - [RecognitionResponseSlim](doc/RecognitionResponseSlim.md)
  - [RegionKind](doc/RegionKind.md)
  - [RegionModel](doc/RegionModel.md)
+ - [ReviewActionResponse](doc/ReviewActionResponse.md)
+ - [ReviewResponse](doc/ReviewResponse.md)
  - [RubricCriterionResponse](doc/RubricCriterionResponse.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
@@ -133,6 +147,7 @@ Class | Method | HTTP request | Description
  - [SubmissionResponse](doc/SubmissionResponse.md)
  - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)
+ - [UndoReviewRequest](doc/UndoReviewRequest.md)
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
  - [UpdateProfileRequest](doc/UpdateProfileRequest.md)
  - [ValidationError](doc/ValidationError.md)

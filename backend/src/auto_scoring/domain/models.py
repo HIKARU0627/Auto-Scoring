@@ -241,11 +241,32 @@ RETRYABLE_ERROR_CATEGORIES = frozenset(
 
 
 class ReviewAction(StrEnum):
-    """The human decision recorded in the operation history (§19)."""
+    """The human decision recorded in the operation history (§19, Issue #22).
+
+    ``APPROVED``/``MODIFIED``/``REJECTED`` are the original three (Issue #21's
+    domain groundwork). Issue #22 adds the remaining two: ``REGRADE_REQUESTED``
+    (a human asked the AI to redo this question -- see
+    ``adapters.review_actions.regrade_question``) and ``UNDONE`` (Ctrl+Z:
+    revert the immediately preceding human operation as a *new* row, per
+    ``docs/review-edit-history.md`` "Undo" -- the reverted row itself is never
+    deleted, matching this table's append-only design).
+    """
 
     APPROVED = "approved"
     MODIFIED = "modified"
     REJECTED = "rejected"
+    REGRADE_REQUESTED = "regrade_requested"
+    UNDONE = "undone"
+
+
+#: `ReviewAction` values whose effect is "this question's grade is confirmed"
+#: (`docs/review-edit-history.md` "確定済みの定義"). Used both to gate a
+#: `Submission`'s `REVIEWED` transition (see
+#: `domain.review_workflow.all_questions_confirmed`) and by the review UI to
+#: decide whether "承認して次へ" still needs to record a fresh confirmation or
+#: may just navigate (the question is already confirmed by an ``APPROVED``
+#: or ``MODIFIED`` row that Undo has not since reverted).
+CONFIRMED_REVIEW_ACTIONS = frozenset({ReviewAction.APPROVED, ReviewAction.MODIFIED})
 
 
 class AnswerImageStatus(StrEnum):
@@ -693,21 +714,44 @@ class Annotation:
 
 @dataclass(frozen=True, kw_only=True)
 class Review:
-    """One human decision over an AI grade — the operation history (§19)."""
+    """One human decision over an AI grade — the operation history (§19).
+
+    ``version`` is the optimistic-concurrency token (Issue #22): the ``n``-th
+    `Review` ever recorded for this ``(submission_id, question_id)`` pair is
+    always ``version=n`` (1-based), and ``uq_reviews_submission_question_version``
+    (``db.orm.ReviewRow``) rejects a second row at the same version -- see
+    ``domain.review_workflow.next_review_version`` and
+    ``docs/review-edit-history.md`` "同時実行制御" for why a real unique
+    constraint, not just this domain check, is what actually prevents two
+    concurrent/duplicate requests from both creating history.
+
+    ``regrade_job_id`` names the fresh `Job` a ``REGRADE_REQUESTED`` row
+    queued (see ``adapters.review_actions.regrade_question``); ``None`` for
+    every other action. ``undone_review_id`` names the specific prior `Review`
+    row an ``UNDONE`` row reverts -- required for that action and for no
+    other, and never physically removes the row it names (append-only, same
+    as every other table here); see
+    ``domain.review_workflow.effective_latest_review``.
+    """
 
     id: str
     submission_id: str
     question_id: str
     action: ReviewAction
     created_at: datetime
+    version: int
     ai_grade_result_id: str | None = None
     human_grade_result_id: str | None = None
+    regrade_job_id: str | None = None
+    undone_review_id: str | None = None
     note: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("Review.id", self.id)
         _require_non_empty("Review.submission_id", self.submission_id)
         _require_non_empty("Review.question_id", self.question_id)
+        if self.version < 1:
+            raise DomainError("Review.version must be >= 1")
         if (
             self.action in (ReviewAction.APPROVED, ReviewAction.MODIFIED)
             and not self.ai_grade_result_id
@@ -715,6 +759,12 @@ class Review:
             raise DomainError(f"{self.action} review must reference the AI grade result")
         if self.action is ReviewAction.MODIFIED and not self.human_grade_result_id:
             raise DomainError("modified review must reference the human grade result")
+        if self.action is ReviewAction.REGRADE_REQUESTED and not self.regrade_job_id:
+            raise DomainError("regrade_requested review must reference the queued job")
+        if self.action is ReviewAction.UNDONE and not self.undone_review_id:
+            raise DomainError("undone review must reference the review it undoes")
+        if self.note is not None and len(self.note) > MAX_COMMENT_CHARS:
+            raise DomainError(f"Review.note exceeds {MAX_COMMENT_CHARS} characters")
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -136,7 +136,16 @@ recognition履歴には設問ごとに複数のOCR結果（各Jobが自分専用
 `review.recognitions`ではなく`review.recognitionsForDisplayedAttempt`を
 渡すよう変更した。
 
-### 2.5 承認・修正・却下はこの画面のメモリ内でのみ保持する
+### 2.5 承認・修正・却下はこの画面のメモリ内でのみ保持する（Issue #22 で解消）
+
+> **Issue #22 で更新**: 以下は Issue #21 時点の記録。承認・修正・却下・再判定・
+> Undo は現在すべてサイドカーへ永続化される（`app/lib/core/app_dependencies.dart`
+> の `editReview`/`rejectReview`/`regradeReview`/`approveReview`/`undoReview`、
+> バックエンドは `backend/src/auto_scoring/adapters/review_actions.py` +
+> `backend/src/auto_scoring/api/review_router.py`）。詳細は
+> [`review-edit-history.md`](./review-edit-history.md)。`ReviewDecision` enum
+> は削除済みで、`QuestionReviewState`はサーバーの`Review`履歴
+> （`effectiveReview`）から確定状態を導出する。
 
 Issue #21 の対象外どおり、`PdfReviewPage`のaction bar（修正/却下/承認して次へ）
 は`ReviewDecision`をこの画面のState内でのみ保持し、バックエンドへは一切
@@ -144,11 +153,12 @@ Issue #21 の対象外どおり、`PdfReviewPage`のaction bar（修正/却下/�
 内のテキストフィールドへ入力できるだけで、`Review`/`GradeResult`エンティティ
 への書き込みは行わない。承認・修正の永続化・最終PDF生成は後続Issueで扱う。
 
-### 2.6 キーボードショートカットは暫定
+### 2.6 キーボードショートカットは暫定（Issue #22 で再判定/Undoを追加、他は確定）
 
 簡易設計書 §17 の候補（Enter=承認して次へ、E=編集、X=却下、↑↓=設問移動）を
-そのまま採用したが、§33 未決定事項12「キーボードショートカット」は依然未確定
-のまま。確定した場合はこのマッピングを合わせて見直すこと。
+そのまま採用し、Issue #22 で
+`business-rules-and-evaluation-data.md` §2 (16) の決定表として確定した
+（R=再判定、Ctrl+Z=Undo を追加）。
 
 ### 2.7 座標往復の検証範囲
 

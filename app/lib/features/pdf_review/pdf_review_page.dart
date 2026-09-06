@@ -9,7 +9,7 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/confidence_level.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 
-/// 添削レビュー画面 (simplified-design-specification.md §16.5, Issue #21).
+/// 添削レビュー画面 (simplified-design-specification.md §16.5, Issue #21 + #22).
 ///
 /// Shows the original answer PDF with AI recognition/score/rubric/confidence
 /// and annotations for the selected question side by side: Navigation Rail
@@ -18,10 +18,15 @@ import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 /// confidence) + a bottom action bar. The original PDF is never edited --
 /// annotations are drawn as widgets on top of it (§13.1).
 ///
-/// Approving/rejecting/editing a question here only updates this screen's own
-/// in-memory state; persisting a reviewer's decision and generating the final
-/// corrected PDF are out of scope for Issue #21 (its "対象外") and are a
-/// later issue's job. See `docs/pdf-review-overlay.md` for the full list of
+/// Edit/reject/regrade/approve-and-next and Ctrl+Z undo (Issue #22) each
+/// persist an append-only `Review` row through the sidecar
+/// (`AppDependencies.editReview`/`rejectReview`/`regradeReview`/
+/// `approveReview`/`undoReview`) and re-fetch this question's full state
+/// afterwards -- nothing about a reviewer's decision lives only in this
+/// screen's memory any more (that was Issue #21's own, explicit "対象外").
+/// Generating the final corrected PDF is still a later issue's job. See
+/// `docs/pdf-review-overlay.md` (Issue #21) and
+/// `docs/review-edit-history.md` (Issue #22) for the full list of
 /// decisions/open questions this screen relies on.
 ///
 /// `features` may depend on `core` and `api` (see `AGENTS.md` "Architecture").
@@ -41,20 +46,52 @@ class PdfReviewPage extends StatefulWidget {
   State<PdfReviewPage> createState() => _PdfReviewPageState();
 }
 
-/// A reviewer's decision for one question, kept only in this screen's memory
-/// (Issue #21 "対象外": no persistence).
-enum ReviewDecision { pending, approved, rejected }
+/// The last element of [reviews] that is neither an ``undone`` row nor the
+/// specific row an ``undone`` row names, or `null` if every row has been
+/// undone (or there are none) -- the server-side twin of
+/// `domain.review_workflow.effective_latest_review` (Issue #22). See that
+/// function's docstring: Redo is out of scope for Issue #22, so a plain
+/// exclusion set is sufficient here too.
+ReviewResponse? _effectiveLatestReview(List<ReviewResponse>? reviews) {
+  if (reviews == null) return null;
+  final excluded = <String>{};
+  for (final review in reviews) {
+    if (review.action == 'undone') {
+      excluded.add(review.id);
+      final target = review.undoneReviewId;
+      if (target != null) excluded.add(target);
+    }
+  }
+  for (var i = reviews.length - 1; i >= 0; i--) {
+    if (!excluded.contains(reviews[i].id)) return reviews[i];
+  }
+  return null;
+}
 
-/// Everything fetched (or being fetched) for one question, plus the
-/// reviewer's local-only decision and note.
+/// Everything fetched (or being fetched) for one question, including its
+/// full append-only review history (Issue #22). Persisting a reviewer's
+/// edit/reject/regrade/approve/undo decision happens through
+/// `AppDependencies`' review methods -- this only caches the server's own
+/// state, it never invents any of its own.
 class QuestionReviewState {
   List<RecognitionResponse>? recognitions;
   List<GradeResultResponse>? grades;
   List<AnnotationResponse>? annotations;
+  List<ReviewResponse>? reviews;
   String? error;
   bool loading = false;
-  ReviewDecision decision = ReviewDecision.pending;
+
+  /// Shared free-text input for whichever action the reviewer next takes
+  /// (edit's note, reject's/regrade's reason) -- backed by `_noteController`
+  /// in `_PdfReviewPageState`, cleared per question the same way that
+  /// controller already is.
   String note = '';
+
+  /// Set for the duration of one edit/reject/regrade/approve/undo call for
+  /// this question, so the action bar can disable itself and a second click
+  /// (or a duplicate keyboard shortcut trigger) can't fire an overlapping
+  /// request with the same `expectedVersion` (`_performReviewAction`).
+  bool actionInFlight = false;
 
   /// Bumped at the start of every `_ensureReviewLoaded` call for this
   /// question; a call only applies its result if it is still the most
@@ -65,7 +102,27 @@ class QuestionReviewState {
   int fetchGeneration = 0;
 
   bool get hasLoaded =>
-      recognitions != null && grades != null && annotations != null;
+      recognitions != null &&
+      grades != null &&
+      annotations != null &&
+      reviews != null;
+
+  /// The `Review` row currently in effect for this question (Issue #22),
+  /// or `null` if none exists yet or every one has been undone.
+  ReviewResponse? get effectiveReview => _effectiveLatestReview(reviews);
+
+  /// The version token the *next* edit/reject/regrade/approve/undo call for
+  /// this question must pass as `expectedVersion` -- this pair's review
+  /// history length so far.
+  int get expectedVersion => reviews?.length ?? 0;
+
+  /// Whether this question's grade is currently confirmed (`approved`/
+  /// `modified`, and not since undone) -- gates whether "承認して次へ" still
+  /// needs to record a fresh confirmation or may just navigate.
+  bool get isConfirmed {
+    final action = effectiveReview?.action;
+    return action == 'approved' || action == 'modified';
+  }
 
   /// The OCR pipeline's own reading (Issue #19), or `null` if none exists
   /// yet. Kept separate from [latestGradingRecognition] and
@@ -98,9 +155,31 @@ class QuestionReviewState {
       _latestWhere(grades, (g) => g.source_ == 'human');
 
   /// The most authoritative grade to show where only one value fits (e.g.
-  /// the `score` annotation on the PDF overlay): a human's grade overrides
-  /// the AI's proposal once one exists, same precedence as the Inspector.
-  GradeResultResponse? get displayGrade => latestHumanGrade ?? latestAiGrade;
+  /// the `score` annotation on the PDF overlay), derived from
+  /// [effectiveReview] rather than simply "the latest human grade by
+  /// timestamp" (Issue #22 P1: Undo must actually revert what is
+  /// *displayed*, not just add a new history row alongside an unaffected
+  /// display). `Review.MODIFIED` -> its own `humanGradeResultId`;
+  /// `Review.APPROVED` -> its own `aiGradeResultId`; anything else
+  /// (`rejected`/`regrade_requested`, or nothing reviewed yet) -> the latest
+  /// AI proposal, so a fresh AI attempt after a regrade request still shows
+  /// up automatically once it lands.
+  GradeResultResponse? get displayGrade {
+    final review = effectiveReview;
+    switch (review?.action) {
+      case 'modified':
+        return _gradeById(review!.humanGradeResultId) ?? latestAiGrade;
+      case 'approved':
+        return _gradeById(review!.aiGradeResultId) ?? latestAiGrade;
+      default:
+        return latestAiGrade;
+    }
+  }
+
+  GradeResultResponse? _gradeById(String? id) {
+    if (id == null) return null;
+    return _latestWhere(grades, (g) => g.id == id);
+  }
 
   /// Only the annotations belonging to [displayGrade]'s own grading attempt,
   /// not every attempt this question has ever had. `Annotation` carries no
@@ -542,6 +621,10 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         widget.submissionId,
         question.id,
       );
+      final reviews = await widget.dependencies.listReviews(
+        widget.submissionId,
+        question.id,
+      );
       // `GradingJobProcessor.process` commits the grading-stage recognition
       // atomically with the grade (and its annotations) it accompanies --
       // both written from the exact same clock read, same as
@@ -572,6 +655,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         review.recognitions = consistentRecognitions;
         review.grades = grades;
         review.annotations = annotations;
+        review.reviews = reviews;
         review.loading = false;
         // A successful refresh -- silent or not -- means the Inspector no
         // longer needs to keep showing a fetch failure from before it (P2
@@ -617,38 +701,86 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   /// Whether the current question's data is fully loaded and free of a
   /// fetch error -- approving/rejecting data the reviewer cannot actually
   /// see yet (still loading, or the last fetch failed) would let them
-  /// unknowingly confirm content they never reviewed.
+  /// unknowingly confirm content they never reviewed. Also false while a
+  /// review action for this question is already in flight, so a second
+  /// click (or a duplicate keyboard trigger) can't fire an overlapping
+  /// request (Issue #22).
   bool get _canDecide {
     final review = _currentReview;
     return review != null &&
         !review.loading &&
+        !review.actionInFlight &&
         review.error == null &&
         review.hasLoaded;
   }
 
-  /// Whether the current question may be *approved*: [_canDecide] and an AI
-  /// grade actually exists -- a confirmed review must reference one
-  /// (domain: `Review` requires `ai_grade_result_id` for `APPROVED`), so
-  /// approving before it exists would let a reviewer confirm a result that
-  /// was never produced (P1 review). 却下 has no such requirement --
-  /// rejecting a question that never produced a usable result is a
-  /// legitimate outcome, so it stays gated on [_canDecide] alone.
+  /// Whether "承認して次へ" may act: [_canDecide], and either the question is
+  /// already confirmed (pure navigation -- an `edit` already confirmed it in
+  /// the same step) or an AI grade exists to confirm (domain: `Review`
+  /// requires `ai_grade_result_id` for `APPROVED`, P1 review).
   bool get _canApprove {
     final review = _currentReview;
     if (!_canDecide) return false;
-    return review!.latestAiGrade != null;
+    return review!.isConfirmed || review.latestAiGrade != null;
   }
 
-  void _setDecision(ReviewDecision decision) {
-    if (!_canDecide) return;
-    final question = _currentQuestion!;
-    final review = _reviews.putIfAbsent(question.id, QuestionReviewState.new);
-    setState(() => review.decision = decision);
+  /// Whether Ctrl+Z has something to revert.
+  bool get _canUndo {
+    final review = _currentReview;
+    return _canDecide && review!.effectiveReview != null;
   }
 
-  void _approveAndNext() {
+  String? _reasonFromNote(QuestionReviewState review) =>
+      review.note.trim().isEmpty ? null : review.note.trim();
+
+  /// Runs one edit/reject/regrade/approve/undo call for the current
+  /// question, disabling the action bar for its duration and always
+  /// resyncing this question's full state (recognitions/grades/annotations/
+  /// reviews, and the submission's own state chip) afterwards -- on success
+  /// *and* on failure, since a `SidecarErrorKind.conflict` means another
+  /// request already changed what's on the server (Issue #22 acceptance:
+  /// "同時/重複requestが履歴を二重作成せず…"). Returns whether [action]
+  /// completed without error, so a caller like [_approveAndNext] knows
+  /// whether it is safe to also navigate.
+  Future<bool> _performReviewAction(Future<void> Function() action) async {
+    final review = _currentReview;
+    if (review == null || review.actionInFlight) return false;
+    setState(() => review.actionInFlight = true);
+    var succeeded = false;
+    try {
+      await action();
+      succeeded = true;
+    } on SidecarApiException catch (error) {
+      if (!mounted) return false;
+      final message = error.kind == SidecarErrorKind.conflict
+          ? '他の操作と競合しました。最新の状態に更新します。(${error.message})'
+          : error.message;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      await _refreshCurrentQuestion();
+      if (mounted) setState(() => review.actionInFlight = false);
+    }
+    return succeeded;
+  }
+
+  Future<void> _approveAndNext() async {
     if (!_canApprove) return;
-    _setDecision(ReviewDecision.approved);
+    final review = _currentReview!;
+    final question = _currentQuestion!;
+    var proceed = true;
+    if (!review.isConfirmed) {
+      proceed = await _performReviewAction(
+        () => widget.dependencies.approveReview(
+          widget.submissionId,
+          question.id,
+          expectedVersion: review.expectedVersion,
+          note: _reasonFromNote(review),
+        ),
+      );
+    }
+    if (!mounted || !proceed) return;
     if (_questionIndex < _questions.length - 1) {
       _moveQuestion(1);
     } else {
@@ -658,9 +790,137 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
   }
 
-  void _reject() => _setDecision(ReviewDecision.rejected);
+  Future<void> _reject() async {
+    if (!_canDecide) return;
+    final review = _currentReview!;
+    await _performReviewAction(
+      () => widget.dependencies.rejectReview(
+        widget.submissionId,
+        _currentQuestion!.id,
+        expectedVersion: review.expectedVersion,
+        reason: _reasonFromNote(review),
+      ),
+    );
+  }
 
-  void _focusEdit() => _noteFocusNode.requestFocus();
+  Future<void> _regrade() async {
+    if (!_canDecide) return;
+    final review = _currentReview!;
+    await _performReviewAction(
+      () => widget.dependencies.regradeReview(
+        widget.submissionId,
+        _currentQuestion!.id,
+        expectedVersion: review.expectedVersion,
+        reason: _reasonFromNote(review),
+      ),
+    );
+  }
+
+  Future<void> _undo() async {
+    if (!_canUndo) return;
+    final review = _currentReview!;
+    await _performReviewAction(
+      () => widget.dependencies.undoReview(
+        widget.submissionId,
+        _currentQuestion!.id,
+        expectedVersion: review.expectedVersion,
+      ),
+    );
+  }
+
+  /// Opens the "修正" dialog (score/comment/recognized text), prefilled from
+  /// [QuestionReviewState.displayGrade] -- Issue #22's "edit" use case.
+  /// Always confirms in the same step (`ReviewAction.MODIFIED`), matching
+  /// `adapters.review_actions.edit_question`'s own docstring. Annotation
+  /// editing (moving/deleting a mark) is out of scope for Issue #22 -- see
+  /// `docs/review-edit-history.md` "Annotationの修正範囲".
+  Future<void> _showEditDialog() async {
+    if (!_canDecide) return;
+    final review = _currentReview!;
+    final question = _currentQuestion!;
+    final currentGrade = review.displayGrade;
+    final currentText =
+        review.latestHumanRecognition?.text ??
+        review.latestGradingRecognition?.text ??
+        review.latestOcrRecognition?.text ??
+        '';
+    final scoreController = TextEditingController(
+      text: (currentGrade?.score.awarded ?? 0).toString(),
+    );
+    final commentController = TextEditingController(
+      text: currentGrade?.comment ?? '',
+    );
+    final textController = TextEditingController(text: currentText);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('問${question.number} を修正'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                key: const Key('edit-dialog-text'),
+                controller: textController,
+                decoration: const InputDecoration(labelText: '認識文字'),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('edit-dialog-score'),
+                controller: scoreController,
+                decoration: InputDecoration(
+                  labelText: '点数 (0〜${question.points})',
+                ),
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('edit-dialog-comment'),
+                controller: commentController,
+                decoration: const InputDecoration(labelText: 'コメント'),
+                maxLines: 2,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            key: const Key('edit-dialog-save'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (saved != true || !mounted) return;
+    final score = int.tryParse(scoreController.text.trim());
+    if (score == null || score < 0 || score > question.points) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('点数は0〜${question.points}の整数で入力してください')),
+      );
+      return;
+    }
+    final text = textController.text.trim();
+    final comment = commentController.text.trim();
+    await _performReviewAction(
+      () => widget.dependencies.editReview(
+        widget.submissionId,
+        question.id,
+        expectedVersion: review.expectedVersion,
+        scoreAwarded: score,
+        scoreMaximum: question.points,
+        comment: comment.isEmpty ? null : comment,
+        recognizedText: text.isEmpty ? null : text,
+        note: _reasonFromNote(review),
+      ),
+    );
+  }
 
   void _saveNote(String value) {
     final question = _currentQuestion;
@@ -670,19 +930,27 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   }
 
   /// Empty while the note field has focus, so plain (unmodified) keys the
-  /// reviewer types into it -- including "x"/"e" and Enter for a newline --
-  /// reach the text field instead of triggering 却下/修正/承認して次へ.
-  /// `CallbackShortcuts` swallows any matching key regardless of what its
-  /// callback does, so the binding itself must be absent, not merely a
+  /// reviewer types into it -- including "x"/"e"/"r" and Enter for a newline
+  /// -- reach the text field instead of triggering 却下/修正/再判定/承認して
+  /// 次へ. `CallbackShortcuts` swallows any matching key regardless of what
+  /// its callback does, so the binding itself must be absent, not merely a
   /// no-op, while typing (P1 review).
+  ///
+  /// Key assignments per docs/business-rules-and-evaluation-data.md §2 (16):
+  /// Enter=承認して次へ, E=修正, X=却下, R=再判定, ↑/↓=設問移動, Ctrl+Z=Undo.
   Map<ShortcutActivator, VoidCallback> get _shortcutBindings {
     if (_noteFocusNode.hasFocus) return const {};
     return {
       LogicalKeySet(LogicalKeyboardKey.arrowDown): () => _moveQuestion(1),
       LogicalKeySet(LogicalKeyboardKey.arrowUp): () => _moveQuestion(-1),
-      LogicalKeySet(LogicalKeyboardKey.enter): _approveAndNext,
-      LogicalKeySet(LogicalKeyboardKey.keyX): _reject,
-      LogicalKeySet(LogicalKeyboardKey.keyE): _focusEdit,
+      LogicalKeySet(LogicalKeyboardKey.enter): () =>
+          unawaited(_approveAndNext()),
+      LogicalKeySet(LogicalKeyboardKey.keyX): () => unawaited(_reject()),
+      LogicalKeySet(LogicalKeyboardKey.keyE): () =>
+          unawaited(_showEditDialog()),
+      LogicalKeySet(LogicalKeyboardKey.keyR): () => unawaited(_regrade()),
+      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyZ): () =>
+          unawaited(_undo()),
     };
   }
 
@@ -829,10 +1097,11 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       return const Icon(Icons.hourglass_empty);
     }
     if (review.error != null) return const Icon(Icons.error_outline);
-    return switch (review.decision) {
-      ReviewDecision.approved => const Icon(Icons.check_circle),
-      ReviewDecision.rejected => const Icon(Icons.cancel_outlined),
-      ReviewDecision.pending => const Icon(Icons.radio_button_unchecked),
+    return switch (review.effectiveReview?.action) {
+      'approved' || 'modified' => const Icon(Icons.check_circle),
+      'rejected' => const Icon(Icons.cancel_outlined),
+      'regrade_requested' => const Icon(Icons.autorenew),
+      _ => const Icon(Icons.radio_button_unchecked),
     };
   }
 
@@ -986,7 +1255,12 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final gradingRecognition = review.latestGradingRecognition;
     final humanRecognition = review.latestHumanRecognition;
     final aiGrade = review.latestAiGrade;
-    final humanGrade = review.latestHumanGrade;
+    // The *effective* human grade (Issue #22), not simply "the latest human
+    // grade by timestamp": once Undo reverts a `modified` review, its own
+    // `GradeResult` row is still there (append-only) but no longer the one
+    // in effect -- see `QuestionReviewState.displayGrade`.
+    final displayGrade = review.displayGrade;
+    final humanGrade = displayGrade?.source_ == 'human' ? displayGrade : null;
     final fallbackAnnotations = _fallbackAnnotationsFor(question, review);
     // A question can have no AI recognition/grade yet but still carry a
     // fallback annotation (e.g. a human-entered comment) or a rubric
@@ -1172,8 +1446,22 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               OutlinedButton.icon(
+                key: const Key('review-undo-button'),
+                onPressed: _canUndo ? _undo : null,
+                icon: const Icon(Icons.undo),
+                label: const Text('元に戻す (Ctrl+Z)'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                key: const Key('review-regrade-button'),
+                onPressed: _canDecide ? _regrade : null,
+                icon: const Icon(Icons.autorenew),
+                label: const Text('再判定 (R)'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
                 key: const Key('review-edit-button'),
-                onPressed: _currentQuestion == null ? null : _focusEdit,
+                onPressed: _canDecide ? _showEditDialog : null,
                 icon: const Icon(Icons.edit_outlined),
                 label: const Text('修正 (E)'),
               ),

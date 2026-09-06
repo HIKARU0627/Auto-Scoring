@@ -383,8 +383,11 @@ def review_to_row(review: Review) -> ReviewRow:
         submission_id=review.submission_id,
         question_id=review.question_id,
         action=review.action,
+        version=review.version,
         ai_grade_result_id=review.ai_grade_result_id,
         human_grade_result_id=review.human_grade_result_id,
+        regrade_job_id=review.regrade_job_id,
+        undone_review_id=review.undone_review_id,
         note=review.note,
         created_at=review.created_at,
     )
@@ -396,8 +399,11 @@ def review_from_row(row: ReviewRow) -> Review:
         submission_id=row.submission_id,
         question_id=row.question_id,
         action=ReviewAction(row.action),
+        version=row.version,
         ai_grade_result_id=row.ai_grade_result_id,
         human_grade_result_id=row.human_grade_result_id,
+        regrade_job_id=row.regrade_job_id,
+        undone_review_id=row.undone_review_id,
         note=row.note,
         created_at=row.created_at,
     )

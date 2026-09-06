@@ -25,6 +25,7 @@ from auto_scoring.domain.models import (
     GradingSource,
     NormalizedRect,
     Score,
+    SubmissionState,
 )
 from tests.support import (
     at,
@@ -55,7 +56,11 @@ def client(
         yield test_client
 
 
-def _seed_question_and_submission(session_factory: sessionmaker[Session]) -> None:
+def _seed_question_and_submission(
+    session_factory: sessionmaker[Session],
+    *,
+    state: SubmissionState = SubmissionState.UNPROCESSED,
+) -> None:
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.tests.add(make_test())
         uow.questions.add(
@@ -65,7 +70,7 @@ def _seed_question_and_submission(session_factory: sessionmaker[Session]) -> Non
             )
         )
         uow.rubrics.add(make_rubric())
-        uow.submissions.add(make_submission())
+        uow.submissions.add(make_submission(state=state))
         uow.commit()
 
 
@@ -206,3 +211,336 @@ def test_list_annotations_returns_recorded_marks(
     assert body[0]["rect"] == {"x": 0.3, "y": 0.4, "width": 0.05, "height": 0.05}
     assert body[1]["kind"] == "comment"
     assert body[1]["comment"] == "理由の説明が不足しています。"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #22: edit / reject / regrade / approve / undo
+# --------------------------------------------------------------------------- #
+def test_list_reviews_is_empty_before_any_review(client: TestClient) -> None:
+    response = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_approve_requires_an_ai_grade_to_exist(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    assert response.status_code == 409
+
+
+def test_approve_confirms_the_latest_ai_grade_without_mutating_it(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0, "note": "問題ありません"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["review"]["action"] == "approved"
+    assert body["review"]["version"] == 1
+    assert body["review"]["ai_grade_result_id"] == "grade-ai"
+
+    # The original AI grade is still retrievable, unmodified (acceptance:
+    # "AI値を修正して承認しても元AI値が参照できる").
+    grades = client.get("/submissions/sub-1/questions/q-1/grades", headers=_AUTH).json()
+    assert len(grades) == 1
+    assert grades[0]["id"] == "grade-ai"
+    assert grades[0]["source"] == "ai"
+
+
+def test_edit_creates_a_confirmed_human_grade_and_keeps_the_ai_value(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(
+            make_grade(id="grade-ai", source=GradingSource.AI, score=Score(awarded=3, maximum=5))
+        )
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={
+            "expected_version": 0,
+            "score_awarded": 5,
+            "score_maximum": 5,
+            "comment": "よくできています",
+            "recognized_text": "訂正後の答案",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["review"]["action"] == "modified"
+    assert body["review"]["ai_grade_result_id"] == "grade-ai"
+    assert body["grade"]["source"] == "human"
+    assert body["grade"]["score"] == {"awarded": 5, "maximum": 5, "ratio": 1.0}
+    assert body["recognition"]["text"] == "訂正後の答案"
+
+    grades = client.get("/submissions/sub-1/questions/q-1/grades", headers=_AUTH).json()
+    assert {g["source"] for g in grades} == {"ai", "human"}
+    ai_grade = next(g for g in grades if g["source"] == "ai")
+    assert ai_grade["score"] == {"awarded": 3, "maximum": 5, "ratio": 0.6}
+
+
+def test_edit_without_an_ai_grade_yet_is_rejected(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 5, "score_maximum": 5},
+    )
+
+    assert response.status_code == 409
+
+
+def test_edit_carries_forward_the_ais_own_annotations_by_default(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    ai_grade = make_grade(id="grade-ai", source=GradingSource.AI, created_at=at(0))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(ai_grade)
+        uow.annotations.add(
+            Annotation(
+                id="anno-ai-circle",
+                submission_id="sub-1",
+                question_id="q-1",
+                source=GradingSource.AI,
+                kind=AnnotationKind.CIRCLE,
+                rect=NormalizedRect(x=0.3, y=0.4, width=0.05, height=0.05),
+                created_at=at(0),
+            )
+        )
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 5, "score_maximum": 5},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert len(body["annotations"]) == 1
+    assert body["annotations"][0]["kind"] == "circle"
+    assert body["annotations"][0]["id"] != "anno-ai-circle"
+
+
+def test_reject_does_not_require_an_ai_grade(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/reject",
+        headers=_AUTH,
+        json={"expected_version": 0, "reason": "手書き文字が判読できない"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["review"]["action"] == "rejected"
+    assert body["review"]["note"] == "手書き文字が判読できない"
+    assert body["review"]["ai_grade_result_id"] is None
+
+
+def test_regrade_queues_a_fresh_job_and_records_the_request(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/regrade",
+        headers=_AUTH,
+        json={"expected_version": 0, "reason": "低confidenceのため再判定"},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["review"]["action"] == "regrade_requested"
+    assert body["review"]["regrade_job_id"] == body["job_id"]
+    assert body["review"]["note"] == "低confidenceのため再判定"
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        job = uow.jobs.get(body["job_id"])
+    assert job is not None
+    assert job.submission_id == "sub-1"
+    assert job.question_id == "q-1"
+    assert job.dependency_graph_version is None
+
+
+def test_undo_reverts_an_approval_back_to_unconfirmed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+    client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/undo",
+        headers=_AUTH,
+        json={"expected_version": 1},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["review"]["action"] == "undone"
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert [r["action"] for r in reviews] == ["approved", "undone"]
+
+
+def test_undo_with_nothing_to_undo_is_rejected(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/undo",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    assert response.status_code == 409
+
+
+def test_stale_expected_version_is_rejected_with_409(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+    client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    stale = client.post(
+        "/submissions/sub-1/questions/q-1/review/reject",
+        headers=_AUTH,
+        json={"expected_version": 0, "reason": "やり直し"},
+    )
+
+    assert stale.status_code == 409
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert len(reviews) == 1, "the rejected stale request must not have appended a second row"
+
+
+def test_duplicate_concurrent_approve_requests_do_not_double_create_history(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Two requests racing with the same (stale-by-the-time-it-lands)
+    ``expected_version=0`` must not both succeed -- only one Review row may
+    ever occupy version 1 for this question (Issue #22 acceptance: "同時/
+    重複requestが履歴を二重作成せず、古いversionの更新を拒否する")."""
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    first = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    second = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    statuses = sorted([first.status_code, second.status_code])
+    assert statuses == [201, 409]
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert len(reviews) == 1
+
+
+def test_submission_becomes_reviewed_only_once_every_question_is_confirmed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.questions.add(make_question(id="q-2", number="2"))
+        uow.submissions.add(make_submission(state=SubmissionState.NEEDS_REVIEW))
+        uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
+        uow.grades.add(make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI))
+        uow.commit()
+
+    first = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert first.status_code == 201
+    assert first.json()["submission_state"] == "needs_review"
+
+    second = client.post(
+        "/submissions/sub-1/questions/q-2/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert second.status_code == 201
+    assert second.json()["submission_state"] == "reviewed"
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.REVIEWED
+
+
+def test_submission_returns_to_needs_review_once_an_undo_unconfirms_a_question(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.submissions.add(make_submission(state=SubmissionState.NEEDS_REVIEW))
+        uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
+        uow.commit()
+    approved = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert approved.json()["submission_state"] == "reviewed"
+
+    undone = client.post(
+        "/submissions/sub-1/questions/q-1/review/undo",
+        headers=_AUTH,
+        json={"expected_version": 1},
+    )
+
+    assert undone.status_code == 201
+    assert undone.json()["submission_state"] == "needs_review"

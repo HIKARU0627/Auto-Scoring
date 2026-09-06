@@ -9,11 +9,107 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
+[**approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost**](ReviewApi.md#approvesubmissionssubmissionidquestionsquestionidreviewapprovepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/approve | Approve
+[**editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost**](ReviewApi.md#editsubmissionssubmissionidquestionsquestionidrevieweditpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/edit | Edit
 [**getSourcePdfSubmissionsSubmissionIdSourcePdfGet**](ReviewApi.md#getsourcepdfsubmissionssubmissionidsourcepdfget) | **GET** /submissions/{submission_id}/source-pdf | Get Source Pdf
 [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
 [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
 [**listQuestionsTestsTestIdQuestionsGet**](ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
+[**listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet**](ReviewApi.md#listreviewssubmissionssubmissionidquestionsquestionidreviewsget) | **GET** /submissions/{submission_id}/questions/{question_id}/reviews | List Reviews
+[**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
+[**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
+[**undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost**](ReviewApi.md#undosubmissionssubmissionidquestionsquestionidreviewundopost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/undo | Undo
 
+
+# **approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost**
+> ReviewActionResponse approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost(submissionId, questionId, approveReviewRequest)
+
+Approve
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+final ApproveReviewRequest approveReviewRequest = ; // ApproveReviewRequest | 
+
+try {
+    final response = api.approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost(submissionId, questionId, approveReviewRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+ **approveReviewRequest** | [**ApproveReviewRequest**](ApproveReviewRequest.md)|  | 
+
+### Return type
+
+[**ReviewActionResponse**](ReviewActionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost**
+> ReviewActionResponse editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost(submissionId, questionId, editReviewRequest)
+
+Edit
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+final EditReviewRequest editReviewRequest = ; // EditReviewRequest | 
+
+try {
+    final response = api.editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost(submissionId, questionId, editReviewRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+ **editReviewRequest** | [**EditReviewRequest**](EditReviewRequest.md)|  | 
+
+### Return type
+
+[**ReviewActionResponse**](ReviewActionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **getSourcePdfSubmissionsSubmissionIdSourcePdfGet**
 > Uint8List getSourcePdfSubmissionsSubmissionIdSourcePdfGet(submissionId)
@@ -179,6 +275,186 @@ Name | Type | Description  | Notes
 ### HTTP request headers
 
  - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet**
+> BuiltList<ReviewResponse> listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet(submissionId, questionId)
+
+List Reviews
+
+The full append-only operation history, oldest first. Its length is the ``expected_version`` the client's *next* mutating call for this submission-question must pass (0 if the list is empty).
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+
+try {
+    final response = api.listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet(submissionId, questionId);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+
+### Return type
+
+[**BuiltList&lt;ReviewResponse&gt;**](ReviewResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**
+> ReviewActionResponse regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost(submissionId, questionId, reasonedReviewRequest)
+
+Regrade
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+final ReasonedReviewRequest reasonedReviewRequest = ; // ReasonedReviewRequest | 
+
+try {
+    final response = api.regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost(submissionId, questionId, reasonedReviewRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+ **reasonedReviewRequest** | [**ReasonedReviewRequest**](ReasonedReviewRequest.md)|  | 
+
+### Return type
+
+[**ReviewActionResponse**](ReviewActionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**
+> ReviewActionResponse rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost(submissionId, questionId, reasonedReviewRequest)
+
+Reject
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+final ReasonedReviewRequest reasonedReviewRequest = ; // ReasonedReviewRequest | 
+
+try {
+    final response = api.rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost(submissionId, questionId, reasonedReviewRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+ **reasonedReviewRequest** | [**ReasonedReviewRequest**](ReasonedReviewRequest.md)|  | 
+
+### Return type
+
+[**ReviewActionResponse**](ReviewActionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost**
+> ReviewActionResponse undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost(submissionId, questionId, undoReviewRequest)
+
+Undo
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+final UndoReviewRequest undoReviewRequest = ; // UndoReviewRequest | 
+
+try {
+    final response = api.undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost(submissionId, questionId, undoReviewRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+ **undoReviewRequest** | [**UndoReviewRequest**](UndoReviewRequest.md)|  | 
+
+### Return type
+
+[**ReviewActionResponse**](ReviewActionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
  - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
