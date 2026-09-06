@@ -202,6 +202,7 @@ class RecognitionResultRow(Base):
     __tablename__ = "recognition_results"
     __table_args__ = (
         CheckConstraint(_CONFIDENCE_RANGE, name="ck_recognition_confidence_range"),
+        CheckConstraint("length(text) <= 10000", name="ck_recognition_results_text_length"),
         Index(
             "ix_recognition_results_submission_question",
             "submission_id",
