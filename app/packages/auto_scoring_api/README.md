@@ -77,6 +77,12 @@ Class | Method | HTTP request | Description
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**getLatestTestsTestIdDependencyGraphGet**](doc/DependencyGraphApi.md#getlatestteststestiddependencygraphget) | **GET** /tests/{test_id}/dependency-graph | Get Latest
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**listVersionsTestsTestIdDependencyGraphVersionsGet**](doc/DependencyGraphApi.md#listversionsteststestiddependencygraphversionsget) | **GET** /tests/{test_id}/dependency-graph/versions | List Versions
+[*JobsApi*](doc/JobsApi.md) | [**cancelJobJobsJobIdCancelPost**](doc/JobsApi.md#canceljobjobsjobidcancelpost) | **POST** /jobs/{job_id}/cancel | Cancel Job
+[*JobsApi*](doc/JobsApi.md) | [**createSubmissionJobsSubmissionsSubmissionIdJobsPost**](doc/JobsApi.md#createsubmissionjobssubmissionssubmissionidjobspost) | **POST** /submissions/{submission_id}/jobs | Create Submission Jobs
+[*JobsApi*](doc/JobsApi.md) | [**getJobJobsJobIdGet**](doc/JobsApi.md#getjobjobsjobidget) | **GET** /jobs/{job_id} | Get Job
+[*JobsApi*](doc/JobsApi.md) | [**listSubmissionJobsSubmissionsSubmissionIdJobsGet**](doc/JobsApi.md#listsubmissionjobssubmissionssubmissionidjobsget) | **GET** /submissions/{submission_id}/jobs | List Submission Jobs
+[*JobsApi*](doc/JobsApi.md) | [**resumeQuestionSubmissionsSubmissionIdQuestionsQuestionIdResumePost**](doc/JobsApi.md#resumequestionsubmissionssubmissionidquestionsquestionidresumepost) | **POST** /submissions/{submission_id}/questions/{question_id}/resume | Resume Question
+[*JobsApi*](doc/JobsApi.md) | [**retryJobJobsJobIdRetryPost**](doc/JobsApi.md#retryjobjobsjobidretrypost) | **POST** /jobs/{job_id}/retry | Retry Job
 
 
 ## Documentation For Models
@@ -87,6 +93,7 @@ Class | Method | HTTP request | Description
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
  - [DependencyProvision](doc/DependencyProvision.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
+ - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
  - [ScoreRequest](doc/ScoreRequest.md)

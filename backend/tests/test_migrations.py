@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0007"
+    assert current_revision(db_url) == "0009"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0007"
+    assert current_revision(db_url) == "0009"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0007"
+    assert current_revision(db_url) == "0009"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0007"
+    assert current_revision(db_url) == "0009"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -235,7 +235,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0007"
+    assert current_revision(db_url) == "0009"
 
 
 _CHILD_TABLES = (
@@ -417,6 +417,54 @@ def test_downgrade_walks_back_to_base(db_url: str) -> None:
 
     downgrade(db_url, "base")
     assert _CORE_TABLES.isdisjoint(_tables(db_url))
+
+
+def test_downgrade_from_0009_normalizes_a_failed_usable_row(db_url: str) -> None:
+    """Issue #18 review round 3, P2: a FAILED job's `usable` bit (settable
+    only once 0009's upgrade has run, via a human /resume approval) has no
+    representation in 0008's stricter constraint. Batch mode's "recreate"
+    copies every existing row when dropping/recreating the constraint;
+    downgrading with such a row present must normalize it away first, not
+    abort partway through with an IntegrityError.
+    """
+    upgrade(db_url, "0009")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                    "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO submissions "
+                    "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, "
+                    "created_at) VALUES ('s', 't', 'p', :sha, 1, 'unprocessed', '2026-01-01')"
+                ),
+                {"sha": "0" * 64},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO jobs (id, kind, submission_id, state, attempts, max_attempts, "
+                    "usable, created_at, updated_at) VALUES "
+                    "('j', 'grading', 's', 'failed', 1, 3, 1, '2026-01-01', '2026-01-01')"
+                )
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    downgrade(db_url, "0008")  # must not raise IntegrityError
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT usable FROM jobs WHERE id = 'j'")).one()
+    finally:
+        engine.dispose()
+    assert row.usable is None
 
 
 def test_head_schema_matches_orm_metadata(db_url: str) -> None:

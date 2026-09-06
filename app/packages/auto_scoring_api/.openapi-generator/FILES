@@ -9,6 +9,8 @@ doc/DependencyGraphApi.md
 doc/DependencyGraphResponse.md
 doc/DependencyProvision.md
 doc/HTTPValidationError.md
+doc/JobResponse.md
+doc/JobsApi.md
 doc/LocationInner.md
 doc/QuestionTextOverride.md
 doc/ScoreRequest.md
@@ -21,6 +23,7 @@ lib/auto_scoring_api.dart
 lib/src/api.dart
 lib/src/api/default_api.dart
 lib/src/api/dependency_graph_api.dart
+lib/src/api/jobs_api.dart
 lib/src/api_util.dart
 lib/src/auth/api_key_auth.dart
 lib/src/auth/auth.dart
@@ -35,6 +38,7 @@ lib/src/model/dependency_edge_model.dart
 lib/src/model/dependency_graph_response.dart
 lib/src/model/dependency_provision.dart
 lib/src/model/http_validation_error.dart
+lib/src/model/job_response.dart
 lib/src/model/location_inner.dart
 lib/src/model/question_text_override.dart
 lib/src/model/score_request.dart

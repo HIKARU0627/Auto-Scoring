@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -40,6 +41,7 @@ from auto_scoring.domain.dependency_graph import DependencyGraphStatus, Dependen
 from auto_scoring.domain.models import (
     AnnotationKind,
     AnswerImageStatus,
+    ErrorCategory,
     GradingSource,
     JobKind,
     JobState,
@@ -303,6 +305,44 @@ class JobRow(Base):
             "dependency_graph_version IS NULL OR dependency_graph_version >= 1",
             name="ck_jobs_dependency_graph_version_positive",
         ),
+        # Explicit named mirror of `_enum(ErrorCategory)`'s own (unnamed, and
+        # therefore untracked by `alembic check`) CHECK -- same pattern as
+        # `ck_jobs_state_valid` above, and required for the same reason:
+        # without a name matching the migration's, autogenerate sees this as
+        # a constraint the migrations never created.
+        CheckConstraint(
+            "error_code IS NULL OR error_code IN "
+            "('timeout', 'rate_limited', 'server_error', 'permanent')",
+            name="ck_jobs_error_code_valid",
+        ),
+        # Mirrors `Job.__post_init__`: `error_code`/`usable` may only be set
+        # while the job is in a state they describe (Issue #18). Both are
+        # one-directional -- a FAILED job need not carry an error_code
+        # (nothing before this issue ever set one), but nothing may carry one
+        # outside the states allowed here.
+        CheckConstraint(
+            "error_code IS NULL OR state = 'failed'", name="ck_jobs_error_code_matches_state"
+        ),
+        # `usable` is allowed on FAILED too (review round 2, P1): a human can
+        # confirm a failed attempt's downstream effect is usable anyway
+        # (business-rules-and-evaluation-data.md §4.4) without the row lying
+        # about `state` -- the attempt itself really did fail.
+        CheckConstraint(
+            "usable IS NULL OR state IN ('succeeded', 'failed')",
+            name="ck_jobs_usable_matches_state",
+        ),
+        # The real idempotency key for Submission-DAG jobs (Issue #18,
+        # docs/job-queue.md "二重処理防止"): re-running job creation for the
+        # same submission/question/confirmed-graph-version must not create a
+        # second row. SQLite treats NULLs as distinct, so this only actually
+        # constrains rows where both columns are set -- exactly the
+        # DAG-scheduled jobs this issue creates.
+        UniqueConstraint(
+            "submission_id",
+            "question_id",
+            "dependency_graph_version",
+            name="uq_jobs_submission_question_graph_version",
+        ),
         Index("ix_jobs_state", "state"),
         Index("ix_jobs_submission_id", "submission_id"),
         Index("ix_jobs_dependency_graph_version", "dependency_graph_version"),
@@ -320,9 +360,15 @@ class JobRow(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: Categorized reason for the most recent FAILED attempt (Issue #18
+    #: retry classification), distinct from the free-text `last_error`.
+    error_code: Mapped[ErrorCategory | None] = mapped_column(_enum(ErrorCategory), nullable=True)
     blocked_on_question_id: Mapped[str | None] = mapped_column(
         ForeignKey("questions.id", ondelete="SET NULL"), nullable=True
     )
+    #: Whether a SUCCEEDED job's result may release a dependent question
+    #: (Issue #18 §4.4). NULL until the job reaches SUCCEEDED.
+    usable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     #: The confirmed DependencyGraph version this job was queued against
     #: (Issue #26). No FK: dependency_graphs is keyed by (test_id, version),
     #: not by version alone, so this stays a plain int matched against
