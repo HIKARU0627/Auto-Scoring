@@ -630,6 +630,14 @@ Material Design 3を利用する。
 
 ## 16.5 添削レビュー画面
 
+> Issue #21でFlutter側の画面（`app/lib/features/pdf_review/`）と、それを
+> 支える読み取り専用API（`backend/src/auto_scoring/api/review_router.py`）を
+> 実装した。Material 3のNavigation Rail + `pdfrx` PDF viewer +
+> Widget Overlay（0〜1正規化座標）+ Inspector + action barで構成する。
+> 承認・修正・却下はこの画面のメモリ内でのみ保持し、永続化と最終PDF生成は
+> 後続Issueで扱う。詳細・決定事項は
+> [`pdf-review-overlay.md`](./pdf-review-overlay.md)。
+
 中央：
 
 - PDF
