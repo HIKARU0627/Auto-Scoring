@@ -1281,6 +1281,24 @@ thread()` で削除する前に、削除せず）読み出し、`turn.items` が
 ResourceWarning)` を最初に使ったが、`ResourceWarning` は Python の
   既定の warning filter で無視されるため運用者に実際には届かない
   （コードレビュー指摘）。
+- `discard_thread()` は Python 側の `_notification_buffer` から通知を
+  取り除くだけであり、app-server 自身のプロセスメモリ上の thread は
+  それでは解放されない（`thread/start` に渡す `ephemeral: true` はディスク
+  永続化を防ぐだけで、in-memory 保持は防がない——コードレビュー指摘）。
+  この adapter はサブプロセスを複数回の `grade()` 呼び出しにまたがって
+  再利用する（プロセス起動——および Codex ログインの再ハンドシェイク——を
+  毎回避けるため）ため、これを放置すると 1 つの長時間稼働する app-server
+  プロセスが、稼働し続ける限りそれまで採点した全設問の会話と採点入力
+  （学生の答案テキストを含む）を蓄積し続けてしまう。`_release_thread()`
+  が、`discard_thread()` でバッファ済み通知を破棄する**前**に
+  `thread/unsubscribe`（`{"threadId": <完了した thread の ID>}`）を送信し、
+  server 側にも thread を手放させる（送信順序が逆だと、`thread/
+unsubscribe` 自体の応答を読み出す経路であるその同じバッファを先に空にして
+  しまう）。ベストエフォートとして扱う: `ProviderUnavailable`/
+  `TimeoutError` はログに残すのみで再送出しない（ここで失敗させると、
+  採点そのものは成功しているターンまで失敗扱いになってしまうため）。
+  失敗した場合、その thread は app-server プロセスが将来自ら終了/再起動
+  するまで解放されないまま残る。
 
 **この作業で見つかった、本 Issue のスコープ外の既存の問題**: この
 `logger.error(...)` を実装する過程で、`backend/migrations/env.py` が
@@ -1394,7 +1412,9 @@ contract test は green だが、実際の `codex login` 済み環境での動�
   workspace ディレクトリ、ターンレベルのネットワーク拒否
   （`sandboxPolicy.networkAccess: false`）、shell/exec/画像閲覧 tool と
   継承された MCP server の無効化（`_TOOL_FREE_THREAD_CONFIG`）、死んだ
-  transport の自動リセット（次回呼び出しで新しいプロセスを起動する）。
+  transport の自動リセット（次回呼び出しで新しいプロセスを起動する）、
+  完了した thread の解放（`_release_thread()` が `discard_thread()` の前に
+  `thread/unsubscribe` を送信する。上記参照）。
 - `turn/completed.turn.items` が `itemsView: "notLoaded"` で空のときの
   `item/completed` 通知へのフォールバック（`peek_thread_items()`。上記
   参照）。

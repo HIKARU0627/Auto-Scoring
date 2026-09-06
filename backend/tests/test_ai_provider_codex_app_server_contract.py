@@ -83,6 +83,9 @@ class _FakeAppServerTransport:
             assert input_items[1]["type"] == "localImage"
             assert os.path.exists(image_path)  # the adapter must write the image to disk
             return {}
+        if method == "thread/unsubscribe":
+            assert params["threadId"] == self._thread_id
+            return {"status": "unsubscribed"}
         raise AssertionError(f"unexpected method: {method}")
 
     def wait_for_notification(
@@ -304,6 +307,59 @@ def test_grade_discards_the_thread_after_completion() -> None:
     provider.grade(_VALID_REQUEST)
 
     assert discarded == [transport._thread_id]
+
+
+def test_grade_releases_the_thread_before_discarding_buffered_notifications() -> None:
+    """`ephemeral` only keeps a thread off disk; the app-server process
+    still holds it (and the conversation/grading input it accumulated) in
+    memory until told to let it go. `thread/unsubscribe` must be sent for
+    the finished thread, with its `threadId`, before the buffered
+    notifications for that thread are discarded -- discarding first would
+    drop the very notification the unsubscribe response is read through
+    (code review finding)."""
+    transport = _FakeAppServerTransport()
+    calls: list[str] = []
+    original_request = transport.request
+    original_discard = transport.discard_thread
+
+    def _spying_request(
+        method: str, params: dict[str, object], *, timeout_seconds: float
+    ) -> dict[str, object]:
+        if method == "thread/unsubscribe":
+            calls.append("thread/unsubscribe")
+        return original_request(method, params, timeout_seconds=timeout_seconds)
+
+    def _spying_discard(thread_id: str) -> None:
+        calls.append("discard_thread")
+        original_discard(thread_id)
+
+    transport.request = _spying_request  # type: ignore[method-assign]
+    transport.discard_thread = _spying_discard  # type: ignore[method-assign]
+    provider = CodexAppServerProvider(prompt_version="v1", transport=transport)
+    provider.grade(_VALID_REQUEST)
+
+    assert calls == ["thread/unsubscribe", "discard_thread"]
+
+
+def test_grade_tolerates_a_failed_thread_unsubscribe() -> None:
+    """Releasing a finished thread is best-effort: a transport failure on
+    `thread/unsubscribe` (dead process, timeout, ...) must not fail an
+    otherwise-successful grading call -- the thread is simply left for the
+    app-server process to reclaim on its own eventual exit/restart (code
+    review finding)."""
+
+    class _FailingUnsubscribeTransport(_FakeAppServerTransport):
+        def request(
+            self, method: str, params: dict[str, object], *, timeout_seconds: float
+        ) -> dict[str, object]:
+            if method == "thread/unsubscribe":
+                raise ProviderUnavailable("codex app-server process exited unexpectedly")
+            return super().request(method, params, timeout_seconds=timeout_seconds)
+
+    provider = CodexAppServerProvider(prompt_version="v1", transport=_FailingUnsubscribeTransport())
+    response = provider.grade(_VALID_REQUEST)
+
+    assert response.score == 4
 
 
 def test_subprocess_transport_discard_thread_prunes_only_that_thread() -> None:

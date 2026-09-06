@@ -486,6 +486,43 @@ def _cleanup_workspace(
     )
 
 
+def _release_thread(
+    transport: _AppServerTransport, thread_id: str, *, timeout_seconds: float
+) -> None:
+    """Releases the app-server's own in-memory hold on a finished thread.
+
+    `ephemeral: true` (set on `thread/start`) only keeps the thread off
+    disk; it does not release it from the app-server process's memory.
+    The underlying subprocess is deliberately reused across many
+    ``grade()`` calls (avoiding a process spawn -- and a fresh Codex login
+    handshake -- per question), so never releasing each finished thread
+    would let that one long-lived process accumulate every prior
+    question's conversation and grading input (student answer text
+    included) for as long as it keeps running (code review finding).
+    ``discard_thread()`` only ever cleaned up this Python-side transport's
+    own notification buffer; it never told the server to let the thread
+    go.
+
+    Sent before ``discard_thread()`` prunes the buffered notifications for
+    this thread (code review finding), since the response to this request
+    is itself read through that same buffering. Best-effort: a transport
+    failure here must not fail an otherwise-successful grading call, so it
+    is logged, not raised -- the thread is then left for the app-server
+    process to reclaim on its own eventual exit/restart.
+    """
+    try:
+        transport.request(
+            "thread/unsubscribe", {"threadId": thread_id}, timeout_seconds=timeout_seconds
+        )
+    except (ProviderUnavailable, TimeoutError) as exc:
+        logger.warning(
+            "codex app-server: failed to release finished thread %s: %s",
+            thread_id,
+            exc,
+            extra={"thread_id": thread_id},
+        )
+
+
 class CodexAppServerProvider:
     """Grades one question per ``turn/start`` on a fresh, ephemeral thread.
 
@@ -664,6 +701,7 @@ class CodexAppServerProvider:
         finally:
             _cleanup_workspace(workspace_dir)
             if thread_id is not None:
+                _release_thread(transport, thread_id, timeout_seconds=self._turn_timeout_seconds)
                 transport.discard_thread(thread_id)
 
         latency_seconds = time.monotonic() - started_at
