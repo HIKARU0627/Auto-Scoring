@@ -38,6 +38,7 @@ from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
+from auto_scoring.api.review_router import build_review_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
@@ -540,6 +541,7 @@ def create_app(
         )
     )
     protected.include_router(build_recognitions_router(session_factory, store, queue_service))
+    protected.include_router(build_review_router(session_factory, store))
 
     app.include_router(protected)
     return app

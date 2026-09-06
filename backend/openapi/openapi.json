@@ -14,6 +14,77 @@
         "title": "AnalyzeRequest",
         "type": "object"
       },
+      "AnnotationResponse": {
+        "properties": {
+          "anchor_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Text"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "rect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NormalizedRectResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "submission_id",
+          "question_id",
+          "source",
+          "kind",
+          "created_at"
+        ],
+        "title": "AnnotationResponse",
+        "type": "object"
+      },
       "Body_create_submission_tests__test_id__submissions_post": {
         "properties": {
           "file": {
@@ -165,6 +236,35 @@
         "title": "ConfirmRequest",
         "type": "object"
       },
+      "CriterionResultResponse": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "criterion_id": {
+            "title": "Criterion Id",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "criterion_id",
+          "outcome"
+        ],
+        "title": "CriterionResultResponse",
+        "type": "object"
+      },
       "DependencyEdgeModel": {
         "properties": {
           "confidence": {
@@ -297,6 +397,68 @@
         ],
         "title": "DependencyProvision",
         "type": "string"
+      },
+      "GradeResultResponse": {
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "criteria": {
+            "items": {
+              "$ref": "#/components/schemas/CriterionResultResponse"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "score": {
+            "$ref": "#/components/schemas/ScoreValueResponse"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "submission_id",
+          "question_id",
+          "source",
+          "score",
+          "confidence",
+          "criteria",
+          "created_at"
+        ],
+        "title": "GradeResultResponse",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -469,6 +631,34 @@
         "title": "NormalizedBBoxModel",
         "type": "object"
       },
+      "NormalizedRectResponse": {
+        "properties": {
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "width": {
+            "title": "Width",
+            "type": "number"
+          },
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "NormalizedRectResponse",
+        "type": "object"
+      },
       "PageFormatModel": {
         "properties": {
           "height_pt": {
@@ -524,6 +714,93 @@
           "revision"
         ],
         "title": "ProfileResponse",
+        "type": "object"
+      },
+      "QuestionResponse": {
+        "properties": {
+          "answer_area": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NormalizedRectResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comment_area": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NormalizedRectResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Answer"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "points": {
+            "title": "Points",
+            "type": "integer"
+          },
+          "rubric": {
+            "items": {
+              "$ref": "#/components/schemas/RubricCriterionResponse"
+            },
+            "title": "Rubric",
+            "type": "array"
+          },
+          "score_area": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NormalizedRectResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scoring_method": {
+            "title": "Scoring Method",
+            "type": "string"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "test_id",
+          "number",
+          "page",
+          "points",
+          "scoring_method",
+          "rubric"
+        ],
+        "title": "QuestionResponse",
         "type": "object"
       },
       "QuestionTextOverride": {
@@ -673,6 +950,34 @@
         "title": "RegionModel",
         "type": "object"
       },
+      "RubricCriterionResponse": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "max_points": {
+            "title": "Max Points",
+            "type": "integer"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "max_points",
+          "position"
+        ],
+        "title": "RubricCriterionResponse",
+        "type": "object"
+      },
       "ScoreRequest": {
         "properties": {
           "key": {
@@ -722,6 +1027,29 @@
           "ratio"
         ],
         "title": "ScoreResponse",
+        "type": "object"
+      },
+      "ScoreValueResponse": {
+        "properties": {
+          "awarded": {
+            "title": "Awarded",
+            "type": "integer"
+          },
+          "maximum": {
+            "title": "Maximum",
+            "type": "integer"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "number"
+          }
+        },
+        "required": [
+          "awarded",
+          "maximum",
+          "ratio"
+        ],
+        "title": "ScoreValueResponse",
         "type": "object"
       },
       "SubmissionResponse": {
@@ -1315,6 +1643,66 @@
         ]
       }
     },
+    "/submissions/{submission_id}/questions/{question_id}/annotations": {
+      "get": {
+        "operationId": "list_annotations_submissions__submission_id__questions__question_id__annotations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AnnotationResponse"
+                  },
+                  "title": "Response List Annotations Submissions  Submission Id  Questions  Question Id  Annotations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Annotations",
+        "tags": [
+          "review"
+        ]
+      }
+    },
     "/submissions/{submission_id}/questions/{question_id}/answer-image": {
       "get": {
         "operationId": "get_answer_image_submissions__submission_id__questions__question_id__answer_image_get",
@@ -1369,6 +1757,66 @@
         "summary": "Get Answer Image",
         "tags": [
           "recognitions"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/grades": {
+      "get": {
+        "operationId": "list_grades_submissions__submission_id__questions__question_id__grades_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GradeResultResponse"
+                  },
+                  "title": "Response List Grades Submissions  Submission Id  Questions  Question Id  Grades Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Grades",
+        "tags": [
+          "review"
         ]
       }
     },
@@ -1542,6 +1990,54 @@
         "summary": "Resume Question",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/source-pdf": {
+      "get": {
+        "operationId": "get_source_pdf_submissions__submission_id__source_pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The original, unmodified answer PDF."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Source Pdf",
+        "tags": [
+          "review"
         ]
       }
     },
@@ -2156,6 +2652,57 @@
         "summary": "Confirm Profile",
         "tags": [
           "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/questions": {
+      "get": {
+        "operationId": "list_questions_tests__test_id__questions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/QuestionResponse"
+                  },
+                  "title": "Response List Questions Tests  Test Id  Questions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Questions",
+        "tags": [
+          "review"
         ]
       }
     },
