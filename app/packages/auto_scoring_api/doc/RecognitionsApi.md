@@ -60,7 +60,7 @@ Name | Type | Description  | Notes
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet**
-> JsonObject getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet(submissionId, questionId)
+> Uint8List getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet(submissionId, questionId)
 
 Get Answer Image
 
@@ -89,7 +89,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-[**JsonObject**](JsonObject.md)
+[**Uint8List**](Uint8List.md)
 
 ### Authorization
 
@@ -98,7 +98,7 @@ Name | Type | Description  | Notes
 ### HTTP request headers
 
  - **Content-Type**: Not defined
- - **Accept**: application/json
+ - **Accept**: image/png, application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

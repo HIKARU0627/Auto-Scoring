@@ -1070,11 +1070,14 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "The cropped answer-area image."
           },
           "422": {
             "content": {
