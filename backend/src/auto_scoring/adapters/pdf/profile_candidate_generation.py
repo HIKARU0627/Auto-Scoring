@@ -83,10 +83,10 @@ class _QuestionBlock:
     body: list[TextLine]
 
 
-#: Minimum width/height `_rect_to_bbox` nudges a clipped-to-nothing bbox
-#: apart to -- small enough to be visually negligible once a human is
-#: reviewing/moving it, large enough that `NormalizedBBox`'s own
-#: positive-area check never rejects it.
+#: Minimum width/height a degenerate bbox gets nudged apart to, here and in
+#: `_placeholder_bbox_below` below -- small enough to be visually negligible
+#: once a human is reviewing/moving it, large enough that `NormalizedBBox`'s
+#: own positive-area check never rejects it.
 _MIN_CLIPPED_BBOX_SIZE = 1e-6
 
 
@@ -195,6 +195,17 @@ def _placeholder_bbox_below(heading_bbox: NormalizedBBox) -> NormalizedBBox:
         y0, y1 = heading_bbox.y1, heading_bbox.y1 + _PLACEHOLDER_HEIGHT
     else:
         y0, y1 = max(0.0, heading_bbox.y0 - _PLACEHOLDER_HEIGHT), heading_bbox.y0
+        if y0 >= y1:
+            # Both branches degenerate only when `heading_bbox.y0` is
+            # already (essentially) 0 while `y1` leaves no room below
+            # either -- e.g. a heading rect `_rect_to_bbox` clipped to the
+            # full displayed page (y0=0, y1=1). `NormalizedBBox` rejects a
+            # zero-height box outright, and this only ever runs during
+            # `/profile/analyze`, so that would 500 the whole analysis and
+            # leave a persisted draft that can never produce a profile
+            # (Issue #16 review round 8). Nudge a minimal, always-positive-
+            # height sliver in from the top instead.
+            y0, y1 = 0.0, _MIN_CLIPPED_BBOX_SIZE
     return NormalizedBBox(x0=heading_bbox.x0, y0=y0, x1=heading_bbox.x1, y1=y1)
 
 

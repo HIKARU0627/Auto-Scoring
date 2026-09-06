@@ -151,6 +151,37 @@ def test_negative_or_decimal_score_text_is_rejected(score_text: str) -> None:
         build_questions_and_rubrics("test-1", regions)
 
 
+def test_a_descriptive_score_field_selects_the_number_attached_to_ten() -> None:
+    """A bare "first standalone integer" search would resolve "問1
+    配点5点" to 1 (from "問1") instead of 5 (the actual score, immediately
+    before "点") -- `Question.points` drives grading, so silently picking
+    the wrong number is worse than rejecting an unclear field (Issue #16
+    review round 8).
+    """
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="問1 配点5点"),
+    ]
+
+    questions, _ = build_questions_and_rubrics("test-1", regions)
+
+    assert questions[0].points == 5
+
+
+def test_a_score_field_with_no_unit_and_multiple_numbers_is_rejected() -> None:
+    """Without a "点" to anchor to, a field containing more than one number
+    is ambiguous -- unlike a bare candidate-generated "5", it must not be
+    accepted by picking whichever number happens to come first.
+    """
+    regions = [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        _region(RegionKind.SCORE, "1", text="問1 5"),
+    ]
+
+    with pytest.raises(InvalidScoreError):
+        build_questions_and_rubrics("test-1", regions)
+
+
 def test_zero_score_is_rejected() -> None:
     regions = [
         _region(RegionKind.QUESTION, "1", text="問1"),

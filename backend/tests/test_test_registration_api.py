@@ -115,6 +115,21 @@ def _region(
     }
 
 
+def _confirm(client: TestClient, test_id: str) -> Any:
+    """`POST /profile/confirm`, pinned to the profile's current revision.
+
+    Exercises the normal reviewer flow (fetch, then confirm what was
+    fetched) -- tests of the revision check itself pass an explicit,
+    deliberately stale `revision` instead of using this helper.
+    """
+    revision = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["revision"]
+    return client.post(
+        f"/tests/{test_id}/profile/confirm",
+        headers=_auth(),
+        json={"revision": revision},
+    )
+
+
 def _minimal_regions(*, label: str = "1", score_text: str = "5点") -> list[dict[str, object]]:
     return [
         _region(region_id=f"question-{label}", kind="question", label=label, text=f"問{label}"),
@@ -216,6 +231,35 @@ class TestCreateTest:
         )
         assert response.status_code == 422
 
+    def test_rejects_a_name_over_the_length_limit(self, client: TestClient) -> None:
+        """An authenticated caller could otherwise pack most of the
+        request's own size limit into `name`, stored verbatim and returned
+        on every test-registration list response (Issue #16 review round
+        8).
+        """
+        response = client.post(
+            "/tests",
+            headers=_auth(),
+            data={"name": "国" * 201},
+            files={
+                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
+                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
+            },
+        )
+        assert response.status_code == 422
+
+    def test_rejects_a_subject_over_the_length_limit(self, client: TestClient) -> None:
+        response = client.post(
+            "/tests",
+            headers=_auth(),
+            data={"name": "国語", "subject": "国" * 201},
+            files={
+                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
+                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
+            },
+        )
+        assert response.status_code == 422
+
     def test_does_not_413_when_two_within_limit_pdfs_exceed_one_files_worth(
         self, client: TestClient
     ) -> None:
@@ -264,7 +308,7 @@ class TestProfileReviewAndConfirm:
         assert updated.json()["status"] == "draft"
         assert len(updated.json()["regions"]) == 3
 
-        confirmed = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        confirmed = _confirm(client, test_id)
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["status"] == "confirmed"
         assert all(region["confirmed"] for region in confirmed.json()["regions"])
@@ -277,7 +321,7 @@ class TestProfileReviewAndConfirm:
             headers=_auth(),
             json={"regions": _minimal_regions(score_text="配点未定")},
         )
-        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        response = _confirm(client, test_id)
         assert response.status_code == 422
 
     def test_confirm_rejects_a_blank_question_label(self, client: TestClient) -> None:
@@ -301,7 +345,7 @@ class TestProfileReviewAndConfirm:
             ),
         ]
         client.put(f"/tests/{test_id}/profile", headers=_auth(), json={"regions": regions})
-        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        response = _confirm(client, test_id)
         assert response.status_code == 422
 
     def test_confirm_rejects_a_duplicate_question_number(self, client: TestClient) -> None:
@@ -312,7 +356,7 @@ class TestProfileReviewAndConfirm:
             _region(region_id="question-1-dup", kind="question", label="1", text="重複問1")
         )
         client.put(f"/tests/{test_id}/profile", headers=_auth(), json={"regions": regions})
-        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        response = _confirm(client, test_id)
         assert response.status_code == 422
 
     def test_update_rejects_out_of_range_coordinates(self, client: TestClient) -> None:
@@ -353,7 +397,7 @@ class TestProfileReviewAndConfirm:
             headers=_auth(),
             json={"regions": _minimal_regions()},
         )
-        client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        _confirm(client, test_id)
 
         reanalyze = client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
         assert reanalyze.status_code == 409
@@ -365,7 +409,7 @@ class TestProfileReviewAndConfirm:
         )
         assert reedit.status_code == 409
 
-        reconfirm = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        reconfirm = _confirm(client, test_id)
         assert reconfirm.status_code == 409
 
     def test_profile_survives_a_process_restart(self, client: TestClient, data_root: Path) -> None:
@@ -413,13 +457,13 @@ class TestProfileReviewAndConfirm:
 
         monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
         with pytest.raises(OSError):
-            client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+            _confirm(client, test_id)
 
         with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
             assert len(uow.questions.list_for_test(test_id)) == 1
 
         monkeypatch.setattr(LocalFileStore, "write_atomic", real_write_atomic)
-        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        response = _confirm(client, test_id)
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "confirmed"
 
@@ -455,7 +499,7 @@ class TestProfileReviewAndConfirm:
 
         monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
         with pytest.raises(OSError):
-            client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+            _confirm(client, test_id)
 
         with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
             assert {q.number for q in uow.questions.list_for_test(test_id)} == {"1", "2"}
@@ -468,7 +512,7 @@ class TestProfileReviewAndConfirm:
             headers=_auth(),
             json={"regions": _minimal_regions(label="1")},
         )
-        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        response = _confirm(client, test_id)
         assert response.status_code == 200, response.text
 
         with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
@@ -515,7 +559,7 @@ class TestProfileReviewAndConfirm:
         confirm_responses: list[int] = []
 
         def _run_confirm() -> None:
-            response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+            response = _confirm(client, test_id)
             confirm_responses.append(response.status_code)
 
         confirm_thread = threading.Thread(target=_run_confirm)
@@ -548,6 +592,62 @@ class TestProfileReviewAndConfirm:
         profile = client.get(f"/tests/{test_id}/profile", headers=_auth())
         assert profile.json()["status"] == "confirmed"
 
+    def test_confirm_rejects_a_stale_revision(self, client: TestClient) -> None:
+        """Two clients reviewing the same test: client A fetches/saves the
+        profile (capturing its revision), then before A calls confirm,
+        client B's own `PUT /profile` replaces the region set. A's confirm
+        must not silently approve B's regions under A's attestation --
+        confirming is "I reviewed *this* region set", not "whatever is on
+        disk when the request happens to run" (Issue #16 review round 8,
+        docs/test-registration.md's human-review contract).
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        a_saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions(label="1")},
+        )
+        assert a_saved.status_code == 200, a_saved.text
+        stale_revision = a_saved.json()["revision"]
+
+        b_saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions(label="2")},
+        )
+        assert b_saved.status_code == 200, b_saved.text
+        assert b_saved.json()["revision"] != stale_revision
+
+        response = client.post(
+            f"/tests/{test_id}/profile/confirm",
+            headers=_auth(),
+            json={"revision": stale_revision},
+        )
+        assert response.status_code == 409
+        assert "revision" in response.json()["detail"]
+
+        # B's regions must still be there, still draft -- A's stale confirm
+        # attempt must not have touched anything.
+        profile = client.get(f"/tests/{test_id}/profile", headers=_auth())
+        assert profile.json()["status"] == "draft"
+        assert [r["label"] for r in profile.json()["regions"]] == ["2", "2", "2"]
+
+    def test_confirm_requires_the_revision_field(self, client: TestClient) -> None:
+        """A malformed body omitting `revision` entirely must fail request
+        validation (422), not be treated as some default revision.
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions()},
+        )
+
+        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth(), json={})
+        assert response.status_code == 422
+
 
 class TestCompleteRegistration:
     def _confirm_profile(self, client: TestClient, test_id: str) -> None:
@@ -557,7 +657,7 @@ class TestCompleteRegistration:
             headers=_auth(),
             json={"regions": _minimal_regions()},
         )
-        response = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        response = _confirm(client, test_id)
         assert response.status_code == 200, response.text
 
     def _confirm_dependency_graph(self, client: TestClient, test_id: str) -> None:
@@ -647,7 +747,7 @@ class TestCompleteRegistration:
 
         monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
         with pytest.raises(OSError):
-            client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+            _confirm(client, test_id)
         monkeypatch.setattr(LocalFileStore, "write_atomic", real_write_atomic)
 
         # The DB commit from the failed attempt above already created both
@@ -664,7 +764,7 @@ class TestCompleteRegistration:
             headers=_auth(),
             json={"regions": _minimal_regions(label="1")},
         )
-        confirm = client.post(f"/tests/{test_id}/profile/confirm", headers=_auth())
+        confirm = _confirm(client, test_id)
         assert confirm.status_code == 200, confirm.text
 
         response = client.post(f"/tests/{test_id}/complete-registration", headers=_auth())

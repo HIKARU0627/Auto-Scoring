@@ -1,19 +1,21 @@
-"""ASGI middleware that gates multipart-upload routes before FastAPI ever
-parses their body.
+"""ASGI middleware that gates large-body routes before FastAPI ever parses
+their body -- multipart file uploads and the one plain-JSON route whose body
+can grow just as unboundedly.
 
 FastAPI resolves a path operation's dependencies (auth) and its body
-parameters (``File``/``Form``, via ``await request.form()``) together, as
-part of routing into the endpoint. Neither one runs strictly before the
-other -- in particular, an unauthenticated caller's request body is already
-spooled by Starlette's multipart parser before ``require_token`` (an
-ordinary ``Depends``) gets a chance to reject it. The same is true of the
-capacity semaphore this module used to be: acquiring it *inside* the async
-handler only ever ran after the body had already been fully parsed.
+parameters (``File``/``Form`` via ``await request.form()``, or a Pydantic
+model via ``await request.json()``) together, as part of routing into the
+endpoint. Neither one runs strictly before the other -- in particular, an
+unauthenticated caller's request body is already spooled/parsed before
+``require_token`` (an ordinary ``Depends``) gets a chance to reject it. The
+same is true of the capacity semaphore this module used to be: acquiring it
+*inside* the async handler only ever ran after the body had already been
+fully parsed.
 
 That means, even with per-request body-size limits in place
 (``body_size_limit.py``), N concurrent requests near that limit -- including
-ones with no valid bearer token at all -- can each make FastAPI spool a full
-multipart body before any of them is ever rejected, unboundedly piling up
+ones with no valid bearer token at all -- can each make FastAPI spool/parse
+a full body before any of them is ever rejected, unboundedly piling up
 parser memory/temp-disk usage (``AGENTS.md`` "Validate every input that
 crosses a trust boundary"; "機能レベルのrate limiting").
 
@@ -33,15 +35,19 @@ import threading
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-#: (method, path pattern) pairs this middleware protects. Both routes accept
-#: a multipart body FastAPI would otherwise spool before any auth/capacity
-#: check runs: ``POST /tests/{test_id}/submissions`` (one answer PDF) and
+#: (method, path pattern) pairs this middleware protects -- every route
+#: whose body FastAPI would otherwise spool/parse before any auth/capacity
+#: check runs: ``POST /tests/{test_id}/submissions`` (one answer PDF),
 #: ``POST /tests`` (Issue #16 registration: two independently-limited PDFs
 #: in one request, so it can carry just as much unauthenticated body as an
-#: answer upload can).
+#: answer upload can), and ``PUT /tests/{test_id}/profile`` (an unbounded
+#: JSON region array -- the same pre-auth body-parsing memory exhaustion
+#: this middleware exists to prevent, just via `request.json()` instead of
+#: a multipart parser; Issue #16 review round 8).
 _GATED_ROUTES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("POST", re.compile(r"^/tests/[^/]+/submissions$")),
     ("POST", re.compile(r"^/tests$")),
+    ("PUT", re.compile(r"^/tests/[^/]+/profile$")),
 )
 
 

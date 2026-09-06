@@ -52,7 +52,14 @@ from auto_scoring.adapters.pdf.profile_candidate_generation import generate_prof
 from auto_scoring.adapters.test_intake import register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
-from auto_scoring.domain.models import MAX_ORIGINAL_FILENAME_LENGTH, DomainError, Test, TestStatus
+from auto_scoring.domain.models import (
+    MAX_ORIGINAL_FILENAME_LENGTH,
+    MAX_TEST_NAME_LENGTH,
+    MAX_TEST_SUBJECT_LENGTH,
+    DomainError,
+    Test,
+    TestStatus,
+)
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
@@ -184,6 +191,9 @@ class ProfileResponse(BaseModel):
     status: str
     pages: list[PageFormatModel]
     regions: list[RegionModel]
+    #: Compare-and-set token for `POST /profile/confirm` -- see
+    #: `domain.profile.Profile.revision`'s own docstring.
+    revision: int
 
     @classmethod
     def from_domain(cls, profile: Profile) -> ProfileResponse:
@@ -192,6 +202,7 @@ class ProfileResponse(BaseModel):
             status=profile.status.value,
             pages=[PageFormatModel.from_domain(page) for page in profile.signature.pages],
             regions=[RegionModel.from_domain(region) for region in profile.regions],
+            revision=profile.revision,
         )
 
 
@@ -202,6 +213,14 @@ class UpdateProfileRequest(BaseModel):
     # `default_factory=list` here would let a malformed `{}` body silently
     # wipe every region instead of failing validation with 422.
     regions: list[RegionModel]
+
+
+class ConfirmProfileRequest(BaseModel):
+    #: The `revision` the reviewer's client last fetched/saved (`GET`/
+    #: `PUT /profile`'s own response) -- must match the profile currently
+    #: on disk, or the confirm is rejected as stale (Issue #16 review round
+    #: 8; see `domain.profile.Profile.revision`).
+    revision: int
 
 
 class CompleteRegistrationResponse(BaseModel):
@@ -331,6 +350,20 @@ def build_test_registration_router(
     ) -> TestResponse:
         if not name.strip():
             raise HTTPException(422, detail="name must not be empty")
+        # Cheapest possible rejection, before a single upload byte is read:
+        # an authenticated caller could otherwise pack most of the request
+        # size limit into these two form fields, which are stored verbatim
+        # and returned in full on every registration list response (Issue
+        # #16 review round 8; `Test.__post_init__` guarantees the same
+        # bound regardless of entry point, this just fails faster here).
+        if len(name) > MAX_TEST_NAME_LENGTH:
+            raise HTTPException(
+                422, detail=f"name must be at most {MAX_TEST_NAME_LENGTH} characters"
+            )
+        if subject is not None and len(subject) > MAX_TEST_SUBJECT_LENGTH:
+            raise HTTPException(
+                422, detail=f"subject must be at most {MAX_TEST_SUBJECT_LENGTH} characters"
+            )
         try:
             model_answer_data = await _read_upload_within_limit(model_answer, limits.max_size_bytes)
             manual_data = await _read_upload_within_limit(manual, limits.max_size_bytes)
@@ -426,6 +459,12 @@ def build_test_registration_router(
             except DomainError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc
 
+            # Bumped, not reset to 1: a fresh analysis is still a change to
+            # the region set a reviewer may have already fetched/reviewed
+            # at the previous revision, and must invalidate a confirm
+            # pinned to that revision the same way `PUT /profile` below
+            # does (Issue #16 review round 8).
+            profile = replace(profile, revision=(existing.revision + 1 if existing else 1))
             profile_store.save(profile)
         return ProfileResponse.from_domain(profile)
 
@@ -457,12 +496,18 @@ def build_test_registration_router(
                 )
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc
+            # Bumped from whatever the currently-saved profile was at, not
+            # reset to 1 -- see `Profile.revision`'s docstring and
+            # `analyze_profile`'s matching comment above.
+            updated = replace(updated, revision=existing.revision + 1)
             profile_store.save(updated)
         return ProfileResponse.from_domain(updated)
 
     @router.post("/tests/{test_id}/profile/confirm", response_model=ProfileResponse)
     def confirm_profile(
-        test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
+        test_id: str,
+        request: ConfirmProfileRequest,
+        uow: SqlAlchemyUnitOfWork = uow_dependency,
     ) -> ProfileResponse:
         test = _get_test_or_404(uow, test_id)
         # Serializes against `analyze_profile`/`update_profile` for this
@@ -473,6 +518,26 @@ def build_test_registration_router(
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     detail=f"test {test_id!r}'s profile is already confirmed",
+                )
+            if profile.revision != request.revision:
+                # Confirming attests to "the region set I reviewed", not
+                # "whatever happens to be on disk right now" -- without
+                # this, another client's `PUT /profile` or `/analyze`
+                # landing between this reviewer's own save and their
+                # confirm call (the per-test lock only serializes
+                # individual requests against each other, it doesn't stop
+                # a *later* request from legitimately changing the profile
+                # first) would have this confirm silently approve regions
+                # nobody actually reviewed under this attestation (Issue
+                # #16 review round 8, docs/test-registration.md's
+                # human-review contract).
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"test {test_id!r}'s profile has changed since revision "
+                        f"{request.revision} was reviewed (current revision: "
+                        f"{profile.revision}); reload and re-review before confirming"
+                    ),
                 )
             if not profile.regions:
                 raise HTTPException(

@@ -55,24 +55,39 @@ def extract_text_lines(source: Path, page_index: int) -> list[TextLine]:
         document.close()
 
 
+def _utf16_length(text: str) -> int:
+    """Length of `text` in UTF-16 code units -- what PDFium's text-index
+    APIs (`FPDFText_GetCharIndexFromTextIndex`) count in, unlike Python's
+    own `len()`, which counts Unicode code points. A non-BMP character (an
+    emoji, or a rare CJK ideograph like "\U00020bb7") is one Python `str`
+    element but a UTF-16 *surrogate pair* -- two code units -- so
+    accumulating plain `len()` into `text_index` drifts out of sync with
+    PDFium's own indexing the moment one appears, misassigning every
+    following line's rectangle to the wrong span of characters (Issue #16
+    review round 8).
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
 def _lines_from_textpage(textpage: PdfTextPage) -> list[TextLine]:
     n_chars = textpage.count_chars()
     if n_chars == 0:
         return []
     full_text = textpage.get_text_range(0, n_chars)
     lines: list[TextLine] = []
-    # Position within `full_text`, *not* PDFium's internal char list --
-    # `_line_rect` converts each line's own position independently instead
-    # of this accumulating into a char-list index (see its docstring).
+    # Position within `full_text`, in UTF-16 code units -- *not* Python
+    # code points, and *not* PDFium's internal char list either (`_line_rect`
+    # converts each line's own position independently instead of this
+    # accumulating into a char-list index, see its docstring).
     text_index = 0
     for raw_line in full_text.split("\r\n"):
-        length = len(raw_line)
+        length = _utf16_length(raw_line)
         stripped = raw_line.strip()
         if stripped:
             rect = _line_rect(textpage, text_index, length)
             if rect is not None:
                 lines.append(TextLine(text=stripped, rect_pt=rect))
-        text_index += length + 2  # skip the "\r\n" itself
+        text_index += length + 2  # skip the "\r\n" itself (2 UTF-16 units)
     return lines
 
 

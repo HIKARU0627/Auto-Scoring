@@ -184,6 +184,18 @@ class Profile:
     signature: FormatSignature
     regions: tuple[Region, ...]
     status: ProfileStatus
+    #: Monotonically increasing with every saved change to `regions`
+    #: (`/profile/analyze`, `PUT /profile`) -- never touched by `confirm`
+    #: itself, which changes only `status`. Exists purely as a compare-and-
+    #: set token: a reviewer's confirm attests to "the region set at
+    #: revision N", and `api.test_registration_router.confirm_profile`
+    #: rejects a confirm whose `revision` no longer matches the profile
+    #: currently on disk. Without it, a second client's `PUT /profile` (or
+    #: a re-`analyze`) landing between a reviewer's own save and their
+    #: confirm call would be silently approved under that reviewer's
+    #: attestation instead (Issue #16 review round 8). Defaults to `1` so
+    #: a profile saved before this field existed still loads.
+    revision: int = 1
 
     def __post_init__(self) -> None:
         invalid_pages = _pages_out_of_range(self.regions, self.signature)
@@ -246,6 +258,7 @@ class Profile:
             "status": self.status.value,
             "signature": self.signature.to_dict(),
             "regions": [region.to_dict() for region in self.regions],
+            "revision": self.revision,
         }
 
     @classmethod
@@ -263,4 +276,5 @@ class Profile:
             signature=signature,
             regions=regions,
             status=ProfileStatus(data["status"]),
+            revision=int(data.get("revision", 1)),
         )

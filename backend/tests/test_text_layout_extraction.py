@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from auto_scoring.adapters.pdf.text_layout_extraction import extract_text_lines
+from auto_scoring.adapters.pdf.text_layout_extraction import _utf16_length, extract_text_lines
 
 _WIDTH, _HEIGHT = 595.0, 842.0
 
@@ -83,3 +83,19 @@ def test_blank_page_has_no_lines(tmp_path: Path) -> None:
     path.write_bytes(_text_pdf([]))
 
     assert extract_text_lines(path, 0) == []
+
+
+def test_utf16_length_counts_surrogate_pairs_for_non_bmp_characters() -> None:
+    """A non-BMP character (an emoji, or a rare CJK ideograph) is one
+    Python `str` element but a UTF-16 *surrogate pair* -- two code units,
+    which is what PDFium's own text-index APIs
+    (`FPDFText_GetCharIndexFromTextIndex`) count in. Accumulating plain
+    `len()` instead would drift `text_index` out of sync with PDFium's own
+    indexing the moment one such character appears, misassigning every
+    following line's rectangle (Issue #16 review round 8).
+    """
+    assert _utf16_length("ab") == len("ab") == 2
+    non_bmp = "\U0001f600"  # an emoji outside the Basic Multilingual Plane
+    assert len(non_bmp) == 1
+    assert _utf16_length(non_bmp) == 2
+    assert _utf16_length(f"a{non_bmp}b") == 4

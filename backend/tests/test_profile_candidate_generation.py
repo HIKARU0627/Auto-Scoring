@@ -20,7 +20,7 @@ import pytest
 from auto_scoring.adapters.pdf import profile_candidate_generation as pcg
 from auto_scoring.adapters.pdf.text_layout_extraction import TextLine
 from auto_scoring.domain.pdf_geometry import PageGeometry
-from auto_scoring.domain.profile import ProfileStatus, RegionKind
+from auto_scoring.domain.profile import NormalizedBBox, ProfileStatus, RegionKind
 
 _A4 = PageGeometry(crop_width=595.0, crop_height=842.0)
 
@@ -266,6 +266,21 @@ class TestPlaceholderBboxBelow:
         # Whichever side was chosen, the box must stay within 0..1 and have
         # positive height (NormalizedBBox's own constructor already
         # guarantees this -- constructing it without raising is the check).
+        assert 0.0 <= placeholder.y0 < placeholder.y1 <= 1.0
+
+    def test_stays_non_degenerate_when_the_heading_spans_the_full_page(self) -> None:
+        """A heading rect clipped to the full displayed page (`_rect_to_bbox`
+        clips an out-of-page rect to 0..1) leaves neither "below" nor
+        "above" any room within 0..1 for a `_PLACEHOLDER_HEIGHT` box -- the
+        old logic computed `y0 == y1 == 0` here, and `NormalizedBBox`
+        rejects that as having no area. This only ever runs during
+        `/profile/analyze`, so an uncaught `ValueError` here would 500 the
+        whole analysis (Issue #16 review round 8).
+        """
+        heading = NormalizedBBox(x0=0.1, y0=0.0, x1=0.5, y1=1.0)
+
+        placeholder = pcg._placeholder_bbox_below(heading)
+
         assert 0.0 <= placeholder.y0 < placeholder.y1 <= 1.0
 
 

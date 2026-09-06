@@ -81,6 +81,16 @@ class QuestionNumberTooLongError(TestRegistrationError):
 #: treats as "no valid score".
 _SCORE_NUMBER_PATTERN = re.compile(r"(?<![-.\d])\d{1,19}(?![.\d])")
 
+#: Same digit-run boundary as `_SCORE_NUMBER_PATTERN`, but additionally
+#: anchored to a following `点` (with optional whitespace in between) --
+#: `_extract_points` prefers this whenever a region's text contains it, so
+#: a descriptive field like "問1 配点5点" resolves to the score (5) instead
+#: of the first standalone integer found anywhere in the text (1, from
+#: "問1") -- the maximum this becomes a `Question.points`, which grading
+#: depends on, so silently picking the wrong number is worse than
+#: rejecting the input outright (Issue #16 review round 8).
+_SCORE_WITH_UNIT_PATTERN = re.compile(r"(?<![-.\d])(\d{1,19})(?![.\d])\s*点")
+
 #: `QuestionRow.points`/`RubricCriterionRow.max_points` (db/orm.py) are both
 #: SQLite `INTEGER` columns, which store at most a signed 64-bit value.
 #: Python's own `int` has no such ceiling, so a `SCORE` region whose text
@@ -155,18 +165,32 @@ def _extract_points(score_regions: Sequence[Region]) -> int | None:
     """Pull an integer point value out of the `SCORE` region(s)' text.
 
     Candidate generation (`domain.profile_candidate_generation`) writes the
-    matched number as region text; a human can also type a corrected value in
-    directly before confirming. Returns `None` when there is no `SCORE`
-    region or its text carries no digits -- the caller treats that as an
-    invalid score, not a silent zero (Issue #16 acceptance: "配点不正…を拒否
-    する").
+    matched number as a bare digit string (e.g. "5"); a human can also type
+    a corrected value in directly before confirming -- possibly a
+    descriptive phrase like "問1 配点5点" rather than just a number. A
+    number immediately followed by "点" is preferred whenever the text
+    contains one, so that phrase resolves to 5 (the actual score) rather
+    than 1 (the first standalone integer, from "問1"). Text with no "点"
+    mention is only accepted if it is *unambiguously* one integer end to
+    end (candidate generation's own bare digit string) -- never the first
+    number found inside a longer, possibly unrelated sentence (Issue #16
+    review round 8: `Question.points` drives grading, so guessing wrong is
+    worse than rejecting the input).
+
+    Returns `None` when there is no `SCORE` region or none of the above
+    matches -- the caller treats that as an invalid score, not a silent
+    zero (Issue #16 acceptance: "配点不正…を拒否する").
     """
     for region in score_regions:
         if not region.text:
             continue
-        match = _SCORE_NUMBER_PATTERN.search(region.text)
-        if match is not None:
-            return int(match.group())
+        text = region.text.strip()
+        with_unit = _SCORE_WITH_UNIT_PATTERN.search(text)
+        if with_unit is not None:
+            return int(with_unit.group(1))
+        whole_field = _SCORE_NUMBER_PATTERN.fullmatch(text)
+        if whole_field is not None:
+            return int(whole_field.group())
     return None
 
 

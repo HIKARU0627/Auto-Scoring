@@ -116,6 +116,16 @@ Issue #15時点で保存された `profile.json`（`text` キーが無い）も�
 という単一の行為になる。人間はconfirmを押す前に `PUT /profile` で何度でも内容を
 編集できる。
 
+confirmは`ProfileResponse.revision`（`Profile.revision`、`/profile/analyze`・
+`PUT /profile`のたびに増分、confirm自体では変わらない）へのcompare-and-setでもある
+（PRラウンド8）——`POST /profile/confirm`は`revision`をbodyで要求し、profileが
+現在保持するrevisionと一致しない場合は`409`で拒否する。2つのクライアントが同じ
+testをreviewしている場合、client Aの保存～confirmの間に別のPUT/analysisが割り込むと、
+このrevisionチェックが無ければclient Aはレビューしていないregionセットを自分の
+attestationで確定してしまう。テスト単位のlock（上記）はrequest同士を直列化するだけで、
+「後から来たrequestが正当にprofileを変更する」ケースまでは防げないため、別途この
+compare-and-setが必要だった。
+
 ### API一覧（`api.test_registration_router`）
 
 すべて既存のBearer認証必須ルータ配下（`docs/sidecar-api.md` §2）。
@@ -339,6 +349,45 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   broadな`except Exception`を追加し、`ValueError`（ジオメトリ自体が不正）は
   引き続き`PdfGeometryError`に、それ以外（ページ自体が読めない）は
   `PdfCorruptedError`に変換するようにした。
+
+## レビュー対応（PRラウンド8）
+
+- **profile確定をレビュー済みrevisionに固定する**: 上記「Profile確認は一方向・
+  一度きり」参照。`Profile.revision`と`ConfirmProfileRequest.revision`による
+  compare-and-setを追加し、2クライアントが同じtestをreviewしている場合に
+  未レビューのregionが黙って確定されてしまうのを防いだ。
+- **実際のscoreトークンをparseする**: `_extract_points`が「テキスト中の最初の
+  独立した整数」を返していたため、「問1 配点5点」のような記述的な入力で
+  設問番号の「1」を配点として誤って永続化し得た。「点」に直接紐づく数値を
+  優先し、それが無い場合はテキスト全体が曖昧さ無く1つの整数であることを
+  要求するようにした（`_SCORE_WITH_UNIT_PATTERN`追加）。
+- **`PUT /profile`をbodyパース前にgateする**: `SubmissionUploadGateMiddleware`
+  の`_GATED_ROUTES`に`PUT /tests/{id}/profile`を追加した。無制限のregion
+  JSONは、multipart uploadに対してこのmiddlewareが防いでいるのと同じ
+  認証前body解析メモリ枯渇を`request.json()`経由で再現し得た。
+- **PDFiumのtext indexをUTF-16単位で数える**: `_lines_from_textpage`が
+  Pythonの`len()`（コードポイント数）を`FPDFText_GetCharIndexFromTextIndex`
+  の`text_index`にそのまま累積していたが、このAPIはUTF-16コード単位で数える。
+  絵文字や🈁のような非BMP文字（サロゲートペア、UTF-16で2単位）を含む行の後、
+  `text_index`がずれて以降の行のrectangleが誤った文字に割り当てられ得た。
+  `_utf16_length`ヘルパーでUTF-16単位の長さを計算するようにした。
+- **全ページ見出しplaceholderを非退化に保つ**: `_placeholder_bbox_below`が、
+  見出しrectangleがページ全体の高さにclipされる場合（y0=0, y1=1）に
+  `y0 == y1 == 0`を計算し、`NormalizedBBox`が未捕捉の`ValueError`を送出して
+  いた（`/profile/analyze`中にのみ発生するため、登録自体は成功し、以後の
+  analysisが常に500になる永続的なdraftが残っていた）。両方の配置（下・上）が
+  収まらない退化ケースでは、ページ内に収まる極小の正の高さへずらすようにした。
+- **永続化するtestメタデータに上限を設ける**: `name`/`subject`は認証済み
+  呼び出し元がbody制限まで送信でき、全ての登録一覧responseでそのまま
+  返却されていた。`MAX_TEST_NAME_LENGTH`/`MAX_TEST_SUBJECT_LENGTH`
+  （各200文字）を`Test.__post_init__`に追加し、`POST /tests`ハンドラでも
+  早期に同じ上限で拒否するようにした。
+- **[app] リスト再読み込み失敗を処理する**: `TestListPage._reload`が
+  `await future`で失敗をそのまま再送出しており、`FutureBuilder`がエラーを
+  描画しているにもかかわらず、`RefreshIndicator.onRefresh`やタイルの
+  `onTap`から未処理の非同期例外が発生していた。`_testsFuture`には失敗した
+  Futureをそのまま渡しつつ、`_reload`自身の`await`は`try`/`catch`で
+  捕捉するようにした。
 
 ## 未決事項
 
