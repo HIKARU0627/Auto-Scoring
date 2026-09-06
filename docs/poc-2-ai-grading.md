@@ -23,8 +23,9 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 | メトリクス計算・集計パイプライン              | **実装済み**（`backend/src/auto_scoring/domain/ai_grading_metrics.py`） |
 | 合成フィクスチャでの集計再現                  | **実装済み**（`uv run python poc/issue_14_ai_grading/report.py`）       |
 | 実データ（2教科×問1）の書き起こし・接地       | **実施済み（予備調査、§6 参照）**。5 件・のべ 5 設問                    |
-| 実 AI プロバイダアダプタ（Gemini/Claude/GPT） | **未実装**（credentials 待ち。§7・§9）                                  |
-| 実データでの AI 呼び出し・実測値・採用判断    | **未実施**（同上）                                                      |
+| 直接 vendor API アダプタ（Gemini/Claude/GPT） | **未実装**（credentials 待ち。§7・§9）                                  |
+| OpenRouter / Codex app-server アダプタ        | **実装済み**（Issue #44。§7.0・§7.3。`adapters/ai_grading/`）           |
+| 実データでの AI 呼び出し・実測値・採用判断    | **未実施**（§7.4 の live probe が未記入。#35 のスコープ）               |
 
 ---
 
@@ -951,6 +952,46 @@ distinct submissions (answers, by submissionId) per subject -- decision record s
 
 ## 7. credentials と rate limit
 
+### 7.0 3 つの呼び出し経路（Issue #44）
+
+`AIProvider` adapter は次の 3 経路のいずれでも差し替え可能である。
+`ProviderDescriptor`/`descriptor_key`（§3.3 の再現性 identity）はどの経路でも
+同じ形（provider/model/version/prompt_version/temperature/
+structured_output_mode）のまま保たれ、経路の違いは `provider` フィールドの値
+（`gemini`/`claude`/`gpt` 対 `openrouter` 対 `codex-app-server`）と `version`
+の埋まり方だけに現れる。既存 contract test（`AIProviderContract`,
+`backend/tests/test_ai_provider_contract.py`）はどの経路のアダプタにも同一の
+まま適用される（§7.3 が実装済みのサブクラスを列挙する）。
+
+| 経路                 | 実装                                                                        | 認証方式                                              | コスト                                                             | latency                                               | 対応状況                               |
+| -------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- | -------------------------------------- |
+| 直接 vendor API      | 未実装（§0.1・§2 参照）                                                     | 各社ごとの API key                                    | 各社の従量課金（トークン単価。§8.1 の cost 閾値と同じ単位）        | 各社 API のネットワーク往復のみ                       | 未実装                                 |
+| **OpenRouter**       | `backend/src/auto_scoring/adapters/ai_grading/openrouter_provider.py`       | 単一 API key（OpenRouter 自身の key）                 | 各社原価 + OpenRouter の手数料（数 %。モデルごとに異なる）         | 直接呼び出し + OpenRouter ゲートウェイの追加ホップ    | 実装済み（§7.1.1 参照）                |
+| **Codex app-server** | `backend/src/auto_scoring/adapters/ai_grading/codex_app_server_provider.py` | Codex CLI の既存ログイン（ChatGPT プラン or API key） | ChatGPT サブスクリプション上限内は追加課金なし（サブスク外は別途） | `codex` サブプロセス起動 + JSON-RPC 往復（実測 §7.4） | 実装済み、プロトコルは実験的（§7.1.2） |
+
+トレードオフの要点:
+
+- **鍵管理**: 直接 API は候補ごとに個別の鍵を管理する必要があるのに対し、
+  OpenRouter は単一鍵で複数候補を切り替えられる。Codex app-server は API
+  key をこのリポジトリ側で一切保持しない（後述）。
+- **コスト**: OpenRouter は原価に手数料が乗る。Codex app-server は運用者が
+  既に持つ ChatGPT/Codex サブスクリプションの範囲内であれば追加コストなしで
+  試せるが、大量の採点呼び出しをサブスクリプション個人利用の範囲外で行うこと
+  は契約上/レート制限上想定されていない可能性があり、本番運用で採用するかは
+  #35 の実データ評価で判断する（本 Issue #44 の対象外）。
+- **認証境界**: 直接 API / OpenRouter は「API key を渡す」という一様な
+  境界を持つのに対し、Codex app-server は「運用者の Codex ログインセッション
+  を間借りする」経路であり、セキュリティ境界の性質が異なる（§7.1.2 に明記）。
+
+どの経路を使うかは `AUTO_SCORING_AI_GRADING_TRANSPORT` 環境変数で切り替える
+（`backend/src/auto_scoring/adapters/ai_grading/factory.py` の
+`create_ai_provider()`）。値は `openrouter` または `codex_app_server`
+のいずれか（直接 vendor API は未実装のため値も未定義）。ただし
+`create_ai_provider()` はまだどこからも呼ばれていない（AI 採点ジョブ
+プロセッサ自体が未実装のため。§0.1・`backend/poc/issue_14_ai_grading/README.md`
+参照）。将来そのジョブプロセッサが `create_app` 相当の DI ポイントから呼ぶ
+ことを想定した、設定 → adapter のマッピング関数として先に用意した。
+
 ### 7.1 credentials 設定方法
 
 `.env.example` の「AI grading PoC 2」節を参照。API キーは **Python サイドカー
@@ -958,19 +999,131 @@ distinct submissions (answers, by submissionId) per subject -- decision record s
 または OS キーチェーン（`keyring`）に置く。リポジトリ・ログ・Issue・
 スクリーンショットに含めない（`AGENTS.md`「Security」）。
 
+#### 直接 vendor API（未実装）
+
 | 候補     | 必要な設定                                                        |
 | -------- | ----------------------------------------------------------------- |
 | `gemini` | `AUTO_SCORING_GEMINI_API_KEY` + `AUTO_SCORING_GEMINI_MODEL`       |
 | `claude` | `AUTO_SCORING_ANTHROPIC_API_KEY` + `AUTO_SCORING_ANTHROPIC_MODEL` |
 | `gpt`    | `AUTO_SCORING_OPENAI_API_KEY` + `AUTO_SCORING_OPENAI_MODEL`       |
 
-温度は `AUTO_SCORING_AI_GRADING_TEMPERATURE`（既定 0.0）で全候補共通に揃え、
-再現性を確保する（Issue #14「再現条件」）。プロンプトテンプレートは
-バージョン管理し、`ProviderDescriptor.prompt_version` に版数タグまたは
-ハッシュ値を記録する（§3.3）。外部送信は**生徒識別情報を除いた設問単位
-データ（当該設問の答案画像切り出し + OCR テキスト + 問題文 + 模範解答 +
-採点基準）だけ**に限定する（決定書 §2 (2)）。可能なら各サービスの
-データ保持オプトアウト／ゼロデータ保持を有効にする（決定書 §6.6）。
+#### OpenRouter
+
+| 設定                              | 内容                                                                                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTO_SCORING_OPENROUTER_API_KEY` | OpenRouter の API key（単一鍵で複数 vendor のモデルにアクセス可能）                                                                 |
+| `AUTO_SCORING_OPENROUTER_MODEL`   | OpenRouter のルーティング識別子（例: `google/gemini-2.5-flash`、`anthropic/claude-sonnet-4.5`。vendor 固有の SDK モデル名ではない） |
+
+OpenRouter は OpenAI Chat Completions 互換の HTTP API
+（`POST /api/v1/chat/completions`）を提供するため、既存の GPT 系 adapter
+パターン（画像は `image_url` の data URI、構造化出力は
+`response_format: {"type": "json_schema", ...}`）をそのまま流用できる
+（`openrouter_provider.py` の `_build_response_format`/`grade`）。OpenRouter
+はモデル ID の裏側で実際に呼ばれる deployment をルーティングで変えることが
+あるため、応答に含まれる実際の `model` フィールドを
+`ProviderDescriptor.version` に記録し、どの deployment が実際に応答したかを
+再現性 identity（§3.3）に残す。
+
+#### Codex app-server
+
+| 設定                            | 内容                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `AUTO_SCORING_CODEX_EXECUTABLE` | `codex` 実行ファイル名/パス（既定 `codex`。`PATH` から解決）            |
+| `AUTO_SCORING_CODEX_MODEL`      | Codex に渡すモデル指定（省略可。省略時は Codex 自身の既定モデルを使う） |
+
+**API key をこのリポジトリ側では一切保持しない**: 認証は運用者が事前に
+`codex login`（ChatGPT プランでのログイン、または Codex 自身の API key
+設定）を完了させていることに依存する。`CodexAppServerProvider` は
+`codex app-server` サブプロセスを起動して JSON-RPC で会話するだけで、鍵や
+トークンを読み書きしない（`codex_app_server_provider.py` に API key を扱う
+コードが一切ないことで担保する）。これは直接 API / OpenRouter とはセキュリ
+ティ境界の性質が異なる: 鍵の代わりに「そのホスト上の Codex CLI の既存ログイン
+セッション」を境界として利用するため、
+（a）このサイドカーを動かすホスト自体が信頼境界に入る（ホスト上の誰でも
+`codex` コマンドを叩けるなら同じログインを再利用できる）、
+（b）Codex 側のレート制限・利用規約は個人のサブスクリプション利用を前提に
+設計されており、自動採点のような高頻度・非対話的な利用が許容されるかは
+契約上明確でない、という 2 点を運用上のリスクとして明記する。本番採用の可否
+は #35 のスコープであり、本 Issue はこのリスクを adapter 実装と併せて記録する
+に留める。
+
+共通: 温度は `AUTO_SCORING_AI_GRADING_TEMPERATURE`（既定 0.0）でどの経路でも
+揃え、再現性を確保する（Issue #14「再現条件」）。プロンプトテンプレートの
+版数タグは `AUTO_SCORING_AI_GRADING_PROMPT_VERSION` として設定し、
+`ProviderDescriptor.prompt_version` にそのまま記録する（§3.3。プロンプト
+本文自体や答案本文を識別子に含めない）。外部送信は**生徒識別情報を除いた
+設問単位データ（当該設問の答案画像切り出し + OCR テキスト + 問題文 + 模範解答
+
+- 採点基準）だけ**に限定する（決定書 §2 (2)）。可能なら各サービスの
+  データ保持オプトアウト／ゼロデータ保持を有効にする（決定書 §6.6。Codex
+  app-server 経路はこの設定が運用者の Codex アカウント設定に属し、このリポジ
+  トリからは制御できないことに注意する）。
+
+#### 7.1.1 OpenRouter 調査結果
+
+`https://openrouter.ai/api/v1/chat/completions` は OpenAI 互換の
+リクエスト/レスポンス形状を使う。構造化出力は `response_format` に
+JSON Schema を渡す `json_schema` モードで指定でき、`AIGradingResult`
+（`domain/ai_grading.py`）の `model_json_schema(by_alias=True)` をそのまま
+渡せる。ただし OpenRouter はこの hint を実際に守るかどうかをルーティング先
+のモデルに委ねるため、`OpenRouterAIProvider.grade()` は応答をそのまま
+信頼せず、必ず `parse_ai_grading_result()` でローカル再検証してから
+`GradingResponse` を組み立てる（Issue #14 acceptance と同じ「provider の
+自己申告を信用しない」原則）。
+
+#### 7.1.2 Codex app-server プロトコル調査結果（Issue #44 指示に基づく事前調査）
+
+調査に使ったバージョン: `codex --version` 相当の情報は `app-server`
+`initialize` 応答の `userAgent` から確認（このワークツリーの開発環境では
+Codex CLI 0.153.2）。公式の独立したプロトコル仕様書は見つからず、
+以下はこのバージョンの CLI が実際に返す情報のみを根拠にしている:
+
+- `codex app-server --help`: トランスポートは既定で `stdio://`
+  （`--listen` で `unix://`/`ws://` にも変更可能。本 adapter は既定の stdio
+  のみを使う）。
+- `codex app-server generate-json-schema --out <dir>` がプロトコルの
+  JSON Schema バンドル一式（リクエスト/レスポンス/通知のスキーマ）を出力する
+  （生成コマンド自体が `[experimental]` と明記されている）。
+- **ワイヤーフォーマットは改行区切り JSON-RPC 2.0（NDJSON）**であり、
+  LSP のような `Content-Length` ヘッダフレーミングではない。これは
+  `stdin` に `{"jsonrpc":"2.0","id":1,"method":"initialize","params":
+{"clientInfo":{"name":"probe","version":"0.0.1"}}}\n` を書き込み、
+  `stdout` から改行区切りで応答（`{"id":1,"result":{...}}`）が返ることを
+  実際に確認して判断した（`codex_app_server_provider.py` の
+  `_SubprocessAppServerTransport` はこの前提で実装している）。
+- 使用したメソッド: `initialize`（`clientInfo` のみで足りる。
+  `capabilities` は省略可）、`thread/start`（`sandbox: "read-only"`,
+  `approvalPolicy: "never"`, `ephemeral: true` で会話ごとに使い捨ての
+  スレッドを作る）、`turn/start`（`input` に `text` と `localImage`
+  （ローカルファイルパス。答案画像は一時ファイルへ書き出してから渡し、
+  ターン完了後に削除する）、`outputSchema` に
+  `AIGradingResult.model_json_schema(by_alias=True)` を渡してモデルの
+  最終メッセージを拘束する）。
+- 採点結果は `turn/start` の応答（ack のみ）ではなく、後続の
+  `turn/completed` 通知（`{"threadId", "turn": {"id", "status", "items"}}`）
+  で非同期に届く。`items` のうち `type: "agentMessage"` の要素の `text` が
+  モデルの最終応答文字列であり、これを `parse_ai_grading_result()` で検証する。
+
+**未決事項・リスク（無理に実装を進めず、ここに記録する）**:
+
+1. **プロトコル安定性が未検証**: `app-server` は Codex CLI 自身が
+   `[experimental]` と明記する機能であり、CLI のバージョンが上がった際に
+   メソッド名・パラメータ形状・通知の届き方が変わらない保証はない。
+   `docs/quality-gates.md`/`pnpm run check` は Codex CLI のバージョンを
+   固定・検証しないため、運用環境の Codex CLI が調査時と異なるバージョンに
+   なった場合の挙動は本 Issue の範囲では確認していない。
+2. **JSON-RPC エラー応答の実例が未取得**: 生成された JSON Schema
+   （`JSONRPCError.json`）からエラー封筒の形（`{"id", "error": {"code",
+"message"}}`）を推測して実装したが、認証切れ・不正なパラメータ等の
+   実際のエラー応答は本調査では発生させていない（live probe が必要。§7.4）。
+3. **認証・レート制限の運用上の位置づけが未確定**: §7.0/§7.1 に記載の通り、
+   個人のサブスクリプションを自動採点という非対話的・高頻度な用途に使う
+   ことの契約上の扱いは未確認。本番採用可否は #35 のスコープ。
+
+これらの理由により、この adapter は「オフラインの fake transport による
+contract test は green だが、実際の `codex login` 済み環境での動作確認は
+§7.4 の live probe として別途実施し、記録した上で判断する」という位置づけ
+とする（Issue #44 の指示どおり、無理に実装を仕上げず未決事項を明記する）。
 
 ### 7.2 rate limit 時の扱い（暫定。最終値は §3 E = Issue で確定）
 
@@ -979,23 +1132,110 @@ distinct submissions (answers, by submissionId) per subject -- decision record s
   「要確認」に落とす（`ProviderUnavailable`。§9.2）。
 - PoC のハーネスは逐次実行（並列度 1）を既定とする。MVP の並列度は本 PoC 後に
   確定する（決定書 §3 E）。
+- OpenRouter / Codex app-server のいずれも、現時点の adapter 実装
+  （`grade()` 単体）はこのバックオフをまだ内蔵していない。恒常的な失敗は
+  `ProviderUnavailable` として一度で送出されるため、再試行ポリシーは
+  呼び出し側（将来のジョブプロセッサ、または `report.py` の live-provider
+  パス）が §7.2 の方針で実装する（Issue #14 の既存方針をそのまま踏襲。
+  再試行そのものは本 Issue #44 のスコープ外）。
 
-### 7.3 実測前に本 PoC へ追加するもの
+### 7.3 実装済み・未実装の一覧（Issue #44 で追加したもの）
 
-- 比較する各候補の `AIProvider` 実アダプタ（Gemini / Claude / GPT）。
-- 各アダプタ用の `AIProviderContract` サブクラス（実キーは CI に置かず、
-  ローカル／手動実行のマーカー付きテストにする）。
+- `AIProvider` 実アダプタ: OpenRouter (`openrouter_provider.py`)・Codex
+  app-server (`codex_app_server_provider.py`) は実装済み。直接 vendor API
+  （Gemini/Claude/GPT）は引き続き未実装（credentials 待ち。#35 のスコープ）。
+- 各アダプタ用の `AIProviderContract` サブクラス:
+  `backend/tests/test_ai_provider_openrouter_contract.py`・
+  `backend/tests/test_ai_provider_codex_app_server_contract.py`。どちらも
+  オフラインの fake transport（`httpx.MockTransport` / 自作の
+  `_FakeAppServerTransport`）で contract を検証し、実キー・実ログインを
+  必要としない（Issue #44 検証方針）。
+- 設定 → adapter の切り替え: `factory.create_ai_provider()`
+  （`backend/tests/test_ai_grading_provider_factory.py`）。
 - `poc/issue_14_ai_grading/report.py` の live-provider パス（設問 →
-  `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）。
-  録画する各セルには `descriptor`（model/version/**prompt_version**/
-  temperature/structured_output_mode）を必ず含める。ハーネスはこの記録済み
-  メタデータを読むだけで、`provider` 名から決め打ちしない（Issue #14
-  「再現条件」。同じ provider 名でも設定が違う録画は区別できなければ
-  ならない）。`latency_seconds`/`cost_usd` は有限かつ非負でなければ
-  ハーネスが録画時点で拒否する（§3.2）。
+  `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）
+  は**未実装のまま**（#35 のスコープ。実データでの評価実施そのものが本
+  Issue #44 の対象外であるため）。録画する各セルには `descriptor`
+  （model/version/**prompt_version**/temperature/structured_output_mode）を
+  必ず含める設計はそのまま踏襲する（§3.3）。
 
 実測・選定後は §10 に従い、不採用アダプタを削除して採用アダプタだけを MVP へ
 昇格する。
+
+### 7.4 live probe（実際の呼び出し。技術プローブ、`pnpm run check` には含まれない）
+
+`AGENTS.md`「Verification」の技術プローブ要件（repro command・期待結果・
+実測値・決定・削除/昇格条件をすべて記録する）に従い、実際に OpenRouter /
+Codex app-server を叩く確認は次のコマンドで手動実施し、結果をこの節に
+追記する。どちらも credentials（OpenRouter の API key、または Codex CLI の
+既存ログイン）を必要とするため CI では実行しない。
+
+#### OpenRouter live probe
+
+```bash
+cd backend
+# backend/.env.local に AUTO_SCORING_OPENROUTER_API_KEY / _MODEL を設定してから:
+uv run python -c "
+from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
+from auto_scoring.domain.ai_provider import GradingRequest
+import os
+
+provider = OpenRouterAIProvider(
+    api_key=os.environ['AUTO_SCORING_OPENROUTER_API_KEY'],
+    model=os.environ['AUTO_SCORING_OPENROUTER_MODEL'],
+    prompt_version='live-probe-v1',
+)
+request = GradingRequest(
+    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=b'\x89PNG\r\n\x1a\n',
+    ocr_text='2', model_answer='2', rubric_text='正しい数値が書かれていれば5点。', max_score=5,
+)
+response = provider.grade(request)
+print(response.score, response.max_score, response.grading_confidence)
+"
+```
+
+- **repro command**: 上記。
+- **期待結果**: 例外を投げず、`score <= max_score` かつ
+  `0.0 <= grading_confidence <= 1.0` の 1 行が出力される。
+- **実測値**: _未実施（credentials 未取得のため。本 PR のマージ時点では
+  記入なし。credentials が用意でき次第、担当者が本節を更新する）_。
+- **判断・削除/昇格条件**: 実測が得られ、かつ contract test（§7.3）が green
+  であれば adapter を維持する。実測で `SchemaViolation`/`ProviderUnavailable`
+  以外の未分類の例外が出た場合は adapter のバグとして修正する。
+
+#### Codex app-server live probe
+
+```bash
+cd backend
+# 事前に `codex login` を完了させておく（ChatGPT プランまたは API key）。
+uv run python -c "
+from auto_scoring.adapters.ai_grading.codex_app_server_provider import CodexAppServerProvider
+from auto_scoring.domain.ai_provider import GradingRequest
+
+provider = CodexAppServerProvider(prompt_version='live-probe-v1')
+request = GradingRequest(
+    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=b'\x89PNG\r\n\x1a\n',
+    ocr_text='2', model_answer='2', rubric_text='正しい数値が書かれていれば5点。', max_score=5,
+)
+try:
+    response = provider.grade(request)
+    print(response.score, response.max_score, response.grading_confidence)
+finally:
+    provider.close()
+"
+```
+
+- **repro command**: 上記。
+- **期待結果**: `codex app-server` サブプロセスが起動し、例外を投げず
+  `score <= max_score` かつ `0.0 <= grading_confidence <= 1.0` の 1 行が
+  出力される。
+- **実測値**: _未実施（ローカルの Codex ログイン状態に依存するため。本 PR
+  のマージ時点では記入なし。実施できる担当者が本節を更新する）_。
+- **判断・削除/昇格条件**: 実測で §7.1.2 の未決事項（プロトコル安定性・
+  エラー応答形状）が問題にならないことを確認できれば adapter を維持する。
+  `turn/completed` 通知が届かない、メソッド名やパラメータ形状が拒否される
+  等の互換性問題が実際に発生した場合は、§7.1.2 の記録を更新した上で
+  adapter の対応バージョン範囲を明記するか、実装を見直す。
 
 ---
 
