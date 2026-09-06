@@ -40,6 +40,7 @@ from auto_scoring.domain.models import (
     CriterionResult,
     ErrorCategory,
     GradeResult,
+    GradeResultContextEntry,
     GradingSource,
     Job,
     JobKind,
@@ -285,6 +286,22 @@ def recognition_from_row(row: RecognitionResultRow) -> RecognitionResult:
 # --------------------------------------------------------------------------- #
 # GradeResult
 # --------------------------------------------------------------------------- #
+def _context_entry_to_json(entry: GradeResultContextEntry) -> dict[str, Any]:
+    return {
+        "question_id": entry.question_id,
+        "recognition_result_id": entry.recognition_result_id,
+        "grade_result_id": entry.grade_result_id,
+    }
+
+
+def _context_entry_from_json(data: dict[str, Any]) -> GradeResultContextEntry:
+    return GradeResultContextEntry(
+        question_id=data["question_id"],
+        recognition_result_id=data.get("recognition_result_id"),
+        grade_result_id=data.get("grade_result_id"),
+    )
+
+
 def grade_to_row(result: GradeResult) -> GradeResultRow:
     return GradeResultRow(
         id=result.id,
@@ -296,6 +313,12 @@ def grade_to_row(result: GradeResult) -> GradeResultRow:
         confidence=result.confidence,
         criteria=[_criterion_to_json(c) for c in result.criteria],
         rationale=result.rationale,
+        comment=result.comment,
+        provider=result.provider,
+        model=result.model,
+        prompt_version=result.prompt_version,
+        dependency_graph_version=result.dependency_graph_version,
+        context=[_context_entry_to_json(c) for c in result.context],
         created_at=result.created_at,
     )
 
@@ -310,6 +333,12 @@ def grade_from_row(row: GradeResultRow) -> GradeResult:
         confidence=row.confidence,
         criteria=tuple(_criterion_from_json(c) for c in row.criteria),
         rationale=row.rationale,
+        comment=row.comment,
+        provider=row.provider,
+        model=row.model,
+        prompt_version=row.prompt_version,
+        dependency_graph_version=row.dependency_graph_version,
+        context=tuple(_context_entry_from_json(c) for c in row.context),
         created_at=row.created_at,
     )
 

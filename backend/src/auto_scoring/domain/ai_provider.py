@@ -29,7 +29,8 @@ from typing import Annotated, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from auto_scoring.domain.ai_grading import AIGradingResult
-from auto_scoring.domain.models import AnnotationKind, CriterionOutcome
+from auto_scoring.domain.dependency_graph import DependencyProvision
+from auto_scoring.domain.models import AnnotationKind, CriterionOutcome, CriterionResult
 
 #: A required string that must contain more than just whitespace (mirrors
 #: ``ai_grading._NonBlankStr``): plain ``min_length=1`` accepts ``" "``.
@@ -54,7 +55,27 @@ class ProviderUnavailable(Exception):
     Distinct from :class:`SchemaViolation`: this is a call failure, not a
     malformed answer. Callers retry per the PoC's backoff policy before
     falling back to "needs review".
+
+    Raised bare only for a transport failure that does not fit one of the
+    subclasses below; a real adapter should prefer the specific subclass so
+    callers (`auto_scoring.jobs.grading_processor.GradingJobProcessor`) can
+    classify it into `auto_scoring.domain.models.ErrorCategory` for the
+    queue's retry policy (Issue #20: "timeout、429/5xxを分類しqueueのretry
+    規則へ接続する"), mirroring `domain.ocr.OCRProviderError`'s own
+    subclasses for the same purpose.
     """
+
+
+class ProviderTimeoutError(ProviderUnavailable):
+    """The provider did not respond within its configured timeout."""
+
+
+class ProviderRateLimitedError(ProviderUnavailable):
+    """The provider rejected the call for exceeding a rate limit/quota (429)."""
+
+
+class ProviderServerError(ProviderUnavailable):
+    """The provider reported a transient server-side failure (5xx or similar)."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -228,6 +249,63 @@ def parse_provider_descriptor(raw: str | bytes, *, provider: str) -> ProviderDes
 
 
 @dataclass(frozen=True, kw_only=True)
+class PrerequisiteAnswer:
+    """What one prerequisite question hands to a dependent question's grading
+    call (Issue #20; business-rules-and-evaluation-data.md section 4.3).
+
+    Only the fields section 4.3 allows are representable here: the
+    prerequisite's recognized text and its criterion/score outcome. There is
+    no field for the prerequisite's answer image, its AI comment, or any
+    student-identifying data -- section 4.3's "渡してはならないもの" list --
+    so a caller cannot accidentally attach them even by mistake.
+    `provides` names which of `recognized_text`/`score`+`max_score`/
+    `criteria` this instance actually carries, mirroring
+    `domain.dependency_graph.DependencyEdge.provides` (Issue #26): a caller
+    builds one `PrerequisiteAnswer` per prerequisite edge, filling in only
+    the fields that edge's own `provides` calls for.
+
+    ``criteria`` reuses `domain.models.CriterionResult` (id + outcome +
+    confidence), the same shape a persisted `GradeResult` already carries --
+    not `GradingCriterionOutcome` (which adds a ``rationale``): section 4.3's
+    "criterion 結果と最終得点" allows the outcome itself to cross into a
+    dependent question's context, not the prerequisite's free-text judgement
+    rationale (section 4.3's own "AIコメント文・自由文の判定根拠" exclusion).
+    """
+
+    question_id: str
+    provides: tuple[DependencyProvision, ...]
+    recognized_text: str | None = None
+    score: int | None = None
+    max_score: int | None = None
+    criteria: tuple[CriterionResult, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.question_id.strip():
+            raise ValueError("PrerequisiteAnswer.question_id must be a non-blank string")
+        if not self.provides:
+            raise ValueError("PrerequisiteAnswer.provides must include at least one item")
+        if DependencyProvision.RECOGNIZED_TEXT in self.provides and self.recognized_text is None:
+            raise ValueError(
+                "PrerequisiteAnswer.recognized_text is required when provides includes "
+                "RECOGNIZED_TEXT"
+            )
+        if DependencyProvision.SCORE in self.provides:
+            if self.score is None or self.max_score is None:
+                raise ValueError(
+                    "PrerequisiteAnswer.score/max_score are required when provides includes SCORE"
+                )
+            if not 0 <= self.score <= self.max_score:
+                raise ValueError(
+                    f"PrerequisiteAnswer.score {self.score} outside range 0..{self.max_score}"
+                )
+        if DependencyProvision.CRITERION_RESULT in self.provides and not self.criteria:
+            raise ValueError(
+                "PrerequisiteAnswer.criteria must be non-empty when provides includes "
+                "CRITERION_RESULT"
+            )
+
+
+@dataclass(frozen=True, kw_only=True)
 class GradingRequest:
     """Everything sent for one question. Holds no student-identifying data
     (business-rules-and-evaluation-data.md section 2 (2)).
@@ -258,6 +336,13 @@ class GradingRequest:
     exempt: an empty string is the legitimate reading of a question the
     student left blank (mirrors
     ``ai_grading_metrics.GradingInputRecord.ocr_clean``).
+
+    ``prerequisite_context`` (Issue #20) carries only the prerequisite
+    question data business-rules-and-evaluation-data.md section 4.3
+    allows to cross into a dependent question's grading call -- built by
+    ``auto_scoring.domain.grading_context.build_prerequisite_context`` from
+    the confirmed `DependencyGraph` (Issue #26), never assembled ad hoc by a
+    caller. Empty for a question with no prerequisite edge into it.
     """
 
     question_id: str
@@ -267,6 +352,7 @@ class GradingRequest:
     model_answer: str
     rubric_text: str
     max_score: int
+    prerequisite_context: tuple[PrerequisiteAnswer, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name, value in (

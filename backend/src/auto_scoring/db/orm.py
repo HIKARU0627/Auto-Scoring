@@ -244,6 +244,22 @@ class GradeResultRow(Base):
             name="ck_grade_results_awarded_in_range",
         ),
         CheckConstraint(_CONFIDENCE_RANGE, name="ck_grade_results_confidence_range"),
+        CheckConstraint(
+            "comment IS NULL OR length(comment) <= 120", name="ck_grade_results_comment_length"
+        ),
+        # Mirrors `domain.models.GradeResult.__post_init__`: the AI
+        # reproducibility triple (Issue #20 "provider/model/prompt versionが
+        # 追跡でき") is recorded together or not at all -- a human-confirmed
+        # row has no such call to reproduce.
+        CheckConstraint(
+            "(provider IS NULL AND model IS NULL AND prompt_version IS NULL) OR "
+            "(provider IS NOT NULL AND model IS NOT NULL AND prompt_version IS NOT NULL)",
+            name="ck_grade_results_ai_metadata_complete",
+        ),
+        CheckConstraint(
+            "dependency_graph_version IS NULL OR dependency_graph_version >= 1",
+            name="ck_grade_results_dependency_graph_version_positive",
+        ),
         Index("ix_grade_results_submission_question", "submission_id", "question_id"),
     )
 
@@ -260,6 +276,23 @@ class GradeResultRow(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     criteria: Mapped[list[dict[str, Any]]] = _json_list()
     rationale: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: AI総評コメント (Issue #20; simplified-design-specification.md section
+    #: 16.5's "コメント" review-UI field). ``None`` for a human-confirmed row
+    #: that carries no such AI-generated comment.
+    comment: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: AI reproducibility triple (Issue #20 acceptance). All three or none.
+    provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    model: Mapped[str | None] = mapped_column(String, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    #: The confirmed DependencyGraph version in effect when this grade was
+    #: produced (Issue #20 additional acceptance), mirroring
+    #: `JobRow.dependency_graph_version` (Issue #26).
+    dependency_graph_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Which prerequisite RecognitionResult/GradeResult row(s) fed this grade
+    #: (Issue #20: "前提result versionをGradeResultへ記録"), as a JSON list of
+    #: {question_id, recognition_result_id, grade_result_id}. Empty for a
+    #: question with no prerequisite.
+    context: Mapped[list[dict[str, Any]]] = _json_list()
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

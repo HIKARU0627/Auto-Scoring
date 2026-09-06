@@ -65,6 +65,12 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > で追加した登録ライフサイクルで、テストプロファイルと設問依存関係グラフ（Issue #26）
 > の両方が確認済みになるまで `draft` のまま一方向に留まる。詳細は
 > [`test-registration.md`](./test-registration.md)。
+>
+> `GradeResult` の `comment` / `provider` / `model` / `prompt_version` /
+> `dependency_graph_version` / `context`（マイグレーション
+> `0012_grade_result_ai_metadata`）は Issue #20（本番 AI 採点パイプライン）で
+> 追加した AI 追跡用の列。人間確定行は全て `NULL`/空のまま。詳細は
+> [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、

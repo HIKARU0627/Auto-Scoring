@@ -21,10 +21,23 @@ Endpoints:
   oldest first), for a review UI to show side by side (§19, §35-5).
 * ``POST /submissions/{submission_id}/questions/{question_id}/recognitions``
   -- a human's manually-entered text. Always ``source=human``,
-  ``confidence=1.0`` (a human read it), and releases any dependent question
-  BLOCKED on this one, mirroring ``jobs_router.resume_question`` (Issue #18
-  §4.4) -- a future full review API only needs to call the same
-  `JobQueueService.mark_question_usable`.
+  ``confidence=1.0`` (a human read it).
+
+  Does **not** release a dependent question BLOCKED on this one (Issue #20
+  review, P1): since `auto_scoring.jobs.grading_processor.GradingJobProcessor`
+  combined recognition and grading into one `Job` per question, that job's
+  already-persisted `GradeResult` reflects whatever text was recognized
+  *before* this correction (possibly the default `NullAIProvider`'s
+  zero-score proposal, or a real provider's low-confidence read of the
+  uncorrected text). Marking the job `usable` here -- as an Issue #19-era
+  version of this endpoint used to, before grading existed -- would release
+  a dependent question onto a grade nobody has actually reviewed or
+  recomputed against the corrected text. The corrected text is still
+  recorded (append-only history, visible to a future re-grade or review
+  step); only the automatic release is removed. A future review Issue must
+  re-trigger grading (a fresh `Job`) or have a human explicitly approve the
+  existing grade (``jobs_router.resume_question``, an explicit human
+  decision, unaffected by this) before a dependent may proceed.
 """
 
 from __future__ import annotations
@@ -46,7 +59,6 @@ from auto_scoring.domain.models import (
     RecognitionResult,
     find_answer_image,
 )
-from auto_scoring.jobs.queue import JobNotFoundError, JobQueueService, JobResumeConflictError
 
 
 class BoundingBoxResponse(BaseModel):
@@ -98,7 +110,6 @@ class ManualRecognitionRequest(BaseModel):
 def build_recognitions_router(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
-    queue_service: JobQueueService,
 ) -> APIRouter:
     """Build the router. Every handler opens its own `SqlAlchemyUnitOfWork`,
     matching every other router in this package."""
@@ -176,17 +187,13 @@ def build_recognitions_router(
                 )
             uow.recognitions.add(recognition)
             uow.commit()
-        # The recognition row above is append-only history and stays valid
-        # regardless of what happens next -- if the release below 404s/409s
-        # (no confirmed graph yet, or this question's job isn't terminal
-        # yet), the human's text is still recorded and
-        # `POST .../resume` (jobs_router) can be retried once it is.
-        try:
-            queue_service.mark_question_usable(submission_id=submission_id, question_id=question_id)
-        except JobNotFoundError as error:
-            raise HTTPException(404, detail=str(error)) from error
-        except JobResumeConflictError as error:
-            raise HTTPException(409, detail=str(error)) from error
+        # Deliberately does not call `JobQueueService.mark_question_usable`
+        # (module docstring, Issue #20 review, P1): that job's `GradeResult`
+        # still reflects whatever text was recognized *before* this
+        # correction, so releasing a dependent here would proceed on a grade
+        # nobody has reviewed against the corrected text. The row above is
+        # still append-only history, valid regardless -- a future re-grade
+        # or review step reads it.
         return RecognitionResponse.from_domain(recognition)
 
     return router

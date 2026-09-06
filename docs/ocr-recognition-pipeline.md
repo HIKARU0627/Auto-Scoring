@@ -130,10 +130,18 @@ Issue #18が`POST /submissions/{submission_id}/questions/{question_id}/resume`
   これまでの`RecognitionResult`履歴（AI提案・人間修正を含む、`created_at`昇順）。
 - `POST /submissions/{submission_id}/questions/{question_id}/recognitions` --
   人間が手入力したテキストを`source=human`・`confidence=1.0`の
-  `RecognitionResult`として保存し、`JobQueueService.mark_question_usable`を
-  呼んで前提待ちの後続設問を解放する（Issue #18 §4.4と同じ解放経路）。解放が
-  409/404になっても（対象Jobがまだ終端状態でない等）、手入力したテキスト自体は
-  追記型履歴として残る -- `POST .../resume`を後から呼び直せる。
+  `RecognitionResult`として保存する。
+
+  **Issue #20以降、`JobQueueService.mark_question_usable`は呼ばない**
+  （コードレビュー指摘）: Issue #20が`GradingJobProcessor`を導入し、1つの
+  `Job`が文字認識とAI採点の両方を担うようになったため、この設問の`Job`は
+  既に（訂正前のテキストに対する）`GradeResult`を持っている。ここで
+  `mark_usable`を呼ぶと、その古い・未レビューのgradeを根拠に前提待ちの
+  後続設問を解放してしまう -- Issue #19時点（`Job`がOCRのみを表していた頃）
+  の設計を踏襲したままだと成立しなくなった。手入力したテキスト自体は追記型
+  履歴として残るが、後続設問の解放には`POST .../resume`
+  （`jobs_router`、人間が明示的にgradeを承認する経路）か、将来の再採点
+  Issueが必要。
 
 `recognition_results.text`にも`submissions.student_label`/
 `original_filename`（Issue #17 review）と同じ理由で長さ上限
