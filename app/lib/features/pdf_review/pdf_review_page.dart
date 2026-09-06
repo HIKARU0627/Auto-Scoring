@@ -257,9 +257,9 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     return latest;
   }
 
-  /// Whether [questionId]'s AI processing might still produce a grade --
-  /// polling must keep running, and a cached "loaded but no grade yet"
-  /// result must stay provisional, while this is true.
+  /// Whether [questionId]'s AI processing might still produce (or replace)
+  /// a grade -- polling must keep running, and a cached "loaded" result
+  /// must stay provisional (not treated as final), while this is true.
   ///
   /// Not simply "no grade exists yet": `GradingJobProcessor.process`
   /// commits the OCR half's `RecognitionResult` in its own transaction
@@ -269,14 +269,33 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   /// visible so far. Stopping as soon as *any* AI output (including just
   /// that recognition) exists would let the screen decide "done" while a
   /// grade is still on its way, leaving 承認 permanently disabled until a
-  /// manual refresh (P1 review). This instead keeps polling until either a
-  /// grade exists, or [questionId]'s own job reports a state in
-  /// [_terminalJobStates] -- `QUEUED`/`RUNNING`/`BLOCKED`, or no job at all
-  /// yet, both mean "might still produce one".
+  /// manual refresh (P1 review).
+  ///
+  /// Nor is "*a* grade exists" enough on its own (P2 review): a question can
+  /// be re-submitted under a newer confirmed dependency-graph version
+  /// (Issue #18), which creates a *new* `Job` for it while the append-only
+  /// history still has the previous attempt's `GradeResult`. If that new
+  /// job is `QUEUED`/`RUNNING`/`BLOCKED`, the cached `latestAiGrade` belongs
+  /// to a superseded attempt, not the one currently in flight -- treating
+  /// it as final would leave the reviewer looking at a stale score/
+  /// annotations even after the new attempt finishes, until a manual
+  /// refresh.
+  ///
+  /// So this keeps polling while either: no job is known for [questionId]
+  /// and no grade exists yet either (nothing to go on but "keep checking");
+  /// the latest known job is not yet in a [_terminalJobStates] state (a
+  /// newer attempt might still be running, whether or not an older grade
+  /// happens to be cached); or the latest job *is* terminal but the cached
+  /// grade still predates it (`grade.createdAt` no later than
+  /// `job.createdAt` -- the grade was written strictly after the job that
+  /// produced it was created, so this means the grades list has not caught
+  /// up with that attempt's result yet and needs one more refetch).
   bool _isAwaitingGrade(QuestionReviewState review, String questionId) {
-    if (review.latestAiGrade != null) return false;
     final job = _latestJobFor(questionId);
-    return job == null || !_terminalJobStates.contains(job.state);
+    if (job == null) return review.latestAiGrade == null;
+    if (!_terminalJobStates.contains(job.state)) return true;
+    final grade = review.latestAiGrade;
+    return grade == null ? false : !grade.createdAt.isAfter(job.createdAt);
   }
 
   /// Starts polling while the *currently selected* question is still
@@ -497,9 +516,34 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         widget.submissionId,
         question.id,
       );
+      // `GradingJobProcessor.process` commits the grading-stage recognition
+      // atomically with the grade (and its annotations) it accompanies --
+      // both written from the exact same clock read, same as
+      // `QuestionReviewState.annotationsForDisplayedAttempt` relies on --
+      // but strictly *after*, and separately from, the OCR-stage
+      // recognition's own earlier commit. If that atomic commit lands
+      // between the `listRecognitions` and `listGrades` calls above,
+      // `recognitions` is a snapshot from just before it: it is missing the
+      // grading-stage recognition the grade we just fetched was written
+      // alongside, even though that grade itself already reflects the new
+      // attempt. Left uncorrected, 採点AIの認識結果 stays missing until a
+      // manual refresh, because a grade already exists and (per
+      // `_isAwaitingGrade`) that alone can stop polling (P2 review).
+      // Detected by checking whether the latest AI grade has a matching
+      // recognition (identical `created_at`, by construction); if not, one
+      // more fetch picks up a consistent snapshot.
+      final latestAiGrade = _latestWhere(grades, (g) => g.source_ == 'ai');
+      final consistentRecognitions =
+          latestAiGrade == null ||
+              recognitions.any((r) => r.createdAt == latestAiGrade.createdAt)
+          ? recognitions
+          : await widget.dependencies.listRecognitions(
+              widget.submissionId,
+              question.id,
+            );
       if (!mounted || generation != review.fetchGeneration) return;
       setState(() {
-        review.recognitions = recognitions;
+        review.recognitions = consistentRecognitions;
         review.grades = grades;
         review.annotations = annotations;
         review.loading = false;
@@ -801,6 +845,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     for (final annotation in review.annotationsForDisplayedAttempt) {
       final resolved = resolveAnnotationRect(
         annotation: annotation,
+        questionAnswerArea: question.answerArea,
         questionScoreArea: question.scoreArea,
         recognitions: review.recognitions ?? const [],
       );
@@ -834,6 +879,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         (a) =>
             resolveAnnotationRect(
               annotation: a,
+              questionAnswerArea: question.answerArea,
               questionScoreArea: question.scoreArea,
               recognitions: review.recognitions ?? const [],
             ) ==

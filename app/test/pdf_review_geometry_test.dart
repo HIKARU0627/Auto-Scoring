@@ -136,6 +136,7 @@ void main() {
 
       final resolved = resolveAnnotationRect(
         annotation: annotation(rect: explicitRect),
+        questionAnswerArea: null,
         questionScoreArea: null,
         recognitions: const [],
       );
@@ -151,7 +152,8 @@ void main() {
     });
 
     test('an anchor_text annotation resolves to the matching OCR word box, '
-        'per simplified-design-spec §12.3', () {
+        'per simplified-design-spec §12.3, when the question has no confirmed '
+        'answer_area yet (OCR ran against the full, uncropped page)', () {
       final wordBox = NormalizedRectResponse(
         (b) => b
           ..x = 0.4
@@ -162,6 +164,7 @@ void main() {
 
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'underline', anchorText: '行く'),
+        questionAnswerArea: null,
         questionScoreArea: null,
         recognitions: [
           recognitionWithBoxes([('走る', _dummyRect), ('行く', wordBox)]),
@@ -172,6 +175,49 @@ void main() {
       expect(resolved?.y, wordBox.y);
       expect(resolved?.width, wordBox.width);
       expect(resolved?.height, wordBox.height);
+    });
+
+    test('an anchor_text annotation resolves to the matching OCR word box '
+        "mapped from the cropped answer image's coordinates into page "
+        'coordinates through the question\'s answer_area (P1 review: '
+        'RecognitionJobProcessor persists boxes normalized against the crop '
+        'the OCR provider actually saw, not the page)', () {
+      // The answer area covers only the bottom-right quadrant of the
+      // page -- picked to be asymmetric so a missed offset or a missed
+      // scale would both be visible.
+      final answerArea = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.5
+          ..y = 0.6
+          ..width = 0.4
+          ..height = 0.3,
+      );
+      // Normalized against the *crop*: dead center of the answer image.
+      final cropRelativeBox = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.5
+          ..y = 0.5
+          ..width = 0.1
+          ..height = 0.1,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'underline', anchorText: '酸素'),
+        questionAnswerArea: answerArea,
+        questionScoreArea: null,
+        recognitions: [
+          recognitionWithBoxes([('酸素', cropRelativeBox)]),
+        ],
+      );
+
+      // page.x = area.x + box.x * area.width = 0.5 + 0.5*0.4 = 0.7
+      expect(resolved?.x, closeTo(0.7, 1e-9));
+      // page.y = area.y + box.y * area.height = 0.6 + 0.5*0.3 = 0.75
+      expect(resolved?.y, closeTo(0.75, 1e-9));
+      // page.width = box.width * area.width = 0.1 * 0.4 = 0.04
+      expect(resolved?.width, closeTo(0.04, 1e-9));
+      // page.height = box.height * area.height = 0.1 * 0.3 = 0.03
+      expect(resolved?.height, closeTo(0.03, 1e-9));
     });
 
     test('a fixed-position mark with no OCR match falls back to the '
@@ -187,6 +233,7 @@ void main() {
       for (final kind in ['circle', 'cross', 'triangle', 'score']) {
         final resolved = resolveAnnotationRect(
           annotation: annotation(kind: kind),
+          questionAnswerArea: null,
           questionScoreArea: scoreArea,
           recognitions: const [],
         );
@@ -206,6 +253,7 @@ void main() {
 
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'score', anchorText: '存在しない語'),
+        questionAnswerArea: null,
         questionScoreArea: scoreArea,
         recognitions: [
           recognitionWithBoxes([('別の語', _dummyRect)]),
@@ -220,6 +268,7 @@ void main() {
         'by the caller, per simplified-design-spec §12.4)', () {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'comment', anchorText: '存在しない語'),
+        questionAnswerArea: null,
         questionScoreArea: null,
         recognitions: const [],
       );

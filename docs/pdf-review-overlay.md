@@ -77,6 +77,27 @@ REST エンドポイントは Issue #21 着手時点で存在しなかった（�
    でもないもの）は`null`を返し、呼び出し側が設問のInspector内
    「設問コメント」欄へ退避表示する（§12.4）。
 
+**R5レビュー対応**: 上記2.のOCR Bounding Boxは、`adapters/submission_
+intake.py`が答案areaごとに`crop_normalized_rect`でpageからcropした
+answer画像に対して正規化された座標であり、page全体に対する正規化座標
+ではない（`RecognitionJobProcessor`はこのcrop画像をそのままOCR provider
+へ渡し、providerが返すbox座標を一切re-projectionせずに永続化する）。
+`_findAnchorTextRect`が`box.x`/`box.y`をそのままpage正規化rectangleへ
+コピーしていたため、答案areaがpage全体でない設問では、crop分のoffsetと
+scaleが失われ、annotationが誤った位置（＝誤ったコンテンツの上）に配置
+されていた（R5レビュー指摘）。
+
+`resolveAnnotationRect`へ`questionAnswerArea`（`Question.answer_area`）を
+追加の引数として渡し、`_cropRelativeToPage`が
+`page.x = area.x + box.x * area.width`（y/width/heightも同様）で
+box座標をpage正規化座標へ変換してから使う。`crop_normalized_rect`は
+軸並行なcrop（offset・scaleのみ、回転なし）であるため、この一次変換で
+厳密に一致する。`answer_area`が未確定の設問は
+`_build_answer_image`がpage全体をそのままOCRへ渡す（`NEEDS_REVIEW`、
+簡易設計書 §24）ため、この場合はidentity（offset 0, scale 1）の
+crop領域として扱い、既存の（page全体を答案areaとする）挙動を保つ
+（`_fullPageArea`）。
+
 ### 2.5 承認・修正・却下はこの画面のメモリ内でのみ保持する
 
 Issue #21 の対象外どおり、`PdfReviewPage`のaction bar（修正/却下/承認して次へ）
@@ -138,15 +159,37 @@ gradeが1件も存在しないままpollingを停止させてしまい、手動�
 画面が「未採点」のまま固まっていた。
 
 `GET /submissions/{submission_id}/jobs`（Issue #18で実装済み、本Issueでは
-新規に消費するだけ）から取得した設問ごとのJob一覧を使い、
-`_isAwaitingGrade(review, questionId)`は「gradeが存在する」または「その
-設問の最新Jobが`succeeded`/`failed`/`cancelled`のいずれか（
-`_terminalJobStates`）」のどちらかが成立するまで`true`を返す（`queued`/
-`running`/`blocked`、またはJobがまだ存在しない場合は継続）。Jobsの取得は
+新規に消費するだけ）から取得した設問ごとのJob一覧を使う。Jobsの取得は
 submissionの取得と同様best-effort（`_refreshJobs`、失敗しても既知の一覧を
 保持するだけで画面全体は壊さない）。`FAILED`はbackendの再試行ポリシーに
 よって`QUEUED`へ自動的に戻り得るが、それは他の終端状態と同じく手動更新
 ボタンに委ねる（P1 review）。
+
+**R5レビュー対応**: `_isAwaitingGrade`は当初「gradeが1件でも存在すれば
+即座にfalse（pollingを止めてよい）」だったが、これは設問が新しい確定済み
+依存グラフversionの下で再submitされた場合（Issue #18）を考慮していな
+かった。再submitは同じ設問に新しいJobを作るが、append-only履歴の
+`latestAiGrade`は古い試行のgradeを引き続き返すため、`_latestJobFor`が
+新しいJobをqueued/running/blockedとして報告していても、古いgradeの存在
+だけでpollingが止まり、新しい試行が完了してもreviewerには古いscore・
+annotationが残り続けていた（R5レビュー指摘）。
+
+`_isAwaitingGrade(review, questionId)`は次の順で判定する。
+
+1. その設問のJobが1件も無ければ、gradeが無い間だけ継続する（Jobが後から
+   作られる可能性に備える、従来どおり）。
+2. 最新Jobが終端状態（`_terminalJobStates`）でなければ無条件に継続する
+   （新しい試行が走っている可能性があるため、たまたま古いgradeが
+   キャッシュにあっても関係ない）。
+3. 最新Jobが終端状態なら、`latestAiGrade`が無いか、その`created_at`が
+   最新Jobの`created_at`以前（＝その試行より前に書かれたgrade）である間
+   だけ継続する。gradeは常にそれを生成したJobの作成より後に書き込まれる
+   ため、`grade.created_at`がJobの`created_at`より後であることが「この
+   gradeはこのJobの結果である」ことの確認になる。
+
+3.の判定により、新しいJobが実際にはterminalに達しているのにまだ古い
+gradeしか観測できていない（次のfetchでまだ追いついていない）窓では
+継続してもう一度fetchし、追いついた時点で自然に停止する。
 
 pollingが導入する race condition に対処している。
 
@@ -162,6 +205,20 @@ pollingが導入する race condition に対処している。
   表示ありfetchの途中でsilent pollが割り込んで`fetchGeneration`を進め、
   そのsilent fetch自体が失敗した場合に表示ありfetch側の`loading`を誰も
   `false`へ戻さず、スピナーが永久に残ってしまう。
+- **recognition/gradeのcommitタイミングの競合**（R5レビュー指摘）:
+  `GradingJobProcessor.process`は採点半分のOCR訂正結果
+  （`grading-recognition:`、stage=`grading`）をgrade・annotationと
+  同一transactionでcommitするが、これはOCR半分の`RecognitionResult`
+  （stage=`ocr`）の別のtransactionより後に発生する。`_ensureReviewLoaded`
+  が`listRecognitions`を呼んだ直後・`listGrades`を呼ぶ前にこのcommitが
+  割り込むと、取得した`recognitions`はまだ古いまま（`grading`段階の行が
+  無い）なのに、`grades`は新しいgradeを含んでしまう。gradeが存在すれば
+  pollingが停止し得るため、この不整合を放置すると「採点AIの認識結果」欄が
+  手動更新まで欠落したままになる。fetch後に「最新のAI gradeと同じ
+  `created_at`を持つrecognitionが取得済みrecognitions内にあるか」を
+  確認し、無ければrecognitionsだけをもう一度取得し直す
+  （`consistentRecognitions`）。annotationはgradeと同一transactionで
+  commitされるため、この競合の対象にならない。
 
 ### 2.9 keyboardショートカットはnote編集中は無効化する
 
@@ -257,10 +314,13 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   `stage`が`"ocr"`/`"grading"`/`"human"`へ正しく振り分けられることを検証。
 - `app/test/pdf_review_geometry_test.dart`: 座標変換の純関数テスト（PoC 3
   fixture再利用）に加え、`resolveAnnotationRect`（§2.4）の単体テストとして
-  明示rectの優先、`anchor_text`のOCR Bounding Boxへの解決、固定位置種別
-  （○・×・△・点数）4種すべてでのscore_areaへのフォールバック、
-  `anchor_text`が一致しない場合の固定位置種別のscore_areaフォールバック、
-  非固定位置種別で何も解決できない場合に`null`を返すことを検証。
+  明示rectの優先、`anchor_text`のOCR Bounding Boxへの解決（答案areaが
+  page全体の場合、および答案areaがpageの一部分にcropされている場合の
+  両方で、crop相対座標からpage正規化座標への変換が正しいこと。R5レビュー
+  対応）、固定位置種別（○・×・△・点数）4種すべてでのscore_areaへの
+  フォールバック、`anchor_text`が一致しない場合の固定位置種別の
+  score_areaフォールバック、非固定位置種別で何も解決できない場合に`null`
+  を返すことを検証。
 - `app/test/pdf_review_page_test.dart`: loading/empty/error状態、
   認識文字・点数・根拠・rubric（`question.rubric`の定義自体）・2種の
   Confidenceの同時表示、AI/human結果がsource別に区別されること、
@@ -283,4 +343,11 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   pollingを継続し承認もブロックされ続けること（§2.8、R4レビュー対応）、
   複数回グレーディングされた設問で現在表示中の試行（`displayGrade`と
   同じ`created_at`）のannotationだけがoverlayされ、古い試行のmarkが
-  残らないこと（§2.12、R4レビュー対応）、を検証。
+  残らないこと（§2.12、R4レビュー対応）、答案areaがpage全体でない設問の
+  text系annotationがOCR box座標を答案areaで変換したpage位置へ配置される
+  こと（R5レビュー対応）、再submitで新しい試行のJobがqueued/running/
+  blockedの間は古い試行のgradeがキャッシュに残っていてもpollingを継続し、
+  新しい試行のgradeが実際に届くまで止めないこと（§2.8、R5レビュー対応）、
+  recognitionとgradeのcommitタイミングが競合し新しいgradeだけが先に見えた
+  場合でも、対応する採点AIの認識結果をもう一度取得して欠落させないこと
+  （§2.8、R5レビュー対応）、を検証。

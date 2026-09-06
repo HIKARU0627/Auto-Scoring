@@ -38,6 +38,7 @@ QuestionResponse _question({
   int page = 1,
   List<RubricCriterionResponse> rubric = const [],
   NormalizedRectResponse? rect,
+  NormalizedRectResponse? answerArea,
 }) => QuestionResponse(
   (b) => b
     ..id = id
@@ -47,7 +48,8 @@ QuestionResponse _question({
     ..points = 5
     ..scoringMethod = 'additive'
     ..rubric.replace(rubric)
-    ..commentArea = rect?.toBuilder(),
+    ..commentArea = rect?.toBuilder()
+    ..answerArea = answerArea?.toBuilder(),
 );
 
 RecognitionResponse _recognition({
@@ -57,6 +59,7 @@ RecognitionResponse _recognition({
   double confidence = 0.91,
   String stage = 'ocr',
   List<BoundingBoxResponse> boxes = const [],
+  DateTime? createdAt,
 }) => RecognitionResponse(
   (b) => b
     ..id = id
@@ -67,7 +70,7 @@ RecognitionResponse _recognition({
     ..text = text
     ..confidence = confidence
     ..boxes.replace(boxes)
-    ..createdAt = DateTime.utc(2026, 1, 1),
+    ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
 );
 
 GradeResultResponse _grade({
@@ -1594,4 +1597,232 @@ void main() {
       reason: "a superseded attempt's mark must not linger on the overlay",
     );
   });
+
+  testWidgets(
+    'places a text-targeted annotation at the OCR word box mapped from the '
+    "cropped answer image's coordinates into page coordinates, not the "
+    "box's own (crop-relative) coordinates copied directly onto the page",
+    (tester) async {
+      // The answer area covers only the bottom-right quadrant of the page
+      // -- asymmetric on purpose so a missed offset or a missed scale
+      // would both be visible.
+      final answerArea = _rect(0.5, 0.5, 0.5, 0.5);
+      // Normalized against the *crop* the OCR provider actually saw, not
+      // the page: dead center of the answer image, which maps onto
+      // (0.75, 0.75) on the page.
+      final cropRelativeBox = _rect(0.5, 0.5, 0.05, 0.05);
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(answerArea: answerArea),
+        recognitions: [
+          RecognitionResponse(
+            (b) => b
+              ..id = 'rec-1'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'ai'
+              ..stage = 'ocr'
+              ..text = '光合成によって酸素が発生する'
+              ..confidence = 0.9
+              ..boxes.add(
+                BoundingBoxResponse(
+                  (b) => b
+                    ..text = '酸素'
+                    ..x = cropRelativeBox.x
+                    ..y = cropRelativeBox.y
+                    ..width = cropRelativeBox.width
+                    ..height = cropRelativeBox.height,
+                ),
+              )
+              ..createdAt = DateTime.utc(2026, 1, 1),
+          ),
+        ],
+        grades: [_grade()],
+        annotations: [
+          AnnotationResponse(
+            (b) => b
+              ..id = 'anno-1'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'ai'
+              ..kind = 'underline'
+              ..anchorText = '酸素'
+              ..createdAt = DateTime.utc(2026, 1, 1),
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      final overlay = find.byKey(const Key('annotation-anno-1'));
+      expect(overlay, findsOneWidget);
+
+      final pageOverlayPositioned = tester.widget<Positioned>(
+        find.byKey(const Key('#__pageOverlay__:1')),
+      );
+      final pageRect = Rect.fromLTWH(
+        pageOverlayPositioned.left!,
+        pageOverlayPositioned.top!,
+        pageOverlayPositioned.width!,
+        pageOverlayPositioned.height!,
+      );
+      final overlayTopLeft = tester.getTopLeft(overlay);
+      final pdfViewerTopLeft = tester.getTopLeft(find.byType(PdfViewer));
+      final localOffset = overlayTopLeft - pdfViewerTopLeft;
+
+      // page.x = area.x + box.x * area.width = 0.5 + 0.5*0.5 = 0.75
+      // page.y = area.y + box.y * area.height = 0.5 + 0.5*0.5 = 0.75
+      expect(
+        localOffset.dx,
+        closeTo(pageRect.left + 0.75 * pageRect.width, 5.0),
+      );
+      expect(
+        localOffset.dy,
+        closeTo(pageRect.top + 0.75 * pageRect.height, 5.0),
+      );
+    },
+  );
+
+  testWidgets(
+    'keeps polling until a newer grading attempt actually finishes, even '
+    "though an older attempt's grade is already cached from before a "
+    're-submission',
+    (tester) async {
+      final oldGradeCreatedAt = DateTime.utc(2026, 1, 1);
+      final newJobCreatedAt = DateTime.utc(2026, 1, 2);
+      final newGradeCreatedAt = DateTime.utc(2026, 1, 3);
+      var newGradeAvailable = false;
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(state: 'ai_processed'),
+        listQuestions: (_) async => [_question()],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, _) async => const [],
+        listGrades: (_, _) async => [
+          _grade(id: 'grade-old', awarded: 2, createdAt: oldGradeCreatedAt),
+          if (newGradeAvailable)
+            _grade(id: 'grade-new', awarded: 5, createdAt: newGradeCreatedAt),
+        ],
+        listAnnotations: (_, _) async => const [],
+        // Issue #18: a re-submission under a new confirmed dependency-graph
+        // version creates a second Job for the same question, created
+        // after the previous attempt's grade.
+        listJobs: (_) async => [
+          JobResponse(
+            (b) => b
+              ..id = 'job-2'
+              ..kind = 'grading'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..state = newGradeAvailable ? 'succeeded' : 'running'
+              ..attempts = 1
+              ..maxAttempts = 3
+              ..createdAt = newJobCreatedAt
+              ..updatedAt = newJobCreatedAt,
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Nothing wrong with showing the previous attempt's grade while the
+      // new one is still running -- the bug is failing to keep polling
+      // past it.
+      expect(find.text('2 / 5 点'), findsOneWidget);
+
+      // The new attempt's AI provider call finishes in the background --
+      // no manual refresh.
+      newGradeAvailable = true;
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(seconds: 4));
+      });
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        find.text('5 / 5 点'),
+        findsOneWidget,
+        reason:
+            'the background poll must keep running until the new '
+            "attempt's own grade actually lands, not stop just because an "
+            'older grade already existed from a superseded attempt',
+      );
+    },
+  );
+
+  testWidgets(
+    'refetches recognitions after observing a newly committed grade, so a '
+    "commit landing between the recognitions and grades fetches doesn't "
+    'leave the grading AI recognition permanently missing',
+    (tester) async {
+      var recognitionsCallCount = 0;
+      final gradeCreatedAt = DateTime.utc(2026, 1, 5);
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(state: 'ai_processed'),
+        listQuestions: (_) async => [_question()],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        // The first call races GradingJobProcessor's atomic commit and
+        // only sees the OCR-stage recognition (persisted separately,
+        // earlier) -- the grading-stage recognition (created alongside
+        // the grade, same `created_at`) only shows up once refetched.
+        listRecognitions: (_, _) async {
+          recognitionsCallCount++;
+          return [
+            _recognition(id: 'rec-ocr', text: 'OCRが読んだ文字'),
+            if (recognitionsCallCount > 1)
+              _recognition(
+                id: 'rec-grading',
+                stage: 'grading',
+                text: '採点AIが訂正した文字',
+                confidence: 0.85,
+                createdAt: gradeCreatedAt,
+              ),
+          ];
+        },
+        listGrades: (_, _) async => [_grade(createdAt: gradeCreatedAt)],
+        listAnnotations: (_, _) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        find.text('採点AIが訂正した文字'),
+        findsOneWidget,
+        reason:
+            'a grade observed alongside a not-yet-visible grading '
+            'recognition must trigger one more recognitions fetch, not '
+            'leave it missing until a manual refresh',
+      );
+      expect(recognitionsCallCount, greaterThanOrEqualTo(2));
+    },
+  );
 }
