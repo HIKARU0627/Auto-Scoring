@@ -79,11 +79,31 @@ class BoundingBoxResponse(BaseModel):
         )
 
 
+#: Id prefix `auto_scoring.jobs.grading_processor.grading_recognition_id`
+#: gives the AI grader's own (possibly OCR-correcting) reading of the answer,
+#: to tell it apart from the OCR pipeline's own `recognition:<job.id>` row
+#: (`auto_scoring.jobs.recognition_processor.recognition_result_id`) --
+#: both are `source=ai`, so `source` alone cannot distinguish them. This is
+#: the same id convention those two functions already use to keep the rows
+#: from colliding; duplicated here (not imported) to keep this API module
+#: free of a dependency on the jobs layer for a single string literal.
+_GRADING_RECOGNITION_ID_PREFIX = "grading-recognition:"
+
+
 class RecognitionResponse(BaseModel):
     id: str
     submission_id: str
     question_id: str
     source: str
+    # Which stage of the pipeline produced this row: "ocr" (the OCR
+    # pipeline's own reading, Issue #19), "grading" (the AI grader's own,
+    # possibly OCR-correcting reading, Issue #20 -- see
+    # docs/ai-grading-pipeline.md "AI graderが訂正した認識結果を保持する"),
+    # or "human" (a manual correction). simplified-design-spec §16.5's
+    # "AI認識文字" review field can show the ocr and grading rows side by
+    # side, so a reviewer sees what OCR read *and* what the grader actually
+    # used, not just whichever is more recent.
+    stage: str
     text: str
     confidence: float
     created_at: datetime
@@ -96,11 +116,20 @@ class RecognitionResponse(BaseModel):
             submission_id=result.submission_id,
             question_id=result.question_id,
             source=result.source.value,
+            stage=_recognition_stage(result),
             text=result.text,
             confidence=result.confidence,
             created_at=result.created_at.replace(tzinfo=UTC),
             boxes=[BoundingBoxResponse.from_domain(box) for box in result.boxes],
         )
+
+
+def _recognition_stage(result: RecognitionResult) -> str:
+    if result.source is GradingSource.HUMAN:
+        return "human"
+    if result.id.startswith(_GRADING_RECOGNITION_ID_PREFIX):
+        return "grading"
+    return "ocr"
 
 
 class ManualRecognitionRequest(BaseModel):

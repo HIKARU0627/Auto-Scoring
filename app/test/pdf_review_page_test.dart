@@ -55,14 +55,18 @@ RecognitionResponse _recognition({
   String questionId = 'q-1',
   String text = '光合成によって酸素が発生する',
   double confidence = 0.91,
+  String stage = 'ocr',
+  List<BoundingBoxResponse> boxes = const [],
 }) => RecognitionResponse(
   (b) => b
     ..id = id
     ..submissionId = 'sub-1'
     ..questionId = questionId
     ..source_ = 'ai'
+    ..stage = stage
     ..text = text
     ..confidence = confidence
+    ..boxes.replace(boxes)
     ..createdAt = DateTime.utc(2026, 1, 1),
 );
 
@@ -336,12 +340,12 @@ void main() {
 
       // Both confidences are visible side by side, distinguished by their
       // numeric value + a Japanese level label -- never by color alone.
-      expect(find.text('文字認識信頼度: 55% (低)'), findsOneWidget);
+      expect(find.text('OCR文字認識信頼度: 55% (低)'), findsOneWidget);
       expect(find.text('採点信頼度: 97% (高)'), findsOneWidget);
 
       // Screen reader labels exist for both confidence badges, independent
       // of the visible text rendering above.
-      expect(find.bySemanticsLabel('文字認識信頼度 55% 低'), findsOneWidget);
+      expect(find.bySemanticsLabel('OCR文字認識信頼度 55% 低'), findsOneWidget);
       expect(find.bySemanticsLabel('採点信頼度 97% 高'), findsOneWidget);
 
       // The submission's processing state is identifiable via icon + text.
@@ -613,6 +617,7 @@ void main() {
               ..submissionId = 'sub-1'
               ..questionId = 'q-1'
               ..source_ = 'human'
+              ..stage = 'human'
               ..text = '人が修正した結果'
               ..confidence = 1.0
               ..createdAt = DateTime.utc(2026, 1, 1, 0, 1),
@@ -661,8 +666,8 @@ void main() {
       expect(find.text('5 / 5 点'), findsOneWidget);
       // ...and the only Recognition Confidence badge shown is the AI's own
       // (60%), never a "100%" badge implying the AI was that confident.
-      expect(find.text('文字認識信頼度: 60% (低)'), findsOneWidget);
-      expect(find.textContaining('文字認識信頼度: 100%'), findsNothing);
+      expect(find.text('OCR文字認識信頼度: 60% (低)'), findsOneWidget);
+      expect(find.textContaining('OCR文字認識信頼度: 100%'), findsNothing);
     },
   );
 
@@ -1151,6 +1156,294 @@ void main() {
           (destination.label as Text).data,
       ];
       expect(labels, ['問1', '問2', '問10']);
+    },
+  );
+
+  testWidgets(
+    'keeps question labels in a single, transitive order even when some '
+    'mix digits and letters (e.g. sub-question labels)',
+    (tester) async {
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(),
+        listQuestions: (_) async => [
+          _question(id: 'q-10', number: '10'),
+          _question(id: 'q-1a', number: '1a'),
+          _question(id: 'q-2', number: '2'),
+        ],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, _) async => const [],
+        listGrades: (_, _) async => const [],
+        listAnnotations: (_, _) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      final rail = tester.widget<NavigationRail>(
+        find.byKey(const Key('review-question-rail')),
+      );
+      final labels = [
+        for (final destination in rail.destinations)
+          (destination.label as Text).data,
+      ];
+      // A comparator that special-cases only pure-integer labels reports
+      // 2 < 10, 10 < "1a", and "1a" < 2 all at once for this exact input --
+      // a genuine total order can only produce one consistent arrangement.
+      expect(labels, ['問1a', '問2', '問10']);
+    },
+  );
+
+  testWidgets(
+    'keeps polling for a question with no AI result yet even though the '
+    'submission itself already reports ai_processed -- intake reaches that '
+    'state before any per-question job exists, so it is not a signal that '
+    'processing has actually finished',
+    (tester) async {
+      var recognitionAvailable = false;
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(state: 'ai_processed'),
+        listQuestions: (_) async => [_question()],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, _) async =>
+            recognitionAvailable ? [_recognition()] : const [],
+        listGrades: (_, _) async => const [],
+        listAnnotations: (_, _) async => const [],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-question-empty')), findsOneWidget);
+
+      // AI work finishes in the background -- no submission-state change,
+      // no manual refresh, just the recognition becoming available.
+      recognitionAvailable = true;
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(seconds: 4));
+      });
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        find.text('光合成によって酸素が発生する'),
+        findsOneWidget,
+        reason:
+            'the background poll must keep running based on whether '
+            "this question has a result yet, not the submission's own "
+            '(already-passed) processing state',
+      );
+    },
+  );
+
+  testWidgets(
+    'places a text-targeted annotation at the matching OCR word box, not '
+    'the annotation\'s own (never-set, in real grading output) rect',
+    (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        recognitions: [
+          RecognitionResponse(
+            (b) => b
+              ..id = 'rec-1'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'ai'
+              ..stage = 'ocr'
+              ..text = '光合成によって酸素が発生する'
+              ..confidence = 0.9
+              ..boxes.add(
+                BoundingBoxResponse(
+                  (b) => b
+                    ..text = '酸素'
+                    ..x = 0.5
+                    ..y = 0.5
+                    ..width = 0.05
+                    ..height = 0.05,
+                ),
+              )
+              ..createdAt = DateTime.utc(2026, 1, 1),
+          ),
+        ],
+        annotations: [
+          AnnotationResponse(
+            (b) => b
+              ..id = 'anno-1'
+              ..submissionId = 'sub-1'
+              ..questionId = 'q-1'
+              ..source_ = 'ai'
+              ..kind = 'underline'
+              ..anchorText = '酸素'
+              ..createdAt = DateTime.utc(2026, 1, 1),
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Placed on the PDF overlay (matched the OCR box), not routed to the
+      // comment fallback list.
+      expect(find.byKey(const Key('annotation-anno-1')), findsOneWidget);
+      expect(find.text('設問コメント'), findsNothing);
+
+      final pageOverlayPositioned = tester.widget<Positioned>(
+        find.byKey(const Key('#__pageOverlay__:1')),
+      );
+      final pageRect = Rect.fromLTWH(
+        pageOverlayPositioned.left!,
+        pageOverlayPositioned.top!,
+        pageOverlayPositioned.width!,
+        pageOverlayPositioned.height!,
+      );
+      final overlayTopLeft = tester.getTopLeft(
+        find.byKey(const Key('annotation-anno-1')),
+      );
+      final pdfViewerTopLeft = tester.getTopLeft(find.byType(PdfViewer));
+      final localOffset = overlayTopLeft - pdfViewerTopLeft;
+
+      expect(
+        localOffset.dx,
+        closeTo(pageRect.left + 0.5 * pageRect.width, 5.0),
+      );
+      expect(
+        localOffset.dy,
+        closeTo(pageRect.top + 0.5 * pageRect.height, 5.0),
+      );
+    },
+  );
+
+  testWidgets(
+    'falls back a fixed-position mark with no OCR match to the question\'s '
+    'score_area (simplified-design-spec §12.2), instead of dropping it to '
+    'the comment list',
+    (tester) async {
+      final scoreArea = _rect(0.8, 0.05, 0.1, 0.1);
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: QuestionResponse(
+          (b) => b
+            ..id = 'q-1'
+            ..testId = 'test-1'
+            ..number = '1'
+            ..page = 1
+            ..points = 5
+            ..scoringMethod = 'additive'
+            ..scoreArea = scoreArea.toBuilder(),
+        ),
+        annotations: [
+          _annotation(
+            kind: 'circle',
+            rect: null,
+          ), // no anchor_text and no OCR boxes -- nothing to match against
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('annotation-anno-1')), findsOneWidget);
+      expect(find.text('設問コメント'), findsNothing);
+
+      final pageOverlayPositioned = tester.widget<Positioned>(
+        find.byKey(const Key('#__pageOverlay__:1')),
+      );
+      final pageRect = Rect.fromLTWH(
+        pageOverlayPositioned.left!,
+        pageOverlayPositioned.top!,
+        pageOverlayPositioned.width!,
+        pageOverlayPositioned.height!,
+      );
+      final overlayTopLeft = tester.getTopLeft(
+        find.byKey(const Key('annotation-anno-1')),
+      );
+      final pdfViewerTopLeft = tester.getTopLeft(find.byType(PdfViewer));
+      final localOffset = overlayTopLeft - pdfViewerTopLeft;
+
+      expect(
+        localOffset.dx,
+        closeTo(pageRect.left + 0.8 * pageRect.width, 5.0),
+      );
+      expect(
+        localOffset.dy,
+        closeTo(pageRect.top + 0.05 * pageRect.height, 5.0),
+      );
+    },
+  );
+
+  testWidgets(
+    'shows both the OCR and the AI grader\'s own recognition stages side '
+    'by side when the grader corrects the OCR reading',
+    (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        recognitions: [
+          _recognition(id: 'rec-ocr', text: 'OCRが読んだ文字', confidence: 0.5),
+          _recognition(
+            id: 'rec-grading',
+            stage: 'grading',
+            text: '採点AIが訂正した文字',
+            confidence: 0.85,
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: dependencies,
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.text('OCRが読んだ文字'), findsOneWidget);
+      expect(
+        find.byKey(const Key('review-grading-recognition-label')),
+        findsOneWidget,
+      );
+      expect(find.text('採点AIが訂正した文字'), findsOneWidget);
+      expect(find.text('採点AI文字認識信頼度: 85% (中)'), findsOneWidget);
     },
   );
 }

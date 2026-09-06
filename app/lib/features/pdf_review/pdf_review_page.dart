@@ -56,17 +56,6 @@ class QuestionReviewState {
   ReviewDecision decision = ReviewDecision.pending;
   String note = '';
 
-  /// Whether the data currently cached here was fetched while the
-  /// submission was still `unprocessed`/`ai_processing`. Such a fetch is
-  /// provisional -- AI work for this specific question may not have
-  /// reached it yet -- so it must be refetched once the submission reaches
-  /// a terminal state even if this question was not the one selected when
-  /// that transition happened to be observed (e.g. a background poll or a
-  /// manual refresh on a *different* question). Without this, the
-  /// "already loaded" skip in `_ensureReviewLoaded` would otherwise cache
-  /// an empty result here forever (P1 review).
-  bool fetchedWhileProcessing = false;
-
   /// Bumped at the start of every `_ensureReviewLoaded` call for this
   /// question; a call only applies its result if it is still the most
   /// recently issued one by the time its fetch resolves. Without this, a
@@ -78,29 +67,36 @@ class QuestionReviewState {
   bool get hasLoaded =>
       recognitions != null && grades != null && annotations != null;
 
-  /// Annotations with a target Bounding Box -- drawn on the PDF overlay.
-  List<AnnotationResponse> get placedAnnotations =>
-      (annotations ?? const []).where((a) => a.rect != null).toList();
+  /// Whether AI work has produced anything at all for this question yet.
+  /// While this is false, a cached "loaded but empty" result is provisional
+  /// -- AI processing for this specific question may simply not have
+  /// started/finished, independent of the submission's own coarse state
+  /// (which reaches `ai_processed` immediately at intake, before any
+  /// per-question job even exists -- P1 review) -- so it must not block a
+  /// later refetch, and the background poll must keep running for it.
+  bool get hasAnyAiResult =>
+      latestOcrRecognition != null || latestAiGrade != null;
 
-  /// Annotations pdfrx cannot place (no target Bounding Box, or only an
-  /// `anchor_text` this screen does not yet resolve to a page position) --
-  /// they retreat to the question's comment area instead of being dropped
-  /// (simplified-design-spec.md §12.4). See `docs/pdf-review-overlay.md`.
-  List<AnnotationResponse> get fallbackAnnotations =>
-      (annotations ?? const []).where((a) => a.rect == null).toList();
+  /// The OCR pipeline's own reading (Issue #19), or `null` if none exists
+  /// yet. Kept separate from [latestGradingRecognition] and
+  /// [latestHumanRecognition]: a multimodal grader may correct the OCR text
+  /// it was given, and that correction is persisted as a *second*, distinct
+  /// AI-sourced row rather than replacing this one (append-only history,
+  /// docs/ai-grading-pipeline.md "AI graderが訂正した認識結果を保持する") --
+  /// so a reviewer can compare what OCR read against what the grader
+  /// actually used, not just see whichever happens to be more recent.
+  RecognitionResponse? get latestOcrRecognition =>
+      _latestWhere(recognitions, (r) => r.stage == 'ocr');
 
-  /// The latest AI-proposed recognition, or `null` if none exists yet.
-  /// Kept separate from [latestHumanRecognition] so the Inspector never
-  /// labels a human correction's confidence (always 1.0) as an AI
-  /// Recognition Confidence, and never loses the original AI proposal once
-  /// a human has corrected it (append-only history, §19/§35-5).
-  RecognitionResponse? get latestAiRecognition =>
-      _latestWhere(recognitions, (r) => r.source_ == 'ai');
+  /// The AI grader's own (possibly OCR-correcting) reading, or `null` if
+  /// grading hasn't produced one yet. See [latestOcrRecognition].
+  RecognitionResponse? get latestGradingRecognition =>
+      _latestWhere(recognitions, (r) => r.stage == 'grading');
 
   /// The latest human-entered/corrected recognition, or `null` if a human
   /// has never touched this question yet.
   RecognitionResponse? get latestHumanRecognition =>
-      _latestWhere(recognitions, (r) => r.source_ == 'human');
+      _latestWhere(recognitions, (r) => r.stage == 'human');
 
   /// The latest AI-proposed grade, or `null` if none exists yet.
   GradeResultResponse? get latestAiGrade =>
@@ -128,22 +124,59 @@ T? _latestWhere<T>(List<T>? items, bool Function(T) test) {
   return null;
 }
 
-/// Submission states where AI recognition/grading is still in flight -- a
-/// question's recognitions/grades/annotations reading back empty here is
-/// "not processed yet", not "confirmed empty", so the review screen keeps
-/// polling instead of caching that empty result as final.
-const _processingSubmissionStates = {'unprocessed', 'ai_processing'};
+/// Splits [value] into alternating runs of ASCII digits and non-digits,
+/// e.g. `"1a"` -> `["1", "a"]`, `"問10"` -> `["問", "10"]`. The building
+/// block for [_compareQuestionNumbers]'s natural-sort key.
+List<String> _tokenizeForNaturalSort(String value) {
+  final tokens = <String>[];
+  final buffer = StringBuffer();
+  bool? previousWasDigit;
+  for (final unit in value.codeUnits) {
+    final isDigit = unit >= 0x30 && unit <= 0x39; // '0'..'9'
+    if (previousWasDigit != null && isDigit != previousWasDigit) {
+      tokens.add(buffer.toString());
+      buffer.clear();
+    }
+    buffer.writeCharCode(unit);
+    previousWasDigit = isDigit;
+  }
+  if (buffer.isNotEmpty) tokens.add(buffer.toString());
+  return tokens;
+}
 
-/// Orders question numbers the way a reviewer expects (1, 2, ..., 10), not
-/// lexicographically (which would put "10" before "2") -- `Question.number`
-/// is ordinarily a plain integer as a string. Falls back to a lexicographic
-/// compare for either side that is not one (e.g. a future non-numeric
-/// question label), so ordering degrades gracefully instead of crashing.
+/// Orders question numbers the way a reviewer expects: naturally (1, 2,
+/// ..., 10), not lexicographically (which would put "10" before "2"), and
+/// with a single, transitive rule for labels that mix digits and letters
+/// (e.g. sub-questions like "1a") -- `Question.number` accepts any non-empty
+/// string (P2 review), so a comparator that only special-cases pure-integer
+/// labels and otherwise falls back to raw string comparison is not a total
+/// order (it can report `2 < 10`, `10 < "1a"`, and `"1a" < 2` all at once,
+/// since "10" vs "1a" and "1a" vs "2" each take the *other* branch of that
+/// special case). Comparing token-by-token with one fixed rule throughout
+/// (equal-type tokens compare within their type; a numeric token always
+/// sorts before a non-numeric one at the same position) avoids that: every
+/// pairwise comparison normalizes both sides identically, which is what
+/// makes the result transitive.
 int _compareQuestionNumbers(String a, String b) {
-  final aNum = int.tryParse(a);
-  final bNum = int.tryParse(b);
-  if (aNum != null && bNum != null) return aNum.compareTo(bNum);
-  return a.compareTo(b);
+  final tokensA = _tokenizeForNaturalSort(a);
+  final tokensB = _tokenizeForNaturalSort(b);
+  final sharedLength = tokensA.length < tokensB.length
+      ? tokensA.length
+      : tokensB.length;
+  for (var i = 0; i < sharedLength; i++) {
+    final numA = int.tryParse(tokensA[i]);
+    final numB = int.tryParse(tokensB[i]);
+    if (numA != null && numB != null) {
+      final comparison = numA.compareTo(numB);
+      if (comparison != 0) return comparison;
+      continue;
+    }
+    if (numA != null) return -1;
+    if (numB != null) return 1;
+    final comparison = tokensA[i].compareTo(tokensB[i]);
+    if (comparison != 0) return comparison;
+  }
+  return tokensA.length.compareTo(tokensB.length);
 }
 
 class _PdfReviewPageState extends State<PdfReviewPage> {
@@ -184,14 +217,24 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     if (mounted) setState(() {});
   }
 
-  /// Starts polling while [_submission] is still being processed (so a
-  /// question that reads back empty because AI work hasn't reached it yet
-  /// is retried instead of staying stuck empty until the reviewer reopens
-  /// this page), and stops once it reaches a terminal state. Safe to call
-  /// repeatedly -- it only (re)starts the timer when the desired state
-  /// actually changes.
+  /// Starts polling while the *currently selected* question has no AI
+  /// result yet, and stops once it has one. Safe to call repeatedly -- it
+  /// only (re)starts the timer when the desired state actually changes.
+  ///
+  /// Deliberately not keyed on `_submission.state`: intake moves a
+  /// submission through `unprocessed`/`ai_processing` to `ai_processed`
+  /// synchronously, before any per-question recognition/grading job even
+  /// exists (`adapters/submission_intake.py`) -- by the time a reviewer
+  /// opens this page the submission is essentially always already past
+  /// those two states, so gating polling on them means the real
+  /// queued/running window is never actually observed and an
+  /// initially-empty question stays cached until a manual refresh (P1
+  /// review). Whether *this* question's own AI result exists yet is the
+  /// one signal that actually tracks its job's progress.
   void _updatePolling() {
-    final shouldPoll = _processingSubmissionStates.contains(_submission?.state);
+    final review = _currentReview;
+    final shouldPoll =
+        review == null || review.loading || !review.hasAnyAiResult;
     if (shouldPoll == (_pollTimer != null)) return;
     if (shouldPoll) {
       _pollTimer = Timer.periodic(
@@ -314,23 +357,29 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final question = _currentQuestion;
     if (question == null) return;
     final existing = _reviews[question.id];
-    // While the submission is still being processed, a previously-fetched
-    // empty result is not yet final -- AI work for this specific question
-    // may simply not have reached it, so the cached "already loaded" state
-    // must not stick and quietly hide it from ever being retried again.
-    // `existing.fetchedWhileProcessing` extends this across a *different*
-    // question having been the one open when the submission actually left
-    // the processing state -- that question's own stale, processing-time
-    // cache must still be refetched the next time it is opened, not treated
-    // as final just because the submission itself has since moved on (P1
-    // review).
-    final stillProcessing = _processingSubmissionStates.contains(
-      _submission?.state,
-    );
+    if (silent && existing != null && existing.loading) {
+      // A visible fetch (initial load, manual refresh, or a question
+      // switch) is already in flight for this question -- let it finish
+      // undisturbed instead of bumping fetchGeneration out from under it.
+      // Silent fetches never set `loading` themselves, so this can only be
+      // true because of a visible one; superseding it here would otherwise
+      // leave `loading` stuck true forever if this silent poll then fails
+      // (its failure handler intentionally never touches `loading`/`error`,
+      // see below) (P2 review).
+      return;
+    }
+    // A cached result with no AI output yet is not necessarily final -- AI
+    // work for this question may simply not have completed (or even
+    // started), independent of the submission's own state (see
+    // `_updatePolling`) -- so it must not block a later refetch just
+    // because `hasLoaded` happens to be true. Recomputed from the *current*
+    // cache each call (not a stored flag) so it also self-corrects if this
+    // question was last fetched from a different question's perspective
+    // (e.g. a stale entry that was never revisited) (P1 review).
+    final resultsStillMissing = existing != null && !existing.hasAnyAiResult;
     if (existing != null &&
         !forceReload &&
-        !stillProcessing &&
-        !existing.fetchedWhileProcessing &&
+        !resultsStillMissing &&
         !existing.loading &&
         existing.error == null &&
         existing.hasLoaded) {
@@ -372,7 +421,6 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         // longer needs to keep showing a fetch failure from before it (P2
         // review): the data it was retried for is here now.
         review.error = null;
-        review.fetchedWhileProcessing = stillProcessing;
       });
     } on SidecarApiException catch (error) {
       if (!mounted || silent || generation != review.fetchGeneration) return;
@@ -380,6 +428,8 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         review.error = error.message;
         review.loading = false;
       });
+    } finally {
+      if (mounted) _updatePolling();
     }
   }
 
@@ -398,6 +448,11 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     if (previousPage != question.page && _pdfController.isReady) {
       unawaited(_pdfController.goToPage(pageNumber: question.page));
     }
+    // Re-evaluate immediately against the newly-selected question's own
+    // (possibly already-loaded) cache, rather than waiting for
+    // _ensureReviewLoaded below to eventually finish -- it may not do
+    // anything at all if this question already has data.
+    _updatePolling();
     unawaited(_ensureReviewLoaded());
   }
 
@@ -415,22 +470,16 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         review.hasLoaded;
   }
 
-  /// Whether the current question may be *approved*: [_canDecide], the
-  /// submission is not still being processed (three legitimately-empty list
-  /// responses during `unprocessed`/`ai_processing` would otherwise satisfy
-  /// [QuestionReviewState.hasLoaded] before AI work ever reached this
-  /// question), and an AI grade actually exists -- a confirmed review must
-  /// reference one (domain: `Review` requires `ai_grade_result_id` for
-  /// `APPROVED`), so approving before it exists would let a reviewer confirm
-  /// a result that was never produced (P1 review). 却下 has no such
-  /// requirement -- rejecting a question that never produced a usable
-  /// result is a legitimate outcome, so it stays gated on [_canDecide] alone.
+  /// Whether the current question may be *approved*: [_canDecide] and an AI
+  /// grade actually exists -- a confirmed review must reference one
+  /// (domain: `Review` requires `ai_grade_result_id` for `APPROVED`), so
+  /// approving before it exists would let a reviewer confirm a result that
+  /// was never produced (P1 review). 却下 has no such requirement --
+  /// rejecting a question that never produced a usable result is a
+  /// legitimate outcome, so it stays gated on [_canDecide] alone.
   bool get _canApprove {
     final review = _currentReview;
     if (!_canDecide) return false;
-    if (_processingSubmissionStates.contains(_submission?.state)) {
-      return false;
-    }
     return review!.latestAiGrade != null;
   }
 
@@ -663,8 +712,15 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final review = _reviews[question.id];
     if (review == null) return const [];
     final widgets = <Widget>[];
-    for (final annotation in review.placedAnnotations) {
-      final rect = normalizedRectToLocal(annotation.rect!, pageSize);
+    for (final annotation
+        in review.annotations ?? const <AnnotationResponse>[]) {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation,
+        questionScoreArea: question.scoreArea,
+        recognitions: review.recognitions ?? const [],
+      );
+      if (resolved == null) continue;
+      final rect = normalizedRectToLocal(resolved, pageSize);
       widgets.add(
         Positioned(
           key: Key('annotation-${annotation.id}'),
@@ -681,6 +737,24 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
     return widgets;
   }
+
+  /// The annotations [_buildAnnotationOverlay] could not place anywhere on
+  /// the page (§12.4) -- shown in the Inspector's "設問コメント" section
+  /// instead of being silently dropped.
+  List<AnnotationResponse> _fallbackAnnotationsFor(
+    QuestionResponse question,
+    QuestionReviewState review,
+  ) => (review.annotations ?? const <AnnotationResponse>[])
+      .where(
+        (a) =>
+            resolveAnnotationRect(
+              annotation: a,
+              questionScoreArea: question.scoreArea,
+              recognitions: review.recognitions ?? const [],
+            ) ==
+            null,
+      )
+      .toList();
 
   Widget _buildInspector({required bool narrow}) {
     final question = _currentQuestion;
@@ -751,10 +825,12 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     QuestionResponse question,
     QuestionReviewState review,
   ) {
-    final aiRecognition = review.latestAiRecognition;
+    final ocrRecognition = review.latestOcrRecognition;
+    final gradingRecognition = review.latestGradingRecognition;
     final humanRecognition = review.latestHumanRecognition;
     final aiGrade = review.latestAiGrade;
     final humanGrade = review.latestHumanGrade;
+    final fallbackAnnotations = _fallbackAnnotationsFor(question, review);
     // A question can have no AI recognition/grade yet but still carry a
     // fallback annotation (e.g. a human-entered comment) or a rubric
     // definition -- the empty state below must not swallow either, or a
@@ -762,11 +838,12 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     // marking scheme, would silently disappear for an otherwise-unprocessed
     // question.
     final isEmpty =
-        aiRecognition == null &&
+        ocrRecognition == null &&
+        gradingRecognition == null &&
         humanRecognition == null &&
         aiGrade == null &&
         humanGrade == null &&
-        review.fallbackAnnotations.isEmpty &&
+        fallbackAnnotations.isEmpty &&
         question.rubric.isEmpty;
     if (isEmpty) {
       return const Text('まだAI結果がありません', key: Key('review-question-empty'));
@@ -776,15 +853,37 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       children: [
         Text('AI認識文字', style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 4),
-        if (aiRecognition == null)
+        if (ocrRecognition == null)
           const Text('未認識')
         else ...[
-          Text(aiRecognition.text, key: const Key('review-recognition-text')),
+          Text(ocrRecognition.text, key: const Key('review-recognition-text')),
           const SizedBox(height: 4),
           _ConfidenceBadge(
             key: const Key('review-recognition-confidence'),
-            label: '文字認識信頼度',
-            confidence: aiRecognition.confidence.toDouble(),
+            label: 'OCR文字認識信頼度',
+            confidence: ocrRecognition.confidence.toDouble(),
+          ),
+        ],
+        // The AI grader's own reading is a *second*, distinct AI-sourced row
+        // (docs/ai-grading-pipeline.md "AI graderが訂正した認識結果を保持する")
+        // -- shown alongside OCR's, not merged into it, so a reviewer can
+        // see whether/how the grader corrected what OCR read (P2 review).
+        if (gradingRecognition != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            '採点AIの認識結果',
+            key: const Key('review-grading-recognition-label'),
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+          Text(
+            gradingRecognition.text,
+            key: const Key('review-grading-recognition-text'),
+          ),
+          const SizedBox(height: 4),
+          _ConfidenceBadge(
+            key: const Key('review-grading-recognition-confidence'),
+            label: '採点AI文字認識信頼度',
+            confidence: gradingRecognition.confidence.toDouble(),
           ),
         ],
         // A human correction never overwrites the AI's row (append-only
@@ -872,10 +971,10 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
               ),
             ),
         ],
-        if (review.fallbackAnnotations.isNotEmpty) ...[
+        if (fallbackAnnotations.isNotEmpty) ...[
           const Divider(height: 24),
           Text('設問コメント', style: Theme.of(context).textTheme.titleSmall),
-          for (final annotation in review.fallbackAnnotations)
+          for (final annotation in fallbackAnnotations)
             ListTile(
               key: Key('fallback-annotation-${annotation.id}'),
               dense: true,

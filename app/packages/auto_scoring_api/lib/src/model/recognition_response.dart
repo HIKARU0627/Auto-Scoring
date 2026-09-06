@@ -19,6 +19,7 @@ part 'recognition_response.g.dart';
 /// * [id]
 /// * [questionId]
 /// * [source_]
+/// * [stage]
 /// * [submissionId]
 /// * [text]
 @BuiltValue()
@@ -41,6 +42,9 @@ abstract class RecognitionResponse
 
   @BuiltValueField(wireName: r'source')
   String get source_;
+
+  @BuiltValueField(wireName: r'stage')
+  String get stage;
 
   @BuiltValueField(wireName: r'submission_id')
   String get submissionId;
@@ -105,6 +109,11 @@ class _$RecognitionResponseSerializer
     yield r'source';
     yield serializers.serialize(
       object.source_,
+      specifiedType: const FullType(String),
+    );
+    yield r'stage';
+    yield serializers.serialize(
+      object.stage,
       specifiedType: const FullType(String),
     );
     yield r'submission_id';
@@ -184,6 +193,13 @@ class _$RecognitionResponseSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.source_ = valueDes;
+          break;
+        case r'stage':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(String),
+          ) as String;
+          result.stage = valueDes;
           break;
         case r'submission_id':
           final valueDes = serializers.deserialize(

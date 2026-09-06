@@ -23,6 +23,7 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.dependency_graph import DependencyEdge, DependencyProvision
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
+from auto_scoring.domain.models import GradingSource, RecognitionResult
 from tests.fakes import FakeClock, FakeJobProcessor
 from tests.support import make_answer_image, make_question, make_test
 from tests.support import (
@@ -117,6 +118,64 @@ def test_list_recognitions_is_empty_before_any_recognition(client: TestClient) -
     response = client.get("/submissions/sub-1/questions/qa/recognitions", headers=_AUTH)
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_list_recognitions_distinguishes_ocr_from_grading_stage(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Both rows are `source=ai`; only the id convention
+    (`auto_scoring.jobs.recognition_processor.recognition_result_id` vs
+    `auto_scoring.jobs.grading_processor.grading_recognition_id`) tells them
+    apart. `stage` must expose that distinction so a reviewer can see what
+    OCR read *and* what the AI grader actually used (docs/ai-grading-
+    pipeline.md "AI graderが訂正した認識結果を保持する")."""
+    _seed_confirmed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.recognitions.add(
+            RecognitionResult(
+                id="recognition:job-1",
+                submission_id="sub-1",
+                question_id="qa",
+                source=GradingSource.AI,
+                text="OCRが読んだ文字",
+                confidence=0.7,
+                created_at=datetime(2026, 1, 1),
+            )
+        )
+        uow.recognitions.add(
+            RecognitionResult(
+                id="grading-recognition:job-1",
+                submission_id="sub-1",
+                question_id="qa",
+                source=GradingSource.AI,
+                text="採点AIが訂正した文字",
+                confidence=0.6,
+                created_at=datetime(2026, 1, 1, 0, 0, 1),
+            )
+        )
+        uow.recognitions.add(
+            RecognitionResult(
+                id="manual-1",
+                submission_id="sub-1",
+                question_id="qa",
+                source=GradingSource.HUMAN,
+                text="人が入力した文字",
+                confidence=1.0,
+                created_at=datetime(2026, 1, 1, 0, 0, 2),
+            )
+        )
+        uow.commit()
+
+    response = client.get("/submissions/sub-1/questions/qa/recognitions", headers=_AUTH)
+
+    assert response.status_code == 200
+    body = response.json()
+    stages = {row["id"]: row["stage"] for row in body}
+    assert stages == {
+        "recognition:job-1": "ocr",
+        "grading-recognition:job-1": "grading",
+        "manual-1": "human",
+    }
 
 
 def test_manual_recognition_is_persisted_as_human_source(

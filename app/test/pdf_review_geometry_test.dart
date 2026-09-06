@@ -82,4 +82,157 @@ void main() {
       expect(at2x.height, closeTo(at1x.height * 2, 1e-9));
     });
   });
+
+  group('resolveAnnotationRect', () {
+    AnnotationResponse annotation({
+      String kind = 'circle',
+      NormalizedRectResponse? rect,
+      String? anchorText,
+    }) => AnnotationResponse(
+      (b) => b
+        ..id = 'anno-1'
+        ..submissionId = 'sub-1'
+        ..questionId = 'q-1'
+        ..source_ = 'ai'
+        ..kind = kind
+        ..rect = rect?.toBuilder()
+        ..anchorText = anchorText
+        ..createdAt = DateTime.utc(2026, 1, 1),
+    );
+
+    RecognitionResponse recognitionWithBoxes(
+      List<(String, NormalizedRectResponse)> boxes,
+    ) => RecognitionResponse(
+      (b) => b
+        ..id = 'rec-1'
+        ..submissionId = 'sub-1'
+        ..questionId = 'q-1'
+        ..source_ = 'ai'
+        ..stage = 'ocr'
+        ..text = 'placeholder'
+        ..confidence = 0.9
+        ..createdAt = DateTime.utc(2026, 1, 1)
+        ..boxes.addAll([
+          for (final (text, rect) in boxes)
+            BoundingBoxResponse(
+              (b) => b
+                ..text = text
+                ..x = rect.x
+                ..y = rect.y
+                ..width = rect.width
+                ..height = rect.height,
+            ),
+        ]),
+    );
+
+    test('an explicit rect is used as-is', () {
+      final explicitRect = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.1
+          ..y = 0.1
+          ..width = 0.2
+          ..height = 0.2,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(rect: explicitRect),
+        questionScoreArea: null,
+        recognitions: const [],
+      );
+
+      // Not `same()`: the annotation's `rect` getter returns whatever
+      // built_value produced when building the annotation from a builder
+      // seeded with `explicitRect.toBuilder()`, not necessarily the exact
+      // same instance -- field equality is what actually matters here.
+      expect(resolved?.x, explicitRect.x);
+      expect(resolved?.y, explicitRect.y);
+      expect(resolved?.width, explicitRect.width);
+      expect(resolved?.height, explicitRect.height);
+    });
+
+    test('an anchor_text annotation resolves to the matching OCR word box, '
+        'per simplified-design-spec §12.3', () {
+      final wordBox = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.4
+          ..y = 0.5
+          ..width = 0.05
+          ..height = 0.03,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'underline', anchorText: '行く'),
+        questionScoreArea: null,
+        recognitions: [
+          recognitionWithBoxes([('走る', _dummyRect), ('行く', wordBox)]),
+        ],
+      );
+
+      expect(resolved?.x, wordBox.x);
+      expect(resolved?.y, wordBox.y);
+      expect(resolved?.width, wordBox.width);
+      expect(resolved?.height, wordBox.height);
+    });
+
+    test('a fixed-position mark with no OCR match falls back to the '
+        "question's score_area, per simplified-design-spec §12.2", () {
+      final scoreArea = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.8
+          ..y = 0.05
+          ..width = 0.1
+          ..height = 0.1,
+      );
+
+      for (final kind in ['circle', 'cross', 'triangle', 'score']) {
+        final resolved = resolveAnnotationRect(
+          annotation: annotation(kind: kind),
+          questionScoreArea: scoreArea,
+          recognitions: const [],
+        );
+        expect(resolved, same(scoreArea), reason: 'kind: $kind');
+      }
+    });
+
+    test('an anchor_text that matches nothing falls back to score_area for a '
+        'fixed-position kind instead of leaving it unresolved', () {
+      final scoreArea = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.8
+          ..y = 0.05
+          ..width = 0.1
+          ..height = 0.1,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'score', anchorText: '存在しない語'),
+        questionScoreArea: scoreArea,
+        recognitions: [
+          recognitionWithBoxes([('別の語', _dummyRect)]),
+        ],
+      );
+
+      expect(resolved, same(scoreArea));
+    });
+
+    test('a non-fixed-position annotation with no rect, no OCR match, and no '
+        'score_area is left unresolved (routed to the comment fallback area '
+        'by the caller, per simplified-design-spec §12.4)', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'comment', anchorText: '存在しない語'),
+        questionScoreArea: null,
+        recognitions: const [],
+      );
+
+      expect(resolved, isNull);
+    });
+  });
 }
+
+final _dummyRect = NormalizedRectResponse(
+  (b) => b
+    ..x = 0.01
+    ..y = 0.01
+    ..width = 0.01
+    ..height = 0.01,
+);

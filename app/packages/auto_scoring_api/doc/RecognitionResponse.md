@@ -14,6 +14,7 @@ Name | Type | Description | Notes
 **id** | **String** |  | 
 **questionId** | **String** |  | 
 **source_** | **String** |  | 
+**stage** | **String** |  | 
 **submissionId** | **String** |  | 
 **text** | **String** |  | 
 

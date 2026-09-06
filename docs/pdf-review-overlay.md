@@ -54,15 +54,28 @@ REST エンドポイントは Issue #21 着手時点で存在しなかった（�
 この閾値は何もゲーティングしない（自動確定・ブロックの類は一切行わない）。
 業務閾値が確定したら、この分類も合わせて見直すこと。
 
-### 2.4 target Bounding Boxを持たないannotationの扱い
+### 2.4 annotationの表示位置は`anchor_text`から解決する（R3レビュー対応）
 
-`Annotation.rect` が null の場合（コメントに位置指定が無い場合、または
-`underline`/`box` が `anchor_text` のみを持つ場合）は、設問のInspector内
-「設問コメント」欄へ退避表示する（簡易設計書 §12.4）。`anchor_text` を
-OCRの`RecognitionResult.boxes`と突き合わせて実際の画面位置へ解決する処理は
-本Issueでは実装していない（後続Issueの対象）。そのため現状は
-`anchor_text`のみを持つ`underline`/`box`も、位置未解決として同じ
-フォールバック欄に表示する。
+実際の`GradingJobProcessor`が永続化するannotationは、種類を問わず常に
+`anchor_text`のみを持ち`rect`は設定しない（AIにPDF座標を直接推測させない
+という簡易設計書 §12.1の方針どおり、座標決定はアプリ側の責務）。当初
+このIssueでは`anchor_text`→座標の解決を実装しておらず、フィルタが
+一切マッチしないため実データではoverlayが何も描画されない状態だった
+（R3レビュー指摘）。
+
+`app/lib/core/pdf_review_geometry.dart`の`resolveAnnotationRect`が、
+簡易設計書 §12.1-12.4の手順をそのまま実装する。
+
+1. `annotation.rect`が既に設定されていればそれをそのまま使う（APIの
+   契約上あり得るが、現状どの書き込み経路も設定しない）。
+2. なければ`anchor_text`を、その設問のOCR`RecognitionResult.boxes`と
+   完全一致で突き合わせ、一致した語のBounding Boxを使う（§12.3）。
+3. `○`・`×`・`△`・`点数`（`fixedPositionAnnotationKinds`）は特定の語では
+   なく解答全体に対する印なので、上記で解決できなければ設問の
+   `score_area`（Annotation配置領域）へフォールバックする（§12.2）。
+4. それでも解決できないもの（`anchor_text`が一致せず、かつ固定位置種別
+   でもないもの）は`null`を返し、呼び出し側が設問のInspector内
+   「設問コメント」欄へ退避表示する（§12.4）。
 
 ### 2.5 承認・修正・却下はこの画面のメモリ内でのみ保持する
 
@@ -98,29 +111,37 @@ PoC 3が検証した回転・CropBox・非ゼロ原点MediaBoxの全fixtureを�
 自動テストで再検証してはいない（代表fixture1点のみ、受入条件の文言どおり）。
 残りのfixtureでの目視確認は、Windowsデスクトップビルドでの手動確認に委ねる。
 
-### 2.8 処理中submissionはpollingで更新する
+### 2.8 pollingはsubmission状態でなく設問ごとのAI結果有無で判断する（R3レビュー対応）
 
-`unprocessed`/`ai_processing`状態のsubmissionを開いた場合、設問ごとの
-recognition/grade/annotationが空で返るのは「未処理」であって「確定した空」
-ではない。AI採点はバックエンドのjob queue（Issue #18）が設問単位で非同期に
-進めるため、レビュー画面を開いたままの間にAIが結果を出し得る。この画面は
-push通知を持たないため、3秒間隔のpolling（`Timer.periodic`、submission状態
-が処理中でなくなったら停止）と、AppBarの手動更新ボタン
-（`review-refresh-button`）の両方で追随する。pollingは`silent`フラグ付きで
-実行し、読み込み中スピナーやエラーバナーが定期的にちらつくのを防ぐ。
+当初pollingの継続条件をsubmissionの`unprocessed`/`ai_processing`状態に
+結び付けていたが、`submission_intake.py`が示すとおりsubmissionの状態遷移
+（`UNPROCESSED→AI_PROCESSING→AI_PROCESSED`）は取込時に同期的に完了し、
+設問ごとのjob（Issue #18のjob queue）が作られるより前に`ai_processed`へ
+進んでしまう。つまり本番のタイミングでは、実際にjobがqueued/runningの間
+ずっとsubmissionは既に`ai_processed`を報告しており、状態ベースの条件は
+実質的に一度もpollingを継続させない（R3レビュー指摘）。
 
-pollingが導入する2つの race condition に対処している。
+`_updatePolling()`は`QuestionReviewState.hasAnyAiResult`
+（`latestOcrRecognition != null || latestAiGrade != null`）が`false`である
+限りpollingを継続する方式に変更した。submissionの状態文字列を一切参照
+しない。AppBarの手動更新ボタン（`review-refresh-button`）は変更なし。
+pollingは引き続き`silent`フラグ付きで実行し、読み込み中スピナーやエラー
+バナーが定期的にちらつくのを防ぐ。
 
-- **設問ごとのキャッシュ無効化**: 処理中に訪問した設問はその時点の（空の）
-  結果を`QuestionReviewState.fetchedWhileProcessing = true`として記録する。
-  submissionが処理中でなくなった後にその設問へ戻ると、たとえ処理完了時に
-  別の設問が開かれていたとしても、このフラグにより必ず一度は再取得する。
+pollingが導入する race condition に対処している。
+
 - **世代トークンによる直列化**: `QuestionReviewState.fetchGeneration`を
   fetch開始のたびにインクリメントし、結果を適用する直前にまだ最新の世代か
   確認する。3秒間隔のpollingが前回のrefresh完了より早く発火した場合（遅い
   requestが複数並走した場合）でも、古いrequestが後から完了して新しい結果を
   上書きしないようにする。あわせて`_pollInFlight`フラグで前のpollが
   完了するまで次のtickを開始しない。
+- **表示中fetchのloading状態を保護する**（R3レビュー指摘）: silentな
+  pollは、その設問が既に（手動更新やタブ切替による）表示ありfetch中
+  （`review.loading == true`）であれば何もせず即座に戻る。これが無いと、
+  表示ありfetchの途中でsilent pollが割り込んで`fetchGeneration`を進め、
+  そのsilent fetch自体が失敗した場合に表示ありfetch側の`loading`を誰も
+  `false`へ戻さず、スピナーが永久に残ってしまう。
 
 ### 2.9 keyboardショートカットはnote編集中は無効化する
 
@@ -130,6 +151,41 @@ bindingsに一致するキーを、callbackの中身に関わらず無条件に�
 消費してしまうため、callback内でfocus判定をしても手遅れ（キー入力そのものが
 note fieldへ届かなくなる）。bindingsの登録自体をfocus状態に応じて外す方式を
 採用した。
+
+### 2.10 InspectorはOCRと採点AIの認識結果を別々に表示する（R3レビュー対応）
+
+`RecognitionResult`には、OCR自体の認識結果（Issue #19の文字認識job、
+id接頭辞`recognition:`）と、採点AIが採点時に独自に読み直し訂正した認識結果
+（`GradingJobProcessor`、id接頭辞`grading-recognition:`）の2種類があり、
+どちらも`source=ai`のため`source`だけでは区別できない
+（`docs/ai-grading-pipeline.md`「AI graderが訂正した認識結果を保持する」）。
+当初Inspectorは`source`のみでグルーピングしていたため、この2段階が
+同一の「AI認識文字」欄へ意図せず統合されていた（R3レビュー指摘）。
+
+`RecognitionResponse`（`recognitions_router.py`）へ`stage`
+（`"ocr" | "grading" | "human"`）フィールドを追加し、id接頭辞と
+`source == human`から機械的に導出する（`_recognition_stage`）。
+Inspectorは`latestOcrRecognition`（`stage == 'ocr'`）と
+`latestGradingRecognition`（`stage == 'grading'`）を別々のセクション
+（「OCR文字認識信頼度」欄と「採点AI文字認識信頼度」欄）として表示する。
+pollingの継続判定（2.8）も`latestOcrRecognition`の有無のみを見る
+（採点AIの訂正結果はグレーディングjob完了後にしか現れないため）。
+
+### 2.11 設問番号の並び順は数字/英字混在でも推移的な自然順にする（R3レビュー対応）
+
+設問番号（`Question.number`）は`"1"`のような単純な数字だけでなく、
+`"1a"`のような枝番も許容される。当初の比較関数は
+`int.tryParse`で両辺を数値化できたときだけ数値比較し、片方でも失敗したら
+文字列比較にfall backしていたが、これは推移律を満たさない
+（例: `"2" < "10"`、`"10" < "1a"`、`"1a" < "2"`が同時に成立してしまい、
+安定した全順序にならない）。
+
+`_compareQuestionNumbers`は`_tokenizeForNaturalSort`で文字列を数字の連続と
+非数字の連続に分割し、トークンを先頭から順に比較する一貫した規則に
+書き換えた: 同じ位置のトークンが両方数字ならその数値で、両方非数字なら
+辞書式で比較し、型が異なる場合は常に「数字トークン側を小さい」とみなす
+（共通の型付けルールを型ペアごとに変えないことで推移律を保証する）。
+共通接頭部が一致してどちらかのトークン列が尽きた場合は、短い方を先とする。
 
 ## 3. 追加したAPI（読み取り専用）
 
@@ -147,18 +203,33 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
 ## 4. 検証
 
 - `backend/tests/test_review_api.py`: 上記4エンドポイントのHTTP統合テスト。
+  `GradeResultResponse.comment`のAI総評コメント含む。
+- `backend/tests/test_recognitions_api.py`:
+  `test_list_recognitions_distinguishes_ocr_from_grading_stage`で、
+  同じ`source=ai`のOCR/採点AI訂正の2行と`source=human`の1行から
+  `stage`が`"ocr"`/`"grading"`/`"human"`へ正しく振り分けられることを検証。
 - `app/test/pdf_review_geometry_test.dart`: 座標変換の純関数テスト（PoC 3
-  fixture再利用）。
+  fixture再利用）に加え、`resolveAnnotationRect`（§2.4）の単体テストとして
+  明示rectの優先、`anchor_text`のOCR Bounding Boxへの解決、固定位置種別
+  （○・×・△・点数）4種すべてでのscore_areaへのフォールバック、
+  `anchor_text`が一致しない場合の固定位置種別のscore_areaフォールバック、
+  非固定位置種別で何も解決できない場合に`null`を返すことを検証。
 - `app/test/pdf_review_page_test.dart`: loading/empty/error状態、
   認識文字・点数・根拠・rubric（`question.rubric`の定義自体）・2種の
   Confidenceの同時表示、AI/human結果がsource別に区別されること、
   annotationのoverlay配置（選択中の設問のみに限定されナビゲーション履歴に
   依存しないこと）とフォールバック、AIの総評コメント表示、note field編集中は
   keyboardショートカットが無効化されること、AI gradeが存在するまで承認が
-  ブロックされること、処理中に訪問した設問が処理完了後に正しく再取得される
-  こと（別の設問が開かれていた場合も含む）、silent poll成功時に古いerrorが
-  クリアされること、設問番号が辞書式でなく自然順（1, 2, ..., 10）でソート
-  されること、処理中submissionが手動更新で追随すること、設問データ
-  未読み込み時に承認/却下がブロックされること、キーボードでの設問移動・
-  承認、action barのキーボード到達性、狭幅・低い高さのレイアウトでの
-  overflow無し、多数設問時のNavigation Railのスクロール、を検証。
+  ブロックされること、silent poll成功時に古いerrorがクリアされること、
+  設問番号が辞書式でなく自然順（1, 2, ..., 10）でソートされること、
+  設問番号が数字/英字混在（`"1a"`, `"2"`, `"10"`）でも推移的な順序に
+  なること（§2.11）、submissionが既に`ai_processed`を報告していても
+  その設問にまだAI結果が無ければpollingを継続すること（§2.8）、
+  text系annotationが実際のOCR単語Bounding Box（自身のrectではなく）へ
+  配置されること、固定位置markがOCR未一致時に設問のscore_areaへ
+  フォールバックすること、OCRと採点AI訂正の2つの認識段階が並べて
+  表示されること（§2.10）、処理中submissionが手動更新で追随すること、
+  設問データ未読み込み時に承認/却下がブロックされること、キーボードでの
+  設問移動・承認、action barのキーボード到達性、狭幅・低い高さの
+  レイアウトでのoverflow無し、多数設問時のNavigation Railのスクロール、
+  を検証。

@@ -880,6 +880,10 @@
             "title": "Source",
             "type": "string"
           },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
           "submission_id": {
             "title": "Submission Id",
             "type": "string"
@@ -894,6 +898,7 @@
           "submission_id",
           "question_id",
           "source",
+          "stage",
           "text",
           "confidence",
           "created_at",
