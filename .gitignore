@@ -31,3 +31,10 @@ yarn-error.log*
 /app-data/
 /backend/app-data/
 /app/app-data/
+
+# Scratch state left by a Codex-based code-review run against this worktree
+# (its CODEX_HOME and log, and any protocol-schema dump it generates while
+# investigating a finding) -- tooling output, not project content.
+/.review-codex-home/
+/codex-review-*.log
+/.tmp-review-protocol-schema/

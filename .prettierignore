@@ -12,3 +12,10 @@ docs/poc-3-pdf-coordinates/
 # Flutter app and Python backend own their formatters (dart format / ruff format)
 app/
 backend/
+
+# Scratch state left by a Codex-based code-review run against this worktree
+# (its CODEX_HOME and log, and any protocol-schema dump it generates while
+# investigating a finding) -- tooling output, not project content.
+.review-codex-home/
+codex-review-*.log
+.tmp-review-protocol-schema/
