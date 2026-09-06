@@ -268,7 +268,15 @@ def test_grade_requests_zero_data_retention() -> None:
     or train on it just because the caller's OpenRouter account itself
     hasn't been switched to a global zero-data-retention setting -- this
     request-level preference must be sent on every call (code review
-    finding; decision record's opt-out/ZDR requirement)."""
+    finding; decision record's opt-out/ZDR requirement).
+
+    Both ``data_collection: "deny"`` and ``zdr: True`` are required
+    (code review finding): ``data_collection: "deny"`` alone only
+    restricts routing to providers whose training/data-collection policy
+    is "deny" -- a provider can still retain input for other purposes
+    (e.g. abuse monitoring) under that policy. ``zdr: True`` is
+    OpenRouter's separate, stricter constraint that actually enforces
+    zero data retention."""
     captured: dict[str, object] = {}
 
     def _capturing_handler(request: httpx.Request) -> httpx.Response:
@@ -283,7 +291,7 @@ def test_grade_requests_zero_data_retention() -> None:
     provider = _make_provider(client)
     provider.grade(_VALID_REQUEST)
 
-    assert captured["provider"] == {"data_collection": "deny"}
+    assert captured["provider"] == {"data_collection": "deny", "zdr": True}
 
 
 def test_schema_violation_when_response_body_is_not_a_json_object() -> None:

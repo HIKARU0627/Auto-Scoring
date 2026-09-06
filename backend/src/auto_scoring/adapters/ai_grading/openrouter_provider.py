@@ -46,18 +46,26 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 
 #: OpenRouter's provider-routing preference restricting a request to
-#: upstream providers whose data-collection policy is "deny" (no retention
-#: of, or training on, submitted data) -- request-level zero-data-retention
-#: enforcement. The decision record requires enabling an opt-out/ZDR option
-#: wherever a cloud AI provider offers one for content sent off-device
-#: (docs/business-rules-and-evaluation-data.md; code review finding: a
-#: real answer-image crop must not reach an upstream that may retain or
-#: train on it just because the caller's OpenRouter account itself hasn't
-#: been switched to a global zero-data-retention setting). Whether
-#: OpenRouter honours this preference for every upstream is unverified
-#: against a live call -- see the live probe in docs/poc-2-ai-grading.md
-#: section 7.4.
-_ZERO_DATA_RETENTION_PROVIDER_PREFERENCE = {"data_collection": "deny"}
+#: zero-data-retention upstream providers -- request-level enforcement so
+#: that a real answer-image crop and OCR text never reach an upstream that
+#: may retain or train on them, regardless of whether the caller's
+#: OpenRouter account itself has been switched to a global zero-data-
+#: retention setting. The decision record requires enabling an opt-out/ZDR
+#: option wherever a cloud AI provider offers one for content sent
+#: off-device (docs/business-rules-and-evaluation-data.md).
+#:
+#: Two distinct fields, both required (code review findings):
+#: ``data_collection: "deny"`` restricts routing to providers whose
+#: *training/data-collection* policy is "deny", but a provider can still
+#: retain input for other purposes (e.g. abuse monitoring) under that
+#: policy alone. ``zdr: True`` is OpenRouter's separate, stricter routing
+#: constraint that actually enforces zero data retention -- without it,
+#: the account-level ZDR setting being off would still let a request reach
+#: a non-ZDR endpoint despite this adapter's own zero-retention claim.
+#: Whether OpenRouter honours both constraints for every upstream is
+#: unverified against a live call -- see the live probe in
+#: docs/poc-2-ai-grading.md section 7.4.
+_ZERO_DATA_RETENTION_PROVIDER_PREFERENCE = {"data_collection": "deny", "zdr": True}
 
 
 def _build_response_format() -> dict[str, object]:

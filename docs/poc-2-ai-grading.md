@@ -1090,14 +1090,21 @@ OpenRouter はこの hint を実際に守るかどうかをルーティング先
 自己申告を信用しない」原則）。
 
 `OpenRouterAIProvider.grade()` は request body に
-`"provider": {"data_collection": "deny"}`（OpenRouter の provider-routing
-preference。zero-data-retention/学習拒否ポリシーの upstream のみに
-ルーティングを制限する）を毎回付与する（コードレビュー指摘: 決定書は
+`"provider": {"data_collection": "deny", "zdr": true}`（OpenRouter の
+provider-routing preference）を毎回付与する（コードレビュー指摘: 決定書は
 クラウド送信先が opt-out/ZDR を提供する場合はそれを有効にすることを
 要求しており、呼び出し元の OpenRouter アカウント自体が global に ZDR へ
 切り替えられていなくても、実際の答案 crop 画像を送る request 単位でこの
-制約を強制する必要がある）。OpenRouter が実際にこの preference を
-すべての upstream で厳密に守るかは live probe で未検証（§7.4）。
+制約を強制する必要がある）。この 2 つのフィールドはどちらも必要で、
+役割が異なる（コードレビュー指摘）: `data_collection: "deny"` は学習/
+データ収集ポリシーが "deny" の upstream のみにルーティングを制限するが、
+そのポリシーの下でも upstream が abuse 監視等の別目的で入力を保持し続ける
+余地は残る。`zdr: true` は OpenRouter が別途公開している、実際に
+zero-data-retention を強制するより厳格な routing 制約であり、これを
+付けない場合はアカウント全体の ZDR 設定が無効なままだと非 ZDR の
+endpoint へ到達しうる（`data_collection: "deny"` だけでは zero retention
+を保証できない）。OpenRouter が実際にこれらの制約をすべての upstream で
+厳密に守るかは live probe で未検証（§7.4）。
 
 OpenRouter は同じモデル slug（応答の `model` フィールド）でも、実際に
 応答を処理した upstream inference provider（応答の top-level `provider`
