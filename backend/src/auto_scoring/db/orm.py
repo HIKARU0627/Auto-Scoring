@@ -48,6 +48,7 @@ from auto_scoring.domain.models import (
     ReviewAction,
     ScoringMethod,
     SubmissionState,
+    TestStatus,
 )
 
 _CONFIDENCE_RANGE = "confidence >= 0.0 AND confidence <= 1.0"
@@ -73,12 +74,22 @@ def _json_list() -> Mapped[list[dict[str, Any]]]:
 
 class TestRow(Base):
     __tablename__ = "tests"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'ready')", name="ck_tests_status_valid"),
+    )
 
     id: Mapped[str] = _pk()
     name: Mapped[str] = mapped_column(String, nullable=False)
     subject: Mapped[str | None] = mapped_column(String, nullable=True)
     default_scoring_method: Mapped[ScoringMethod] = mapped_column(
         _enum(ScoringMethod), nullable=False
+    )
+    #: Registration lifecycle (Issue #16). Mirrors `domain.models.Test.status`;
+    #: the one-way draft->ready move is enforced in the domain
+    #: (`Test.mark_ready`), this CHECK only rejects an unknown value reaching
+    #: the DB outside the domain (repair, import, direct SQL).
+    status: Mapped[TestStatus] = mapped_column(
+        _enum(TestStatus), nullable=False, default=TestStatus.DRAFT
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 

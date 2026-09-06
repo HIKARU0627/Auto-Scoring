@@ -43,6 +43,7 @@ from auto_scoring.domain.models import (
     Question,
     Submission,
     SubmissionState,
+    TestStatus,
 )
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -76,6 +77,20 @@ class DuplicateSubmissionError(Exception):
             f"an identical PDF was already submitted as submission {existing_submission_id!r}"
         )
         self.existing_submission_id = existing_submission_id
+
+
+class TestNotReadyError(Exception):
+    """The test exists but has not completed registration (Issue #16).
+
+    A `draft` test's profile and/or dependency graph may still be
+    unconfirmed or incomplete -- accepting submissions against it would let
+    answer processing start before the lifecycle Issue #16 defines actually
+    permits it (`docs/test-registration.md` "ready になる条件").
+    """
+
+    def __init__(self, test_id: str) -> None:
+        super().__init__(f"test {test_id!r} is not ready to accept submissions yet")
+        self.test_id = test_id
 
 
 class SubmissionRetryConflictError(Exception):
@@ -133,6 +148,8 @@ def intake_submission(
     test = uow.tests.get(test_id)
     if test is None:
         raise LookupError(f"test {test_id!r} not found")
+    if test.status is not TestStatus.READY:
+        raise TestNotReadyError(test_id)
 
     with tempfile.TemporaryDirectory(prefix="auto-scoring-intake-") as scratch_dir:
         scratch_path = Path(scratch_dir) / "upload.pdf"

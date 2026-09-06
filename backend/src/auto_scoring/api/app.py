@@ -27,9 +27,11 @@ from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
     SubmissionIntakeResult,
     SubmissionRetryConflictError,
+    TestNotReadyError,
     intake_submission,
     repair_incomplete_submissions,
 )
+from auto_scoring.adapters.test_intake import repair_incomplete_test_registrations
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
@@ -37,11 +39,12 @@ from auto_scoring.api.dependency_graph_router import build_dependency_graph_rout
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
+from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
-from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission
+from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission, TestStatus
 from auto_scoring.domain.ocr import OCRProvider
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -261,9 +264,15 @@ def create_app(
             # alive to raise it) leaves that submission stuck: recorded as
             # complete, some files missing, and no way to retry it.
             # repair_incomplete_submissions covers that other half.
+            # repair_incomplete_test_registrations covers the same crash
+            # window for test registration (Issue #16 review): a `Test` row
+            # committed before its two PDFs both finished writing, with no
+            # `error` state to retry into and no endpoint able to find or
+            # remove it otherwise.
             store.sweep_temp()
             with SqlAlchemyUnitOfWork(session_factory) as uow:
                 repair_incomplete_submissions(uow, store)
+                repair_incomplete_test_registrations(uow, store)
     except BaseException:
         # Nothing below this point has run yet, so nothing else needs
         # unwinding -- but this function's caller (or a test) may go on to
@@ -345,12 +354,22 @@ def create_app(
 
     # Rejects an over-limit request body at the ASGI stream boundary, before
     # FastAPI's multipart parser buffers/spools it -- api/body_size_limit.py.
-    # The per-file limit is enforced precisely by _read_upload_within_limit
-    # below; this one only needs to be no *smaller* than that plus multipart
+    # This is one app-wide limit shared by every multipart-accepting route,
+    # not just this module's own /tests/{test_id}/submissions: Issue #16's
+    # `POST /tests` carries *two* independently `limits.max_size_bytes`-capped
+    # PDFs (model answer + marking manual) in a single multipart body. Sizing
+    # this for only one file's worth would 413 a perfectly valid two-PDF
+    # registration before either per-file check in
+    # `test_registration_router`/`_read_upload_within_limit` ever ran, even
+    # though each file on its own is within limits. The per-file limits are
+    # enforced precisely by those callers; this middleware only needs to be
+    # no smaller than the largest *request* (two files) plus multipart
     # framing overhead.
+    _max_files_per_multipart_request = 2
     app.add_middleware(
         MaxBodySizeMiddleware,
-        max_bytes=limits.max_size_bytes + _MULTIPART_OVERHEAD_BYTES,
+        max_bytes=limits.max_size_bytes * _max_files_per_multipart_request
+        + _MULTIPART_OVERHEAD_BYTES,
     )
 
     # Bounds how many uploads may have their body parsed/materialized at
@@ -419,10 +438,17 @@ def create_app(
 
     @protected.get("/tests")
     def list_tests() -> list[TestSummary]:
+        # Answer intake (§16.4) must only offer tests whose registration is
+        # actually complete (Issue #16: profile + dependency graph both
+        # confirmed) -- a `draft` test can have unconfirmed/incomplete
+        # regions or no confirmed dependency graph, and intake_submission()
+        # below independently enforces the same gate so this is a UX filter,
+        # not the only enforcement point.
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             return [
                 TestSummary(id=test.id, name=test.name, subject=test.subject)
                 for test in uow.tests.list_all()
+                if test.status is TestStatus.READY
             ]
 
     @protected.get("/tests/{test_id}/submissions")
@@ -476,6 +502,8 @@ def create_app(
             raise HTTPException(status_code, detail=str(exc)) from exc
         except LookupError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except TestNotReadyError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except DuplicateSubmissionError as exc:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -502,6 +530,15 @@ def create_app(
         )
     )
     protected.include_router(build_jobs_router(queue_service))
+    protected.include_router(
+        build_test_registration_router(
+            session_factory,
+            store,
+            engine,
+            intake_limits=limits,
+            pdfium_lock=intake_lock,
+        )
+    )
     protected.include_router(build_recognitions_router(session_factory, store, queue_service))
 
     app.include_router(protected)

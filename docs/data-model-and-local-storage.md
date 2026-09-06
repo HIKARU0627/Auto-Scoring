@@ -60,6 +60,11 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > `original_filename` / `review_reason` は Issue #17（答案取込・画像前処理）で
 > マイグレーション `0005_answer_intake` により追加した。詳細は
 > [`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md)。
+>
+> `Test.status`（`draft`/`ready`、マイグレーション `0011_test_status`）は Issue #16
+> で追加した登録ライフサイクルで、テストプロファイルと設問依存関係グラフ（Issue #26）
+> の両方が確認済みになるまで `draft` のまま一方向に留まる。詳細は
+> [`test-registration.md`](./test-registration.md)。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、

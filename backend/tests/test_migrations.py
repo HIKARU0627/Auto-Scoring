@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -171,6 +171,52 @@ def test_backfills_pre_existing_submission_metadata_on_upgrade(db_url: str, db_p
     assert loaded["missing-file"].page_count == 1
 
 
+def test_backfills_pre_existing_tests_as_ready_on_upgrade(db_url: str) -> None:
+    """A `Test` row from before 0011 (``status`` didn't exist, and neither
+    did the two-PDF registration flow it gates) must come out the other
+    side ``ready``, not ``draft``.
+
+    Before 0011, answer intake accepted a submission for any test
+    unconditionally; afterward, ``GET /tests`` and ``intake_submission``
+    both reject anything short of ``ready``. Such a row never had -- and,
+    lacking registration PDFs, can never retroactively earn -- a profile or
+    dependency graph to confirm, so backfilling it to ``draft`` would make
+    it permanently unusable for new submissions with no way to recover
+    (Issue #16 review round 6).
+    """
+    upgrade(db_url, "0007")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, created_at) "
+                    "VALUES ('legacy-test', 'n', 'additive', '2026-01-01')"
+                )
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            status = conn.execute(
+                text("SELECT status FROM tests WHERE id = 'legacy-test'")
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert status == "ready"
+
+    session_factory = build_session_factory(create_sqlite_engine(db_url))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        loaded = uow.tests.get("legacy-test")
+    assert loaded is not None
+    assert loaded.status.value == "ready"
+
+
 def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
     db_url: str, db_path: Path
 ) -> None:
@@ -235,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0010"
+    assert current_revision(db_url) == "0011"
 
 
 _CHILD_TABLES = (
@@ -347,8 +393,8 @@ def test_reintake_key_is_unique_per_test(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -387,8 +433,8 @@ def test_submission_metadata_columns_require_a_value_after_upgrade(db_url: str) 
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -491,8 +537,8 @@ def test_check_constraint_rejects_bad_row(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -586,8 +632,8 @@ def test_answer_image_check_constraint_rejects_reason_status_mismatch(
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -639,8 +685,8 @@ def test_state_check_constraints_reject_unknown_values(db_url: str, bad_insert: 
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -668,8 +714,8 @@ def test_confirmed_dependency_graph_row_requires_empty_unresolved(db_url: str) -
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -701,8 +747,8 @@ def test_dependency_graph_status_confirmed_at_pairing_is_enforced(db_url: str) -
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -740,8 +786,8 @@ def test_dependency_graph_requires_non_empty_question_ids(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -771,8 +817,8 @@ def test_dependency_edge_invariants_are_enforced(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -829,8 +875,8 @@ def test_dependency_edge_provides_rejects_unknown_values(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -884,8 +930,8 @@ def test_dependency_edge_provides_rejects_a_null_element(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -924,8 +970,8 @@ def test_dependency_graph_question_ids_rejects_a_null_or_blank_element(db_url: s
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -965,8 +1011,8 @@ def test_dependency_graph_unresolved_shape_and_elements_are_enforced(db_url: str
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.commit()
@@ -1008,8 +1054,8 @@ def test_dependency_edge_endpoints_must_belong_to_the_graph(db_url: str) -> None
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(
@@ -1042,8 +1088,8 @@ def test_job_dependency_graph_version_must_be_positive(db_url: str) -> None:
     try:
         conn.execute(
             text(
-                "INSERT INTO tests (id, name, default_scoring_method, created_at) "
-                "VALUES ('t', 'n', 'additive', '2026-01-01')"
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
             )
         )
         conn.execute(

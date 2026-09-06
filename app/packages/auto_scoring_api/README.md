@@ -86,12 +86,22 @@ Class | Method | HTTP request | Description
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**createManualRecognitionSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsPost**](doc/RecognitionsApi.md#createmanualrecognitionsubmissionssubmissionidquestionsquestionidrecognitionspost) | **POST** /submissions/{submission_id}/questions/{question_id}/recognitions | Create Manual Recognition
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet**](doc/RecognitionsApi.md#getanswerimagesubmissionssubmissionidquestionsquestionidanswerimageget) | **GET** /submissions/{submission_id}/questions/{question_id}/answer-image | Get Answer Image
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**listRecognitionsSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsGet**](doc/RecognitionsApi.md#listrecognitionssubmissionssubmissionidquestionsquestionidrecognitionsget) | **GET** /submissions/{submission_id}/questions/{question_id}/recognitions | List Recognitions
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**completeRegistrationTestsTestIdCompleteRegistrationPost**](doc/TestRegistrationApi.md#completeregistrationteststestidcompleteregistrationpost) | **POST** /tests/{test_id}/complete-registration | Complete Registration
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**confirmProfileTestsTestIdProfileConfirmPost**](doc/TestRegistrationApi.md#confirmprofileteststestidprofileconfirmpost) | **POST** /tests/{test_id}/profile/confirm | Confirm Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**createTestTestsPost**](doc/TestRegistrationApi.md#createtesttestspost) | **POST** /tests | Create Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getProfileTestsTestIdProfileGet**](doc/TestRegistrationApi.md#getprofileteststestidprofileget) | **GET** /tests/{test_id}/profile | Get Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getTestTestsTestIdGet**](doc/TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listTestRegistrationsTestRegistrationsGet**](doc/TestRegistrationApi.md#listtestregistrationstestregistrationsget) | **GET** /test-registrations | List Test Registrations
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**updateProfileTestsTestIdProfilePut**](doc/TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
 
 
 ## Documentation For Models
 
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
+ - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
+ - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
@@ -100,13 +110,20 @@ Class | Method | HTTP request | Description
  - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)
  - [ManualRecognitionRequest](doc/ManualRecognitionRequest.md)
+ - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)
+ - [PageFormatModel](doc/PageFormatModel.md)
+ - [ProfileResponse](doc/ProfileResponse.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
  - [RecognitionResponse](doc/RecognitionResponse.md)
+ - [RegionKind](doc/RegionKind.md)
+ - [RegionModel](doc/RegionModel.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
+ - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
+ - [UpdateProfileRequest](doc/UpdateProfileRequest.md)
  - [ValidationError](doc/ValidationError.md)
 
 

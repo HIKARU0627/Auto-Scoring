@@ -16,6 +16,8 @@ import 'package:auto_scoring_api/src/model/date.dart';
 
 import 'package:auto_scoring_api/src/model/analyze_request.dart';
 import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
+import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
+import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
@@ -24,13 +26,20 @@ import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
+import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
+import 'package:auto_scoring_api/src/model/page_format_model.dart';
+import 'package:auto_scoring_api/src/model/profile_response.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
 import 'package:auto_scoring_api/src/model/recognition_response.dart';
+import 'package:auto_scoring_api/src/model/region_kind.dart';
+import 'package:auto_scoring_api/src/model/region_model.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
 import 'package:auto_scoring_api/src/model/submission_response.dart';
+import 'package:auto_scoring_api/src/model/test_response.dart';
 import 'package:auto_scoring_api/src/model/test_summary.dart';
 import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
+import 'package:auto_scoring_api/src/model/update_profile_request.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
 
 part 'serializers.g.dart';
@@ -38,6 +47,8 @@ part 'serializers.g.dart';
 @SerializersFor([
   AnalyzeRequest,
   BoundingBoxResponse,
+  CompleteRegistrationResponse,
+  ConfirmProfileRequest,
   ConfirmRequest,
   DependencyEdgeModel,
   DependencyGraphResponse,
@@ -46,19 +57,30 @@ part 'serializers.g.dart';
   JobResponse,
   LocationInner,
   ManualRecognitionRequest,
+  NormalizedBBoxModel,
+  PageFormatModel,
+  ProfileResponse,
   QuestionTextOverride,
   RecognitionResponse,
+  RegionKind,
+  RegionModel,
   ScoreRequest,
   ScoreResponse,
   SubmissionResponse,
+  TestResponse,
   TestSummary,
   UnresolvedQuestionModel,
+  UpdateProfileRequest,
   ValidationError,
 ])
 Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltMap, [FullType(String), FullType(String)]),
         () => MapBuilder<String, String>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(PageFormatModel)]),
+        () => ListBuilder<PageFormatModel>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(BoundingBoxResponse)]),
@@ -115,8 +137,16 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<DependencyProvision>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(RegionModel)]),
+        () => ListBuilder<RegionModel>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(String)]),
         () => ListBuilder<String>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(TestResponse)]),
+        () => ListBuilder<TestResponse>(),
       )
       ..add(const OneOfSerializer())
       ..add(const AnyOfSerializer())

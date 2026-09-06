@@ -32,6 +32,53 @@ Future<SubmissionResponse> _unavailableCreateSubmission({
   String? studentLabel,
 }) async => _unavailable();
 
+Future<TestResponse> _unavailableCreateTest({
+  required String name,
+  String? subject,
+  required String modelAnswerPath,
+  required String manualPath,
+}) async => _unavailable();
+
+Future<TestResponse> _unavailableGetTest(String testId) async => _unavailable();
+
+Future<List<TestResponse>> _unavailableListTestRegistrations() async =>
+    _unavailable();
+
+Future<ProfileResponse> _unavailableAnalyzeProfile(String testId) async =>
+    _unavailable();
+
+Future<ProfileResponse> _unavailableGetProfile(String testId) async =>
+    _unavailable();
+
+Future<ProfileResponse> _unavailableUpdateProfile(
+  String testId,
+  List<RegionModel> regions,
+) async => _unavailable();
+
+Future<ProfileResponse> _unavailableConfirmProfile(
+  String testId, {
+  required int revision,
+}) async => _unavailable();
+
+Future<CompleteRegistrationResponse> _unavailableCompleteRegistration(
+  String testId,
+) async => _unavailable();
+
+Future<DependencyGraphResponse> _unavailableAnalyzeDependencyGraph(
+  String testId, {
+  List<QuestionTextOverride> overrides = const [],
+}) async => _unavailable();
+
+Future<DependencyGraphResponse> _unavailableGetDependencyGraph(
+  String testId,
+) async => _unavailable();
+
+Future<DependencyGraphResponse> _unavailableConfirmDependencyGraph(
+  String testId, {
+  required int version,
+  required List<DependencyEdgeModel> edges,
+}) async => _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -51,6 +98,66 @@ typedef CreateSubmission =
       String? studentLabel,
     });
 
+/// Registers a new test's model-answer + marking-manual PDFs (テスト登録画面,
+/// Issue #16). Creates a `draft` test; no profile exists yet.
+typedef CreateTest =
+    Future<TestResponse> Function({
+      required String name,
+      String? subject,
+      required String modelAnswerPath,
+      required String manualPath,
+    });
+
+/// One test's current registration state (テスト設定画面).
+typedef GetTest = Future<TestResponse> Function(String testId);
+
+/// Every test regardless of status -- how a `draft` registration is found
+/// and reopened again after leaving テスト設定画面 or restarting the app.
+typedef ListTestRegistrations = Future<List<TestResponse>> Function();
+
+/// Generates DRAFT profile candidates from a test's two registration PDFs.
+/// Safe to call again -- always overwrites whatever DRAFT profile was there.
+typedef AnalyzeProfile = Future<ProfileResponse> Function(String testId);
+
+/// The current (draft or confirmed) profile for a test.
+typedef GetProfile = Future<ProfileResponse> Function(String testId);
+
+/// Replaces a test's profile regions with a human-reviewed set (still
+/// DRAFT -- not the confirm step).
+typedef UpdateProfile =
+    Future<ProfileResponse> Function(String testId, List<RegionModel> regions);
+
+/// The human confirmation step over a test's current profile region set.
+/// `revision` must match the profile currently on disk (the caller's own
+/// last `getProfile`/`updateProfile`/`analyzeProfile` response), or another
+/// client's edit landed in between and this is rejected as stale.
+typedef ConfirmProfile =
+    Future<ProfileResponse> Function(String testId, {required int revision});
+
+/// The final registration gate: moves a test from `draft` to `ready` once
+/// both the profile and the dependency graph are confirmed.
+typedef CompleteRegistration =
+    Future<CompleteRegistrationResponse> Function(String testId);
+
+/// Generates a new dependency-graph candidate version for a test (Issue #26).
+typedef AnalyzeDependencyGraph =
+    Future<DependencyGraphResponse> Function(
+      String testId, {
+      List<QuestionTextOverride> overrides,
+    });
+
+/// The latest dependency-graph version for a test (draft or confirmed).
+typedef GetDependencyGraph =
+    Future<DependencyGraphResponse> Function(String testId);
+
+/// The human confirmation step over one dependency-graph version of a test.
+typedef ConfirmDependencyGraph =
+    Future<DependencyGraphResponse> Function(
+      String testId, {
+      required int version,
+      required List<DependencyEdgeModel> edges,
+    });
+
 /// Composition-root dependency container.
 ///
 /// Features read their collaborators from here instead of constructing them,
@@ -62,6 +169,17 @@ class AppDependencies {
     this.listTests = _unavailableListTests,
     this.listSubmissions = _unavailableListSubmissions,
     this.createSubmission = _unavailableCreateSubmission,
+    this.createTest = _unavailableCreateTest,
+    this.getTest = _unavailableGetTest,
+    this.listTestRegistrations = _unavailableListTestRegistrations,
+    this.analyzeProfile = _unavailableAnalyzeProfile,
+    this.getProfile = _unavailableGetProfile,
+    this.updateProfile = _unavailableUpdateProfile,
+    this.confirmProfile = _unavailableConfirmProfile,
+    this.completeRegistration = _unavailableCompleteRegistration,
+    this.analyzeDependencyGraph = _unavailableAnalyzeDependencyGraph,
+    this.getDependencyGraph = _unavailableGetDependencyGraph,
+    this.confirmDependencyGraph = _unavailableConfirmDependencyGraph,
   });
 
   /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
@@ -70,4 +188,15 @@ class AppDependencies {
   final ListTests listTests;
   final ListSubmissions listSubmissions;
   final CreateSubmission createSubmission;
+  final CreateTest createTest;
+  final GetTest getTest;
+  final ListTestRegistrations listTestRegistrations;
+  final AnalyzeProfile analyzeProfile;
+  final GetProfile getProfile;
+  final UpdateProfile updateProfile;
+  final ConfirmProfile confirmProfile;
+  final CompleteRegistration completeRegistration;
+  final AnalyzeDependencyGraph analyzeDependencyGraph;
+  final GetDependencyGraph getDependencyGraph;
+  final ConfirmDependencyGraph confirmDependencyGraph;
 }

@@ -49,6 +49,18 @@ MAX_STUDENT_LABEL_LENGTH = 200
 #: constraint in ``migrations/versions/0007_original_filename_length.py``.
 MAX_ORIGINAL_FILENAME_LENGTH = 255
 
+#: Same reasoning as ``MAX_STUDENT_LABEL_LENGTH``: an authenticated caller of
+#: ``POST /tests`` can send ``name``/``subject`` as multipart form fields up
+#: to the whole request's own size limit, and both are stored verbatim and
+#: returned in full on every test-registration list response -- a handful of
+#: megabyte-scale values would bloat both the database and every such
+#: response's memory footprint (AGENTS.md "Validate every input that
+#: crosses a trust boundary"). Enforced in ``Test.__post_init__``, the same
+#: place ``Test.id``/``Test.name`` non-emptiness already is (Issue #16
+#: review round 8).
+MAX_TEST_NAME_LENGTH = 200
+MAX_TEST_SUBJECT_LENGTH = 200
+
 #: Upper bound for a single annotation comment, in characters
 #: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
 MAX_COMMENT_CHARS = 120
@@ -117,6 +129,26 @@ class ScoringMethod(StrEnum):
 
     ADDITIVE = "additive"
     SUBTRACTIVE = "subtractive"
+
+
+class TestStatus(StrEnum):
+    """Registration lifecycle of one test (Issue #16, simplified-design-spec.md §6.1).
+
+    A test starts ``DRAFT`` the moment its two PDFs are registered and stays
+    there through candidate generation and human review of the profile and
+    dependency graph. Only an explicit, one-way move to ``READY`` (see
+    ``Test.mark_ready``) unblocks answer processing for it -- there is no path
+    back to ``DRAFT``.
+    """
+
+    #: Not a pytest test class -- only named ``TestStatus`` because it
+    #: describes ``Test.status``. Without this, pytest's default
+    #: ``Test*``-prefix collection heuristic tries (and fails) to collect it,
+    #: emitting a `PytestCollectionWarning` on every run.
+    __test__ = False
+
+    DRAFT = "draft"
+    READY = "ready"
 
 
 class GradingSource(StrEnum):
@@ -390,10 +422,26 @@ class Test:
     created_at: datetime
     subject: str | None = None
     default_scoring_method: ScoringMethod = ScoringMethod.ADDITIVE
+    status: TestStatus = TestStatus.DRAFT
 
     def __post_init__(self) -> None:
         _require_non_empty("Test.id", self.id)
         _require_non_empty("Test.name", self.name)
+        if len(self.name) > MAX_TEST_NAME_LENGTH:
+            raise DomainError(f"Test.name must be at most {MAX_TEST_NAME_LENGTH} characters")
+        if self.subject is not None and len(self.subject) > MAX_TEST_SUBJECT_LENGTH:
+            raise DomainError(f"Test.subject must be at most {MAX_TEST_SUBJECT_LENGTH} characters")
+
+    def mark_ready(self) -> Test:
+        """Return a copy transitioned to ``READY`` -- the only allowed move.
+
+        Raises ``InvalidStateTransition`` if this test is already ``READY``:
+        the move is one-way (Issue #16), so re-confirming an already-ready
+        test is a caller bug, not an idempotent no-op.
+        """
+        if self.status is TestStatus.READY:
+            raise InvalidStateTransition("test", self.status, TestStatus.READY)
+        return replace(self, status=TestStatus.READY)
 
 
 @dataclass(frozen=True, kw_only=True)

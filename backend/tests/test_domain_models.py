@@ -7,6 +7,8 @@ import pytest
 from auto_scoring.domain.models import (
     MAX_ORIGINAL_FILENAME_LENGTH,
     MAX_STUDENT_LABEL_LENGTH,
+    MAX_TEST_NAME_LENGTH,
+    MAX_TEST_SUBJECT_LENGTH,
     Annotation,
     AnnotationKind,
     DomainError,
@@ -20,6 +22,7 @@ from auto_scoring.domain.models import (
     Score,
     ScoreOutOfRange,
     SubmissionState,
+    TestStatus,
     ensure_job_transition,
     ensure_submission_transition,
     reissue_job_for_graph_version,
@@ -31,7 +34,55 @@ from tests.support import (
     make_job,
     make_review,
     make_submission,
+    make_test,
 )
+
+
+def test_new_test_starts_as_draft() -> None:
+    assert make_test().status is TestStatus.DRAFT
+
+
+def test_mark_ready_transitions_a_draft_test() -> None:
+    ready = make_test().mark_ready()
+    assert ready.status is TestStatus.READY
+
+
+def test_mark_ready_is_one_way() -> None:
+    """Issue #16: registration completion is a one-way move -- a test that
+    is already `ready` cannot be "re-completed" (that would silently no-op
+    what should be a caller bug, e.g. calling complete-registration twice).
+    """
+    ready = make_test().mark_ready()
+    with pytest.raises(InvalidStateTransition):
+        ready.mark_ready()
+
+
+def test_test_name_length_is_capped() -> None:
+    """An authenticated caller of `POST /tests` can send `name` as a
+    multipart form field up to the whole request's own size limit; it is
+    stored verbatim and returned on every test-registration list response
+    (Issue #16 review round 8).
+    """
+    with pytest.raises(DomainError):
+        make_test(name="a" * (MAX_TEST_NAME_LENGTH + 1))
+
+
+def test_test_name_at_the_cap_is_accepted() -> None:
+    assert make_test(name="a" * MAX_TEST_NAME_LENGTH).name == "a" * MAX_TEST_NAME_LENGTH
+
+
+def test_test_subject_length_is_capped() -> None:
+    with pytest.raises(DomainError):
+        make_test(subject="a" * (MAX_TEST_SUBJECT_LENGTH + 1))
+
+
+def test_test_subject_at_the_cap_is_accepted() -> None:
+    subject = "a" * MAX_TEST_SUBJECT_LENGTH
+    assert make_test(subject=subject).subject == subject
+
+
+def test_test_subject_may_be_none() -> None:
+    assert make_test(subject=None).subject is None
 
 
 @pytest.mark.parametrize("awarded", [-1, 6])

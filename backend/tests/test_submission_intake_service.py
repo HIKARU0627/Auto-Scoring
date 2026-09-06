@@ -32,6 +32,7 @@ from auto_scoring.domain.models import (
     NormalizedRect,
     Question,
     SubmissionState,
+    TestStatus,
 )
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
@@ -76,7 +77,9 @@ def _seed_test_with_questions(
     questions: list[Question] | None = None,
 ) -> None:
     with make_uow() as uow:
-        uow.tests.add(make_test(id=test_id))
+        # READY: intake_submission() now rejects a draft test (Issue #16) --
+        # these tests exercise intake itself, not the registration gate.
+        uow.tests.add(make_test(id=test_id, status=TestStatus.READY))
         for question in questions or []:
             uow.questions.add(question)
         uow.commit()

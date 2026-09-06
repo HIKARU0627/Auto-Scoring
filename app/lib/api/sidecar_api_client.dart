@@ -15,7 +15,24 @@ import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
-    show ScoreRequest, ScoreResponse, SubmissionResponse, TestSummary;
+    show
+        CompleteRegistrationResponse,
+        DependencyEdgeModel,
+        DependencyGraphResponse,
+        DependencyProvision,
+        NormalizedBBoxModel,
+        PageFormatModel,
+        ProfileResponse,
+        QuestionTextOverride,
+        RegionKind,
+        RegionModel,
+        ScoreRequest,
+        ScoreResponse,
+        SubmissionResponse,
+        TestResponse,
+        TestSummary,
+        UnresolvedQuestionModel,
+        UpdateProfileRequest;
 export 'package:dio/dio.dart' show CancelToken;
 
 /// Where the sidecar is listening and the token minted for this session.
@@ -97,11 +114,19 @@ class SidecarApiClient {
     _configure(_uploadDio, connection, intakeTimeout);
     // Pass an empty interceptor list so the generated client does not also
     // register its own auth interceptors on top of ours.
-    _api = AutoScoringApi(dio: _dio, interceptors: const []).getDefaultApi();
-    _uploadApi = AutoScoringApi(
+    final generated = AutoScoringApi(dio: _dio, interceptors: const []);
+    _api = generated.getDefaultApi();
+    _testRegistrationApi = generated.getTestRegistrationApi();
+    _dependencyGraphApi = generated.getDependencyGraphApi();
+    final uploadGenerated = AutoScoringApi(
       dio: _uploadDio,
       interceptors: const [],
-    ).getDefaultApi();
+    );
+    _uploadApi = uploadGenerated.getDefaultApi();
+    // Registering a test uploads two PDFs in one request, same rationale as
+    // createSubmission below -- it needs the longer intake timeout, not the
+    // near-instant default.
+    _uploadTestRegistrationApi = uploadGenerated.getTestRegistrationApi();
   }
 
   static void _configure(
@@ -129,6 +154,8 @@ class SidecarApiClient {
 
   final Dio _dio;
   late final DefaultApi _api;
+  late final TestRegistrationApi _testRegistrationApi;
+  late final DependencyGraphApi _dependencyGraphApi;
 
   /// A second Dio/client pair, configured with [intakeTimeout] instead of
   /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
@@ -140,6 +167,7 @@ class SidecarApiClient {
   /// confusing duplicate-submission conflict.
   final Dio _uploadDio;
   late final DefaultApi _uploadApi;
+  late final TestRegistrationApi _uploadTestRegistrationApi;
 
   /// Liveness probe. Never throws: an unreachable sidecar is a state the UI
   /// renders, not an error. The endpoint itself needs no auth.
@@ -274,6 +302,271 @@ class SidecarApiClient {
     } on DioException catch (error) {
       final duplicate = _duplicateSubmission(error);
       if (duplicate != null) throw duplicate;
+      throw _translate(error);
+    }
+  }
+
+  /// Register a new test (テスト登録画面, Issue #16): both PDFs are validated
+  /// and stored, and a `draft` [TestResponse] is created. No profile exists
+  /// yet -- call [analyzeProfile] next. Uses the same longer intake timeout
+  /// as [createSubmission], since both PDFs are read and validated server-side
+  /// before the sidecar responds.
+  Future<TestResponse> createTest({
+    required String name,
+    String? subject,
+    required String modelAnswerPath,
+    required String manualPath,
+    CancelToken? cancelToken,
+  }) async {
+    final MultipartFile modelAnswer;
+    final MultipartFile manual;
+    try {
+      modelAnswer = await MultipartFile.fromFile(
+        modelAnswerPath,
+        contentType: MediaType('application', 'pdf'),
+      );
+      manual = await MultipartFile.fromFile(
+        manualPath,
+        contentType: MediaType('application', 'pdf'),
+      );
+    } catch (error) {
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
+      final response = await _uploadTestRegistrationApi.createTestTestsPost(
+        manual: manual,
+        modelAnswer: modelAnswer,
+        name: name,
+        subject: subject,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// One test's current registration state (テスト設定画面).
+  /// Throws [SidecarApiException] on any failure, including 404 for an
+  /// unknown [testId].
+  Future<TestResponse> getTest(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi.getTestTestsTestIdGet(
+        testId: testId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Generate DRAFT profile candidates from [testId]'s two registration PDFs
+  /// (テスト設定画面 "自動解析"/再実行). Safe to call again -- it always
+  /// overwrites whatever DRAFT profile was there. Throws [SidecarApiException]
+  /// (409) if the profile is already confirmed.
+  ///
+  /// Uses the same longer intake timeout as [createTest]/[createSubmission]:
+  /// this scans up to 100 pages across both PDFs and may wait behind the
+  /// sidecar's shared PDFium lock if a submission intake is already running,
+  /// so the default (near-instant) timeout would fire while the server is
+  /// still working -- the client would then report a failure and let the
+  /// review screen re-analyze on top of a draft profile the first, still
+  /// in-flight call is about to overwrite anyway.
+  Future<ProfileResponse> analyzeProfile(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _uploadTestRegistrationApi
+          .analyzeProfileTestsTestIdProfileAnalyzePost(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every test regardless of status (テスト設定画面の再開導線) -- unlike
+  /// [listTests], which only returns `ready` tests for the answer-intake
+  /// picker, this is how a `draft` registration (its `TestSettingsPage`
+  /// closed, or the app restarted) can be found and reopened again (Issue
+  /// #16 review).
+  Future<List<TestResponse>> listTestRegistrations({
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .listTestRegistrationsTestRegistrationsGet(cancelToken: cancelToken);
+      return (response.data ?? const <TestResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The current (draft or confirmed) profile for [testId].
+  /// Throws [SidecarApiException] (404) if [analyzeProfile] has not run yet.
+  Future<ProfileResponse> getProfile(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .getProfileTestsTestIdProfileGet(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Replace [testId]'s profile regions with a human-reviewed set (still
+  /// DRAFT -- this is not the confirm step). Lets the review screen
+  /// add/edit/remove regions, including fully manual ones.
+  Future<ProfileResponse> updateProfile(
+    String testId,
+    List<RegionModel> regions, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = UpdateProfileRequest((b) => b.regions.replace(regions));
+      final response = await _testRegistrationApi
+          .updateProfileTestsTestIdProfilePut(
+            testId: testId,
+            updateProfileRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The human confirmation step over [testId]'s current profile region set
+  /// (テスト設定画面 "確定"). Turns the confirmed regions into the test's
+  /// real Question/Rubric rows. [revision] must match the profile currently
+  /// on disk (the caller's own last `getProfile`/`updateProfile`/
+  /// `analyzeProfile` response) -- otherwise another client's edit landed
+  /// in between and this throws [SidecarApiException] (409), asking the
+  /// caller to reload and re-review before confirming again. Also (409) if
+  /// the profile is already confirmed, or (422) if the regions don't add up
+  /// to a valid test (missing score, duplicate question number, ...).
+  Future<ProfileResponse> confirmProfile(
+    String testId, {
+    required int revision,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = ConfirmProfileRequest((b) => b.revision = revision);
+      final response = await _testRegistrationApi
+          .confirmProfileTestsTestIdProfileConfirmPost(
+            testId: testId,
+            confirmProfileRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The final registration gate (テスト設定画面 "登録完了"): moves [testId]
+  /// from `draft` to `ready` once both the profile and the dependency graph
+  /// are confirmed. Throws [SidecarApiException] (409) listing what is still
+  /// missing otherwise.
+  Future<CompleteRegistrationResponse> completeRegistration(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .completeRegistrationTestsTestIdCompleteRegistrationPost(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Generate a new dependency-graph candidate version for [testId] (Issue
+  /// #26, shown on テスト設定画面). Always creates a new version; never
+  /// overwrites one a reviewer might already be looking at.
+  Future<DependencyGraphResponse> analyzeDependencyGraph(
+    String testId, {
+    List<QuestionTextOverride> overrides = const [],
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = AnalyzeRequest((b) => b.overrides.replace(overrides));
+      final response = await _dependencyGraphApi
+          .analyzeTestsTestIdDependencyGraphAnalyzePost(
+            testId: testId,
+            analyzeRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The latest dependency-graph version for [testId] (draft or confirmed).
+  /// Throws [SidecarApiException] (404) if [analyzeDependencyGraph] has not
+  /// run yet.
+  Future<DependencyGraphResponse> getDependencyGraph(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _dependencyGraphApi
+          .getLatestTestsTestIdDependencyGraphGet(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The human confirmation step over one dependency-graph [version] of
+  /// [testId]: replaces its candidate edges with the reviewer's final
+  /// [edges] and locks it. [version] must be the exact version the reviewer
+  /// looked at (from [getDependencyGraph]/[analyzeDependencyGraph]) -- a
+  /// stale or already-confirmed version is rejected (409), as is one whose
+  /// edges still contain a cycle (422).
+  Future<DependencyGraphResponse> confirmDependencyGraph(
+    String testId, {
+    required int version,
+    required List<DependencyEdgeModel> edges,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = ConfirmRequest(
+        (b) => b
+          ..version = version
+          ..edges.replace(edges),
+      );
+      final response = await _dependencyGraphApi
+          .confirmTestsTestIdDependencyGraphConfirmPost(
+            testId: testId,
+            confirmRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
       throw _translate(error);
     }
   }

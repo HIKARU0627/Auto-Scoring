@@ -72,6 +72,15 @@ class Region:
     bbox: NormalizedBBox
     label: str
     confirmed: bool = False
+    #: Extracted text content for kinds that carry one (QUESTION prompt,
+    #: MODEL_ANSWER, RUBRIC, SCORE). ``None`` for purely-positional kinds
+    #: (ANSWER_AREA, ANNOTATION_AREA) that only mark where something goes.
+    #: Added in Issue #16 so a candidate generated from real PDF text (rather
+    #: than the PoC's tagged annotations) can carry its source text through
+    #: human review and into the confirmed `Question`/`Rubric` it becomes --
+    #: see `domain.test_registration`. Optional with a default for backward
+    #: compatibility with profiles saved before this field existed.
+    text: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +90,7 @@ class Region:
             "bbox": self.bbox.to_dict(),
             "label": self.label,
             "confirmed": self.confirmed,
+            "text": self.text,
         }
 
     @classmethod
@@ -88,6 +98,9 @@ class Region:
         confirmed = data["confirmed"]
         if not isinstance(confirmed, bool):
             raise ValueError("region confirmed must be a boolean")
+        text = data.get("text")
+        if text is not None and not isinstance(text, str):
+            raise ValueError("region text must be a string or null")
         return cls(
             region_id=str(data["region_id"]),
             kind=RegionKind(data["kind"]),
@@ -95,6 +108,7 @@ class Region:
             bbox=NormalizedBBox.from_dict(data["bbox"]),
             label=str(data["label"]),
             confirmed=confirmed,
+            text=text,
         )
 
 
@@ -170,6 +184,18 @@ class Profile:
     signature: FormatSignature
     regions: tuple[Region, ...]
     status: ProfileStatus
+    #: Monotonically increasing with every saved change to `regions`
+    #: (`/profile/analyze`, `PUT /profile`) -- never touched by `confirm`
+    #: itself, which changes only `status`. Exists purely as a compare-and-
+    #: set token: a reviewer's confirm attests to "the region set at
+    #: revision N", and `api.test_registration_router.confirm_profile`
+    #: rejects a confirm whose `revision` no longer matches the profile
+    #: currently on disk. Without it, a second client's `PUT /profile` (or
+    #: a re-`analyze`) landing between a reviewer's own save and their
+    #: confirm call would be silently approved under that reviewer's
+    #: attestation instead (Issue #16 review round 8). Defaults to `1` so
+    #: a profile saved before this field existed still loads.
+    revision: int = 1
 
     def __post_init__(self) -> None:
         invalid_pages = _pages_out_of_range(self.regions, self.signature)
@@ -232,6 +258,7 @@ class Profile:
             "status": self.status.value,
             "signature": self.signature.to_dict(),
             "regions": [region.to_dict() for region in self.regions],
+            "revision": self.revision,
         }
 
     @classmethod
@@ -249,4 +276,5 @@ class Profile:
             signature=signature,
             regions=regions,
             status=ProfileStatus(data["status"]),
+            revision=int(data.get("revision", 1)),
         )

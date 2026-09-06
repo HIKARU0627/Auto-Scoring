@@ -60,6 +60,11 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+  # Only used directly by widget tests to build BuiltList-typed fields
+  # (e.g. DependencyGraphResponse.layers) on the generated auto_scoring_api
+  # models -- version pinned to match that package's own dependency.
+  built_collection: '>=5.1.1 <6.0.0'
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

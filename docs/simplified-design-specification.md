@@ -582,6 +582,11 @@ Material Design 3を利用する。
 - 採点ルール抽出
 - テストプロファイル生成
 
+> Issue #16でFlutter側の画面（`app/lib/features/test_registration/`）とAPI
+> （`POST /tests`ほか）を実装した。登録直後はテストプロファイルも設問依存関係グラフも
+> 未確認の`draft`状態で、両方を確認・確定するまでテスト登録は完了しない（§6.1）。
+> 詳細は[`test-registration.md`](./test-registration.md)。
+
 ---
 
 ## 16.3 テスト設定画面
@@ -594,6 +599,11 @@ Material Design 3を利用する。
 - 配点
 - 採点基準
 - Annotation領域
+- 設問依存関係グラフ（Issue #26のedge候補・並列実行層。確認するまで登録完了にならない）
+
+> Issue #16で実装。§13の「PDF + Annotation Overlay」表示ではなく、region一覧を
+> フィールド編集するUIとした（PDFオーバーレイでの視覚編集は未実装、後続Issueで検討）。
+> 詳細・理由は[`test-registration.md`](./test-registration.md)。
 
 ---
 

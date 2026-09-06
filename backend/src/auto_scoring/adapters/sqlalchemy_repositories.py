@@ -56,6 +56,7 @@ from auto_scoring.domain.models import (
     Submission,
     SubmissionState,
     Test,
+    TestStatus,
     ensure_job_transition,
     ensure_submission_transition,
 )
@@ -77,6 +78,26 @@ class SqlAlchemyTestRepository:
         rows = self._session.scalars(select(TestRow).order_by(TestRow.created_at))
         return [m.test_from_row(row) for row in rows]
 
+    def delete(self, test_id: str) -> None:
+        row = self._session.get(TestRow, test_id)
+        if row is not None:
+            self._session.delete(row)
+            self._session.flush()
+
+    def mark_ready(self, test_id: str) -> bool:
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(TestRow)
+                .where(TestRow.id == test_id, TestRow.status == TestStatus.DRAFT)
+                .values(status=TestStatus.READY)
+            ),
+        )
+        cached = self._session.get(TestRow, test_id)
+        if cached is not None:
+            self._session.refresh(cached)
+        return result.rowcount == 1
+
 
 class SqlAlchemyQuestionRepository:
     def __init__(self, session: Session) -> None:
@@ -97,6 +118,10 @@ class SqlAlchemyQuestionRepository:
             .order_by(QuestionRow.page, QuestionRow.number)
         )
         return [m.question_from_row(row) for row in rows]
+
+    def delete_for_test(self, test_id: str) -> None:
+        self._session.execute(delete(QuestionRow).where(QuestionRow.test_id == test_id))
+        self._session.flush()
 
 
 class SqlAlchemyRubricRepository:

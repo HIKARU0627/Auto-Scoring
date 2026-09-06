@@ -103,3 +103,23 @@ def test_profile_rejects_region_outside_its_page_range() -> None:
     invalid = replace(_region("q1"), page_index=-1)
     with pytest.raises(ValueError, match="outside the format signature"):
         Profile.from_candidates("p1", "format-a", _SIGNATURE, [invalid])
+
+
+def test_region_text_round_trips_through_to_dict_and_from_dict() -> None:
+    """Issue #16 added `Region.text` for candidate-generated wording (rubric,
+    score, model answer) -- it must survive a save/reload just like every
+    other field.
+    """
+    region = replace(_region("q1"), text="5点満点")
+    assert Region.from_dict(region.to_dict()) == region
+
+
+def test_region_from_dict_defaults_text_to_none_for_pre_issue_16_data() -> None:
+    """A profile.json saved before Issue #16 added `text` has no such key --
+    it must still load, with `text` defaulting to `None`, not raise a
+    `KeyError`.
+    """
+    region = _region("q1")
+    data = region.to_dict()
+    del data["text"]
+    assert Region.from_dict(data).text is None
