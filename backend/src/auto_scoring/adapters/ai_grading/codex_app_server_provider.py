@@ -61,31 +61,46 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TURN_TIMEOUT_SECONDS = 120.0
 
 #: `thread/start.config` override disabling every Codex feature that lets
-#: the agent read the filesystem or run commands. `sandbox: "read-only"`
-#: only blocks *writes*; it does not confine reads to `cwd`, and
-#: `approvalPolicy: "never"` only skips approval prompts for actions Codex
-#: already permits -- neither stops a prompt-injected turn (the grading
-#: input -- OCR text, rubric, answer image -- is student-controlled) from
-#: reading arbitrary files the OS-level user this process runs as can see
-#: and returning their contents through its own agent message (code review
-#: finding; trust-boundary/secret-masking rule, AGENTS.md "Security").
+#: the agent read the filesystem, run commands, or call an operator-
+#: configured external service. `sandbox: "read-only"` only blocks
+#: *writes*; it does not confine reads to `cwd`, and `approvalPolicy:
+#: "never"` only skips approval prompts for actions Codex already permits
+#: -- neither stops a prompt-injected turn (the grading input -- OCR text,
+#: rubric, answer image -- is student-controlled) from reading arbitrary
+#: files the OS-level user this process runs as can see, or from invoking
+#: whatever MCP servers the operator has configured, and returning either
+#: through its own agent message (code review finding; trust-boundary/
+#: secret-masking rule, AGENTS.md "Security"). This adapter deliberately
+#: reuses the operator's Codex home (`CODEX_HOME` in
+#: `_ALLOWED_ENV_VAR_NAMES`) to keep the existing login/subscription
+#: working, but that means any MCP server the operator has connected
+#: (`codex mcp add ...`) is also inherited unless explicitly cleared here
+#: -- the turn-level sandbox's network restriction does not limit a remote
+#: MCP tool call, which goes through Codex's own process, not a shell
+#: command (code review finding).
+#:
 #: Grading needs no tool at all: one attached image and OCR text in, one
 #: JSON message out. `codex features list` (run against the locally
 #: installed CLI, Codex CLI 0.153.2) confirms `shell_tool`, `unified_exec`,
 #: and `view_image` are stable, enabled-by-default features, and `codex
 #: features disable <name>` documents `-c features.<name>=false` as the
-#: equivalent config override -- this dict is that override's JSON form.
-#: Not exercised against a live app-server call (recorded as an open
-#: question in docs/poc-2-ai-grading.md section 7.1.2); the read-only
-#: sandbox, minimal child-process environment, and private per-call
-#: workspace directory remain as defense in depth regardless of whether
-#: this succeeds in fully disabling tool access.
-_DISABLE_FILE_AND_SHELL_TOOLS_CONFIG = {
+#: equivalent config override -- this dict's `features` entry is that
+#: override's JSON form. `mcp_servers` is the config.toml table `codex mcp
+#: add/list/remove` manage; overriding it to an empty object clears every
+#: configured server for this thread only (mirrors `-c mcp_servers={}`),
+#: without touching the operator's own `~/.codex/config.toml` or their
+#: login/auth state. Not exercised against a live app-server call
+#: (recorded as an open question in docs/poc-2-ai-grading.md section
+#: 7.1.2); the read-only sandbox, minimal child-process environment, and
+#: private per-call workspace directory remain as defense in depth
+#: regardless of whether this succeeds in fully disabling tool access.
+_TOOL_FREE_THREAD_CONFIG = {
     "features": {
         "shell_tool": False,
         "unified_exec": False,
         "view_image": False,
     },
+    "mcp_servers": {},
     # Best-effort defense in depth kept from an earlier round: even with
     # the tools above disabled, this tells Codex's own shell-environment
     # handling not to forward any environment variables into whatever a
@@ -157,6 +172,8 @@ class _AppServerTransport(Protocol):
         *,
         timeout_seconds: float,
     ) -> dict[str, object]: ...
+
+    def peek_thread_items(self, thread_id: str) -> list[dict[str, object]]: ...
 
     def discard_thread(self, thread_id: str) -> None: ...
 
@@ -291,6 +308,31 @@ class _SubprocessAppServerTransport:
                 self._notification_buffer.append(message)
             # Responses with no pending request (e.g. a stray late reply) are ignored.
 
+    def peek_thread_items(self, thread_id: str) -> list[dict[str, object]]:
+        """Returns the ``item`` payload of every buffered ``item/completed``
+        notification for ``thread_id``, without removing anything from the
+        buffer (``discard_thread`` still does that during cleanup).
+
+        ``turn/completed.turn.items`` can legitimately be empty
+        (``itemsView: "notLoaded"``, per the generated protocol schema)
+        even when the turn produced a real answer -- the final agent
+        message may have already arrived as one or more ``item/completed``
+        notifications while this adapter was waiting for ``turn/completed``
+        (code review finding: those notifications were previously only
+        ever buffered and then discarded, turning a successful grading
+        turn into a spurious ``SchemaViolation``)."""
+        items: list[dict[str, object]] = []
+        for message in self._notification_buffer:
+            if message.get("method") != "item/completed":
+                continue
+            params = message.get("params")
+            if not isinstance(params, dict) or params.get("threadId") != thread_id:
+                continue
+            item = params.get("item")
+            if isinstance(item, dict):
+                items.append(item)
+        return items
+
     def discard_thread(self, thread_id: str) -> None:
         """Drop buffered notifications belonging to an already-finished
         thread. Codex app-server emits many per-turn notifications besides
@@ -363,21 +405,41 @@ def _extract_configured_model(thread_start_result: dict[str, object]) -> str:
     return model
 
 
-def _extract_final_agent_message(turn_completed_params: dict[str, object]) -> str:
+def _find_agent_message(items: list[dict[str, object]]) -> str | None:
+    for item in reversed(items):
+        if item.get("type") == "agentMessage":
+            text = item.get("text")
+            if isinstance(text, str):
+                return text
+    return None
+
+
+def _extract_final_agent_message(
+    turn_completed_params: dict[str, object], fallback_items: list[dict[str, object]]
+) -> str:
     turn = turn_completed_params.get("turn")
     if not isinstance(turn, dict):
         raise ProviderUnavailable("codex app-server turn/completed had no turn payload")
     if turn.get("status") != "completed":
         raise ProviderUnavailable(f"codex app-server turn ended with status {turn.get('status')!r}")
     items = turn.get("items")
-    if not isinstance(items, list):
-        raise SchemaViolation("codex app-server turn had no items")
-    for item in reversed(items):
-        if isinstance(item, dict) and item.get("type") == "agentMessage":
-            text = item.get("text")
-            if isinstance(text, str):
-                return text
-    raise SchemaViolation("codex app-server turn produced no agent message")
+    text = (
+        _find_agent_message([item for item in items if isinstance(item, dict)])
+        if isinstance(items, list)
+        else None
+    )
+    if text is None:
+        # `turn.items` can legitimately be empty (`itemsView: "notLoaded"`,
+        # per the generated protocol schema) even though the turn produced
+        # a real answer -- fall back to the `item/completed` notifications
+        # buffered while waiting for `turn/completed` (see
+        # `peek_thread_items`; code review finding: discarding those
+        # notifications outright turned a successful grading turn into a
+        # spurious SchemaViolation).
+        text = _find_agent_message(fallback_items)
+    if text is None:
+        raise SchemaViolation("codex app-server turn produced no agent message")
+    return text
 
 
 def _cleanup_workspace(
@@ -547,12 +609,13 @@ class CodexAppServerProvider:
                         # image the turn's `input` carries (code review
                         # finding; see _prompt.py's module docstring).
                         "developerInstructions": GRADING_SYSTEM_INSTRUCTIONS,
-                        # See _DISABLE_FILE_AND_SHELL_TOOLS_CONFIG's own
-                        # docstring: removes the agent's shell/exec/
-                        # image-view tools for this thread (code review
-                        # finding), on top of the already-minimal
-                        # child-process environment (_minimal_environment).
-                        "config": _DISABLE_FILE_AND_SHELL_TOOLS_CONFIG,
+                        # See _TOOL_FREE_THREAD_CONFIG's own docstring:
+                        # removes the agent's shell/exec/image-view tools
+                        # and every inherited MCP server for this thread
+                        # (code review finding), on top of the
+                        # already-minimal child-process environment
+                        # (_minimal_environment).
+                        "config": _TOOL_FREE_THREAD_CONFIG,
                     },
                     timeout_seconds=self._turn_timeout_seconds,
                 )
@@ -585,6 +648,12 @@ class CodexAppServerProvider:
                     lambda params: params.get("threadId") == thread_id,
                     timeout_seconds=self._turn_timeout_seconds,
                 )
+                # Read before `discard_thread` below removes them: a
+                # fallback source for the final agent message when
+                # `turn/completed.turn.items` comes back empty (code review
+                # finding; see `peek_thread_items`/`_extract_final_agent_
+                # message`).
+                fallback_items = transport.peek_thread_items(thread_id)
             except TimeoutError as exc:
                 # Covers every stage above (initialize already handled in
                 # _ensure_transport): a hung thread/start or turn/start must
@@ -598,7 +667,7 @@ class CodexAppServerProvider:
                 transport.discard_thread(thread_id)
 
         latency_seconds = time.monotonic() - started_at
-        text = _extract_final_agent_message(completed_params)
+        text = _extract_final_agent_message(completed_params, fallback_items)
 
         try:
             parsed_result = parse_ai_grading_result(text)

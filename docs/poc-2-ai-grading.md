@@ -1197,11 +1197,11 @@ Codex CLI 0.153.2）。公式の独立したプロトコル仕様書は見つか
   にし、ターン完了後に丸ごと削除する——コードレビュー指摘: `read-only`
   sandbox でもファイル読み取り自体は許可されたままであり、共有 temp root
   を指すと他の呼び出し・他プロセスの一時ファイルを列挙されうる。
-  `thread/start` にはさらに `config` として
-  `_DISABLE_FILE_AND_SHELL_TOOLS_CONFIG`（`{"features": {"shell_tool":
-false, "unified_exec": false, "view_image": false}, "shell_environment_
-policy": {"inherit": "none"}}`）を渡す。`codex features list`（このワーク
-  ツリーの Codex CLI 0.153.2 で実行）が `shell_tool`/`unified_exec`/
+  `thread/start` にはさらに `config` として `_TOOL_FREE_THREAD_CONFIG`
+  （`{"features": {"shell_tool": false, "unified_exec": false,
+"view_image": false}, "mcp_servers": {}, "shell_environment_policy":
+{"inherit": "none"}}`）を渡す。`codex features list`（このワークツリー
+  の Codex CLI 0.153.2 で実行）が `shell_tool`/`unified_exec`/
   `view_image` を stable かつ既定で有効な feature だと示しており、
   `codex features disable <name>` の help が `-c features.<name>=false`
   をその等価な設定 override として文書化しているため、この JSON は
@@ -1209,11 +1209,21 @@ policy": {"inherit": "none"}}`）を渡す。`codex features list`（このワ�
   指摘: `sandbox: "read-only"` は書き込みのみを禁止し読み取りを `cwd` へ
   限定しない。`approvalPolicy: "never"` も既に許可された操作をブロック
   しない。採点には tool が一切不要〈テキスト+画像1枚を渡して JSON 1つを
-  受け取るだけ〉であるため、shell/exec/画像閲覧の tool 自体を無効化する。
+  受け取るだけ〉であるため、shell/exec/画像閲覧の tool 自体を無効化する）。
+  `mcp_servers: {}` は `codex mcp add/list/remove` が管理する config.toml
+  の `mcp_servers` テーブルをこの thread に限りリセットする
+  （コードレビュー指摘: この adapter は運用者の既存ログイン/サブスクリ
+  プションをそのまま使うため、`_ALLOWED_ENV_VAR_NAMES` に含めた
+  `CODEX_HOME` ごと運用者の Codex home を意図的に継承しており、運用者が
+  `codex mcp add` で接続した MCP server も一緒に継承されてしまう。ターン
+  レベルの sandbox のネットワーク制限は、shell コマンドではなく Codex
+  自身のプロセスを経由する remote MCP tool 呼び出しを制限しないため、
+  学生が制御する入力によって接続済み service へのアクセスを誘発され得た）。
   `shell_environment_policy.inherit: "none"` は前回までの防御をそのまま
-  残している）。実際の app-server 呼び出しに対してこれらの feature-disable
-  が本当に tool 呼び出しを阻止することは live probe で未検証（下記の
-  未決事項）。`turn/start`（`input` に `text` と `localImage`
+  残している。実際の app-server 呼び出しに対してこれらの feature-disable/
+  `mcp_servers` override が本当に tool 呼び出しを阻止することは live
+  probe で未検証（下記の未決事項）。`turn/start`（`input` に `text` と
+  `localImage`
   （ローカルファイルパス。答案画像は呼び出し専用の一時ディレクトリへ
   書き出してから渡し、ターン完了後にディレクトリごと削除する）、
   `outputSchema` に `_schema.strict_ai_grading_result_schema()`（§7.1.1）
@@ -1235,6 +1245,18 @@ env=None)` の既定動作は全環境変数を継承し、DB接続文字列や�
   `turn/completed` 通知（`{"threadId", "turn": {"id", "status", "items"}}`）
   で非同期に届く。`items` のうち `type: "agentMessage"` の要素の `text` が
   モデルの最終応答文字列であり、これを `parse_ai_grading_result()` で検証する。
+  ただし生成済み JSON Schema（`Turn.itemsView`）は `turn.items` が
+  `"notLoaded"` の場合は意図的に空配列のままでよいと定めており、この場合
+  `turn/completed` 自体には最終応答が一切含まれない（コードレビュー指摘:
+  以前の実装は `turn.items` だけを見ており、この場合は採点に成功していても
+  `SchemaViolation("codex app-server turn produced no agent message")` に
+  なってしまっていた）。実際の最終応答は、`turn/completed` を待っている間に
+  先着する `item/completed` 通知（`type: "agentMessage"` の `item`）として
+  既に届いている可能性があるため、`_SubprocessAppServerTransport.
+peek_thread_items()` がこの thread 宛の `item/completed` を（`discard_
+thread()` で削除する前に、削除せず）読み出し、`turn.items` が空のときの
+  フォールバックとして使う。`turn.items` に見つかった場合はそちらを優先し、
+  どちらにも見つからない場合にのみ `SchemaViolation` を送出する。
 - 固定の採点ルールは `thread/start` の `developerInstructions` フィールド
   （`GRADING_SYSTEM_INSTRUCTIONS`、§7.1.1 参照）に渡し、`turn/start` の
   `input` テキスト（学生の OCR テキストを含む）とは別チャンネルにする
@@ -1298,27 +1320,35 @@ server_contract.py` の該当テストはこれを踏まえてロガーの `disa
    本当に環境変数を継承しなくなることは live probe で未確認（§7.4）。
    受理されない・無視される場合でも、`_minimal_environment()` による
    子プロセス自体の環境最小化（上記）が主たる防御でありこれには依存しない。
-5. **feature-disable による tool 無効化が live 未検証**: `read-only`
-   sandbox はファイル読み取りと読み取り専用の shell コマンド実行を
-   許可したままであり、`approvalPolicy: "never"` は「既に許可された操作」
-   をブロックしない（コードレビュー指摘）。`thread/start`/`turn/start` の
-   生成済み JSON Schema 自体には「tool を無効化する」専用フィールドは
-   ないが、`codex features list`（Codex CLI 0.153.2）は `shell_tool`/
-   `unified_exec`/`view_image` が stable・既定で有効な feature であること
-   を示しており、`codex features disable <name>` の help は
-   `-c features.<name>=false` をその等価な override として文書化して
-   いる。これに基づき `thread/start.config` へ
-   `{"features": {"shell_tool": false, "unified_exec": false,
-"view_image": false}}` を渡し、これらの tool を無効化するよう実装した
-   （`_DISABLE_FILE_AND_SHELL_TOOLS_CONFIG`）。ただし、これが実際の
-   app-server セッションに対しても同じ意味を持ち、モデルがこれらの tool
-   を本当に呼び出せなくなることは live probe で未確認（§7.4。CLI 引数
-   `-c`/`--disable` の効果と、JSON-RPC `thread/start.config` 経由で渡した
-   場合の効果が同一である保証はない）。この feature-disable が無効/
-   一部のみ有効だった場合でも、private workspace ディレクトリ・環境変数
-   最小化・ターンレベルのネットワーク拒否が多層防御として残る。OS/
-   container レベルで完全に分離した worker への切り替えは、feature-disable
-   の live 検証結果を踏まえたうえで本番採用判断（#35）までに再検討する。
+5. **feature-disable / `mcp_servers` override による tool 無効化が live
+   未検証**: `read-only` sandbox はファイル読み取りと読み取り専用の
+   shell コマンド実行を許可したままであり、`approvalPolicy: "never"` は
+   「既に許可された操作」をブロックしない（コードレビュー指摘）。
+   `thread/start`/`turn/start` の生成済み JSON Schema 自体には「tool を
+   無効化する」専用フィールドはないが、`codex features list`（Codex CLI
+   0.153.2）は `shell_tool`/`unified_exec`/`view_image` が stable・既定で
+   有効な feature であることを示しており、`codex features disable
+<name>` の help は `-c features.<name>=false` をその等価な override
+   として文書化している。`mcp_servers` も同様に、`codex mcp add/list/
+remove` が管理する config.toml のテーブルであることが CLI から確認
+   できる。これに基づき `thread/start.config` へ `_TOOL_FREE_THREAD_
+CONFIG`（`{"features": {"shell_tool": false, "unified_exec": false,
+"view_image": false}, "mcp_servers": {}, ...}`）を渡し、これらの tool
+   と運用者が接続した MCP server を無効化するよう実装した。この adapter
+   は運用者の既存ログインを使うため Codex home を意図的に継承しており
+   （`CODEX_HOME`）、その home で設定された MCP server も無効化しない
+   限り継承されてしまう（コードレビュー指摘: turn レベルの sandbox の
+   ネットワーク制限は、shell コマンドではなく Codex 自身のプロセスを
+   経由する remote MCP tool 呼び出しを制限しない）。ただし、これらの
+   override が実際の app-server セッションに対しても同じ意味を持ち、
+   モデルがこれらの tool を本当に呼び出せなくなることは live probe で
+   未確認（§7.4。CLI 引数 `-c`/`--disable` の効果と、JSON-RPC
+   `thread/start.config` 経由で渡した場合の効果が同一である保証はない）。
+   これらの override が無効/一部のみ有効だった場合でも、private
+   workspace ディレクトリ・環境変数最小化・ターンレベルのネットワーク
+   拒否が多層防御として残る。OS/container レベルで完全に分離した worker
+   への切り替えは、live 検証結果を踏まえたうえで本番採用判断（#35）まで
+   に再検討する。
 
 これらの理由により、この adapter は「オフラインの fake transport による
 contract test は green だが、実際の `codex login` 済み環境での動作確認は
@@ -1362,8 +1392,12 @@ contract test は green だが、実際の `codex login` 済み環境での動�
 - Codex app-server adapter のセキュリティ強化（§7.1.2 に詳細）: 子プロセス
   への環境変数最小化（`_minimal_environment()`）、呼び出しごとの private
   workspace ディレクトリ、ターンレベルのネットワーク拒否
-  （`sandboxPolicy.networkAccess: false`）、死んだ transport の
-  自動リセット（次回呼び出しで新しいプロセスを起動する）。
+  （`sandboxPolicy.networkAccess: false`）、shell/exec/画像閲覧 tool と
+  継承された MCP server の無効化（`_TOOL_FREE_THREAD_CONFIG`）、死んだ
+  transport の自動リセット（次回呼び出しで新しいプロセスを起動する）。
+- `turn/completed.turn.items` が `itemsView: "notLoaded"` で空のときの
+  `item/completed` 通知へのフォールバック（`peek_thread_items()`。上記
+  参照）。
 - `poc/issue_14_ai_grading/report.py` の live-provider パス（設問 →
   `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）
   は**未実装のまま**（#35 のスコープ。実データでの評価実施そのものが本

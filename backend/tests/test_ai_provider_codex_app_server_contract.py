@@ -111,6 +111,9 @@ class _FakeAppServerTransport:
         assert matches(params)
         return params
 
+    def peek_thread_items(self, thread_id: str) -> list[dict[str, object]]:
+        return []
+
     def discard_thread(self, thread_id: str) -> None:
         pass
 
@@ -170,6 +173,47 @@ def test_schema_violation_when_turn_produces_no_agent_message() -> None:
     provider = CodexAppServerProvider(prompt_version="v1", transport=_NoAgentMessageTransport())
     with pytest.raises(SchemaViolation):
         provider.grade(_VALID_REQUEST)
+
+
+def test_grade_falls_back_to_item_completed_when_turn_items_is_not_loaded() -> None:
+    """``turn/completed.turn.items`` can legitimately be empty
+    (``itemsView: "notLoaded"``, per the generated protocol schema) even
+    though the turn produced a real answer -- the final agent message may
+    already have arrived via one or more ``item/completed`` notifications
+    buffered while waiting for ``turn/completed``. Discarding those
+    notifications outright (instead of checking them first) turned a
+    successful grading turn into a spurious ``SchemaViolation`` (code
+    review finding)."""
+
+    class _NotLoadedItemsViewTransport(_FakeAppServerTransport):
+        def peek_thread_items(self, thread_id: str) -> list[dict[str, object]]:
+            assert self._last_question_id is not None
+            return [
+                {
+                    "id": "item-1",
+                    "type": "agentMessage",
+                    "text": _canned_grading_json(self._last_question_id),
+                }
+            ]
+
+        def wait_for_notification(
+            self,
+            method: str,
+            matches: Callable[[dict[str, object]], bool],
+            *,
+            timeout_seconds: float,
+        ) -> dict[str, object]:
+            assert method == "turn/completed"
+            params: dict[str, object] = {
+                "threadId": self._thread_id,
+                "turn": {"id": "turn-1", "status": "completed", "items": []},
+            }
+            assert matches(params)
+            return params
+
+    provider = CodexAppServerProvider(prompt_version="v1", transport=_NotLoadedItemsViewTransport())
+    response = provider.grade(_VALID_REQUEST)
+    assert response.score == 4
 
 
 def test_provider_unavailable_when_turn_fails() -> None:
@@ -281,6 +325,26 @@ def test_subprocess_transport_discard_thread_prunes_only_that_thread() -> None:
     ]
 
 
+def test_subprocess_transport_peek_thread_items_reads_without_removing() -> None:
+    """White-box check of the ``item/completed`` fallback: matching items
+    are returned for the requested thread only, and the buffer is left
+    untouched (``discard_thread`` -- not this method -- is what removes
+    entries, during cleanup) (code review finding)."""
+    transport = _SubprocessAppServerTransport.__new__(_SubprocessAppServerTransport)
+    agent_message_item = {"id": "item-1", "type": "agentMessage", "text": "hello"}
+    buffer: list[dict[str, object]] = [
+        {"method": "item/completed", "params": {"threadId": "t1", "item": agent_message_item}},
+        {"method": "item/completed", "params": {"threadId": "t2", "item": {"type": "reasoning"}}},
+        {"method": "turn/completed", "params": {"threadId": "t1"}},
+    ]
+    transport._notification_buffer = list(buffer)
+
+    items = transport.peek_thread_items("t1")
+
+    assert items == [agent_message_item]
+    assert transport._notification_buffer == buffer  # nothing removed
+
+
 def test_descriptor_records_the_codex_cli_user_agent_as_version() -> None:
     """`initialize`'s `userAgent` is the CLI's own version identifier; an
     upgraded, differently-behaving Codex CLI must not silently pool with
@@ -322,8 +386,13 @@ def test_grade_disables_the_codex_shell_and_file_tools_and_turn_network_access()
     already-permitted actions -- neither stops a prompt-injected turn from
     reading arbitrary files and returning their contents through its own
     agent message. The thread's `shell_tool`/`unified_exec`/`view_image`
-    features must be disabled outright, and the turn's sandbox policy must
-    explicitly deny network access too (code review finding)."""
+    features must be disabled outright, the turn's sandbox policy must
+    explicitly deny network access too, and every inherited MCP server
+    must be cleared for this thread (code review finding: the operator's
+    Codex home -- and any MCP server they have configured -- is
+    deliberately inherited to keep the existing login working, but a
+    turn-level sandbox's network restriction does not limit a remote MCP
+    tool call)."""
     transport = _FakeAppServerTransport()
     captured: dict[str, object] = {}
     original_request = transport.request
@@ -343,6 +412,7 @@ def test_grade_disables_the_codex_shell_and_file_tools_and_turn_network_access()
 
     assert captured["config"] == {
         "features": {"shell_tool": False, "unified_exec": False, "view_image": False},
+        "mcp_servers": {},
         "shell_environment_policy": {"inherit": "none"},
     }
     assert captured["sandboxPolicy"] == {"type": "readOnly", "networkAccess": False}
