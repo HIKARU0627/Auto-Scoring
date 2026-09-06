@@ -1825,4 +1825,115 @@ void main() {
       expect(recognitionsCallCount, greaterThanOrEqualTo(2));
     },
   );
+
+  testWidgets('places a text-targeted annotation at the OCR word box from the '
+      "currently displayed grading attempt's own recognition, not a stale "
+      'earlier attempt that happens to report the same text at a different '
+      'position', (tester) async {
+    final oldAttempt = DateTime.utc(2026, 1, 1);
+    final newAttempt = DateTime.utc(2026, 1, 2);
+    final oldBox = _rect(0.2, 0.2, 0.05, 0.05);
+    final newBox = _rect(0.7, 0.7, 0.05, 0.05);
+    // Two grading attempts (Issue #18 re-submission) whose OCR results
+    // both mention the same anchor text, at different positions -- the
+    // append-only recognition history keeps both, oldest first.
+    final dependencies = _dependencies(
+      pdfBytes: _pocA4PortraitPdf(),
+      q1: _question(),
+      recognitions: [
+        RecognitionResponse(
+          (b) => b
+            ..id = 'rec-old'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..source_ = 'ai'
+            ..stage = 'ocr'
+            ..text = '古い試行の答案'
+            ..confidence = 0.9
+            ..boxes.add(
+              BoundingBoxResponse(
+                (b) => b
+                  ..text = '酸素'
+                  ..x = oldBox.x
+                  ..y = oldBox.y
+                  ..width = oldBox.width
+                  ..height = oldBox.height,
+              ),
+            )
+            ..createdAt = oldAttempt,
+        ),
+        RecognitionResponse(
+          (b) => b
+            ..id = 'rec-new'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..source_ = 'ai'
+            ..stage = 'ocr'
+            ..text = '新しい試行の答案'
+            ..confidence = 0.9
+            ..boxes.add(
+              BoundingBoxResponse(
+                (b) => b
+                  ..text = '酸素'
+                  ..x = newBox.x
+                  ..y = newBox.y
+                  ..width = newBox.width
+                  ..height = newBox.height,
+              ),
+            )
+            ..createdAt = newAttempt,
+        ),
+      ],
+      grades: [_grade(createdAt: newAttempt)],
+      annotations: [
+        AnnotationResponse(
+          (b) => b
+            ..id = 'anno-1'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..source_ = 'ai'
+            ..kind = 'underline'
+            ..anchorText = '酸素'
+            ..createdAt = newAttempt,
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _wrap(
+        PdfReviewPage(
+          dependencies: dependencies,
+          testId: 'test-1',
+          submissionId: 'sub-1',
+        ),
+      ),
+    );
+    await tester.pump();
+    await _settlePdf(tester);
+
+    final overlay = find.byKey(const Key('annotation-anno-1'));
+    expect(overlay, findsOneWidget);
+
+    final pageOverlayPositioned = tester.widget<Positioned>(
+      find.byKey(const Key('#__pageOverlay__:1')),
+    );
+    final pageRect = Rect.fromLTWH(
+      pageOverlayPositioned.left!,
+      pageOverlayPositioned.top!,
+      pageOverlayPositioned.width!,
+      pageOverlayPositioned.height!,
+    );
+    final overlayTopLeft = tester.getTopLeft(overlay);
+    final pdfViewerTopLeft = tester.getTopLeft(find.byType(PdfViewer));
+    final localOffset = overlayTopLeft - pdfViewerTopLeft;
+
+    expect(
+      localOffset.dx,
+      closeTo(pageRect.left + 0.7 * pageRect.width, 5.0),
+      reason:
+          "must use the current attempt's own OCR box (0.7), not the "
+          'superseded earlier attempt\'s (0.2)',
+    );
+    expect(localOffset.dy, closeTo(pageRect.top + 0.7 * pageRect.height, 5.0));
+  });
 }

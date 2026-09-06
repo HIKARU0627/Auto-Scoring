@@ -125,6 +125,32 @@ class QuestionReviewState {
         .where((a) => a.createdAt == grade.createdAt)
         .toList();
   }
+
+  /// Only the recognitions ([RecognitionResponse]s) that could belong to
+  /// [displayGrade]'s own grading attempt, for resolving a text-anchored
+  /// annotation's Bounding Box against the *right* OCR result.
+  ///
+  /// Unlike [annotationsForDisplayedAttempt], this cannot match on an exact
+  /// shared `created_at`: `RecognitionJobProcessor.process` commits the
+  /// OCR-stage `RecognitionResult` in its *own*, earlier transaction, before
+  /// the grading half even calls the `AIProvider` (see `_isAwaitingGrade`),
+  /// so an attempt's own OCR recognition always predates its grade. A
+  /// re-graded question's history holds one such OCR recognition per
+  /// attempt (each `Job` gets its own, deterministically-`id`'d row), and
+  /// naively searching every one of them for an `anchor_text` match could
+  /// pick a *different* (stale, or not-yet-displayed) attempt's box for the
+  /// same text at a different position (P2 review). Bounding by "created no
+  /// later than [displayGrade]" keeps only recognitions [displayGrade]'s own
+  /// attempt could actually have produced -- any recognition from a job
+  /// created *after* it (a newer, not-yet-graded re-submission that simply
+  /// finished its OCR half first) is excluded, leaving exactly the
+  /// currently-displayed attempt's own OCR result as the latest match.
+  List<RecognitionResponse> get recognitionsForDisplayedAttempt {
+    final all = recognitions ?? const <RecognitionResponse>[];
+    final grade = displayGrade;
+    if (grade == null) return all;
+    return all.where((r) => !r.createdAt.isAfter(grade.createdAt)).toList();
+  }
 }
 
 /// The last element of [items] matching [test], or `null` if none does.
@@ -847,7 +873,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         annotation: annotation,
         questionAnswerArea: question.answerArea,
         questionScoreArea: question.scoreArea,
-        recognitions: review.recognitions ?? const [],
+        recognitions: review.recognitionsForDisplayedAttempt,
       );
       if (resolved == null) continue;
       final rect = normalizedRectToLocal(resolved, pageSize);
@@ -881,7 +907,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
               annotation: a,
               questionAnswerArea: question.answerArea,
               questionScoreArea: question.scoreArea,
-              recognitions: review.recognitions ?? const [],
+              recognitions: review.recognitionsForDisplayedAttempt,
             ) ==
             null,
       )

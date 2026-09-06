@@ -220,6 +220,57 @@ void main() {
       expect(resolved?.height, closeTo(0.03, 1e-9));
     });
 
+    for (final degenerateArea in [
+      (
+        'zero width',
+        NormalizedRectResponse(
+          (b) => b
+            ..x = 0.5
+            ..y = 0.6
+            ..width = 0
+            ..height = 0.3,
+        ),
+      ),
+      (
+        'zero height',
+        NormalizedRectResponse(
+          (b) => b
+            ..x = 0.5
+            ..y = 0.6
+            ..width = 0.4
+            ..height = 0,
+        ),
+      ),
+    ]) {
+      test('treats a persisted answer_area with ${degenerateArea.$1} the same '
+          'as no answer_area at all -- OCR ran against the full page, not a '
+          'zero-size crop (P2 review: _build_answer_image falls back to the '
+          'full page for this exact case, so this must not collapse the '
+          "annotation's rect to zero size)", () {
+        final wordBox = NormalizedRectResponse(
+          (b) => b
+            ..x = 0.4
+            ..y = 0.5
+            ..width = 0.05
+            ..height = 0.03,
+        );
+
+        final resolved = resolveAnnotationRect(
+          annotation: annotation(kind: 'underline', anchorText: '酸素'),
+          questionAnswerArea: degenerateArea.$2,
+          questionScoreArea: null,
+          recognitions: [
+            recognitionWithBoxes([('酸素', wordBox)]),
+          ],
+        );
+
+        expect(resolved?.x, wordBox.x);
+        expect(resolved?.y, wordBox.y);
+        expect(resolved?.width, wordBox.width);
+        expect(resolved?.height, wordBox.height);
+      });
+    }
+
     test('a fixed-position mark with no OCR match falls back to the '
         "question's score_area, per simplified-design-spec §12.2", () {
       final scoreArea = NormalizedRectResponse(

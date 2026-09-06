@@ -55,12 +55,17 @@ final NormalizedRectResponse _fullPageArea = NormalizedRectResponse(
 /// 1. An annotation that already carries an explicit rect uses it as-is
 ///    (the API contract allows one; nothing currently sets it, but a future
 ///    source might).
-/// 2. Otherwise, if it names an `anchor_text`, look it up against this
-///    question's own OCR bounding boxes (§12.3) -- the same boxes behind
+/// 2. Otherwise, if it names an `anchor_text`, look it up against
+///    [recognitions]' OCR bounding boxes (§12.3) -- the same boxes behind
 ///    the "AI認識文字" Inspector field. Those boxes are normalized against
 ///    the *cropped answer image* the OCR provider actually saw, not the
 ///    page, so they are first mapped into page space through
-///    [questionAnswerArea] (see [_cropRelativeToPage], P1 review).
+///    [questionAnswerArea] (see [_cropRelativeToPage], P1 review). The
+///    caller is responsible for [recognitions] already being scoped to the
+///    grading attempt currently on screen -- a re-graded question's history
+///    holds one OCR result per attempt, and a stale or not-yet-displayed
+///    attempt's result can report the same text at a different position
+///    (P2 review; see `QuestionReviewState.recognitionsForDisplayedAttempt`).
 /// 3. Otherwise, a fixed-position mark ([fixedPositionAnnotationKinds])
 ///    falls back to the question's own `score_area`, its designated
 ///    "Annotation配置領域" (§12.2).
@@ -77,7 +82,7 @@ NormalizedRectResponse? resolveAnnotationRect({
     final matched = _findAnchorTextRect(
       anchorText,
       recognitions,
-      questionAnswerArea ?? _fullPageArea,
+      _effectiveAnswerArea(questionAnswerArea),
     );
     if (matched != null) return matched;
   }
@@ -87,15 +92,47 @@ NormalizedRectResponse? resolveAnnotationRect({
   return null;
 }
 
-/// The page-normalized rect of the first OCR word/phrase box whose text
-/// exactly matches [anchorText], or `null` if none of [recognitions]' boxes
-/// do.
+/// The answer-area crop to map an OCR box through, treating a `null` *or*
+/// degenerate (non-positive width/height) [answerArea] the same way
+/// `_build_answer_image` (backend `adapters/submission_intake.py`) does --
+/// both mean the OCR provider actually saw the full, uncropped page
+/// (simplified-design-spec §24 "回答欄検出失敗は…元画像を人間へ提示する"),
+/// so [_fullPageArea]'s identity offset/scale is the correct transform for
+/// either. A zero-area `NormalizedRect` is a *valid, persisted* fallback
+/// case -- `_build_answer_image`'s own docstring notes the domain model
+/// allows one through -- not something this can assume already got
+/// rejected upstream; composing a real box's coordinates with a
+/// zero-width/height crop instead collapsed every text-anchored annotation
+/// to a zero-size rect, making it invisible (P2 review).
+NormalizedRectResponse _effectiveAnswerArea(
+  NormalizedRectResponse? answerArea,
+) {
+  if (answerArea == null || answerArea.width <= 0 || answerArea.height <= 0) {
+    return _fullPageArea;
+  }
+  return answerArea;
+}
+
+/// The page-normalized rect of the *most recent* OCR word/phrase box whose
+/// text exactly matches [anchorText], or `null` if none of [recognitions]'
+/// boxes do.
+///
+/// Searches [recognitions] newest-first (the reverse of its oldest-first
+/// server history order): a re-graded question's history holds one OCR
+/// recognition per attempt, still present after a later attempt superseded
+/// it (append-only), and a stale earlier attempt can report the very same
+/// [anchorText] at a *different* position than the current one. Returning
+/// the first (oldest) match let a stale attempt's box win outright whenever
+/// both happened to contain the anchor text, drawing the annotation over
+/// the wrong content even though the Inspector and the annotation itself
+/// (`QuestionReviewState.annotationsForDisplayedAttempt`) already show the
+/// current attempt (P2 review).
 NormalizedRectResponse? _findAnchorTextRect(
   String anchorText,
   List<RecognitionResponse> recognitions,
   NormalizedRectResponse answerArea,
 ) {
-  for (final recognition in recognitions) {
+  for (final recognition in recognitions.reversed) {
     for (final box in recognition.boxes) {
       if (box.text == anchorText) {
         return _cropRelativeToPage(box, answerArea);

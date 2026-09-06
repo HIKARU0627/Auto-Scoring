@@ -98,6 +98,44 @@ box座標をpage正規化座標へ変換してから使う。`crop_normalized_re
 crop領域として扱い、既存の（page全体を答案areaとする）挙動を保つ
 （`_fullPageArea`）。
 
+**R6レビュー対応（1/2）**: `_build_answer_image`は`answer_area`が`None`の
+場合だけでなく、幅または高さが0以下の場合（`zero_area`）も同じpage全体
+フォールバックを適用する（ドメインモデルは幅/高さ0の`NormalizedRect`を
+そのまま許容するため、`Question.answer_area`にこの状態が実際に永続化され
+得る）。当初`_effectiveAnswerArea`相当の判定が無く、`questionAnswerArea`
+が非nullでさえあればそのままcrop変換に使っていたため、面積0の
+`answer_area`ではannotationの幅/高さが`box.width/height * 0 = 0`に潰れ、
+描画されないまま消えていた（R6レビュー指摘）。`_effectiveAnswerArea`が
+`answerArea == null || width <= 0 || height <= 0`のいずれかで
+`_fullPageArea`（identity）へフォールバックするようにし、backendの
+`_build_answer_image`と同じ判定基準に揃えた。
+
+**R6レビュー対応（2/2）**: 設問が再度採点されると（Issue #18の再submit）、
+recognition履歴には設問ごとに複数のOCR結果（各Jobが自分専用の
+`RecognitionResult`を作る）が古い順で積み重なる。`_findAnchorTextRect`は
+`recognitions`を先頭（＝最も古い試行）から走査し最初に一致したboxを返して
+いたため、`annotationsForDisplayedAttempt`が最新の試行のannotationを
+表示し、Inspectorも最新のOCR結果を表示しているにもかかわらず、同じ
+`anchor_text`が古い試行のOCR結果にもたまたま存在する場合、古い試行の
+（別の位置にある）boxが使われてしまっていた（R6レビュー指摘）。
+
+対応として2点変更した。
+
+- `QuestionReviewState.recognitionsForDisplayedAttempt`（新規）: OCR半分の
+  `RecognitionResult`は採点半分の`GradeResult`より先にcommitされるため
+  （`_isAwaitingGrade`と同じ因果関係）、`annotationsForDisplayedAttempt`
+  のような`created_at`の完全一致では紐づけられない。代わりに
+  `created_at`が`displayGrade.created_at`以前のものだけに絞り込み、
+  まだgrade化されていない（将来の）再submit試行のOCR結果を除外する。
+- `_findAnchorTextRect`は`recognitions`を末尾（＝最も新しい試行）から
+  走査するように変更した。上記で絞り込んだ一覧の中でも、複数の過去の
+  試行が残っている（＝現在の試行だけに限定できていない）ケースを吸収し、
+  「表示中の試行のOCR結果」を常に優先して一致させる。
+
+呼び出し側（`_buildAnnotationOverlay`/`_fallbackAnnotationsFor`）は
+`review.recognitions`ではなく`review.recognitionsForDisplayedAttempt`を
+渡すよう変更した。
+
 ### 2.5 承認・修正・却下はこの画面のメモリ内でのみ保持する
 
 Issue #21 の対象外どおり、`PdfReviewPage`のaction bar（修正/却下/承認して次へ）
@@ -317,10 +355,11 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   明示rectの優先、`anchor_text`のOCR Bounding Boxへの解決（答案areaが
   page全体の場合、および答案areaがpageの一部分にcropされている場合の
   両方で、crop相対座標からpage正規化座標への変換が正しいこと。R5レビュー
-  対応）、固定位置種別（○・×・△・点数）4種すべてでのscore_areaへの
-  フォールバック、`anchor_text`が一致しない場合の固定位置種別の
-  score_areaフォールバック、非固定位置種別で何も解決できない場合に`null`
-  を返すことを検証。
+  対応）、幅または高さが0の`answer_area`もpage全体のフォールバックとして
+  扱われ、annotationの幅/高さが0に潰れないこと（R6レビュー対応）、固定
+  位置種別（○・×・△・点数）4種すべてでのscore_areaへのフォールバック、
+  `anchor_text`が一致しない場合の固定位置種別のscore_areaフォールバック、
+  非固定位置種別で何も解決できない場合に`null`を返すことを検証。
 - `app/test/pdf_review_page_test.dart`: loading/empty/error状態、
   認識文字・点数・根拠・rubric（`question.rubric`の定義自体）・2種の
   Confidenceの同時表示、AI/human結果がsource別に区別されること、
@@ -350,4 +389,7 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   新しい試行のgradeが実際に届くまで止めないこと（§2.8、R5レビュー対応）、
   recognitionとgradeのcommitタイミングが競合し新しいgradeだけが先に見えた
   場合でも、対応する採点AIの認識結果をもう一度取得して欠落させないこと
-  （§2.8、R5レビュー対応）、を検証。
+  （§2.8、R5レビュー対応）、複数回グレーディングされた設問で同じ
+  `anchor_text`が古い試行のOCR結果にも存在する場合に、現在表示中の試行
+  自身のOCR結果のbox位置が使われ、古い試行の（別の位置にある）boxが
+  使われないこと（§2.4、R6レビュー対応）、を検証。
