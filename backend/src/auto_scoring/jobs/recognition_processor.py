@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from asyncio import to_thread
 from pathlib import Path
-from uuid import uuid4
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -88,6 +87,25 @@ def _to_domain_boxes(tokens: tuple[OcrToken, ...]) -> tuple[ModelsBoundingBox, .
     return tuple(boxes)
 
 
+def _recognition_result_id(job: Job) -> str:
+    """Deterministic id for the `RecognitionResult` a successful recognition
+    of ``job`` produces.
+
+    `JobState.SUCCEEDED` is a dead end (`domain.models._JOB_TRANSITIONS`) --
+    a job is only ever RUNNING more than once if an earlier attempt crashed
+    or errored, so a row already existing under this id can only mean an
+    earlier attempt of this *exact* job (same `job.id`; a reissued job for a
+    new dependency-graph version gets a new id, see
+    `reissue_job_for_graph_version`) already recognized and persisted it but
+    the process died, or `jobs.queue._finalize_result` hit a DB error,
+    before the queue recorded the SUCCEEDED transition (Issue #19 review
+    round 1, P1). `process` uses this to recompute the outcome from the
+    existing row instead of calling the provider again and persisting a
+    duplicate AI proposal.
+    """
+    return f"recognition:{job.id}"
+
+
 class RecognitionJobProcessor:
     """Recognizes one question's answer image via `OCRProvider` and persists
     the result as a `RecognitionResult` (source=AI, always -- Issue #19
@@ -136,7 +154,14 @@ class RecognitionJobProcessor:
                 error_message="recognition requires a question_id",
             )
 
+        recognition_id = _recognition_result_id(job)
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+            existing = uow.recognitions.get(recognition_id)
+            if existing is not None:
+                return ProcessingResult(
+                    outcome=ProcessingOutcome.SUCCEEDED,
+                    usable=existing.confidence >= self._settings.confidence_threshold,
+                )
             images = uow.answer_images.list_for_submission(job.submission_id)
             image = find_answer_image(images, question_id)
             if image is None:
@@ -173,7 +198,7 @@ class RecognitionJobProcessor:
 
         confidence = overall_confidence(result)
         recognition = RecognitionResult(
-            id=str(uuid4()),
+            id=recognition_id,
             submission_id=job.submission_id,
             question_id=question_id,
             source=GradingSource.AI,

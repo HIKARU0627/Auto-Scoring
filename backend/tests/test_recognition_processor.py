@@ -260,3 +260,36 @@ async def test_bounding_box_at_the_page_edge_is_clamped_not_rejected(
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         boxes = uow.recognitions.history("sub-1", "q-1")[0].boxes
     assert boxes[0].rect.x + boxes[0].rect.width <= 1.0
+
+
+async def test_reprocessing_the_same_job_after_a_crash_does_not_call_the_provider_twice(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """Simulates jobs.queue's crash-recovery path: the same Job row (same
+    `job.id`) is handed to `process` again after an earlier call already
+    committed a RecognitionResult but the queue never got to record the
+    job's own SUCCEEDED transition (Issue #19 review round 1, P1). The
+    second call must recompute the outcome from the already-persisted
+    result instead of calling the provider again and adding a duplicate.
+    """
+    _seed(session_factory, store)
+    provider.script(
+        OcrResult(
+            text="光合成", tokens=(_token("光合成", 0.96, ConfidenceBand.HIGH),), provider="x"
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    first = await processor.process(job)
+    second = await processor.process(job)
+
+    assert first.usable is True
+    assert second.outcome is ProcessingOutcome.SUCCEEDED
+    assert second.usable is True
+    assert provider.calls == [_IMAGE_BYTES]  # only the first call reached the provider
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        history = uow.recognitions.history("sub-1", "q-1")
+    assert len(history) == 1
