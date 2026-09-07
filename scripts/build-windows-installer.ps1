@@ -13,29 +13,29 @@
     credential belongs in this repository or in CI. Signing is a separate,
     human-only step performed on the artifact this produces.
 
-.PARAMETER Configuration
-    Which Flutter build output to package. `Release` (default) is what ships;
-    `Debug` exists so a developer can package a debug build without editing
-    the .iss.
+    Release only, and takes no parameters. There was briefly a
+    `-Configuration Debug` switch, which was worse than useless: it checked
+    that a *Debug* build existed and then packaged the *Release* one anyway,
+    because `installer/auto-scoring.iss` hard-codes the Release directory and
+    nothing overrode it. Issue #24 ships Release, so the option is gone rather
+    than fixed -- a switch nobody needs cannot silently package the wrong
+    build (review round 1, P2).
 #>
 [CmdletBinding()]
-param(
-    [ValidateSet('Release', 'Debug')]
-    [string]$Configuration = 'Release'
-)
+param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repoRoot 'installer\auto-scoring.iss'
-$flutterOutput = Join-Path $repoRoot "app\build\windows\x64\runner\$Configuration"
+$flutterOutput = Join-Path $repoRoot 'app\build\windows\x64\runner\Release'
 $sidecarOutput = Join-Path $repoRoot 'backend\dist\auto-scoring-sidecar'
 
 # Checked here rather than left to Inno Setup, whose "no files found matching"
 # error names a wildcard rather than the build step that was skipped.
 if (-not (Test-Path -LiteralPath (Join-Path $flutterOutput 'auto_scoring_app.exe'))) {
-    throw "No Flutter $Configuration build at $flutterOutput. Run: cd app; flutter build windows --$($Configuration.ToLower())"
+    throw "No Flutter Release build at $flutterOutput. Run: cd app; flutter build windows --release"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $sidecarOutput 'auto-scoring-sidecar.exe'))) {
     throw "No packaged sidecar at $sidecarOutput. Run: pnpm run package:sidecar"
