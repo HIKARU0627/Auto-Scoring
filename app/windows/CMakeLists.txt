@@ -87,6 +87,36 @@ if(PLUGIN_BUNDLED_LIBRARIES)
     COMPONENT Runtime)
 endif()
 
+# Bundle the MSVC runtime (msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll)
+# beside the executable (Issue #24).
+#
+# Flutter's Windows template does not do this, and without it the installed app
+# does not start at all on a clean Windows machine that has never had a Visual
+# C++ redistributable installed -- which is exactly the machine Issue #24's
+# acceptance criterion describes ("clean Windows VMで... Python/Flutter SDKなしで
+# 登録からPDF出力まで実行できる"). CI can never catch it: the `windows-latest`
+# runner has Visual Studio, so the DLLs are always already on the system path.
+#
+# The PyInstaller bundle carries its own copies, but those live in `sidecar\`
+# and are useless here -- the Windows loader searches the directory of the
+# executable being started, not arbitrary subdirectories.
+#
+# App-local deployment rather than running vcredist_x64.exe from the installer,
+# because that installer requires administrator rights, and `installer/
+# auto-scoring.iss` deliberately installs per-user without elevation
+# (docs/windows-distribution.md §2.2). These DLLs are on Microsoft's
+# redistributable list, so shipping them alongside the app is permitted.
+#
+# `..._SKIP TRUE` suppresses the module's own install rule (which targets
+# `bin/`) so the files land next to the executable instead. Only the release
+# runtime is ever copied: `CMAKE_INSTALL_DEBUG_LIBRARIES` stays off, since the
+# debug CRT is not redistributable and no debug build is ever shipped.
+set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+include(InstallRequiredSystemLibraries)
+install(FILES ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS}
+  DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

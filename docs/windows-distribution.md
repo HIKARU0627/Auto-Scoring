@@ -24,6 +24,9 @@ GitHub Issue #24（親: #3）で実装した、Windows 向け配布物とサイ�
 <インストール先>/                       # 既定: %LOCALAPPDATA%\Programs\Auto-Scoring
 ├─ auto_scoring_app.exe                 # Flutter release ビルド
 ├─ flutter_windows.dll
+├─ msvcp140.dll                         # MSVC ランタイム（§1.1）
+├─ vcruntime140.dll
+├─ vcruntime140_1.dll
 ├─ data/                                # Flutter の assets / AOT snapshot
 ├─ *.dll                                # Flutter プラグインの DLL（pdfrx 等）
 └─ sidecar/                             # PyInstaller onedir の成果物
@@ -39,7 +42,27 @@ GitHub Issue #24（親: #3）で実装した、Windows 向け配布物とサイ�
 ものでビルドのたびに丸ごと書き換わるため、そこに置いたものは消える可能性があり、
 ビルド生成物と区別もつかない。
 
-### 1.1 ビルド手順（開発者・CI 共通）
+### 1.1 MSVC ランタイムを同梱する（配布物に必須）
+
+**素の Windows には Visual C++ 再頒布可能パッケージが入っていない。** その状態では
+Flutter の実行ファイルが `msvcp140.dll` / `vcruntime140.dll` /
+`vcruntime140_1.dll` を解決できず、**そもそも起動しない**。Flutter の Windows
+テンプレートはこれらを同梱しないので、`app/windows/CMakeLists.txt` に
+`InstallRequiredSystemLibraries` を追加し、実行ファイルと同じディレクトリへ
+install するようにした。
+
+- PyInstaller バンドルも自前のランタイム DLL を持っているが、それは `sidecar\`
+  配下にあり**役に立たない**。Windows のローダーが見るのは起動する実行ファイルと
+  同じディレクトリで、任意のサブディレクトリではない。
+- **CI では絶対に再現しない**。`windows-latest` runner には Visual Studio が
+  入っており、ランタイムが常にシステム側にある。clean VM で初めて出る種類の不具合で、
+  §10 の手順に確認項目を入れてある。
+- vcredist_x64.exe を installer から実行する案は採らない。**あれは管理者権限を
+  要求する**が、この installer は既定で非昇格のユーザー単位インストール（§2.2）
+  なので前提が崩れる。app-local 配置は Microsoft が認めている配布方法で、対象
+  DLL は再頒布可能リストに含まれる。
+
+### 1.2 ビルド手順（開発者・CI 共通）
 
 ```powershell
 pnpm run package:sidecar          # backend/dist/auto-scoring-sidecar/ を作る
@@ -188,14 +211,13 @@ Flutter 起動
 状態機械は `app/lib/core/sidecar_supervisor.dart`、UI は
 `app/lib/features/startup/startup_gate.dart`（簡易設計書 §24）。
 
-| 状態              | UI                                                         |
-| ----------------- | ---------------------------------------------------------- |
-| `SidecarStarting` | スプラッシュ（「初回起動には時間がかかることがあります」） |
-| `SidecarReady`    | ホーム画面                                                 |
-| `SidecarFailed`   | エラー画面 + **再起動ボタン**                              |
-| `SidecarStopped`  | 終了中                                                     |
-
-`SidecarFailed` の内訳と表示:
+| 状態                          | UI                                                         |
+| ----------------------------- | ---------------------------------------------------------- |
+| `SidecarStarting`             | スプラッシュ（「初回起動には時間がかかることがあります」） |
+| `SidecarReady`                | ホーム画面                                                 |
+| `SidecarFailed`               | エラー画面 + **再起動ボタン**                              |
+| `SidecarStopped`              | 終了中                                                     |
+| `SidecarFailed` の内訳と表示: |
 
 | `SidecarFailure`      | 起きたこと                              | 表示                                             |
 | --------------------- | --------------------------------------- | ------------------------------------------------ |
@@ -470,19 +492,19 @@ CI が自動化できるのは §7 まで。受入条件「clean Windows VM で 
 起動し、Python/Flutter SDK なしで登録から PDF 出力まで実行できる」は、
 **Python も Flutter SDK も入っていない Windows VM** を用意して人間が確認する。
 
-| #   | 手順                                                                                     | 期待結果                                                                                 |
-| --- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 1   | clean な Windows 11 VM を用意（Python / Flutter / Visual Studio いずれも未インストール） | —                                                                                        |
-| 2   | CI の `auto-scoring-installer-unsigned` artifact を展開して実行                          | SmartScreen 警告 →「詳細情報」→「実行」でインストーラーが起動する（unsigned なので正常） |
-| 3   | 既定のまま完了                                                                           | `%LOCALAPPDATA%\Programs\Auto-Scoring\` に展開され、`sidecar\` が存在する                |
-| 4   | スタートメニューから起動                                                                 | スプラッシュ →（初回はマイグレーションで数十秒）→ ホーム画面「backend: ok」              |
-| 5   | `%LOCALAPPDATA%\Auto-Scoring\app-data\` を確認                                           | `database.sqlite` と `logs\sidecar.log` がある。ログにトークンが無い                     |
-| 6   | テスト登録 → 答案取込 → レビュー → PDF 出力                                              | `app-data\exports\` に添削済み PDF が出る                                                |
-| 7   | もう一度アプリを起動（二重起動）                                                         | 2 つ目は「Auto-Scoring はすでに起動しています」。サイドカーは 1 つのまま（§5.4）         |
-| 8   | タスクマネージャで `auto_scoring_app.exe` を強制終了                                     | `auto-scoring-sidecar.exe` も一緒に消える（§5.3）                                        |
-| 9   | もう一度起動 → ウィンドウを閉じる                                                        | `auto-scoring-sidecar.exe` が残らない。ポートも解放される（§5.2）                        |
-| 10  | タスクマネージャで `auto-scoring-sidecar.exe` だけを強制終了                             | アプリがエラー画面 + 再起動ボタンを出し、押すと復帰する（§5・簡易設計書 §24）            |
-| 11  | アンインストール                                                                         | データ削除の確認が出る。「いいえ」で `%LOCALAPPDATA%\Auto-Scoring\` が残る（§6）         |
+| #   | 手順                                                                                                                           | 期待結果                                                                                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | clean な Windows 11 VM を用意（Python / Flutter / Visual Studio / **Visual C++ 再頒布可能パッケージ** いずれも未インストール） | 「アプリと機能」に `Microsoft Visual C++ ... Redistributable` が無いことを確認する（§1.1）                                                              |
+| 2   | CI の `auto-scoring-installer-unsigned` artifact を展開して実行                                                                | SmartScreen 警告 →「詳細情報」→「実行」でインストーラーが起動する（unsigned なので正常）                                                                |
+| 3   | 既定のまま完了                                                                                                                 | `%LOCALAPPDATA%\Programs\Auto-Scoring\` に展開され、`sidecar\` が存在する                                                                               |
+| 4   | スタートメニューから起動                                                                                                       | スプラッシュ →（初回はマイグレーションで数十秒）→ ホーム画面「backend: ok」。**`vcruntime140.dll が見つかりません` 等のダイアログが出ないこと**（§1.1） |
+| 5   | `%LOCALAPPDATA%\Auto-Scoring\app-data\` を確認                                                                                 | `database.sqlite` と `logs\sidecar.log` がある。ログにトークンが無い                                                                                    |
+| 6   | テスト登録 → 答案取込 → レビュー → PDF 出力                                                                                    | `app-data\exports\` に添削済み PDF が出る                                                                                                               |
+| 7   | もう一度アプリを起動（二重起動）                                                                                               | 2 つ目は「Auto-Scoring はすでに起動しています」。サイドカーは 1 つのまま（§5.4）                                                                        |
+| 8   | タスクマネージャで `auto_scoring_app.exe` を強制終了                                                                           | `auto-scoring-sidecar.exe` も一緒に消える（§5.3）                                                                                                       |
+| 9   | もう一度起動 → ウィンドウを閉じる                                                                                              | `auto-scoring-sidecar.exe` が残らない。ポートも解放される（§5.2）                                                                                       |
+| 10  | タスクマネージャで `auto-scoring-sidecar.exe` だけを強制終了                                                                   | アプリがエラー画面 + 再起動ボタンを出し、押すと復帰する（§5・簡易設計書 §24）                                                                           |
+| 11  | アンインストール                                                                                                               | データ削除の確認が出る。「いいえ」で `%LOCALAPPDATA%\Auto-Scoring\` が残る（§6）                                                                        |
 
 実施したら、**実行したコマンド・実際の結果・使った artifact の CI run 番号**を
 Issue #24 または本書に追記する。
