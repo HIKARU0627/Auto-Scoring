@@ -14,6 +14,87 @@
         "title": "AnalyzeRequest",
         "type": "object"
       },
+      "AnnotationEditRequest": {
+        "description": "One annotation to record as part of an ``edit`` request. Omitting the\nparent request's ``annotations`` field entirely (not sending an empty\nlist) keeps the AI attempt's own marks -- see\n``adapters.review_actions._carry_forward_annotations``.",
+        "properties": {
+          "anchor_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anchor Text"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "AnnotationEditRequest",
+        "type": "object"
+      },
       "AnnotationResponse": {
         "properties": {
           "anchor_text": {
@@ -83,6 +164,43 @@
           "created_at"
         ],
         "title": "AnnotationResponse",
+        "type": "object"
+      },
+      "ApproveReviewRequest": {
+        "properties": {
+          "expected_ai_grade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Ai Grade Id"
+          },
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "ApproveReviewRequest",
         "type": "object"
       },
       "Body_create_submission_tests__test_id__submissions_post": {
@@ -234,6 +352,35 @@
           "edges"
         ],
         "title": "ConfirmRequest",
+        "type": "object"
+      },
+      "CriterionOutcomeRequest": {
+        "properties": {
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "criterion_id": {
+            "title": "Criterion Id",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "criterion_id",
+          "outcome"
+        ],
+        "title": "CriterionOutcomeRequest",
         "type": "object"
       },
       "CriterionResultResponse": {
@@ -397,6 +544,118 @@
         ],
         "title": "DependencyProvision",
         "type": "string"
+      },
+      "EditReviewRequest": {
+        "properties": {
+          "annotations": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AnnotationEditRequest"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "confidence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "criteria": {
+            "items": {
+              "$ref": "#/components/schemas/CriterionOutcomeRequest"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "expected_ai_grade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Ai Grade Id"
+          },
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "recognized_text": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recognized Text"
+          },
+          "score_awarded": {
+            "minimum": 0.0,
+            "title": "Score Awarded",
+            "type": "integer"
+          },
+          "score_maximum": {
+            "minimum": 0.0,
+            "title": "Score Maximum",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version",
+          "score_awarded",
+          "score_maximum"
+        ],
+        "title": "EditReviewRequest",
+        "type": "object"
       },
       "GradeResultResponse": {
         "properties": {
@@ -850,6 +1109,32 @@
         "title": "QuestionTextOverride",
         "type": "object"
       },
+      "ReasonedReviewRequest": {
+        "properties": {
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "ReasonedReviewRequest",
+        "type": "object"
+      },
       "RecognitionResponse": {
         "properties": {
           "boxes": {
@@ -905,6 +1190,36 @@
           "boxes"
         ],
         "title": "RecognitionResponse",
+        "type": "object"
+      },
+      "RecognitionResponseSlim": {
+        "description": "The recognized-text row `edit_question` optionally creates. Deliberately\nnot the full `api.recognitions_router.RecognitionResponse` (no ``boxes``,\nno ``stage``): a human's manually-entered correction never carries OCR\nword boxes, and this is always ``source=human`` by construction.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "confidence",
+          "created_at"
+        ],
+        "title": "RecognitionResponseSlim",
         "type": "object"
       },
       "RegionKind": {
@@ -964,6 +1279,157 @@
           "label"
         ],
         "title": "RegionModel",
+        "type": "object"
+      },
+      "ReviewActionResponse": {
+        "description": "The new `Review` row plus whatever it produced, and the submission's\nstate right after re-syncing it (Issue #22 acceptance: \"\u672a\u78ba\u8a8d\u8a2d\u554f\u304c\u6b8b\u308b\nSubmission\u306f\u51fa\u529b\u53ef\u80fd\u72b6\u614b\u306b\u306a\u3089\u306a\u3044\") -- so the review screen can update\nits `SubmissionState` chip without a second round trip.",
+        "properties": {
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationResponse"
+            },
+            "title": "Annotations",
+            "type": "array"
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GradeResultResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "recognition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecognitionResponseSlim"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review": {
+            "$ref": "#/components/schemas/ReviewResponse"
+          },
+          "submission_state": {
+            "title": "Submission State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "review",
+          "submission_state"
+        ],
+        "title": "ReviewActionResponse",
+        "type": "object"
+      },
+      "ReviewResponse": {
+        "description": "One row of the append-only operation history (Issue #22 \u00a719).\n\n``version`` is the optimistic-concurrency token a client must echo back\n(as ``expected_version``) on its *next* mutating call for this\nsubmission-question -- see `domain.review_workflow.next_review_version`\nand `docs/review-edit-history.md` \"\u540c\u6642\u5b9f\u884c\u5236\u5fa1\". A client that has never\nloaded any review for a question passes ``expected_version=0``.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "ai_grade_result_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Grade Result Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "human_grade_result_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Human Grade Result Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "regrade_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Regrade Job Id"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "undone_review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undone Review Id"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "submission_id",
+          "question_id",
+          "action",
+          "version",
+          "created_at"
+        ],
+        "title": "ReviewResponse",
         "type": "object"
       },
       "RubricCriterionResponse": {
@@ -1207,6 +1673,20 @@
           "name"
         ],
         "title": "TestSummary",
+        "type": "object"
+      },
+      "UndoReviewRequest": {
+        "properties": {
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "UndoReviewRequest",
         "type": "object"
       },
       "UnresolvedQuestionModel": {
@@ -2006,6 +2486,397 @@
         "summary": "Resume Question",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/review/approve": {
+      "post": {
+        "operationId": "approve_submissions__submission_id__questions__question_id__review_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/review/edit": {
+      "post": {
+        "operationId": "edit_submissions__submission_id__questions__question_id__review_edit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/review/regrade": {
+      "post": {
+        "operationId": "regrade_submissions__submission_id__questions__question_id__review_regrade_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReasonedReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Regrade",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/review/reject": {
+      "post": {
+        "operationId": "reject_submissions__submission_id__questions__question_id__review_reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReasonedReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reject",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/review/undo": {
+      "post": {
+        "operationId": "undo_submissions__submission_id__questions__question_id__review_undo_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undo",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/reviews": {
+      "get": {
+        "description": "The full append-only operation history, oldest first. Its length is\nthe ``expected_version`` the client's *next* mutating call for this\nsubmission-question must pass (0 if the list is empty).",
+        "operationId": "list_reviews_submissions__submission_id__questions__question_id__reviews_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewResponse"
+                  },
+                  "title": "Response List Reviews Submissions  Submission Id  Questions  Question Id  Reviews Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Reviews",
+        "tags": [
+          "review"
         ]
       }
     },

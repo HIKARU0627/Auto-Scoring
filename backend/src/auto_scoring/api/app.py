@@ -561,7 +561,7 @@ def create_app(
         )
     )
     protected.include_router(build_recognitions_router(session_factory, store))
-    protected.include_router(build_review_router(session_factory, store))
+    protected.include_router(build_review_router(session_factory, store, queue_service))
 
     app.include_router(protected)
     return app

@@ -317,7 +317,51 @@ class AnnotationRow(Base):
 
 class ReviewRow(Base):
     __tablename__ = "reviews"
-    __table_args__ = (Index("ix_reviews_submission_question", "submission_id", "question_id"),)
+    __table_args__ = (
+        Index("ix_reviews_submission_question", "submission_id", "question_id"),
+        # The optimistic-concurrency guard (Issue #22): the real constraint
+        # that stops two concurrent/duplicate review requests from both
+        # appending a row for the same ``(submission_id, question_id)``
+        # pair's next slot -- see `domain.review_workflow.next_review_version`
+        # and `docs/review-edit-history.md` "同時実行制御". Application code
+        # computes ``version`` as ``1 + <this pair's current row count>``
+        # before insert; the loser of a race between two callers who both
+        # computed the same value hits this constraint's `IntegrityError`.
+        UniqueConstraint(
+            "submission_id", "question_id", "version", name="uq_reviews_submission_question_version"
+        ),
+        CheckConstraint("version >= 1", name="ck_reviews_version_positive"),
+        CheckConstraint(
+            "action IN ('approved', 'modified', 'rejected', 'regrade_requested', 'undone')",
+            name="ck_reviews_action_valid",
+        ),
+        # Mirrors `Review.__post_init__`: a row written outside the domain
+        # (repair, import, direct SQL) could otherwise persist an
+        # ``approved``/``modified`` row with no AI grade to confirm, a
+        # ``modified`` row with no human grade recording what it was
+        # modified *to*, a ``regrade_requested`` row with no record of which
+        # `Job` it queued, or an ``undone`` row with nothing to say what it
+        # undid -- each of which `Review`'s own constructor already rejects,
+        # so a row like that would only ever surface as a hydration crash on
+        # the next read of this question's history.
+        CheckConstraint(
+            "action NOT IN ('approved', 'modified') OR ai_grade_result_id IS NOT NULL",
+            name="ck_reviews_confirmed_requires_ai_grade",
+        ),
+        CheckConstraint(
+            "action != 'modified' OR human_grade_result_id IS NOT NULL",
+            name="ck_reviews_modified_requires_human_grade",
+        ),
+        CheckConstraint(
+            "action != 'regrade_requested' OR regrade_job_id IS NOT NULL",
+            name="ck_reviews_regrade_requires_job",
+        ),
+        CheckConstraint(
+            "action != 'undone' OR undone_review_id IS NOT NULL",
+            name="ck_reviews_undone_requires_target",
+        ),
+        CheckConstraint("note IS NULL OR length(note) <= 120", name="ck_reviews_note_length"),
+    )
 
     id: Mapped[str] = _pk()
     submission_id: Mapped[str] = mapped_column(
@@ -327,11 +371,25 @@ class ReviewRow(Base):
         ForeignKey("questions.id", ondelete="CASCADE"), nullable=False
     )
     action: Mapped[ReviewAction] = mapped_column(_enum(ReviewAction), nullable=False)
+    #: 1-based sequence number within this (submission_id, question_id)'s own
+    #: review history (Issue #22 optimistic concurrency). See the unique
+    #: constraint above.
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
     ai_grade_result_id: Mapped[str | None] = mapped_column(
         ForeignKey("grade_results.id", ondelete="SET NULL"), nullable=True
     )
     human_grade_result_id: Mapped[str | None] = mapped_column(
         ForeignKey("grade_results.id", ondelete="SET NULL"), nullable=True
+    )
+    #: The `Job` a ``regrade_requested`` row queued (Issue #22). ``None`` for
+    #: every other action.
+    regrade_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    #: The prior `Review` row an ``undone`` row reverts (Issue #22). Never
+    #: physically removed -- see `domain.review_workflow.effective_latest_review`.
+    undone_review_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
     )
     note: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

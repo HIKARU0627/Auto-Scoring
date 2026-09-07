@@ -11,9 +11,15 @@ import 'package:dio/dio.dart';
 import 'dart:typed_data';
 import 'package:auto_scoring_api/src/api_util.dart';
 import 'package:auto_scoring_api/src/model/annotation_response.dart';
+import 'package:auto_scoring_api/src/model/approve_review_request.dart';
+import 'package:auto_scoring_api/src/model/edit_review_request.dart';
 import 'package:auto_scoring_api/src/model/grade_result_response.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/question_response.dart';
+import 'package:auto_scoring_api/src/model/reasoned_review_request.dart';
+import 'package:auto_scoring_api/src/model/review_action_response.dart';
+import 'package:auto_scoring_api/src/model/review_response.dart';
+import 'package:auto_scoring_api/src/model/undo_review_request.dart';
 import 'package:built_collection/built_collection.dart';
 
 class ReviewApi {
@@ -22,6 +28,242 @@ class ReviewApi {
   final Serializers _serializers;
 
   const ReviewApi(this._dio, this._serializers);
+
+  /// Approve
+  ///
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [approveReviewRequest]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ReviewActionResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ReviewActionResponse>>
+      approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost({
+    required String submissionId,
+    required String questionId,
+    required ApproveReviewRequest approveReviewRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/review/approve'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(ApproveReviewRequest);
+      _bodyData =
+          _serializers.serialize(approveReviewRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ReviewActionResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ReviewActionResponse),
+            ) as ReviewActionResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ReviewActionResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Edit
+  ///
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [editReviewRequest]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ReviewActionResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ReviewActionResponse>>
+      editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost({
+    required String submissionId,
+    required String questionId,
+    required EditReviewRequest editReviewRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/review/edit'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(EditReviewRequest);
+      _bodyData =
+          _serializers.serialize(editReviewRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ReviewActionResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ReviewActionResponse),
+            ) as ReviewActionResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ReviewActionResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
 
   /// Get Source Pdf
   ///
@@ -373,6 +615,457 @@ class ReviewApi {
     }
 
     return Response<BuiltList<QuestionResponse>>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// List Reviews
+  /// The full append-only operation history, oldest first. Its length is the &#x60;&#x60;expected_version&#x60;&#x60; the client&#39;s *next* mutating call for this submission-question must pass (0 if the list is empty).
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [BuiltList<ReviewResponse>] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<BuiltList<ReviewResponse>>>
+      listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet({
+    required String submissionId,
+    required String questionId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/reviews'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    BuiltList<ReviewResponse>? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType:
+                  const FullType(BuiltList, [FullType(ReviewResponse)]),
+            ) as BuiltList<ReviewResponse>;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<BuiltList<ReviewResponse>>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Regrade
+  ///
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [reasonedReviewRequest]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ReviewActionResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ReviewActionResponse>>
+      regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost({
+    required String submissionId,
+    required String questionId,
+    required ReasonedReviewRequest reasonedReviewRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/review/regrade'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(ReasonedReviewRequest);
+      _bodyData =
+          _serializers.serialize(reasonedReviewRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ReviewActionResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ReviewActionResponse),
+            ) as ReviewActionResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ReviewActionResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Reject
+  ///
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [reasonedReviewRequest]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ReviewActionResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ReviewActionResponse>>
+      rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost({
+    required String submissionId,
+    required String questionId,
+    required ReasonedReviewRequest reasonedReviewRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/review/reject'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(ReasonedReviewRequest);
+      _bodyData =
+          _serializers.serialize(reasonedReviewRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ReviewActionResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ReviewActionResponse),
+            ) as ReviewActionResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ReviewActionResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Undo
+  ///
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [undoReviewRequest]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ReviewActionResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ReviewActionResponse>>
+      undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost({
+    required String submissionId,
+    required String questionId,
+    required UndoReviewRequest undoReviewRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/review/undo'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(UndoReviewRequest);
+      _bodyData =
+          _serializers.serialize(undoReviewRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ReviewActionResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ReviewActionResponse),
+            ) as ReviewActionResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ReviewActionResponse>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

@@ -18,9 +18,11 @@ import 'package:http_parser/http_parser.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
     show
+        AnnotationEditRequest,
         AnnotationResponse,
         BoundingBoxResponse,
         CompleteRegistrationResponse,
+        CriterionOutcomeRequest,
         CriterionResultResponse,
         DependencyEdgeModel,
         DependencyGraphResponse,
@@ -34,8 +36,11 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         QuestionResponse,
         QuestionTextOverride,
         RecognitionResponse,
+        RecognitionResponseSlim,
         RegionKind,
         RegionModel,
+        ReviewActionResponse,
+        ReviewResponse,
         RubricCriterionResponse,
         ScoreRequest,
         ScoreResponse,
@@ -75,6 +80,13 @@ enum SidecarErrorKind {
 
   /// The sidecar rejected the bearer token (HTTP 401).
   unauthorized,
+
+  /// The sidecar refused a review action (HTTP 409): a stale
+  /// `expected_version` (someone else already acted on this question), no AI
+  /// grade to approve/edit yet, or nothing left to undo. The caller should
+  /// reload this question's review history and let the reviewer retry
+  /// (Issue #22 acceptance: "同時/重複requestが…古いversionの更新を拒否する").
+  conflict,
 
   /// The sidecar answered with an error status or an unreadable body.
   badResponse,
@@ -687,6 +699,205 @@ class SidecarApiClient {
     }
   }
 
+  /// The full append-only operation history for [submissionId]/[questionId],
+  /// oldest first (Issue #22 §19). Its length is the ``expectedVersion`` the
+  /// caller's *next* mutating review call for this submission-question must
+  /// pass (``0`` if the list is empty).
+  Future<List<ReviewResponse>> listReviews(
+    String submissionId,
+    String questionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _reviewApi
+          .listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet(
+            submissionId: submissionId,
+            questionId: questionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <ReviewResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// A human's corrected score/comment (and, optionally, recognized text and
+  /// annotations) for [submissionId]/[questionId] -- always confirms in the
+  /// same step (Issue #22 "edit"). [expectedVersion] must be this question's
+  /// current review-history length (`listReviews(...).length`); a stale
+  /// value throws [SidecarApiException] with [SidecarErrorKind.conflict].
+  /// Throws the same conflict kind if no AI grade exists yet to correct, or
+  /// if [expectedAiGradeId] is given and no longer names the latest AI grade
+  /// (Issue #22 P1 review: a regrade completing after the reviewer's screen
+  /// loaded this question's AI proposal but before this edit reached the
+  /// server) -- pass the id of the AI grade currently displayed to the
+  /// reviewer (`QuestionReviewState.latestAiGrade?.id`), or omit it to skip
+  /// this check entirely.
+  Future<ReviewActionResponse> editReview(
+    String submissionId,
+    String questionId, {
+    required int expectedVersion,
+    String? expectedAiGradeId,
+    required int scoreAwarded,
+    required int scoreMaximum,
+    double confidence = 1.0,
+    List<CriterionOutcomeRequest> criteria = const [],
+    String? rationale,
+    String? comment,
+    String? recognizedText,
+    List<AnnotationEditRequest>? annotations,
+    String? note,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request =
+          EditReviewRequest(
+            (b) => b
+              ..expectedVersion = expectedVersion
+              ..expectedAiGradeId = expectedAiGradeId
+              ..scoreAwarded = scoreAwarded
+              ..scoreMaximum = scoreMaximum
+              ..confidence = confidence
+              ..criteria.replace(criteria)
+              ..rationale = rationale
+              ..comment = comment
+              ..recognizedText = recognizedText
+              ..note = note,
+          ).rebuild(
+            (b) =>
+                annotations == null ? b : (b..annotations.replace(annotations)),
+          );
+      final response = await _reviewApi
+          .editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost(
+            submissionId: submissionId,
+            questionId: questionId,
+            editReviewRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Records that the AI's current proposal for [submissionId]/[questionId]
+  /// is unusable (Issue #22 "reject"). See [editReview] for [expectedVersion].
+  Future<ReviewActionResponse> rejectReview(
+    String submissionId,
+    String questionId, {
+    required int expectedVersion,
+    String? reason,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = ReasonedReviewRequest(
+        (b) => b
+          ..expectedVersion = expectedVersion
+          ..reason = reason,
+      );
+      final response = await _reviewApi
+          .rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost(
+            submissionId: submissionId,
+            questionId: questionId,
+            reasonedReviewRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Queues a fresh AI attempt for [submissionId]/[questionId] (Issue #22
+  /// "regrade"). See [editReview] for [expectedVersion]. The returned
+  /// [ReviewActionResponse.jobId] is the freshly-queued `Job`.
+  Future<ReviewActionResponse> regradeReview(
+    String submissionId,
+    String questionId, {
+    required int expectedVersion,
+    String? reason,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = ReasonedReviewRequest(
+        (b) => b
+          ..expectedVersion = expectedVersion
+          ..reason = reason,
+      );
+      final response = await _reviewApi
+          .regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost(
+            submissionId: submissionId,
+            questionId: questionId,
+            reasonedReviewRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Confirms the AI's current proposal for [submissionId]/[questionId] as-is
+  /// (Issue #22 "approve", the confirm half of "承認して次へ" -- moving to the
+  /// next question is pure client-side navigation). See [editReview] for
+  /// [expectedVersion]/[expectedAiGradeId].
+  Future<ReviewActionResponse> approveReview(
+    String submissionId,
+    String questionId, {
+    required int expectedVersion,
+    String? expectedAiGradeId,
+    String? note,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = ApproveReviewRequest(
+        (b) => b
+          ..expectedVersion = expectedVersion
+          ..expectedAiGradeId = expectedAiGradeId
+          ..note = note,
+      );
+      final response = await _reviewApi
+          .approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost(
+            submissionId: submissionId,
+            questionId: questionId,
+            approveReviewRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Reverts the currently-effective human review action for
+  /// [submissionId]/[questionId] as a *new* row (Ctrl+Z, Issue #22 "Undo") --
+  /// never deletes or mutates the reverted row. See [editReview] for
+  /// [expectedVersion]. Throws [SidecarApiException] with
+  /// [SidecarErrorKind.conflict] if every action has already been undone (or
+  /// none exists).
+  Future<ReviewActionResponse> undoReview(
+    String submissionId,
+    String questionId, {
+    required int expectedVersion,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = UndoReviewRequest(
+        (b) => b..expectedVersion = expectedVersion,
+      );
+      final response = await _reviewApi
+          .undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost(
+            submissionId: submissionId,
+            questionId: questionId,
+            undoReviewRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
   /// Every `Job` (kind GRADING) ever created for [submissionId], across every
   /// question and every dependency-graph version it was submitted under
   /// (Issue #18) -- the only way to observe a per-question job's own
@@ -769,6 +980,14 @@ class SidecarApiClient {
           return SidecarApiException(
             SidecarErrorKind.unauthorized,
             'sidecar rejected the bearer token',
+            statusCode: status,
+          );
+        }
+        if (status == 409) {
+          return SidecarApiException(
+            SidecarErrorKind.conflict,
+            _detailMessage(error.response?.data) ??
+                'sidecar reported a conflict',
             statusCode: status,
           );
         }

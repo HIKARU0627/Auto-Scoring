@@ -297,3 +297,42 @@ def test_modified_review_must_reference_both_results() -> None:
             ai_grade_result_id="grade-1",
             human_grade_result_id=None,
         )
+
+
+def test_review_version_must_be_positive() -> None:
+    with pytest.raises(DomainError):
+        make_review(version=0)
+
+
+def test_regrade_requested_review_must_reference_a_job() -> None:
+    with pytest.raises(DomainError):
+        make_review(
+            action=ReviewAction.REGRADE_REQUESTED,
+            ai_grade_result_id=None,
+            regrade_job_id=None,
+        )
+
+
+def test_regrade_requested_review_may_omit_the_ai_grade() -> None:
+    """Regrading is exactly how a reviewer recovers from "AI never produced
+    a grade at all" -- unlike APPROVED/MODIFIED, it must not require one."""
+    review = make_review(
+        action=ReviewAction.REGRADE_REQUESTED,
+        ai_grade_result_id=None,
+        regrade_job_id="job-1",
+    )
+    assert review.regrade_job_id == "job-1"
+
+
+def test_undone_review_must_reference_the_review_it_undoes() -> None:
+    with pytest.raises(DomainError):
+        make_review(
+            action=ReviewAction.UNDONE,
+            ai_grade_result_id=None,
+            undone_review_id=None,
+        )
+
+
+def test_review_note_length_is_capped() -> None:
+    with pytest.raises(DomainError):
+        make_review(note="あ" * 121)

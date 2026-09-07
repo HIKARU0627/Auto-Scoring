@@ -8,15 +8,19 @@ part of 'serializers.dart';
 
 Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnalyzeRequest.serializer)
+      ..add(AnnotationEditRequest.serializer)
       ..add(AnnotationResponse.serializer)
+      ..add(ApproveReviewRequest.serializer)
       ..add(BoundingBoxResponse.serializer)
       ..add(CompleteRegistrationResponse.serializer)
       ..add(ConfirmProfileRequest.serializer)
       ..add(ConfirmRequest.serializer)
+      ..add(CriterionOutcomeRequest.serializer)
       ..add(CriterionResultResponse.serializer)
       ..add(DependencyEdgeModel.serializer)
       ..add(DependencyGraphResponse.serializer)
       ..add(DependencyProvision.serializer)
+      ..add(EditReviewRequest.serializer)
       ..add(GradeResultResponse.serializer)
       ..add(HTTPValidationError.serializer)
       ..add(JobResponse.serializer)
@@ -28,9 +32,13 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ProfileResponse.serializer)
       ..add(QuestionResponse.serializer)
       ..add(QuestionTextOverride.serializer)
+      ..add(ReasonedReviewRequest.serializer)
       ..add(RecognitionResponse.serializer)
+      ..add(RecognitionResponseSlim.serializer)
       ..add(RegionKind.serializer)
       ..add(RegionModel.serializer)
+      ..add(ReviewActionResponse.serializer)
+      ..add(ReviewResponse.serializer)
       ..add(RubricCriterionResponse.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
@@ -38,9 +46,21 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(SubmissionResponse.serializer)
       ..add(TestResponse.serializer)
       ..add(TestSummary.serializer)
+      ..add(UndoReviewRequest.serializer)
       ..add(UnresolvedQuestionModel.serializer)
       ..add(UpdateProfileRequest.serializer)
       ..add(ValidationError.serializer)
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(AnnotationEditRequest)]),
+          () => ListBuilder<AnnotationEditRequest>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(CriterionOutcomeRequest)]),
+          () => ListBuilder<CriterionOutcomeRequest>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(AnnotationResponse)]),
+          () => ListBuilder<AnnotationResponse>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(BoundingBoxResponse)]),

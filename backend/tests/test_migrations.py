@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0012"
+    assert current_revision(db_url) == "0013"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0012"
+    assert current_revision(db_url) == "0013"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0012"
+    assert current_revision(db_url) == "0013"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0012"
+    assert current_revision(db_url) == "0013"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0012"
+    assert current_revision(db_url) == "0013"
 
 
 _CHILD_TABLES = (

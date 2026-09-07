@@ -37,7 +37,9 @@ from auto_scoring.domain.models import (
     ErrorCategory,
     GradingSource,
     JobKind,
+    ReviewAction,
     RubricCriterion,
+    Score,
 )
 from auto_scoring.domain.ocr import BoundingBox, ConfidenceBand, OcrResult, OcrToken
 from auto_scoring.jobs.grading_processor import (
@@ -51,8 +53,11 @@ from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from tests.support import (
     at,
     make_answer_image,
+    make_grade,
     make_job,
     make_question,
+    make_recognition,
+    make_review,
     make_rubric,
     make_submission,
     make_test,
@@ -832,6 +837,255 @@ async def test_prerequisite_context_is_built_from_the_completed_prerequisite(
     assert dependent_grade.context[0].question_id == "q-1"
     assert dependent_grade.context[0].recognition_result_id is not None
     assert dependent_grade.context[0].grade_result_id is not None
+
+
+async def test_prerequisite_context_ignores_an_undone_human_correction(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ocr_provider: _ScriptedOCRProvider,
+    ai_provider: _ScriptedAIProvider,
+) -> None:
+    """Issue #22 P1 review: a dependent question's grading context must be
+    resolved through the prerequisite's own review history, not simply "the
+    latest human row wins" -- once a reviewer's correction to the
+    prerequisite (q-1) is reverted with Undo, its `GradeResult`/
+    `RecognitionResult` rows are still there (append-only) but must stop
+    feeding q-2's context, the same way the review screen's own
+    `QuestionReviewState.displayGrade` stops showing them.
+    """
+    image_q1 = make_answer_image(id="ai-q1", question_id="q-1")
+    image_q2 = make_answer_image(
+        id="ai-q2", question_id="q-2", image_path="submissions/sub-1/q2.png"
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="問1", model_answer="模範解答1"))
+        uow.questions.add(make_question(id="q-2", number="問2", model_answer="問1の答えを2倍する"))
+        uow.rubrics.add(make_rubric(id="rubric-1", question_id="q-1"))
+        uow.rubrics.add(
+            make_rubric(
+                id="rubric-2",
+                question_id="q-2",
+                criteria=(
+                    RubricCriterion(id="c-3", description="正確性", max_points=3, position=0),
+                    RubricCriterion(id="c-4", description="表現", max_points=2, position=1),
+                ),
+            )
+        )
+        uow.submissions.add(make_submission())
+        uow.answer_images.add(image_q1)
+        uow.answer_images.add(image_q2)
+        uow.commit()
+    store.write_atomic(store.root / image_q1.image_path, _IMAGE_BYTES)
+    store.write_atomic(store.root / image_q2.image_path, _IMAGE_BYTES)
+    edge = DependencyEdge(
+        from_question_id="q-1",
+        to_question_id="q-2",
+        provides=(DependencyProvision.RECOGNIZED_TEXT, DependencyProvision.SCORE),
+        rationale="問2は問1の答えに依存する",
+    )
+    _confirm_graph(session_factory, question_ids=["q-1", "q-2"], edges=[edge])
+
+    recognition = RecognitionJobProcessor(session_factory, store, ocr_provider)
+    processor = GradingJobProcessor(session_factory, store, recognition, ai_provider)
+
+    # Grade the prerequisite (q-1) first, as the DAG requires.
+    ai_provider.script(_response(question_id="q-1"))
+    prerequisite_job = make_job(id="job-q1", kind=JobKind.GRADING, question_id="q-1")
+    prerequisite_result = await processor.process(prerequisite_job)
+    assert prerequisite_result.usable is True
+    ai_grade_id = grade_result_id(prerequisite_job)
+
+    # A reviewer corrects q-1 (a `modified` Review) -- a much lower score and
+    # a different recognized text -- then immediately reverts it with Undo.
+    # Both actions are legitimate review-screen calls
+    # (`adapters.review_actions.edit_question`/`undo_last_review`); this
+    # reproduces their net effect directly against the repositories to keep
+    # this test scoped to `GradingJobProcessor` alone.
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(
+            make_grade(
+                id="grade-human-q1",
+                question_id="q-1",
+                source=GradingSource.HUMAN,
+                score=Score(awarded=1, maximum=5),
+                confidence=1.0,
+                created_at=at(100),
+            )
+        )
+        uow.recognitions.add(
+            make_recognition(
+                id="rec-human-q1",
+                question_id="q-1",
+                source=GradingSource.HUMAN,
+                text="人による誤った修正",
+                confidence=1.0,
+                created_at=at(100),
+            )
+        )
+        modified_review = make_review(
+            id="review-modified-q1",
+            question_id="q-1",
+            action=ReviewAction.MODIFIED,
+            version=1,
+            ai_grade_result_id=ai_grade_id,
+            human_grade_result_id="grade-human-q1",
+            created_at=at(100),
+        )
+        uow.reviews.add(modified_review)
+        uow.reviews.add(
+            make_review(
+                id="review-undone-q1",
+                question_id="q-1",
+                action=ReviewAction.UNDONE,
+                version=2,
+                ai_grade_result_id=None,
+                undone_review_id=modified_review.id,
+                created_at=at(200),
+            )
+        )
+        uow.commit()
+
+    # Now grade the dependent (q-2); its request must carry q-1's *AI*
+    # context, exactly as if the human correction above had never happened.
+    ai_provider.script(
+        _response(
+            question_id="q-2",
+            criteria=(
+                GradingCriterionOutcome(
+                    criterion_id="c-3",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠3",
+                ),
+                GradingCriterionOutcome(
+                    criterion_id="c-4",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠4",
+                ),
+            ),
+        )
+    )
+    dependent_job = make_job(id="job-q2", kind=JobKind.GRADING, question_id="q-2")
+    dependent_result = await processor.process(dependent_job)
+
+    assert dependent_result.usable is True
+    dependent_request = ai_provider.calls[-1]
+    assert len(dependent_request.prerequisite_context) == 1
+    prerequisite_answer = dependent_request.prerequisite_context[0]
+    assert prerequisite_answer.question_id == "q-1"
+    assert prerequisite_answer.recognized_text == "模範的な解答"
+    assert prerequisite_answer.score == 4
+
+
+async def test_prerequisite_context_uses_a_standalone_manual_recognition_correction(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ocr_provider: _ScriptedOCRProvider,
+    ai_provider: _ScriptedAIProvider,
+) -> None:
+    """Issue #22 P2 review, round 3: a human `RecognitionResult` created
+    through the older, review-workflow-independent ``POST .../recognitions``
+    endpoint (Issue #19) is never tied to any `Review` row at all. A
+    dependent question's grading context must still pick it up over the
+    prerequisite's own (possibly misread) AI text -- treating "no `modified`
+    Review for this question" the same as "no human correction exists at
+    all" would silently hand the dependent question the wrong text even
+    though a reviewer already fixed it.
+    """
+    image_q1 = make_answer_image(id="ai-q1", question_id="q-1")
+    image_q2 = make_answer_image(
+        id="ai-q2", question_id="q-2", image_path="submissions/sub-1/q2.png"
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="問1", model_answer="模範解答1"))
+        uow.questions.add(make_question(id="q-2", number="問2", model_answer="問1の答えを2倍する"))
+        uow.rubrics.add(make_rubric(id="rubric-1", question_id="q-1"))
+        uow.rubrics.add(
+            make_rubric(
+                id="rubric-2",
+                question_id="q-2",
+                criteria=(
+                    RubricCriterion(id="c-3", description="正確性", max_points=3, position=0),
+                    RubricCriterion(id="c-4", description="表現", max_points=2, position=1),
+                ),
+            )
+        )
+        uow.submissions.add(make_submission())
+        uow.answer_images.add(image_q1)
+        uow.answer_images.add(image_q2)
+        uow.commit()
+    store.write_atomic(store.root / image_q1.image_path, _IMAGE_BYTES)
+    store.write_atomic(store.root / image_q2.image_path, _IMAGE_BYTES)
+    edge = DependencyEdge(
+        from_question_id="q-1",
+        to_question_id="q-2",
+        provides=(DependencyProvision.RECOGNIZED_TEXT, DependencyProvision.SCORE),
+        rationale="問2は問1の答えに依存する",
+    )
+    _confirm_graph(session_factory, question_ids=["q-1", "q-2"], edges=[edge])
+
+    recognition = RecognitionJobProcessor(session_factory, store, ocr_provider)
+    processor = GradingJobProcessor(session_factory, store, recognition, ai_provider)
+
+    # Grade the prerequisite (q-1) first, as the DAG requires.
+    ai_provider.script(_response(question_id="q-1"))
+    prerequisite_job = make_job(id="job-q1", kind=JobKind.GRADING, question_id="q-1")
+    prerequisite_result = await processor.process(prerequisite_job)
+    assert prerequisite_result.usable is True
+
+    # A reviewer manually corrects q-1's recognized text through the
+    # standalone `POST .../recognitions` endpoint (Issue #19) -- no `Review`
+    # row of any kind is ever created for this, unlike an `edit_question`
+    # correction (`adapters.recognitions_router.create_manual_recognition`
+    # reproduced here directly, keeping this test scoped to
+    # `GradingJobProcessor`).
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.recognitions.add(
+            make_recognition(
+                id="rec-manual-q1",
+                question_id="q-1",
+                source=GradingSource.HUMAN,
+                text="手動で訂正した文字",
+                confidence=1.0,
+                created_at=at(100),
+            )
+        )
+        uow.commit()
+
+    # Now grade the dependent (q-2); its request must carry the manually
+    # corrected text, not q-1's own (uncorrected) AI reading.
+    ai_provider.script(
+        _response(
+            question_id="q-2",
+            criteria=(
+                GradingCriterionOutcome(
+                    criterion_id="c-3",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠3",
+                ),
+                GradingCriterionOutcome(
+                    criterion_id="c-4",
+                    outcome=CriterionOutcome.PASS,
+                    confidence=0.9,
+                    rationale="根拠4",
+                ),
+            ),
+        )
+    )
+    dependent_job = make_job(id="job-q2", kind=JobKind.GRADING, question_id="q-2")
+    dependent_result = await processor.process(dependent_job)
+
+    assert dependent_result.usable is True
+    dependent_request = ai_provider.calls[-1]
+    assert len(dependent_request.prerequisite_context) == 1
+    prerequisite_answer = dependent_request.prerequisite_context[0]
+    assert prerequisite_answer.question_id == "q-1"
+    assert prerequisite_answer.recognized_text == "手動で訂正した文字"
+    assert prerequisite_answer.score == 4
 
 
 async def test_dependent_question_job_is_blocked_until_prerequisite_is_usable(

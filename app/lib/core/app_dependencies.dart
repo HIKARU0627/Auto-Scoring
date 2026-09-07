@@ -109,6 +109,55 @@ Future<List<AnnotationResponse>> _unavailableListAnnotations(
 Future<List<JobResponse>> _unavailableListJobs(String submissionId) async =>
     _unavailable();
 
+Future<List<ReviewResponse>> _unavailableListReviews(
+  String submissionId,
+  String questionId,
+) async => _unavailable();
+
+Future<ReviewActionResponse> _unavailableEditReview(
+  String submissionId,
+  String questionId, {
+  required int expectedVersion,
+  String? expectedAiGradeId,
+  required int scoreAwarded,
+  required int scoreMaximum,
+  double confidence = 1.0,
+  List<CriterionOutcomeRequest> criteria = const [],
+  String? rationale,
+  String? comment,
+  String? recognizedText,
+  List<AnnotationEditRequest>? annotations,
+  String? note,
+}) async => _unavailable();
+
+Future<ReviewActionResponse> _unavailableRejectReview(
+  String submissionId,
+  String questionId, {
+  required int expectedVersion,
+  String? reason,
+}) async => _unavailable();
+
+Future<ReviewActionResponse> _unavailableRegradeReview(
+  String submissionId,
+  String questionId, {
+  required int expectedVersion,
+  String? reason,
+}) async => _unavailable();
+
+Future<ReviewActionResponse> _unavailableApproveReview(
+  String submissionId,
+  String questionId, {
+  required int expectedVersion,
+  String? expectedAiGradeId,
+  String? note,
+}) async => _unavailable();
+
+Future<ReviewActionResponse> _unavailableUndoReview(
+  String submissionId,
+  String questionId, {
+  required int expectedVersion,
+}) async => _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -231,6 +280,77 @@ typedef ListAnnotations =
 /// (添削レビュー画面のpolling, Issue #21 P1 review).
 typedef ListJobs = Future<List<JobResponse>> Function(String submissionId);
 
+/// The full append-only operation history for one submission-question,
+/// oldest first (Issue #22 §19). Its length is the ``expectedVersion`` the
+/// next mutating review call for this submission-question must pass.
+typedef ListReviews =
+    Future<List<ReviewResponse>> Function(
+      String submissionId,
+      String questionId,
+    );
+
+/// A human's corrected score/comment (and, optionally, recognized text and
+/// annotations) -- always confirms in the same step (Issue #22 "edit").
+/// [expectedVersion] must be this question's current review-history length
+/// (`ListReviews`'s result); a stale value throws [SidecarApiException] with
+/// `SidecarErrorKind.conflict`, as does having no AI grade yet to correct,
+/// or a stale [expectedAiGradeId] (Issue #22 P1 review) -- see
+/// `SidecarApiClient.editReview`.
+typedef EditReview =
+    Future<ReviewActionResponse> Function(
+      String submissionId,
+      String questionId, {
+      required int expectedVersion,
+      String? expectedAiGradeId,
+      required int scoreAwarded,
+      required int scoreMaximum,
+      double confidence,
+      List<CriterionOutcomeRequest> criteria,
+      String? rationale,
+      String? comment,
+      String? recognizedText,
+      List<AnnotationEditRequest>? annotations,
+      String? note,
+    });
+
+/// Records that the AI's current proposal is unusable (Issue #22 "reject").
+typedef RejectReview =
+    Future<ReviewActionResponse> Function(
+      String submissionId,
+      String questionId, {
+      required int expectedVersion,
+      String? reason,
+    });
+
+/// Queues a fresh AI attempt (Issue #22 "regrade").
+typedef RegradeReview =
+    Future<ReviewActionResponse> Function(
+      String submissionId,
+      String questionId, {
+      required int expectedVersion,
+      String? reason,
+    });
+
+/// Confirms the AI's current proposal as-is (Issue #22 "approve", the
+/// confirm half of "承認して次へ"). See [EditReview] for [expectedAiGradeId].
+typedef ApproveReview =
+    Future<ReviewActionResponse> Function(
+      String submissionId,
+      String questionId, {
+      required int expectedVersion,
+      String? expectedAiGradeId,
+      String? note,
+    });
+
+/// Reverts the currently-effective human review action as a new row (Ctrl+Z,
+/// Issue #22 "Undo").
+typedef UndoReview =
+    Future<ReviewActionResponse> Function(
+      String submissionId,
+      String questionId, {
+      required int expectedVersion,
+    });
+
 /// Composition-root dependency container.
 ///
 /// Features read their collaborators from here instead of constructing them,
@@ -260,6 +380,12 @@ class AppDependencies {
     this.listGrades = _unavailableListGrades,
     this.listAnnotations = _unavailableListAnnotations,
     this.listJobs = _unavailableListJobs,
+    this.listReviews = _unavailableListReviews,
+    this.editReview = _unavailableEditReview,
+    this.rejectReview = _unavailableRejectReview,
+    this.regradeReview = _unavailableRegradeReview,
+    this.approveReview = _unavailableApproveReview,
+    this.undoReview = _unavailableUndoReview,
   });
 
   /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
@@ -286,4 +412,10 @@ class AppDependencies {
   final ListGrades listGrades;
   final ListAnnotations listAnnotations;
   final ListJobs listJobs;
+  final ListReviews listReviews;
+  final EditReview editReview;
+  final RejectReview rejectReview;
+  final RegradeReview regradeReview;
+  final ApproveReview approveReview;
+  final UndoReview undoReview;
 }

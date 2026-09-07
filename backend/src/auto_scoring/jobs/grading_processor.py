@@ -52,6 +52,10 @@ from auto_scoring.domain.models import (
     ScoringMethod,
     find_answer_image,
 )
+from auto_scoring.domain.review_workflow import (
+    resolve_effective_grade,
+    resolve_effective_recognition,
+)
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor, recognition_result_id
@@ -79,23 +83,6 @@ def grading_recognition_id(job: Job) -> str:
     16.5's "AI認識文字" review-UI field.
     """
     return f"grading-recognition:{job.id}"
-
-
-def _latest_preferring_human[T](results: Sequence[tuple[GradingSource, T]]) -> T | None:
-    """Pick the latest result, preferring a human confirmation over an AI
-    proposal regardless of recency (a human correction always supersedes an
-    AI reading for context purposes, mirroring the general "human overrides
-    AI" rule -- simplified-design-specification.md section 19).
-
-    ``results`` is already in ascending ``created_at`` order (matches every
-    ``history()`` repository method's ordering), so "the latest of a source"
-    is simply the last matching entry.
-    """
-    human = [value for source, value in results if source is GradingSource.HUMAN]
-    if human:
-        return human[-1]
-    ai = [value for source, value in results if source is GradingSource.AI]
-    return ai[-1] if ai else None
 
 
 class GradingJobProcessor:
@@ -206,17 +193,23 @@ class GradingJobProcessor:
             )
             sources: dict[str, PrerequisiteSource] = {}
             for prerequisite_id in prerequisite_ids:
-                prerequisite_recognition = _latest_preferring_human(
-                    [
-                        (r.source, r)
-                        for r in uow.recognitions.history(job.submission_id, prerequisite_id)
-                    ]
-                )
-                prerequisite_grade = _latest_preferring_human(
-                    [(g.source, g) for g in uow.grades.history(job.submission_id, prerequisite_id)]
+                # Resolved through the prerequisite's own review history (Issue
+                # #22 P1 review), not simply "prefer the latest human row" --
+                # once Undo reverts a prerequisite's human correction, its
+                # `RecognitionResult`/`GradeResult` rows are still there
+                # (append-only) but must stop feeding a dependent question's
+                # grading context, the same way `QuestionReviewState.
+                # displayGrade` stops showing them client-side.
+                prerequisite_reviews = uow.reviews.history(job.submission_id, prerequisite_id)
+                prerequisite_grades = uow.grades.history(job.submission_id, prerequisite_id)
+                prerequisite_recognitions = uow.recognitions.history(
+                    job.submission_id, prerequisite_id
                 )
                 sources[prerequisite_id] = PrerequisiteSource(
-                    recognition=prerequisite_recognition, grade=prerequisite_grade
+                    recognition=resolve_effective_recognition(
+                        prerequisite_reviews, prerequisite_grades, prerequisite_recognitions
+                    ),
+                    grade=resolve_effective_grade(prerequisite_reviews, prerequisite_grades),
                 )
 
             try:

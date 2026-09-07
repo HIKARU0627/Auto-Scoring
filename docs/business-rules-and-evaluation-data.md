@@ -221,12 +221,19 @@ MVP 0.1 の実装着手前に確定する（GitHub Issue #8 / 親 Issue #3）。
   | Enter                       | 承認して次へ  |
   | E                           | 編集          |
   | X                           | AI 結果を却下 |
+  | R                           | 再判定        |
   | ↑ / ↓                       | 設問移動      |
   | Ctrl + Z                    | Undo          |
   | Ctrl + Y / Ctrl + Shift + Z | Redo          |
 
 - 割り当てはユーザー設定で変更可能にするが、既定値は上表で固定して実装を開始してよい。
   IME 変換中・テキスト入力フォーカス中はショートカットを無効化する。
+- **Issue #22 追記**: `R`（再判定）と `Ctrl + Z`（Undo）を実装した
+  （`app/lib/features/pdf_review/pdf_review_page.dart`
+  `_shortcutBindings`/`docs/review-edit-history.md`）。`R` は簡易設計書 §17 に
+  候補がなかったため本Issueで新規に決定した。`Ctrl + Y` / `Ctrl + Shift + Z`
+  （Redo）は Issue #22 の対象外のまま（実施内容が Undo のみを求めている
+  ため）— 後続Issueで扱う。
 
 ### (17) AI による自動コメント生成の許容範囲（§33-23）
 
