@@ -2,6 +2,10 @@
 
 Flutter desktop front-end for Auto-Scoring (Windows, Material 3).
 
+`linux/` exists so the UI can be run and screenshotted on a Linux development
+machine. It is **not** a distribution target -- see
+[`../docs/linux-desktop-development.md`](../docs/linux-desktop-development.md).
+
 - Toolchain: Flutter 3.41.4 stable / Dart 3 — pinned in [`.fvmrc`](./.fvmrc).
 - Layers (dependency direction `features → core → api`, enforced by
   `test/architecture_test.dart`):

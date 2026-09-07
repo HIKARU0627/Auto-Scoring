@@ -287,6 +287,11 @@ C++ プラグインを `windows/runner` に足すのではなく FFI にした�
 macOS/Linux 配布は本 Issue の対象外で、そこでの等価物（`setsid` プロセス
 グループ）は配布を始めるときに実装する。
 
+> Issue #62 で `app/linux/` を足したが、**あれは開発機で画面を見るための足場で
+> あって配布対象ではない**。上の「macOS/Linux 配布は対象外」は変わっていない。
+> no-op のままなので Linux では強制終了時にサイドカーが残る。
+> [`linux-desktop-development.md`](./linux-desktop-development.md) §0・§5.1 を参照。
+
 **残存リスク**: `Process.start` と Job への登録の間に数マイクロ秒の隙間がある
 （Windows の完全解は `CREATE_SUSPENDED` + assign + resume だが dart:io は
 これを公開していない）。その隙間で Flutter 側が死んだ場合のみ orphan が残る。

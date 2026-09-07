@@ -65,7 +65,8 @@
 - Flutter 起動時にバンドル済み Python 実行ファイルを起動 →
   `GET /healthz` が通るまで待機 → スプラッシュ表示。
 - Flutter 終了・クラッシュ時に子プロセスを確実に kill する（Windows は Job Object、
-  将来の macOS/Linux はプロセスグループ）。
+  将来の macOS/Linux はプロセスグループ）。Linux では未実装で、開発起動時は
+  強制終了するとサイドカーが残る（[`linux-desktop-development.md`](./linux-desktop-development.md) §5.1）。
 - サイドカーが異常終了したら UI にエラーを出し、再起動ボタンを提供（簡易設計書 §24）。
 
 > 認証・動的ポート・OpenAPI → Dart 生成・接続情報の受け渡し（ハンドシェイク）の
