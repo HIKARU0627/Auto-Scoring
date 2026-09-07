@@ -324,7 +324,13 @@ Material 既定の `outlineVariant` も同程度である。境界を見つけ�
 `AppLayout`: `narrowBreakpoint` 900（添削レビューが Inspector を PDF の下へ回す幅、
 Issue #21 の受入条件）・`inspectorWidth` 360・`formMaxWidth` 640（フォームの
 読みやすい行長）・`messageMaxWidth` 480（文章なので フォームより狭い）・
-`dialogContentWidth` 360・`hairline` 1・`sectionDivider` 24。
+`dashboardMaxWidth` 800（ホーム画面の内容幅）・`dialogContentWidth` 360・
+`hairline` 1・`sectionDivider` 24。
+
+`dashboardMaxWidth` はフォームより広くウィンドウより狭い（Issue #68 で追加）。
+ホームのカードは進捗バーと状態の内訳を横に並べるのでフォーム幅では窮屈になり、
+一方で最大化したデスクトップでカード1枚を画面いっぱいに伸ばすと、テスト名から
+その行のボタンまで目が長距離を移動することになる。
 
 ## 5. モーション
 
