@@ -2314,14 +2314,34 @@ async def test_retry_scheduler_survives_a_requeue_after_backoff_error(
     would silently strand every other pending retry until a restart. The
     scheduler must absorb the failure per entry, keep running, and
     reschedule the affected entry instead of losing it outright.
+
+    Both jobs' *entire* attempt history is scripted up front (one FAILED,
+    then SUCCEEDED) instead of relying on this test calling
+    `processor.set_default(...)` at just the right moment: every delay the
+    service awaits here goes through `FakeClock`, which advances virtual
+    time instantly rather than actually waiting, so nothing stops both
+    jobs from racing through every one of their `max_attempts` attempts
+    (all still FAILED/TIMEOUT) before this coroutine ever gets scheduled
+    again to flip the processor's default to SUCCEEDED -- on a fast enough
+    event loop that race is lost close to every time, permanently
+    exhausting both jobs' retries and hanging the test on its final
+    `_wait_until` no matter how generous its timeout is (Issue #50: this
+    reproduced deterministically on Linux, confirmed by tracing the actual
+    attempt counts -- see docs/job-queue.md). Scripting the exact outcome
+    of every attempt removes the race entirely: the fate of both jobs is
+    fixed before `service.start()` ever runs, independent of how fast or
+    slow the host schedules the retry storm.
     """
     _seed(session_factory, test_id="test-a", submission_id="sub-a", question_ids=["qa"])
     _seed(session_factory, test_id="test-b", submission_id="sub-b", question_ids=["qb"])
     processor = FakeJobProcessor(
-        default=ProcessingResult(
-            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT
-        )
+        default=ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
     )
+    failed_once = [
+        ProcessingResult(outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.TIMEOUT)
+    ]
+    processor.script("sub-a", "qa", failed_once)
+    processor.script("sub-b", "qb", failed_once)
     service = JobQueueService(
         session_factory, processor, settings=QueueSettings(max_attempts=5), clock=clock
     )
@@ -2350,13 +2370,9 @@ async def test_retry_scheduler_survives_a_requeue_after_backoff_error(
             JobQueueService, "_requeue_after_backoff", _requeue_raises_once_for_job_a
         )
 
-        await _wait_until(lambda: _state(service, job_a) is JobState.FAILED)
-        await _wait_until(lambda: _state(service, job_b) is JobState.FAILED)
-
         # Both jobs must still eventually succeed: job_b's own backoff
         # timer was never affected, and job_a's failed requeue attempt gets
         # rescheduled rather than lost once the scheduler absorbs the error.
-        processor.set_default(ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True))
         await _wait_until(lambda: _state(service, job_a) is JobState.SUCCEEDED)
         await _wait_until(lambda: _state(service, job_b) is JobState.SUCCEEDED)
         assert calls["count"] == 1

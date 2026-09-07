@@ -777,3 +777,103 @@ to a different event loop`を送出し得た。`shutdown()`で`clear()`する
   `enqueue`で再ディスパッチする。`_worker_loop`自身のbackstopは、
   claimがcommitされる前（行はまだQUEUEDのまま）の失敗だけを担当する
   役割に整理した。
+
+## Linux環境で`test_retry_scheduler_survives_a_requeue_after_backoff_error`が
+
+決定的に失敗していた原因（Issue #50）
+
+Issue [#47](https://github.com/HIKARU0627/Auto-Scoring/issues/47)（Orca
+リモート開発環境構築）の検証中、Windows専用CI（`.github/workflows/ci.yml`）
+以外で初めてbackendテストスイートをUbuntu上で実行したところ、
+`tests/test_job_queue.py::test_retry_scheduler_survives_a_requeue_after_backoff_error`
+が個別実行・全体実行のいずれでも高確率で（フレーキーではなく実行のたびに
+ほぼ再現して）`AssertionError: timed out waiting for condition`で失敗した
+（Ubuntu 24.04.4、Python 3.12.3、`uv run pytest`）。
+
+### 誤っていた最初の仮説: 実時間マージン不足
+
+最初の調査では「`_wait_until`（実時間`time.monotonic()`でポーリングする
+テストヘルパー）の既定`timeout=5.0`秒がWindows CIでしか検証されておらず、
+別環境では不足していただけ」と判断し、`timeout`を`20.0`秒へ引き上げる
+修正を行った。しかしUbuntu環境（SSH経由）で実際に検証したところ、
+`timeout=20.0`秒でも**ほぼ毎回正確に約20.1秒で**同じ箇所（
+`await _wait_until(lambda: _state(service, job_a) is JobState.SUCCEEDED)`）
+でタイムアウトすることが判明し、これは「多少遅いだけ」ではなく決定的な
+ハングであると分かった。timeoutをどれだけ伸ばしても解決しないため、
+この最初の対応は誤りだった（`_wait_until`の`timeout`は`5.0`秒へ戻した）。
+
+### 真の原因: テストとFakeClock駆動のretry stormの間のレース条件
+
+`_retry_scheduler_loop`/`_requeue_after_backoff`/`_schedule_retry`に一時的な
+デバッグログを仕込みSSH経由のUbuntu環境で実行を追跡したところ、以下が
+判明した:
+
+- `FakeClock.sleep`（`backend/tests/fakes.py`）は仮想時刻を即座に進める
+  だけで実時間をほとんど消費しない（`await asyncio.sleep(0)`による
+  cooperative schedulingの1回のyieldのみ）。そのため`queue.py`側の
+  retry/backoffロジック（`_retry_scheduler_loop`、`_schedule_retry`、
+  `_requeue_after_backoff`を含む、round 8, P1のエラー吸収経路も含む）は
+  正しく実装されており、それ自体にはバグは無い。
+- 問題はテスト側の設計にあった。このテストは
+  `processor = FakeJobProcessor(default=FAILED/TIMEOUT)`で開始し、
+  `_wait_until(job_a/job_b is FAILED)`を2回待ってから
+  `processor.set_default(SUCCEEDED)`を呼び、その後`SUCCEEDED`を待つ、
+  という手順で「job_aのrequeueエラーが吸収された後もjob_aが最終的に
+  成功する」ことを検証しようとしていた。しかし`service.start()`後の
+  最初の`await`（最初の`_wait_until`呼び出し）に到達するまでの間に、
+  workerタスクとretry schedulerタスクは実時間をほとんど消費せずに
+  何ラウンドでも実行を進められる（`FakeClock`のおかげでbackoffが実質
+  瞬時のため）。そのため、`processor.set_default(SUCCEEDED)`がテストに
+  よって呼ばれる前に、job_a・job_bの両方が`max_attempts=5`回の試行を
+  （scriptedでないデフォルトのFAILED/TIMEOUT結果のまま）使い切り、
+  リトライ不能な最終FAILED（`attempts=5, should_retry=False`）に到達
+  してしまうことがある。一度この状態になると`_requeue_after_backoff`の
+  ガード（`current.attempts >= job.max_attempts`相当の判定は
+  `_finalize_result`の`should_retry`計算で行われ、以降は
+  `start()`の起動時sweep条件`attempts < max_attempts`にも一致しなくなる）
+  により二度と自動requeueされないため、後続の
+  `_wait_until(... SUCCEEDED)`は原理的に条件を満たすことがなく、
+  `timeout`の値に関わらず必ずタイムアウトする。
+- 実際にUbuntu環境へデバッグログ（`[DBG t=...]`形式、時刻付き）を
+  仕込んで観測したところ、job_a・job_b双方が`t=0.06`秒未満の実時間で
+  `attempts=5, should_retry=False`に到達しており（`processor.set_default`
+  が呼ばれるより前）、この仮説が実測で裏付けられた。
+- このレースの勝敗は「`service.start()`が起動したworker/retry scheduler
+  タスクが、テストコルーチンに制御を返す前にどれだけ多くのラウンドを
+  実行できるか」という実行速度の問題であり、実時間マージンをいくら
+  広げても解決しない。Windows側でこれまで再現しなかったのは、単に
+  イベントループの実際のスケジューリング速度・粒度の違いにより、この
+  レースがWindowsでは（比較的）テスト側に有利に働いていたためと考えられる
+  （`uvloop`は`uvicorn[standard]`のUnix限定transitive dependencyとして
+  インストールされるだけで、テストのevent loop policyには一切関与しない
+  ことは確認済み -- 「Linux側だけ`uvloop`を使っているため」という仮説は
+  誤り）。
+
+### 対応
+
+対症療法（`_wait_until`のtimeout調整）ではなく、テスト設計そのものの
+レース条件を除去した。`processor.set_default(...)`を実行タイミングに
+依存する形でテスト内から呼ぶのをやめ、`FakeJobProcessor.script(...)`で
+job_a・job_bそれぞれの1回目の呼び出し結果を`FAILED/TIMEOUT`に固定し、
+`processor`の既定値を最初から`SUCCEEDED`にした。これにより両ジョブの
+運命（1回目失敗→2回目成功）は`service.start()`が呼ばれる前に完全に
+決定しており、workerタスク・retry schedulerタスクが実際にどれだけ速く
+（あるいは遅く）実行されるかに一切依存しなくなった。あわせて、
+値そのものが本質的に不要になった中間の`_wait_until(job_a/job_b is FAILED)`
+待機も削除した（scriptingにより発生タイミングが保証されなくなった
+transientなFAILED状態を実時間ポーリングで捕捉しようとすると、今度は
+「速すぎて捕まえ損ねる」形の別のレースを生みかねないため）。
+`_wait_until`の既定`timeout`は元の`5.0`秒に戻した。
+
+Ubuntu環境（SSH経由）で該当テストを25回連続実行し全て成功（各実行
+0.1秒未満）、`tests/test_job_queue.py`全体を5回連続実行し全て成功
+（各回49件、約2.6秒）、backend全体テストスイート（968件）も成功する
+ことを確認した。
+
+`tests/test_jobs_api.py`/`tests/test_recognitions_api.py`にも同じ
+パターンの`_wait_until_job_state`ヘルパー（実時間5秒ポーリング）が
+別途存在するが、これらは`TestClient`経由で実サーバーlifespanを使い
+`SystemClock`（実時間）で駆動されるテストであり、`FakeClock`を使う
+このテストとは性質が異なる（実際に業務ロジック側の遅延も実時間で発生
+するため、テスト側が制御を取り戻せないまま先へ進んでしまうレースは
+起こりにくい）。本Issueの対象外として変更していない。
