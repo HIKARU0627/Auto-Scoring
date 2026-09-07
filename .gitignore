@@ -38,6 +38,10 @@ yarn-error.log*
 /backend/build/
 /backend/dist/
 
+# Inno Setup output (`pnpm run package:installer`). The installer is a CI
+# artifact, never committed.
+/installer/output/
+
 # Scratch state left by a Codex-based code-review run against this worktree
 # (its CODEX_HOME and log, and any protocol-schema dump it generates while
 # investigating a finding) -- tooling output, not project content.
