@@ -1,92 +1,63 @@
-import 'dart:async';
-
-// `AppExitResponse` -- the `didRequestAppExit` contract -- is declared in
-// dart:ui, and neither material nor widgets re-exports it.
-import 'dart:ui' show AppExitResponse;
-
 import 'package:flutter/material.dart';
 
-import 'package:auto_scoring_app/api/sidecar_api_client.dart';
-import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
-import 'package:auto_scoring_app/features/home/home_page.dart';
 
-/// Stands between app launch and the first screen: shows a splash while the
-/// sidecar starts, the app once it is reachable, and a recoverable error
-/// screen if it is not (`docs/technology-stack.md` §1.2,
-/// simplified-design-specification.md §24).
+/// Covers the whole app while the sidecar is not usable: a splash during
+/// startup, and a recoverable error screen with a 再起動 button when it has
+/// failed (`docs/technology-stack.md` §1.2, simplified-design-specification.md
+/// §24).
 ///
-/// Also the app's exit hook. Closing the window is the only "normal" way this
-/// app ends, and it is the moment the sidecar has to be killed.
-class StartupGate extends StatefulWidget {
-  const StartupGate({super.key, required this.supervisor});
+/// Wraps `MaterialApp.builder`'s [child] -- the app's entire Navigator --
+/// rather than sitting inside it as a route.
+///
+/// That placement is the whole point. As `MaterialApp.home` this was the
+/// *bottom* route of the Navigator, so a sidecar crash while the reviewer had
+/// 答案取込 or 添削レビュー open swapped out a subtree nobody could see: the
+/// error screen and its restart button stayed buried under every pushed page,
+/// and the only thing the reviewer actually saw was their own screen failing
+/// every request for no stated reason (Issue #24 review round 1, P1).
+///
+/// [child] is kept mounted underneath rather than replaced, so nothing is torn
+/// down mid-frame; the composition root separately drops any pushed route
+/// before it closes the client those routes captured.
+class SidecarStartupOverlay extends StatelessWidget {
+  const SidecarStartupOverlay({
+    super.key,
+    required this.state,
+    required this.onRestart,
+    required this.child,
+  });
 
-  final SidecarSupervisor supervisor;
+  final SidecarState state;
 
-  @override
-  State<StartupGate> createState() => _StartupGateState();
-}
+  /// Runs the supervisor's start/restart. Wired by the composition root.
+  final VoidCallback onRestart;
 
-class _StartupGateState extends State<StartupGate> with WidgetsBindingObserver {
-  /// Built from the connection the supervisor established, and closed again
-  /// whenever the sidecar stops being reachable -- a client pins its base URL
-  /// and token at construction, and a restart mints new ones.
-  SidecarApiClient? _client;
-  AppDependencies? _dependencies;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    widget.supervisor.state.addListener(_onSidecarStateChanged);
-    // Not awaited: `start()` completes only once the sidecar is ready or has
-    // failed, and the whole point of this widget is to render that wait.
-    unawaited(widget.supervisor.start());
-  }
-
-  @override
-  void dispose() {
-    widget.supervisor.state.removeListener(_onSidecarStateChanged);
-    WidgetsBinding.instance.removeObserver(this);
-    _client?.close();
-    super.dispose();
-  }
-
-  @override
-  Future<AppExitResponse> didRequestAppExit() async {
-    // Flutter asks before closing the window, which is the last point any
-    // Dart code runs. On Windows the Job Object would clean up even if this
-    // never ran (`core/child_process_group.dart`); this is the orderly path.
-    await widget.supervisor.shutdown();
-    return AppExitResponse.exit;
-  }
-
-  void _onSidecarStateChanged() {
-    final state = widget.supervisor.state.value;
-    _client?.close();
-    if (state is SidecarReady) {
-      final client = SidecarApiClient(state.connection);
-      _client = client;
-      _dependencies = AppDependencies.fromClient(client);
-    } else {
-      _client = null;
-      _dependencies = null;
-    }
-    if (mounted) setState(() {});
-  }
+  /// The app's Navigator, as handed to `MaterialApp.builder`.
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
-    return switch (widget.supervisor.state.value) {
-      SidecarReady() => HomePage(dependencies: _dependencies!),
+    final overlay = switch (state) {
+      SidecarReady() => null,
       SidecarStarting() => const _SidecarSplash(),
       SidecarStopped() => const _SidecarSplash(message: '終了しています…'),
       SidecarFailed(:final failure, :final exitCode) => _SidecarErrorScreen(
         failure: failure,
         exitCode: exitCode,
-        onRestart: () => unawaited(widget.supervisor.start()),
+        onRestart: onRestart,
       ),
     };
+    if (overlay == null) return child ?? const SizedBox.shrink();
+
+    return Stack(
+      children: [
+        ?child,
+        // Both children are opaque `Scaffold`s, so this also stops taps
+        // reaching whatever is still mounted underneath.
+        Positioned.fill(child: overlay),
+      ],
+    );
   }
 }
 
