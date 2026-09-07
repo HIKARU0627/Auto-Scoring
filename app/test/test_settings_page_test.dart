@@ -582,7 +582,20 @@ void main() {
         // surfacing it here names which width broke rather than leaving it
         // to teardown.
         expect(tester.takeException(), isNull);
-        expect(find.text('テスト状態: 下書き'), findsOneWidget);
+        // Present *and* on screen at this width. `takeException` alone only
+        // catches a RenderFlex overflow; a section pushed past the viewport
+        // edge raises nothing (round 1 review).
+        for (final finder in [
+          find.text('テスト状態: 下書き'),
+          find.textContaining('回答欄 ・ 設問1'),
+        ]) {
+          expect(finder, findsOneWidget);
+          final rect = tester.getRect(finder);
+          expect(rect.width, greaterThan(0));
+          expect(rect.height, greaterThan(0));
+          expect(rect.left, greaterThanOrEqualTo(0));
+          expect(rect.right, lessThanOrEqualTo(size.width));
+        }
       });
     }
   });

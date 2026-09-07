@@ -780,10 +780,28 @@ void main() {
 
         expect(tester.takeException(), isNull);
         // The whole intake control set stays present at both widths -- a
-        // narrower window must not drop the picker or the upload action.
-        expect(find.byKey(const Key('test-picker')), findsOneWidget);
-        expect(find.text('ファイルを選択'), findsOneWidget);
-        expect(find.text('取り込む'), findsOneWidget);
+        // narrower window must not drop the picker or the upload action --
+        // and each control is actually on screen. Presence alone would also
+        // be satisfied by a control laid out past the viewport edge, which
+        // raises no overflow exception (round 1 review).
+        for (final finder in [
+          find.byKey(const Key('test-picker')),
+          find.text('ファイルを選択'),
+          find.text('取り込む'),
+        ]) {
+          expect(finder, findsOneWidget);
+          final rect = tester.getRect(finder);
+          expect(rect.width, greaterThan(0));
+          expect(rect.height, greaterThan(0));
+          expect(
+            rect.left >= 0 &&
+                rect.top >= 0 &&
+                rect.right <= size.width &&
+                rect.bottom <= size.height,
+            isTrue,
+            reason: 'control outside the $size viewport: $rect',
+          );
+        }
       });
     }
   });
