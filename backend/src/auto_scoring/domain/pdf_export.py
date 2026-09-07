@@ -32,6 +32,7 @@ from auto_scoring.domain.models import (
     AnnotationKind,
     Export,
     GradeResult,
+    NormalizedRect,
     Question,
     QuestionReviewVersion,
     RecognitionResult,
@@ -150,20 +151,48 @@ def build_export_marks(
     records this as a known gap: test registration is expected to always set
     a `comment_area` (`docs/test-registration.md`), so this should not occur
     against real, fully-registered tests.
+
+    A `COMMENT`-kind annotation that falls back this way is never drawn as
+    its own mark: `PdfEngine.render_annotations` draws every mark
+    independently from its rect's own top-left corner, so two or more
+    COMMENT annotations all landing on the same ``comment_area`` (nothing
+    else distinguishes where each individually belongs) would be drawn on
+    top of one another, both illegible, while the export itself still
+    reports success (P2 review, round 5). Every such comment is instead
+    collected and drawn as a single merged text block -- one mark, its text
+    the individual comments joined with a blank line -- so multiple
+    unplaceable comments still show as several stacked paragraphs rather
+    than overlapping text.
     """
     attempt_annotations = annotations_for_attempt(annotations, grade.created_at)
     attempt_recognitions = recognitions_up_to_attempt(recognitions, grade.created_at)
     marks: list[AnnotationMark] = []
+    fallback_comment_texts: list[str] = []
+    fallback_comment_rect: NormalizedRect | None = None
     for annotation in attempt_annotations:
         rect = resolve_annotation_rect(
             annotation, question=question, recognitions=attempt_recognitions
         )
-        if rect is None:
+        used_fallback_rect = rect is None
+        if used_fallback_rect:
             rect = question.comment_area
         if rect is None:
             continue
         text = _score_text(grade) if annotation.kind is AnnotationKind.SCORE else annotation.comment
+        if used_fallback_rect and annotation.kind is AnnotationKind.COMMENT:
+            fallback_comment_texts.append(text or "")
+            fallback_comment_rect = rect
+            continue
         marks.append(AnnotationMark(kind=annotation.kind, rect=rect, text=text))
+    if fallback_comment_texts:
+        assert fallback_comment_rect is not None
+        marks.append(
+            AnnotationMark(
+                kind=AnnotationKind.COMMENT,
+                rect=fallback_comment_rect,
+                text="\n\n".join(fallback_comment_texts),
+            )
+        )
     return marks
 
 

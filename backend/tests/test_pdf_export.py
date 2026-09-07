@@ -244,6 +244,47 @@ class TestBuildExportMarks:
 
         assert marks[0].rect == comment_area
 
+    def test_multiple_unresolvable_comments_are_merged_into_one_mark_instead_of_overlapping(
+        self,
+    ) -> None:
+        """P2 review, round 5: two COMMENT annotations that both fall back to
+        the same ``comment_area`` (neither has a rect, an anchor_text match,
+        or is a fixed-position kind) must not become two separate marks --
+        `PdfEngine.render_annotations` draws each mark independently from its
+        rect's own top-left corner, so two marks on the identical rect would
+        be drawn on top of one another and both become illegible."""
+        grade = _grade()
+        comment_area = NormalizedRect(x=0.0, y=0.9, width=1.0, height=0.1)
+        first = Annotation(
+            id="a1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.HUMAN,
+            kind=AnnotationKind.COMMENT,
+            comment="誤字があります。",
+            created_at=_NOW,
+        )
+        second = Annotation(
+            id="a2",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.HUMAN,
+            kind=AnnotationKind.COMMENT,
+            comment="根拠が不足しています。",
+            created_at=_NOW,
+        )
+
+        marks = build_export_marks(
+            question=_question(comment_area=comment_area),
+            grade=grade,
+            annotations=[first, second],
+            recognitions=[],
+        )
+
+        assert len(marks) == 1
+        assert marks[0].rect == comment_area
+        assert marks[0].text == "誤字があります。\n\n根拠が不足しています。"
+
     def test_a_mark_with_no_resolvable_position_at_all_is_skipped_not_crashed_on(
         self,
     ) -> None:
