@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -176,16 +177,29 @@ def seed_confirmed_dependency_graph(
     submission_id: str = "sub-1",
     question_ids: list[str],
     edges: list[DependencyEdge] | None = None,
+    question_pages: Mapping[str, int] | None = None,
+    page_count: int = 1,
 ) -> int:
     """Register a test with ``question_ids``, one submission, and a
     CONFIRMED dependency graph over those questions (Issue #18's queue tests
     need this fixture shape repeatedly). Returns the graph version.
+
+    ``question_pages`` / ``page_count`` spread the questions over a
+    multi-page answer instead of the default single page. The queue itself
+    is indifferent to `Question.page`, but Issue #25's additional acceptance
+    is stated for "1答案3ページ以上", so the fixture has to be able to
+    actually be that answer rather than only claim to be.
     """
+    pages = question_pages or {}
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.tests.add(make_test(id=test_id))
         for qid in question_ids:
-            uow.questions.add(make_question(id=qid, test_id=test_id, number=qid))
-        uow.submissions.add(make_submission(id=submission_id, test_id=test_id))
+            uow.questions.add(
+                make_question(id=qid, test_id=test_id, number=qid, page=pages.get(qid, 1))
+            )
+        uow.submissions.add(
+            make_submission(id=submission_id, test_id=test_id, page_count=page_count)
+        )
         draft = DependencyGraph.from_candidates(
             id=f"{test_id}:v1",
             test_id=test_id,
