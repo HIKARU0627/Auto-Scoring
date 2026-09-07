@@ -6,10 +6,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
-import 'package:dio/dio.dart';
 import 'package:auto_scoring_app/core/sidecar_platform_io.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'sidecar_probe.dart';
 
 /// Drives the real supervisor against the real Python sidecar: the pieces the
 /// unit tests deliberately fake (`Process.start`, the handshake file, the HTTP
@@ -84,7 +85,7 @@ void main() {
     // And the shutdown test's survivor check says so too. Without this, a
     // `_stillServing` broken to always answer `false` would look fine: every
     // other use of it asserts the negative.
-    expect((await _stillServing(connection)).serving, isTrue);
+    expect((await sidecarStillServing(connection)).serving, isTrue);
   });
 
   test('leaves no handshake file holding the token on disk', () async {
@@ -118,7 +119,7 @@ void main() {
     // listener's port can still be refused by `bind` for a minute or two while
     // connections the health probes opened sit in TIME_WAIT, which says
     // nothing about whether a *process* survived.
-    final probe = await _stillServing(connection);
+    final probe = await sidecarStillServing(connection);
     if (probe.serving) {
       // TEMPORARY (Issue #57): this assertion fails intermittently on the
       // Windows CI runner and only there, so the evidence has to be collected
@@ -129,7 +130,7 @@ void main() {
           connection: connection,
           appDataDirectory: '${appData.path}/app-data',
           listenerBeforeShutdown: listenerBeforeShutdown,
-          probeLog: probe.log,
+          probeDetail: probe.detail,
         ),
       );
     }
@@ -179,7 +180,7 @@ void main() {
     expect(await health.isHealthy(), isTrue);
 
     // What the shutdown test asks instead.
-    expect((await _stillServing(ours)).serving, isFalse);
+    expect((await sidecarStillServing(ours)).serving, isFalse);
   });
 
   test('a crashed sidecar is reported, and restart recovers', () async {
@@ -273,77 +274,6 @@ Future<HttpServer> _startForeignSidecar() async {
   return server;
 }
 
-/// Whether the sidecar that [connection] was minted for is still serving.
-///
-/// A *protected* call carrying that session's token, deliberately not the
-/// `/healthz` probe this used to be (Issue #57). `/healthz` needs no auth, so
-/// every sidecar instance answers `{"status": "ok"}` to anyone -- which makes
-/// "someone answers on this port" indistinguishable from "our sidecar survived".
-/// The token is what tells the port's occupant apart, and it separates all
-/// three outcomes:
-///
-/// * our sidecar is still up -- the token is still valid, so the call succeeds
-///   (the leak this file exists to catch);
-/// * a *different* sidecar holds the port -- it minted a different token, so
-///   the call is refused with 401;
-/// * nothing is listening -- the connection is refused.
-///
-/// So "the protected call did not succeed" is the assertion, and no other
-/// test's sidecar can satisfy it on our behalf. That matters because
-/// `sidecar_api_client_test.dart` runs its own sidecar concurrently with this
-/// file, and Windows hands a just-released ephemeral port straight back out.
-///
-/// TEMPORARY (Issue #57): returns what it saw alongside the verdict. "Did not
-/// throw" is a looser test than it looks -- dio accepts any 2xx, and
-/// `listTests` turns an empty body into an empty list rather than an error --
-/// so the run that fails has to say which of those it actually got.
-Future<({bool serving, String log})> _stillServing(
-  SidecarConnection connection,
-) async {
-  final log = StringBuffer();
-  final dio = Dio()
-    ..interceptors.add(
-      InterceptorsWrapper(
-        onResponse: (response, handler) {
-          log.writeln(
-            '  transport: status=${response.statusCode} '
-            '(${response.statusMessage}) '
-            'redirect=${response.isRedirect} '
-            'headers=${response.headers.map} '
-            'dataType=${response.data.runtimeType} '
-            'data=${_truncated(response.data)}',
-          );
-          handler.next(response);
-        },
-        onError: (error, handler) {
-          log.writeln(
-            '  transport error: type=${error.type} '
-            'status=${error.response?.statusCode} '
-            'message=${error.message} '
-            'inner=${error.error.runtimeType}: ${error.error}',
-          );
-          handler.next(error);
-        },
-      ),
-    );
-  final client = SidecarApiClient(connection, dio: dio);
-  try {
-    final tests = await client.listTests();
-    log.writeln('  listTests returned ${tests.length} entries');
-    return (serving: true, log: log.toString());
-  } on SidecarApiException catch (error) {
-    log.writeln('  listTests threw $error');
-    return (serving: false, log: log.toString());
-  } finally {
-    client.close();
-  }
-}
-
-String _truncated(Object? value) {
-  final text = '$value';
-  return text.length > 200 ? '${text.substring(0, 200)}...' : text;
-}
-
 SidecarFailure? supervisorFailureOf(SidecarSupervisor supervisor) =>
     switch (supervisor.state.value) {
       SidecarFailed(:final failure) => failure,
@@ -406,7 +336,7 @@ Future<String> _survivorReport({
   required SidecarConnection connection,
   required String appDataDirectory,
   required String? listenerBeforeShutdown,
-  required String probeLog,
+  required String probeDetail,
 }) async {
   final port = Uri.parse(connection.baseUrl).port;
   final report = StringBuffer()
@@ -414,8 +344,7 @@ Future<String> _survivorReport({
     ..writeln('port: $port')
     ..writeln('app-data: $appDataDirectory')
     ..writeln('listener pid before shutdown: ${listenerBeforeShutdown ?? "-"}')
-    ..writeln('what the probe that returned true actually saw:')
-    ..write(probeLog);
+    ..writeln('what the probe that returned true saw: $probeDetail');
 
   // First, and on purpose: one cheap spawn asking whether the process that was
   // serving before the shutdown is still alive *now*. Everything below costs
