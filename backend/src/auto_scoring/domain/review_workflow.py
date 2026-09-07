@@ -26,6 +26,7 @@ implement.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import datetime
 
 from auto_scoring.domain.models import (
     CONFIRMED_REVIEW_ACTIONS,
@@ -86,6 +87,22 @@ def next_review_version(
     return actual + 1
 
 
+def _undone_review_ids(reviews: Sequence[Review]) -> set[str]:
+    """Every `Review.id` that an ``undone`` row excludes from consideration
+    -- the row itself and the specific prior row it names
+    (``Review.undone_review_id``). Shared by `effective_latest_review` and
+    `resolve_effective_recognition` (Issue #22 P2 review, round 3), so both
+    agree on exactly which rows Undo has taken out of effect.
+    """
+    excluded: set[str] = set()
+    for review in reviews:
+        if review.action is ReviewAction.UNDONE:
+            excluded.add(review.id)
+            assert review.undone_review_id is not None  # Review.__post_init__ already requires this
+            excluded.add(review.undone_review_id)
+    return excluded
+
+
 def effective_latest_review(reviews: Sequence[Review]) -> Review | None:
     """The `Review` row currently "in effect" for one submission-question,
     accounting for any ``undone`` rows -- without ever removing anything
@@ -105,12 +122,7 @@ def effective_latest_review(reviews: Sequence[Review]) -> Review | None:
     exclusion set is sufficient; nothing here needs to reconstruct the exact
     order operations happened in.
     """
-    excluded: set[str] = set()
-    for review in reviews:
-        if review.action is ReviewAction.UNDONE:
-            excluded.add(review.id)
-            assert review.undone_review_id is not None  # Review.__post_init__ already requires this
-            excluded.add(review.undone_review_id)
+    excluded = _undone_review_ids(reviews)
     for review in reversed(reviews):
         if review.id not in excluded:
             return review
@@ -175,6 +187,42 @@ def resolve_effective_grade(
     return ai_grades[-1] if ai_grades else None
 
 
+def _undone_edit_recognition_timestamps(
+    reviews: Sequence[Review], grade_by_id: Mapping[str, GradeResult]
+) -> set[datetime]:
+    """The ``created_at`` of every `edit_question`-authored human
+    `GradeResult` (and, by the same-clock-read convention
+    `resolve_effective_recognition` relies on, its own `RecognitionResult`)
+    whose ``modified`` `Review` has since been reverted by an ``undone`` row.
+
+    Only these are excluded (Issue #22 P2 review, round 3) -- a standalone
+    manual correction (``POST .../recognitions``, Issue #19) was never tied
+    to a `Review` at all, so it must not be discarded just because some
+    unrelated edit for this same question was later undone; blanket-
+    excluding every human recognition that does not match the *currently*
+    effective review (the previous behaviour here) did exactly that.
+    """
+    reviews_by_id = {review.id: review for review in reviews}
+    undone_target_ids = {
+        review.undone_review_id
+        for review in reviews
+        if review.action is ReviewAction.UNDONE and review.undone_review_id is not None
+    }
+    timestamps: set[datetime] = set()
+    for target_id in undone_target_ids:
+        target = reviews_by_id.get(target_id)
+        if (
+            target is None
+            or target.action is not ReviewAction.MODIFIED
+            or target.human_grade_result_id is None
+        ):
+            continue
+        human_grade = grade_by_id.get(target.human_grade_result_id)
+        if human_grade is not None:
+            timestamps.add(human_grade.created_at)
+    return timestamps
+
+
 def resolve_effective_recognition(
     reviews: Sequence[Review],
     grades: Sequence[GradeResult],
@@ -188,20 +236,27 @@ def resolve_effective_recognition(
     A ``modified`` review in effect shows the human recognition sharing its
     own human grade's ``created_at`` (`adapters.review_actions.edit_question`
     persists both from the same clock read, the same signal
-    `QuestionReviewState.annotationsForDisplayedAttempt` already relies on),
-    falling back to the latest AI-sourced recognition if that edit did not
-    touch the recognized text at all (or once Undo reverts back past it) --
-    the AI branch naturally picks the *grading*-stage recognition over the
-    earlier *OCR*-stage one for the same attempt, since
-    `GradingJobProcessor.process` always commits the OCR-stage row first.
+    `QuestionReviewState.annotationsForDisplayedAttempt` already relies on).
+    Otherwise (that edit did not touch the recognized text, the effective
+    review is not a ``modified`` one at all, or there is no review history
+    for this question whatsoever), this falls back to the latest human
+    recognition that is not tied to an *undone* edit (Issue #22 P2 review,
+    round 3) -- covering both a standalone manual correction
+    (``POST .../recognitions``, Issue #19, never tied to any `Review`) and an
+    older edit's own recognition that a later, still-in-effect action simply
+    never touched. Only once no human recognition survives that filter does
+    this fall back further, to the latest AI-sourced recognition -- which
+    naturally picks the *grading*-stage recognition over the earlier *OCR*-
+    stage one for the same attempt, since `GradingJobProcessor.process`
+    always commits the OCR-stage row first.
     """
+    grade_by_id = {grade.id: grade for grade in grades}
     review = effective_latest_review(reviews)
     if (
         review is not None
         and review.action is ReviewAction.MODIFIED
         and review.human_grade_result_id is not None
     ):
-        grade_by_id = {grade.id: grade for grade in grades}
         human_grade = grade_by_id.get(review.human_grade_result_id)
         if human_grade is not None:
             human_recognitions = [
@@ -212,6 +267,17 @@ def resolve_effective_recognition(
             ]
             if human_recognitions:
                 return human_recognitions[-1]
+
+    undone_timestamps = _undone_edit_recognition_timestamps(reviews, grade_by_id)
+    surviving_human_recognitions = [
+        recognition
+        for recognition in recognitions
+        if recognition.source is GradingSource.HUMAN
+        and recognition.created_at not in undone_timestamps
+    ]
+    if surviving_human_recognitions:
+        return surviving_human_recognitions[-1]
+
     ai_recognitions = [
         recognition for recognition in recognitions if recognition.source is GradingSource.AI
     ]

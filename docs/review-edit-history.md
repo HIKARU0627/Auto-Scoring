@@ -342,7 +342,63 @@ question` の戻り値を `(Submission, str)`（test_idのみ）から
 `app/lib/features/pdf_review/pdf_review_page.dart`、
 `app/test/pdf_review_page_test.dart`。
 
-## 12. 対象外（後続Issue）
+## 12. Codexレビュー(3回目/確認レビュー)での修正（P2x3、Issue #22の最終ラウンド）
+
+3回目（P1指摘なし）で、Issue #22のレビューサイクルはこれで完了とする。
+
+- **P2: 2回目以降のeditで、明示的にクリアされたrecognitionを保持できていな
+  かった** R2で入れた `currentText.isEmpty && text.isEmpty ? null : text`
+  は、「AIの誤認識文字を1回目のeditで空文字列へ明示的にクリアした後、2回目
+  のeditでscoreだけ変更する」場合を見落としていた -- 2回目を開いた時点で
+  `currentText` はその**保存済みの空文字列recognition**由来なので、text
+  フィールドを一切触らなければ `currentText`/`text` は両方とも空になり、式が
+  `null`（「recognitionは触らない」）を送ってしまう。すると2回目のeditが
+  作る新しい human `GradeResult` には対応するrecognitionが無いままとなり、
+  `resolve_effective_recognition`/`effectiveHumanRecognition` は
+  created_atが一致するものを探せずAIの元テキストへfallbackしてしまう
+  （＝無関係な2回目のeditが1回目の訂正を黙って元に戻す）。dialogを開く前に
+  `currentHumanRecognition`（`review.effectiveHumanRecognition`、他の
+  concurrency tokenと同じタイミングで確定）も併せて確定させ、
+  `currentHumanRecognition == null && currentText.isEmpty && text.isEmpty
+? null : text` へ変更 -- 「既存の有効なhuman recognitionが存在する」場合は
+  そのtextが空文字列であっても常に送り直す（＝新しいhuman gradeの
+  created_atに紐づけ直す）ことで、何回editを重ねても明示的な空クリアが
+  維持される。
+- **P2: 独立した手動recognition訂正（review履歴を経由しないもの）を保持
+  できていなかった** `domain.review_workflow.resolve_effective_recognition`
+  は、有効な `modified` review自身のrecognitionにマッチしない場合、
+  マッチしなかった人間recognition行を一律で無視してAIへfallbackしていた。
+  しかしIssue #19由来の `POST .../recognitions`（`recognitions_router.
+create_manual_recognition`）はそもそも `Review` 行を一切作らずに人間
+  recognitionだけを追加できるため、review履歴が全く無い設問（または
+  他の無関係なeditがundoされただけの設問）でも、この手動訂正がAIテキストへ
+  上書きされてしまっていた。`_undone_review_ids`（`effective_latest_review`
+  と共有）を使って「undoされたeditが自分の human grade
+  created_atで作ったrecognition」だけを除外リストへ入れ、それ以外の
+  未マッチな人間recognition（review非依存の独立した手動訂正や、undoされて
+  いない古いeditのrecognition）は除外せず、その中の最新行を採用するよう
+  変更。`GradingJobProcessor` はこの関数を経由して前提設問のcontextを
+  組み立てるため、依存する設問への影響も同時に直る。
+- **P2: comment-onlyのeditで、未変更のrubric criteria/rationaleが消えて
+  いた** dialogは元々criteria/rationaleを編集するUIを持たないため、
+  `editReview` を呼ぶたびに`criteria`/`rationale`をデフォルト（空リスト/
+  `None`）のまま送っていた。`edit_question`はrequestに渡された値だけで
+  新しいhuman `GradeResult`を組み立てるため、コメントだけを直すつもりの
+  editでも、以前判定済みだった全rubric criterionが未判定へ戻り、rationale
+  も消える（`displayGrade`がその human gradeを表示に選ぶため画面にも、
+  `GradeResultContextEntry`経由で下流の採点contextにも影響する）。dialogを
+  開く時点の `currentGrade`（表示中のgrade）自身の `criteria`/`rationale`
+  を `carriedCriteria`/`carriedRationale` としてキャプチャし、保存時は
+  常にそれを送るよう変更（dialogに無いfieldは「編集できないのだから毎回
+  引き継ぐ」という一貫した扱いにした）。
+
+修正差分: `backend/src/auto_scoring/domain/review_workflow.py`、
+`backend/tests/test_review_workflow.py`、
+`backend/tests/test_grading_processor.py`、
+`app/lib/features/pdf_review/pdf_review_page.dart`、
+`app/test/pdf_review_page_test.dart`。
+
+## 13. 対象外（後続Issue）
 
 - Redo（Ctrl+Y / Ctrl+Shift+Z）。
 - Annotation の図形的な追加・移動・削除 UI。

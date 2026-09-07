@@ -2588,6 +2588,227 @@ void main() {
       expect(capturedExpectedAiGradeId, 'grade-ai-old');
     });
 
+    testWidgets(
+      '修正 preserves an explicitly-cleared recognition across a later, '
+      'unrelated edit (Issue #22 P2 review, round 3)',
+      (tester) async {
+        final grades = [_grade(id: 'grade-ai', awarded: 4, maximum: 5)];
+        final recognitions = [_recognition(id: 'rec-ai', text: 'AI誤認識')];
+        final reviews = <ReviewResponse>[];
+        var editCount = 0;
+        String? secondEditRecognizedText = 'not-yet-called';
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          recognitions: recognitions,
+          grades: grades,
+          reviews: reviews,
+          editReview:
+              (
+                submissionId,
+                questionId, {
+                required expectedVersion,
+                expectedAiGradeId,
+                required scoreAwarded,
+                required scoreMaximum,
+                confidence = 1.0,
+                criteria = const [],
+                rationale,
+                comment,
+                recognizedText,
+                annotations,
+                note,
+              }) async {
+                editCount++;
+                if (editCount == 2) secondEditRecognizedText = recognizedText;
+                final humanGradeId = 'grade-human-$editCount';
+                final createdAt = DateTime.utc(2026, 1, editCount + 1);
+                final grade = GradeResultResponse(
+                  (b) => b
+                    ..id = humanGradeId
+                    ..submissionId = 'sub-1'
+                    ..questionId = questionId
+                    ..source_ = 'human'
+                    ..score.awarded = scoreAwarded
+                    ..score.maximum = scoreMaximum
+                    ..score.ratio = scoreAwarded / scoreMaximum
+                    ..confidence = 1.0
+                    ..comment = comment
+                    ..criteria.replace(const [])
+                    ..createdAt = createdAt,
+                );
+                grades.add(grade);
+                if (recognizedText != null) {
+                  recognitions.add(
+                    RecognitionResponse(
+                      (b) => b
+                        ..id = 'rec-human-$editCount'
+                        ..submissionId = 'sub-1'
+                        ..questionId = questionId
+                        ..source_ = 'human'
+                        ..stage = 'human'
+                        ..text = recognizedText
+                        ..confidence = 1.0
+                        ..boxes.replace(const [])
+                        ..createdAt = createdAt,
+                    ),
+                  );
+                }
+                final review = _review(
+                  questionId: questionId,
+                  action: 'modified',
+                  aiGradeResultId: 'grade-ai',
+                  humanGradeResultId: humanGradeId,
+                  version: expectedVersion + 1,
+                  createdAt: createdAt,
+                );
+                reviews.add(review);
+                return _reviewAction(review, grade: grade);
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+
+        // First edit: clear the AI-misread text entirely (an explicit
+        // clear, per the round-2 fix already tested above).
+        await tester.tap(find.byKey(const Key('review-edit-button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('edit-dialog-text')), '');
+        await tester.tap(find.byKey(const Key('edit-dialog-save')));
+        await tester.pumpAndSettle();
+        await _settlePdf(tester);
+
+        // Second, unrelated edit: change only the score, leaving the
+        // (still empty, now-effective human) text field untouched.
+        await tester.tap(find.byKey(const Key('review-edit-button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const Key('edit-dialog-score')), '3');
+        await tester.tap(find.byKey(const Key('edit-dialog-save')));
+        await tester.pumpAndSettle();
+        await _settlePdf(tester);
+
+        expect(editCount, 2);
+        // Sent as `''` again, not `null` -- `null` on this second edit would
+        // tell the server "this edit does not touch recognized text",
+        // leaving the first edit's explicit empty correction without a
+        // matching recognition for the *new* human grade this edit just
+        // created, and the effective-recognition resolver would fall back
+        // to displaying the original AI-misread text again.
+        expect(secondEditRecognizedText, '');
+      },
+    );
+
+    testWidgets(
+      '修正 carries the displayed grade\'s own rubric criteria and rationale '
+      'forward on a comment-only edit (Issue #22 P2 review, round 3)',
+      (tester) async {
+        List<CriterionOutcomeRequest>? capturedCriteria;
+        String? capturedRationale = 'not-yet-called';
+        final aiGrade = GradeResultResponse(
+          (b) => b
+            ..id = 'grade-ai'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..source_ = 'ai'
+            ..score.awarded = 4
+            ..score.maximum = 5
+            ..score.ratio = 0.8
+            ..confidence = 0.9
+            ..rationale = '理由の説明が不足しています。'
+            ..criteria.replace([
+              CriterionResultResponse(
+                (b) => b
+                  ..criterionId = 'c-1'
+                  ..outcome = 'pass'
+                  ..confidence = 0.9,
+              ),
+              CriterionResultResponse(
+                (b) => b
+                  ..criterionId = 'c-2'
+                  ..outcome = 'partial'
+                  ..confidence = 0.7,
+              ),
+            ])
+            ..createdAt = DateTime.utc(2026, 1, 1),
+        );
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [aiGrade],
+          editReview:
+              (
+                submissionId,
+                questionId, {
+                required expectedVersion,
+                expectedAiGradeId,
+                required scoreAwarded,
+                required scoreMaximum,
+                confidence = 1.0,
+                criteria = const [],
+                rationale,
+                comment,
+                recognizedText,
+                annotations,
+                note,
+              }) async {
+                capturedCriteria = criteria;
+                capturedRationale = rationale;
+                return _reviewAction(
+                  _review(
+                    questionId: questionId,
+                    action: 'modified',
+                    aiGradeResultId: 'grade-ai',
+                    version: expectedVersion + 1,
+                    humanGradeResultId: 'grade-human',
+                  ),
+                );
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+
+        // Only the comment field is editable-and-edited here -- the dialog
+        // itself has no rubric-criteria/rationale fields at all.
+        await tester.tap(find.byKey(const Key('review-edit-button')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('edit-dialog-comment')),
+          'コメントのみ変更',
+        );
+        await tester.tap(find.byKey(const Key('edit-dialog-save')));
+        await tester.pumpAndSettle();
+        await _settlePdf(tester);
+
+        expect(capturedRationale, '理由の説明が不足しています。');
+        expect(capturedCriteria, isNotNull);
+        expect(capturedCriteria, hasLength(2));
+        expect(capturedCriteria![0].criterionId, 'c-1');
+        expect(capturedCriteria![0].outcome, 'pass');
+        expect(capturedCriteria![1].criterionId, 'c-2');
+        expect(capturedCriteria![1].outcome, 'partial');
+      },
+    );
+
     testWidgets('承認して次へ only records a fresh Review when the question is not '
         'already confirmed -- an already-edited question just navigates', (
       tester,

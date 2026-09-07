@@ -264,3 +264,75 @@ def test_resolve_effective_recognition_reverts_to_ai_after_undo() -> None:
     result = resolve_effective_recognition(reviews, grades, recognitions)
     assert result is not None
     assert result.id == "rec-ai"
+
+
+def test_resolve_effective_recognition_keeps_a_standalone_manual_correction() -> None:
+    """A human `RecognitionResult` created via `POST .../recognitions`
+    (Issue #19) is never tied to any `Review` at all -- it must not be
+    discarded just because there is no review history whatsoever for this
+    question (Issue #22 P2 review, round 3): the previous "no modified
+    review's own recognition matches -> fall straight to AI" rule treated
+    every unmatched human row as if it did not exist."""
+    recognitions = [
+        make_recognition(id="rec-ai"),
+        make_recognition(
+            id="rec-human-manual",
+            source=GradingSource.HUMAN,
+            text="手動で訂正した文字",
+            created_at=at(5),
+        ),
+    ]
+    result = resolve_effective_recognition([], [], recognitions)
+    assert result is not None
+    assert result.id == "rec-human-manual"
+
+
+def test_resolve_effective_recognition_keeps_a_standalone_correction_alongside_an_undone_edit() -> (
+    None
+):
+    """An independent manual correction (unrelated to the review workflow)
+    must survive even when *some* edit for this same question was undone --
+    only the undone edit's *own* recognition (matched by its human grade's
+    `created_at`) is excluded, not every human row that fails to match the
+    currently effective review (Issue #22 P2 review, round 3)."""
+    grades = [
+        make_grade(id="g-ai"),
+        make_grade(id="g-human-edit", source=GradingSource.HUMAN, created_at=at(5)),
+    ]
+    recognitions = [
+        make_recognition(id="rec-ai"),
+        # Belongs to the edit below, undone -- must be excluded.
+        make_recognition(
+            id="rec-human-edit",
+            source=GradingSource.HUMAN,
+            text="undoされた訂正",
+            created_at=at(5),
+        ),
+        # A later, independent manual correction -- must survive.
+        make_recognition(
+            id="rec-human-manual",
+            source=GradingSource.HUMAN,
+            text="手動で訂正した文字",
+            created_at=at(10),
+        ),
+    ]
+    modified = make_review(
+        id="r1",
+        action=ReviewAction.MODIFIED,
+        ai_grade_result_id="g-ai",
+        human_grade_result_id="g-human-edit",
+    )
+    reviews = [
+        modified,
+        make_review(
+            id="r2",
+            version=2,
+            action=ReviewAction.UNDONE,
+            ai_grade_result_id=None,
+            undone_review_id="r1",
+            created_at=at(6),
+        ),
+    ]
+    result = resolve_effective_recognition(reviews, grades, recognitions)
+    assert result is not None
+    assert result.id == "rec-human-manual"

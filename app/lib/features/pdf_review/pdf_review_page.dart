@@ -925,8 +925,36 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final expectedVersion = review.expectedVersion;
     final expectedAiGradeId = review.latestAiGrade?.id;
     final currentGrade = review.displayGrade;
+    // This dialog has no fields for rubric criteria or rationale -- an edit
+    // through it is always score/comment/recognized-text only, so the new
+    // human `GradeResult` it produces must carry the displayed grade's own
+    // criteria/rationale forward unchanged, not silently drop them (Issue
+    // #22 P2 review, round 3): `editReview` defaults `criteria`/`rationale`
+    // to empty/`None` when omitted, and `edit_question` builds the new grade
+    // from exactly what it is given -- a comment-only edit would otherwise
+    // blank out every rubric criterion this question had already been
+    // judged against, in the display and in a dependent question's grading
+    // context alike.
+    final carriedCriteria = [
+      for (final criterion
+          in currentGrade?.criteria ?? const <CriterionResultResponse>[])
+        CriterionOutcomeRequest(
+          (b) => b
+            ..criterionId = criterion.criterionId
+            ..outcome = criterion.outcome
+            ..confidence = criterion.confidence,
+        ),
+    ];
+    final carriedRationale = currentGrade?.rationale;
+    // Captured now too, for the same reason as the two tokens above: an
+    // existing effective human recognition (including one whose *text* is
+    // an explicit, previously-saved empty string -- see [recognizedText]
+    // below) must keep being treated as "there is something to preserve"
+    // even if the background poll later updates [review] while this dialog
+    // is still open.
+    final currentHumanRecognition = review.effectiveHumanRecognition;
     final currentText =
-        review.effectiveHumanRecognition?.text ??
+        currentHumanRecognition?.text ??
         review.latestGradingRecognition?.text ??
         review.latestOcrRecognition?.text ??
         '';
@@ -1001,11 +1029,25 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     // 2): a reviewer who deletes AI-misread text to mark the answer as blank
     // needs that recorded as a human recognition reading `''`, or the screen
     // (correctly reporting the save as successful) would keep falling back
-    // to display the very AI text they just deleted. Only when there was
-    // never anything to say in the first place (nothing prefilled, nothing
-    // typed) is `null` still correct, so a question with no AI recognition
-    // yet does not get a spurious empty human row on every score-only edit.
-    final recognizedText = currentText.isEmpty && text.isEmpty ? null : text;
+    // to display the very AI text they just deleted.
+    //
+    // [currentHumanRecognition] guards the case that check alone missed
+    // (Issue #22 P2 review, round 3): once an *earlier* edit already saved
+    // such an explicit empty correction, its `currentText` is itself `''`,
+    // so leaving the field untouched on a later, unrelated edit (e.g.
+    // changing only the score) would otherwise look identical to "nothing
+    // was ever recognized" and wrongly send `null` -- silently reverting the
+    // saved correction back to the AI's own text once that later edit's
+    // *new* human grade fails to share any recognition's `created_at`. A
+    // human recognition already being in effect -- whatever its text -- is
+    // always something to keep re-asserting on this new edit; only "never
+    // touched, and there is still nothing to say" stays `null`, so a
+    // question with no recognition of any kind yet does not gain a spurious
+    // empty human row on every score-only edit.
+    final recognizedText =
+        currentHumanRecognition == null && currentText.isEmpty && text.isEmpty
+        ? null
+        : text;
     await _performReviewAction(
       question,
       review,
@@ -1016,6 +1058,8 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         expectedAiGradeId: expectedAiGradeId,
         scoreAwarded: score,
         scoreMaximum: question.points,
+        criteria: carriedCriteria,
+        rationale: carriedRationale,
         comment: comment.isEmpty ? null : comment,
         recognizedText: recognizedText,
         note: _reasonFromNote(review),
