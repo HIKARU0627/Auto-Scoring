@@ -289,8 +289,9 @@ ExportJobProcessor})`を組み立てて`JobQueueService`へ渡す。`job_process
   回転pageでも正しい位置に描画されること、フォント未検出時に
   `JapaneseFontNotFoundError`で失敗し出力ファイルを残さないこと、
   フォント未検出でも図形のみのAnnotationは影響を受けないことを検証。
-  点数と日本語コメントを同時に描く1件だけは、両方のグリフを持つフォントが
-  必要なため素のUbuntuではskipする（§3.2、mvp-acceptance.md §4.3）。
+  点数と日本語コメントを同時に描く1件は両方のグリフを持つフォントを要求する
+  （素のUbuntuには無い。`fonts-ipafont-gothic`で解決 ——
+  §3.2、mvp-acceptance.md §4.3）。
 - `backend/tests/test_export_processor.py`: 実SQLite + 実
   `PdfiumPypdfEngine`で、Export生成・記録・sha256一致・元PDF不変、
   未確認設問がある場合の拒否（Export行・ファイルとも作られない）、

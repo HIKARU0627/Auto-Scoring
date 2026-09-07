@@ -45,8 +45,9 @@ import auto_scoring.adapters.pdf.pdfium_pypdf_engine as engine_module
 #: Noto CJK OTCs those images do ship.) `install_font_covering` picks per
 #: test rather than assuming one font serves both. The first four entries are
 #: full-coverage Japanese faces that do serve both, which is why installing
-#: one of them removes every skip -- see docs/orca-remote-environment.md
-#: section 7.
+#: one of them removes every skip. The Linux dev machine has
+#: `fonts-ipafont-gothic` for exactly that reason -- see
+#: docs/orca-remote-environment.md section 8.1.
 _FALLBACK_FONTS = (
     Path("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"),
     Path("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf"),

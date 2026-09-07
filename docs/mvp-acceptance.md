@@ -117,37 +117,42 @@ MVPの対象OSは Windows のみ（§2 (1)）で、CIは `windows-latest` で回
   （`forget_registered_font`）。これを `backend/tests/conftest.py` の autouse fixture で
   **全テスト共通**にしてあり、先に走ったモジュールが後続のフォントを決めてしまうことは無い。
 
-### 4.3 Ubuntu に残る skip 2件
+### 4.3 Ubuntu 側の必要フォント（skip は 0 件）
 
 素の Ubuntu イメージには**日本語と Latin を同時に描けるフォントが無い**。
 `DroidSansFallbackFull` は唯一の漢字対応 TrueType だが数字を一切持たず、`DejaVuSans` は
 その逆で、同梱の Noto CJK は CFF アウトラインなので reportlab の `TTFont` が読めない。
-そのため、**同一ページに点数と日本語コメントの両方を描いて両方を検証する**次の2件だけが
-skip する。
+そのため、**同一ページに点数と日本語コメントの両方を描いて両方を検証する**次の2件は、
+両方のグリフを持つ1つのフォントを要求する。
 
-| skip するテスト                                                                                          | 検証できていないこと                                                                              |
+| テスト                                                                                                   | 要求するグリフ                                                                                    |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `test_pdf_annotation_rendering.py::test_score_and_long_japanese_comment_text_render_within_their_rects`  | 点数と長文日本語コメントが**同時に**それぞれのrect内へ描かれること                                |
 | `test_export_processor.py::test_repair_regenerates_from_the_recorded_snapshot_not_a_later_review_change` | 修復生成されたPDFの点数が記録時のスナップショット（`4/5`）であり、後から入った `2/5` ではないこと |
 
-いずれも **Windows CI では実行される**。Ubuntu 側でも解消したい場合は、両方のグリフを
-持つ日本語フォントを1つ入れれば skip は 0 になる
-（`sudo apt install fonts-ipafont-gothic` など。
-[orca-remote-environment.md](./orca-remote-environment.md) §7.5）。
+Ubuntu 開発機には **`fonts-ipafont-gothic` を導入済み**
+（[orca-remote-environment.md](./orca-remote-environment.md) §8.1）。IPAゴシックは日本語と
+Latin/数字の両方を持ち `font_support.py` の候補にも入っているため、上記2件も実行され、
+**skip は 0 件**になる。導入していない環境ではこの2件だけが skip され、その分は Windows
+CI でのみ検証されることになる（skip の理由はメッセージに出る）。
 
 なお Issue #25 の時点で、点数とコメントの文字描画を伴う受入テストを2本に分けてある
 （`test_the_exported_pdf_carries_the_reviewed_comment_text` / `::_the_reviewed_score`）。
-分けたのは同じ理由 —— 1本のままだと Linux では必ず skip になるからで、分けたことで
-**両OSで実行される**。以前は `skipif` で Windows 限定にしていたが、**ローカルで一度も
-走らないテストだったために assertion が `exists()` と `size > 0` のまま気づかれず残って
-いた**（レビュー ラウンド1 P2-1）。走らせられるようにしたこと自体がその再発防止である。
+分けたのは同じ理由 —— 1本のままだとフォントの無い Linux では必ず skip になるからで、
+分けたことで**両OSで実行される**。以前は `skipif` で Windows 限定にしていたが、
+**ローカルで一度も走らないテストだったために assertion が `exists()` と `size > 0` のまま
+気づかれず残っていた**（レビュー ラウンド1 P2-1）。走らせられるようにしたこと自体が
+その再発防止である。
 
 ### 4.4 件数
 
 | スイート | Issue #60 以前（`origin/main`）            | 現在（Ubuntu, 2026-09-07）         |
 | -------- | ------------------------------------------ | ---------------------------------- |
-| backend  | 1049 passed / 13 failed（既知）/ 0 skipped | 1060 passed / 0 failed / 2 skipped |
-| Flutter  | 157 passed / 8 failed（既知）              | 165 passed / 0 failed              |
+| backend  | 1049 passed / 13 failed（既知）/ 0 skipped | 1062 passed / 0 failed / 0 skipped |
+| Flutter  | 157 passed / 8 failed（既知）              | 176 passed / 0 failed              |
+
+Flutter の総数が増えているのは Issue #57（#58）が
+`sidecar_supervisor_integration_test.dart` へテストを追加したため。
 
 `pnpm run check` 全体は依然として Ubuntu では完走しない。`build:app`
 （`flutter build windows`）と `openapi:check`（Java 必須）が残るためで、これは
