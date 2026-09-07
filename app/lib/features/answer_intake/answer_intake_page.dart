@@ -5,7 +5,12 @@ import 'package:go_router/go_router.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/app_status_tone.dart';
+import 'package:auto_scoring_app/core/design/app_theme_context.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
+import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/app_file_picker_row.dart';
 
 /// 答案取込画面 (simplified-design-specification.md §16.4).
 ///
@@ -223,9 +228,9 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
     return Scaffold(
       appBar: AppBar(title: const Text('答案取込')),
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: AppSpacing.page,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
+          constraints: const BoxConstraints(maxWidth: AppLayout.formMaxWidth),
           // CustomScrollView, not a fixed Column+Expanded: on a short
           // viewport -- a small window, a phone in landscape, or the
           // student-label field's keyboard eating half the screen -- the
@@ -241,9 +246,13 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _buildTestPicker(),
-                    const SizedBox(height: 16),
-                    _buildFilePicker(),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
+                    AppFilePickerRow(
+                      buttonLabel: 'ファイルを選択',
+                      fileName: _pickedFileName,
+                      onPressed: _isSubmitting ? null : _pickFile,
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
                     TextField(
                       controller: _studentLabelController,
                       enabled: !_isSubmitting,
@@ -254,27 +263,24 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
                       textInputAction: TextInputAction.done,
                       onSubmitted: (_) => _submit(),
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
                     if (_isSubmitting) const LinearProgressIndicator(),
                     if (_errorMessage != null) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: AppSpacing.sm),
                       _buildErrorBanner(),
                     ],
-                    const SizedBox(height: 16),
+                    const SizedBox(height: AppSpacing.lg),
                     FilledButton.icon(
                       focusNode: _submitFocusNode,
                       onPressed: _canSubmit ? _submit : null,
                       icon: const Icon(Icons.upload_file),
                       label: const Text('取り込む'),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: AppSpacing.xl),
                     const Divider(),
-                    const SizedBox(height: 8),
-                    Text(
-                      '取込済み答案',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
+                    Text('取込済み答案', style: context.texts.titleMedium),
+                    const SizedBox(height: AppSpacing.sm),
                   ],
                 ),
               ),
@@ -323,25 +329,6 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
     );
   }
 
-  Widget _buildFilePicker() {
-    return Row(
-      children: [
-        OutlinedButton.icon(
-          onPressed: _isSubmitting ? null : _pickFile,
-          icon: const Icon(Icons.picture_as_pdf),
-          label: const Text('ファイルを選択'),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            _pickedFileName ?? '未選択',
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _buildErrorBanner() {
     // A list-load failure must retry *that* fetch, not start an upload: the
     // shared error banner used to always wire this button to _submit, so a
@@ -353,30 +340,7 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
       _ErrorKind.filePick => _isSubmitting ? null : _pickFile,
       _ErrorKind.submit || null => _canSubmit ? _submit : null,
     };
-    return Card(
-      color: Theme.of(context).colorScheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Icon(
-              Icons.error_outline,
-              color: Theme.of(context).colorScheme.onErrorContainer,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _errorMessage!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                ),
-              ),
-            ),
-            TextButton(onPressed: retry, child: const Text('再試行')),
-          ],
-        ),
-      ),
-    );
+    return AppErrorBanner(message: _errorMessage!, onRetry: retry);
   }
 
   Widget _buildSubmissionSliver() {
@@ -400,13 +364,15 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
     }
     return SliverList.separated(
       itemCount: _submissions.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
+      separatorBuilder: (_, _) => const Divider(height: AppLayout.hairline),
       itemBuilder: (context, index) {
         final submission = _submissions[index];
-        final (icon, label) = _stateVisual(submission.state);
+        final (icon, label, tone) = _stateVisual(submission.state);
         return ListTile(
           key: Key('submission-tile-$index'),
-          leading: Icon(icon),
+          // 要確認/エラーだけが色で目を引く。それ以外は状態が進んでも色は
+          // 変わらない -- アイコンとラベルが状態を伝える (Issue #25)。
+          leading: Icon(icon, color: tone.color(context)),
           title: Text(submission.studentLabel ?? submission.id),
           subtitle: Text(
             submission.reviewReason != null
@@ -475,13 +441,18 @@ String _describeError(Object? error) =>
 
 String _stateLabel(String state) => _stateVisual(state).$2;
 
-(IconData, String) _stateVisual(String state) => switch (state) {
-  'unprocessed' => (Icons.hourglass_empty, '未処理'),
-  'ai_processing' => (Icons.autorenew, '処理中'),
-  'ai_processed' => (Icons.check_circle_outline, '処理済み'),
-  'needs_review' => (Icons.warning_amber, '要確認'),
-  'reviewed' => (Icons.verified_outlined, '確認済み'),
-  'exported' => (Icons.file_download_done, '出力済み'),
-  'error' => (Icons.error_outline, 'エラー'),
-  _ => (Icons.help_outline, state),
+/// アイコン・日本語ラベル・強調度の3点セット。答案の取込状態は色だけでは
+/// 表さない (Issue #25) ので、この3つは常に一緒に決める。
+///
+/// 「処理中」に色を付けないのが要点: 取込直後の一覧はほぼ全部が処理中で、
+/// そこへ色を割くと本当に人間を呼んでいる 要確認/エラー が埋もれる。
+(IconData, String, AppStatusTone) _stateVisual(String state) => switch (state) {
+  'unprocessed' => (Icons.hourglass_empty, '未処理', AppStatusTone.neutral),
+  'ai_processing' => (Icons.autorenew, '処理中', AppStatusTone.neutral),
+  'ai_processed' => (Icons.check_circle_outline, '処理済み', AppStatusTone.success),
+  'needs_review' => (Icons.warning_amber, '要確認', AppStatusTone.attention),
+  'reviewed' => (Icons.verified_outlined, '確認済み', AppStatusTone.success),
+  'exported' => (Icons.file_download_done, '出力済み', AppStatusTone.success),
+  'error' => (Icons.error_outline, 'エラー', AppStatusTone.danger),
+  _ => (Icons.help_outline, state, AppStatusTone.neutral),
 };

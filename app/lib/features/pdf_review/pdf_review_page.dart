@@ -8,7 +8,11 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/confidence_level.dart';
+import 'package:auto_scoring_app/core/design/app_status_tone.dart';
+import 'package:auto_scoring_app/core/design/app_theme_context.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
+import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
 
 /// 添削レビュー画面 (simplified-design-specification.md §16.5, Issue #21 + #22).
@@ -985,7 +989,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                 decoration: const InputDecoration(labelText: '認識文字'),
                 maxLines: 3,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               TextField(
                 key: const Key('edit-dialog-score'),
                 controller: scoreController,
@@ -994,7 +998,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                 ),
                 keyboardType: TextInputType.number,
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppSpacing.md),
               TextField(
                 key: const Key('edit-dialog-comment'),
                 controller: commentController,
@@ -1151,14 +1155,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   Widget _buildShellError() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: AppSpacing.page,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline, size: 40),
-            const SizedBox(height: 8),
+            const Icon(Icons.error_outline, size: AppIconSize.display),
+            const SizedBox(height: AppSpacing.sm),
             Text(_shellError!, key: const Key('review-shell-error')),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             FilledButton(onPressed: _loadShell, child: const Text('再試行')),
           ],
         ),
@@ -1174,7 +1178,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // Navigation Rail itself always stays a vertical rail on the left --
         // it only switches to icon-only labels -- since `NavigationRail`
         // does not support a horizontal layout.
-        final narrow = constraints.maxWidth < 900;
+        final narrow = constraints.maxWidth < AppLayout.narrowBreakpoint;
         final rail = _buildNavigationRail(narrow: narrow);
         final inspector = _buildInspector(narrow: narrow);
         // The narrow (stacked) layout splits height by flex ratio, not a
@@ -1193,7 +1197,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             : Row(
                 children: [
                   Expanded(child: _buildPdfViewer()),
-                  SizedBox(width: 360, child: inspector),
+                  SizedBox(width: AppLayout.inspectorWidth, child: inspector),
                 ],
               );
         return Column(
@@ -1202,7 +1206,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               child: Row(
                 children: [
                   rail,
-                  const VerticalDivider(width: 1),
+                  const VerticalDivider(width: AppLayout.hairline),
                   Expanded(child: viewerAndInspector),
                 ],
               ),
@@ -1247,18 +1251,31 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// The rail is the reviewer's map of the whole submission, so its icons say
+  /// how far each question has got. Shape carries that on its own (Issue #25);
+  /// the tone only sharpens the one distinction worth finding at a glance --
+  /// which questions failed to load and still need a person.
+  ///
+  /// Nothing here is [AppStatusTone.attention]: a question waiting to be
+  /// reviewed is the *normal* state on this screen, and colouring it would
+  /// leave the whole rail shouting.
   Icon _questionStatusIcon(QuestionResponse question) {
     final review = _reviews[question.id];
-    if (review == null || review.loading) {
-      return const Icon(Icons.hourglass_empty);
-    }
-    if (review.error != null) return const Icon(Icons.error_outline);
-    return switch (review.effectiveReview?.action) {
-      'approved' || 'modified' => const Icon(Icons.check_circle),
-      'rejected' => const Icon(Icons.cancel_outlined),
-      'regrade_requested' => const Icon(Icons.autorenew),
-      _ => const Icon(Icons.radio_button_unchecked),
+    final (icon, tone) = switch (review) {
+      null => (Icons.hourglass_empty, AppStatusTone.neutral),
+      _ when review.loading => (Icons.hourglass_empty, AppStatusTone.neutral),
+      _ when review.error != null => (
+        Icons.error_outline,
+        AppStatusTone.danger,
+      ),
+      _ => switch (review.effectiveReview?.action) {
+        'approved' || 'modified' => (Icons.check_circle, AppStatusTone.success),
+        'rejected' => (Icons.cancel_outlined, AppStatusTone.neutral),
+        'regrade_requested' => (Icons.autorenew, AppStatusTone.neutral),
+        _ => (Icons.radio_button_unchecked, AppStatusTone.neutral),
+      },
     };
+    return Icon(icon, color: tone.color(context));
   }
 
   Widget _buildPdfViewer() {
@@ -1346,22 +1363,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     }
     return SingleChildScrollView(
       key: const Key('review-inspector'),
-      padding: const EdgeInsets.all(16),
+      padding: AppSpacing.panel,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '問${question.number}',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
+          Text('問${question.number}', style: context.texts.titleLarge),
+          const SizedBox(height: AppSpacing.sm),
           _buildSubmissionStateChip(),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.lg),
           if (review == null || review.loading)
             const Center(
               key: Key('review-question-loading'),
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: AppSpacing.page,
                 child: CircularProgressIndicator(),
               ),
             )
@@ -1376,30 +1390,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
 
   Widget _buildSubmissionStateChip() {
     final state = _submission?.state ?? 'unprocessed';
-    final (icon, label) = _submissionStateVisual(state);
+    final (icon, label, tone) = _submissionStateVisual(state);
     return Chip(
       key: const Key('review-submission-state'),
-      avatar: Icon(icon, size: 18),
+      avatar: Icon(icon, size: AppIconSize.dense, color: tone.color(context)),
       label: Text(label),
     );
   }
 
   Widget _buildQuestionError(String message) {
-    return Card(
-      color: Theme.of(context).colorScheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(message, key: const Key('review-question-error')),
-            TextButton(
-              onPressed: () => _ensureReviewLoaded(forceReload: true),
-              child: const Text('再試行'),
-            ),
-          ],
-        ),
-      ),
+    return AppErrorBanner(
+      message: message,
+      messageKey: const Key('review-question-error'),
+      onRetry: () => _ensureReviewLoaded(forceReload: true),
     );
   }
 
@@ -1439,13 +1442,17 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('AI認識文字', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
+        Text('AI認識文字', style: context.texts.titleSmall),
+        const SizedBox(height: AppSpacing.xs),
         if (ocrRecognition == null)
           const Text('未認識')
         else ...[
-          Text(ocrRecognition.text, key: const Key('review-recognition-text')),
-          const SizedBox(height: 4),
+          Text(
+            ocrRecognition.text,
+            key: const Key('review-recognition-text'),
+            style: context.textRoles.recognizedText,
+          ),
+          const SizedBox(height: AppSpacing.xs),
           _ConfidenceBadge(
             key: const Key('review-recognition-confidence'),
             label: 'OCR文字認識信頼度',
@@ -1457,17 +1464,18 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // -- shown alongside OCR's, not merged into it, so a reviewer can
         // see whether/how the grader corrected what OCR read (P2 review).
         if (gradingRecognition != null) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             '採点AIの認識結果',
             key: const Key('review-grading-recognition-label'),
-            style: Theme.of(context).textTheme.labelLarge,
+            style: context.texts.labelLarge,
           ),
           Text(
             gradingRecognition.text,
             key: const Key('review-grading-recognition-text'),
+            style: context.textRoles.recognizedText,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: AppSpacing.xs),
           _ConfidenceBadge(
             key: const Key('review-grading-recognition-confidence'),
             label: '採点AI文字認識信頼度',
@@ -1479,7 +1487,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // instead of silently replacing "AI認識文字" above, so a human's
         // confidence (always 1.0) is never mistaken for the AI's.
         if (humanRecognition != null) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           _ProvenanceLabel(
             key: const Key('review-human-recognition-label'),
             text: '人による修正',
@@ -1487,20 +1495,21 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           Text(
             humanRecognition.text,
             key: const Key('review-human-recognition-text'),
+            style: context.textRoles.recognizedText,
           ),
         ],
-        const Divider(height: 24),
-        Text('採点', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
+        const Divider(height: AppLayout.sectionDivider),
+        Text('採点', style: context.texts.titleSmall),
+        const SizedBox(height: AppSpacing.xs),
         if (aiGrade == null)
           const Text('未採点')
         else ...[
           Text(
             '${aiGrade.score.awarded} / ${aiGrade.score.maximum} 点',
             key: const Key('review-score'),
-            style: Theme.of(context).textTheme.headlineSmall,
+            style: context.textRoles.score,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: AppSpacing.xs),
           _ConfidenceBadge(
             key: const Key('review-grading-confidence'),
             label: '採点信頼度',
@@ -1508,20 +1517,28 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           ),
           if (aiGrade.rationale case final rationale?
               when rationale.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text('根拠', style: Theme.of(context).textTheme.labelLarge),
-            Text(rationale, key: const Key('review-rationale')),
+            const SizedBox(height: AppSpacing.sm),
+            Text('根拠', style: context.texts.labelLarge),
+            Text(
+              rationale,
+              key: const Key('review-rationale'),
+              style: context.textRoles.gradingComment,
+            ),
           ],
           // AIの総評コメント (簡易設計書 §16.5「コメント」) -- 根拠 (この点数に
           // なった理由) とは別の欄として表示する。
           if (aiGrade.comment case final comment? when comment.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text('コメント', style: Theme.of(context).textTheme.labelLarge),
-            Text(comment, key: const Key('review-grade-comment')),
+            const SizedBox(height: AppSpacing.sm),
+            Text('コメント', style: context.texts.labelLarge),
+            Text(
+              comment,
+              key: const Key('review-grade-comment'),
+              style: context.textRoles.gradingComment,
+            ),
           ],
         ],
         if (humanGrade != null) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
           _ProvenanceLabel(
             key: const Key('review-human-grade-label'),
             text: '人による確定',
@@ -1529,7 +1546,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           Text(
             '${humanGrade.score.awarded} / ${humanGrade.score.maximum} 点',
             key: const Key('review-human-score'),
-            style: Theme.of(context).textTheme.headlineSmall,
+            style: context.textRoles.score,
           ),
         ],
         // The rubric's own definition (description + 配点) is shown
@@ -1539,8 +1556,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // never disappear just because grading hasn't reached it (P1
         // review).
         if (question.rubric.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text('採点基準', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: AppSpacing.sm),
+          Text('採点基準', style: context.texts.labelLarge),
           for (final criterion in question.rubric)
             ListTile(
               key: Key('rubric-criterion-${criterion.id}'),
@@ -1551,7 +1568,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                   _criterionOutcomeFor(criterion.id, review.displayGrade),
                 ),
               ),
-              title: Text('${criterion.description}（${criterion.maxPoints}点）'),
+              title: Text(
+                '${criterion.description}（${criterion.maxPoints}点）',
+                style: context.textRoles.questionText,
+              ),
               subtitle: Text(
                 _criterionLabel(
                   _criterionOutcomeFor(criterion.id, review.displayGrade),
@@ -1560,19 +1580,22 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             ),
         ],
         if (fallbackAnnotations.isNotEmpty) ...[
-          const Divider(height: 24),
-          Text('設問コメント', style: Theme.of(context).textTheme.titleSmall),
+          const Divider(height: AppLayout.sectionDivider),
+          Text('設問コメント', style: context.texts.titleSmall),
           for (final annotation in fallbackAnnotations)
             ListTile(
               key: Key('fallback-annotation-${annotation.id}'),
               dense: true,
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.comment_outlined),
-              title: Text(annotation.comment ?? annotation.anchorText ?? ''),
+              title: Text(
+                annotation.comment ?? annotation.anchorText ?? '',
+                style: context.textRoles.gradingComment,
+              ),
             ),
         ],
-        const Divider(height: 24),
-        Text('修正コメント', style: Theme.of(context).textTheme.titleSmall),
+        const Divider(height: AppLayout.sectionDivider),
+        Text('修正コメント', style: context.texts.titleSmall),
         TextField(
           key: const Key('review-note-field'),
           controller: _noteController,
@@ -1590,9 +1613,9 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
 
   Widget _buildActionBar() {
     return Material(
-      elevation: 4,
+      elevation: AppElevation.raised,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: AppSpacing.actionBar,
         // Scrolls horizontally instead of overflowing at a narrow desktop
         // width (Issue #21 acceptance: desktopの標準/狭幅表示) -- every
         // button stays reachable by keyboard focus traversal regardless.
@@ -1608,21 +1631,21 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                 icon: const Icon(Icons.undo),
                 label: const Text('元に戻す (Ctrl+Z)'),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppSpacing.md),
               OutlinedButton.icon(
                 key: const Key('review-regrade-button'),
                 onPressed: _canDecide ? _regrade : null,
                 icon: const Icon(Icons.autorenew),
                 label: const Text('再判定 (R)'),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppSpacing.md),
               OutlinedButton.icon(
                 key: const Key('review-edit-button'),
                 onPressed: _canDecide ? _showEditDialog : null,
                 icon: const Icon(Icons.edit_outlined),
                 label: const Text('修正 (E)'),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppSpacing.md),
               OutlinedButton.icon(
                 key: const Key('review-reject-button'),
                 // Disabled while the question's data is still loading (or
@@ -1633,7 +1656,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                 icon: const Icon(Icons.close),
                 label: const Text('却下 (X)'),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: AppSpacing.md),
               FilledButton.icon(
                 key: const Key('review-approve-button'),
                 onPressed: _canApprove ? _approveAndNext : null,
@@ -1648,16 +1671,24 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 }
 
-(IconData, String) _submissionStateVisual(String state) => switch (state) {
-  'unprocessed' => (Icons.hourglass_empty, '未処理'),
-  'ai_processing' => (Icons.autorenew, 'AI処理中'),
-  'ai_processed' => (Icons.check_circle_outline, 'AI処理済み'),
-  'needs_review' => (Icons.warning_amber, '要確認'),
-  'reviewed' => (Icons.verified_outlined, '確認済み'),
-  'exported' => (Icons.file_download_done, '出力済み'),
-  'error' => (Icons.error_outline, 'エラー'),
-  _ => (Icons.help_outline, state),
-};
+/// アイコン・日本語ラベル・強調度。色だけで状態を表さない (Issue #25) ため、
+/// この3つは常に一緒に決める。AI処理中に色を割かないのが要点 -- 進行中は
+/// 一番よくある状態で、そこを塗ると 要確認 が埋もれる。
+(IconData, String, AppStatusTone) _submissionStateVisual(String state) =>
+    switch (state) {
+      'unprocessed' => (Icons.hourglass_empty, '未処理', AppStatusTone.neutral),
+      'ai_processing' => (Icons.autorenew, 'AI処理中', AppStatusTone.neutral),
+      'ai_processed' => (
+        Icons.check_circle_outline,
+        'AI処理済み',
+        AppStatusTone.success,
+      ),
+      'needs_review' => (Icons.warning_amber, '要確認', AppStatusTone.attention),
+      'reviewed' => (Icons.verified_outlined, '確認済み', AppStatusTone.success),
+      'exported' => (Icons.file_download_done, '出力済み', AppStatusTone.success),
+      'error' => (Icons.error_outline, 'エラー', AppStatusTone.danger),
+      _ => (Icons.help_outline, state, AppStatusTone.neutral),
+    };
 
 /// The outcome a grade recorded for [criterionId], or `null` if [grade] is
 /// `null` or never judged that criterion (e.g. grading hasn't reached this
@@ -1699,9 +1730,9 @@ class _ProvenanceLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Icon(Icons.person, size: 16),
-        const SizedBox(width: 4),
-        Text(text, style: Theme.of(context).textTheme.labelLarge),
+        const Icon(Icons.person, size: AppIconSize.inline),
+        const SizedBox(width: AppSpacing.xs),
+        Text(text, style: context.texts.labelLarge),
       ],
     );
   }
@@ -1728,6 +1759,15 @@ class _ConfidenceBadge extends StatelessWidget {
       ConfidenceLevel.medium => Icons.info_outline,
       ConfidenceLevel.low => Icons.warning_amber,
     };
+    // 低Confidence は「人間が見ないと決められない」の代表例なので、この画面で
+    // 強調色を使ってよい数少ない場所。中/高は進行中と同じく無彩色に置く --
+    // 全部に色を付ければ、どれも目立たなくなる。
+    final tone = switch (level) {
+      ConfidenceLevel.high => AppStatusTone.success,
+      ConfidenceLevel.medium => AppStatusTone.neutral,
+      ConfidenceLevel.low => AppStatusTone.attention,
+    };
+    final color = tone.color(context);
     final percent = (confidence * 100).round();
     return Semantics(
       label: '$label $percent% ${level.label}',
@@ -1738,9 +1778,12 @@ class _ConfidenceBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18),
-          const SizedBox(width: 4),
-          Text('$label: $percent% (${level.label})'),
+          Icon(icon, size: AppIconSize.dense, color: color),
+          const SizedBox(width: AppSpacing.xs),
+          Text(
+            '$label: $percent% (${level.label})',
+            style: context.texts.bodySmall?.copyWith(color: color),
+          ),
         ],
       ),
     );
@@ -1797,7 +1840,11 @@ class _ShapeMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.error;
+    // 赤ペンの赤。`colorScheme.error` ではない -- 正解に付ける○はエラーでは
+    // なく、これは答案の上に重ねる添削記号の色である (`AppStatusColors
+    // .annotationMark`)。ライト/ダークで同じ値なのも意図的で、記号が乗るのは
+    // テーマではなく常に白いPDFのページだから。
+    final color = context.statusColors.annotationMark;
     // The icon alone already distinguishes most kinds by shape (not just
     // color); `label` additionally carries information the icon can't
     // (e.g. the actual awarded score number for `score`), so it is shown
@@ -1808,7 +1855,7 @@ class _ShapeMark extends StatelessWidget {
         children: [
           Icon(icon, color: color),
           if (label.isNotEmpty) ...[
-            const SizedBox(width: 2),
+            const SizedBox(width: AppSpacing.xs),
             Text(label, style: TextStyle(color: color)),
           ],
         ],

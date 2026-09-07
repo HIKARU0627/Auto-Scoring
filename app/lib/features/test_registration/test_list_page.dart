@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/app_status_tone.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 /// テスト一覧画面 (Issue #16).
 ///
@@ -78,7 +80,7 @@ class _TestListPageState extends ConsumerState<TestListPage> {
                   : '$error';
               return ListView(
                 children: [
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xl),
                   Center(
                     key: const Key('test-list-error'),
                     child: Text('テスト一覧を取得できません: $message'),
@@ -90,21 +92,30 @@ class _TestListPageState extends ConsumerState<TestListPage> {
             if (tests.isEmpty) {
               return ListView(
                 children: const [
-                  SizedBox(height: 24),
+                  SizedBox(height: AppSpacing.xl),
                   Center(child: Text('登録済みのテストがありません')),
                 ],
               );
             }
             return ListView.separated(
               itemCount: tests.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
+              separatorBuilder: (_, _) =>
+                  const Divider(height: AppLayout.hairline),
               itemBuilder: (context, index) {
                 final test = tests[index];
                 final isReady = test.status == 'ready';
                 return ListTile(
                   key: Key('test-list-tile-${test.id}'),
+                  // 登録完了 is a finished state, so it recedes; a draft is
+                  // not a problem to fix, so it stays neutral rather than
+                  // pulling the eye (`AppStatusTone`).
                   leading: Icon(
                     isReady ? Icons.verified : Icons.pending_actions,
+                    color:
+                        (isReady
+                                ? AppStatusTone.success
+                                : AppStatusTone.neutral)
+                            .color(context),
                   ),
                   title: Text(test.name),
                   subtitle: Text(isReady ? '登録完了' : '下書き'),

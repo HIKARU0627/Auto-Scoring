@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/app_theme_context.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 /// Landing screen. Confirms the app boots and can reach the (stubbed) backend.
 ///
@@ -28,19 +30,16 @@ class HomePage extends ConsumerWidget {
                   false => 'backend: unavailable',
                   null => 'backend: checking…',
                 };
-                return Text(
-                  label,
-                  style: Theme.of(context).textTheme.titleLarge,
-                );
+                return Text(label, style: context.texts.titleLarge);
               },
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xl),
             FilledButton.icon(
               onPressed: () => context.push(AppRoutes.testRegistration),
               icon: const Icon(Icons.add_task),
               label: const Text('テスト登録'),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             // Re-entry point for a `draft` registration left mid-way (or
             // after an app restart) -- `GET /tests` (答案取込) only offers
             // `ready` tests, so without this a persisted draft would be
@@ -51,7 +50,7 @@ class HomePage extends ConsumerWidget {
               icon: const Icon(Icons.list_alt),
               label: const Text('テスト一覧'),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             FilledButton.icon(
               onPressed: () => context.push(AppRoutes.answerIntake),
               icon: const Icon(Icons.upload_file),

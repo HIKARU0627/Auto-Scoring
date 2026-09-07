@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:auto_scoring_app/core/design/app_theme_context.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
 
 /// Covers the whole app while the sidecar is not usable: a splash during
@@ -73,22 +75,16 @@ class _SidecarSplash extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Auto-Scoring',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 32),
+            Text('Auto-Scoring', style: context.texts.headlineMedium),
+            const SizedBox(height: AppSpacing.xxl),
             const CircularProgressIndicator(),
-            const SizedBox(height: 24),
-            Text(message, style: Theme.of(context).textTheme.bodyMedium),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.xl),
+            Text(message, style: context.texts.bodyMedium),
+            const SizedBox(height: AppSpacing.sm),
             // The first launch on a machine runs every schema migration and
             // is scanned by Windows Defender, so it is the slow one. Saying
             // so is the difference between "still working" and "hung".
-            Text(
-              '初回起動には時間がかかることがあります。',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            Text('初回起動には時間がかかることがあります。', style: context.texts.bodySmall),
           ],
         ),
       ),
@@ -128,38 +124,39 @@ class _SidecarErrorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
       body: Center(
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
+          constraints: const BoxConstraints(
+            maxWidth: AppLayout.messageMaxWidth,
+          ),
           child: Padding(
-            padding: const EdgeInsets.all(24),
+            padding: AppSpacing.page,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
                   Icons.error_outline,
-                  size: 48,
-                  color: theme.colorScheme.error,
+                  size: AppIconSize.hero,
+                  color: context.colors.error,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 Text(
                   _headline,
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.titleMedium,
+                  style: context.texts.titleMedium,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: AppSpacing.md),
                 Text(
                   _detail,
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall,
+                  style: context.texts.bodySmall,
                 ),
                 if (exitCode case final code?) ...[
-                  const SizedBox(height: 4),
-                  Text('終了コード: $code', style: theme.textTheme.bodySmall),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text('終了コード: $code', style: context.texts.bodySmall),
                 ],
-                const SizedBox(height: 24),
+                const SizedBox(height: AppSpacing.xl),
                 FilledButton.icon(
                   onPressed: onRestart,
                   icon: const Icon(Icons.refresh),
