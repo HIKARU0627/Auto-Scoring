@@ -7,6 +7,7 @@ and each submission-question's grade/annotation history.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters import review_actions
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
@@ -484,6 +486,219 @@ def test_duplicate_concurrent_approve_requests_do_not_double_create_history(
     assert statuses == [201, 409]
     reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
     assert len(reviews) == 1
+
+
+def test_concurrent_approve_requests_racing_past_the_precheck_resolve_with_one_conflict(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlike the sequential test above (the first request's commit always
+    lands before the second's pre-check even runs, since `TestClient.post`
+    blocks until each request finishes), this forces both requests to pass
+    `next_review_version`'s cheap pre-check at the same ``expected_version``
+    *before* either writes anything -- exactly the race
+    ``uq_reviews_submission_question_version`` exists to guard.
+
+    `SqlAlchemyReviewRepository.add` flushes immediately, so the loser's
+    `IntegrityError` can surface there, before `_finalize_review`'s
+    conflict-handling `try` used to start (P2 review, when it only wrapped
+    `uow.commit()`) -- resolving with a bare 500 instead of the promised 409.
+    """
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    barrier = threading.Barrier(2)
+    original_next_version = review_actions._next_version
+
+    def _next_version_after_barrier(*args: object, **kwargs: object) -> object:
+        result = original_next_version(*args, **kwargs)  # type: ignore[arg-type]
+        # Both requests must have already computed the same next version
+        # (both saw an empty history) before either is allowed to proceed to
+        # its own `uow.reviews.add`/`uow.commit()` below.
+        barrier.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(review_actions, "_next_version", _next_version_after_barrier)
+
+    statuses: list[int | None] = [None, None]
+
+    def _approve(index: int) -> None:
+        response = client.post(
+            "/submissions/sub-1/questions/q-1/review/approve",
+            headers=_AUTH,
+            json={"expected_version": 0},
+        )
+        statuses[index] = response.status_code
+
+    threads = [threading.Thread(target=_approve, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sorted(statuses) == [201, 409]
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert len(reviews) == 1
+
+
+def test_approve_with_the_currently_displayed_ai_grade_id_succeeds(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0, "expected_ai_grade_id": "grade-ai"},
+    )
+
+    assert response.status_code == 201
+
+
+def test_approve_rejects_a_stale_expected_ai_grade_id(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A regrade landing after the reviewer's screen loaded but before this
+    approve reached the server must not let the approve silently confirm the
+    fresh, unreviewed attempt (Issue #22 P1 review)."""
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai-old", source=GradingSource.AI))
+        uow.grades.add(make_grade(id="grade-ai-new", source=GradingSource.AI, created_at=at(1)))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0, "expected_ai_grade_id": "grade-ai-old"},
+    )
+
+    assert response.status_code == 409
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
+
+
+def test_approve_without_an_expected_ai_grade_id_skips_the_check(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Backward-compatible default: omitting ``expected_ai_grade_id``
+    entirely (an older client) behaves exactly as before this check existed."""
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai-old", source=GradingSource.AI))
+        uow.grades.add(make_grade(id="grade-ai-new", source=GradingSource.AI, created_at=at(1)))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["review"]["ai_grade_result_id"] == "grade-ai-new"
+
+
+def test_edit_rejects_a_stale_expected_ai_grade_id(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai-old", source=GradingSource.AI))
+        uow.grades.add(make_grade(id="grade-ai-new", source=GradingSource.AI, created_at=at(1)))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={
+            "expected_version": 0,
+            "expected_ai_grade_id": "grade-ai-old",
+            "score_awarded": 5,
+            "score_maximum": 5,
+        },
+    )
+
+    assert response.status_code == 409
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
+
+
+def test_edit_with_score_awarded_above_maximum_is_rejected_with_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A request that passes pydantic's own field validation (both are
+    non-negative ints) but fails once `edit_question` builds the domain
+    `Score` must surface as a 422 client error, not an unhandled 500 (P2
+    review)."""
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 2, "score_maximum": 1},
+    )
+
+    assert response.status_code == 422
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
+
+
+def test_edit_with_an_unknown_criterion_outcome_is_rejected_with_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={
+            "expected_version": 0,
+            "score_awarded": 5,
+            "score_maximum": 5,
+            "criteria": [{"criterion_id": "c-1", "outcome": "not-a-real-outcome"}],
+        },
+    )
+
+    assert response.status_code == 422
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
+
+
+def test_edit_with_an_out_of_page_annotation_rect_is_rejected_with_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={
+            "expected_version": 0,
+            "score_awarded": 5,
+            "score_maximum": 5,
+            "annotations": [{"kind": "circle", "x": 0.9, "y": 0.9, "width": 0.5, "height": 0.5}],
+        },
+    )
+
+    assert response.status_code == 422
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
 
 
 def test_submission_becomes_reviewed_only_once_every_question_is_confirmed(

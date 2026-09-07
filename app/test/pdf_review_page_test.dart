@@ -168,6 +168,7 @@ AppDependencies _dependencies({
           submissionId,
           questionId, {
           required expectedVersion,
+          expectedAiGradeId,
           required scoreAwarded,
           required scoreMaximum,
           confidence = 1.0,
@@ -209,14 +210,19 @@ AppDependencies _dependencies({
             ),
     approveReview:
         approveReview ??
-        (submissionId, questionId, {required expectedVersion, note}) async =>
-            _reviewAction(
-              _review(
-                questionId: questionId,
-                action: 'approved',
-                version: expectedVersion + 1,
-              ),
-            ),
+        (
+          submissionId,
+          questionId, {
+          required expectedVersion,
+          expectedAiGradeId,
+          note,
+        }) async => _reviewAction(
+          _review(
+            questionId: questionId,
+            action: 'approved',
+            version: expectedVersion + 1,
+          ),
+        ),
     undoReview:
         undoReview ??
         (submissionId, questionId, {required expectedVersion}) async =>
@@ -2232,6 +2238,7 @@ void main() {
               submissionId,
               questionId, {
               required expectedVersion,
+              expectedAiGradeId,
               required scoreAwarded,
               required scoreMaximum,
               confidence = 1.0,
@@ -2343,7 +2350,13 @@ void main() {
           ),
         ],
         approveReview:
-            (submissionId, questionId, {required expectedVersion, note}) async {
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              expectedAiGradeId,
+              note,
+            }) async {
               approveCalls++;
               return _reviewAction(
                 _review(
@@ -2448,6 +2461,107 @@ void main() {
     );
 
     testWidgets(
+      'undoing a 修正 also reverts the recognized text the Inspector shows, '
+      'not just the score (Issue #22 P1 review)',
+      (tester) async {
+        final aiCreatedAt = DateTime.utc(2026, 1, 1);
+        final humanCreatedAt = DateTime.utc(2026, 1, 2);
+        final humanGrade = GradeResultResponse(
+          (b) => b
+            ..id = 'grade-human'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..source_ = 'human'
+            ..score.awarded = 5
+            ..score.maximum = 5
+            ..score.ratio = 1.0
+            ..confidence = 1.0
+            ..criteria.replace(const [])
+            ..createdAt = humanCreatedAt,
+        );
+        final humanRecognition = RecognitionResponse(
+          (b) => b
+            ..id = 'rec-human'
+            ..submissionId = 'sub-1'
+            ..questionId = 'q-1'
+            ..source_ = 'human'
+            ..stage = 'human'
+            ..text = '人による修正文字'
+            ..confidence = 1.0
+            ..boxes.replace(const [])
+            ..createdAt = humanCreatedAt,
+        );
+        final modifiedReview = _review(
+          action: 'modified',
+          aiGradeResultId: 'grade-ai',
+          humanGradeResultId: 'grade-human',
+          createdAt: humanCreatedAt,
+        );
+        final reviews = [modifiedReview];
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          recognitions: [
+            _recognition(id: 'rec-ai', text: 'AI認識結果', createdAt: aiCreatedAt),
+            humanRecognition,
+          ],
+          grades: [
+            _grade(id: 'grade-ai', createdAt: aiCreatedAt),
+            humanGrade,
+          ],
+          reviews: reviews,
+          undoReview:
+              (submissionId, questionId, {required expectedVersion}) async {
+                final review = _review(
+                  questionId: questionId,
+                  action: 'undone',
+                  version: expectedVersion + 1,
+                  undoneReviewId: modifiedReview.id,
+                );
+                reviews.add(review);
+                return _reviewAction(review);
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+
+        // Before Undo: the human correction is shown as the effective
+        // recognized text.
+        expect(
+          find.byKey(const Key('review-human-recognition-label')),
+          findsOneWidget,
+        );
+        expect(find.text('人による修正文字'), findsOneWidget);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+        await tester.pump();
+        await _settlePdf(tester);
+
+        // After Undo: the human correction must no longer be shown as in
+        // effect, even though its row is still there (append-only history)
+        // -- the Inspector falls back to the AI's own recognized text.
+        expect(
+          find.byKey(const Key('review-human-recognition-label')),
+          findsNothing,
+        );
+        expect(find.text('人による修正文字'), findsNothing);
+        expect(find.text('AI認識結果'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'a stale expected_version (409 conflict) surfaces a snackbar and '
       'refreshes instead of silently doing nothing',
       (tester) async {
@@ -2460,6 +2574,7 @@ void main() {
                 submissionId,
                 questionId, {
                 required expectedVersion,
+                expectedAiGradeId,
                 note,
               }) async {
                 throw SidecarApiException(
@@ -2487,6 +2602,98 @@ void main() {
         await _settlePdf(tester);
 
         expect(find.textContaining('競合しました'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'refreshing after an action targets the question the action was '
+      'actually for, even if the reviewer navigated away while it was still '
+      'in flight (P2 review)',
+      (tester) async {
+        final approveCompleter = Completer<void>();
+        final reviews = <ReviewResponse>[];
+        final dependencies = _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(id: 'q-1', number: '1'),
+          q2: _question(id: 'q-2', number: '2'),
+          recognitions: [
+            _recognition(questionId: 'q-1', text: '設問1の答案'),
+            _recognition(questionId: 'q-2', text: '設問2の答案'),
+          ],
+          grades: [
+            _grade(id: 'grade-q1', questionId: 'q-1'),
+            _grade(id: 'grade-q2', questionId: 'q-2'),
+          ],
+          reviews: reviews,
+          approveReview:
+              (
+                submissionId,
+                questionId, {
+                required expectedVersion,
+                expectedAiGradeId,
+                note,
+              }) async {
+                await approveCompleter.future;
+                final review = _review(
+                  questionId: questionId,
+                  action: 'approved',
+                  version: expectedVersion + 1,
+                );
+                reviews.add(review);
+                return _reviewAction(review);
+              },
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            PdfReviewPage(
+              dependencies: dependencies,
+              testId: 'test-1',
+              submissionId: 'sub-1',
+            ),
+          ),
+        );
+        await tester.pump();
+        await _settlePdf(tester);
+        expect(find.text('設問1の答案'), findsOneWidget);
+
+        // Start approving question 1, but its request does not resolve yet.
+        await tester.tap(find.byKey(const Key('review-approve-button')));
+        await tester.pump();
+
+        // Navigate to question 2 while question 1's approve request is
+        // still in flight -- navigation stays enabled during an action, only
+        // question 1's own action bar is disabled for its duration.
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+        await _settlePdf(tester);
+        expect(find.text('設問2の答案'), findsOneWidget);
+
+        // Now let question 1's approve request resolve while question 2 is
+        // selected.
+        approveCompleter.complete();
+        await tester.pump();
+        await _settlePdf(tester);
+
+        // Navigate back to question 1: its rail icon must already reflect
+        // the approval that resolved while question 2 was selected -- a
+        // refresh that targeted "whichever question was current when the
+        // request resolved" (question 2) instead of question 1 itself would
+        // leave question 1's cache stale here.
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pump();
+        await _settlePdf(tester);
+        expect(find.text('設問1の答案'), findsOneWidget);
+
+        final railIcons = tester
+            .widgetList<Icon>(
+              find.descendant(
+                of: find.byKey(const Key('review-question-rail')),
+                matching: find.byType(Icon),
+              ),
+            )
+            .toList();
+        expect(railIcons.first.icon, Icons.check_circle);
       },
     );
   });

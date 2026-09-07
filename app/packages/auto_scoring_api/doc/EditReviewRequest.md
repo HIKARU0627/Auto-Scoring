@@ -12,6 +12,7 @@ Name | Type | Description | Notes
 **comment** | **String** |  | [optional] 
 **confidence** | **num** |  | [optional] [default to 1.0]
 **criteria** | [**BuiltList&lt;CriterionOutcomeRequest&gt;**](CriterionOutcomeRequest.md) |  | [optional] 
+**expectedAiGradeId** | **String** |  | [optional] 
 **expectedVersion** | **int** |  | 
 **note** | **String** |  | [optional] 
 **rationale** | **String** |  | [optional] 

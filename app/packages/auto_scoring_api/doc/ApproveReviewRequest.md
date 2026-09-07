@@ -8,6 +8,7 @@ import 'package:auto_scoring_api/api.dart';
 ## Properties
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**expectedAiGradeId** | **String** |  | [optional] 
 **expectedVersion** | **int** |  | 
 **note** | **String** |  | [optional] 
 

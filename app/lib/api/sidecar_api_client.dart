@@ -726,11 +726,18 @@ class SidecarApiClient {
   /// same step (Issue #22 "edit"). [expectedVersion] must be this question's
   /// current review-history length (`listReviews(...).length`); a stale
   /// value throws [SidecarApiException] with [SidecarErrorKind.conflict].
-  /// Throws the same conflict kind if no AI grade exists yet to correct.
+  /// Throws the same conflict kind if no AI grade exists yet to correct, or
+  /// if [expectedAiGradeId] is given and no longer names the latest AI grade
+  /// (Issue #22 P1 review: a regrade completing after the reviewer's screen
+  /// loaded this question's AI proposal but before this edit reached the
+  /// server) -- pass the id of the AI grade currently displayed to the
+  /// reviewer (`QuestionReviewState.latestAiGrade?.id`), or omit it to skip
+  /// this check entirely.
   Future<ReviewActionResponse> editReview(
     String submissionId,
     String questionId, {
     required int expectedVersion,
+    String? expectedAiGradeId,
     required int scoreAwarded,
     required int scoreMaximum,
     double confidence = 1.0,
@@ -747,6 +754,7 @@ class SidecarApiClient {
           EditReviewRequest(
             (b) => b
               ..expectedVersion = expectedVersion
+              ..expectedAiGradeId = expectedAiGradeId
               ..scoreAwarded = scoreAwarded
               ..scoreMaximum = scoreMaximum
               ..confidence = confidence
@@ -832,11 +840,12 @@ class SidecarApiClient {
   /// Confirms the AI's current proposal for [submissionId]/[questionId] as-is
   /// (Issue #22 "approve", the confirm half of "承認して次へ" -- moving to the
   /// next question is pure client-side navigation). See [editReview] for
-  /// [expectedVersion].
+  /// [expectedVersion]/[expectedAiGradeId].
   Future<ReviewActionResponse> approveReview(
     String submissionId,
     String questionId, {
     required int expectedVersion,
+    String? expectedAiGradeId,
     String? note,
     CancelToken? cancelToken,
   }) async {
@@ -844,6 +853,7 @@ class SidecarApiClient {
       final request = ApproveReviewRequest(
         (b) => b
           ..expectedVersion = expectedVersion
+          ..expectedAiGradeId = expectedAiGradeId
           ..note = note,
       );
       final response = await _reviewApi

@@ -27,7 +27,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
-from auto_scoring.domain.models import CONFIRMED_REVIEW_ACTIONS, DomainError, Review, ReviewAction
+from auto_scoring.domain.models import (
+    CONFIRMED_REVIEW_ACTIONS,
+    DomainError,
+    GradeResult,
+    GradingSource,
+    RecognitionResult,
+    Review,
+    ReviewAction,
+)
 
 
 class ReviewVersionConflict(DomainError):
@@ -130,3 +138,81 @@ def all_questions_confirmed(
         is_confirmed(effective_latest_review(reviews_by_question.get(question_id, ())))
         for question_id in question_ids
     )
+
+
+def resolve_effective_grade(
+    reviews: Sequence[Review], grades: Sequence[GradeResult]
+) -> GradeResult | None:
+    """The `GradeResult` currently "in effect" for one question, given its
+    full review history and full grade history -- the domain twin of the
+    Flutter review screen's own `QuestionReviewState.displayGrade` (Issue #22
+    P1 review: a downstream consumer picking "the latest human grade by
+    timestamp" instead of resolving through the review history keeps using a
+    correction Undo has already reverted).
+
+    `effective_latest_review(reviews)`'s ``modified`` -> its own
+    ``human_grade_result_id``; ``approved`` -> its own ``ai_grade_result_id``;
+    anything else (``rejected``/``regrade_requested``, or nothing reviewed
+    yet) -> the latest AI-sourced grade, so a fresh AI attempt after a
+    rejection/regrade still resolves once it lands, matching `displayGrade`'s
+    own ``default`` branch.
+    """
+    review = effective_latest_review(reviews)
+    grade_by_id = {grade.id: grade for grade in grades}
+    if review is not None:
+        target_id = (
+            review.human_grade_result_id
+            if review.action is ReviewAction.MODIFIED
+            else review.ai_grade_result_id
+            if review.action is ReviewAction.APPROVED
+            else None
+        )
+        if target_id is not None:
+            grade = grade_by_id.get(target_id)
+            if grade is not None:
+                return grade
+    ai_grades = [grade for grade in grades if grade.source is GradingSource.AI]
+    return ai_grades[-1] if ai_grades else None
+
+
+def resolve_effective_recognition(
+    reviews: Sequence[Review],
+    grades: Sequence[GradeResult],
+    recognitions: Sequence[RecognitionResult],
+) -> RecognitionResult | None:
+    """The `RecognitionResult` currently "in effect" for one question -- the
+    domain twin of the Flutter review screen's own
+    `QuestionReviewState.effectiveHumanRecognition` fallback chain (Issue #22
+    P1 review, same reasoning as `resolve_effective_grade`).
+
+    A ``modified`` review in effect shows the human recognition sharing its
+    own human grade's ``created_at`` (`adapters.review_actions.edit_question`
+    persists both from the same clock read, the same signal
+    `QuestionReviewState.annotationsForDisplayedAttempt` already relies on),
+    falling back to the latest AI-sourced recognition if that edit did not
+    touch the recognized text at all (or once Undo reverts back past it) --
+    the AI branch naturally picks the *grading*-stage recognition over the
+    earlier *OCR*-stage one for the same attempt, since
+    `GradingJobProcessor.process` always commits the OCR-stage row first.
+    """
+    review = effective_latest_review(reviews)
+    if (
+        review is not None
+        and review.action is ReviewAction.MODIFIED
+        and review.human_grade_result_id is not None
+    ):
+        grade_by_id = {grade.id: grade for grade in grades}
+        human_grade = grade_by_id.get(review.human_grade_result_id)
+        if human_grade is not None:
+            human_recognitions = [
+                recognition
+                for recognition in recognitions
+                if recognition.source is GradingSource.HUMAN
+                and recognition.created_at == human_grade.created_at
+            ]
+            if human_recognitions:
+                return human_recognitions[-1]
+    ai_recognitions = [
+        recognition for recognition in recognitions if recognition.source is GradingSource.AI
+    ]
+    return ai_recognitions[-1] if ai_recognitions else None

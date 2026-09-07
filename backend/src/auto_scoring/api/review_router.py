@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.review_actions import (
+    AiGradeChangedError,
     AnnotationInput,
     CriterionInput,
     NoAiGradeYetError,
@@ -54,6 +55,7 @@ from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
     CriterionOutcome,
+    DomainError,
     GradeResult,
     NormalizedRect,
     Question,
@@ -282,6 +284,10 @@ class CriterionOutcomeRequest(BaseModel):
 
 class EditReviewRequest(BaseModel):
     expected_version: int = Field(ge=0)
+    # The id of the AI grade the reviewer's client currently displays, if
+    # any (Issue #22 P1 review). ``None`` skips the check -- see
+    # `adapters.review_actions._latest_ai_grade_matching`'s docstring.
+    expected_ai_grade_id: str | None = None
     score_awarded: int = Field(ge=0)
     score_maximum: int = Field(ge=0)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -300,6 +306,8 @@ class ReasonedReviewRequest(BaseModel):
 
 class ApproveReviewRequest(BaseModel):
     expected_version: int = Field(ge=0)
+    # See `EditReviewRequest.expected_ai_grade_id`.
+    expected_ai_grade_id: str | None = None
     note: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
 
 
@@ -448,6 +456,7 @@ def build_review_router(
                     submission_id=submission_id,
                     question_id=question_id,
                     expected_version=request.expected_version,
+                    expected_ai_grade_id=request.expected_ai_grade_id,
                     score_awarded=request.score_awarded,
                     score_maximum=request.score_maximum,
                     confidence=request.confidence,
@@ -465,10 +474,18 @@ def build_review_router(
                 )
             except (LookupError, QuestionMismatchError) as error:
                 raise HTTPException(404, detail=str(error)) from error
-            except NoAiGradeYetError as error:
+            except (NoAiGradeYetError, AiGradeChangedError) as error:
                 raise HTTPException(409, detail=str(error)) from error
             except ReviewVersionConflict as error:
                 raise _version_conflict(error) from error
+            except (DomainError, ValueError) as error:
+                # A request whose score/criterion-outcome/annotation-rect
+                # combination passed pydantic field validation but fails once
+                # `edit_question` actually builds the domain objects (e.g.
+                # `score_awarded > score_maximum`, an unrecognized criterion
+                # outcome, an out-of-page annotation rect) -- a malformed
+                # client request, not a server fault (P2 review).
+                raise HTTPException(422, detail=str(error)) from error
         return ReviewActionResponse(
             review=ReviewResponse.from_domain(result.review),
             grade=GradeResultResponse.from_domain(result.grade),
@@ -554,12 +571,13 @@ def build_review_router(
                     submission_id=submission_id,
                     question_id=question_id,
                     expected_version=request.expected_version,
+                    expected_ai_grade_id=request.expected_ai_grade_id,
                     note=request.note,
                     now=datetime.now(UTC).replace(tzinfo=None),
                 )
             except (LookupError, QuestionMismatchError) as error:
                 raise HTTPException(404, detail=str(error)) from error
-            except NoAiGradeYetError as error:
+            except (NoAiGradeYetError, AiGradeChangedError) as error:
                 raise HTTPException(409, detail=str(error)) from error
             except ReviewVersionConflict as error:
                 raise _version_conflict(error) from error

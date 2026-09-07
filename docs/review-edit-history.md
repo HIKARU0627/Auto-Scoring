@@ -223,7 +223,77 @@ new row`）。
   非ゼロ終了で失敗を検知。GitHub Actions のブランチ保護必須チェックに含まれる
   （`docs/quality-gates.md` 参照）。
 
-## 10. 対象外（後続Issue）
+## 10. Codexレビュー(1回目)での修正（P1x2 / P2x3）
+
+PR #46 の1回目コードレビューで指摘された5件。§2/§4の設計自体は変えず、
+「下流の消費者」と「エラー変換」の抜けを塞いだ。
+
+- **P1: Undo後もrecognition/gradeの"正本"が消費者側で古いまま**
+  `QuestionReviewState.displayGrade`（Flutter）は元々 `effectiveReview` 経由
+  で undo-aware だったが、recognition側（`latestHumanRecognition`）と、
+  `GradingJobProcessor` が前提設問のcontextを組み立てる際に使っていた
+  `_latest_preferring_human`（「sourceがhumanなら常に最新を採用」、undoを
+  一切見ない）は undo を無視していた。
+  - `domain.review_workflow` に `resolve_effective_grade`/
+    `resolve_effective_recognition` を追加（`effective_latest_review` と同じ
+    「reviewsから実効行を導出する」ロジックを、`GradeResult`/
+    `RecognitionResult` の解決にも適用）。`GradingJobProcessor.process` は
+    前提設問ごとにこれを呼ぶよう変更（`_latest_preferring_human` は削除）。
+  - Flutter側は `QuestionReviewState.effectiveHumanRecognition`
+    （`effectiveReview.action == 'modified'` のときだけ、その human
+    `GradeResult` と同じ `createdAt` を持つ human recognition を返す）を追加
+    し、`latestHumanRecognition`（undo非対応）は削除。Inspector・修正dialog
+    のprefillの両方をこちらに切り替えた。
+- **P1: 承認/修正がreviewerの見ていないAI試行に紐づく**
+  画面ロード後、request到達前にregradeが完了すると（regrade完了はReview行を
+  追加しないため `expected_version` は変化しない）、approve/editが新しい
+  未確認のAI grade へ黙って確定してしまう問題。`EditReviewRequest`/
+  `ApproveReviewRequest` に `expected_ai_grade_id`（省略可）を追加し、
+  `adapters.review_actions._latest_ai_grade_matching` が最新AI gradeのidと
+  比較、不一致なら `AiGradeChangedError` → HTTP 409
+  （`_latest_ai_grade`の代わりにedit_question/approve_questionで使用）。
+  `None`の場合はチェックをスキップ（後方互換; 実際のFlutterクライアントは
+  常に `QuestionReviewState.latestAiGrade?.id` を渡す）。
+- **P2: repository insertのflushがcommit専用のconflict handlerを迂回する**
+  `SqlAlchemyReviewRepository.add()` は呼び出し直後に `session.flush()` する
+  ため、同時書き込みの負け側はここで `IntegrityError` を送出しうる -- 旧
+  `_commit_or_conflict` は `uow.commit()` だけを `try` していたため、この
+  経路は素通りして未処理の500になっていた。`_finalize_review`
+  （`uow.reviews.add` → `_sync_submission_review_state` → `uow.commit()` を
+  ひとつの `try`/`except IntegrityError` で包む）に統合し、edit/reject/
+  regrade/approve/undo の全関数がこれを使うよう変更。実際の並行性を検証する
+  ため、`test_review_api.py` に `threading.Barrier` で両requestを事前チェック
+  通過まで同期させてから競合させるテスト
+  （`test_concurrent_approve_requests_racing_past_the_precheck_resolve_with_one_conflict`）
+  を追加（既存の `test_duplicate_concurrent_approve_requests_do_not_double_create_history`
+  は`TestClient.post`が同期実行のため、実際にはレースしていなかった）。
+- **P2: domain validation失敗が client error に変換されない**
+  `score_awarded > score_maximum`、未知の `criterion.outcome`、ページ外の
+  annotation rect はpydanticの型検証は通過するが、`edit_question` が
+  `Score`/`CriterionResult`/`NormalizedRect` を構築する際に
+  `ScoreOutOfRange`/`InvalidCoordinate`（`DomainError`）または
+  `ValueError`（`CriterionOutcome(...)` の不正値）を送出し、`review_router`
+  はそれらを捕まえていなかった（→ 未処理の500）。`edit()` ハンドラに
+  `except (DomainError, ValueError): raise HTTPException(422, ...)` を追加
+  （`test_registration_router.py` の既存パターンと同じ変換規則）。
+- **P2: reviewer操作中にnavigationしたまま別設問がrefreshされる**
+  action中も設問navigationは有効なままのため、reviewerが設問Aを承認し、
+  requestが完了する前に設問Bへ切り替えると、旧 `_performReviewAction` の
+  `finally` は（その時点の）`_currentQuestion` = Bをrefreshしてしまい、Aの
+  cacheはstaleなまま。`_performReviewAction`/`_refreshQuestion`/`_loadReview`
+  を「操作対象の `QuestionResponse` を明示的に受け取る」形へ変更（各呼び出し
+  元が action 開始前に `question`/`review` をキャプチャ）。`_approveAndNext`
+  も、承認した設問がまだ選択されたままのときだけ auto-advance するよう変更。
+
+修正差分: `backend/src/auto_scoring/domain/review_workflow.py`、
+`backend/src/auto_scoring/jobs/grading_processor.py`、
+`backend/src/auto_scoring/adapters/review_actions.py`、
+`backend/src/auto_scoring/api/review_router.py`、
+`app/lib/features/pdf_review/pdf_review_page.dart`、
+`app/lib/core/app_dependencies.dart`、`app/lib/api/sidecar_api_client.dart`
+（+ `pnpm run openapi:generate` で再生成した `app/packages/auto_scoring_api`）。
+
+## 11. 対象外（後続Issue）
 
 - Redo（Ctrl+Y / Ctrl+Shift+Z）。
 - Annotation の図形的な追加・移動・削除 UI。

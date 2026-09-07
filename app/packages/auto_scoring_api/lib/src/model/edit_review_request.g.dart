@@ -16,6 +16,8 @@ class _$EditReviewRequest extends EditReviewRequest {
   @override
   final BuiltList<CriterionOutcomeRequest>? criteria;
   @override
+  final String? expectedAiGradeId;
+  @override
   final int expectedVersion;
   @override
   final String? note;
@@ -37,6 +39,7 @@ class _$EditReviewRequest extends EditReviewRequest {
       this.comment,
       this.confidence,
       this.criteria,
+      this.expectedAiGradeId,
       required this.expectedVersion,
       this.note,
       this.rationale,
@@ -60,6 +63,7 @@ class _$EditReviewRequest extends EditReviewRequest {
         comment == other.comment &&
         confidence == other.confidence &&
         criteria == other.criteria &&
+        expectedAiGradeId == other.expectedAiGradeId &&
         expectedVersion == other.expectedVersion &&
         note == other.note &&
         rationale == other.rationale &&
@@ -75,6 +79,7 @@ class _$EditReviewRequest extends EditReviewRequest {
     _$hash = $jc(_$hash, comment.hashCode);
     _$hash = $jc(_$hash, confidence.hashCode);
     _$hash = $jc(_$hash, criteria.hashCode);
+    _$hash = $jc(_$hash, expectedAiGradeId.hashCode);
     _$hash = $jc(_$hash, expectedVersion.hashCode);
     _$hash = $jc(_$hash, note.hashCode);
     _$hash = $jc(_$hash, rationale.hashCode);
@@ -92,6 +97,7 @@ class _$EditReviewRequest extends EditReviewRequest {
           ..add('comment', comment)
           ..add('confidence', confidence)
           ..add('criteria', criteria)
+          ..add('expectedAiGradeId', expectedAiGradeId)
           ..add('expectedVersion', expectedVersion)
           ..add('note', note)
           ..add('rationale', rationale)
@@ -125,6 +131,11 @@ class EditReviewRequestBuilder
       _$this._criteria ??= ListBuilder<CriterionOutcomeRequest>();
   set criteria(ListBuilder<CriterionOutcomeRequest>? criteria) =>
       _$this._criteria = criteria;
+
+  String? _expectedAiGradeId;
+  String? get expectedAiGradeId => _$this._expectedAiGradeId;
+  set expectedAiGradeId(String? expectedAiGradeId) =>
+      _$this._expectedAiGradeId = expectedAiGradeId;
 
   int? _expectedVersion;
   int? get expectedVersion => _$this._expectedVersion;
@@ -163,6 +174,7 @@ class EditReviewRequestBuilder
       _comment = $v.comment;
       _confidence = $v.confidence;
       _criteria = $v.criteria?.toBuilder();
+      _expectedAiGradeId = $v.expectedAiGradeId;
       _expectedVersion = $v.expectedVersion;
       _note = $v.note;
       _rationale = $v.rationale;
@@ -196,6 +208,7 @@ class EditReviewRequestBuilder
             comment: comment,
             confidence: confidence,
             criteria: _criteria?.build(),
+            expectedAiGradeId: expectedAiGradeId,
             expectedVersion: BuiltValueNullFieldError.checkNotNull(
                 expectedVersion, r'EditReviewRequest', 'expectedVersion'),
             note: note,

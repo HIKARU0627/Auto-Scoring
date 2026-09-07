@@ -126,12 +126,12 @@ class QuestionReviewState {
 
   /// The OCR pipeline's own reading (Issue #19), or `null` if none exists
   /// yet. Kept separate from [latestGradingRecognition] and
-  /// [latestHumanRecognition]: a multimodal grader may correct the OCR text
-  /// it was given, and that correction is persisted as a *second*, distinct
-  /// AI-sourced row rather than replacing this one (append-only history,
-  /// docs/ai-grading-pipeline.md "AI graderが訂正した認識結果を保持する") --
-  /// so a reviewer can compare what OCR read against what the grader
-  /// actually used, not just see whichever happens to be more recent.
+  /// [effectiveHumanRecognition]: a multimodal grader may correct the OCR
+  /// text it was given, and that correction is persisted as a *second*,
+  /// distinct AI-sourced row rather than replacing this one (append-only
+  /// history, docs/ai-grading-pipeline.md "AI graderが訂正した認識結果を
+  /// 保持する") -- so a reviewer can compare what OCR read against what the
+  /// grader actually used, not just see whichever happens to be more recent.
   RecognitionResponse? get latestOcrRecognition =>
       _latestWhere(recognitions, (r) => r.stage == 'ocr');
 
@@ -139,11 +139,6 @@ class QuestionReviewState {
   /// grading hasn't produced one yet. See [latestOcrRecognition].
   RecognitionResponse? get latestGradingRecognition =>
       _latestWhere(recognitions, (r) => r.stage == 'grading');
-
-  /// The latest human-entered/corrected recognition, or `null` if a human
-  /// has never touched this question yet.
-  RecognitionResponse? get latestHumanRecognition =>
-      _latestWhere(recognitions, (r) => r.stage == 'human');
 
   /// The latest AI-proposed grade, or `null` if none exists yet.
   GradeResultResponse? get latestAiGrade =>
@@ -179,6 +174,29 @@ class QuestionReviewState {
   GradeResultResponse? _gradeById(String? id) {
     if (id == null) return null;
     return _latestWhere(grades, (g) => g.id == id);
+  }
+
+  /// The recognized text currently in effect, given [effectiveReview] --
+  /// the same undo-aware resolution [displayGrade] already gives the score
+  /// (Issue #22 P1 review): once Undo reverts a `modified` review, the human
+  /// [RecognitionResponse] it introduced must stop being treated as the
+  /// authoritative reading the Inspector/edit dialog show, even though its
+  /// row is still there (append-only). A `modified` review in effect shows
+  /// the human recognition sharing its own human grade's `createdAt`
+  /// (`edit_question` persists both from the same clock read, the same
+  /// signal [annotationsForDisplayedAttempt] already relies on) -- `null` if
+  /// that edit did not touch the recognized text at all, so callers fall
+  /// back through [latestGradingRecognition]/[latestOcrRecognition] exactly
+  /// as if no human correction had ever happened.
+  RecognitionResponse? get effectiveHumanRecognition {
+    final review = effectiveReview;
+    if (review?.action != 'modified') return null;
+    final humanGrade = _gradeById(review!.humanGradeResultId);
+    if (humanGrade == null) return null;
+    return _latestWhere(
+      recognitions,
+      (r) => r.stage == 'human' && r.createdAt == humanGrade.createdAt,
+    );
   }
 
   /// Only the annotations belonging to [displayGrade]'s own grading attempt,
@@ -470,10 +488,27 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
 
   /// Manual "更新" action (P1 review: a submission stuck in
   /// unprocessed/ai_processing must be refreshable without relying solely
-  /// on the background poll). Best-effort on the submission refetch -- a
-  /// failure there still lets the question data refresh below, since that
-  /// is the part a reviewer watching a stuck "処理中" state actually wants.
+  /// on the background poll) -- refreshes the *currently selected* question.
+  /// See [_refreshQuestion] for the version [_performReviewAction] uses,
+  /// which refreshes whichever question the action was actually for.
   Future<void> _refreshCurrentQuestion() async {
+    final question = _currentQuestion;
+    if (question == null) return;
+    await _refreshQuestion(question);
+  }
+
+  /// Refreshes [question]'s own recognitions/grades/annotations/reviews
+  /// (plus the submission's own state chip and the job list) regardless of
+  /// which question is currently selected -- [_performReviewAction] passes
+  /// the question an edit/reject/regrade/approve/undo call actually acted
+  /// on, which may no longer be [_currentQuestion] by the time the request
+  /// resolves if the reviewer navigated away while it was in flight (P2
+  /// review): refreshing "the current question" in that case would update
+  /// the wrong question's cache and leave the acted-upon one stale. Best-
+  /// effort on the submission refetch -- a failure there still lets the
+  /// question data refresh below, since that is the part a reviewer
+  /// watching a stuck "処理中" state actually wants.
+  Future<void> _refreshQuestion(QuestionResponse question) async {
     try {
       final submission = await widget.dependencies.getSubmission(
         widget.submissionId,
@@ -485,7 +520,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
     await _refreshJobs();
     _updatePolling();
-    await _ensureReviewLoaded(forceReload: true);
+    await _loadReview(question, forceReload: true);
   }
 
   /// Best-effort refresh of every job for this submission. A failure here
@@ -553,18 +588,31 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
   }
 
-  /// Fetches (or refreshes) the current question's recognitions/grades/
-  /// annotations. [silent] skips flipping [QuestionReviewState.loading]/
-  /// clearing its error and skips surfacing a fetch failure -- used by the
-  /// background poll below so a transient hiccup or the routine "still
-  /// nothing yet" tick doesn't flash the spinner or an error banner over
-  /// content the reviewer is already looking at.
+  /// [_loadReview] for the *currently selected* question. See that method
+  /// for [forceReload]/[silent].
   Future<void> _ensureReviewLoaded({
     bool forceReload = false,
     bool silent = false,
   }) async {
     final question = _currentQuestion;
     if (question == null) return;
+    await _loadReview(question, forceReload: forceReload, silent: silent);
+  }
+
+  /// Fetches (or refreshes) [question]'s recognitions/grades/annotations --
+  /// not necessarily the currently selected one: [_refreshQuestion] passes
+  /// whichever question an in-flight review action was actually for, which
+  /// may differ from [_currentQuestion] by the time that action resolves
+  /// (P2 review). [silent] skips flipping [QuestionReviewState.loading]/
+  /// clearing its error and skips surfacing a fetch failure -- used by the
+  /// background poll below so a transient hiccup or the routine "still
+  /// nothing yet" tick doesn't flash the spinner or an error banner over
+  /// content the reviewer is already looking at.
+  Future<void> _loadReview(
+    QuestionResponse question, {
+    bool forceReload = false,
+    bool silent = false,
+  }) async {
     final existing = _reviews[question.id];
     if (silent && existing != null && existing.loading) {
       // A visible fetch (initial load, manual refresh, or a question
@@ -733,18 +781,27 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   String? _reasonFromNote(QuestionReviewState review) =>
       review.note.trim().isEmpty ? null : review.note.trim();
 
-  /// Runs one edit/reject/regrade/approve/undo call for the current
-  /// question, disabling the action bar for its duration and always
-  /// resyncing this question's full state (recognitions/grades/annotations/
-  /// reviews, and the submission's own state chip) afterwards -- on success
-  /// *and* on failure, since a `SidecarErrorKind.conflict` means another
-  /// request already changed what's on the server (Issue #22 acceptance:
-  /// "同時/重複requestが履歴を二重作成せず…"). Returns whether [action]
-  /// completed without error, so a caller like [_approveAndNext] knows
-  /// whether it is safe to also navigate.
-  Future<bool> _performReviewAction(Future<void> Function() action) async {
-    final review = _currentReview;
-    if (review == null || review.actionInFlight) return false;
+  /// Runs one edit/reject/regrade/approve/undo call for [question],
+  /// disabling [review]'s action bar for its duration and always resyncing
+  /// [question]'s full state (recognitions/grades/annotations/reviews, and
+  /// the submission's own state chip) afterwards -- on success *and* on
+  /// failure, since a `SidecarErrorKind.conflict` means another request
+  /// already changed what's on the server (Issue #22 acceptance: "同時/重複
+  /// requestが履歴を二重作成せず…"). Takes [question]/[review] as explicit
+  /// captured-before-the-await parameters, not read fresh from
+  /// [_currentQuestion]/[_currentReview]: navigation stays enabled while an
+  /// action is in flight (only [question]'s own action bar disables), so the
+  /// reviewer may already have selected a different question by the time
+  /// [action] resolves -- refreshing "whichever question is current then"
+  /// would update the wrong question's cache and leave [question] stale (P2
+  /// review). Returns whether [action] completed without error, so a caller
+  /// like [_approveAndNext] knows whether it is safe to also navigate.
+  Future<bool> _performReviewAction(
+    QuestionResponse question,
+    QuestionReviewState review,
+    Future<void> Function() action,
+  ) async {
+    if (review.actionInFlight) return false;
     setState(() => review.actionInFlight = true);
     var succeeded = false;
     try {
@@ -759,7 +816,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
-      await _refreshCurrentQuestion();
+      await _refreshQuestion(question);
       if (mounted) setState(() => review.actionInFlight = false);
     }
     return succeeded;
@@ -772,15 +829,23 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     var proceed = true;
     if (!review.isConfirmed) {
       proceed = await _performReviewAction(
+        question,
+        review,
         () => widget.dependencies.approveReview(
           widget.submissionId,
           question.id,
           expectedVersion: review.expectedVersion,
+          expectedAiGradeId: review.latestAiGrade?.id,
           note: _reasonFromNote(review),
         ),
       );
     }
     if (!mounted || !proceed) return;
+    // Only auto-advance if the reviewer hasn't already navigated away from
+    // [question] while the approve request above was in flight (P2 review)
+    // -- otherwise this would advance from wherever they've since selected
+    // instead, and [question] itself would never be the one advanced past.
+    if (_currentQuestion?.id != question.id) return;
     if (_questionIndex < _questions.length - 1) {
       _moveQuestion(1);
     } else {
@@ -793,10 +858,13 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   Future<void> _reject() async {
     if (!_canDecide) return;
     final review = _currentReview!;
+    final question = _currentQuestion!;
     await _performReviewAction(
+      question,
+      review,
       () => widget.dependencies.rejectReview(
         widget.submissionId,
-        _currentQuestion!.id,
+        question.id,
         expectedVersion: review.expectedVersion,
         reason: _reasonFromNote(review),
       ),
@@ -806,10 +874,13 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   Future<void> _regrade() async {
     if (!_canDecide) return;
     final review = _currentReview!;
+    final question = _currentQuestion!;
     await _performReviewAction(
+      question,
+      review,
       () => widget.dependencies.regradeReview(
         widget.submissionId,
-        _currentQuestion!.id,
+        question.id,
         expectedVersion: review.expectedVersion,
         reason: _reasonFromNote(review),
       ),
@@ -819,10 +890,13 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   Future<void> _undo() async {
     if (!_canUndo) return;
     final review = _currentReview!;
+    final question = _currentQuestion!;
     await _performReviewAction(
+      question,
+      review,
       () => widget.dependencies.undoReview(
         widget.submissionId,
-        _currentQuestion!.id,
+        question.id,
         expectedVersion: review.expectedVersion,
       ),
     );
@@ -840,7 +914,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final question = _currentQuestion!;
     final currentGrade = review.displayGrade;
     final currentText =
-        review.latestHumanRecognition?.text ??
+        review.effectiveHumanRecognition?.text ??
         review.latestGradingRecognition?.text ??
         review.latestOcrRecognition?.text ??
         '';
@@ -909,10 +983,13 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final text = textController.text.trim();
     final comment = commentController.text.trim();
     await _performReviewAction(
+      question,
+      review,
       () => widget.dependencies.editReview(
         widget.submissionId,
         question.id,
         expectedVersion: review.expectedVersion,
+        expectedAiGradeId: review.latestAiGrade?.id,
         scoreAwarded: score,
         scoreMaximum: question.points,
         comment: comment.isEmpty ? null : comment,
@@ -1253,12 +1330,13 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   ) {
     final ocrRecognition = review.latestOcrRecognition;
     final gradingRecognition = review.latestGradingRecognition;
-    final humanRecognition = review.latestHumanRecognition;
+    // The *effective* human recognition/grade (Issue #22 P1 review), not
+    // simply "the latest human row by timestamp": once Undo reverts a
+    // `modified` review, its own `RecognitionResponse`/`GradeResultResponse`
+    // rows are still there (append-only) but no longer the ones in effect --
+    // see `QuestionReviewState.effectiveHumanRecognition`/`displayGrade`.
+    final humanRecognition = review.effectiveHumanRecognition;
     final aiGrade = review.latestAiGrade;
-    // The *effective* human grade (Issue #22), not simply "the latest human
-    // grade by timestamp": once Undo reverts a `modified` review, its own
-    // `GradeResult` row is still there (append-only) but no longer the one
-    // in effect -- see `QuestionReviewState.displayGrade`.
     final displayGrade = review.displayGrade;
     final humanGrade = displayGrade?.source_ == 'human' ? displayGrade : null;
     final fallbackAnnotations = _fallbackAnnotationsFor(question, review);

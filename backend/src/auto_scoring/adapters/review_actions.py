@@ -16,15 +16,18 @@ Every function:
    `approve_question`/`undo_last_review`).
 3. Appends the new `Review` row and re-syncs the submission's
    `SubmissionState` (`_sync_submission_review_state`) in the *same*
-   transaction, then commits.
+   transaction, then commits -- all through `_finalize_review`.
 
 The version check in step 1 is a cheap pre-check; the real guard against two
 concurrent/duplicate requests both winning is
 ``uq_reviews_submission_question_version`` (`db.orm.ReviewRow`) -- a
 concurrent caller that also passed step 1 (because it read the history before
-this transaction committed) hits that constraint's `IntegrityError` at
-`uow.commit()`, which every function here re-raises as the same
-`ReviewVersionConflict` the pre-check would have raised from a fresh read.
+this transaction committed) hits that constraint's `IntegrityError`. That can
+surface as early as `SqlAlchemyReviewRepository.add`'s own immediate
+`session.flush()`, not only at the final `uow.commit()` (P2 review) --
+`_finalize_review` wraps both in one conflict-handling block, re-raising
+either as the same `ReviewVersionConflict` the pre-check would have raised
+from a fresh read.
 """
 
 from __future__ import annotations
@@ -94,6 +97,34 @@ class QuestionMismatchError(Exception):
         super().__init__(
             f"question {question_id!r} does not belong to submission {submission_id!r}'s test"
         )
+
+
+class AiGradeChangedError(Exception):
+    """`edit_question`/`approve_question` refused: the caller's
+    ``expected_ai_grade_id`` no longer matches this question's latest AI
+    grade (Issue #22 P1 review).
+
+    `regrade_question` completing (`GradingJobProcessor.process` persisting a
+    fresh AI `GradeResult`) never appends a `Review` row, so
+    ``expected_version``'s own optimistic-concurrency check alone cannot
+    detect a regrade that lands after the review screen loaded but before
+    this approve/edit reached the server -- without this separate check, an
+    approval/correction could silently attach itself to an AI attempt the
+    reviewer never actually saw. The caller must reload this question's
+    state and decide again against the current attempt.
+    """
+
+    def __init__(
+        self, submission_id: str, question_id: str, *, expected: str | None, actual: str
+    ) -> None:
+        super().__init__(
+            f"{submission_id!r}:{question_id!r}: expected AI grade {expected!r} but the "
+            f"latest AI grade is now {actual!r}; reload and retry"
+        )
+        self.submission_id = submission_id
+        self.question_id = question_id
+        self.expected = expected
+        self.actual = actual
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -176,21 +207,35 @@ def _sync_submission_review_state(uow: SqlAlchemyUnitOfWork, submission: Submiss
     return replace(submission, state=target)
 
 
-def _commit_or_conflict(
-    uow: SqlAlchemyUnitOfWork, *, submission_id: str, question_id: str, expected_version: int
-) -> None:
-    """Commit the review action's transaction, converting the unique
-    constraint's `IntegrityError` (a concurrent writer's `Review` row won the
-    same ``version`` first) into the same `ReviewVersionConflict` a fresh
-    read would have raised -- see this module's own docstring, point 3.
+def _finalize_review(
+    uow: SqlAlchemyUnitOfWork,
+    review: Review,
+    submission: Submission,
+    *,
+    expected_version: int,
+) -> Submission:
+    """Add ``review``'s row, re-sync ``submission``'s review state, and
+    commit -- one conflict-handling block covering both (P2 review):
+    `SqlAlchemyReviewRepository.add` flushes immediately, so a concurrent
+    writer's `IntegrityError` (the unique constraint on ``version``) can
+    surface right there, not only at the final `uow.commit()` a narrower
+    ``try`` around just the commit would have missed. Either way it is
+    converted into the same `ReviewVersionConflict` a fresh read would have
+    raised -- see this module's own docstring, point 3.
     """
     try:
+        uow.reviews.add(review)
+        submission = _sync_submission_review_state(uow, submission)
         uow.commit()
     except IntegrityError as error:
         uow.rollback()
         raise ReviewVersionConflict(
-            submission_id, question_id, expected=expected_version, actual=expected_version + 1
+            review.submission_id,
+            review.question_id,
+            expected=expected_version,
+            actual=expected_version + 1,
         ) from error
+    return submission
 
 
 def _latest_ai_grade(
@@ -199,6 +244,28 @@ def _latest_ai_grade(
     grade = uow.grades.latest(submission_id, question_id, GradingSource.AI)
     if grade is None:
         raise NoAiGradeYetError(submission_id, question_id)
+    return grade
+
+
+def _latest_ai_grade_matching(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    submission_id: str,
+    question_id: str,
+    expected_ai_grade_id: str | None,
+) -> GradeResult:
+    """`_latest_ai_grade`, additionally refusing (`AiGradeChangedError`) if
+    ``expected_ai_grade_id`` is given and no longer names the latest AI
+    grade -- see that error's docstring. ``None`` skips the check entirely
+    (a caller that never loaded an AI grade at all -- e.g. an older client --
+    has nothing to compare against; this only guards a client that *did*
+    display one).
+    """
+    grade = _latest_ai_grade(uow, submission_id=submission_id, question_id=question_id)
+    if expected_ai_grade_id is not None and grade.id != expected_ai_grade_id:
+        raise AiGradeChangedError(
+            submission_id, question_id, expected=expected_ai_grade_id, actual=grade.id
+        )
     return grade
 
 
@@ -252,6 +319,7 @@ def edit_question(
     submission_id: str,
     question_id: str,
     expected_version: int,
+    expected_ai_grade_id: str | None = None,
     score_awarded: int,
     score_maximum: int,
     confidence: float = 1.0,
@@ -275,12 +343,20 @@ def edit_question(
     て承認しても元AI値が参照できる").
 
     Requires an AI grade to already exist (`NoAiGradeYetError` otherwise) --
-    see that error's docstring.
+    see that error's docstring. ``expected_ai_grade_id``, if given, must name
+    that AI grade or this refuses with `AiGradeChangedError` (Issue #22 P1
+    review: a regrade must not let this edit silently record an AI baseline
+    the reviewer never actually saw).
     """
     submission, _test_id = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
-    ai_grade = _latest_ai_grade(uow, submission_id=submission_id, question_id=question_id)
+    ai_grade = _latest_ai_grade_matching(
+        uow,
+        submission_id=submission_id,
+        question_id=question_id,
+        expected_ai_grade_id=expected_ai_grade_id,
+    )
     version, _existing = _next_version(
         uow,
         submission_id=submission_id,
@@ -358,11 +434,7 @@ def edit_question(
             based_on_created_at=ai_grade.created_at,
             now=now,
         )
-    uow.reviews.add(review)
-    submission = _sync_submission_review_state(uow, submission)
-    _commit_or_conflict(
-        uow, submission_id=submission_id, question_id=question_id, expected_version=expected_version
-    )
+    submission = _finalize_review(uow, review, submission, expected_version=expected_version)
 
     return EditResult(
         review=review,
@@ -408,11 +480,7 @@ def reject_question(
         note=reason,
         created_at=now,
     )
-    uow.reviews.add(review)
-    submission = _sync_submission_review_state(uow, submission)
-    _commit_or_conflict(
-        uow, submission_id=submission_id, question_id=question_id, expected_version=expected_version
-    )
+    submission = _finalize_review(uow, review, submission, expected_version=expected_version)
     return review, submission
 
 
@@ -490,11 +558,7 @@ def regrade_question(
         created_at=now,
     )
     uow.jobs.add(job)
-    uow.reviews.add(review)
-    submission = _sync_submission_review_state(uow, submission)
-    _commit_or_conflict(
-        uow, submission_id=submission_id, question_id=question_id, expected_version=expected_version
-    )
+    submission = _finalize_review(uow, review, submission, expected_version=expected_version)
     return review, job, submission
 
 
@@ -504,6 +568,7 @@ def approve_question(
     submission_id: str,
     question_id: str,
     expected_version: int,
+    expected_ai_grade_id: str | None = None,
     note: str | None,
     now: datetime,
 ) -> tuple[Review, Submission]:
@@ -513,11 +578,20 @@ def approve_question(
 
     Requires an AI grade to exist (`NoAiGradeYetError` otherwise), mirroring
     the pre-existing Flutter `_canApprove` gate this replaces.
+    ``expected_ai_grade_id``, if given, must name that AI grade or this
+    refuses with `AiGradeChangedError` -- see that error's docstring (Issue
+    #22 P1 review: a regrade completing after the reviewer loaded the screen
+    must not let this approval silently confirm an attempt they never saw).
     """
     submission, _test_id = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
-    ai_grade = _latest_ai_grade(uow, submission_id=submission_id, question_id=question_id)
+    ai_grade = _latest_ai_grade_matching(
+        uow,
+        submission_id=submission_id,
+        question_id=question_id,
+        expected_ai_grade_id=expected_ai_grade_id,
+    )
     version, _existing = _next_version(
         uow,
         submission_id=submission_id,
@@ -534,11 +608,7 @@ def approve_question(
         note=note,
         created_at=now,
     )
-    uow.reviews.add(review)
-    submission = _sync_submission_review_state(uow, submission)
-    _commit_or_conflict(
-        uow, submission_id=submission_id, question_id=question_id, expected_version=expected_version
-    )
+    submission = _finalize_review(uow, review, submission, expected_version=expected_version)
     return review, submission
 
 
@@ -582,9 +652,5 @@ def undo_last_review(
         undone_review_id=target.id,
         created_at=now,
     )
-    uow.reviews.add(review)
-    submission = _sync_submission_review_state(uow, submission)
-    _commit_or_conflict(
-        uow, submission_id=submission_id, question_id=question_id, expected_version=expected_version
-    )
+    submission = _finalize_review(uow, review, submission, expected_version=expected_version)
     return review, submission

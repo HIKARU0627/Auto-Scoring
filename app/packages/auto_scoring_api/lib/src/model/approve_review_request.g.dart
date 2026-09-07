@@ -8,6 +8,8 @@ part of 'approve_review_request.dart';
 
 class _$ApproveReviewRequest extends ApproveReviewRequest {
   @override
+  final String? expectedAiGradeId;
+  @override
   final int expectedVersion;
   @override
   final String? note;
@@ -16,7 +18,8 @@ class _$ApproveReviewRequest extends ApproveReviewRequest {
           [void Function(ApproveReviewRequestBuilder)? updates]) =>
       (ApproveReviewRequestBuilder()..update(updates))._build();
 
-  _$ApproveReviewRequest._({required this.expectedVersion, this.note})
+  _$ApproveReviewRequest._(
+      {this.expectedAiGradeId, required this.expectedVersion, this.note})
       : super._();
   @override
   ApproveReviewRequest rebuild(
@@ -31,6 +34,7 @@ class _$ApproveReviewRequest extends ApproveReviewRequest {
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
     return other is ApproveReviewRequest &&
+        expectedAiGradeId == other.expectedAiGradeId &&
         expectedVersion == other.expectedVersion &&
         note == other.note;
   }
@@ -38,6 +42,7 @@ class _$ApproveReviewRequest extends ApproveReviewRequest {
   @override
   int get hashCode {
     var _$hash = 0;
+    _$hash = $jc(_$hash, expectedAiGradeId.hashCode);
     _$hash = $jc(_$hash, expectedVersion.hashCode);
     _$hash = $jc(_$hash, note.hashCode);
     _$hash = $jf(_$hash);
@@ -47,6 +52,7 @@ class _$ApproveReviewRequest extends ApproveReviewRequest {
   @override
   String toString() {
     return (newBuiltValueToStringHelper(r'ApproveReviewRequest')
+          ..add('expectedAiGradeId', expectedAiGradeId)
           ..add('expectedVersion', expectedVersion)
           ..add('note', note))
         .toString();
@@ -56,6 +62,11 @@ class _$ApproveReviewRequest extends ApproveReviewRequest {
 class ApproveReviewRequestBuilder
     implements Builder<ApproveReviewRequest, ApproveReviewRequestBuilder> {
   _$ApproveReviewRequest? _$v;
+
+  String? _expectedAiGradeId;
+  String? get expectedAiGradeId => _$this._expectedAiGradeId;
+  set expectedAiGradeId(String? expectedAiGradeId) =>
+      _$this._expectedAiGradeId = expectedAiGradeId;
 
   int? _expectedVersion;
   int? get expectedVersion => _$this._expectedVersion;
@@ -73,6 +84,7 @@ class ApproveReviewRequestBuilder
   ApproveReviewRequestBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
+      _expectedAiGradeId = $v.expectedAiGradeId;
       _expectedVersion = $v.expectedVersion;
       _note = $v.note;
       _$v = null;
@@ -96,6 +108,7 @@ class ApproveReviewRequestBuilder
   _$ApproveReviewRequest _build() {
     final _$result = _$v ??
         _$ApproveReviewRequest._(
+          expectedAiGradeId: expectedAiGradeId,
           expectedVersion: BuiltValueNullFieldError.checkNotNull(
               expectedVersion, r'ApproveReviewRequest', 'expectedVersion'),
           note: note,

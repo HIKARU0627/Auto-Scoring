@@ -11,11 +11,15 @@ part 'approve_review_request.g.dart';
 /// ApproveReviewRequest
 ///
 /// Properties:
+/// * [expectedAiGradeId]
 /// * [expectedVersion]
 /// * [note]
 @BuiltValue()
 abstract class ApproveReviewRequest
     implements Built<ApproveReviewRequest, ApproveReviewRequestBuilder> {
+  @BuiltValueField(wireName: r'expected_ai_grade_id')
+  String? get expectedAiGradeId;
+
   @BuiltValueField(wireName: r'expected_version')
   int get expectedVersion;
 
@@ -51,6 +55,13 @@ class _$ApproveReviewRequestSerializer
     ApproveReviewRequest object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
+    if (object.expectedAiGradeId != null) {
+      yield r'expected_ai_grade_id';
+      yield serializers.serialize(
+        object.expectedAiGradeId,
+        specifiedType: const FullType.nullable(String),
+      );
+    }
     yield r'expected_version';
     yield serializers.serialize(
       object.expectedVersion,
@@ -88,6 +99,14 @@ class _$ApproveReviewRequestSerializer
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
+        case r'expected_ai_grade_id':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
+          result.expectedAiGradeId = valueDes;
+          break;
         case r'expected_version':
           final valueDes = serializers.deserialize(
             value,

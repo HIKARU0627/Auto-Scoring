@@ -18,6 +18,7 @@ part 'edit_review_request.g.dart';
 /// * [comment]
 /// * [confidence]
 /// * [criteria]
+/// * [expectedAiGradeId]
 /// * [expectedVersion]
 /// * [note]
 /// * [rationale]
@@ -38,6 +39,9 @@ abstract class EditReviewRequest
 
   @BuiltValueField(wireName: r'criteria')
   BuiltList<CriterionOutcomeRequest>? get criteria;
+
+  @BuiltValueField(wireName: r'expected_ai_grade_id')
+  String? get expectedAiGradeId;
 
   @BuiltValueField(wireName: r'expected_version')
   int get expectedVersion;
@@ -111,6 +115,13 @@ class _$EditReviewRequestSerializer
         object.criteria,
         specifiedType:
             const FullType(BuiltList, [FullType(CriterionOutcomeRequest)]),
+      );
+    }
+    if (object.expectedAiGradeId != null) {
+      yield r'expected_ai_grade_id';
+      yield serializers.serialize(
+        object.expectedAiGradeId,
+        specifiedType: const FullType.nullable(String),
       );
     }
     yield r'expected_version';
@@ -207,6 +218,14 @@ class _$EditReviewRequestSerializer
           ) as BuiltList<CriterionOutcomeRequest>?;
           if (valueDes == null) continue;
           result.criteria.replace(valueDes);
+          break;
+        case r'expected_ai_grade_id':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
+          result.expectedAiGradeId = valueDes;
           break;
         case r'expected_version':
           final valueDes = serializers.deserialize(

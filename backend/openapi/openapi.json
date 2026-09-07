@@ -168,6 +168,17 @@
       },
       "ApproveReviewRequest": {
         "properties": {
+          "expected_ai_grade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Ai Grade Id"
+          },
           "expected_version": {
             "minimum": 0.0,
             "title": "Expected Version",
@@ -575,6 +586,17 @@
             },
             "title": "Criteria",
             "type": "array"
+          },
+          "expected_ai_grade_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Ai Grade Id"
           },
           "expected_version": {
             "minimum": 0.0,

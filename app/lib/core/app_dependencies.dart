@@ -118,6 +118,7 @@ Future<ReviewActionResponse> _unavailableEditReview(
   String submissionId,
   String questionId, {
   required int expectedVersion,
+  String? expectedAiGradeId,
   required int scoreAwarded,
   required int scoreMaximum,
   double confidence = 1.0,
@@ -147,6 +148,7 @@ Future<ReviewActionResponse> _unavailableApproveReview(
   String submissionId,
   String questionId, {
   required int expectedVersion,
+  String? expectedAiGradeId,
   String? note,
 }) async => _unavailable();
 
@@ -291,12 +293,15 @@ typedef ListReviews =
 /// annotations) -- always confirms in the same step (Issue #22 "edit").
 /// [expectedVersion] must be this question's current review-history length
 /// (`ListReviews`'s result); a stale value throws [SidecarApiException] with
-/// `SidecarErrorKind.conflict`, as does having no AI grade yet to correct.
+/// `SidecarErrorKind.conflict`, as does having no AI grade yet to correct,
+/// or a stale [expectedAiGradeId] (Issue #22 P1 review) -- see
+/// `SidecarApiClient.editReview`.
 typedef EditReview =
     Future<ReviewActionResponse> Function(
       String submissionId,
       String questionId, {
       required int expectedVersion,
+      String? expectedAiGradeId,
       required int scoreAwarded,
       required int scoreMaximum,
       double confidence,
@@ -327,12 +332,13 @@ typedef RegradeReview =
     });
 
 /// Confirms the AI's current proposal as-is (Issue #22 "approve", the
-/// confirm half of "承認して次へ").
+/// confirm half of "承認して次へ"). See [EditReview] for [expectedAiGradeId].
 typedef ApproveReview =
     Future<ReviewActionResponse> Function(
       String submissionId,
       String questionId, {
       required int expectedVersion,
+      String? expectedAiGradeId,
       String? note,
     });
 

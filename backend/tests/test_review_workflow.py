@@ -8,15 +8,17 @@ from __future__ import annotations
 
 import pytest
 
-from auto_scoring.domain.models import ReviewAction
+from auto_scoring.domain.models import GradingSource, ReviewAction
 from auto_scoring.domain.review_workflow import (
     ReviewVersionConflict,
     all_questions_confirmed,
     effective_latest_review,
     is_confirmed,
     next_review_version,
+    resolve_effective_grade,
+    resolve_effective_recognition,
 )
-from tests.support import at, make_review
+from tests.support import at, make_grade, make_recognition, make_review
 
 
 def test_next_review_version_starts_at_one() -> None:
@@ -119,3 +121,146 @@ def test_all_questions_confirmed_requires_every_question_to_have_a_confirmed_rev
 
 def test_all_questions_confirmed_treats_a_missing_question_as_unconfirmed() -> None:
     assert all_questions_confirmed(["q-1"], {}) is False
+
+
+def test_resolve_effective_grade_is_the_latest_ai_grade_when_nothing_is_reviewed() -> None:
+    grades = [make_grade(id="g-ai-1"), make_grade(id="g-ai-2", created_at=at(1))]
+    assert resolve_effective_grade([], grades) is grades[-1]
+
+
+def test_resolve_effective_grade_follows_a_modified_reviews_own_human_grade() -> None:
+    grades = [make_grade(id="g-ai"), make_grade(id="g-human", source=GradingSource.HUMAN)]
+    reviews = [
+        make_review(
+            action=ReviewAction.MODIFIED,
+            ai_grade_result_id="g-ai",
+            human_grade_result_id="g-human",
+        )
+    ]
+    result = resolve_effective_grade(reviews, grades)
+    assert result is not None
+    assert result.id == "g-human"
+
+
+def test_resolve_effective_grade_follows_an_approved_reviews_own_ai_grade() -> None:
+    grades = [make_grade(id="g-ai-1"), make_grade(id="g-ai-2", created_at=at(1))]
+    reviews = [make_review(action=ReviewAction.APPROVED, ai_grade_result_id="g-ai-1")]
+    result = resolve_effective_grade(reviews, grades)
+    assert result is not None
+    assert result.id == "g-ai-1"
+
+
+def test_resolve_effective_grade_reverts_to_the_latest_ai_grade_after_undo() -> None:
+    """Issue #22 P1 review: a downstream consumer resolving "the" grade for
+    a question must stop seeing a `modified` review's human correction once
+    Undo reverts it -- the same guarantee `QuestionReviewState.displayGrade`
+    already gives the review screen itself."""
+    grades = [make_grade(id="g-ai"), make_grade(id="g-human", source=GradingSource.HUMAN)]
+    modified = make_review(
+        id="r1",
+        action=ReviewAction.MODIFIED,
+        ai_grade_result_id="g-ai",
+        human_grade_result_id="g-human",
+    )
+    reviews = [
+        modified,
+        make_review(
+            id="r2",
+            version=2,
+            action=ReviewAction.UNDONE,
+            ai_grade_result_id=None,
+            undone_review_id="r1",
+            created_at=at(1),
+        ),
+    ]
+    result = resolve_effective_grade(reviews, grades)
+    assert result is not None
+    assert result.id == "g-ai"
+
+
+def test_resolve_effective_recognition_is_the_latest_ai_recognition_by_default() -> None:
+    recognitions = [
+        make_recognition(id="rec-ai-1"),
+        make_recognition(id="rec-ai-2", created_at=at(1)),
+    ]
+    assert resolve_effective_recognition([], [], recognitions) is recognitions[-1]
+
+
+def test_resolve_effective_recognition_follows_a_modified_reviews_own_human_edit() -> None:
+    """`edit_question` persists the human `GradeResult` and (if the edit
+    touched the text) `RecognitionResult` from the same clock read -- the
+    shared `created_at` is what ties them together."""
+    grades = [
+        make_grade(id="g-ai"),
+        make_grade(id="g-human", source=GradingSource.HUMAN, created_at=at(5)),
+    ]
+    recognitions = [
+        make_recognition(id="rec-ai"),
+        make_recognition(
+            id="rec-human", source=GradingSource.HUMAN, text="人による修正", created_at=at(5)
+        ),
+    ]
+    reviews = [
+        make_review(
+            action=ReviewAction.MODIFIED,
+            ai_grade_result_id="g-ai",
+            human_grade_result_id="g-human",
+        )
+    ]
+    result = resolve_effective_recognition(reviews, grades, recognitions)
+    assert result is not None
+    assert result.id == "rec-human"
+
+
+def test_resolve_effective_recognition_falls_back_to_ai_when_the_edit_did_not_touch_text() -> None:
+    """An edit that only changed the score (no `recognized_text`) never
+    creates a human `RecognitionResult` at all -- the effective recognition
+    must still fall back to the latest AI one, not disappear."""
+    grades = [
+        make_grade(id="g-ai"),
+        make_grade(id="g-human", source=GradingSource.HUMAN, created_at=at(5)),
+    ]
+    recognitions = [make_recognition(id="rec-ai")]
+    reviews = [
+        make_review(
+            action=ReviewAction.MODIFIED,
+            ai_grade_result_id="g-ai",
+            human_grade_result_id="g-human",
+        )
+    ]
+    result = resolve_effective_recognition(reviews, grades, recognitions)
+    assert result is not None
+    assert result.id == "rec-ai"
+
+
+def test_resolve_effective_recognition_reverts_to_ai_after_undo() -> None:
+    grades = [
+        make_grade(id="g-ai"),
+        make_grade(id="g-human", source=GradingSource.HUMAN, created_at=at(5)),
+    ]
+    recognitions = [
+        make_recognition(id="rec-ai"),
+        make_recognition(
+            id="rec-human", source=GradingSource.HUMAN, text="人による修正", created_at=at(5)
+        ),
+    ]
+    modified = make_review(
+        id="r1",
+        action=ReviewAction.MODIFIED,
+        ai_grade_result_id="g-ai",
+        human_grade_result_id="g-human",
+    )
+    reviews = [
+        modified,
+        make_review(
+            id="r2",
+            version=2,
+            action=ReviewAction.UNDONE,
+            ai_grade_result_id=None,
+            undone_review_id="r1",
+            created_at=at(6),
+        ),
+    ]
+    result = resolve_effective_recognition(reviews, grades, recognitions)
+    assert result is not None
+    assert result.id == "rec-ai"
