@@ -24,13 +24,19 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Sidecar local data dir (simplified-design-specification.md §23) -- created
-# at runtime by `auto_scoring.api.sidecar.run` when no --app-data-dir is given.
-# The default is relative to the sidecar process's CWD, which varies by how
-# it is launched (repo root, backend/, app/), so cover all three.
+# Sidecar local data dir (simplified-design-specification.md §23). The default
+# is now the OS's per-user location, outside any checkout
+# (`auto_scoring.api.sidecar.default_app_data_dir`, docs/windows-distribution.md
+# §3), but `--app-data-dir ./app-data` is still a normal thing to type while
+# developing, from any of the three directories tests and tools run in.
 /app-data/
 /backend/app-data/
 /app/app-data/
+
+# PyInstaller output for the bundled sidecar (`pnpm run package:sidecar`).
+# The distributable artifact is built by CI, never committed.
+/backend/build/
+/backend/dist/
 
 # Scratch state left by a Codex-based code-review run against this worktree
 # (its CODEX_HOME and log, and any protocol-schema dump it generates while

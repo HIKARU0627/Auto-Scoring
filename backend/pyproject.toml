@@ -35,6 +35,12 @@ dev = [
     "ruff>=0.9",
     # PoC 3 evidence measurement and sample generation.
     "pillow>=12.3",
+    # Freezes the sidecar into the onedir bundle the Windows installer ships
+    # (Issue #24, `pnpm run package:sidecar`, `packaging/auto-scoring-sidecar.spec`).
+    # A build tool, never imported by `auto_scoring`, so it stays out of
+    # `[project].dependencies` -- shipping it inside its own output would be
+    # circular.
+    "pyinstaller>=6.11,<7.0",
 ]
 
 [build-system]
