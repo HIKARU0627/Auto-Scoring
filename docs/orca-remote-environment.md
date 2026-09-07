@@ -47,6 +47,8 @@ SSH は本書の手順を流すための管理経路にすぎず、接続確立�
   `~/.cache/orca/appimage/launcher/orca-ide`（`~/Downloads/orca-linux.AppImage` から展開）。
 - ログインシェルの `orca` は `~/.local/bin/orca`（Orca CLI 1.4.197）。
 - Claude Code / Codex / Cursor Agent の CLI が `~/.local/bin` に導入済み。
+- **日本語フォントが導入済み** — `sudo apt install fonts-ipafont-gothic`。
+  backend の PDF出力テストに必要（§8）。
 
 > **注意: `/usr/bin/orca` は Orca ではない。** Ubuntu の `/usr/bin/orca` は GNOME の
 > スクリーンリーダー（`orca` パッケージ、バージョン 46.1）で、名前が衝突している。
@@ -435,8 +437,7 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
    [ade-setup.md](./ade-setup.md)「必要環境」の導入が必要。Node.js は v18.19.1 で、
    `package.json` の `engines.node >=24.14.0` に満たないため更新も要る。
    **ただしツールを揃えても `pnpm run check` は Ubuntu では完走しない**（§8）。
-
-3・4 が終わるまで、リモートランタイムで扱えるのは Auto-Scoring 以外のリポジトリに限る。
+   3・4 が終わるまで、リモートランタイムで扱えるのは Auto-Scoring 以外のリポジトリに限る。
 
 ## 8. `pnpm run check` は Ubuntu で完走しない（プラットフォーム制約）
 
@@ -448,14 +449,34 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
 
 リモート実行の可否は次の通り。
 
-| gate                                       | Ubuntu   | 備考                                                   |
-| ------------------------------------------ | -------- | ------------------------------------------------------ |
-| `skills:check` / `format:check`            | 可       | Node のみ                                              |
-| `openapi:check`                            | 可       | Node のみ                                              |
-| `lint` / `typecheck`（app・backend）       | 可       | `flutter analyze`・Ruff・mypy はクロスプラットフォーム |
-| `test`（`flutter test` / `pytest`）        | 可       | 同上                                                   |
-| `build:backend`                            | 可       | パッケージ import のみ                                 |
-| **`build:app`（`flutter build windows`）** | **不可** | Windows ホストが必須                                   |
+| gate                                       | Ubuntu   | 備考                                                       |
+| ------------------------------------------ | -------- | ---------------------------------------------------------- |
+| `skills:check` / `format:check`            | 可       | Node のみ                                                  |
+| `openapi:check`                            | 要 Java  | `openapi-generator` が JRE を要求（`scripts/openapi.mjs`） |
+| `lint` / `typecheck`（app・backend）       | 可       | `flutter analyze`・Ruff・mypy はクロスプラットフォーム     |
+| `test`（`flutter test` / `pytest`）        | 可       | 同上。ただし日本語フォントが要る（下記）                   |
+| `build:backend`                            | 可       | パッケージ import のみ                                     |
+| **`build:app`（`flutter build windows`）** | **不可** | Windows ホストが必須                                       |
+
+### 8.1 `pnpm run test:backend` に必要な日本語フォント
+
+PDF出力の文字描画は Windows 同梱の日本語フォントを使う
+（`pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES`。フォントを同梱・再配布しないための
+決定で、[pdf-export.md](./pdf-export.md) §3.2）。それが無い環境では、テスト側が
+**そのテストのassertionが必要とするグリフを実際に持つ**ローカルフォントを候補の末尾へ
+追記して走る（`backend/tests/font_support.py`）。
+
+ここで Ubuntu 標準のフォントは**日本語と Latin のどちらか片方しか持たない** ——
+`DroidSansFallbackFull` は唯一の漢字対応 TrueType なのに数字を持たず、`DejaVuSans` は
+その逆で、同梱の Noto CJK は CFF アウトラインなので reportlab が読めない。**同一ページに
+点数（`4/5`）と日本語コメントの両方を描いて両方を検証するテストは、両方のグリフを持つ
+1つのフォントを要求する**ため、素のイメージでは skip されてしまう。
+
+そこで **`sudo apt install fonts-ipafont-gothic` を Ubuntu 側の必須パッケージとする**
+（`fonts-vlgothic` / `fonts-takao-gothic` でも可）。IPAゴシックは日本語と Latin/数字の
+両方を持ち、`font_support.py` の候補にも入っているため、導入すれば
+**backend は skip 0 件**で完走する。入れない場合は該当2件が skip され、その分は Windows
+CI でのみ検証されることになる（[mvp-acceptance.md](./mvp-acceptance.md) §4）。
 
 したがって、リモート開発時の Windows build の検証は次のどちらかで担保する。
 

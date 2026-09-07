@@ -19,6 +19,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.db.base import Base
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
+from tests.font_support import forget_registered_font
 
 
 @pytest.fixture
@@ -62,3 +63,18 @@ def make_uow(
 @pytest.fixture
 def store(tmp_path: Path) -> LocalFileStore:
     return LocalFileStore(tmp_path / "app-data")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_font_registration() -> Iterator[None]:
+    """Every test starts and ends with no export font registered.
+
+    Session-wide rather than per-module because what leaks is process-wide:
+    reportlab's font registry is keyed by name and ignores a re-registration
+    under a name it already holds (`font_support.forget_registered_font`).
+    A module that installs a fallback face would otherwise decide the font
+    for every module collected after it.
+    """
+    forget_registered_font()
+    yield
+    forget_registered_font()

@@ -175,6 +175,13 @@ Issue #21 の対象外どおり、`PdfReviewPage`のaction bar（修正/却下/�
   正規化座標(0.5, 0.5)のannotationが実際の画面上でpdfrxが報告したページ
   実寸（`pageOverlaysBuilder`が包む`Positioned`）に対して期待位置へ乗ることを
   検証する。
+  なお`flutter test`はpdfiumのネイティブライブラリを自力では解決できない
+  （`pdfium_dart`はビルド済みFlutterアプリの隣か`.dart_tool/native_assets.yaml`
+  しか見ないが、Linuxの`flutter test`にはどちらも無い）。同ファイルの
+  `_hookBuiltPdfiumModule`が、`pdfium_dart`のbuild hookが実際にダウンロード
+  済みのライブラリを`output.json`から読み取って`Pdfrx.pdfiumModulePath`へ
+  渡すため、Linuxでも**実pdfium**で走る（Windowsは従来の解決経路のまま。
+  [mvp-acceptance.md](./mvp-acceptance.md) §4.1）。
 
 PoC 3が検証した回転・CropBox・非ゼロ原点MediaBoxの全fixtureをこの画面の
 自動テストで再検証してはいない（代表fixture1点のみ、受入条件の文言どおり）。

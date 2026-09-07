@@ -11,6 +11,7 @@ import hashlib
 from pathlib import Path
 from threading import Lock
 
+import pytest
 from pypdf import PdfReader, PdfWriter
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -32,7 +33,25 @@ from auto_scoring.domain.models import (
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import PageGeometry
 from auto_scoring.jobs.export_processor import ExportJobProcessor, export_id
+from tests.font_support import install_font_covering
 from tests.support import at, make_grade, make_question, make_review, make_submission, make_test
+
+#: The comment every export-ready fixture below stamps on the page. Named
+#: because `japanese_font` has to hand the exact text to
+#: `install_font_covering` -- the whole point being that the font is checked
+#: for the glyphs this module actually draws, not assumed.
+_FIXTURE_COMMENT = "理由の説明が不足しています。"
+
+
+@pytest.fixture
+def japanese_font(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requested by every test whose export draws `_FIXTURE_COMMENT`, i.e.
+    every one that seeds a reviewed submission and then actually renders it
+    (tests/font_support.py). The score drawn alongside it is deliberately
+    *not* required here: none of these assert on it, and demanding Latin
+    glyphs too would skip them on machines whose only Japanese face has
+    none."""
+    install_font_covering(monkeypatch, _FIXTURE_COMMENT)
 
 
 def _write_source_pdf(path: Path, *, pages: int = 1) -> None:
@@ -86,7 +105,7 @@ def _seed_reviewed_submission(
                 question_id="q-1",
                 source=GradingSource.AI,
                 kind=AnnotationKind.COMMENT,
-                comment="理由の説明が不足しています。",
+                comment=_FIXTURE_COMMENT,
                 created_at=at(),
             )
         )
@@ -139,7 +158,7 @@ def _seed_second_reviewed_submission_for_the_same_test(
                 question_id="q-1",
                 source=GradingSource.AI,
                 kind=AnnotationKind.COMMENT,
-                comment="理由の説明が不足しています。",
+                comment=_FIXTURE_COMMENT,
                 created_at=at(),
             )
         )
@@ -201,6 +220,7 @@ class _FailingEngine:
         raise RuntimeError("simulated rendering failure")
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_generates_an_annotated_pdf_and_records_the_export(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -254,6 +274,7 @@ async def test_refuses_when_a_question_has_no_confirmed_review(
     assert not store.exports_dir().exists()
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_replaying_the_same_job_is_idempotent(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -271,6 +292,7 @@ async def test_replaying_the_same_job_is_idempotent(
     assert len(list(store.exports_dir().glob("*.pdf"))) == 1
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_two_different_jobs_for_the_same_submission_produce_two_numbered_files(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -321,6 +343,7 @@ async def test_a_generation_failure_leaves_no_export_and_no_file_and_does_not_to
     assert source_path.read_bytes() == original_bytes
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_a_prior_successful_export_survives_a_later_failed_attempt(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -343,6 +366,7 @@ async def test_a_prior_successful_export_survives_a_later_failed_attempt(
     assert first_path.read_bytes() == first_bytes
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_a_missing_file_after_a_prior_commit_is_regenerated_and_repaired(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -383,6 +407,7 @@ async def test_a_missing_file_after_a_prior_commit_is_regenerated_and_repaired(
         assert repaired.file_sha256 == hashlib.sha256(output_path.read_bytes()).hexdigest()
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_a_job_cancelled_before_publish_does_not_create_an_export(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -414,13 +439,17 @@ async def test_a_job_cancelled_before_publish_does_not_create_an_export(
 
 
 async def test_repair_regenerates_from_the_recorded_snapshot_not_a_later_review_change(
-    session_factory: sessionmaker[Session], store: LocalFileStore
+    session_factory: sessionmaker[Session], store: LocalFileStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """P2 review, round 2: if a reviewer edits/regrades a question between
     an export's original (lost) file and a later repair-retry of the same
     job, the repaired file must still reflect exactly what was true at the
     *recorded* `review_versions` snapshot -- never a newer grade silently
     attributed to that older row's provenance."""
+    # Unlike its siblings this one reads the drawn score back out of the PDF,
+    # so the font has to carry the digits as well as the comment -- see
+    # `japanese_font`, whose weaker requirement would not do here.
+    install_font_covering(monkeypatch, _FIXTURE_COMMENT + "4/5" + "2/5")
     _seed_reviewed_submission(session_factory, store)  # q-1: grade-1 (4/5), version=1
     job = _seed_export_job(session_factory)
     processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
@@ -461,6 +490,7 @@ async def test_repair_regenerates_from_the_recorded_snapshot_not_a_later_review_
     assert "2/5" not in text
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_a_new_export_never_reuses_a_path_a_lost_export_row_still_reserves(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -509,6 +539,7 @@ async def test_a_new_export_never_reuses_a_path_a_lost_export_row_still_reserves
     assert path_b.read_bytes() == path_b_bytes  # untouched by A's repair
 
 
+@pytest.mark.usefixtures("japanese_font")
 async def test_a_new_export_for_a_different_submission_does_not_reuse_a_path_reserved_by_another(
     session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
