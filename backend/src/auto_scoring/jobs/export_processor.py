@@ -270,20 +270,24 @@ class ExportJobProcessor:
         snapshot: tuple[QuestionReviewVersion, ...],
         data: bytes,
     ) -> ProcessingResult:
-        # Every path any Export row for this submission already names is
-        # off-limits, not just what's currently on disk (P1 review, round
-        # 3): a row whose own file write failed after its DB commit (the
-        # exact scenario `_existing_file_is_intact`/`_repair_existing_export`
-        # exist for) still reserves its `file_path` -- nothing has freed it
-        # just because there is nothing there to see yet. Handing that same
-        # path to a *different*, unrelated new export here would let this
-        # write occupy it, and a later repair-retry of the original job
-        # would then overwrite this one's file out from under it.
-        reserved_paths = {
-            export.file_path for export in uow.exports.list_for_submission(job.submission_id)
-        }
+        # Every path any Export row anywhere already names is off-limits,
+        # not just what's currently on disk (P1 review, round 3) and not
+        # just this submission's own rows (P1 review, round 4): export
+        # filenames are derived from the source file's stem alone, with no
+        # submission id in the path, so two different submissions that
+        # happen to share an original filename share the same export-path
+        # namespace. A row whose own file write failed after its DB commit
+        # (the exact scenario `_existing_file_is_intact`/
+        # `_repair_existing_export` exist for) still reserves its
+        # `file_path` -- nothing has freed it just because there is nothing
+        # there to see yet. Handing that same path to a *different*,
+        # unrelated new export (for this submission or another one) here
+        # would let this write occupy it, and a later repair-retry of the
+        # original job would then overwrite this one's file out from under
+        # it.
         destination = self._store.allocate_export_path(
-            submission.original_filename or f"{submission.id}.pdf", reserved=reserved_paths
+            submission.original_filename or f"{submission.id}.pdf",
+            reserved=uow.exports.all_file_paths(),
         )
         relative_path = str(destination.relative_to(self._store.root)).replace("\\", "/")
         export = Export(

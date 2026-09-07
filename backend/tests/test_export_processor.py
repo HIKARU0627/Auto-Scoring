@@ -94,6 +94,65 @@ def _seed_reviewed_submission(
         uow.commit()
 
 
+def _seed_second_reviewed_submission_for_the_same_test(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    *,
+    submission_id: str,
+    original_filename: str,
+) -> None:
+    """A second, independent export-ready submission for the *same* `Test`
+    row (`test-1`/`q-1`, already inserted by an earlier
+    `_seed_reviewed_submission` call in the same test) -- unlike that
+    helper, this does not re-add `Test`/`Question` (their ids are fixed and
+    would collide) and gives every submission-scoped row (`GradeResult`,
+    `Annotation`, `Review`) an id namespaced by ``submission_id`` so two
+    calls in the same test never collide with each other either."""
+    source_path = store.submission_source_pdf_path(submission_id)
+    _write_source_pdf(source_path)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.submissions.add(
+            make_submission(
+                id=submission_id,
+                original_filename=original_filename,
+                source_pdf_path=f"submissions/{submission_id}/source.pdf",
+                # `(test_id, source_pdf_sha256)` is unique -- `make_submission`'s
+                # default sha256 would collide with the first submission's.
+                source_pdf_sha256="1" * 64,
+            )
+        )
+        uow.grades.add(make_grade(id=f"grade-{submission_id}", submission_id=submission_id))
+        uow.annotations.add(
+            Annotation(
+                id=f"anno-score-{submission_id}",
+                submission_id=submission_id,
+                question_id="q-1",
+                source=GradingSource.AI,
+                kind=AnnotationKind.SCORE,
+                created_at=at(),
+            )
+        )
+        uow.annotations.add(
+            Annotation(
+                id=f"anno-comment-{submission_id}",
+                submission_id=submission_id,
+                question_id="q-1",
+                source=GradingSource.AI,
+                kind=AnnotationKind.COMMENT,
+                comment="理由の説明が不足しています。",
+                created_at=at(),
+            )
+        )
+        uow.reviews.add(
+            make_review(
+                id=f"review-{submission_id}",
+                submission_id=submission_id,
+                ai_grade_result_id=f"grade-{submission_id}",
+            )
+        )
+        uow.commit()
+
+
 def _seed_export_job(
     session_factory: sessionmaker[Session], *, job_id: str = "job-1", submission_id: str = "sub-1"
 ) -> Job:
@@ -448,3 +507,49 @@ async def test_a_new_export_never_reuses_a_path_a_lost_export_row_still_reserves
     assert third.outcome is ProcessingOutcome.SUCCEEDED
     assert path_a.exists()
     assert path_b.read_bytes() == path_b_bytes  # untouched by A's repair
+
+
+async def test_a_new_export_for_a_different_submission_does_not_reuse_a_path_reserved_by_another(
+    session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """P1 review, round 4: R3's fix (the test above) only reserved paths
+    recorded by `Export` rows for the *same* submission
+    (`ExportRepository.list_for_submission`) -- but export filenames are
+    derived from the source file's stem alone, with no submission id in the
+    path (`LocalFileStore.allocate_export_path`). Two different submissions
+    that happen to share an original filename share the same export-path
+    namespace, so a path submission A's Export row already claims (even one
+    whose file write never landed) must stay reserved when a wholly
+    different submission B is exported too -- not only when A itself is
+    re-exported."""
+    _seed_reviewed_submission(
+        session_factory, store, submission_id="sub-1", original_filename="答案A.pdf"
+    )
+    job_a = _seed_export_job(session_factory, job_id="job-a", submission_id="sub-1")
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    first = await processor.process(job_a)
+    assert first.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export_a = uow.exports.get(export_id(job_a))
+        assert export_a is not None
+    assert export_a.file_path == "exports/答案A_corrected.pdf"
+    (store.root / export_a.file_path).unlink()  # simulate the file being lost after the DB commit
+
+    # A second, DIFFERENT submission (its own Test/Question/Review/Grade)
+    # that just happens to share the same original filename.
+    _seed_second_reviewed_submission_for_the_same_test(
+        session_factory, store, submission_id="sub-2", original_filename="答案A.pdf"
+    )
+    job_b = _seed_export_job(session_factory, job_id="job-b", submission_id="sub-2")
+    second = await processor.process(job_b)
+
+    assert second.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export_b = uow.exports.get(export_id(job_b))
+        assert export_b is not None
+    # Must NOT reuse export_a's still-reserved path, even though export_a
+    # belongs to an entirely different submission.
+    assert export_b.file_path == "exports/答案A_corrected_2.pdf"
+    path_b = store.root / export_b.file_path
+    assert path_b.exists()

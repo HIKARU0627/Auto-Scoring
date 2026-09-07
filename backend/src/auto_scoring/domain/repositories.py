@@ -315,6 +315,23 @@ class ExportRepository(Protocol):
         """
         ...
 
+    def all_file_paths(self) -> frozenset[str]:
+        """Every ``file_path`` recorded by any `Export` row, across every
+        submission (Issue #23 P1 review, round 4).
+
+        ``exports/<original-stem>_corrected[_N].pdf`` names are derived from
+        the *source* file's stem alone, with no submission id in the path
+        (`adapters.local_storage.LocalFileStore.allocate_export_path`), so
+        two different submissions that happen to share an original filename
+        share the same export-path namespace too. `jobs.export_processor.
+        ExportJobProcessor._create_new_export` reserves every path this
+        returns -- not just the ones from `list_for_submission` on its own
+        submission -- so a path a *different* submission's Export row
+        already claims (even one whose file write failed and left nothing
+        on disk yet) can never be handed to a second, unrelated export.
+        """
+        ...
+
     def repair_file_hash(self, export_id: str, file_sha256: str) -> None:
         """Correct ``file_sha256`` for an already-committed `Export` row
         (Issue #23 P1 review).

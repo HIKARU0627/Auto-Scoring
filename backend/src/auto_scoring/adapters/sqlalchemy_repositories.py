@@ -559,6 +559,9 @@ class SqlAlchemyExportRepository:
         ).first()
         return m.export_from_row(row) if row is not None else None
 
+    def all_file_paths(self) -> frozenset[str]:
+        return frozenset(self._session.scalars(select(ExportRow.file_path)))
+
     def repair_file_hash(self, export_id: str, file_sha256: str) -> None:
         self._session.execute(
             update(ExportRow).where(ExportRow.id == export_id).values(file_sha256=file_sha256)
