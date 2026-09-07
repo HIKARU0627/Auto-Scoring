@@ -71,3 +71,77 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+
+  package:
+    name: Package (Windows)
+    # The only place the Windows artifacts can be built or verified at all:
+    # PyInstaller cannot cross-compile, so a Windows sidecar bundle has to be
+    # produced on Windows (Issue #24).
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.4
+          channel: stable
+          cache: true
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.7"
+          enable-cache: true
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Restore Flutter packages
+        run: flutter pub get
+        working-directory: app
+      - name: Restore Python environment
+        run: uv sync --locked
+        working-directory: backend
+
+      - name: Bundle the Python sidecar (PyInstaller onedir)
+        run: pnpm run package:sidecar
+
+      # The step this job exists for. A missing hidden import, data file or
+      # native library cannot fail the PyInstaller build -- only running the
+      # frozen executable finds it. Boots the bundle, drives a real handshake,
+      # /healthz, an authenticated and an unauthenticated call, then kills it
+      # and checks nothing is left holding the port.
+      - name: Smoke-test the packaged sidecar
+        run: pnpm run package:sidecar:smoke
+
+      - name: Build the Flutter Windows release
+        run: flutter build windows --release
+        working-directory: app
+
+      - name: Build the unsigned installer
+        run: pnpm run package:installer
+
+      # Unsigned, and named so. Installing it shows a SmartScreen warning;
+      # signing is a human-only step performed on this artifact outside CI
+      # (docs/windows-distribution.md §8). No certificate or key exists in
+      # this repository or in CI secrets.
+      - name: Upload the unsigned installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-scoring-installer-unsigned
+          path: installer/output/*.exe
+          if-no-files-found: error
+
+      # The bundle on its own, for reproducing a sidecar-only problem on a
+      # clean VM without running the installer.
+      - name: Upload the sidecar bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-scoring-sidecar-bundle
+          path: backend/dist/auto-scoring-sidecar/
+          if-no-files-found: error

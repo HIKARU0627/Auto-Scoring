@@ -272,13 +272,16 @@ app-data/
 上限超過の巨大ファイルであっても、まず全body分の `bytes` を確保してから検証する
 ことはしない（`AGENTS.md`「trust boundary を跨ぐ入力はすべて検証する」）。
 
-## 10. `app-data/` の実際の格納場所（未決事項）
+## 10. `app-data/` の実際の格納場所（Issue #24 で確定）
 
-サイドカーの `--app-data-dir`（既定 `カレントディレクトリ/app-data`）が実データの
-格納先になる。Windows 配布時の実際のインストール先・`%LOCALAPPDATA%` 等の採用可否は
-`docs/technology-stack.md` §1.2 が「Windows 配布 Issue で決定する」としている範囲のままで、
-本 Issue では確定しない。実装・テストではこの CLI 引数で任意のディレクトリを指定できる
-ことのみを保証する。
+サイドカーの `--app-data-dir` が実データの格納先になる。**既定値は OS の
+ユーザー単位データ領域**で、Windows では `%LOCALAPPDATA%\Auto-Scoring\app-data\`
+（`auto_scoring.api.sidecar.default_app_data_dir`）。暫定値だった
+「カレントディレクトリ/app-data」は、起動方法によって参照先が変わるため配布物では
+使えず、Issue #24 で置き換えた。各 OS のパスと権限、ログの置き場所、アンインストール
+時の扱いは [`windows-distribution.md`](./windows-distribution.md) §3・§5.5・§6。
+
+実装・テストではこの CLI 引数で任意のディレクトリを指定できることは従来どおり。
 
 ## 11. Flutter 側
 
@@ -336,7 +339,7 @@ app-data/
   本書 §3 の粗い判定は、確定 DAG が実装されるまでの暫定であることを明記する。
 - ページの重複スキャン・順序入れ替わりの検出（内容ベース）は OCR/レイアウト解析
   Issue の実装を待つ。
-- `app-data/` の実際のインストール先は Windows 配布 Issue で確定する（§10）。
+- `app-data/` の実際のインストール先は Issue #24 で確定した（§10）。
 - OCR/AI 採点 Job の起票ロジックは、`needs_review` の Submission にジョブを
   作らない制約を守って実装すること（§3）。
 

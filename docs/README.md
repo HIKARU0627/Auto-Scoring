@@ -11,3 +11,4 @@ Operational docs for the agent development environment. Project-specific specs
 | [ai-agent-git-attribution.md](./ai-agent-git-attribution.md) | AIエージェントのコミット/pushを専用GitHub Appへ帰属させる手順（任意）    |
 | [mcp.md](./mcp.md)                                           | MCPサーバー設定を3つのエージェント別ファイルへ展開する方法               |
 | [orca-remote-environment.md](./orca-remote-environment.md)   | Windows の Orca から Ubuntu 上の Orca ランタイムへ接続する構築・運用手順 |
+| [windows-distribution.md](./windows-distribution.md)         | Windows 配布物・サイドカーのライフサイクル・障害復旧・署名手順           |

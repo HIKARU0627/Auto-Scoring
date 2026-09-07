@@ -24,18 +24,28 @@ GitHub Issue #10（親: #3）で実装した、Flutter と Python サイドカ�
 
 ## 3. ハンドシェイク（接続情報の受け渡し）
 
-親プロセス（将来の Flutter プロセス監視。本 Issue では**対象外**）へ `host` / `port` /
+親プロセス（Flutter の `SidecarSupervisor`。実装は Issue #24）へ `host` / `port` /
 `token` を渡す方法:
 
-- 必須の `--handshake-file <path>` で、指定ファイルへ `{"host","port","token"}` の JSON を 1 行書く。
+- `--handshake-file <path>` で、指定ファイルへ `{"host","port","token"}` の JSON を 1 行書く。
+- 書くのは **`create_app()` が成功したあと**。bind 直後に書いていた頃は、
+  ロック失敗・マイグレーション失敗のたびに「誰も応答しない host:port」を書いた
+  ファイルが残り、読む側が起動遅延と区別できなかった（Issue #24）。
 
 トークンはハンドシェイク経路にのみ書き出す。アプリケーションログには
 `_RedactingFilter` が `***` へ置換して出さず、標準出力にも書かない（`install_log_redaction`）。
 uvicorn access ログはヘッダを出力しないため、通常経路でトークンが載ることはない。
 フィルタは多層防御。
 
-未決事項: プロセス監視実装時に、ファイル経由と fd 継承のどちらを本番採用するか。
-`app-data` 配下の権限を絞った一時ファイルを第一候補とする。Windows 配布 Issue で確定。
+**確定（Issue #24）**: ファイル経由。fd 継承は不採用 — dart:io には Windows で
+追加のハンドルを子へ継承させる公式手段がない。置き場所は `app-data` 配下ではなく
+`%TEMP%` 配下の 1 起動ごとのランダム名ディレクトリで、Flutter がトークンを
+読んだ直後に削除する。理由と検証は
+[`windows-distribution.md`](./windows-distribution.md) §4。
+
+読む側の成功条件は「ファイルが存在する」ではなく「JSON として parse でき
+`host`/`port`/`token` が揃っている」こと。ファイルは Flutter が空で作り、
+サイドカーがあとから書くため、その間は空・書きかけが読める（同 §4.1）。
 
 ## 4. API 契約（OpenAPI → Dart 生成）
 
@@ -70,11 +80,13 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 
 ## 5. テスト
 
-| レイヤ  | テスト                                                    | 対象                                                                                                                |
-| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Python  | `backend/tests/test_api.py`                               | `/healthz` は無認証 200、`/score` は無トークン/誤トークンで 401、正トークンで 200                                   |
-| Python  | `backend/tests/test_sidecar.py`                           | ポート 0 → 空きポート、占有ポート → フォールバック、ログのトークン秘匿、ハンドシェイク、`run()` が loopback で bind |
-| Python  | `backend/tests/test_openapi_schema.py`                    | コミット済み schema と生成結果の一致、security 設定                                                                 |
-| Flutter | `app/test/sidecar_api_client_test.dart`（tag: `sidecar`） | 実サイドカーを起動し health check・保護 API（正トークン 200 / 誤トークン 401）・未起動時 `unavailable`              |
+| レイヤ  | テスト                                                                | 対象                                                                                                                |
+| ------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Python  | `backend/tests/test_api.py`                                           | `/healthz` は無認証 200、`/score` は無トークン/誤トークンで 401、正トークンで 200                                   |
+| Python  | `backend/tests/test_sidecar.py`                                       | ポート 0 → 空きポート、占有ポート → フォールバック、ログのトークン秘匿、ハンドシェイク、`run()` が loopback で bind |
+| Python  | `backend/tests/test_openapi_schema.py`                                | コミット済み schema と生成結果の一致、security 設定                                                                 |
+| Flutter | `app/test/sidecar_api_client_test.dart`（tag: `sidecar`）             | 実サイドカーを起動し health check・保護 API（正トークン 200 / 誤トークン 401）・未起動時 `unavailable`              |
+| Flutter | `app/test/sidecar_supervisor_test.dart`                               | プロセス監督の状態遷移全部（`SidecarPlatform` を fake 化。時計も fake なので起動 timeout も一瞬で検証）             |
+| Flutter | `app/test/sidecar_supervisor_integration_test.dart`（tag: `sidecar`） | 実サイドカーに対して動的ポート・handshake 削除・通常終了・crash からの再起動・二重起動拒否                          |
 
 `flutter test -x sidecar` で実サイドカー起動テストを除外できる（`uv` 不要の環境向け）。

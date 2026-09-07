@@ -6,6 +6,10 @@ Target metadata is ``auto_scoring.db.base.Base.metadata``; importing
 the app, and ``render_as_batch`` keeps future ``ALTER TABLE`` migrations
 working on SQLite.
 
+Logging is configured from ``alembic.ini`` only for a bare ``alembic`` CLI
+run, never for the programmatic calls the sidecar makes on startup -- see the
+comment on the ``fileConfig`` call below.
+
 ``foreign_keys`` is deliberately turned back *off* for the migration
 connection (see ``run_migrations_online``): SQLite performs an implicit
 ``DELETE FROM`` -- cascading to any ``ON DELETE CASCADE`` children -- when a
@@ -29,7 +33,24 @@ from auto_scoring.db.base import Base
 from auto_scoring.db.engine import create_sqlite_engine
 
 config = context.config
-if config.config_file_name is not None:
+# Configure logging from `alembic.ini` only for a bare `uv run alembic ...`,
+# never for a programmatic caller. `db.migrator.alembic_config` marks its own
+# Config with `configured_db_url`, and that is the path the *running sidecar*
+# takes on startup -- where `fileConfig` is destructive rather than helpful:
+#
+# * It replaces the root logger's handlers with `alembic.ini`'s console
+#   handler, throwing away the ones `api.sidecar.install_log_redaction`
+#   installed moments earlier -- both the rotating file log (the only durable
+#   record in a distribution, docs/windows-distribution.md §5.5) and, worse,
+#   the filter that keeps the session bearer token out of it.
+# * It defaults to `disable_existing_loggers=True`, which silences every
+#   logger `alembic.ini` does not name -- i.e. every `auto_scoring.*` logger,
+#   all of which already exist by then -- for the rest of the process's life.
+#   Job outcomes, OCR/AI/PDF failures, the whole of simplified-design-
+#   specification.md §28, dropped from the first migration onward.
+#
+# Found while wiring up the file log in Issue #24.
+if config.config_file_name is not None and "configured_db_url" not in config.attributes:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata

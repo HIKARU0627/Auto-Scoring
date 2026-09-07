@@ -5,10 +5,13 @@ import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 Future<bool> _stubHealthCheck() async => true;
 
 /// Default answer-intake operations: honestly report "not connected" rather
-/// than faking success. Process supervision (spawning the sidecar and
-/// handing `main.dart` a real [SidecarConnection]) is future work -- see
-/// `docs/technology-stack.md` §1.2 -- so until then every real call surfaces
-/// the same `unavailable` state [HomePage]'s health check already renders.
+/// than faking success.
+///
+/// These defaults are the *test* configuration now that process supervision
+/// exists: a widget test constructs `AppDependencies()` and overrides only
+/// the handful of calls it exercises. The running app never uses them --
+/// `main.dart` builds [AppDependencies.fromClient] from the connection
+/// [SidecarSupervisor] establishes (`docs/windows-distribution.md` §5).
 Never _unavailable() => throw SidecarApiException(
   SidecarErrorKind.unavailable,
   'sidecar is not connected',
@@ -421,7 +424,52 @@ class AppDependencies {
     this.retryJob = _unavailableRetryJob,
   });
 
-  /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
+  /// Wires every operation to a live sidecar.
+  ///
+  /// The composition root's real configuration: `main.dart` calls this once
+  /// [SidecarSupervisor] reports [SidecarReady], with a [SidecarApiClient]
+  /// built from that connection. Tear-off references (`client.listTests`
+  /// rather than `() => client.listTests()`) so each field is the client's
+  /// own method -- the extra `CancelToken?` those methods accept is an
+  /// optional named parameter, which Dart's function subtyping allows a
+  /// typedef without it to hold.
+  AppDependencies.fromClient(SidecarApiClient client)
+    : healthCheck = client.isHealthy,
+      listTests = client.listTests,
+      listSubmissions = client.listSubmissions,
+      getSubmission = client.getSubmission,
+      createSubmission = client.createSubmission,
+      createTest = client.createTest,
+      getTest = client.getTest,
+      listTestRegistrations = client.listTestRegistrations,
+      analyzeProfile = client.analyzeProfile,
+      getProfile = client.getProfile,
+      updateProfile = client.updateProfile,
+      confirmProfile = client.confirmProfile,
+      completeRegistration = client.completeRegistration,
+      analyzeDependencyGraph = client.analyzeDependencyGraph,
+      getDependencyGraph = client.getDependencyGraph,
+      confirmDependencyGraph = client.confirmDependencyGraph,
+      listQuestions = client.listQuestions,
+      getSourcePdf = client.getSourcePdf,
+      listRecognitions = client.listRecognitions,
+      listGrades = client.listGrades,
+      listAnnotations = client.listAnnotations,
+      listJobs = client.listJobs,
+      listReviews = client.listReviews,
+      editReview = client.editReview,
+      rejectReview = client.rejectReview,
+      regradeReview = client.regradeReview,
+      approveReview = client.approveReview,
+      undoReview = client.undoReview,
+      requestExport = client.requestExport,
+      listExports = client.listExports,
+      getJob = client.getJob,
+      retryJob = client.retryJob;
+
+  /// Whether the sidecar answers its health endpoint. In the running app this
+  /// is `SidecarApiClient.isHealthy`; the default is a stub that reports
+  /// healthy so widget tests need not stand one up.
   final Future<bool> Function() healthCheck;
 
   final ListTests listTests;
