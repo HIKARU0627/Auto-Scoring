@@ -250,17 +250,27 @@ def test_an_underline_stays_horizontal_as_displayed_on_a_rotated_page(
 
 
 def test_a_mark_lands_correctly_on_a_page_with_a_non_zero_mediabox_origin(tmp_path: Path) -> None:
-    """Regression test for P2 review: an earlier version of `render_annotations`
-    shifted every mark's coordinates by the page's own MediaBox origin before
-    merging, which is backwards for `merge_page` (it composites the overlay's
-    content stream using absolute coordinates, with no transform of its own)
-    -- every mark landed offset by the MediaBox origin on any page whose
-    MediaBox does not start at ``(0, 0)`` (PoC 3's own
-    ``a4-mediabox-offset`` fixture is exactly this case)."""
+    """Regression test for P2 review (both rounds): an earlier version of
+    `render_annotations` shifted every mark's coordinates by the page's own
+    MediaBox origin before merging, which is backwards -- `merge_page`
+    composites the overlay's content stream using absolute coordinates, with
+    no transform of its own (round 1). Fixing only that left a second bug:
+    ``pypdf``'s ``merge_page`` also clips the merged content to the
+    *overlay's own* page box, and reportlab always writes that box starting
+    at ``(0, 0)`` -- so a mark near the *far* edge of a non-zero-origin
+    MediaBox (this fixture's real box is ``[100, 200, 695, 1042]``) still
+    got clipped away even with absolute coordinates, because its absolute
+    position exceeds the zero-origin overlay's own width/height (round 2).
+    A mark near the page's *center* (an earlier version of this test) can't
+    reveal that second bug -- centered coordinates happen to stay inside the
+    zero-origin box's bounds by coincidence."""
     source = tmp_path / "source.pdf"
     _write_pdf_with_mediabox_offset(source, offset=(100.0, 200.0))
     destination = tmp_path / "out.pdf"
-    rect = NormalizedRect(x=0.3, y=0.3, width=0.2, height=0.1)
+    # Near the top-right corner as displayed -- its absolute coordinates
+    # exceed the target box's own width/height (595x842), which is exactly
+    # what a zero-origin overlay box of that same size would clip away.
+    rect = NormalizedRect(x=0.85, y=0.05, width=0.1, height=0.1)
 
     engine = PdfiumPypdfEngine()
     engine.render_annotations(

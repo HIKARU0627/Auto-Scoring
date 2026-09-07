@@ -169,22 +169,29 @@ def _render_annotation_overlay(
     """A one-page PDF with ``marks`` drawn via reportlab -- merged onto the
     real page by `render_annotations`.
 
-    ``pypdf``'s ``merge_page`` concatenates the overlay's content stream
-    directly onto the target page's *own* content stream, with no
-    coordinate transform of its own; it never looks at the overlay's own
-    ``/MediaBox``. So the only thing that matters is that every drawing
-    operator this function emits already carries the correct **absolute**
-    PDF user-space coordinate -- the same one `stamp_markers`'s
-    `_filled_square`/`_overlay_pdf` pair uses (P2 review: an earlier version
-    of this function shifted coordinates by the page's own MediaBox origin,
-    which is exactly backwards -- `merge_page` needs absolute coordinates,
-    not ones relative to that origin, and doing so shifted every mark by the
-    MediaBox offset on any page whose MediaBox does not start at ``(0, 0)``,
-    e.g. PoC 3's ``a4-mediabox-offset``/``a4-cropbox-inset`` fixtures).
-    ``pagesize`` below only sizes this overlay's own, immediately-discarded
-    ``/MediaBox`` -- reportlab always declares one starting at ``(0, 0)``,
-    but since nothing ever reads it that has no bearing on where the
-    absolute-coordinate content this function emits ends up once merged.
+    Every drawing operator this function emits already carries the correct
+    **absolute** PDF user-space coordinate -- the same one `stamp_markers`'s
+    `_filled_square`/`_overlay_pdf` pair uses (P2 review, round 1: an
+    earlier version of this function shifted coordinates by the page's own
+    MediaBox origin, which is backwards -- content needs absolute
+    coordinates, not ones relative to that origin).
+
+    That alone is not sufficient, though: ``pypdf``'s ``merge_page`` clips
+    the merged content to the *overlay's own* page box (P2 review, round 2)
+    -- and reportlab's `Canvas` always declares its generated page's
+    ``/MediaBox`` starting at ``(0, 0)``, sized only ``pagesize`` (here,
+    just the target's *width*/*height*, not its actual absolute range). On
+    a page whose real MediaBox does not start at ``(0, 0)`` (PoC 3's
+    ``a4-mediabox-offset``/``a4-cropbox-inset`` fixtures), a mark's real
+    absolute coordinates can fall entirely outside that zero-origin box --
+    e.g. a target box ``[100, 200, 700, 1000]`` (width 600, height 800)
+    makes the overlay's own box ``[0, 0, 600, 800]``, silently clipping
+    away any mark whose absolute x exceeds 600 or y exceeds 800, even
+    though both are well within the real, target page. Rewriting the
+    overlay's own MediaBox/CropBox to that same absolute range below, after
+    reportlab has finished writing but before `render_annotations` merges
+    it, keeps the overlay's own clip boundary consistent with the absolute
+    coordinates its content stream actually uses.
     """
     left, bottom = float(mediabox.left), float(mediabox.bottom)
     right, top = float(mediabox.right), float(mediabox.top)
@@ -193,7 +200,26 @@ def _render_annotation_overlay(
     for mark in marks:
         _draw_mark_in_place(pdf_canvas, mark, geometry)
     pdf_canvas.save()
-    return buffer.getvalue()
+    return _with_absolute_page_box(buffer.getvalue(), left, bottom, right, top)
+
+
+def _with_absolute_page_box(
+    overlay_pdf_bytes: bytes, left: float, bottom: float, right: float, top: float
+) -> bytes:
+    """Rewrite a one-page PDF's MediaBox *and* CropBox to
+    ``[left, bottom, right, top]`` -- see `_render_annotation_overlay`'s
+    docstring for why both need to match the target page's own absolute
+    box, not the zero-origin one reportlab always writes.
+    """
+    writer = PdfWriter()
+    writer.append(PdfReader(BytesIO(overlay_pdf_bytes)))
+    box = RectangleObject((left, bottom, right, top))
+    page = writer.pages[0]
+    page.mediabox = box
+    page.cropbox = box
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 def _draw_mark_in_place(
