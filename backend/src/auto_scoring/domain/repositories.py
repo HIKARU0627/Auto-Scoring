@@ -21,6 +21,7 @@ from auto_scoring.domain.dependency_graph import DependencyGraph
 from auto_scoring.domain.models import (
     Annotation,
     AnswerImage,
+    Export,
     GradeResult,
     GradingSource,
     Job,
@@ -292,6 +293,28 @@ class JobRepository(Protocol):
         ...
 
 
+class ExportRepository(Protocol):
+    """Successful `Export` rows only (Issue #23) -- an in-flight or failed
+    attempt lives entirely as a `Job` (kind=``EXPORT``); nothing here ever
+    updates a row once added.
+    """
+
+    def add(self, export: Export) -> None: ...
+    def get(self, export_id: str) -> Export | None: ...
+
+    def list_for_submission(self, submission_id: str) -> list[Export]:
+        """Every export for ``submission_id``, oldest first (for "保存先表示"
+        / export history display)."""
+        ...
+
+    def latest_for_submission(self, submission_id: str) -> Export | None:
+        """The most recently created export for ``submission_id``, or
+        ``None`` -- what `domain.pdf_export.decide_reexport` compares a fresh
+        request's review-version snapshot against.
+        """
+        ...
+
+
 class DependencyGraphRepository(Protocol):
     """One test's dependency-graph versions (Issue #26).
 
@@ -338,6 +361,7 @@ class UnitOfWork(Protocol):
     annotations: AnnotationRepository
     reviews: ReviewRepository
     jobs: JobRepository
+    exports: ExportRepository
     dependency_graphs: DependencyGraphRepository
 
     def __enter__(self) -> UnitOfWork: ...

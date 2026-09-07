@@ -884,6 +884,66 @@ class Job:
         )
 
 
+@dataclass(frozen=True, kw_only=True)
+class QuestionReviewVersion:
+    """One question's review-history length at the moment an `Export` was
+    produced (Issue #23) -- ``version`` is exactly ``len(ReviewRepository.
+    history(submission_id, question_id))`` at that instant, which (per
+    ``domain.review_workflow.next_review_version``) is also the ``version``
+    of the latest `Review` row for that pair. Recorded so a later export
+    request can tell whether anything happened to this question's review
+    history since (``domain.pdf_export.decide_reexport``) without re-reading
+    every `Review` row again.
+    """
+
+    question_id: str
+    version: int
+
+    def __post_init__(self) -> None:
+        _require_non_empty("QuestionReviewVersion.question_id", self.question_id)
+        if self.version < 1:
+            raise DomainError("QuestionReviewVersion.version must be >= 1")
+
+
+@dataclass(frozen=True, kw_only=True)
+class Export:
+    """One generated annotated-PDF output (Issue #23, simplified-design-spec
+    §14).
+
+    Only ever created after every question of ``submission_id``'s test is
+    confirmed (``domain.review_workflow.all_questions_confirmed``) and the
+    output file has been generated, verified, and atomically written --
+    there is no "failed" or "pending" `Export` row; a `Job` (kind=``EXPORT``)
+    tracks in-flight/failed attempts instead (``docs/pdf-export.md``).
+
+    ``file_path`` follows the same app-data-root-relative convention as
+    ``Submission.source_pdf_path``. ``review_versions`` is the snapshot this
+    output was generated from -- see `QuestionReviewVersion` -- and
+    ``job_id`` names the `Job` that produced it, so both are independently
+    retrievable per Issue #23's "出力job、hash、生成時刻、元Submission、
+    review versionを保存する".
+    """
+
+    id: str
+    submission_id: str
+    job_id: str
+    file_path: str
+    file_sha256: str
+    created_at: datetime
+    review_versions: tuple[QuestionReviewVersion, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_non_empty("Export.id", self.id)
+        _require_non_empty("Export.submission_id", self.submission_id)
+        _require_non_empty("Export.job_id", self.job_id)
+        _require_non_empty("Export.file_path", self.file_path)
+        _require_non_empty("Export.file_sha256", self.file_sha256)
+        _require_unique(
+            "Export.review_versions question_ids",
+            [v.question_id for v in self.review_versions],
+        )
+
+
 def find_answer_image(images: Sequence[AnswerImage], question_id: str) -> AnswerImage | None:
     """Pick ``question_id``'s row out of one submission's `AnswerImage` list.
 

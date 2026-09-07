@@ -481,6 +481,34 @@ class JobRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+class ExportRow(Base):
+    """A successful annotated-PDF output (Issue #23). ``job_id`` is unique --
+    the `Job` (kind=``EXPORT``) that produced it never produces a second row
+    (``jobs.export_processor.ExportJobProcessor`` looks one up by ``job_id``
+    before generating anything, for idempotent replay after a crash).
+    """
+
+    __tablename__ = "exports"
+    __table_args__ = (
+        UniqueConstraint("job_id", name="uq_exports_job_id"),
+        Index("ix_exports_submission_id", "submission_id"),
+    )
+
+    id: Mapped[str] = _pk()
+    submission_id: Mapped[str] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
+    file_path: Mapped[str] = mapped_column(String, nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    #: JSON list of ``{"question_id": ..., "version": ...}`` -- the
+    #: `QuestionReviewVersion` snapshot this output was generated from.
+    review_versions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class DependencyGraphRow(Base):
     """One version of one test's dependency graph (Issue #26).
 
