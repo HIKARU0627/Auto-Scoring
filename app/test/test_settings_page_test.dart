@@ -547,4 +547,56 @@ void main() {
       );
     },
   );
+
+  // ------------------------------------------------------------------ //
+  // Issue #25 acceptance: desktop standard / narrow width.
+  // ------------------------------------------------------------------ //
+  group('Issue #25: 受入 -- desktop標準幅と狭幅', () {
+    /// `_pumpSettings` above deliberately uses an unrealistically tall
+    /// viewport so the lazy `ListView` builds every section at once. These
+    /// two are the real thing: the window sizes a reviewer actually has.
+    const desktopStandard = Size(1440, 900);
+    const desktopNarrow = Size(820, 720);
+
+    for (final (name, size) in [
+      ('desktop標準幅', desktopStandard),
+      ('狭幅', desktopNarrow),
+    ]) {
+      testWidgets('$name でテスト設定画面のレイアウトが破綻しない', (tester) async {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final dependencies = AppDependencies(
+          getTest: (testId) async => _test(),
+          getProfile: (testId) async => _profile(),
+          getDependencyGraph: (testId) async => _dependencyGraph(),
+        );
+
+        await tester.pumpWidget(
+          _wrap(TestSettingsPage(dependencies: dependencies, testId: 'test-1')),
+        );
+        await tester.pumpAndSettle();
+
+        // A RenderFlex overflow is reported as a framework exception;
+        // surfacing it here names which width broke rather than leaving it
+        // to teardown.
+        expect(tester.takeException(), isNull);
+        // Present *and* on screen at this width. `takeException` alone only
+        // catches a RenderFlex overflow; a section pushed past the viewport
+        // edge raises nothing (round 1 review).
+        for (final finder in [
+          find.text('テスト状態: 下書き'),
+          find.textContaining('回答欄 ・ 設問1'),
+        ]) {
+          expect(finder, findsOneWidget);
+          final rect = tester.getRect(finder);
+          expect(rect.width, greaterThan(0));
+          expect(rect.height, greaterThan(0));
+          expect(rect.left, greaterThanOrEqualTo(0));
+          expect(rect.right, lessThanOrEqualTo(size.width));
+        }
+      });
+    }
+  });
 }

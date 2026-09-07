@@ -12,3 +12,4 @@ Operational docs for the agent development environment. Project-specific specs
 | [mcp.md](./mcp.md)                                           | MCPサーバー設定を3つのエージェント別ファイルへ展開する方法               |
 | [orca-remote-environment.md](./orca-remote-environment.md)   | Windows の Orca から Ubuntu 上の Orca ランタイムへ接続する構築・運用手順 |
 | [windows-distribution.md](./windows-distribution.md)         | Windows 配布物・サイドカーのライフサイクル・障害復旧・署名手順           |
+| [mvp-acceptance.md](./mvp-acceptance.md)                     | 簡易設計書 §31 の全実装項目と、それを検証しているテストの対応表          |

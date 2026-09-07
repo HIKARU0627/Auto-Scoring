@@ -3192,4 +3192,180 @@ void main() {
       },
     );
   });
+
+  // ------------------------------------------------------------------ //
+  // Issue #25 acceptance: desktop standard / narrow width, focus order,
+  // and the accessibility labels the review screen is navigated by.
+  // ------------------------------------------------------------------ //
+  group('Issue #25: 受入 -- 幅・focus・accessibility label', () {
+    /// Wider and narrower than `_PdfReviewPageState`'s own 900px breakpoint.
+    /// `flutter test`'s default surface is 800x600, so every other test in
+    /// this file has only ever exercised the narrow branch -- the standard
+    /// desktop layout was never rendered at all until this group.
+    const desktopStandard = Size(1440, 900);
+    const desktopNarrow = Size(820, 720);
+
+    /// Per-question Inspector text. The rail draws a label for *every*
+    /// question, so `find.text('問2')` matches from the very first frame and
+    /// cannot tell "moved to question 2" from "the key did nothing"
+    /// (round 1 review). These strings appear only for the question that is
+    /// actually selected -- the same signal the existing keyboard-navigation
+    /// test above keys its assertions on.
+    const q1Answer = '設問1の答案';
+    const q2Answer = '設問2の答案';
+
+    Future<void> pumpAt(
+      WidgetTester tester,
+      Size size, {
+      ApproveReview? approveReview,
+    }) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: _dependencies(
+              pdfBytes: _pocA4PortraitPdf(),
+              q1: _question(),
+              q2: _question(id: 'q-2', number: '2'),
+              recognitions: [
+                _recognition(text: q1Answer),
+                _recognition(id: 'rec-2', questionId: 'q-2', text: q2Answer),
+              ],
+              // 承認 is refused until an AI grade exists, so both questions
+              // need one for Enter to do anything at all.
+              grades: [
+                _grade(),
+                _grade(id: 'grade-2', questionId: 'q-2'),
+              ],
+              approveReview: approveReview,
+            ),
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+    }
+
+    /// The index `NavigationRail` itself reports as selected -- widget state
+    /// that must change on every arrow key, not a label that is on screen
+    /// either way.
+    int selectedRailIndex(WidgetTester tester) => tester
+        .widget<NavigationRail>(find.byKey(const Key('review-question-rail')))
+        .selectedIndex!;
+
+    for (final (name, size) in [
+      ('desktop標準幅', desktopStandard),
+      ('狭幅', desktopNarrow),
+    ]) {
+      testWidgets('$name でレイアウトが破綻しない', (tester) async {
+        await pumpAt(tester, size);
+
+        // A RenderFlex overflow (or any other layout assertion) is reported
+        // as a framework exception, which `takeException` surfaces here
+        // instead of only at teardown -- so a broken layout names *which*
+        // width broke it.
+        expect(tester.takeException(), isNull);
+        // Both layouts keep the same controls: a narrow window rearranges
+        // the screen, it does not drop half of it.
+        expect(find.byType(PdfViewer), findsOneWidget);
+        // ...and each one is actually *on* that screen. Presence alone is
+        // not enough: a control laid out past the viewport edge, or
+        // collapsed to nothing, is still `findsOneWidget` while being
+        // unusable, and produces no overflow exception either (round 1
+        // review's "would this go red if the feature broke?").
+        for (final key in const [
+          'review-question-rail',
+          'review-submission-state',
+          'review-approve-button',
+        ]) {
+          final finder = find.byKey(Key(key));
+          expect(finder, findsOneWidget, reason: key);
+          final rect = tester.getRect(finder);
+          expect(rect.width, greaterThan(0), reason: key);
+          expect(rect.height, greaterThan(0), reason: key);
+          expect(
+            rect.left >= 0 &&
+                rect.top >= 0 &&
+                rect.right <= size.width &&
+                rect.bottom <= size.height,
+            isTrue,
+            reason: '\$key is outside the \$size viewport: \$rect',
+          );
+        }
+      });
+    }
+
+    testWidgets('狭幅でもキーボードだけで設問を移動して承認できる', (tester) async {
+      final approved = <String>[];
+      await pumpAt(
+        tester,
+        desktopNarrow,
+        approveReview:
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              expectedAiGradeId,
+              note,
+            }) async {
+              approved.add(questionId);
+              return _reviewAction(
+                _review(questionId: questionId, action: 'approved'),
+              );
+            },
+      );
+
+      expect(selectedRailIndex(tester), 0);
+      expect(find.text(q1Answer), findsOneWidget);
+      expect(find.text(q2Answer), findsNothing);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(selectedRailIndex(tester), 1);
+      expect(find.text(q2Answer), findsOneWidget);
+      expect(find.text(q1Answer), findsNothing);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(selectedRailIndex(tester), 0);
+      expect(find.text(q1Answer), findsOneWidget);
+      expect(find.text(q2Answer), findsNothing);
+
+      // The 承認 this test's name promises: Enter must actually reach the
+      // sidecar for the selected question, and advance to the next one.
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(approved, ['q-1']);
+      expect(selectedRailIndex(tester), 1);
+      expect(find.text(q2Answer), findsOneWidget);
+    });
+
+    testWidgets('主要なaccessibility labelが両方の幅で存在する', (tester) async {
+      final semantics = tester.ensureSemantics();
+      for (final size in [desktopStandard, desktopNarrow]) {
+        await pumpAt(tester, size);
+
+        // The PDF itself, and both confidence figures -- the three things a
+        // reviewer working by screen reader needs named. The confidence
+        // labels carry the level word ("高"/"中"/"低") as well as the
+        // percentage, so the value is never conveyed by color alone.
+        expect(find.bySemanticsLabel(RegExp('^答案PDF 問1 ページ1')), findsOneWidget);
+        expect(
+          find.bySemanticsLabel(RegExp('^OCR文字認識信頼度 .* [高中低]\$')),
+          findsOneWidget,
+        );
+        expect(
+          find.bySemanticsLabel(RegExp('^採点信頼度 .* [高中低]\$')),
+          findsOneWidget,
+        );
+      }
+      semantics.dispose();
+    });
+  });
 }
