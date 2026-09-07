@@ -20,6 +20,8 @@ from auto_scoring.api.sidecar import (
     install_log_redaction,
     run,
 )
+from auto_scoring.db.engine import sqlite_url
+from auto_scoring.db.migrator import upgrade
 
 
 def test_bind_socket_zero_returns_an_open_socket_on_a_free_loopback_port() -> None:
@@ -114,6 +116,42 @@ def test_install_log_redaction_without_a_directory_stays_on_stderr_only(
         )
     finally:
         root.handlers = saved
+
+
+def test_startup_migrations_do_not_dismantle_the_log_configuration(
+    tmp_path: Path,
+) -> None:
+    """Running migrations must leave `install_log_redaction`'s handlers -- and
+    the app's own loggers -- exactly as they were.
+
+    The regression this exists for (Issue #24): `migrations/env.py` called
+    `fileConfig(alembic.ini)` unconditionally, including on the programmatic
+    path the sidecar takes at startup. That replaced the root handlers with
+    alembic.ini's console handler -- dropping the rotating file log *and the
+    token-redaction filter* -- and, via `disable_existing_loggers`'s default,
+    silenced every `auto_scoring.*` logger for the rest of the process. The
+    sidecar kept running and simply stopped recording anything.
+    """
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    log_directory = tmp_path / "logs"
+    application_logger = logging.getLogger("auto_scoring.jobs.queue")
+    try:
+        install_log_redaction("s3cr3t-token", log_directory)
+        upgrade(sqlite_url(tmp_path / "database.sqlite"), "head")
+
+        assert not application_logger.disabled
+        application_logger.info("token s3cr3t-token in a job record")
+        for handler in root.handlers:
+            handler.flush()
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved
+
+    written = (log_directory / sidecar.LOG_FILENAME).read_text(encoding="utf-8")
+    assert "in a job record" in written, "app logging stopped working after migrations"
+    assert "s3cr3t-token" not in written, "redaction filter was lost during migrations"
 
 
 def test_emit_handshake_writes_one_json_line(tmp_path: Path) -> None:
