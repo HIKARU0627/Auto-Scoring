@@ -41,6 +41,14 @@ while getopts ':o:s:h' option; do
   esac
 done
 
+# Resolved and cleared before anything else can fail, so that every exit path
+# below leaves the caller with this run's frame or with nothing -- never with the
+# PNG some earlier run left at the same path. A stale file that outlives a failed
+# run is the same trap as a stale frame: the caller looks at the path and
+# believes what is there.
+mkdir -p "$(dirname "$output")"
+rm -f "$output"
+
 for tool in import xwininfo curl; do
   command -v "$tool" >/dev/null ||
     { echo "$tool is not installed -- see docs/linux-desktop-development.md §1" >&2; exit 1; }
@@ -105,12 +113,9 @@ set -m
 # second.
 cd "$REPO_ROOT"
 # Every frame this script reads goes through one scratch file, including the
-# shutter frame, and the output path is written only once that frame has passed
-# the freshness checks below. Dropping an earlier run's PNG up front is part of
-# the same contract: after any run, that path holds this run's frame or nothing.
+# shutter frame; the output path is written only once that frame has passed the
+# checks below.
 sample="$(mktemp --suffix=.png)"
-mkdir -p "$(dirname "$output")"
-rm -f "$output"
 "$BUNDLE" >/dev/null 2>&1 &
 app_pid=$!
 # Waits for the group to actually drain, not just for the app: uvicorn shuts
