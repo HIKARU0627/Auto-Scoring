@@ -27,6 +27,24 @@
     How long to wait for the sidecar to become healthy. Generous by default:
     the first launch runs every schema migration against a new database, and
     Windows Defender scans a freshly built, unsigned executable tree.
+
+.NOTES
+    Run this against a *Linux* build of the bundle before pushing, on any
+    machine with pwsh:
+
+        pnpm run package:sidecar
+        pwsh -NoProfile -File scripts/smoke-test-sidecar.ps1 `
+            -SidecarPath backend/dist/auto-scoring-sidecar/auto-scoring-sidecar
+
+    Every step above runs there too, so it catches this script's own bugs --
+    syntax, strict-mode violations, and names that collide with PowerShell's
+    read-only automatic variables (`$pid` was one; it reached CI and failed
+    the job *after* the packaged sidecar had already passed every real
+    check). Only the packaging is platform-specific, not this script.
+
+    What that rehearsal cannot cover, and CI must: the `.exe` suffix, and
+    Windows Defender's scan of a freshly built unsigned executable -- which
+    is why `-TimeoutSeconds` defaults so high.
 #>
 [CmdletBinding()]
 param(
@@ -162,7 +180,10 @@ try {
     }
 
     Write-Step 'Confirming the sidecar wrote its own rotating log'
-    $log = Join-Path $appDataDir 'logs\sidecar.log'
+    # Separate segments, not 'logs\sidecar.log': a literal backslash is only a
+    # separator on Windows, and this script is also run against a Linux build of
+    # the bundle as a rehearsal before CI (docs/windows-distribution.md §7.1).
+    $log = Join-Path $appDataDir 'logs' 'sidecar.log'
     if (-not (Test-Path -LiteralPath $log)) {
         throw "no log at $log"
     }
@@ -171,13 +192,17 @@ try {
     }
 
     Write-Step 'Terminating, and checking nothing is left behind'
-    $pid = $process.Id
+    # NOT $pid: that is PowerShell's read-only automatic variable holding *this*
+    # process's id, and variable names are case-insensitive, so assigning to
+    # `$pid` fails at runtime with "Cannot overwrite variable PID because it is
+    # read-only or constant".
+    $sidecarPid = $process.Id
     $process.Kill()
     if (-not $process.WaitForExit(30000)) {
         throw "sidecar did not exit within 30s of being killed"
     }
-    if (Get-Process -Id $pid -ErrorAction SilentlyContinue) {
-        throw "process $pid survived termination"
+    if (Get-Process -Id $sidecarPid -ErrorAction SilentlyContinue) {
+        throw "process $sidecarPid survived termination"
     }
 
     # Nothing answers on that port any more. Probed rather than re-bound: a

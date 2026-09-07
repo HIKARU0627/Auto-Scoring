@@ -371,6 +371,24 @@ PyInstaller は **hidden import の漏れでビルドを失敗させられない
 
 ローカルで同じことを走らせるには `pnpm run package:sidecar:smoke`（Windows）。
 
+**push 前に Linux でも走らせること。** `pnpm run package:sidecar` は Linux でも
+Linux バイナリを作れるので、同じ `.ps1` をそのまま流せる:
+
+```bash
+pwsh -NoProfile -File scripts/smoke-test-sidecar.ps1 \
+  -SidecarPath backend/dist/auto-scoring-sidecar/auto-scoring-sidecar
+```
+
+上の 2 も含め全ステップが Linux でも走るので、**スクリプト自身のバグ**（構文、
+strict mode 違反、PowerShell の読み取り専用自動変数との名前衝突）はここで潰れる。
+実際 `$pid`（`$PID` は現在のプロセス ID を持つ読み取り専用の自動変数で、変数名は
+大文字小文字を区別しない）への代入が CI まで到達し、**バンドル自体は全チェックを
+通過したあとで** job を落とした。同じ手順を手で実行しても、スクリプト自身のバグは
+絶対に見つからない。
+
+Linux のリハーサルで covered できないのは `.exe` 拡張子と、初回実行時の Windows
+Defender のスキャン（`-TimeoutSeconds` の既定値が大きい理由）だけ。
+
 ### 7.2 Dart 側のテスト
 
 プロセス起動・FFI・ファイルシステム・時刻はすべて `SidecarPlatform` として
