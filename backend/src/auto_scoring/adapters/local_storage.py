@@ -23,6 +23,7 @@ Rules this class enforces:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -201,3 +202,19 @@ class LocalFileStore:
         except FileNotFoundError:
             if path.exists():
                 raise
+
+
+def file_matches_sha256(path: Path, expected_sha256: str) -> bool:
+    """Whether ``path`` exists and its content's sha256 digest equals
+    ``expected_sha256`` (Issue #23 P1/P2 review).
+
+    Shared by `jobs.export_processor.ExportJobProcessor` (idempotent-replay
+    safety: an `Export` row surviving a crash between its own DB commit and
+    the file write that follows it) and `api.export_router` (never telling a
+    reviewer a `reuse_existing` export is ready when its recorded file has
+    since gone missing or been corrupted) so both agree on exactly one
+    definition of "this recorded output is actually still there, intact".
+    """
+    if not path.exists():
+        return False
+    return hashlib.sha256(path.read_bytes()).hexdigest() == expected_sha256

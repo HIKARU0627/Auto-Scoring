@@ -27,6 +27,7 @@ from auto_scoring.domain.models import (
     JobKind,
     JobState,
     NormalizedRect,
+    Score,
 )
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import PageGeometry
@@ -351,3 +352,51 @@ async def test_a_job_cancelled_before_publish_does_not_create_an_export(
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.exports.list_for_submission("sub-1") == []
     assert not store.exports_dir().exists()
+
+
+async def test_repair_regenerates_from_the_recorded_snapshot_not_a_later_review_change(
+    session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """P2 review, round 2: if a reviewer edits/regrades a question between
+    an export's original (lost) file and a later repair-retry of the same
+    job, the repaired file must still reflect exactly what was true at the
+    *recorded* `review_versions` snapshot -- never a newer grade silently
+    attributed to that older row's provenance."""
+    _seed_reviewed_submission(session_factory, store)  # q-1: grade-1 (4/5), version=1
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    first = await processor.process(job)
+    assert first.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        original_export = uow.exports.get(export_id(job))
+        assert original_export is not None
+    original_path = store.root / original_export.file_path
+    original_path.unlink()  # simulate the file being lost after the DB commit
+
+    # The review moves on before the retry: a fresh grade for q-1.
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(
+            make_grade(id="grade-2", score=Score(awarded=2, maximum=5), created_at=at(10))
+        )
+        uow.reviews.add(
+            make_review(id="review-2", version=2, ai_grade_result_id="grade-2", created_at=at(10))
+        )
+        uow.commit()
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        repaired = uow.exports.get(export_id(job))
+        assert repaired is not None
+        # Provenance is untouched: still the ORIGINAL snapshot/timestamp,
+        # not the review's current (version=2) state.
+        assert repaired.review_versions == original_export.review_versions
+        assert repaired.created_at == original_export.created_at
+        assert len(uow.exports.list_for_submission("sub-1")) == 1  # never a second row
+
+    # Content matches the ORIGINAL grade (4/5), not the newer one (2/5).
+    text = PdfReader(str(original_path)).pages[0].extract_text()
+    assert "4/5" in text
+    assert "2/5" not in text

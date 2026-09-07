@@ -17,7 +17,7 @@ from threading import Lock
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.atomic import transactional_operation
-from auto_scoring.adapters.local_storage import LocalFileStore
+from auto_scoring.adapters.local_storage import LocalFileStore, file_matches_sha256
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
 from auto_scoring.domain.models import (
@@ -26,6 +26,7 @@ from auto_scoring.domain.models import (
     Job,
     JobState,
     QuestionReviewVersion,
+    Review,
     Submission,
 )
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
@@ -45,6 +46,29 @@ def export_id(job: Job) -> str:
     job must not regenerate the file or insert a second row.
     """
     return f"export:{job.id}"
+
+
+def _truncate_to_snapshot(
+    reviews_by_question: dict[str, list[Review]],
+    snapshot: tuple[QuestionReviewVersion, ...],
+) -> dict[str, list[Review]]:
+    """Reconstruct each question's review history exactly as it stood at
+    ``snapshot`` (an `Export.review_versions`) -- the repair path's way of
+    regenerating from the past, not the present (P2 review, round 2).
+
+    ``ReviewRepository.history`` is oldest-first and
+    ``QuestionReviewVersion.version`` is that history's length at snapshot
+    time (`domain.review_workflow.next_review_version`'s own invariant), so
+    keeping only the first ``version`` rows for each question reconstructs
+    precisely what `domain.review_workflow.effective_latest_review` would
+    have resolved to back then -- any review recorded since is simply not
+    there to be seen.
+    """
+    versions = {entry.question_id: entry.version for entry in snapshot}
+    return {
+        question_id: reviews[: versions.get(question_id, len(reviews))]
+        for question_id, reviews in reviews_by_question.items()
+    }
 
 
 class ExportGenerationError(Exception):
@@ -121,20 +145,46 @@ class ExportJobProcessor:
                 question_id: uow.reviews.history(job.submission_id, question_id)
                 for question_id in question_ids
             }
-            missing = unconfirmed_question_ids(question_ids, reviews_by_question)
-            if missing:
-                return self._failed(
-                    f"{len(missing)} question(s) not yet confirmed: {', '.join(sorted(missing))}"
+
+            if existing is not None:
+                # Repair path (P2 review, round 2): regenerate strictly from
+                # the snapshot already recorded on `existing`, not whatever
+                # the review state happens to be *now* -- a reviewer may
+                # have edited/regraded/undone a question between the
+                # original (lost) file and this retry, and the row must
+                # keep describing exactly what was true when it was first
+                # produced, not silently attribute a newer PDF to an older
+                # `review_versions`/`created_at`. Truncating each question's
+                # history to its recorded version count reconstructs that
+                # exact past state (`ReviewRepository.history` is
+                # oldest-first, and `QuestionReviewVersion.version` is that
+                # history's length at snapshot time -- the same invariant
+                # `domain.review_workflow.next_review_version` relies on).
+                # The confirmed-gate below is skipped: this exact snapshot
+                # already passed it the first time this job ran.
+                reviews_by_question = _truncate_to_snapshot(
+                    reviews_by_question, existing.review_versions
                 )
+                snapshot = existing.review_versions
+            else:
+                missing = unconfirmed_question_ids(question_ids, reviews_by_question)
+                if missing:
+                    return self._failed(
+                        f"{len(missing)} question(s) not yet confirmed: "
+                        f"{', '.join(sorted(missing))}"
+                    )
+                snapshot = review_version_snapshot(question_ids, reviews_by_question)
 
             marks_by_page: dict[int, list[AnnotationMark]] = {}
             for question in questions:
                 grades = uow.grades.history(job.submission_id, question.id)
                 grade = resolve_effective_grade(reviews_by_question[question.id], grades)
                 if grade is None:
-                    # Unreachable: the confirmed-gate above already requires
-                    # an effective review, and a confirmed review always
-                    # names a grade (`Review.__post_init__`).
+                    # Unreachable: the confirmed-gate (fresh generation) or
+                    # the original run's own confirmed-gate (repair, whose
+                    # truncated history reproduces exactly what already
+                    # passed it) always leaves an effective review naming a
+                    # grade (`Review.__post_init__`).
                     continue
                 annotations = uow.annotations.list_for(job.submission_id, question.id)
                 recognitions = uow.recognitions.history(job.submission_id, question.id)
@@ -146,7 +196,6 @@ class ExportJobProcessor:
                 )
                 marks_by_page.setdefault(question.page - 1, []).extend(marks)
 
-            snapshot = review_version_snapshot(question_ids, reviews_by_question)
             source_path = self._store.root / submission.source_pdf_path
 
             try:
@@ -192,10 +241,7 @@ class ExportJobProcessor:
         let every later export request for this submission resolve to
         `reuse_existing` against a file that does not exist.
         """
-        output_path = self._store.root / export.file_path
-        if not output_path.exists():
-            return False
-        return hashlib.sha256(output_path.read_bytes()).hexdigest() == export.file_sha256
+        return file_matches_sha256(self._store.root / export.file_path, export.file_sha256)
 
     def _repair_existing_export(
         self, uow: SqlAlchemyUnitOfWork, existing: Export, data: bytes

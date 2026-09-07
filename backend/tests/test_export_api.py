@@ -162,3 +162,33 @@ def test_reexporting_unchanged_review_state_reuses_the_existing_export(
 
     listing = client.get("/submissions/sub-1/exports", headers=_AUTH)
     assert len(listing.json()) == 1
+
+
+def test_reexporting_when_the_previous_export_s_file_has_gone_missing_queues_a_fresh_one(
+    client: TestClient, session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """P1 review, round 2: `decide_reexport` alone (unchanged review state)
+    would say `reuse_existing`, but if the previously recorded export's file
+    is missing (e.g. it was deleted, or a crash between its DB commit and
+    the file write that follows it), the endpoint must not claim success
+    against a file that isn't there -- it must queue a fresh export
+    instead."""
+    _seed_reviewed_submission(session_factory, store)
+    first = client.post("/submissions/sub-1/export", headers=_AUTH).json()
+    _wait_until_job_state(client, first["job_id"], "succeeded")
+    first_listing = client.get("/submissions/sub-1/exports", headers=_AUTH).json()
+    assert len(first_listing) == 1
+    (store.root / first_listing[0]["file_path"]).unlink()
+
+    second = client.post("/submissions/sub-1/export", headers=_AUTH)
+
+    assert second.status_code == 202, second.text
+    body = second.json()
+    assert body["decision"] == "accept_new_superseding"
+    assert body["job_id"] is not None
+
+    _wait_until_job_state(client, body["job_id"], "succeeded")
+    listing = client.get("/submissions/sub-1/exports", headers=_AUTH).json()
+    assert len(listing) == 2
+    new_export = next(e for e in listing if e["job_id"] == body["job_id"])
+    assert (store.root / new_export["file_path"]).exists()

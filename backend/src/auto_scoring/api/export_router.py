@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.local_storage import LocalFileStore, file_matches_sha256
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import Export, Job, JobKind, JobState
 from auto_scoring.domain.pdf_export import (
@@ -82,7 +83,9 @@ class ExportRequestResponse(BaseModel):
 
 
 def build_export_router(
-    session_factory: sessionmaker[Session], queue_service: JobQueueService
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    queue_service: JobQueueService,
 ) -> APIRouter:
     """Build the router. Every handler owns its own `SqlAlchemyUnitOfWork`
     per call, same as `api.jobs_router`."""
@@ -130,10 +133,23 @@ def build_export_router(
             decision = decide_reexport(previous, snapshot)
             if decision is ReexportDecision.REUSE_EXISTING:
                 assert previous is not None  # decide_reexport only returns this when so
-                response.status_code = status.HTTP_200_OK
-                return ExportRequestResponse(
-                    decision=decision.value, export=ExportResponse.from_domain(previous)
-                )
+                if file_matches_sha256(store.root / previous.file_path, previous.file_sha256):
+                    response.status_code = status.HTTP_200_OK
+                    return ExportRequestResponse(
+                        decision=decision.value, export=ExportResponse.from_domain(previous)
+                    )
+                # The recorded export's file is missing or corrupted (P1
+                # review, round 2 -- e.g. a crash between its DB commit and
+                # the file write that follows it, or the file being
+                # removed/corrupted afterward). Never hand back a
+                # `reuse_existing` pointing at a file that is not actually
+                # there; queue a fresh export instead, exactly as if the
+                # review state itself had moved on. `previous`'s row is left
+                # untouched as a historical record -- only the same job
+                # that originally produced it can repair it in place
+                # (`jobs.export_processor.ExportJobProcessor`'s own
+                # crash-recovery path, keyed by that job's id).
+                decision = ReexportDecision.ACCEPT_NEW_SUPERSEDING
 
             job = Job(
                 id=str(uuid4()),
