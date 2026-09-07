@@ -27,6 +27,8 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         DependencyEdgeModel,
         DependencyGraphResponse,
         DependencyProvision,
+        ExportRequestResponse,
+        ExportResponse,
         GradeResultResponse,
         JobResponse,
         NormalizedBBoxModel,
@@ -97,11 +99,21 @@ enum SidecarErrorKind {
 
 /// The only exception callers of [SidecarApiClient] need to handle.
 class SidecarApiException implements Exception {
-  SidecarApiException(this.kind, this.message, {this.statusCode});
+  SidecarApiException(
+    this.kind,
+    this.message, {
+    this.statusCode,
+    this.unconfirmedQuestionIds,
+  });
 
   final SidecarErrorKind kind;
   final String message;
   final int? statusCode;
+
+  /// Present only for `POST .../export`'s 409 (Issue #23 acceptance: "未確認
+  /// 設問がある場合は出力を拒否し、対象を表示する") -- the question ids the
+  /// sidecar reports are not yet confirmed. `null` for every other error.
+  final List<String>? unconfirmedQuestionIds;
 
   @override
   String toString() =>
@@ -154,6 +166,7 @@ class SidecarApiClient {
     _recognitionsApi = generated.getRecognitionsApi();
     _reviewApi = generated.getReviewApi();
     _jobsApi = generated.getJobsApi();
+    _exportApi = generated.getExportApi();
   }
 
   static void _configure(
@@ -186,6 +199,7 @@ class SidecarApiClient {
   late final RecognitionsApi _recognitionsApi;
   late final ReviewApi _reviewApi;
   late final JobsApi _jobsApi;
+  late final ExportApi _exportApi;
 
   /// A second Dio/client pair, configured with [intakeTimeout] instead of
   /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
@@ -919,6 +933,74 @@ class SidecarApiClient {
     }
   }
 
+  /// Requests the annotated-PDF export for [submissionId] (Issue #23).
+  /// Refuses with [SidecarErrorKind.conflict] (409) if any question is not
+  /// yet confirmed. Otherwise either queues a fresh `Job` (kind EXPORT --
+  /// poll [listJobs]/[getJob] for progress, `retryJob` on failure) or, if
+  /// the current review state was already exported, hands back that
+  /// existing [ExportResponse] directly without queuing anything
+  /// (`decision: reuse_existing`).
+  Future<ExportRequestResponse> requestExport(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _exportApi
+          .requestExportSubmissionsSubmissionIdExportPost(
+            submissionId: submissionId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every successful export recorded for [submissionId], oldest first
+  /// (Issue #23: 保存先表示 / export history).
+  Future<List<ExportResponse>> listExports(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _exportApi
+          .listExportsSubmissionsSubmissionIdExportsGet(
+            submissionId: submissionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <ExportResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// One `Job`'s current state, by id (Issue #23: polling an export job
+  /// without re-listing every job for its submission).
+  Future<JobResponse> getJob(String jobId, {CancelToken? cancelToken}) async {
+    try {
+      final response = await _jobsApi.getJobJobsJobIdGet(
+        jobId: jobId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Requeues a `FAILED` job (Issue #23: 出力の再試行).
+  Future<JobResponse> retryJob(String jobId, {CancelToken? cancelToken}) async {
+    try {
+      final response = await _jobsApi.retryJobJobsJobIdRetryPost(
+        jobId: jobId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
   T _requireBody<T>(Response<T> response) {
     final body = response.data;
     if (body == null) {
@@ -989,6 +1071,7 @@ class SidecarApiClient {
             _detailMessage(error.response?.data) ??
                 'sidecar reported a conflict',
             statusCode: status,
+            unconfirmedQuestionIds: _detailQuestionIds(error.response?.data),
           );
         }
         return SidecarApiException(
@@ -1018,6 +1101,17 @@ String? _detailMessage(Object? data) {
     return detail['message'] as String;
   }
   return null;
+}
+
+/// `POST .../export`'s 409 body's `detail.question_ids` (Issue #23), or
+/// `null` if absent/malformed -- see [SidecarApiException.unconfirmedQuestionIds].
+List<String>? _detailQuestionIds(Object? data) {
+  if (data is! Map) return null;
+  final detail = data['detail'];
+  if (detail is! Map) return null;
+  final ids = detail['question_ids'];
+  if (ids is! List) return null;
+  return ids.whereType<String>().toList();
 }
 
 String _validatedLoopbackBaseUrl(String value) {

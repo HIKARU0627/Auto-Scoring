@@ -8,6 +8,7 @@ import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/confidence_level.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
+import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
 
 /// 添削レビュー画面 (simplified-design-specification.md §16.5, Issue #21 + #22).
 ///
@@ -495,6 +496,17 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     final question = _currentQuestion;
     if (question == null) return;
     await _refreshQuestion(question);
+  }
+
+  /// "PDF出力" toolbar action (Issue #23): shows [ExportDialog], which owns
+  /// the whole request/poll/retry flow itself -- this screen does not track
+  /// export state beyond launching it.
+  Future<void> _showExportDialog() async {
+    await showExportDialog(
+      context,
+      dependencies: widget.dependencies,
+      submissionId: widget.submissionId,
+    );
   }
 
   /// Refreshes [question]'s own recognitions/grades/annotations/reviews
@@ -1105,6 +1117,12 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       appBar: AppBar(
         title: Text(_appBarTitle()),
         actions: [
+          IconButton(
+            key: const Key('review-export-button'),
+            tooltip: 'PDF出力',
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            onPressed: _loadingShell ? null : _showExportDialog,
+          ),
           IconButton(
             key: const Key('review-refresh-button'),
             tooltip: '更新',

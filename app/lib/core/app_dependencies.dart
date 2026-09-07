@@ -158,6 +158,18 @@ Future<ReviewActionResponse> _unavailableUndoReview(
   required int expectedVersion,
 }) async => _unavailable();
 
+Future<ExportRequestResponse> _unavailableRequestExport(
+  String submissionId,
+) async => _unavailable();
+
+Future<List<ExportResponse>> _unavailableListExports(
+  String submissionId,
+) async => _unavailable();
+
+Future<JobResponse> _unavailableGetJob(String jobId) async => _unavailable();
+
+Future<JobResponse> _unavailableRetryJob(String jobId) async => _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -351,6 +363,23 @@ typedef UndoReview =
       required int expectedVersion,
     });
 
+/// Requests the annotated-PDF export for [submissionId] (Issue #23,
+/// simplified-design-spec.md §14). Throws [SidecarApiException] with
+/// `SidecarErrorKind.conflict` if any question is not yet confirmed.
+typedef RequestExport =
+    Future<ExportRequestResponse> Function(String submissionId);
+
+/// Every successful export recorded for [submissionId], oldest first
+/// (Issue #23: 出力履歴・保存先表示).
+typedef ListExports =
+    Future<List<ExportResponse>> Function(String submissionId);
+
+/// One `Job`'s current state, by id (Issue #23: exportジョブの進捗polling).
+typedef GetJob = Future<JobResponse> Function(String jobId);
+
+/// Requeues a `FAILED` job (Issue #23: 出力の再試行).
+typedef RetryJob = Future<JobResponse> Function(String jobId);
+
 /// Composition-root dependency container.
 ///
 /// Features read their collaborators from here instead of constructing them,
@@ -386,6 +415,10 @@ class AppDependencies {
     this.regradeReview = _unavailableRegradeReview,
     this.approveReview = _unavailableApproveReview,
     this.undoReview = _unavailableUndoReview,
+    this.requestExport = _unavailableRequestExport,
+    this.listExports = _unavailableListExports,
+    this.getJob = _unavailableGetJob,
+    this.retryJob = _unavailableRetryJob,
   });
 
   /// Replaced with `SidecarApiClient.isHealthy` when process supervision lands.
@@ -418,4 +451,8 @@ class AppDependencies {
   final RegradeReview regradeReview;
   final ApproveReview approveReview;
   final UndoReview undoReview;
+  final RequestExport requestExport;
+  final ListExports listExports;
+  final GetJob getJob;
+  final RetryJob retryJob;
 }
