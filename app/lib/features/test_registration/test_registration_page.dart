@@ -5,7 +5,10 @@ import 'package:go_router/go_router.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
+import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/app_file_picker_row.dart';
 
 /// テスト登録画面 (simplified-design-specification.md §16.2, Issue #16).
 ///
@@ -128,9 +131,9 @@ class _TestRegistrationPageState extends ConsumerState<TestRegistrationPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('テスト登録')),
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: AppSpacing.page,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
+          constraints: const BoxConstraints(maxWidth: AppLayout.formMaxWidth),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -145,7 +148,7 @@ class _TestRegistrationPageState extends ConsumerState<TestRegistrationPage> {
                   ),
                   onChanged: (_) => setState(() {}),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 TextField(
                   key: const Key('test-subject-field'),
                   controller: _subjectController,
@@ -155,27 +158,34 @@ class _TestRegistrationPageState extends ConsumerState<TestRegistrationPage> {
                     border: OutlineInputBorder(),
                   ),
                 ),
-                const SizedBox(height: 24),
-                _buildFilePickerRow(
-                  key: const Key('model-answer-picker'),
-                  label: '模範解答PDF',
+                const SizedBox(height: AppSpacing.xl),
+                AppFilePickerRow(
+                  buttonKey: const Key('model-answer-picker'),
+                  buttonLabel: '模範解答PDF',
                   fileName: _modelAnswerName,
-                  onPressed: () => _pickFile(_PdfSlot.modelAnswer),
+                  onPressed: _isSubmitting
+                      ? null
+                      : () => _pickFile(_PdfSlot.modelAnswer),
                 ),
-                const SizedBox(height: 16),
-                _buildFilePickerRow(
-                  key: const Key('manual-picker'),
-                  label: '採点マニュアルPDF',
+                const SizedBox(height: AppSpacing.lg),
+                AppFilePickerRow(
+                  buttonKey: const Key('manual-picker'),
+                  buttonLabel: '採点マニュアルPDF',
                   fileName: _manualName,
-                  onPressed: () => _pickFile(_PdfSlot.manual),
+                  onPressed: _isSubmitting
+                      ? null
+                      : () => _pickFile(_PdfSlot.manual),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: AppSpacing.xl),
                 if (_isSubmitting) const LinearProgressIndicator(),
                 if (_errorMessage != null) ...[
-                  const SizedBox(height: 8),
-                  _buildErrorBanner(),
+                  const SizedBox(height: AppSpacing.sm),
+                  AppErrorBanner(
+                    message: _errorMessage!,
+                    onRetry: _canSubmit ? _submit : null,
+                  ),
                 ],
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.lg),
                 FilledButton.icon(
                   key: const Key('register-test-button'),
                   onPressed: _canSubmit ? _submit : null,
@@ -185,58 +195,6 @@ class _TestRegistrationPageState extends ConsumerState<TestRegistrationPage> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFilePickerRow({
-    required Key key,
-    required String label,
-    required String? fileName,
-    required VoidCallback onPressed,
-  }) {
-    return Row(
-      children: [
-        OutlinedButton.icon(
-          key: key,
-          onPressed: _isSubmitting ? null : onPressed,
-          icon: const Icon(Icons.picture_as_pdf),
-          label: Text(label),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(fileName ?? '未選択', overflow: TextOverflow.ellipsis),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildErrorBanner() {
-    return Card(
-      color: Theme.of(context).colorScheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Icon(
-              Icons.error_outline,
-              color: Theme.of(context).colorScheme.onErrorContainer,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _errorMessage!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: _canSubmit ? _submit : null,
-              child: const Text('再試行'),
-            ),
-          ],
         ),
       ),
     );

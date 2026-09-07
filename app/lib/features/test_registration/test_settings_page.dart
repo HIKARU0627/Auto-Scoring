@@ -4,6 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
+import 'package:auto_scoring_app/core/design/app_status_tone.dart';
+import 'package:auto_scoring_app/core/design/app_theme_context.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 
 /// テスト設定画面 (simplified-design-specification.md §16.3, Issue #16).
 ///
@@ -307,22 +311,22 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
           : RefreshIndicator(
               onRefresh: _loadAll,
               child: ListView(
-                padding: const EdgeInsets.all(16),
+                padding: AppSpacing.panel,
                 children: [
                   _buildStatusBanner(),
                   if (_errorMessage != null) ...[
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     _buildErrorBanner(),
                   ],
                   if (_busy) ...[
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppSpacing.sm),
                     const LinearProgressIndicator(),
                   ],
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.lg),
                   _buildProfileSection(),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xl),
                   _buildDependencyGraphSection(),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xl),
                   _buildCompleteRegistrationButton(),
                 ],
               ),
@@ -334,11 +338,18 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     final status = _test?.status ?? 'draft';
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: AppSpacing.banner,
         child: Row(
           children: [
-            Icon(status == 'ready' ? Icons.verified : Icons.pending_actions),
-            const SizedBox(width: 8),
+            Icon(
+              status == 'ready' ? Icons.verified : Icons.pending_actions,
+              color:
+                  (status == 'ready'
+                          ? AppStatusTone.success
+                          : AppStatusTone.neutral)
+                      .color(context),
+            ),
+            const SizedBox(width: AppSpacing.sm),
             Text(
               status == 'ready' ? 'テスト状態: 登録完了' : 'テスト状態: 下書き',
               key: const Key('test-status-label'),
@@ -350,29 +361,13 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   }
 
   Widget _buildErrorBanner() {
-    return Card(
-      color: Theme.of(context).colorScheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Icon(
-              Icons.error_outline,
-              color: Theme.of(context).colorScheme.onErrorContainer,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _errorMessage!,
-                key: const Key('settings-error-message'),
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+    // `retryable: false`: this screen's failures always belong to one of its
+    // explicit actions (自動解析, 保存, 確定, 登録完了), and the reviewer
+    // re-presses that button -- a generic 再試行 could not know which.
+    return AppErrorBanner(
+      message: _errorMessage!,
+      messageKey: const Key('settings-error-message'),
+      retryable: false,
     );
   }
 
@@ -380,7 +375,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     final regions = _editableRegions;
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: AppSpacing.card,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -389,7 +384,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 Expanded(
                   child: Text(
                     'テストプロファイル（設問・回答欄・配点・採点基準・模範解答）',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: context.texts.titleMedium,
                   ),
                 ),
                 if (_profileConfirmed)
@@ -398,9 +393,9 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   const Chip(label: Text('未確認')),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Wrap(
-              spacing: 8,
+              spacing: AppSpacing.sm,
               children: [
                 FilledButton.icon(
                   key: const Key('analyze-profile-button'),
@@ -419,7 +414,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             if (regions == null)
               const Text('まだ解析されていません。「自動解析」を実行してください。')
             else if (regions.isEmpty)
@@ -428,9 +423,9 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
               ...regions.asMap().entries.map(
                 (entry) => _buildRegionTile(entry.key, entry.value),
               ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             Wrap(
-              spacing: 8,
+              spacing: AppSpacing.sm,
               children: [
                 OutlinedButton.icon(
                   key: const Key('save-profile-button'),
@@ -505,17 +500,14 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         : _computeLayers(graph.questionIds.toList(), edges ?? const []);
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: AppSpacing.card,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    '設問依存関係グラフ',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+                  child: Text('設問依存関係グラフ', style: context.texts.titleMedium),
                 ),
                 if (_dependencyGraphConfirmed)
                   const Chip(label: Text('確認済み'))
@@ -523,9 +515,9 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   const Chip(label: Text('未確認')),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             Wrap(
-              spacing: 8,
+              spacing: AppSpacing.sm,
               children: [
                 FilledButton.icon(
                   key: const Key('analyze-dependency-graph-button'),
@@ -562,7 +554,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             if (graph == null)
               const Text('まだ分析されていません。「依存関係を分析」を実行してください。')
             else ...[
@@ -573,27 +565,29 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   (entry) => _buildEdgeTile(entry.key, entry.value),
                 ),
               if (graph.unresolved.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  '要確認（AIが依存を判断できなかった設問）',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text('要確認（AIが依存を判断できなかった設問）', style: context.texts.titleSmall),
                 for (final unresolved in graph.unresolved)
                   ListTile(
-                    leading: const Icon(Icons.help_outline),
+                    // AIが判断できなかった設問は、人間が決めるまで先へ進めない
+                    // -- この画面で強調色を使う唯一の箇所 (`AppStatusTone`)。
+                    leading: Icon(
+                      Icons.help_outline,
+                      color: AppStatusTone.attention.color(context),
+                    ),
                     title: Text('設問 ${unresolved.questionId}'),
                     subtitle: Text(unresolved.reason),
                   ),
               ],
-              const SizedBox(height: 8),
-              Text('並列実行可能な層', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: AppSpacing.sm),
+              Text('並列実行可能な層', style: context.texts.titleSmall),
               if (layers == null)
                 const Text('循環した依存関係があるため層を計算できません。確定前に解消してください。')
               else
                 for (final (i, layer) in layers.indexed)
                   Text('第${i + 1}層: ${layer.join(', ')}'),
             ],
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.md),
             FilledButton.icon(
               key: const Key('confirm-dependency-graph-button'),
               onPressed: (_busy || graph == null || _dependencyGraphConfirmed)
@@ -865,7 +859,7 @@ class _RegionEditDialogState extends State<_RegionEditDialog> {
                     decoration: const InputDecoration(labelText: 'x0'),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: TextField(
                     key: const Key('region-y0-field'),
@@ -884,7 +878,7 @@ class _RegionEditDialogState extends State<_RegionEditDialog> {
                     decoration: const InputDecoration(labelText: 'x1'),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: TextField(
                     key: const Key('region-y1-field'),
@@ -903,10 +897,12 @@ class _RegionEditDialogState extends State<_RegionEditDialog> {
               ),
             ),
             if (_validationError != null) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               Text(
                 _validationError!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                style: context.texts.bodySmall?.copyWith(
+                  color: context.colors.error,
+                ),
               ),
             ],
           ],
@@ -1023,7 +1019,7 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
                 if (value != null) setState(() => _to = value);
               },
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             const Text('依存先に渡す内容'),
             for (final provision in DependencyProvision.values)
               CheckboxListTile(
@@ -1048,10 +1044,12 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
               decoration: const InputDecoration(labelText: '根拠'),
             ),
             if (_validationError != null) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.sm),
               Text(
                 _validationError!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                style: context.texts.bodySmall?.copyWith(
+                  color: context.colors.error,
+                ),
               ),
             ],
           ],

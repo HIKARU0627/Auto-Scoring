@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 /// Shows the "PDF出力" flow (Issue #23, simplified-design-specification.md
 /// §16.5): request the annotated-PDF export, poll its `Job` until it reaches
@@ -272,7 +273,10 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('PDF出力'),
-      content: SizedBox(width: 360, child: _buildContent()),
+      content: SizedBox(
+        width: AppLayout.dialogContentWidth,
+        child: _buildContent(),
+      ),
       actions: _buildActions(),
     );
   }
@@ -285,11 +289,11 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
-              width: 20,
-              height: 20,
+              width: AppIconSize.standard,
+              height: AppIconSize.standard,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            SizedBox(width: 16),
+            SizedBox(width: AppSpacing.lg),
             Expanded(child: Text('出力しています…')),
           ],
         );
@@ -305,7 +309,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('未確認の設問があるため出力できません:'),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.sm),
             if (_unconfirmedQuestionIds.isEmpty)
               Text(_errorMessage ?? '')
             else
