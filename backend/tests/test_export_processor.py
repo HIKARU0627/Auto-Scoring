@@ -400,3 +400,51 @@ async def test_repair_regenerates_from_the_recorded_snapshot_not_a_later_review_
     text = PdfReader(str(original_path)).pages[0].extract_text()
     assert "4/5" in text
     assert "2/5" not in text
+
+
+async def test_a_new_export_never_reuses_a_path_a_lost_export_row_still_reserves(
+    session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """P1 review, round 3: `LocalFileStore.allocate_export_path`'s own
+    ``.exists()`` check can't see a path an `Export` row already names but
+    whose file write never landed (the exact "DB commit succeeded, file
+    write failed" scenario `_existing_file_is_intact`/
+    `_repair_existing_export` exist for). A second, unrelated export
+    request must never be handed that same path -- occupying it would let
+    a later repair-retry of the original job overwrite the second export's
+    file out from under it."""
+    _seed_reviewed_submission(session_factory, store)
+    job_a = _seed_export_job(session_factory, job_id="job-a")
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    first = await processor.process(job_a)
+    assert first.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export_a = uow.exports.get(export_id(job_a))
+        assert export_a is not None
+    assert export_a.file_path == "exports/答案A_corrected.pdf"
+    path_a = store.root / export_a.file_path
+    path_a.unlink()  # simulate the file being lost after the DB commit
+
+    # A second, unrelated export request for the same submission (e.g. the
+    # review moved on in the meantime -- ACCEPT_NEW_SUPERSEDING) creates a
+    # brand new job.
+    job_b = _seed_export_job(session_factory, job_id="job-b")
+    second = await processor.process(job_b)
+
+    assert second.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export_b = uow.exports.get(export_id(job_b))
+        assert export_b is not None
+    # Must NOT reuse export_a's still-reserved path.
+    assert export_b.file_path == "exports/答案A_corrected_2.pdf"
+    path_b = store.root / export_b.file_path
+    assert path_b.exists()
+    path_b_bytes = path_b.read_bytes()
+
+    # A later repair-retry of the original job A writes only to its OWN
+    # path, never touching B's file.
+    third = await processor.process(job_a)
+    assert third.outcome is ProcessingOutcome.SUCCEEDED
+    assert path_a.exists()
+    assert path_b.read_bytes() == path_b_bytes  # untouched by A's repair

@@ -47,6 +47,23 @@ def test_allocate_export_path_numbers_collisions(store: LocalFileStore) -> None:
     assert second.name == "答案A_corrected_2.pdf"
 
 
+def test_allocate_export_path_also_skips_reserved_paths_with_no_file_on_disk(
+    store: LocalFileStore,
+) -> None:
+    """Issue #23 P1 review, round 3: a path some `Export` row already
+    names -- e.g. one whose own file write failed after its DB commit --
+    must stay off-limits even though nothing exists there yet for the
+    plain `.exists()` check (covered by the test above) to catch."""
+    first = store.allocate_export_path("答案A.pdf")
+    assert first.name == "答案A_corrected.pdf"
+    reserved = {"exports/答案A_corrected.pdf"}
+
+    second = store.allocate_export_path("答案A.pdf", reserved=reserved)
+
+    assert second.name == "答案A_corrected_2.pdf"
+    assert not second.exists()
+
+
 def test_delete_submission_removes_the_subtree(store: LocalFileStore) -> None:
     store.write_atomic(store.submission_dir("sub-9") / "source.pdf", b"x")
     store.delete_submission("sub-9")
