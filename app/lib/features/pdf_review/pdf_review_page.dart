@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
@@ -31,20 +32,18 @@ import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
 /// decisions/open questions this screen relies on.
 ///
 /// `features` may depend on `core` and `api` (see `AGENTS.md` "Architecture").
-class PdfReviewPage extends StatefulWidget {
+class PdfReviewPage extends ConsumerStatefulWidget {
   const PdfReviewPage({
     super.key,
-    required this.dependencies,
     required this.testId,
     required this.submissionId,
   });
 
-  final AppDependencies dependencies;
   final String testId;
   final String submissionId;
 
   @override
-  State<PdfReviewPage> createState() => _PdfReviewPageState();
+  ConsumerState<PdfReviewPage> createState() => _PdfReviewPageState();
 }
 
 /// The last element of [reviews] that is neither an ``undone`` row nor the
@@ -317,7 +316,12 @@ int _compareQuestionNumbers(String a, String b) {
   return tokensA.length.compareTo(tokensB.length);
 }
 
-class _PdfReviewPageState extends State<PdfReviewPage> {
+class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
+  /// The live sidecar operations. Read on every use rather than captured
+  /// once: the composition root swaps this provider's value whenever the
+  /// connection changes (`main.dart`).
+  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+
   late final PdfViewerController _pdfController;
   final _noteController = TextEditingController();
   final _noteFocusNode = FocusNode(debugLabel: '修正コメント');
@@ -469,9 +473,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     if (_pollInFlight) return;
     _pollInFlight = true;
     try {
-      final submission = await widget.dependencies.getSubmission(
-        widget.submissionId,
-      );
+      final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
       setState(() => _submission = submission);
       await _refreshJobs();
@@ -502,11 +504,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   /// the whole request/poll/retry flow itself -- this screen does not track
   /// export state beyond launching it.
   Future<void> _showExportDialog() async {
-    await showExportDialog(
-      context,
-      dependencies: widget.dependencies,
-      submissionId: widget.submissionId,
-    );
+    await showExportDialog(context, submissionId: widget.submissionId);
   }
 
   /// Refreshes [question]'s own recognitions/grades/annotations/reviews
@@ -522,9 +520,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   /// watching a stuck "処理中" state actually wants.
   Future<void> _refreshQuestion(QuestionResponse question) async {
     try {
-      final submission = await widget.dependencies.getSubmission(
-        widget.submissionId,
-      );
+      final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
       setState(() => _submission = submission);
     } on SidecarApiException {
@@ -543,7 +539,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
   /// question's own job state as unknown" rather than surfacing an error.
   Future<void> _refreshJobs() async {
     try {
-      final jobs = await widget.dependencies.listJobs(widget.submissionId);
+      final jobs = await _dependencies.listJobs(widget.submissionId);
       if (!mounted) return;
       setState(() => _jobs = jobs);
     } on SidecarApiException {
@@ -568,13 +564,9 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       _shellError = null;
     });
     try {
-      final submission = await widget.dependencies.getSubmission(
-        widget.submissionId,
-      );
-      final questions = await widget.dependencies.listQuestions(widget.testId);
-      final pdfBytes = await widget.dependencies.getSourcePdf(
-        widget.submissionId,
-      );
+      final submission = await _dependencies.getSubmission(widget.submissionId);
+      final questions = await _dependencies.listQuestions(widget.testId);
+      final pdfBytes = await _dependencies.getSourcePdf(widget.submissionId);
       final sorted = questions.toList()
         ..sort((a, b) {
           final byPage = a.page.compareTo(b.page);
@@ -669,19 +661,19 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       setState(() => _reviews[question.id] = review);
     }
     try {
-      final recognitions = await widget.dependencies.listRecognitions(
+      final recognitions = await _dependencies.listRecognitions(
         widget.submissionId,
         question.id,
       );
-      final grades = await widget.dependencies.listGrades(
+      final grades = await _dependencies.listGrades(
         widget.submissionId,
         question.id,
       );
-      final annotations = await widget.dependencies.listAnnotations(
+      final annotations = await _dependencies.listAnnotations(
         widget.submissionId,
         question.id,
       );
-      final reviews = await widget.dependencies.listReviews(
+      final reviews = await _dependencies.listReviews(
         widget.submissionId,
         question.id,
       );
@@ -706,7 +698,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
           latestAiGrade == null ||
               recognitions.any((r) => r.createdAt == latestAiGrade.createdAt)
           ? recognitions
-          : await widget.dependencies.listRecognitions(
+          : await _dependencies.listRecognitions(
               widget.submissionId,
               question.id,
             );
@@ -843,7 +835,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
       proceed = await _performReviewAction(
         question,
         review,
-        () => widget.dependencies.approveReview(
+        () => _dependencies.approveReview(
           widget.submissionId,
           question.id,
           expectedVersion: review.expectedVersion,
@@ -874,7 +866,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     await _performReviewAction(
       question,
       review,
-      () => widget.dependencies.rejectReview(
+      () => _dependencies.rejectReview(
         widget.submissionId,
         question.id,
         expectedVersion: review.expectedVersion,
@@ -890,7 +882,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     await _performReviewAction(
       question,
       review,
-      () => widget.dependencies.regradeReview(
+      () => _dependencies.regradeReview(
         widget.submissionId,
         question.id,
         expectedVersion: review.expectedVersion,
@@ -906,7 +898,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     await _performReviewAction(
       question,
       review,
-      () => widget.dependencies.undoReview(
+      () => _dependencies.undoReview(
         widget.submissionId,
         question.id,
         expectedVersion: review.expectedVersion,
@@ -1063,7 +1055,7 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     await _performReviewAction(
       question,
       review,
-      () => widget.dependencies.editReview(
+      () => _dependencies.editReview(
         widget.submissionId,
         question.id,
         expectedVersion: expectedVersion,

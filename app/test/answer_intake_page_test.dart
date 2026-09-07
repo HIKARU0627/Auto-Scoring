@@ -2,10 +2,13 @@ import 'dart:async';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/answer_intake/answer_intake_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'app_harness.dart';
 
 SubmissionResponse _submission({
   String id = 'sub-1',
@@ -36,7 +39,20 @@ TestSummary _test({String id = 'test-1', String name = '国語 第1回'}) {
 Future<PickedPdfFile?> _fakePick() async =>
     const PickedPdfFile(path: 'C:/tmp/student-a.pdf', name: 'student-a.pdf');
 
-Widget _wrap(AnswerIntakePage page) => MaterialApp(home: page);
+/// Opens 答案取込画面 with [dependencies] in place of a live sidecar and
+/// [pickFile] in place of the native file-picker dialog.
+Future<void> _pumpIntake(
+  WidgetTester tester,
+  AppDependencies dependencies, {
+  Future<PickedPdfFile?> Function() pickFile = _fakePick,
+}) {
+  return pumpAppAt(
+    tester,
+    AppRoutes.answerIntake,
+    dependencies: dependencies,
+    overrides: [pickPdfFileProvider.overrideWithValue(pickFile)],
+  );
+}
 
 void main() {
   testWidgets('lists tests, uploads a file, and shows the result', (
@@ -58,9 +74,7 @@ void main() {
           },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('test-picker')), findsOneWidget);
@@ -104,9 +118,7 @@ void main() {
           },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('test-picker')));
@@ -149,11 +161,7 @@ void main() {
         listSubmissions: (testId) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          AnswerIntakePage(dependencies: dependencies, pickFile: flakyPick),
-        ),
-      );
+      await _pumpIntake(tester, dependencies, pickFile: flakyPick);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('test-picker')));
       await tester.pumpAndSettle();
@@ -187,9 +195,7 @@ void main() {
               throw DuplicateSubmissionException('duplicate', 'sub-99'),
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -213,9 +219,7 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -237,11 +241,7 @@ void main() {
                 _submission(state: 'ai_processed'),
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
-        ),
-      );
+      await _pumpIntake(tester, dependencies);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('test-picker')));
       await tester.pumpAndSettle();
@@ -275,11 +275,7 @@ void main() {
                 _submission(state: 'ai_processed'),
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
-        ),
-      );
+      await _pumpIntake(tester, dependencies);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('test-picker')));
       await tester.pumpAndSettle();
@@ -336,9 +332,7 @@ void main() {
           },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -391,9 +385,7 @@ void main() {
       },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
 
     // Select A: its list request starts and never resolves (yet), so from
@@ -446,9 +438,7 @@ void main() {
           },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -478,9 +468,7 @@ void main() {
           },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -508,9 +496,7 @@ void main() {
   ) async {
     final dependencies = AppDependencies(listTests: () async => const []);
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('登録済みのテストがありません'), findsOneWidget);
@@ -531,9 +517,7 @@ void main() {
           },
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -576,11 +560,7 @@ void main() {
             },
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
-        ),
-      );
+      await _pumpIntake(tester, dependencies);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('test-picker')));
       await tester.pumpAndSettle();
@@ -620,23 +600,20 @@ void main() {
   testWidgets(
     'disposing the page while a file pick is still pending does not throw',
     (tester) async {
-      // Regression test: _pickFile must check `mounted` after `await
-      // widget.pickFile()` before touching setState -- otherwise navigating
-      // away while the native file dialog is still open crashes with
-      // "setState() called after dispose()".
+      // Regression test: _pickFile must check `mounted` after awaiting the
+      // picker before touching setState -- otherwise navigating away while
+      // the native file dialog is still open crashes with "setState() called
+      // after dispose()".
       final pickCompleter = Completer<PickedPdfFile?>();
       final dependencies = AppDependencies(
         listTests: () async => [_test()],
         listSubmissions: (testId) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          AnswerIntakePage(
-            dependencies: dependencies,
-            pickFile: () => pickCompleter.future,
-          ),
-        ),
+      await _pumpIntake(
+        tester,
+        dependencies,
+        pickFile: () => pickCompleter.future,
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('test-picker')));
@@ -674,11 +651,7 @@ void main() {
                 _submission(id: 'sub-new'),
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
-        ),
-      );
+      await _pumpIntake(tester, dependencies);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('test-picker')));
       await tester.pumpAndSettle();
@@ -722,9 +695,7 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      _wrap(AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick)),
-    );
+    await _pumpIntake(tester, dependencies);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('test-picker')));
     await tester.pumpAndSettle();
@@ -742,9 +713,7 @@ void main() {
       // synchronously -- a synchronous throw during initState's
       // `widget.dependencies.listTests()` call would crash while the widget
       // is still mounting instead of reaching FutureBuilder's error branch.
-      await tester.pumpWidget(
-        _wrap(AnswerIntakePage(dependencies: const AppDependencies())),
-      );
+      await _pumpIntake(tester, const AppDependencies());
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('test-list-error')), findsOneWidget);
@@ -771,11 +740,7 @@ void main() {
           listSubmissions: (testId) async => const [],
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
-          ),
-        );
+        await _pumpIntake(tester, dependencies);
         await tester.pumpAndSettle();
 
         expect(tester.takeException(), isNull);

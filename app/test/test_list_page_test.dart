@@ -1,9 +1,12 @@
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+
+import 'app_harness.dart';
 
 TestResponse _test({required String id, required String status}) {
   return TestResponse(
@@ -41,9 +44,7 @@ void main() {
       getDependencyGraph: (testId) async => _notFound(),
     );
 
-    await tester.pumpWidget(
-      MaterialApp(home: TestListPage(dependencies: dependencies)),
-    );
+    await pumpAppAt(tester, AppRoutes.testList, dependencies: dependencies);
     await tester.pumpAndSettle();
 
     expect(find.text('下書き'), findsOneWidget);
@@ -54,7 +55,7 @@ void main() {
 
     // Simulate the reviewer finishing on the settings screen and coming
     // back, without needing to drive that whole flow from here.
-    Navigator.of(tester.element(find.byType(TestSettingsPage))).pop();
+    GoRouter.of(tester.element(find.byType(TestSettingsPage))).pop();
     await tester.pumpAndSettle();
 
     expect(find.byType(TestSettingsPage), findsNothing);
@@ -86,16 +87,14 @@ void main() {
         getDependencyGraph: (testId) async => _notFound(),
       );
 
-      await tester.pumpWidget(
-        MaterialApp(home: TestListPage(dependencies: dependencies)),
-      );
+      await pumpAppAt(tester, AppRoutes.testList, dependencies: dependencies);
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('test-list-tile-test-1')));
       await tester.pumpAndSettle();
       expect(find.byType(TestSettingsPage), findsOneWidget);
 
-      Navigator.of(tester.element(find.byType(TestSettingsPage))).pop();
+      GoRouter.of(tester.element(find.byType(TestSettingsPage))).pop();
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('test-list-error')), findsOneWidget);

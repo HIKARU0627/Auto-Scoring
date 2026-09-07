@@ -1,37 +1,42 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
 
 /// テスト一覧画面 (Issue #16).
 ///
 /// The re-entry point for a test whose registration isn't finished yet:
 /// `GET /tests` (答案取込のテスト選択) only offers `ready` tests, so once a
-/// reviewer leaves `TestSettingsPage` mid-way -- or restarts the app --
-/// there is otherwise no way back to a persisted `draft` registration. This
-/// screen lists every test regardless of status and opens
-/// [TestSettingsPage] for whichever one is tapped.
-class TestListPage extends StatefulWidget {
-  const TestListPage({super.key, required this.dependencies});
-
-  final AppDependencies dependencies;
+/// reviewer leaves テスト設定画面 mid-way -- or restarts the app -- there is
+/// otherwise no way back to a persisted `draft` registration. This screen
+/// lists every test regardless of status and opens `TestSettingsPage` for
+/// whichever one is tapped.
+class TestListPage extends ConsumerStatefulWidget {
+  const TestListPage({super.key});
 
   @override
-  State<TestListPage> createState() => _TestListPageState();
+  ConsumerState<TestListPage> createState() => _TestListPageState();
 }
 
-class _TestListPageState extends State<TestListPage> {
+class _TestListPageState extends ConsumerState<TestListPage> {
+  /// The live sidecar operations. Read on every use rather than captured
+  /// once: the composition root swaps this provider's value whenever the
+  /// connection changes (`main.dart`).
+  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+
   late Future<List<TestResponse>> _testsFuture;
 
   @override
   void initState() {
     super.initState();
-    _testsFuture = widget.dependencies.listTestRegistrations();
+    _testsFuture = _dependencies.listTestRegistrations();
   }
 
   Future<void> _reload() async {
-    final future = widget.dependencies.listTestRegistrations();
+    final future = _dependencies.listTestRegistrations();
     // A block body, not `() => _testsFuture = future` -- an assignment
     // expression evaluates to the assigned value, so an arrow body would
     // hand `setState` a closure that returns the `Future` itself, which
@@ -109,14 +114,7 @@ class _TestListPageState extends State<TestListPage> {
                     // from the response this page fetched before the push
                     // until the reviewer pulled to refresh manually (Issue
                     // #16 review round 5).
-                    await Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => TestSettingsPage(
-                          dependencies: widget.dependencies,
-                          testId: test.id,
-                        ),
-                      ),
-                    );
+                    await context.push(AppRoutes.testSettings(test.id));
                     if (!mounted) return;
                     await _reload();
                   },

@@ -1,28 +1,11 @@
-import 'package:file_picker/file_picker.dart' as picker;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
-
-/// A PDF chosen from the native file picker. Kept separate from
-/// `package:file_picker`'s own `PlatformFile` so [AnswerIntakePage] can be
-/// driven by a fake in widget tests without touching a platform channel.
-class PickedPdfFile {
-  const PickedPdfFile({required this.path, required this.name});
-
-  final String path;
-  final String name;
-}
-
-Future<PickedPdfFile?> _pickPdfFromNativeDialog() async {
-  final picked = await picker.FilePicker.pickFile(
-    type: picker.FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (picked?.path == null) return null;
-  return PickedPdfFile(path: picked!.path!, name: picked.name);
-}
+import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 
 /// 答案取込画面 (simplified-design-specification.md §16.4).
 ///
@@ -33,21 +16,11 @@ Future<PickedPdfFile?> _pickPdfFromNativeDialog() async {
 /// leaving the screen.
 ///
 /// `features` may depend on `core` and `api` (see `AGENTS.md` "Architecture").
-class AnswerIntakePage extends StatefulWidget {
-  const AnswerIntakePage({
-    super.key,
-    required this.dependencies,
-    this.pickFile = _pickPdfFromNativeDialog,
-  });
-
-  final AppDependencies dependencies;
-
-  /// Opens the native "choose a PDF" dialog. Overridable so widget tests can
-  /// simulate a pick without a real platform channel.
-  final Future<PickedPdfFile?> Function() pickFile;
+class AnswerIntakePage extends ConsumerStatefulWidget {
+  const AnswerIntakePage({super.key});
 
   @override
-  State<AnswerIntakePage> createState() => _AnswerIntakePageState();
+  ConsumerState<AnswerIntakePage> createState() => _AnswerIntakePageState();
 }
 
 /// Which operation an [_AnswerIntakePageState._errorMessage] came from, so
@@ -55,7 +28,12 @@ class AnswerIntakePage extends StatefulWidget {
 /// always retrying the upload.
 enum _ErrorKind { listLoad, filePick, submit }
 
-class _AnswerIntakePageState extends State<AnswerIntakePage> {
+class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
+  /// The live sidecar operations. Read on every use rather than captured
+  /// once: the composition root swaps this provider's value whenever the
+  /// connection changes (`main.dart`).
+  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+
   final _studentLabelController = TextEditingController();
   final _submitFocusNode = FocusNode(debugLabel: '取込ボタン');
 
@@ -90,7 +68,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
   @override
   void initState() {
     super.initState();
-    _testsFuture = widget.dependencies.listTests();
+    _testsFuture = _dependencies.listTests();
   }
 
   @override
@@ -128,7 +106,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     // that id predates it and must not overwrite it.
     final fetchStartSeq = _localUpdateSeq;
     try {
-      final submissions = await widget.dependencies.listSubmissions(testId);
+      final submissions = await _dependencies.listSubmissions(testId);
       if (!mounted || requestId != _selectTestRequestId) return;
       setState(
         () => _submissions = _mergeFetchedSubmissions(
@@ -153,7 +131,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
 
   Future<void> _pickFile() async {
     try {
-      final picked = await widget.pickFile();
+      final picked = await ref.read(pickPdfFileProvider)();
       if (!mounted) return;
       if (picked == null) return;
       setState(() {
@@ -163,8 +141,8 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
         _errorKind = null;
       });
     } catch (error) {
-      // widget.pickFile() talks to a native platform channel/dialog, which
-      // can fail (an OS-level error, a denied permission, ...). Left
+      // The picker talks to a native platform channel/dialog, which can
+      // fail (an OS-level error, a denied permission, ...). Left
       // uncaught, that would leak out of this button's onPressed callback
       // as an unhandled async error, leaving the screen showing no error
       // and no way to retry -- exactly the state every other failure path
@@ -189,7 +167,7 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
     });
     final label = _studentLabelController.text.trim();
     try {
-      final result = await widget.dependencies.createSubmission(
+      final result = await _dependencies.createSubmission(
         testId: testId,
         filePath: filePath,
         studentLabel: label.isEmpty ? null : label,
@@ -431,13 +409,10 @@ class _AnswerIntakePageState extends State<AnswerIntakePage> {
           ),
           // 添削レビュー画面 (Issue #21) への入口 -- テストが選ばれている限り、
           // どの取込状態の答案でも開ける(要確認/エラーの答案ほどレビューが必要)。
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => PdfReviewPage(
-                dependencies: widget.dependencies,
-                testId: _selectedTestId!,
-                submissionId: submission.id,
-              ),
+          onTap: () => context.push(
+            AppRoutes.pdfReview(
+              testId: _selectedTestId!,
+              submissionId: submission.id,
             ),
           ),
         );

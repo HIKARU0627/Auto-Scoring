@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 
 Future<bool> _stubHealthCheck() async => true;
@@ -7,11 +9,13 @@ Future<bool> _stubHealthCheck() async => true;
 /// Default answer-intake operations: honestly report "not connected" rather
 /// than faking success.
 ///
-/// These defaults are the *test* configuration now that process supervision
-/// exists: a widget test constructs `AppDependencies()` and overrides only
-/// the handful of calls it exercises. The running app never uses them --
-/// `main.dart` builds [AppDependencies.fromClient] from the connection
-/// [SidecarSupervisor] establishes (`docs/windows-distribution.md` §5).
+/// These defaults are what [appDependenciesProvider] serves when nothing has
+/// overridden it -- a widget test builds an `AppDependencies()` carrying only
+/// the handful of calls it exercises and installs it through the provider
+/// (`test/app_harness.dart`), and the running app sits on these while the
+/// sidecar is not reachable, with `main.dart` swapping in
+/// [AppDependencies.fromClient] for the connection [SidecarSupervisor]
+/// establishes (`docs/windows-distribution.md` §5).
 Never _unavailable() => throw SidecarApiException(
   SidecarErrorKind.unavailable,
   'sidecar is not connected',
@@ -383,11 +387,29 @@ typedef GetJob = Future<JobResponse> Function(String jobId);
 /// Requeues a `FAILED` job (Issue #23: 出力の再試行).
 typedef RetryJob = Future<JobResponse> Function(String jobId);
 
+/// The [AppDependencies] every screen resolves its collaborators through.
+///
+/// Overridden twice, and only twice:
+///
+/// * by the composition root (`main.dart`), with [AppDependencies.fromClient]
+///   for the connection [SidecarSupervisor] currently has -- and back to the
+///   not-connected default whenever that connection goes away, so no screen
+///   can keep calling a closed client;
+/// * by widget tests (`test/app_harness.dart`), with an [AppDependencies]
+///   carrying stand-ins for the handful of operations under test.
+///
+/// The default is the not-connected configuration below: every real call
+/// throws `sidecar is not connected` rather than pretending to succeed.
+final appDependenciesProvider = Provider<AppDependencies>(
+  (ref) => const AppDependencies(),
+);
+
 /// Composition-root dependency container.
 ///
-/// Features read their collaborators from here instead of constructing them,
-/// so the dependency direction stays `features -> core -> api`. A richer DI
-/// solution (Riverpod) arrives with the first real feature.
+/// Features read their collaborators from [appDependenciesProvider] instead of
+/// constructing them or being handed them through constructors, so the
+/// dependency direction stays `features -> core -> api` and no page has to
+/// carry another page's dependencies to it.
 class AppDependencies {
   const AppDependencies({
     this.healthCheck = _stubHealthCheck,

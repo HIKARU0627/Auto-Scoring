@@ -5,6 +5,8 @@ import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
 
+import 'app_harness.dart';
+
 JobResponse _job({
   String id = 'job-1',
   String state = 'queued',
@@ -41,21 +43,21 @@ Future<void> _pumpDialog(
   AppDependencies dependencies,
 ) async {
   await tester.pumpWidget(
-    MaterialApp(
-      home: Builder(
-        builder: (context) => Scaffold(
-          body: Center(
-            child: FilledButton(
-              onPressed: () => showExportDialog(
-                context,
-                dependencies: dependencies,
-                submissionId: 'sub-1',
+    wrapWithDependencies(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                onPressed: () =>
+                    showExportDialog(context, submissionId: 'sub-1'),
+                child: const Text('open'),
               ),
-              child: const Text('open'),
             ),
           ),
         ),
       ),
+      dependencies: dependencies,
     ),
   );
   await tester.tap(find.text('open'));

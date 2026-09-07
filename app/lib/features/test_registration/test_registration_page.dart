@@ -1,28 +1,11 @@
-import 'package:file_picker/file_picker.dart' as picker;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
-
-/// A PDF chosen from the native file picker (mirrors
-/// `features.answer_intake.PickedPdfFile` -- kept separate so this page can
-/// be driven by a fake in widget tests without touching a platform channel).
-class PickedPdfFile {
-  const PickedPdfFile({required this.path, required this.name});
-
-  final String path;
-  final String name;
-}
-
-Future<PickedPdfFile?> _pickPdfFromNativeDialog() async {
-  final picked = await picker.FilePicker.pickFile(
-    type: picker.FileType.custom,
-    allowedExtensions: const ['pdf'],
-  );
-  if (picked?.path == null) return null;
-  return PickedPdfFile(path: picked!.path!, name: picked.name);
-}
+import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 
 /// テスト登録画面 (simplified-design-specification.md §16.2, Issue #16).
 ///
@@ -31,26 +14,22 @@ Future<PickedPdfFile?> _pickPdfFromNativeDialog() async {
 /// immediately run candidate detection and confirm the profile / dependency
 /// graph -- registration is not "complete" until that follow-up flow finishes
 /// (`Test.status` stays `draft` until `completeRegistration` succeeds).
-class TestRegistrationPage extends StatefulWidget {
-  const TestRegistrationPage({
-    super.key,
-    required this.dependencies,
-    this.pickFile = _pickPdfFromNativeDialog,
-  });
-
-  final AppDependencies dependencies;
-
-  /// Opens the native "choose a PDF" dialog. Overridable so widget tests can
-  /// simulate a pick without a real platform channel.
-  final Future<PickedPdfFile?> Function() pickFile;
+class TestRegistrationPage extends ConsumerStatefulWidget {
+  const TestRegistrationPage({super.key});
 
   @override
-  State<TestRegistrationPage> createState() => _TestRegistrationPageState();
+  ConsumerState<TestRegistrationPage> createState() =>
+      _TestRegistrationPageState();
 }
 
 enum _PdfSlot { modelAnswer, manual }
 
-class _TestRegistrationPageState extends State<TestRegistrationPage> {
+class _TestRegistrationPageState extends ConsumerState<TestRegistrationPage> {
+  /// The live sidecar operations. Read on every use rather than captured
+  /// once: the composition root swaps this provider's value whenever the
+  /// connection changes (`main.dart`).
+  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+
   final _nameController = TextEditingController();
   final _subjectController = TextEditingController();
 
@@ -77,7 +56,7 @@ class _TestRegistrationPageState extends State<TestRegistrationPage> {
 
   Future<void> _pickFile(_PdfSlot slot) async {
     try {
-      final picked = await widget.pickFile();
+      final picked = await ref.read(pickPdfFileProvider)();
       if (!mounted || picked == null) return;
       setState(() {
         switch (slot) {
@@ -111,21 +90,20 @@ class _TestRegistrationPageState extends State<TestRegistrationPage> {
     final name = _nameController.text.trim();
     final subject = _subjectController.text.trim();
     try {
-      final test = await widget.dependencies.createTest(
+      final test = await _dependencies.createTest(
         name: name,
         subject: subject.isEmpty ? null : subject,
         modelAnswerPath: modelAnswerPath,
         manualPath: manualPath,
       );
       if (!mounted) return;
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(
-          builder: (_) => TestSettingsPage(
-            dependencies: widget.dependencies,
-            testId: test.id,
-          ),
-        ),
-      );
+      // `GoRouter.of` rather than the `context.pushReplacement` extension:
+      // that extension returns `void`, and awaiting the replacement's own
+      // lifetime is what keeps the `finally` below from resetting
+      // `_isSubmitting` on a screen that has already been replaced.
+      await GoRouter.of(
+        context,
+      ).pushReplacement<void>(AppRoutes.testSettings(test.id));
     } on SidecarApiException catch (error) {
       if (!mounted) return;
       setState(() => _errorMessage = error.message);
