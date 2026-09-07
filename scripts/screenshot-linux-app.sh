@@ -28,8 +28,8 @@ readonly WINDOW_NAME=auto_scoring_app
 readonly BUNDLE="$REPO_ROOT/app/build/linux/x64/debug/bundle/auto_scoring_app"
 
 output="$REPO_ROOT/app/build/linux-screenshot.png"
-# Time between the sidecar answering and the shutter. Dismissing the startup
-# overlay is one setState, so this only has to cover a frame or two.
+# Time between the home screen being seen to arrive and the shutter. Dismissing
+# the startup overlay is one setState, so this only has to cover a frame or two.
 settle_seconds=2
 
 while getopts ':o:s:h' option; do
@@ -49,7 +49,7 @@ done
 mkdir -p "$(dirname "$output")"
 rm -f "$output"
 
-for tool in import xwininfo curl; do
+for tool in import xwininfo xprop curl; do
   command -v "$tool" >/dev/null ||
     { echo "$tool is not installed -- see docs/linux-desktop-development.md §1" >&2; exit 1; }
 done
@@ -73,28 +73,53 @@ xwininfo -root >/dev/null 2>&1 ||
 # here speaks X.
 export GDK_BACKEND=x11
 
-# The lock screen and the blank screen are the same thing to us: mutter stops
-# presenting the window behind them, and everything below would then be looking
-# at a frame from before it happened. Asked before the app is even built so the
-# answer is a sentence rather than a timeout, and again on both sides of the
-# shutter, because a lock landing in those last seconds is exactly the shape of
-# Issue #73. An answer we cannot get (no GNOME on the bus) reads as unlocked:
-# this is the early, precise diagnosis, and the repaint check below is the
-# guarantee that does not depend on anyone answering.
-session_is_locked() {
-  [[ "$(gdbus call --session --dest org.gnome.ScreenSaver \
-      --object-path /org/gnome/ScreenSaver \
-      --method org.gnome.ScreenSaver.GetActive 2>/dev/null)" == *true* ]]
+# mutter stops presenting a window the moment it leaves the screen, and Flutter
+# then stops drawing, while `import` carries on returning the last frame the
+# compositor kept. These are the three ways off the screen that X and the session
+# bus can be asked about outright, so they are worth asking rather than inferring.
+# A question that cannot be answered (no GNOME on the bus, no window yet) counts
+# as "still on screen": this is the direct, early diagnosis, and the startup loop
+# further down is the part that does not depend on anyone answering.
+window_left_the_screen() {
+  local desktop current
+  if [[ "$(gdbus call --session --dest org.gnome.ScreenSaver \
+        --object-path /org/gnome/ScreenSaver \
+        --method org.gnome.ScreenSaver.GetActive 2>/dev/null)" == *true* ]]; then
+    echo "the session is locked or blanked"
+    return
+  fi
+  if [[ "$(xprop -name "$WINDOW_NAME" _NET_WM_STATE 2>/dev/null)" == *_NET_WM_STATE_HIDDEN* ]]; then
+    echo "the window is minimised"
+    return
+  fi
+  # `|| true` because there is nothing to read before the window exists, and an
+  # unanswered question is not an answer of "gone".
+  desktop="$(xprop -name "$WINDOW_NAME" _NET_WM_DESKTOP 2>/dev/null | grep -o '[0-9]*$' || true)"
+  current="$(xprop -root _NET_CURRENT_DESKTOP 2>/dev/null | grep -o '[0-9]*$' || true)"
+  # 0xFFFFFFFF means "on every workspace", which is never the wrong one.
+  if [[ -n $desktop && -n $current && $desktop != 4294967295 && $desktop != "$current" ]]; then
+    echo "the window is on a workspace other than the one on screen"
+  fi
+  # This one answers on stdout, so its exit status carries nothing and must not
+  # be allowed to look like a failure to `set -e`.
+  return 0
 }
 
-locked_bail() {
-  echo "the session is locked or blanked, so the window behind it is not being" >&2
-  echo "presented and anything photographed now is an old frame. Unlock it (a" >&2
-  echo "password is needed) and run again -- docs/linux-desktop-development.md 4.2." >&2
+on_screen_or_bail() {
+  local reason
+  reason="$(window_left_the_screen)"
+  [[ -n $reason ]] || return 0
+  cat >&2 <<HINT
+$reason, so it is not being redrawn and \`import\` can only hand back the frame
+the compositor kept from before. Put it back on screen and run again.
+See docs/linux-desktop-development.md 4.2.
+HINT
   exit 1
 }
 
-session_is_locked && locked_bail
+# Asked before the app is even built, so a locked session is a sentence rather
+# than a timeout.
+on_screen_or_bail
 
 # Incremental, so this is a no-op once the bundle is up to date. Building here
 # rather than asking the caller to remember keeps this one command.
@@ -152,18 +177,23 @@ wait_for() {
 #
 # Waiting on the listening socket alone is not enough -- uvicorn binds it
 # before running the startup work, so an early shutter catches the splash.
+sidecar_port=''
 sidecar_is_serving() {
-  local sidecar_pid port
-  sidecar_pid="$(pgrep -P "$app_pid" | head -n 1)"
-  [[ -n $sidecar_pid ]] || return 1
-  port="$(ss -ltnpH | grep "pid=${sidecar_pid}," | grep -oP ':\K[0-9]+(?= )' | head -n 1)"
-  [[ -n $port ]] || return 1
-  curl -sfo /dev/null "http://127.0.0.1:${port}/healthz"
+  local sidecar_pid
+  # Found once and kept: the loop below polls this often enough that a pgrep and
+  # an ss per call would cost more than the wait it is timing.
+  if [[ -z $sidecar_port ]]; then
+    sidecar_pid="$(pgrep -P "$app_pid" | head -n 1)"
+    [[ -n $sidecar_pid ]] || return 1
+    sidecar_port="$(ss -ltnpH | grep "pid=${sidecar_pid}," | grep -oP ':\K[0-9]+(?= )' | head -n 1)"
+    [[ -n $sidecar_port ]] || return 1
+  fi
+  curl -sfo /dev/null "http://127.0.0.1:${sidecar_port}/healthz"
 }
 
 # `import` cannot photograph a window that is not mapped yet, and the toplevel
-# exists for a moment before mutter maps it, so waiting for the name alone
-# hands the next step a window it cannot read.
+# exists for a moment before mutter maps it, so waiting for the name alone hands
+# the next step a window it cannot read.
 window_is_viewable() {
   [[ "$(xwininfo -name "$WINDOW_NAME" -stats 2>/dev/null)" == *IsViewable* ]]
 }
@@ -174,73 +204,141 @@ frame_hash() {
     md5sum <"$sample" | cut -d' ' -f1
 }
 
-# What `import` hands back is whatever the compositor last kept for the window,
-# and mutter stops handing out frame callbacks as soon as the window is not
-# being presented -- session locked or blanked, window minimised, another
-# workspace in front. Flutter then blocks in eglSwapBuffers and draws nothing
-# more, while `import` keeps succeeding and keeps returning that one frozen
-# frame. That is how three runs of this script, in three separate processes and
-# with three different settle times, produced byte-identical PNGs of the splash
-# screen (Issue #73). Nothing downstream can tell such a frame from a fresh one,
-# so the window has to prove it is live before the shutter.
-#
-# The splash screen's CircularProgressIndicator is the one thing on screen that
-# is guaranteed to move, and it is up for exactly as long as we are waiting for
-# the sidecar anyway.
-#
-# Three samples, because two consecutive intervals have to show movement. One
-# interval would not do: a window that froze on startup still changes once, from
-# bare to the single frame it managed to draw, and a check that accepted one
-# change would call that alive.
-splash_frame=''
-window_is_repainting() {
-  local first second third
-  first="$(frame_hash)" || return 1
-  sleep 0.2
-  second="$(frame_hash)" || return 1
-  sleep 0.2
-  third="$(frame_hash)" || return 1
-  [[ $first != "$second" && $second != "$third" ]] || return 1
-  # The oldest of the three, so the reference stays a splash frame even if the
-  # home screen happened to arrive while the samples were being taken.
-  splash_frame="$first"
+# Milliseconds, because the two moments this has to put in order -- the sidecar
+# answering and the screen changing -- are a few hundred apart.
+now_ms() { date +%s%3N; }
+
+not_repainting_bail() {
+  cat >&2 <<'HINT'
+the window stopped redrawing before the home screen could appear, so `import`
+can only return the frame the compositor kept from before it stopped. mutter
+stops presenting a window that is not on screen: unlock the session and wake the
+display, and make sure the window is neither minimised nor on another workspace.
+See docs/linux-desktop-development.md 4.2.
+HINT
+  exit 1
 }
 
 # The window is mapped on Flutter's first frame, not at startup
-# (my_application.cc), so this already waits out engine warm-up. The sidecar
-# gets far longer: a first launch runs every Alembic migration against a new
-# database (sidecarStartupTimeout in app/lib/core/sidecar_supervisor.dart).
+# (my_application.cc), so this already waits out engine warm-up.
 wait_for "the app window" 60 window_is_viewable
-wait_for "the window to be repainted" 30 window_is_repainting || {
-  cat >&2 <<'HINT'
-the window is not being repainted, so `import` can only return a stale frame.
-mutter stops presenting a window that is not on screen: unlock the session and
-wake the display, and make sure the window is neither minimised nor behind
-another workspace. See docs/linux-desktop-development.md 4.2.
 
-The other way to reach a screen that never moves is the "already running" error
-screen, which replaces the splash when a leftover sidecar still holds app-data:
-`pgrep -af auto-scoring-sidecar` (docs/linux-desktop-development.md 5.1).
-HINT
-  exit 1
-}
-wait_for "the sidecar to start serving" 90 sidecar_is_serving
-sleep "$settle_seconds"
+# What `import` hands back is whatever the compositor last kept for the window,
+# and mutter stops handing out frame callbacks as soon as the window is not being
+# presented -- session locked or blanked, window minimised, another workspace in
+# front. Flutter then blocks in eglSwapBuffers and draws nothing more, while
+# `import` keeps succeeding and keeps returning that one frozen frame. That is how
+# three runs of this script, in three separate processes and with three different
+# settle times, produced byte-identical PNGs of the splash screen (Issue #73).
+#
+# What tells a current frame from a kept one is the startup overlay giving way to
+# the home screen. The app only does that once the sidecar answers, so a screen
+# that has moved no earlier than the sidecar came up is a screen still being
+# drawn. This loop therefore polls `/healthz` and watches the window at the same
+# time, and remembers when each of the two happened.
+#
+# Two things it deliberately does not do:
+#
+#   * It does not settle for "this frame differs from the one before it". A
+#     window that freezes partway through the splash has already changed several
+#     times and every one of those changes was real -- what it cannot do is
+#     change once more after the backend is up.
+#   * It does not insist on seeing movement either. If the sidecar is already
+#     answering when the first sample is taken, the home screen is up and static
+#     and a healthy run has nothing left to show, so a screen that last moved no
+#     earlier than the sidecar counts whether or not we watched it move.
+readonly POLL_SECONDS=0.04
+readonly FRAME_INTERVAL_MS=120
+readonly ON_SCREEN_INTERVAL_MS=500
+# How much earlier than `serving_ms` the last change is still allowed to be.
+# `serving_ms` is when *we* saw the sidecar answer, and the app polls the same
+# endpoint on its own schedule: it can act on an answer up to one of our polls
+# before we record one, and then the screen has already changed and will never
+# change again. That lag -- not the app's poll interval -- is all this has to
+# cover, which is why /healthz is polled far more often than frames are sampled.
+readonly SERVING_LAG_MS=120
+# Once the backend is up the home screen is one setState away, so this is
+# generous. It only decides how long a window that will never redraw is waited on.
+readonly HOME_SCREEN_TIMEOUT_MS=15000
+# A screen that never stops changing is still a current screen, so this only
+# gives up on waiting for stillness -- it does not give up on the screenshot.
+readonly SETTLE_CAP_MS=30000
 
-session_is_locked && locked_bail
+previous_frame="$(frame_hash || true)"
+clock_ms="$(now_ms)"
+last_change_ms=$clock_ms
+last_frame_ms=$clock_ms
+last_on_screen_ms=$clock_ms
+serving_ms=''
+sidecar_deadline=$((SECONDS + 90))
+while :; do
+  if [[ -z $serving_ms ]] && sidecar_is_serving; then
+    serving_ms="$(now_ms)"
+  fi
+  clock_ms="$(now_ms)"
+  if ((clock_ms - last_frame_ms >= FRAME_INTERVAL_MS)); then
+    last_frame_ms=$clock_ms
+    frame="$(frame_hash || true)"
+    if [[ -n $frame && $frame != "$previous_frame" ]]; then
+      previous_frame="$frame"
+      last_change_ms=$clock_ms
+    fi
+  fi
+  if [[ -n $serving_ms ]] && ((last_change_ms + SERVING_LAG_MS >= serving_ms)); then
+    break
+  fi
+
+  kill -0 "$app_pid" 2>/dev/null ||
+    { echo "the app exited during startup" >&2; exit 1; }
+  # Asked here too, so a window that leaves the screen mid-startup says why
+  # instead of running out one of the clocks below.
+  if ((clock_ms - last_on_screen_ms >= ON_SCREEN_INTERVAL_MS)); then
+    last_on_screen_ms=$clock_ms
+    on_screen_or_bail
+  fi
+  if [[ -n $serving_ms ]] && ((clock_ms - serving_ms > HOME_SCREEN_TIMEOUT_MS)); then
+    not_repainting_bail
+  fi
+  ((SECONDS < sidecar_deadline)) || {
+    echo "timed out after 90s waiting for the sidecar to start serving" >&2
+    echo "if the app is showing \"already running\" instead of the splash, a" >&2
+    echo "leftover sidecar still holds app-data: pgrep -af auto-scoring-sidecar" >&2
+    echo "(docs/linux-desktop-development.md 5.1)" >&2
+    exit 1
+  }
+  sleep "$POLL_SECONDS"
+done
+
+# The home screen has arrived but may not have finished arriving: it asks the
+# backend how it is doing, so it reads "backend: checking..." for a moment. Wait
+# for the picture to hold still rather than sleeping a fixed amount and hoping.
+settle_ms=$(awk "BEGIN { printf \"%d\", $settle_seconds * 1000 }")
+settle_deadline_ms=$((clock_ms + SETTLE_CAP_MS))
+while (($(now_ms) - last_change_ms < settle_ms)); do
+  clock_ms="$(now_ms)"
+  if ((clock_ms > settle_deadline_ms)); then
+    echo "the screen is still changing after $((SETTLE_CAP_MS / 1000))s; shooting anyway" >&2
+    break
+  fi
+  if ((clock_ms - last_frame_ms >= FRAME_INTERVAL_MS)); then
+    last_frame_ms=$clock_ms
+    frame="$(frame_hash || true)"
+    if [[ -n $frame && $frame != "$previous_frame" ]]; then
+      previous_frame="$frame"
+      last_change_ms=$clock_ms
+    fi
+  fi
+  sleep "$POLL_SECONDS"
+done
+
+# The loops above proved the window was live while the home screen arrived and
+# settled. Nothing watches it between that moment and the shutter, though, and a
+# window that goes away in that gap freezes on whatever it had drawn by then --
+# which is how a screenshot of a half-loaded home screen gets taken and believed.
+# Asking on both sides of the shutter closes that gap.
+on_screen_or_bail
 import -silent -window "$WINDOW_NAME" "$sample"
-session_is_locked && locked_bail
-# The startup overlay is gone by now, so the shutter frame cannot legitimately
-# match the splash frame the check above left behind. If it does, the window
-# stopped being presented in between and this is that same old frame again.
-[[ "$(md5sum <"$sample" | cut -d' ' -f1)" != "$splash_frame" ]] || {
-  cat >&2 <<'HINT'
-the captured frame is byte-identical to the splash frame sampled during startup,
-so the window stopped being presented after it was checked. See
-docs/linux-desktop-development.md 4.2.
-HINT
-  exit 1
-}
+on_screen_or_bail
 
 mv "$sample" "$output"
 echo "wrote $output"
