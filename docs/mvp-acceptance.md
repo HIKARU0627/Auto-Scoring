@@ -15,21 +15,21 @@ MVPのE2E受入・性能・セキュリティ検証。親 [#3](https://github.co
 
 ## 1. §31 実装項目 → 検証手段
 
-| #   | §31 の項目        | 主たる自動テスト                                                                                                                                                                                                               | 補足                                                                                                                                |
-| --- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | テスト登録        | `backend/tests/test_e2e_acceptance.py::test_register_take_in_three_answers_and_process_them_while_reviewing`（`register_ready_test` が登録→profile候補生成→人間修正→confirm→DAG confirm→complete-registration を実HTTPで通す） | 層単位の網羅は `test_test_registration_api.py` / `test_dependency_graph_api.py`                                                     |
-| 2   | 模範解答PDF読込   | 同上（`POST /tests` の `model_answer`）。`MODEL_ANSWER` regionが `Question.model_answer` になり、無ければ採点自体が拒否されることまで通る                                                                                      | `test_test_intake.py`, `test_grading_processor.py`                                                                                  |
-| 3   | マニュアルPDF読込 | 同上（`POST /tests` の `manual`）。`RUBRIC` regionが `Rubric` になり、無ければ採点が拒否される                                                                                                                                 | 同上                                                                                                                                |
-| 4   | 生徒答案PDF読込   | 同上（`upload_answer` → 実PDFレンダリング + 実OpenCV前処理 → 回答欄crop）                                                                                                                                                      | `test_api_submissions.py`, `test_submission_intake_service.py`                                                                      |
-| 5   | PDF表示           | `app/test/pdf_review_page_test.dart::Issue #25: 受入 -- 幅・focus・accessibility label`（desktop標準幅/狭幅の両方で `PdfViewer` が出る）                                                                                       | 座標の正しさは同ファイルの overlay 系テスト（**Linuxでは pdfium 未同梱のため8件失敗。§4**）                                         |
-| 6   | AI文字認識        | `test_e2e_acceptance.py::test_register_..._while_reviewing`（全設問がOCRされ `RecognitionResult` になる）、`::test_a_failing_ocr_provider_fails_the_job_and_a_human_retry_recovers_it`                                         | 低Confidence時の扱いは `::test_a_low_confidence_reading_is_held_for_a_human_and_never_auto_confirmed`                               |
-| 7   | AI採点            | `test_e2e_acceptance.py::test_register_..._while_reviewing`、`::test_a_failing_ai_provider_fails_the_job_with_its_own_classified_reason`                                                                                       | 設問依存を含む順序制御は `test_e2e_dag_parallelism.py` 全体                                                                         |
-| 8   | 点数表示          | `app/test/pdf_review_page_test.dart::shows recognition, score, rationale, rubric, and dual confidence ...`                                                                                                                     | 出力側は #13 の `test_the_exported_pdf_carries_reviewed_score_and_comment_text`（§4の条件付き）                                     |
-| 9   | ○×表示            | `app/test/pdf_review_page_test.dart::places a target-anchored annotation on the PDF overlay ...` ほか overlay 系                                                                                                               | 位置不明時の退避は `test_e2e_acceptance.py::test_an_annotation_whose_target_text_is_not_on_the_page_falls_back_to_the_comment_area` |
-| 10  | コメント表示      | `app/test/pdf_review_page_test.dart::shows the AI grade comment (総評コメント), distinct from the rationale`                                                                                                                   | 出力側は #13 と同じ                                                                                                                 |
-| 11  | AI結果修正        | `test_e2e_acceptance.py::test_correcting_approving_and_undoing_leaves_a_complete_history`、`app/test/pdf_review_page_test.dart::Issue #22: ... 修正 ...`                                                                       | 履歴とUndoの詳細は `test_review_api.py` / `docs/review-edit-history.md`                                                             |
-| 12  | AI結果承認        | 同上（`review/approve` と Undo を含む1本）、`app/test/pdf_review_page_test.dart::Issue #22: ... 承認して次へ ...`                                                                                                              | 承認なしに確定しないことは #6 の低Confidenceテストが背理で示す                                                                      |
-| 13  | 添削済みPDF出力   | `test_e2e_acceptance.py::test_exporting_a_fully_reviewed_answer_never_touches_the_original_pdf`、`::test_export_is_refused_while_any_question_is_still_unconfirmed`                                                            | 文字描画を伴う出力は `::test_the_exported_pdf_carries_reviewed_score_and_comment_text`（§4）                                        |
+| #   | §31 の項目        | 主たる自動テスト                                                                                                                                                                                                               | 補足                                                                                                                                           |
+| --- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | テスト登録        | `backend/tests/test_e2e_acceptance.py::test_register_take_in_three_answers_and_process_them_while_reviewing`（`register_ready_test` が登録→profile候補生成→人間修正→confirm→DAG confirm→complete-registration を実HTTPで通す） | 層単位の網羅は `test_test_registration_api.py` / `test_dependency_graph_api.py`                                                                |
+| 2   | 模範解答PDF読込   | 同上（`POST /tests` の `model_answer`）。`MODEL_ANSWER` regionが `Question.model_answer` になり、無ければ採点自体が拒否されることまで通る                                                                                      | `test_test_intake.py`, `test_grading_processor.py`                                                                                             |
+| 3   | マニュアルPDF読込 | 同上（`POST /tests` の `manual`）。`RUBRIC` regionが `Rubric` になり、無ければ採点が拒否される                                                                                                                                 | 同上                                                                                                                                           |
+| 4   | 生徒答案PDF読込   | 同上（`upload_answer` → 実PDFレンダリング + 実OpenCV前処理 → 回答欄crop）                                                                                                                                                      | `test_api_submissions.py`, `test_submission_intake_service.py`                                                                                 |
+| 5   | PDF表示           | `app/test/pdf_review_page_test.dart::Issue #25: 受入 -- 幅・focus・accessibility label`（desktop標準幅/狭幅の両方で `PdfViewer` が出る）                                                                                       | 座標の正しさは同ファイルの overlay 系テスト（**Linuxでは pdfium 未同梱のため8件失敗。§4**）                                                    |
+| 6   | AI文字認識        | `test_e2e_acceptance.py::test_register_..._while_reviewing`（全設問がOCRされ `RecognitionResult` になる）、`::test_a_failing_ocr_provider_fails_the_job_and_a_human_retry_recovers_it`                                         | 低Confidence時の扱いは `::test_a_low_confidence_reading_is_held_for_a_human_and_never_auto_confirmed`                                          |
+| 7   | AI採点            | `test_e2e_acceptance.py::test_register_..._while_reviewing`、`::test_a_failing_ai_provider_fails_the_job_with_its_own_classified_reason`                                                                                       | 設問依存を含む順序制御は `test_e2e_dag_parallelism.py` 全体                                                                                    |
+| 8   | 点数表示          | `app/test/pdf_review_page_test.dart::shows recognition, score, rationale, rubric, and dual confidence ...`                                                                                                                     | 出力側は #13 の `test_the_exported_pdf_carries_the_reviewed_score`（確定した点数がPDFのテキスト層に載ることを確認）                            |
+| 9   | ○×表示            | `app/test/pdf_review_page_test.dart::places a target-anchored annotation on the PDF overlay ...` ほか overlay 系                                                                                                               | 位置不明時の退避は `test_e2e_acceptance.py::test_an_annotation_whose_target_text_is_not_on_the_page_falls_back_to_the_comment_area`            |
+| 10  | コメント表示      | `app/test/pdf_review_page_test.dart::shows the AI grade comment (総評コメント), distinct from the rationale`                                                                                                                   | 出力側は #13 と同じ                                                                                                                            |
+| 11  | AI結果修正        | `test_e2e_acceptance.py::test_correcting_approving_and_undoing_leaves_a_complete_history`、`app/test/pdf_review_page_test.dart::Issue #22: ... 修正 ...`                                                                       | 履歴とUndoの詳細は `test_review_api.py` / `docs/review-edit-history.md`                                                                        |
+| 12  | AI結果承認        | 同上（`review/approve` と Undo を含む1本）、`app/test/pdf_review_page_test.dart::Issue #22: ... 承認して次へ ...`                                                                                                              | 承認なしに確定しないことは #6 の低Confidenceテストが背理で示す                                                                                 |
+| 13  | 添削済みPDF出力   | `test_e2e_acceptance.py::test_exporting_a_fully_reviewed_answer_never_touches_the_original_pdf`、`::test_export_is_refused_while_any_question_is_still_unconfirmed`                                                            | 文字描画を伴う出力は `::test_the_exported_pdf_carries_the_reviewed_comment_text` と `::test_the_exported_pdf_carries_the_reviewed_score`（§4） |
 
 §31 に**未対応の項目は無い**。ただし 5・8・9・10・13 の一部は、Linux 上では実行できない
 （§4）。「記録付き手動test」で埋めているのは §6 の #53 のみ。
@@ -98,21 +98,32 @@ MVPの対象OSは Windows のみ（§2 (1)）で、CIは `windows-latest` で回
 
 本Issueで追加したテストは**この件数を増やさない**方針で書いた。
 
-- backend E2E の出力シナリオは **○×マークのみ**で出力する。文字を描かないので
-  フォントを必要とせず、**両OSで**「新規ファイルができ、元PDFが1バイトも変わらない」
-  （§2 (15)）を証明する。
-- 点数・コメントの**文字描画**を伴う出力は
-  `test_the_exported_pdf_carries_reviewed_score_and_comment_text` に分け、
-  日本語フォントが無い環境では `skipif` で明示的にスキップする
-  （フォント判定はエンジン自身の解決関数を呼ぶので、実際の出力と食い違わない）。
-  Linuxでは「skipped」として見え、Windows CIでは実行される。
+- 元PDF不変（§2 (15)）を確認する出力シナリオは **○マークのみ**で出力する。
+  図形にはグリフが要らないので、フォントの有無によらず両OSで成立する。
+- 点数・コメントの**文字描画**を伴う出力は 2 本に分けた
+  （`test_the_exported_pdf_carries_the_reviewed_comment_text` /
+  `::_the_reviewed_score`）。分けたのは、**両方を同時に描けるフォントが
+  素の Linux イメージに無い**ため:
+  `DroidSansFallbackFull` は唯一の kanji 対応 TrueType だが Latin グリフを
+  一切持たず、`DejaVuSans` はその逆で、ディストリビューションが同梱する
+  Noto CJK は CFF アウトラインなので reportlab の `TTFont` が読めない。
+  1本のままだとどちらのマシンでも skip になる。
+- そのため両テストは、Windows のフォントが見つからない環境では
+  **必要なグリフを実際に持つ**ローカルフォントを候補リストへ追記してから走る
+  （`_install_font_covering`。Windows では本物が先に見つかるので何も起きない）。
+  結果として **Linux でも Windows CI でも実行される**。
+  該当フォントが1つも無い環境でのみ skip する。
+  以前は `skipif` で Windows 限定にしていたが、**ローカルで一度も走らない
+  テストだったために assertion が `exists()` と `size > 0` のまま気づかれず
+  残っていた**（レビュー ラウンド1 P2-1）。走らせられるようにしたこと自体が
+  その再発防止である。
 - Flutter の幅・focus・label テストは PDF の**描画結果**に依存しない。
 
 検証後の件数（Ubuntu, 2026-09-07 時点、本ブランチ）:
 
 | スイート | 結果                                       |
 | -------- | ------------------------------------------ |
-| backend  | 1054 passed / 13 failed（既知）/ 1 skipped |
+| backend  | 1049 passed / 13 failed（既知）/ 0 skipped |
 | Flutter  | 157 passed / 8 failed（既知）              |
 
 ---
