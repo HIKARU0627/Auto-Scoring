@@ -523,7 +523,10 @@ def test_concurrent_approve_requests_racing_past_the_precheck_resolve_with_one_c
 
     monkeypatch.setattr(review_actions, "_next_version", _next_version_after_barrier)
 
-    statuses: list[int | None] = [None, None]
+    # 0 is not a real HTTP status -- placeholder for "this thread hasn't
+    # written its result yet" that both slots are always overwritten past
+    # before the assertion below reads them (each thread is joined first).
+    statuses: list[int] = [0, 0]
 
     def _approve(index: int) -> None:
         response = client.post(
