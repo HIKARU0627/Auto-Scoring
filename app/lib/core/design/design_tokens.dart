@@ -1,0 +1,179 @@
+/// Dimension, elevation and motion tokens (Issue #67).
+///
+/// Every spacing, corner radius, icon size and animation duration a screen
+/// uses comes from here, so that changing the feel of the app is a change to
+/// this file rather than a sweep through `features/`. Colour and type live
+/// next door in `app_color_schemes.dart` / `app_typography.dart`; all three
+/// are assembled into `ThemeData` by `core/app_theme.dart`.
+///
+/// The rationale for the values themselves is in `docs/design-tokens.md`.
+library;
+
+import 'package:flutter/material.dart';
+
+/// The 4px spacing scale. Nothing in `features/` should write a raw pixel gap.
+///
+/// The steps are deliberately few: a grading session shows one dense working
+/// surface, and six choices are enough to keep related things grouped and
+/// unrelated things apart without every screen inventing its own rhythm.
+abstract final class AppSpacing {
+  /// 4 -- inside a single line of content (icon to its label).
+  static const double xs = 4;
+
+  /// 8 -- between tightly related items (a label and the value under it).
+  static const double sm = 8;
+
+  /// 12 -- between controls in a row, and inside a compact banner.
+  static const double md = 12;
+
+  /// 16 -- between fields in a form, and inside a card.
+  static const double lg = 16;
+
+  /// 24 -- between sections of a screen, and around a page's content.
+  static const double xl = 24;
+
+  /// 32 -- above/below a lone centred element (the startup splash).
+  static const double xxl = 32;
+
+  /// Around the content of a full screen.
+  static const EdgeInsets page = EdgeInsets.all(xl);
+
+  /// Inside a `Card` that holds a section of a screen.
+  static const EdgeInsets card = EdgeInsets.all(lg);
+
+  /// Inside a compact `Card` that holds one line (status/error banners).
+  static const EdgeInsets banner = EdgeInsets.all(md);
+
+  /// A scrolling panel that holds a column of sections (添削レビューの
+  /// Inspector, テスト設定画面のリスト).
+  ///
+  /// The same value as [card] today, and named separately on purpose: a panel
+  /// is the container, a card is one section inside it, and the day they need
+  /// to differ should be one edit here rather than a hunt for which `lg` meant
+  /// which.
+  static const EdgeInsets panel = EdgeInsets.all(lg);
+
+  /// The 添削レビュー action bar: wider than tall, so the buttons sit in a
+  /// band rather than a box.
+  static const EdgeInsets actionBar = EdgeInsets.symmetric(
+    horizontal: lg,
+    vertical: md,
+  );
+}
+
+/// Corner radii. Deliberately modest: this is a dense information tool, and
+/// large radii cost horizontal space in every nested container.
+abstract final class AppRadius {
+  /// 4 -- chips, small inline surfaces.
+  static const double sm = 4;
+
+  /// 8 -- cards, buttons, text fields. The default.
+  static const double md = 8;
+
+  /// 12 -- dialogs, the one place a rounder shape reads as "on top".
+  static const double lg = 12;
+
+  static const BorderRadius smAll = BorderRadius.all(Radius.circular(sm));
+  static const BorderRadius mdAll = BorderRadius.all(Radius.circular(md));
+  static const BorderRadius lgAll = BorderRadius.all(Radius.circular(lg));
+}
+
+/// Elevation steps. Only three, because a flat, low-glare surface is the
+/// point -- shadows are for things that genuinely float over the work.
+abstract final class AppElevation {
+  /// Cards and the app bar: separated by colour (`surfaceContainer`), not by
+  /// a shadow.
+  static const double flat = 0;
+
+  /// Genuinely floating over the content: the 添削レビュー action bar, which
+  /// scrolling content passes under.
+  static const double raised = 3;
+
+  /// Modal surfaces (dialogs, menus).
+  static const double modal = 6;
+}
+
+/// Icon sizes. Material's own default is 24; the smaller steps are for icons
+/// that sit inline with text and must not out-weigh it.
+abstract final class AppIconSize {
+  /// 16 -- inline with `labelLarge`/`bodyMedium` text.
+  static const double inline = 16;
+
+  /// 18 -- a chip avatar, or a badge leading its own line of text.
+  static const double dense = 18;
+
+  /// 24 -- Material's default; buttons and list tiles.
+  static const double standard = 24;
+
+  /// 40 -- an empty/error state inside a panel.
+  static const double display = 40;
+
+  /// 48 -- a full-screen error state.
+  static const double hero = 48;
+}
+
+/// Fixed layout dimensions that are neither spacing nor type.
+///
+/// These are widths a design decision fixes, not numbers a screen invents:
+/// the reading measure of a form, the width of the Inspector, and the point
+/// at which 添削レビュー stops putting the Inspector beside the PDF.
+abstract final class AppLayout {
+  /// Below this width 添削レビュー stacks the Inspector under the PDF viewer
+  /// instead of beside it (Issue #21 acceptance: desktopの標準/狭幅表示).
+  static const double narrowBreakpoint = 900;
+
+  /// The 添削レビュー Inspector, when it sits beside the PDF.
+  static const double inspectorWidth = 360;
+
+  /// A form's reading measure. Wider than this and the eye loses the start of
+  /// the next line on a maximised desktop window.
+  static const double formMaxWidth = 640;
+
+  /// A centred message (the sidecar error screen). Narrower than a form: it is
+  /// prose, not fields.
+  static const double messageMaxWidth = 480;
+
+  /// An `AlertDialog`'s content, so a progress row and a path both get the
+  /// same dialog width instead of one sized to its text.
+  static const double dialogContentWidth = 360;
+
+  /// A `Divider`/`VerticalDivider` that separates two panes: the widget's
+  /// `width`/`height` is its *total* extent including padding, so 1 means a
+  /// hairline with nothing around it.
+  static const double hairline = 1;
+
+  /// A `Divider` used as a section break inside a scrolling column. Unlike
+  /// [hairline] this is the rule *plus* the space it reserves above and below
+  /// it, which is why it is a spacing step rather than 1.
+  static const double sectionDivider = AppSpacing.xl;
+}
+
+/// Motion tokens.
+///
+/// Grading is a long, screen-staring task, so the rule this app follows is:
+/// **nothing moves on its own**. Motion exists to say that a state just
+/// changed -- "the job finished", "this needs a human" -- and then stops.
+/// There is no idle animation, no looping emphasis, and no transition long
+/// enough to wait on.
+///
+/// Issue #67 defines these and applies them in one place (`AppErrorBanner`);
+/// per-screen application is deliberately left to later issues so that the
+/// vocabulary is settled first. [stateChange] and [standard] therefore have no
+/// call site yet -- they are the half of the vocabulary those issues will
+/// reach for, not leftovers.
+abstract final class AppMotion {
+  /// 150ms -- a control changing state under the pointer/keyboard. Short
+  /// enough to feel like a response rather than an animation.
+  static const Duration stateChange = Duration(milliseconds: 150);
+
+  /// 250ms -- something appearing that the reviewer did not ask for and must
+  /// notice: an error, a 要確認 banner. The upper bound; nothing is slower.
+  static const Duration emphasis = Duration(milliseconds: 250);
+
+  /// The default curve for a state change: fast out, settles gently.
+  static const Curve standard = Easing.standard;
+
+  /// For something entering the screen -- it decelerates into place, which
+  /// reads as "arrived" rather than "flew past".
+  static const Curve enter = Easing.emphasizedDecelerate;
+}

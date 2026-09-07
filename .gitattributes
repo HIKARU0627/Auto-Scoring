@@ -4,3 +4,5 @@
 *.jpg binary
 *.pdf binary
 *.pem binary
+*.ttf binary
+*.otf binary
