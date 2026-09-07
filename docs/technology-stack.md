@@ -83,9 +83,9 @@
 | 要素              | 決定                                                                                                                             | 代替案と却下理由                                                                                                                                                                          |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Flutter チャネル  | stable、最新安定版。バージョンは `fvm` などで固定しリポジトリに記録                                                              | beta/master は不採用（デスクトップ安定性優先）                                                                                                                                            |
-| 状態管理          | **Riverpod 3.x**                                                                                                                 | Bloc: 記述量が多い。Provider: 新規非推奨。GetX: 過度な多機能・暗黙的挙動。Riverpod は非同期状態・キャッシュ・コンパイル時安全性で 2026 年時点の推奨                                       |
-| ルーティング      | **go_router**                                                                                                                    | 画面数が限られ（§16）、宣言的ルーティングで十分。自前 Navigator 管理は不要                                                                                                                |
-| DTO / モデル      | **freezed** + **json_serializable**（または OpenAPI 生成コード）                                                                 | 手書きの `fromJson` は乖離・記述漏れの温床                                                                                                                                                |
+| 状態管理          | **Riverpod 3.x**（配置と差し替え方針は §2.2）                                                                                    | Bloc: 記述量が多い。Provider: 新規非推奨。GetX: 過度な多機能・暗黙的挙動。Riverpod は非同期状態・キャッシュ・コンパイル時安全性で 2026 年時点の推奨                                       |
+| ルーティング      | **go_router**（ルート表の置き場所は §2.2）                                                                                       | 画面数が限られ（§16）、宣言的ルーティングで十分。自前 Navigator 管理は不要                                                                                                                |
+| DTO / モデル      | **OpenAPI 生成コード**（`built_value`）。**freezed は採用しない**（§2.3）                                                        | 手書きの `fromJson` は乖離・記述漏れの温床。生成コードでその目的は達しており、freezed は二重のモデル層になる                                                                              |
 | HTTP クライアント | **dio**（インターセプタでトークン付与・リトライ・タイムアウト）                                                                  | 標準 `http` はインターセプタ・キャンセルが弱い                                                                                                                                            |
 | PDF 表示          | **pdfrx**（pdfium ベース、寛容ライセンス）                                                                                       | Syncfusion PDF Viewer は商用ライセンス要件あり。pdfrx は Widget Overlay / ページ単位オーバーレイ / パン・ズームを阻害しないタップ領域を提供でき、§13 の「PDF + Annotation Overlay」に合致 |
 | Annotation 描画   | pdfrx のページオーバーレイ上に Flutter ウィジェット（○×△・コメント・下線）を配置。座標は 0〜1 正規化で受け取りページサイズへ変換 | AI/Python に PDF 座標を直接描かせない（§12・§35-3）                                                                                                                                       |
@@ -104,6 +104,72 @@
   → **PoC 3（Issue #12）で検証済み**。Python 側を `pypdfium2`（= pdfium）に揃えたこと
   もあり、回転・CropBox 込みで 0〜1 正規化座標の往復誤差は最大 0.0005・DPI 非依存。
   [`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。
+
+### 2.2 Riverpod / go_router の配置（Issue #66 で確定）
+
+上表の「Riverpod 3.x」「go_router」を実装に落とすときの置き場所を確定する。依存方向
+`features → core → api`（§5）を壊さないことが制約。
+
+| 対象                      | 置き場所                                          | 理由                                                                                                                                         |
+| ------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider の定義           | `app/lib/core/`（型のすぐ隣）                     | `core` は「テーマ・ルーティング・DI」の層（§5）。`features` は `core` を import してよいので、どの画面からも到達できる                       |
+| `appDependenciesProvider` | `core/app_dependencies.dart`                      | 差し替える値（`AppDependencies`）と同じファイルに置き、既定値＝「未接続」構成であることを 1 か所で読めるようにする                           |
+| ルートのパス              | `core/app_routes.dart`（`AppRoutes`）             | 画面へ遷移するのは `features`。パスだけなら feature を import しないので `core` に置ける                                                     |
+| ルート表（`GoRouter`）    | `app/lib/app_router.dart`（コンポジションルート） | ルートを組むには画面クラスを名指しする必要があり、**`core` は `features` を import できない**。`main.dart` と同じ層に置くのが唯一の解        |
+| 画面の状態                | 当面は各画面の `ConsumerState`（`setState`）      | Issue #66 の範囲は「バケツリレーの解消」まで。画面内状態の Notifier 化は、その状態を複数画面で共有する必要が出た時点で行う（下記「範囲外」） |
+
+決定の要点:
+
+- **画面は `AppDependencies` をコンストラクタで受け取らない。**
+  `ref.read(appDependenciesProvider)` で解決する。go_router のルート表はパスから画面を
+  組み立てるため、コンストラクタ経由の注入はそもそも成立しない。
+- **ウィジェットテストの差し替えは `ProviderScope(overrides: ...)` で行う。**
+  入口は `app/test/app_harness.dart` の `pumpAppAt()`。従来の
+  `SomePage(dependencies: ...)` と同じ粒度（個別の関数だけ差し替える）を保ったまま、
+  ネイティブファイルピッカー（`core/pdf_file_picker.dart` の `pickPdfFileProvider`）の
+  ように**コンストラクタ引数では渡せなくなったもの**も同じ仕組みで差し替えられる。
+  テストが実際のルート表を通るため、画面遷移そのものも検証対象になる。
+- **サイドカー異常時の復帰 UI（Issue #24）は go_router 導入後も最前面のまま。**
+  `SidecarStartupOverlay` は引き続き `MaterialApp.router` の `builder` で Router 全体に
+  重なる。異常検知時に `popUntil((route) => route.isFirst)` でスタックを畳んでいた処理は
+  `GoRouter.go(AppRoutes.starting)` に置き換えた（`AppRoutes.starting` は画面ではなく、
+  オーバーレイが覆っている間の空ルート）。回帰テストは
+  `app/test/startup_gate_test.dart`。
+
+**この Issue の範囲外（意図的に手を付けていない）:**
+
+- 画面内状態の `Notifier` / `AsyncNotifier` 化。`PdfReviewPage` などの `setState` は
+  そのまま。1 画面に閉じた状態を Riverpod へ移しても現時点で得るものが無く、UI 改良
+  （#67 / #68 / #64）で画面構成そのものが変わる前にやると二度手間になる。
+- サイドカーのライフサイクル（`SidecarSupervisor`）の provider 化。コンポジションルート
+  が `ValueListenable` で持つ現在の形で足りている。
+
+### 2.3 freezed を採用しない判断（Issue #66 で確定）
+
+上表の当初の決定は「freezed + json_serializable（または OpenAPI 生成コード）」だった。
+実装が進んだ結果、**OpenAPI 生成コードを採用した時点で freezed の目的は達成済み**であり、
+追加する理由が無くなったため**採用しない**。
+
+- **JSON を持つ型はすべて生成物**。`app/lib/api/` の DTO は FastAPI の OpenAPI schema から
+  `built_value` ベースで生成しており（§1.1「API 契約」）、不変・`==`/`hashCode`・
+  `toString`・`rebuild()`（= `copyWith` 相当）・`fromJson`/`toJson` を既に備える。
+  freezed を入れると、同じデータに対して**生成モデルが 2 層**になり、両者の変換コードが
+  新たな乖離の温床になる。
+- **手書きモデルは少なく、かつ freezed 向きではない**。
+  - `SidecarState`（`core/sidecar_supervisor.dart`）は Dart 3 の `sealed class` +
+    パターンマッチで網羅性検査まで効いている。freezed の union 型が解いていた問題は
+    言語機能で解決済み。
+  - `SidecarConnection` / `PickedPdfFile` はフィールド 2 個の `const` クラスで、
+    `copyWith` も値等価も使っていない。
+  - `QuestionReviewState`（`features/pdf_review/`）は**意図的に可変**な画面内キャッシュで、
+    不変データクラス化は設計に反する。
+- **コストが釣り合わない**。freezed は `build_runner` + `freezed_annotation` +
+  `json_serializable` と、生成ファイルの生成・コミット・鮮度チェックを品質ゲート
+  （[`quality-gates.md`](./quality-gates.md)）に足すことを意味する。上記の数クラスのために
+  払う額ではない。
+
+**再検討の条件**: サイドカーに無い（＝生成 DTO で表せない）ドメインモデルを Flutter 側に
+持つ必要が出て、その型に `copyWith`・値等価・JSON 永続化のうち複数が必要になったとき。
 
 ---
 
@@ -239,9 +305,11 @@ MSIX を採用しない判断の根拠は同 §2。
 /
 ├─ app/                     # Flutter デスクトップアプリ
 │   ├─ lib/
+│   │   ├─ main.dart        # コンポジションルート（サイドカー監視・DI の上書き）
+│   │   ├─ app_router.dart  # go_router のルート表（画面を名指しするので core には置けない: §2.2）
 │   │   ├─ features/        # 画面・状態（home, test_registration, review, ...）
 │   │   ├─ api/             # OpenAPI 生成クライアント（コミットする）
-│   │   └─ core/            # テーマ(Material 3), ルーティング, DI
+│   │   └─ core/            # テーマ(Material 3), ルートのパス, provider 定義（DI）
 │   ├─ integration_test/
 │   └─ pubspec.yaml
 │
