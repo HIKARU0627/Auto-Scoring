@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
@@ -568,5 +570,37 @@ void main() {
         }
       });
     }
+  });
+
+  // Issue #66 review (P2): `_loadAll` calls getTest -> getProfile ->
+  // getDependencyGraph in sequence, with a single `mounted` check after all
+  // three. Now that `AppDependencies` comes from a provider, resolving it
+  // again after a dispose would throw a `StateError` from `ref` -- which is
+  // not a `SidecarApiException`, so nothing here catches it and it surfaces
+  // as an unhandled async error.
+  testWidgets('leaving while the initial load is in flight does not throw', (
+    tester,
+  ) async {
+    final profile = Completer<ProfileResponse>();
+    final dependencies = AppDependencies(
+      getTest: (testId) async => _test(),
+      getProfile: (testId) => profile.future,
+      getDependencyGraph: (testId) async => _dependencyGraph(),
+    );
+
+    await pumpAppAt(
+      tester,
+      AppRoutes.testSettings('test-1'),
+      dependencies: dependencies,
+    );
+    await tester.pump();
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+
+    profile.complete(_profile());
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
   });
 }

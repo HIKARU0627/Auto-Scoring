@@ -61,10 +61,10 @@ class ExportDialog extends ConsumerStatefulWidget {
 }
 
 class _ExportDialogState extends ConsumerState<ExportDialog> {
-  /// The live sidecar operations. Read on every use rather than captured
-  /// once: the composition root swaps this provider's value whenever the
-  /// connection changes (`main.dart`).
-  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+  /// The sidecar operations this screen was opened against, captured once in
+  /// [initState] -- never re-resolved from the provider mid-request. See
+  /// [appDependenciesProvider] for why that rule exists.
+  late final AppDependencies _dependencies;
 
   /// A transport-level failure while polling (sidecar unreachable, timeout,
   /// ...) says nothing about the job itself -- it may still be running or
@@ -96,6 +96,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   @override
   void initState() {
     super.initState();
+    _dependencies = ref.read(appDependenciesProvider);
     _start();
   }
 

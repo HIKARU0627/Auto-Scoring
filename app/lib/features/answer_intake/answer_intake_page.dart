@@ -29,10 +29,14 @@ class AnswerIntakePage extends ConsumerStatefulWidget {
 enum _ErrorKind { listLoad, filePick, submit }
 
 class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
-  /// The live sidecar operations. Read on every use rather than captured
-  /// once: the composition root swaps this provider's value whenever the
-  /// connection changes (`main.dart`).
-  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+  /// The sidecar operations this screen was opened against, captured once in
+  /// [initState] -- never re-resolved from the provider mid-request. See
+  /// [appDependenciesProvider] for why that rule exists.
+  late final AppDependencies _dependencies;
+
+  /// The native "choose a PDF" dialog. Captured in [initState] for the same
+  /// reason as [_dependencies].
+  late final Future<PickedPdfFile?> Function() _pickPdfFile;
 
   final _studentLabelController = TextEditingController();
   final _submitFocusNode = FocusNode(debugLabel: '取込ボタン');
@@ -68,6 +72,8 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
   @override
   void initState() {
     super.initState();
+    _dependencies = ref.read(appDependenciesProvider);
+    _pickPdfFile = ref.read(pickPdfFileProvider);
     _testsFuture = _dependencies.listTests();
   }
 
@@ -131,7 +137,7 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
 
   Future<void> _pickFile() async {
     try {
-      final picked = await ref.read(pickPdfFileProvider)();
+      final picked = await _pickPdfFile();
       if (!mounted) return;
       if (picked == null) return;
       setState(() {

@@ -317,10 +317,10 @@ int _compareQuestionNumbers(String a, String b) {
 }
 
 class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
-  /// The live sidecar operations. Read on every use rather than captured
-  /// once: the composition root swaps this provider's value whenever the
-  /// connection changes (`main.dart`).
-  AppDependencies get _dependencies => ref.read(appDependenciesProvider);
+  /// The sidecar operations this screen was opened against, captured once in
+  /// [initState] -- never re-resolved from the provider mid-request. See
+  /// [appDependenciesProvider] for why that rule exists.
+  late final AppDependencies _dependencies;
 
   late final PdfViewerController _pdfController;
   final _noteController = TextEditingController();
@@ -339,6 +339,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   @override
   void initState() {
     super.initState();
+    _dependencies = ref.read(appDependenciesProvider);
     _pdfController = PdfViewerController();
     // Rebuilds so the keyboard bindings in build() can drop out while the
     // note field has focus (see _shortcutBindings) -- FocusNode changes do

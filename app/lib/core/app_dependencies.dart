@@ -400,6 +400,24 @@ typedef RetryJob = Future<JobResponse> Function(String jobId);
 ///
 /// The default is the not-connected configuration below: every real call
 /// throws `sidecar is not connected` rather than pretending to succeed.
+///
+/// **A screen reads this once, in `initState`, and holds the result** -- it
+/// never resolves it again per call. Two reasons, and the first is a
+/// correctness one:
+///
+/// * `ref` throws a `StateError` once a `ConsumerState` has been disposed. A
+///   method that awaits between two calls -- `PdfReviewPage._loadShell`,
+///   `TestSettingsPage._loadAll` -- would raise an *unhandled* async error, not
+///   a [SidecarApiException] its `catch` would see, if the reviewer left the
+///   screen mid-request (Issue #66 review, P2). Riverpod says as much in that
+///   error: "save the provider state in a field of your State class".
+/// * A request that started against one connection should finish against that
+///   one, or not at all. When the value here is replaced the composition root
+///   sends the router to `AppRoutes.starting` (`main.dart`), so a screen still
+///   holding the old value is already on its way out.
+///
+/// A `ConsumerWidget` with no async gap (`HomePage`) may of course `watch` it
+/// in `build` -- that is the point of a provider.
 final appDependenciesProvider = Provider<AppDependencies>(
   (ref) => const AppDependencies(),
 );

@@ -3046,4 +3046,68 @@ void main() {
       semantics.dispose();
     });
   });
+
+  // ------------------------------------------------------------------ //
+  // Issue #66 review (P2): the screen resolves `AppDependencies` from a
+  // provider now, and `ref` throws once a `ConsumerState` is disposed. A
+  // load that awaits between two of those calls must therefore not touch
+  // the provider again after the reviewer has left -- a `StateError` from
+  // `ref` is not a `SidecarApiException`, so nothing here would catch it
+  // and it would surface as an unhandled async error.
+  // ------------------------------------------------------------------ //
+  group('Issue #66: leaving the screen mid-request', () {
+    testWidgets('a pending shell load does not throw once the page is gone', (
+      tester,
+    ) async {
+      // `_loadShell` calls getSubmission -> listQuestions -> getSourcePdf in
+      // sequence; hold the middle one open across the dispose.
+      final questions = Completer<List<QuestionResponse>>();
+      final dependencies = AppDependencies(
+        getSubmission: (submissionId) async => _submission(),
+        listQuestions: (testId) => questions.future,
+        getSourcePdf: (submissionId) async => _pocA4PortraitPdf(),
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      questions.complete([_question()]);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'a pending question load does not throw once the page is gone',
+      (tester) async {
+        // Same for `_loadReview`: listRecognitions -> listGrades -> ... ->
+        // listReviews, with only one `mounted` check after all of them.
+        final grades = Completer<List<GradeResultResponse>>();
+        final dependencies = AppDependencies(
+          getSubmission: (submissionId) async => _submission(),
+          listQuestions: (testId) async => [_question()],
+          getSourcePdf: (submissionId) async => _pocA4PortraitPdf(),
+          listJobs: (submissionId) async => const [],
+          listRecognitions: (submissionId, questionId) async => const [],
+          listGrades: (submissionId, questionId) => grades.future,
+          listAnnotations: (submissionId, questionId) async => const [],
+          listReviews: (submissionId, questionId) async => const [],
+        );
+
+        await _pumpReview(tester, dependencies);
+        await _settlePdf(tester);
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+
+        grades.complete(const []);
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
 }

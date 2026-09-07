@@ -123,6 +123,15 @@
 - **画面は `AppDependencies` をコンストラクタで受け取らない。**
   `ref.read(appDependenciesProvider)` で解決する。go_router のルート表はパスから画面を
   組み立てるため、コンストラクタ経由の注入はそもそも成立しない。
+- **画面は provider を `initState` で1回だけ読み、結果をフィールドに持つ。**
+  呼び出しのたびに読み直してはいけない。`ref` は `ConsumerState` が dispose された後に
+  `StateError` を投げるため、`await` を挟んで2回読むメソッド（`_loadShell` / `_loadAll`
+  のような逐次ロード）は、ユーザーが読み込み中に画面を離れると**未処理の非同期エラー**に
+  なる。`SidecarApiException` の `catch` では捕まらない（Issue #66 レビュー P2）。
+  1つの値に固定するのは意味的にも正しい: ある接続に対して始まった要求はその接続で
+  終わるべきで、接続が差し替わった時点でコンポジションルートは
+  `AppRoutes.starting` へ遷移させている。
+  `await` を挟まない `ConsumerWidget`（`HomePage`）が `build` で `watch` するのは問題ない。
 - **ウィジェットテストの差し替えは `ProviderScope(overrides: ...)` で行う。**
   入口は `app/test/app_harness.dart` の `pumpAppAt()`。従来の
   `SomePage(dependencies: ...)` と同じ粒度（個別の関数だけ差し替える）を保ったまま、
