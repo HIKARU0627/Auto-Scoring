@@ -440,6 +440,73 @@ Defender のスキャン（`-TimeoutSeconds` の既定値が大きい理由）�
 
 `flutter test -x sidecar` で実サイドカー起動テストを除外できる（`uv` の無い環境向け）。
 
+### 7.3 「自分のサイドカーが生きているか」はポートでは判定できない（Issue #57）
+
+`sidecar_supervisor_integration_test.dart` の
+`shutdown releases the port and the app-data lock` が Windows CI で不定期に
+`Expected: false / Actual: <true>` で失敗していた（Issue
+[#57](https://github.com/HIKARU0627/Auto-Scoring/issues/57)。無関係な PR の CI を
+落とし、PR #56 のマージを塞いだ）。
+
+**製品側のバグではない。** `SidecarSupervisor._terminateCurrentProcess` は
+`process.kill()` の後に `await process.exitCode` していて、`shutdown()` が返る
+時点で自分のサイドカーは確実に死んでいる。**テストの分離の欠陥**で、次の 3 つが
+重なると別プロセスの応答を自分のサイドカーだと誤認する:
+
+1. `/healthz` は認証不要（`api/app.py` で `protected` ルーターではなく `app` に
+   直接登録。§7.1 の smoke test もこの前提で書かれている）なので、**どの
+   サイドカーインスタンスでも**トークン無関係に `{"status": "ok"}` を返す。
+2. 旧アサーションはその `/healthz` を叩く `isHealthy()` だけを見ていて、応答した
+   のが自分の起動したサイドカーかを区別しない。
+3. `sidecar_supervisor_integration_test.dart` と `sidecar_api_client_test.dart`
+   はどちらも実サイドカーを `--port 0` で起動し、`flutter test` はテスト
+   ファイルを**並行に**走らせる。
+
+結果、supervisor テストが解放したエフェメラルポートを並行実行中の別テストの
+サイドカーが掴むと、probe がその別サイドカーから 200 を受け取って偽陽性になる。
+Windows でだけ起きるのは、直前に解放されたエフェメラルポートを再利用しやすい
+ため。
+
+**対応: ポートの生死ではなく「自分のサイドカーが生きているか」を判定する。**
+そのセッションのトークンで**保護されたエンドポイント**を叩くと 3 状態が分かれる:
+
+| 状況                               | 結果                                   |
+| ---------------------------------- | -------------------------------------- |
+| 自分のサイドカーが生き残っている   | トークンは有効 → 200（検出したい失敗） |
+| 別のサイドカーがポートを掴んでいる | トークンが違う → 401                   |
+| 誰も listen していない             | 接続拒否                               |
+
+したがって「**保護された呼び出しが成功しないこと**」を assert する
+（`_stillServing`）。他テストのサイドカーがこれを肩代わりして満たすことはできない
+ので、Issue #24 の受入条件「通常終了後に port/process が残らない」の検出力は
+落ちない。
+
+sleep・リトライ・`--concurrency=1` といった対症療法は採っていない。Issue #50 の
+記録（`job-queue.md`「Linux 環境で…決定的に失敗していた原因」）と同じ判断で、
+タイミングを調整するのではなくレースそのものを設計から取り除く。
+
+**回帰テスト**: `another sidecar holding the port is not read as a survivor` が
+「別のサイドカーがそのポートを掴んでいる」状況を**タイミング抜きで**再現する。
+外部から見た振る舞いだけ（`/healthz` は誰にでも `ok`、他は 401）を返す
+stand-in を立て、`isHealthy()` が `true` になること（＝旧 probe が偽陽性を出す
+こと）と `_stillServing` が `false` を返すことを両方 assert する。修正前の probe
+に差し戻すとこのテストは Issue #57 と同じ `Expected: false / Actual: <true>` で
+落ちる（確認済み）。解放された実ポートを binding し直す形では再現しない
+（Windows では health probe の接続が TIME_WAIT にいる間 `bind` が数分拒否される）。
+
+同じ「ポートを同一性の証拠として扱う」前提を持っていた 2 か所も直した:
+
+- `sidecar_api_client_test.dart` の
+  `a sidecar that is not running surfaces as unavailable` は、エフェメラル
+  ポートを bind → close して「空いているポート」を得ていた。空いているのは
+  誰かが取るまでで、`--port 0` のサイドカーに配られるのはまさにそのポート。
+  どの OS のエフェメラル範囲より下で `--port 0` が絶対に当たらない固定ポート
+  （1）に変えた。
+- `leaves no handshake file holding the token on disk` は `%TEMP%` 全体を舐めて
+  いた。`%TEMP%` はマシン全体で共有され、中断された過去の実行や実アプリの
+  セッションが残したディレクトリまで拾う。テスト実行中に**増えた**分だけを見る
+  ようにした。
+
 ---
 
 ## 8. コード署名（人間だけが行う手順）
