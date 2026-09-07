@@ -197,9 +197,14 @@ gdbus call --session --dest org.gnome.ScreenSaver \
 次の起動はスプラッシュを抜けられず、「Auto-Scoring はすでに起動しています。
 終了コード: 3」のエラー画面になる。
 
-`flutter run` を `q` で終了する、ウィンドウを閉じるといった**通常の終了では
-起きない**（`didRequestAppExit` が `SidecarSupervisor.shutdown()` を呼ぶ）。
-実験中に強制終了したときだけの話である。
+ウィンドウを閉じて終了した場合は起きない。GTK の delete-event から
+`didRequestAppExit` が走り、`SidecarSupervisor.shutdown()` がサイドカーを
+明示的に kill するためである。
+
+**`flutter run` の `q` では残る。** `q` はアプリのプロセスをそのまま停止させる
+だけで、ウィンドウを閉じたときの経路を通らないので `didRequestAppExit` が
+走らない。実測でも `q` で終了した後にサイドカーが 1 つ残った。`q` を使った
+あとは次の起動の前に確認すること。
 
 取り残しの確認と後片付け:
 
