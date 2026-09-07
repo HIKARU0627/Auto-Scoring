@@ -2,6 +2,7 @@
 
 import json
 import logging
+import logging.handlers
 import socket
 from pathlib import Path
 from typing import Any
@@ -9,10 +10,13 @@ from typing import Any
 import pytest
 import uvicorn
 
+from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.api import sidecar
 from auto_scoring.api.sidecar import (
+    ALREADY_RUNNING_EXIT_CODE,
     LOOPBACK,
     Handshake,
+    default_app_data_dir,
     install_log_redaction,
     run,
 )
@@ -74,6 +78,44 @@ def test_install_log_redaction_scrubs_the_token(capsys: pytest.CaptureFixture[st
     assert "***" in err
 
 
+def test_install_log_redaction_also_writes_a_rotating_file_log(tmp_path: Path) -> None:
+    """The installed app has nowhere for stderr to go (the Flutter supervisor
+    drains it), so the file log is the only durable record of §28's AI/OCR/PDF
+    outcomes -- and it has to be scrubbed just like stderr."""
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    log_directory = tmp_path / "logs"
+    try:
+        install_log_redaction("s3cr3t-token", log_directory)
+        # An `auto_scoring.*` logger, not one of uvicorn's: these are the
+        # loggers §28's records actually come from, and they reach the
+        # handlers only by propagating to root.
+        logging.getLogger("auto_scoring.jobs.queue").warning("token s3cr3t-token leaked")
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved
+
+    written = (log_directory / sidecar.LOG_FILENAME).read_text(encoding="utf-8")
+    assert "s3cr3t-token" not in written
+    assert "***" in written
+
+
+def test_install_log_redaction_without_a_directory_stays_on_stderr_only(
+    tmp_path: Path,
+) -> None:
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    try:
+        install_log_redaction("token")
+        assert all(
+            not isinstance(handler, logging.handlers.RotatingFileHandler)
+            for handler in root.handlers
+        )
+    finally:
+        root.handlers = saved
+
+
 def test_emit_handshake_writes_one_json_line(tmp_path: Path) -> None:
     target = tmp_path / "handshake.json"
     sidecar._emit_handshake(Handshake(host=LOOPBACK, port=51234, token="abc"), target)
@@ -87,7 +129,7 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
-    monkeypatch.setattr(sidecar, "install_log_redaction", lambda _token: None)
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args: None)
 
     captured: dict[str, Any] = {}
 
@@ -133,3 +175,124 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     assert sockets[0].getsockname()[1] == payload["port"]
     assert sockets[0].fileno() != -1
     sockets[0].close()
+
+
+def test_self_test_imports_native_backed_modules_without_a_handshake_file() -> None:
+    """`--self-test` is the packaging build's proof that the frozen bundle is
+    complete (docs/windows-distribution.md §7), so it has to work with none of
+    a real run's arguments and without touching app-data."""
+    assert run(["--self-test"]) == 0
+
+
+def test_self_test_covers_every_lazily_imported_native_dependency() -> None:
+    """Guards the list itself, not the import: the modules named there are the
+    only ones that load OpenCV, pdfium and reportlab, and they are reached
+    lazily (first answer PDF), long after `/healthz` starts answering. Dropping
+    one silently narrows what the packaging smoke test can catch."""
+    assert set(sidecar._NATIVE_BACKED_MODULES) == {
+        "auto_scoring.adapters.image.opencv_preprocessor",
+        "auto_scoring.adapters.pdf.pdfium_pypdf_engine",
+    }
+
+
+def test_run_without_handshake_file_is_rejected() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        run([])
+    assert exit_info.value.code == 2  # argparse's usage-error exit code
+
+
+def test_run_reports_a_data_root_another_process_owns_and_writes_no_handshake(
+    tmp_path: Path,
+) -> None:
+    """A second instance against a live instance's app-data root must fail
+    with its own exit code -- and must not leave a handshake file behind, or
+    the supervisor that spawned it would read a host:port nothing ever serves
+    (Issue #24: 二重起動でport/processが残らない)."""
+    data_root = tmp_path / "app-data"
+    handshake_file = tmp_path / "handshake.json"
+
+    held = acquire_data_root_lock(data_root)
+    try:
+        exit_code = run(
+            [
+                "--handshake-file",
+                str(handshake_file),
+                "--app-data-dir",
+                str(data_root),
+            ]
+        )
+    finally:
+        held.close()
+
+    assert exit_code == ALREADY_RUNNING_EXIT_CODE
+    assert not handshake_file.exists()
+
+
+def test_run_writes_no_handshake_when_startup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guarantee for every *other* startup failure (a failed migration, a
+    corrupt database): the handshake file is the promise "this port is
+    served", so it is only ever written once that promise can be kept."""
+
+    def _boom(**_kwargs: object) -> object:
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(sidecar, "create_app", _boom)
+    handshake_file = tmp_path / "handshake.json"
+
+    with pytest.raises(RuntimeError):
+        run(
+            [
+                "--handshake-file",
+                str(handshake_file),
+                "--app-data-dir",
+                str(tmp_path / "app-data"),
+            ]
+        )
+
+    assert not handshake_file.exists()
+
+
+class TestDefaultAppDataDir:
+    """The final production app-data location (Issue #24). Resolved from an
+    explicit environment/platform pair so every OS's layout is verifiable from
+    any host -- these run on a Linux CI runner too."""
+
+    def test_windows_uses_localappdata(self) -> None:
+        resolved = default_app_data_dir(
+            {"LOCALAPPDATA": r"C:\Users\teacher\AppData\Local"}, platform="win32"
+        )
+        assert resolved == Path(r"C:\Users\teacher\AppData\Local") / "Auto-Scoring" / "app-data"
+
+    def test_windows_falls_back_to_the_home_directory_layout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: Path("/home/t")))
+        assert default_app_data_dir({}, platform="win32") == Path(
+            "/home/t/AppData/Local/Auto-Scoring/app-data"
+        )
+
+    def test_macos_uses_application_support(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: Path("/Users/t")))
+        assert default_app_data_dir({}, platform="darwin") == Path(
+            "/Users/t/Library/Application Support/Auto-Scoring/app-data"
+        )
+
+    def test_posix_honours_xdg_data_home(self) -> None:
+        assert default_app_data_dir({"XDG_DATA_HOME": "/tmp/xdg"}, platform="linux") == Path(
+            "/tmp/xdg/auto-scoring/app-data"
+        )
+
+    def test_posix_falls_back_to_local_share(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: Path("/home/t")))
+        assert default_app_data_dir({}, platform="linux") == Path(
+            "/home/t/.local/share/auto-scoring/app-data"
+        )
+
+    def test_the_default_is_never_relative_to_the_working_directory(self) -> None:
+        """The regression this location replaces: a `cwd()`-relative default
+        made an installed app find a different database depending on how it
+        was launched."""
+        assert default_app_data_dir().is_absolute()

@@ -14,25 +14,59 @@ Design decisions live in ``docs/technology-stack.md`` §1.1-§1.2 and
   startup.
 * The token is written only to the handshake channel. A logging filter redacts
   it from anything that reaches the application log.
+* The handshake is written *after* ``create_app`` succeeds, so a handshake file
+  never advertises a ``host:port`` this process will not go on to serve
+  (``docs/windows-distribution.md`` §4).
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
+import logging.handlers
+import os
 import socket
-from collections.abc import Sequence
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict
 
 import uvicorn
 
+from auto_scoring.adapters.data_root_lock import DataRootLockedError
 from auto_scoring.api.app import create_app
 from auto_scoring.api.auth import generate_token
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
+
+ALREADY_RUNNING_EXIT_CODE = 3
+"""Exit code for "another live process already owns this app-data root".
+
+Its own code, distinct from the generic ``1`` any other startup failure exits
+with, because it is the one startup failure the *user* can act on: the
+supervisor that spawned this process turns it into "Auto-Scoring はすでに
+起動しています" instead of a generic crash screen
+(``app/lib/core/sidecar_supervisor.dart``, ``docs/windows-distribution.md`` §5).
+"""
+
+APP_NAME = "Auto-Scoring"
+"""Directory name this app owns under the OS's per-user data location."""
+
+LOG_DIRECTORY_NAME = "logs"
+LOG_FILENAME = "sidecar.log"
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
+"""Log rotation: 5 MiB per file, 3 kept, so the log is bounded at 20 MiB.
+
+Bounded because nothing else ever prunes it: the sidecar runs on a teacher's
+own machine with no operator and no log shipper, and simplified-design-
+specification.md §28 wants a durable record of AI/OCR/PDF successes and
+failures across sessions. Size-based rather than time-based since usage is
+bursty (a whole class of answers in one afternoon, then nothing for a week).
+"""
 
 
 class Handshake(TypedDict):
@@ -93,19 +127,127 @@ class _RedactingFilter(logging.Filter):
         return True
 
 
-def install_log_redaction(token: str) -> None:
-    """Route logging through a single handler that scrubs ``token``."""
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
-    handler.addFilter(_RedactingFilter(token))
+def install_log_redaction(token: str, log_directory: Path | None = None) -> None:
+    """Route logging through handlers that all scrub ``token``.
+
+    Always to stderr; additionally to a rotating file under ``log_directory``
+    when one is given. The file is what makes the log useful in a
+    distribution at all -- the Flutter supervisor drains the sidecar's stderr
+    to keep its pipe from filling up, so on an installed machine stderr goes
+    nowhere and a crash would otherwise leave nothing to look at
+    (docs/windows-distribution.md §5).
+
+    Every handler gets its own copy of the redaction filter rather than the
+    filter being attached to the root logger: a filter on a *logger* only
+    applies to records logged directly through it, not to records that
+    propagate up from child loggers -- which is every record that matters
+    here (``uvicorn.access``, ``alembic.runtime.migration``).
+    """
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+
+    if log_directory is not None:
+        log_directory.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                log_directory / LOG_FILENAME,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        )
+
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        # A filter instance per handler, not one shared -- logging holds
+        # filters per handler and this keeps each handler independent.
+        handler.addFilter(_RedactingFilter(token))
+
     root = logging.getLogger()
-    root.handlers = [handler]
+    root.handlers = handlers
     root.setLevel(logging.INFO)
 
 
 def _emit_handshake(handshake: Handshake, destination: Path) -> None:
     line = json.dumps(handshake) + "\n"
     destination.write_text(line, encoding="utf-8")
+
+
+def default_app_data_dir(
+    environment: Mapping[str, str] | None = None,
+    platform: str | None = None,
+) -> Path:
+    """The per-user ``app-data/`` root this sidecar owns when no
+    ``--app-data-dir`` is given (simplified-design-spec.md §23).
+
+    Final location, decided by Issue #24 -- it replaces the provisional
+    ``cwd()/app-data`` this default used to be. ``cwd()`` was unusable in a
+    distribution: the working directory of a process launched from a Start
+    menu shortcut, from Explorer, or by the Flutter app is whatever the
+    launcher happened to set, so the same installed app would have found (or
+    silently created) a *different* database depending on how it was started,
+    and installing under ``C:\Program Files`` would have put it somewhere the
+    user cannot write at all.
+
+    Per-user, not per-machine, and outside the install directory, because the
+    data is one teacher's answer PDFs and grades (§26), an uninstall must be
+    able to leave it behind (docs/windows-distribution.md §6), and a
+    non-elevated user must be able to write it.
+
+    ``environment``/``platform`` default to this process's own and exist so
+    tests can resolve any OS's layout from any host.
+    """
+    env = os.environ if environment is None else environment
+    system = sys.platform if platform is None else platform
+
+    if system == "win32":
+        # LOCALAPPDATA, not APPDATA: this is machine-local working data
+        # (a SQLite database and hundreds of MB of PDFs and page images),
+        # exactly what Microsoft reserves LocalAppData for. APPDATA roams
+        # to a domain controller on managed networks, which for this data
+        # would be both slow and a copy of personal information onto a
+        # server the user did not choose (§26).
+        local = env.get("LOCALAPPDATA")
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / APP_NAME / "app-data"
+
+    if system == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_NAME / "app-data"
+
+    # POSIX (developer machines and CI Linux runners): the XDG base directory
+    # spec's data location. Not the Windows-cased APP_NAME -- lowercase and
+    # hyphenated is the convention there.
+    data_home = env.get("XDG_DATA_HOME")
+    base = Path(data_home) if data_home else Path.home() / ".local" / "share"
+    return base / "auto-scoring" / "app-data"
+
+
+#: Modules whose import is what actually loads a native library: OpenCV's
+#: compiled extension, pdfium via `pypdfium2`, and reportlab's C accelerator.
+#: Nothing imports them until the first answer PDF is processed, so a bundle
+#: missing one of them boots, serves `/healthz`, and only fails much later --
+#: in front of a user, on a machine with no Python to debug it on. `--self-test`
+#: exists to pull that failure forward into the packaging build.
+_NATIVE_BACKED_MODULES = (
+    "auto_scoring.adapters.image.opencv_preprocessor",
+    "auto_scoring.adapters.pdf.pdfium_pypdf_engine",
+)
+
+
+def self_test() -> int:
+    """Import every native-backed module and report the outcome on stdout.
+
+    The packaging counterpart of `pnpm run build:backend`'s
+    ``import auto_scoring`` check: that one proves the *source tree* imports,
+    this one proves the *frozen bundle* does. Run against the built
+    executable by the CI "Package (Windows)" job before it uploads anything
+    (docs/windows-distribution.md §7).
+    """
+    for name in _NATIVE_BACKED_MODULES:
+        module = importlib.import_module(name)
+        print(f"ok {name} ({module.__name__})")
+    print(f"self-test passed: {len(_NATIVE_BACKED_MODULES)} native-backed modules")
+    return 0
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -119,26 +261,42 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--handshake-file",
         type=Path,
-        required=True,
+        default=None,
         help="File to write the {host, port, token} JSON line to.",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help=(
+            "Import every native-backed dependency and exit, without binding a "
+            "port or touching app-data. Verifies a packaged build is complete."
+        ),
     )
     parser.add_argument(
         "--app-data-dir",
         type=Path,
-        default=Path.cwd() / "app-data",
+        default=default_app_data_dir(),
         help=(
             "app-data/ root (simplified-design-spec.md §23): database, source "
-            "PDFs, generated images. Persists across restarts -- the final "
-            "production location is provisional pending the Windows "
-            "distribution issue (docs/answer-intake-and-preprocessing.md §5)."
+            "PDFs, generated images. Persists across restarts. Defaults to the "
+            "OS's per-user data location (docs/windows-distribution.md §3): "
+            "%%LOCALAPPDATA%%\\Auto-Scoring\\app-data on Windows."
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    # Required for a real run, meaningless for --self-test (which starts no
+    # server for anyone to hand a host:port to).
+    if not args.self_test and args.handshake_file is None:
+        parser.error("--handshake-file is required")
+    return args
 
 
 def run(argv: Sequence[str] | None = None) -> int:
     """Start the sidecar. Returns the process exit code."""
     args = _parse_args(argv)
+    if args.self_test:
+        return self_test()
+
     token = generate_token()
 
     # Bound (and held open) before anything else in this function -- see
@@ -148,19 +306,44 @@ def run(argv: Sequence[str] | None = None) -> int:
     sock = _bind_socket(args.port)
     port = int(sock.getsockname()[1])
 
-    install_log_redaction(token)
-    _emit_handshake(
-        Handshake(host=LOOPBACK, port=port, token=token),
-        args.handshake_file,
-    )
+    # Before create_app, so the file log captures the slowest and least
+    # observable part of startup: the first launch's full Alembic migration
+    # run. The cost is that a *second* instance -- one that is about to be
+    # refused the data-root lock below -- appends its single error line to
+    # the same file as the live instance. Harmless at one line, and the
+    # alternative (logging to a file only once the lock is held) would drop
+    # exactly the records worth keeping.
+    install_log_redaction(token, args.app_data_dir / LOG_DIRECTORY_NAME)
 
     # data_root only, no session_factory: create_app() builds the database
     # itself (migrations, engine, the startup repair sweep) rather than this
     # function duplicating that -- see create_app()'s docstring for why
     # session_factory is reserved for callers (Issue #26's tests) that need
     # to hand in an already-migrated database instead.
+    try:
+        app = create_app(api_token=token, data_root=args.app_data_dir)
+    except DataRootLockedError as error:
+        # The one startup failure with a name the user understands, so it
+        # gets an exit code of its own rather than an anonymous traceback.
+        # Nothing is logged at ERROR beyond the message itself: it already
+        # names the directory, and the supervisor renders the explanation.
+        sock.close()
+        logging.getLogger(__name__).error("%s", error)
+        return ALREADY_RUNNING_EXIT_CODE
+
+    # Only now, once this process is certain it will go on to serve: an
+    # earlier write (the original placement) meant every failure between it
+    # and `Server.run` -- a locked data root, a failed migration, a corrupt
+    # database -- still left behind a handshake file naming a host:port that
+    # nothing would ever answer on, which a supervisor reading it can only
+    # tell apart from a slow start by waiting out its whole timeout.
+    _emit_handshake(
+        Handshake(host=LOOPBACK, port=port, token=token),
+        args.handshake_file,
+    )
+
     config = uvicorn.Config(
-        create_app(api_token=token, data_root=args.app_data_dir),
+        app,
         host=LOOPBACK,
         port=port,
         log_config=None,
