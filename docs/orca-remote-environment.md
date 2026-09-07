@@ -82,23 +82,42 @@ Orca needs a usable display server, but the selected X11 or Wayland endpoint is 
 # Start the Orca headless runtime server for the systemd user service.
 # Prefers a private Xvfb display; falls back to the desktop session Xwayland.
 set -euo pipefail
+umask 077
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export NO_COLOR=1 TERM=dumb
 ORCA_BIN="$HOME/.cache/orca/appimage/launcher/orca-ide"
 PAIRING_ADDRESS="${ORCA_PAIRING_ADDRESS:-$(tailscale ip -4 2>/dev/null | head -1)}"
+PAIRING_FILE="${ORCA_PAIRING_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/orca/pairing-code}"
 
 if [ -z "$PAIRING_ADDRESS" ]; then
   echo "orca-serve-runner: cannot resolve pairing address (set ORCA_PAIRING_ADDRESS)" >&2
   exit 1
 fi
+mkdir -p "$(dirname "$PAIRING_FILE")"
 
-# Run under a pty: Electron block-buffers stdout on a pipe, which would keep the
-# pairing code out of the journal until the process exits.
+# The ready line carries a reusable device token. Divert it to an owner-only
+# file and keep it out of stdout, which systemd forwards to the journal.
+emit_redacted() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      *"orca://pair?code="* | *"code%3D"*)
+        printf "%s\n" "$line" >"$PAIRING_FILE"
+        printf "orca-serve-runner: runtime ready; pairing code written to %s (kept out of the journal)\n" "$PAIRING_FILE"
+        ;;
+      *) printf "%s\n" "$line" ;;
+    esac
+  done
+}
+
+# Run under a pty: Electron block-buffers stdout on a pipe, so the ready line
+# would otherwise not arrive until the process exits.
 run() {
   local cmd
   cmd="$(printf "%q " "$@")"
-  exec script -qefc "$cmd" /dev/null
+  script -qefc "$cmd" /dev/null | emit_redacted
+  exit "${PIPESTATUS[0]}"
 }
 
 if command -v xvfb-run >/dev/null 2>&1; then
@@ -122,8 +141,35 @@ run "$ORCA_BIN" serve --json --pairing-address "$PAIRING_ADDRESS"
 ```
 
 `script -qefc` で pty を挟んでいるのは、Electron が **パイプ出力を block buffering
-する**ため。これが無いと `orca_server_ready`（pairing code を含む）が journal に
-出ず、ペアリングができない。
+する**ため。これが無いと `orca_server_ready` 行がプロセス終了までフラッシュされない。
+
+### 1.2.1 pairing code を journal に残さない
+
+`orca_server_ready` 行には**再利用可能な device token** が含まれる（§2）。素通しすると
+systemd が journald へ転送し、journal とその export 先を読める者が誰でもランタイムの
+認証情報を復元できてしまう。`AGENTS.md`「Security」がログへの token 混入を禁じている。
+
+そのため `emit_redacted` が該当行を stdout から取り除き、`umask 077` の下で
+`~/.local/state/orca/pairing-code`（`0600`、所有者のみ）へ書き出す。journal に残るのは
+「書き出した」という 1 行だけ。ペアリング後はこのファイルを消してよい
+（サービス再起動時に再生成される）。
+
+```bash
+ssh ubuntu 'rm -f ~/.local/state/orca/pairing-code'
+```
+
+**すでに journal へ出してしまった場合は、token を失効させる。** journald は
+unit 単位の削除ができず、`--vacuum-*` は無関係なログまで消すため、ログを消すのではなく
+ランタイム側の paired device store を作り直すのが確実（§5.6 で実証）。
+
+```bash
+ssh ubuntu 'systemctl --user stop orca-serve.service \
+  && rm -f ~/.config/orca/orca-devices.json \
+  && systemctl --user start orca-serve.service'
+```
+
+以後、旧 pairing code は `unauthorized` で拒否される。Windows 側は
+`orca environment rm` してから §2 の手順で貼り直す。
 
 ### 1.3 systemd user service
 
@@ -171,13 +217,19 @@ ssh ubuntu 'journalctl --user -u orca-serve.service -n 50 --no-pager'
 ## 2. Windows 側からペアリングする
 
 pairing code は `orca serve` 起動時の `orca_server_ready` 行に含まれる
-`orca://pair?code=...` である。**これは接続用の device token を含む秘匿値**なので、
-docs・Issue・PR・スクリーンショットに残さない。変数経由で受け渡す。
+`orca://pair?code=...` である。**これは再利用可能な device token を含む秘匿値**なので、
+docs・Issue・PR・スクリーンショット・**ログ**に残さない。§1.2.1 の通り、起動スクリプトが
+所有者のみ読める `~/.local/state/orca/pairing-code`（`0600`）へ書き出しているので、
+journal ではなくそのファイルから変数経由で受け渡す。
 
 ```powershell
-$code = ssh ubuntu "journalctl --user -u orca-serve.service --since '-10 min' --no-pager -o cat | tr -d '\r' | grep -o 'orca://pair?code=[A-Za-z0-9+/=]*' | tail -1"
+$code = ssh ubuntu "tr -d '\r' < ~/.local/state/orca/pairing-code | grep -o 'orca://pair?code=[A-Za-z0-9+/=]*' | tail -1"
 orca environment add --name shijima-runtime --pairing-code $code --json
+ssh ubuntu 'rm -f ~/.local/state/orca/pairing-code'
 ```
+
+`$code` はシェル履歴・トランスクリプトにも残さない。値を確認したいときは
+`$code.Length` のように長さだけ見る。
 
 登録後は名前で参照できる。
 
@@ -189,7 +241,8 @@ orca status --environment shijima-runtime --json
 
 pairing code はサーバー再起動をまたいで有効。`orca serve` を落として上げ直しても
 `orca environment add` のやり直しは不要で、`runtimeId` だけが変わる（§5.4）。
-再ペアリングが要るのは、ランタイム側の設定（`~/.config/orca`）を作り直したときだけ。
+言い換えると **token は自然失効しない**ので、漏れたら §1.2.1 の手順で明示的に失効させる。
+paired device の一覧はランタイム側の `~/.config/orca/orca-devices.json`（`0600`）にある。
 
 ## 3. リモート環境で worktree と terminal を使う
 
@@ -270,12 +323,12 @@ orca worktree rm --environment shijima-runtime --worktree "id:<repo-id>::<abs-pa
 
 ### 5.2 `orca serve` の起動
 
-| 項目  | 内容                                                                                                      |
-| ----- | --------------------------------------------------------------------------------------------------------- |
-| repro | `ssh ubuntu 'systemctl --user restart orca-serve.service'` の後 `journalctl --user -u orca-serve.service` |
-| 期待  | `orca_server_ready` が出て `0.0.0.0:6768` が LISTEN                                                       |
-| 実測  | `advertisedEndpoint: ws://100.125.134.49:6768`、`ss -tln` に `0.0.0.0:6768` を確認                        |
-| 判断  | 成立。ただし §1.1・§1.2 の表示サーバーと pty の対処が前提                                                 |
+| 項目  | 内容                                                                                                                   |
+| ----- | ---------------------------------------------------------------------------------------------------------------------- |
+| repro | `ssh ubuntu 'systemctl --user restart orca-serve.service'` の後 `journalctl --user -u orca-serve.service` と `ss -tln` |
+| 期待  | ランタイムが ready になり `0.0.0.0:6768` が LISTEN                                                                     |
+| 実測  | 起動 10 秒で `0.0.0.0:6768` を LISTEN。`advertisedEndpoint: ws://100.125.134.49:6768`                                  |
+| 判断  | 成立。ただし §1.1・§1.2 の表示サーバーと pty の対処が前提                                                              |
 
 ### 5.3 リモート worktree と terminal
 
@@ -292,15 +345,20 @@ Orca に登録した。以降の疎通確認にも使えるため残してある
 
 ### 5.4 プロセス kill からの自動復旧
 
-| 項目  | 内容                                                                            |
-| ----- | ------------------------------------------------------------------------------- |
-| repro | `ssh ubuntu 'pkill -9 -f "out/cli/index.js serve"'` → 状態と `NRestarts` を観測 |
-| 期待  | systemd が 10 秒後に再起動し、再度 6768 を LISTEN                               |
-| 実測  | 5 秒以内に `active`、`NRestarts=1`、新 PID で `0.0.0.0:6768` を LISTEN          |
-| 判断  | 成立                                                                            |
+| 項目  | 内容                                                                              |
+| ----- | --------------------------------------------------------------------------------- |
+| repro | `ssh ubuntu 'pkill -9 -f "out/cli/inde[x].js serve"'` → 状態と `NRestarts` を観測 |
+| 期待  | systemd が再起動し、再度 6768 を LISTEN                                           |
+| 実測  | 10 秒以内に `active`、`NRestarts=1`、新 MainPID で `0.0.0.0:6768` を LISTEN       |
+| 判断  | 成立                                                                              |
 
-> SSH 越しに `pkill -f` を使うと、パターン文字列が**自分の SSH コマンドライン自体**に
-> 一致して接続ごと落ちる（`ssh` が exit 255 で終わる）。サーバーの再起動自体は成功する。
+> `pkill -f` のパターンに `[x]` のような文字クラスを挟むのは、パターン文字列が
+> **自分の SSH コマンドライン自体**に一致して接続ごと落ちるのを避けるため
+> （素で書くと `ssh` が exit 255 で終わる。サーバーの再起動自体は成功する）。
+
+MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。§1.2 の
+`emit_redacted` へのパイプがあるため `exec` していない。`orca-ide` を落とすとパイプが
+閉じて runner も終了し、systemd が unit ごと再起動する。
 
 ### 5.5 サービス停止中のクライアント挙動と再接続
 
@@ -311,7 +369,23 @@ Orca に登録した。以降の疎通確認にも使えるため残してある
 | 実測  | 停止中は `{"ok": false, "error": {"code": "remote_runtime_unavailable"}}`（exit 1）。起動から 10 秒で LISTEN、その後 `state: ready` / `connectionState: connected` |
 | 判断  | 成立。device token はサーバー再起動をまたいで有効。`orca environment add` の再実行は不要                                                                           |
 
-### 5.6 削除・昇格条件
+### 5.6 pairing code の非ログ化と失効
+
+| 項目  | 内容                                                                                                                                                                                  |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| repro | §1.2 の `emit_redacted` を入れて再起動 → `journalctl --user -u orca-serve.service --since '-2 min' -o cat \| grep -c 'orca://pair?code='` と `ls -l ~/.local/state/orca/pairing-code` |
+| 期待  | journal に code が 0 件、pairing ファイルが `0600` で生成される                                                                                                                       |
+| 実測  | journal `0` 件。`-rw------- 1 hikaru hikaru` の `pairing-code` を 10 秒で生成。journal に残るのは「書き出した」旨の 1 行のみ                                                          |
+| 判断  | 成立。以後 token は journal を経由しない                                                                                                                                              |
+
+| 項目  | 内容                                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| repro | `rm ~/.config/orca/orca-devices.json` + サービス再起動 → 旧 code で登録済みの環境に対し `orca status --environment shijima-runtime --json` |
+| 期待  | 旧 token が拒否される                                                                                                                      |
+| 実測  | `{"ok": false, "error": {"code": "unauthorized", "message": "Remote Orca runtime rejected the pairing token."}}`                           |
+| 判断  | 成立。journal へ出てしまった 5 件の旧 code はこの手順で失効させ、§2 の経路で貼り直した                                                     |
+
+### 5.7 削除・昇格条件
 
 本書は恒久的な運用手順であり、プローブとして削除する対象ではない。
 §7 の未了項目が解消された時点で、該当節を「実施済み」に更新する。
@@ -323,12 +397,14 @@ Orca に登録した。以降の疎通確認にも使えるため残してある
 | `ssh ubuntu "orca ..."` がスクリーンリーダーのヘルプを出す          | 非ログインシェルで `/usr/bin/orca` が引かれている。`ssh ubuntu 'bash -lc "orca ..."'` を使う            |
 | `Orca needs a usable display server`                                | `DISPLAY` / `XAUTHORITY` 未設定。§1.1。デスクトップ未ログインなら `xvfb` を入れる                       |
 | `Missing X server or $DISPLAY` の直後に `SIGSEGV`                   | `DISPLAY=:0` だけ設定し `XAUTHORITY` を渡していない。`.mutter-Xwaylandauth.*` を指定する                |
-| journal に pairing code が出ない                                    | Electron のパイプ出力バッファリング。`script -qefc` で pty を挟む（§1.2）                               |
+| `pairing-code` ファイルができない                                   | Electron のパイプ出力バッファリングで ready 行が届いていない。`script -qefc` で pty を挟む（§1.2）      |
+| journal に pairing code が出てしまっている                          | `emit_redacted` 未適用。§1.2.1 で token を失効させ、redaction を入れてから貼り直す                      |
 | `Unknown key name 'StartLimitIntervalSec' in section 'Service'`     | `[Service]` ではなく `[Unit]` に置く（§1.3）                                                            |
 | `Project path must be an absolute path`（パスは絶対パスなのに）     | Git Bash の MSYS パス変換。PowerShell から実行するか `MSYS_NO_PATHCONV=1`（§3.1）                       |
 | `Choose either --repo or project target flags, not both.`           | `--host runtime:<id>` と `--repo` の併用。`--environment <name>` + `--repo id:<id>` にする（§3.2）      |
 | `selector_not_found`（worktree 削除時）                             | `worktree:` ではなく `id:<repo-id>::<abs-path>` を使う（§3.4）                                          |
 | `remote_runtime_unavailable`                                        | ランタイム停止・Tailscale 断。`systemctl --user status orca-serve.service` と `tailscale status` を確認 |
+| `unauthorized` / `rejected the pairing token`                       | ランタイム側の device store が作り直されている。`orca environment rm` して §2 で貼り直す                |
 | `The OS keyring is unavailable, so secrets are stored unencrypted.` | gnome-keyring 未解錠。デスクトップにログインして解錠するか、keyring を導入する                          |
 
 ## 7. 未了項目（人手が必要）
@@ -345,8 +421,40 @@ Orca に登録した。以降の疎通確認にも使えるため残してある
    秘密鍵はリポジトリに置かない（`AGENTS.md`「Security」、
    [ai-agent-git-attribution.md](./ai-agent-git-attribution.md)）。
 4. **開発ツールチェーン** — Ubuntu 側に `pwsh` / `uv` / `flutter` / `pnpm` が無い。
-   リモートで `pnpm run check` まで回すには [ade-setup.md](./ade-setup.md)「必要環境」の
-   導入が必要。Node.js は v18.19.1 で、`package.json` の `engines.node >=24.14.0` に
-   満たないため更新も要る。
+   [ade-setup.md](./ade-setup.md)「必要環境」の導入が必要。Node.js は v18.19.1 で、
+   `package.json` の `engines.node >=24.14.0` に満たないため更新も要る。
+   **ただしツールを揃えても `pnpm run check` は Ubuntu では完走しない**（§8）。
 
 3・4 が終わるまで、リモートランタイムで扱えるのは Auto-Scoring 以外のリポジトリに限る。
+
+## 8. `pnpm run check` は Ubuntu で完走しない（プラットフォーム制約）
+
+必須 gate `pnpm run check` は最後に `pnpm run build` を実行し、その `build:app` は
+`package.json` で `flutter build windows --debug` に固定されている
+（[quality-gates.md](./quality-gates.md)）。これは Windows ホストと Visual Studio を
+要求するため、**ツールチェーンを何を入れても Linux では通らない**。ツールの不足は
+§7.4 の問題だが、この build は環境整備で解決する種類の制約ではない。
+
+リモート実行の可否は次の通り。
+
+| gate                                       | Ubuntu   | 備考                                                   |
+| ------------------------------------------ | -------- | ------------------------------------------------------ |
+| `skills:check` / `format:check`            | 可       | Node のみ                                              |
+| `openapi:check`                            | 可       | Node のみ                                              |
+| `lint` / `typecheck`（app・backend）       | 可       | `flutter analyze`・Ruff・mypy はクロスプラットフォーム |
+| `test`（`flutter test` / `pytest`）        | 可       | 同上                                                   |
+| `build:backend`                            | 可       | パッケージ import のみ                                 |
+| **`build:app`（`flutter build windows`）** | **不可** | Windows ホストが必須                                   |
+
+したがって、リモート開発時の Windows build の検証は次のどちらかで担保する。
+
+- **CI に任せる（推奨）** — `.github/workflows/ci.yml` の `Quality` job は
+  `runs-on: windows-latest` で、PR ごとに Windows build まで実行する。これが
+  main ruleset の required check であり、マージ前に必ず通る。
+- **手元の Windows で確認する** — 手元で通したいときは、Windows 側の worktree で
+  `pnpm run build:app` だけ実行する。リモートでは残りの gate を回す。
+
+つまりリモート移行後も、Windows build の検証責任は CI（および必要に応じて Windows 機）
+に残る。Ubuntu 側で `pnpm run check` を実行して失敗しても、それは移行の不備ではない。
+`build:app` のターゲットを変えるのは本 Issue の範囲外で、変更するなら
+`quality-gates.md` と CI を同じ変更で更新する。
