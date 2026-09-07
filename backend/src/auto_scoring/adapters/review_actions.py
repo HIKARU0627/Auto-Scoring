@@ -51,10 +51,12 @@ from auto_scoring.domain.models import (
     JobKind,
     JobState,
     NormalizedRect,
+    Question,
     RecognitionResult,
     Review,
     ReviewAction,
     Score,
+    ScoreOutOfRange,
     Submission,
     SubmissionState,
 )
@@ -155,9 +157,9 @@ class EditResult:
 
 def _load_submission_and_question(
     uow: SqlAlchemyUnitOfWork, *, submission_id: str, question_id: str
-) -> tuple[Submission, str]:
-    """Returns ``(submission, question.test_id)`` after validating both exist
-    and belong together -- the same three checks every mutating handler in
+) -> tuple[Submission, Question]:
+    """Returns ``(submission, question)`` after validating both exist and
+    belong together -- the same three checks every mutating handler in
     `api.recognitions_router` already makes before writing anything."""
     submission = uow.submissions.get(submission_id)
     if submission is None:
@@ -167,7 +169,7 @@ def _load_submission_and_question(
         raise LookupError(f"question {question_id!r} not found")
     if question.test_id != submission.test_id:
         raise QuestionMismatchError(submission_id, question_id)
-    return submission, question.test_id
+    return submission, question
 
 
 def _next_version(
@@ -348,9 +350,27 @@ def edit_question(
     review: a regrade must not let this edit silently record an AI baseline
     the reviewer never actually saw).
     """
-    submission, _test_id = _load_submission_and_question(
+    submission, question = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
+    if score_maximum != question.points:
+        # A human correction always scores against this question's own,
+        # already-registered rubric total -- not a value the caller invents
+        # per request. Never simply clamped or otherwise coerced: silently
+        # accepting a mismatched maximum would let an out-of-range score
+        # flow downstream into a confirmed `GradeResult` (and, through it,
+        # into a dependent question's grading context) as if it had been
+        # legitimately scored (Issue #22 P2 review, round 2). Mirrors
+        # `GradingJobProcessor.process`'s identical
+        # ``response.max_score != question.points`` check for an AI
+        # response -- validating the client boundary (the Flutter dialog's
+        # own `question.points`-based bound) is not enough on its own
+        # (AGENTS.md "Security": validate every input crossing a trust
+        # boundary).
+        raise ScoreOutOfRange(
+            f"score_maximum {score_maximum} does not match question {question_id!r}'s "
+            f"registered points ({question.points})"
+        )
     ai_grade = _latest_ai_grade_matching(
         uow,
         submission_id=submission_id,
@@ -460,7 +480,7 @@ def reject_question(
     is a legitimate outcome, matching `Review.__post_init__`'s own rule that
     only `APPROVED`/`MODIFIED` need one).
     """
-    submission, _test_id = _load_submission_and_question(
+    submission, _question = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
     ai_grade = uow.grades.latest(submission_id, question_id, GradingSource.AI)
@@ -526,7 +546,7 @@ def regrade_question(
     (regrading is exactly how a reviewer recovers from "AI never produced
     one").
     """
-    submission, _test_id = _load_submission_and_question(
+    submission, _question = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
     ai_grade = uow.grades.latest(submission_id, question_id, GradingSource.AI)
@@ -583,7 +603,7 @@ def approve_question(
     #22 P1 review: a regrade completing after the reviewer loaded the screen
     must not let this approval silently confirm an attempt they never saw).
     """
-    submission, _test_id = _load_submission_and_question(
+    submission, _question = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
     ai_grade = _latest_ai_grade_matching(
@@ -631,7 +651,7 @@ def undo_last_review(
     none exists). Redo is out of scope for Issue #22 -- see
     `domain.review_workflow.effective_latest_review`'s docstring.
     """
-    submission, _test_id = _load_submission_and_question(
+    submission, _question = _load_submission_and_question(
         uow, submission_id=submission_id, question_id=question_id
     )
     version, existing = _next_version(

@@ -293,7 +293,56 @@ PR #46 の1回目コードレビューで指摘された5件。§2/§4の設計�
 `app/lib/core/app_dependencies.dart`、`app/lib/api/sidecar_api_client.dart`
 （+ `pnpm run openapi:generate` で再生成した `app/packages/auto_scoring_api`）。
 
-## 11. 対象外（後続Issue）
+## 11. Codexレビュー(2回目/確認レビュー)での修正（P1x1 / P2x2）
+
+R1修正に対する確認レビューで指摘された3件。R1で導入した `expectedAiGradeId`
+自体の設計は変えず、「値をいつ確定させるか」「nullと空文字列の区別」という
+2つの取り違えを塞いだ。
+
+- **P1: edit dialogを開く前にconcurrency tokenを取得していなかった**
+  `_showEditDialog` は `expectedVersion`/`expectedAiGradeId` を
+  `await showDialog(...)` の**後**、つまりdialogが閉じてから `review`
+  （background pollingが同じインスタンスをin-placeで更新し続けるmutableな
+  `QuestionReviewState`）経由で読んでいた。dialogが開いている間にregradeが
+  完了すると、dialogはprefillした古いscore/textを表示したままなのに、保存時
+  には新しいAI grade ID/versionを送ってしまい、reviewerが一度も見ていない
+  AI試行への古い訂正がそのまま確定してしまう。`currentGrade`/`currentText`
+  を計算するのと同じタイミング（dialogを開く**前**）で
+  `expectedVersion`/`expectedAiGradeId` をローカル変数へ確定させ、保存時は
+  その値だけを送るよう変更。これにより、dialogが開いている間に競合が起きた
+  場合は必ず409になる（一度、この2行を意図的に旧実装へ戻して新規テストが
+  実際に落ちる＝有効な回帰テストであることを確認済み）。
+- **P2: 送信された `score_maximum` を設問の `points` に対して検証していな
+  かった** `Score.__post_init__` は `0 <= awarded <= maximum` しか見ない
+  ため、5点満点の設問に対して `score_awarded=100, score_maximum=100`
+  のような、内部的には整合するが設問の実際の配点と無関係な値をedit
+  requestへ渡せてしまい、それがそのまま確定した人間gradeとなって下流の
+  採点context（`GradeResultContextEntry`）へ流れ込む。`_load_submission_and_
+question` の戻り値を `(Submission, str)`（test_idのみ）から
+  `(Submission, Question)` へ変更し、`edit_question` が
+  `score_maximum != question.points` を `ScoreOutOfRange` として拒否する
+  （HTTP 422、R1で追加した `(DomainError, ValueError)` → 422 変換に自然に
+  乗る）。`GradingJobProcessor.process` がAI responseに対して既に行っている
+  `response.max_score != question.points` と同じチェックを、人間による
+  edit requestにも適用する形。
+- **P2: 明示的にクリアされたrecognitionが `null`（編集なし）に潰れていた**
+  `recognizedText: text.isEmpty ? null : text` は、AIの誤認識文字を全部
+  削除して「解答は空白」と明示的にマークする操作と、そもそも認識結果自体が
+  何もない設問をスコアだけ編集する操作（textフィールドは元から空のまま）を
+  区別できず、両方とも `null`（`edit_question` に「recognitionは触らない」
+  と伝わる）に潰していた。前者の場合、保存は成功したと画面に表示されるのに
+  human recognition行が作られないため、reviewerが消したはずのAIテキストへ
+  fallbackし続けてしまう。`currentText.isEmpty && text.isEmpty ? null : text`
+  へ変更（「dialogを開いた時点でも今も空」の場合だけ `null` のまま
+  ＝スコアのみ編集で毎回空文字列のrecognition行が量産されるのを防ぎ、
+  それ以外は空文字列を含めて実際の値をそのまま送る）。
+
+修正差分: `backend/src/auto_scoring/adapters/review_actions.py`、
+`backend/tests/test_review_api.py`、
+`app/lib/features/pdf_review/pdf_review_page.dart`、
+`app/test/pdf_review_page_test.dart`。
+
+## 12. 対象外（後続Issue）
 
 - Redo（Ctrl+Y / Ctrl+Shift+Z）。
 - Annotation の図形的な追加・移動・削除 UI。

@@ -912,6 +912,18 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     if (!_canDecide) return;
     final review = _currentReview!;
     final question = _currentQuestion!;
+    // Captured *before* the dialog opens, not re-read from [review] after it
+    // closes (Issue #22 P1 review, round 2): [review] is the same mutable
+    // `QuestionReviewState` the background poll keeps updating in place, so
+    // a regrade completing while the dialog is open would otherwise let the
+    // eventual save submit *new* concurrency tokens (expectedVersion/
+    // expectedAiGradeId) alongside the *old*, already-stale score/text the
+    // dialog still shows -- silently landing this edit against an AI attempt
+    // the reviewer never actually saw. Freezing both tokens here instead
+    // makes that race surface as the same conflict a stale token always
+    // would.
+    final expectedVersion = review.expectedVersion;
+    final expectedAiGradeId = review.latestAiGrade?.id;
     final currentGrade = review.displayGrade;
     final currentText =
         review.effectiveHumanRecognition?.text ??
@@ -982,18 +994,30 @@ class _PdfReviewPageState extends State<PdfReviewPage> {
     }
     final text = textController.text.trim();
     final comment = commentController.text.trim();
+    // `null` means "this edit does not touch the recognized text at all"
+    // (`edit_question` then leaves the existing recognition alone) -- distinct
+    // from an *explicit* clear, which must reach the server as an empty
+    // string, not collapse into that same `null` (Issue #22 P2 review, round
+    // 2): a reviewer who deletes AI-misread text to mark the answer as blank
+    // needs that recorded as a human recognition reading `''`, or the screen
+    // (correctly reporting the save as successful) would keep falling back
+    // to display the very AI text they just deleted. Only when there was
+    // never anything to say in the first place (nothing prefilled, nothing
+    // typed) is `null` still correct, so a question with no AI recognition
+    // yet does not get a spurious empty human row on every score-only edit.
+    final recognizedText = currentText.isEmpty && text.isEmpty ? null : text;
     await _performReviewAction(
       question,
       review,
       () => widget.dependencies.editReview(
         widget.submissionId,
         question.id,
-        expectedVersion: review.expectedVersion,
-        expectedAiGradeId: review.latestAiGrade?.id,
+        expectedVersion: expectedVersion,
+        expectedAiGradeId: expectedAiGradeId,
         scoreAwarded: score,
         scoreMaximum: question.points,
         comment: comment.isEmpty ? null : comment,
-        recognizedText: text.isEmpty ? null : text,
+        recognizedText: recognizedText,
         note: _reasonFromNote(review),
       ),
     );

@@ -656,6 +656,32 @@ def test_edit_with_score_awarded_above_maximum_is_rejected_with_422(
     assert reviews == []
 
 
+def test_edit_with_a_score_maximum_not_matching_the_questions_registered_points_is_rejected(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """`Score.__post_init__` alone only checks ``0 <= awarded <= maximum`` --
+    a client-invented ``score_maximum`` that is internally consistent (e.g.
+    ``score_awarded=100, score_maximum=100`` against a 5-point question)
+    passes that check but must still be rejected: it does not match the
+    question's own registered ``points``, and accepting it would flow a
+    bogus score downstream as if it were legitimate (Issue #22 P2 review,
+    round 2)."""
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/edit",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 100, "score_maximum": 100},
+    )
+
+    assert response.status_code == 422
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
+
+
 def test_edit_with_an_unknown_criterion_outcome_is_rejected_with_422(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
