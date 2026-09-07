@@ -79,4 +79,33 @@ else {
     git config core.hooksPath .githooks
 }
 
+# `core.hooksPath` alone does not mean the hooks run. Git skips a hook file that
+# is not executable and says so only as a hint on stderr, so a worktree can look
+# fully bootstrapped while every hook is dead -- which is exactly where this
+# repository sat until Issue #75 (both hooks tracked as 100644, never fired).
+# Check the tracked mode, which is what every clone gets, and on POSIX the
+# checked-out file as well, because that is the bit git actually tests before
+# running a hook. Fail instead of warn: a warning is what let this go unnoticed.
+$brokenHooks = @()
+foreach ($hook in Get-ChildItem -Path (Join-Path $repoRoot '.githooks') -File) {
+    $path = ".githooks/$($hook.Name)"
+    $trackedMode = ((& git ls-files --stage -- $path | Out-String).Trim() -split '\s+')[0]
+
+    if ([string]::IsNullOrEmpty($trackedMode)) {
+        $brokenHooks += "$path is not tracked by git; run: git add $path"
+    }
+    elseif ($trackedMode -ne '100755') {
+        $brokenHooks += "$path is tracked as $trackedMode; run: git update-index --chmod=+x $path"
+    }
+    # Git decides whether to run a hook with access(X_OK). Windows ignores X_OK
+    # there, so the on-disk bit only matters -- and only exists -- on POSIX.
+    elseif (-not $IsWindows -and ($hook.UnixFileMode -band [System.IO.UnixFileMode]::UserExecute) -eq 0) {
+        $brokenHooks += "$path is not executable in this worktree; run: chmod +x $path"
+    }
+}
+if ($brokenHooks.Count -gt 0) {
+    throw ("git hooks are not executable, so git would silently skip them:`n  " +
+        ($brokenHooks -join "`n  ") + "`nSee docs/quality-gates.md 'git hooks vs CI'.")
+}
+
 Write-Host 'Bootstrap completed.'

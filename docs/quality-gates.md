@@ -43,6 +43,68 @@ See [`sidecar-api.md`](./sidecar-api.md) §4.
 - `pnpm run bootstrap` points the current worktree at `.githooks/`
   (`git config core.hooksPath .githooks`).
 
+### Hook files must carry the executable bit
+
+`core.hooksPath` being set is not enough. Git skips a hook it cannot execute and
+says so only as a hint on stderr, so nothing fails and the hook simply never
+runs. Both hooks sat at `100644` from the day they were added until Issue #75,
+which is why `--no-verify` pushes had no effect either.
+
+A hook must be tracked as `100755` — that is the mode every clone checks out
+with — and, on POSIX, the checked-out file needs the bit as well, because that
+is what git tests before running it. To verify:
+
+```console
+$ git ls-files --stage .githooks/
+100755 9b4f0291... 0	.githooks/pre-commit
+100755 27237d0d... 0	.githooks/pre-push
+
+$ git hook run --ignore-missing pre-commit
+```
+
+`git hook run` executes the hook, or prints `hook was ignored because it's not
+set as executable` instead — the one command that answers "would git actually
+run this?".
+
+When adding a hook, set both modes:
+
+```sh
+chmod +x .githooks/<name>                      # this worktree (POSIX only)
+git update-index --chmod=+x .githooks/<name>   # the tracked mode
+```
+
+### Hooks inherit git's environment
+
+**Rule: a hook must drop the inherited git environment before it shells out to
+any external tool.**
+
+```sh
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX
+```
+
+Git exports those four variables into every hook process, pointing at _this_
+repository, and everything the hook runs inherits them. A tool that calls git
+for its own purposes — locating a repository root, reading its own version,
+resolving config — therefore inspects this repository instead of wherever it
+actually lives. Nothing errors; the tool just quietly gets the wrong answer.
+
+The instance that surfaced here (Issue #75): Flutter shells out to git to
+identify its own SDK, so under a hook it read this repository and reported
+version `0.0.0-unknown`, failing `app/pubspec.yaml`'s `>=3.41.0` constraint.
+`flutter analyze` and `flutter test` broke inside the hook while working fine
+from a normal shell, which made every `git push` fail the moment the hooks
+started running. `.githooks/pre-push` carries the `unset` for that reason.
+
+Verify a new hook with `git hook run --ignore-missing <name>`. Running its
+`pnpm run check:*` script directly from a shell does **not** reproduce the hook
+environment, which is why this trap stayed invisible for as long as it did.
+
+### Where the check lives
+
+`pnpm run bootstrap` checks every file in `.githooks/` for both modes and
+**fails** rather than warns — a warning is what let this go unnoticed. Keep `.githooks/`
+free of non-hook files (notes, READMEs); the check has no way to tell them apart.
+
 ## Adding heavier gates
 
 Add integration / e2e / contract jobs directly to `.github/workflows/ci.yml` as
