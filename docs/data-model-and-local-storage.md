@@ -55,6 +55,7 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 | `Review`                     | 人間の承認/修正/却下の履歴                    | **追記のみ** |
 | `Job`                        | 非同期処理（recognition/grading/export）      | —            |
 | `AnswerImage`                | 設問ごとの回答欄切り出し画像（Issue #17）     | —            |
+| `Export`                     | 成功した添削済みPDF出力（Issue #23）          | **追記のみ** |
 
 > `AnswerImage` と `Submission` の `source_pdf_sha256` / `page_count` /
 > `original_filename` / `review_reason` は Issue #17（答案取込・画像前処理）で
@@ -78,6 +79,12 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > （マイグレーション `0013_review_history_edit`）は Issue #22（レビュー画面の
 > edit/reject/regrade/approve-and-next と Undo）で追加した列。詳細は
 > [`review-edit-history.md`](./review-edit-history.md)。
+>
+> `Export`（`job_id` に一意制約、マイグレーション `0014_exports`）は
+> Issue #23（添削済みPDF出力）で追加したテーブルで、成功した出力のみを
+> 記録する。失敗した試行は `Job`（kind=`export`、Issue #11 の時点で
+> `JobKind` に存在していたが本Issueまで生成する経路が無かった）の
+> `state=failed` にのみ残る。詳細は [`pdf-export.md`](./pdf-export.md)。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、
@@ -199,6 +206,8 @@ app-data/
     制約を追加（Issue #17 レビュー対応）。PR #37 が main にマージされた PR #36
     （Issue #26、`0003`/`0004` を先に使用）と競合したため、Issue #17 側の
     `0003`〜`0005` を `0005`〜`0007` へ振り直した。
+  - `0014_exports` — `exports` テーブルを追加（Issue #23、成功した
+    添削済みPDF出力の記録。`job_id` に一意制約）。
 - スキーマを変更したら `db/orm.py` を直し、`uv run alembic revision --autogenerate`
   で新しい revision を作る。`alembic.command.check`（`test_head_schema_matches_orm_metadata`）
   が ORM とマイグレーション履歴の乖離を検出する。

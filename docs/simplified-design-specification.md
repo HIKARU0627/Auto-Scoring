@@ -523,7 +523,12 @@ pypdfium2 + pypdf
 
 > PDF ライブラリは PoC 3（Issue #12）で `pypdfium2` + `pypdf` に確定した。
 > 経緯は [`technology-stack.md`](./technology-stack.md) §3.1 /
-> [`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。
+> [`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。実装は Issue #23
+> で行った。人間レビュー完了後の確定Annotationを○×△・下線・囲み・点数・
+> コメントとして実際に描画し、`Export`（成功した出力）と`Job`
+> （kind=`export`、出力の実行単位）として永続化する。日本語コメントの
+> フォント埋め込みには`reportlab`を追加した。詳細・決定事項は
+> [`pdf-export.md`](./pdf-export.md)。
 
 として新しいPDFを生成する。
 
@@ -660,6 +665,11 @@ Material Design 3を利用する。
 - Annotation移動
 - Annotation追加
 - Annotation削除
+
+> Issue #23でAppBarへ「PDF出力」ボタンを追加した
+> （`app/lib/features/pdf_review/export_dialog.dart`）。未確認設問がある
+> 場合の一覧表示、出力の進捗、保存先表示、失敗時の再試行を1つのdialogで
+> 行う。詳細は[`pdf-export.md`](./pdf-export.md)。
 
 ---
 
