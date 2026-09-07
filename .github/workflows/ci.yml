@@ -174,17 +174,12 @@ jobs:
   # failure. Remove once the cause is settled.
   flake-hunt:
     name: Flake hunt (Windows)
-    # DISABLED. Six Windows legs x up to 12 runs is expensive, and Windows
-    # minutes bill at 2x -- it took the account close to its Actions limit.
-    # Do not re-enable without agreeing the budget first; when re-enabling,
-    # start from one leg, not six.
-    if: false
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        leg: [1]
+        leg: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

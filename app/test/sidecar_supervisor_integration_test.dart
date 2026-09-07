@@ -385,6 +385,17 @@ Future<void> _killListenerOn(SidecarConnection connection) async {
   );
 }
 
+/// Whether [pid] still names a live process. One spawn, nothing else, because
+/// this is the measurement that has to happen before the survivor is gone.
+Future<bool> _isAlive(String pid) async {
+  if (Platform.isWindows) {
+    final result = await Process.run('tasklist', ['/FI', 'PID eq $pid', '/NH']);
+    return '${result.stdout}'.contains(pid);
+  }
+  final result = await Process.run('ps', ['-p', pid, '-o', 'pid=']);
+  return result.exitCode == 0 && '${result.stdout}'.trim().isNotEmpty;
+}
+
 /// TEMPORARY (Issue #57): everything worth knowing about a sidecar that is
 /// still answering after `shutdown()` returned.
 ///
@@ -405,6 +416,19 @@ Future<String> _survivorReport({
     ..writeln('listener pid before shutdown: ${listenerBeforeShutdown ?? "-"}')
     ..writeln('what the probe that returned true actually saw:')
     ..write(probeLog);
+
+  // First, and on purpose: one cheap spawn asking whether the process that was
+  // serving before the shutdown is still alive *now*. Everything below costs
+  // hundreds of milliseconds to seconds, which is long enough for a survivor
+  // that only outlives the shutdown briefly to be gone before it is looked
+  // for -- so an empty snapshot down there would not mean nobody was there
+  // when the probe ran.
+  if (listenerBeforeShutdown != null) {
+    report.writeln(
+      'is that pid still alive? '
+      '${await _isAlive(listenerBeforeShutdown) ? "yes" : "no"}',
+    );
+  }
 
   // What the protected call actually got back. `_stillServing` only sees
   // "threw or did not", and dio's default validateStatus accepts any 2xx --
