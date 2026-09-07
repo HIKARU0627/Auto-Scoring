@@ -57,8 +57,24 @@ def _edge(a: str, b: str) -> DependencyEdge:
 
 
 async def _wait_until(
-    predicate: Callable[[], bool], *, timeout: float = 5.0, interval: float = 0.01
+    predicate: Callable[[], bool], *, timeout: float = 20.0, interval: float = 0.01
 ) -> None:
+    """Poll ``predicate`` against *real* wall-clock time, not `FakeClock`.
+
+    Every business-logic delay the service under test awaits (backoff,
+    scheduler-error retry, ...) goes through the injected `FakeClock`, whose
+    `sleep` advances virtual time instantly rather than actually waiting
+    (`tests/fakes.py::FakeClock.sleep`) -- so ``timeout`` here is not a
+    budget for simulated time, only for how long *this machine* takes to run
+    the handful of real, synchronous on-disk SQLite commits (`journal_mode=
+    WAL`) each state transition performs. That is genuinely machine-
+    dependent (disk speed, scheduler contention, ...) and was only ever
+    tuned against the Windows CI runner; a 5s budget was observed to be
+    insufficient on at least one Linux dev VM even though nothing was
+    actually hung (Issue #50 -- see docs/job-queue.md). 20s keeps the same
+    fail-fast intent for a genuine hang while giving slower/less predictable
+    environments realistic headroom.
+    """
     deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() > deadline:

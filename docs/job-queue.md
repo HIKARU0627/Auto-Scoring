@@ -777,3 +777,68 @@ to a different event loop`を送出し得た。`shutdown()`で`clear()`する
   `enqueue`で再ディスパッチする。`_worker_loop`自身のbackstopは、
   claimがcommitされる前（行はまだQUEUEDのまま）の失敗だけを担当する
   役割に整理した。
+
+## Linux環境でのテスト実時間マージン（Issue #50）
+
+Issue [#47](https://github.com/HIKARU0627/Auto-Scoring/issues/47)（Orca
+リモート開発環境構築）の検証中、Windows専用CI（`.github/workflows/ci.yml`）
+以外で初めてbackendテストスイートをUbuntu上で実行したところ、
+`tests/test_job_queue.py::test_retry_scheduler_survives_a_requeue_after_backoff_error`
+が個別実行・全体実行のいずれでも決定的に（フレーキーではなく再現性を持って）
+`AssertionError: timed out waiting for condition`で失敗した
+（Ubuntu 24.04.4、Python 3.12.3、`uv run pytest`実行時に`uvloop==0.22.1`が
+インストールされる環境）。
+
+### 調査結果
+
+- このテストが検証する`_retry_scheduler_loop`のエラー吸収経路（round 8,
+  P1「1回のrequeueエラー後もretry schedulerを生かし続ける」、上記参照）は、
+  失敗したentryの再スケジュールを含め、あらゆる待機を`self._clock.sleep(...)`
+  経由で行う。テストで注入される`FakeClock.sleep`
+  （`backend/tests/fakes.py`）は仮想時刻を即座に進めるだけで実時間は
+  一切消費しない（cooperative schedulingのための`await asyncio.sleep(0)`
+  一回のみ）。`queue.py`本体には生の`asyncio.sleep`や固定時間の
+  ブロッキング待ちは存在しない（`grep`で確認済み）。したがって
+  `_SCHEDULER_ERROR_RETRY_DELAY_SECONDS = 1.0`のような業務ロジック上の
+  遅延値は、テスト実行時間には（理論上は）影響しない設計になっている。
+- `uv.lock`を確認すると、`uvloop`は`uvicorn[standard]`が持つ
+  Unix限定（`sys_platform != 'win32'`）のtransitive dependencyとして
+  インストールされるだけで、`backend/tests/`のどこにも`uvloop`の
+  event loop policyを明示的に採用する記述は無く（`pyproject.toml`の
+  `asyncio_mode = "auto"`は標準の`pytest-asyncio`挙動）、pytest実行時は
+  Linux上でも標準の`asyncio`イベントループが使われる。「Linux側だけ
+  `uvloop`を使っているためタイミングが違う」という当初の仮説は誤りだった。
+- 一方、テストヘルパー`_wait_until`（`backend/tests/test_job_queue.py`）は
+  `FakeClock`とは無関係に**実時間**（`time.monotonic()`、既定
+  `timeout=5.0`秒、`interval=0.01`秒）でポーリングする。このテストは
+  実ファイルベースのSQLite（`journal_mode=WAL`、`synchronous=NORMAL`、
+  `backend/src/auto_scoring/db/engine.py`）に対して、job_a・job_bそれぞれ
+  最大5 attempts分の同期commitと、注入した1回のrequeueエラーによる
+  再スケジュールを行う -- これらは全て実ディスクI/Oであり、その所要時間
+  はマシン（ディスク速度、仮想化オーバーヘッド、スケジューリング特性）に
+  依存する。この`timeout=5.0`秒という値はこれまでWindows CIランナー上
+  でしか検証されておらず、それとは異なる特性を持つLinux VM上では
+  マージンを使い切り得る。
+
+### 判断
+
+`_retry_scheduler_loop`/`_requeue_after_backoff`自体に実際のバグは
+見つからなかった -- ロジックは`FakeClock`で駆動される限り実時間に
+依存しない設計になっており、round 8, P1のエラー吸収経路もその設計に
+従っている。原因は業務ロジックではなく、テストヘルパー`_wait_until`の
+実時間マージンが特定の環境（Windows CI）でしか検証されておらず、
+別の環境（今回のUbuntu VM）では不足していたというテストインフラ側の
+問題と判断した。そのため、対症療法ではなく「実際に検証された前提が
+狭すぎた」ことへの対応として、`_wait_until`の既定`timeout`を`5.0`から
+`20.0`秒へ引き上げた（`interval`は`0.01`秒のまま）。本ファイル中の
+`_wait_until`呼び出しはすべて既定値を使っており個別指定は無いため、
+この変更で全呼び出しに一律適用される。「本当にハングした場合は
+タイムアウトで検知する」というテストの意図は変えず、マージンだけを
+広げている。
+
+`tests/test_jobs_api.py`/`tests/test_recognitions_api.py`にも同じ
+パターンの`_wait_until_job_state`ヘルパー（実時間5秒ポーリング）が
+別途存在するが、これらは`TestClient`経由で実サーバーlifespanを使い
+`SystemClock`（実時間）で駆動されるテストであり、今回のIssueが対象と
+する「`FakeClock`使用テストなのに実時間マージン切れで失敗する」問題とは
+性質が異なるため、本Issueの対象外として変更していない。
