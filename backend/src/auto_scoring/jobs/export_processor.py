@@ -20,7 +20,14 @@ from auto_scoring.adapters.atomic import transactional_operation
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
-from auto_scoring.domain.models import ErrorCategory, Export, Job
+from auto_scoring.domain.models import (
+    ErrorCategory,
+    Export,
+    Job,
+    JobState,
+    QuestionReviewVersion,
+    Submission,
+)
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_export import (
     build_export_marks,
@@ -84,7 +91,11 @@ class ExportJobProcessor:
     async def process(self, job: Job) -> ProcessingResult:
         # CPU/IO-bound (PDF rendering + a full page-count verification pass);
         # offloaded exactly like `GradingJobProcessor`'s AI provider call, so
-        # it doesn't block the event loop for the duration.
+        # it doesn't block the event loop for the duration. Cancelling the
+        # awaiting task (`JobQueueService.cancel_running_task`) does not stop
+        # this underlying thread -- `_generate` re-checks the job's own state
+        # immediately before publishing anything, precisely to guard against
+        # that (see its docstring, P2 review).
         return await to_thread(self._process_sync, job)
 
     def _process_sync(self, job: Job) -> ProcessingResult:
@@ -93,11 +104,11 @@ class ExportJobProcessor:
 
     def _generate(self, job: Job) -> ProcessingResult:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
-            if uow.exports.get(export_id(job)) is not None:
+            existing = uow.exports.get(export_id(job))
+            if existing is not None and self._existing_file_is_intact(existing):
                 # Idempotent replay: a prior run of this same job already
-                # succeeded (crash-recovery re-enqueue after the RUNNING ->
-                # SUCCEEDED write, or a duplicate dispatch signal). Never
-                # regenerate or insert a second row.
+                # succeeded and its file is still there, byte-for-byte, as
+                # recorded. Never regenerate or insert a second row.
                 return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
 
             submission = uow.submissions.get(job.submission_id)
@@ -143,23 +154,92 @@ class ExportJobProcessor:
             except ExportGenerationError as error:
                 return self._failed(str(error))
 
-            destination = self._store.allocate_export_path(
-                submission.original_filename or f"{submission.id}.pdf"
-            )
-            relative_path = str(destination.relative_to(self._store.root)).replace("\\", "/")
-            export = Export(
-                id=export_id(job),
-                submission_id=job.submission_id,
-                job_id=job.id,
-                file_path=relative_path,
-                file_sha256=hashlib.sha256(data).hexdigest(),
-                created_at=self._clock.now(),
-                review_versions=snapshot,
-            )
-            with transactional_operation(uow, self._store) as staged:
-                uow.exports.add(export)
-                staged.add(destination, data)
+            # As late as possible before publishing anything: a job cancelled
+            # (`POST /jobs/{id}/cancel`) while this render was in flight only
+            # requests cancellation of the *await* on this thread (P2
+            # review) -- the thread itself, and this whole `_generate` call,
+            # keeps running to completion regardless. The queue's own
+            # `_finalize_cancelled` may already have written CANCELLED to
+            # this job's row by now (from the coroutine side noticing the
+            # cancellation); re-reading it here is the only way this thread
+            # can find out and refuse to publish a result for a job that is
+            # no longer RUNNING. A perfect race is not achievable this way
+            # (the row could still flip between this check and the commit
+            # below), but it narrows the window from "the entire render"
+            # down to a couple of DB round-trips, matching
+            # `jobs.queue.JobQueueService._finalize_result`'s own re-check
+            # of the same field for the same reason.
+            if not self._job_is_still_running(uow, job.id):
+                return self._failed("job was cancelled before the export could be published")
 
+            if existing is not None:
+                return self._repair_existing_export(uow, existing, data)
+            return self._create_new_export(uow, job, submission, snapshot, data)
+
+    def _job_is_still_running(self, uow: SqlAlchemyUnitOfWork, job_id: str) -> bool:
+        current = uow.jobs.get(job_id)
+        return current is not None and current.state is JobState.RUNNING
+
+    def _existing_file_is_intact(self, export: Export) -> bool:
+        """Whether ``export``'s recorded file actually exists and still
+        matches its recorded hash.
+
+        Guards the idempotent-replay fast path (P1 review): a bare "does an
+        `Export` row exist" check is not enough -- a crash between this
+        row's commit and the file write that follows it (`adapters.atomic`'s
+        own documented risk) leaves exactly that: a committed row naming a
+        file that was never written. Treating that as "already done" would
+        let every later export request for this submission resolve to
+        `reuse_existing` against a file that does not exist.
+        """
+        output_path = self._store.root / export.file_path
+        if not output_path.exists():
+            return False
+        return hashlib.sha256(output_path.read_bytes()).hexdigest() == export.file_sha256
+
+    def _repair_existing_export(
+        self, uow: SqlAlchemyUnitOfWork, existing: Export, data: bytes
+    ) -> ProcessingResult:
+        """Rewrite ``existing``'s file from freshly-rendered ``data`` (P1
+        review): reached only when `_existing_file_is_intact` found the
+        previously-committed row's file missing or corrupted. Never inserts
+        a second `Export` row (``job_id`` is unique) -- corrects
+        ``file_sha256`` in place via `ExportRepository.repair_file_hash` if
+        the fresh render's hash differs from what was originally recorded
+        (a fresh render is not guaranteed byte-identical to the lost one).
+        """
+        output_path = self._store.root / existing.file_path
+        self._store.write_atomic(output_path, data)
+        new_sha256 = hashlib.sha256(data).hexdigest()
+        if new_sha256 != existing.file_sha256:
+            uow.exports.repair_file_hash(existing.id, new_sha256)
+            uow.commit()
+        return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
+
+    def _create_new_export(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        job: Job,
+        submission: Submission,
+        snapshot: tuple[QuestionReviewVersion, ...],
+        data: bytes,
+    ) -> ProcessingResult:
+        destination = self._store.allocate_export_path(
+            submission.original_filename or f"{submission.id}.pdf"
+        )
+        relative_path = str(destination.relative_to(self._store.root)).replace("\\", "/")
+        export = Export(
+            id=export_id(job),
+            submission_id=job.submission_id,
+            job_id=job.id,
+            file_path=relative_path,
+            file_sha256=hashlib.sha256(data).hexdigest(),
+            created_at=self._clock.now(),
+            review_versions=snapshot,
+        )
+        with transactional_operation(uow, self._store) as staged:
+            uow.exports.add(export)
+            staged.add(destination, data)
         return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
 
     def _render_and_verify(
@@ -169,9 +249,9 @@ class ExportJobProcessor:
         ``docs/answer-intake-and-preprocessing.md`` §1's same convention),
         verify it, and return its bytes -- never touches ``app-data/`` or the
         database itself; only a successfully-verified result reaches
-        `_generate`'s ``transactional_operation`` call. A generation or
-        verification failure here leaves the source PDF and every prior
-        successful export completely untouched (Issue #23 acceptance).
+        `_generate`'s publish step. A generation or verification failure
+        here leaves the source PDF and every prior successful export
+        completely untouched (Issue #23 acceptance).
         """
         expected_pages = self._engine.page_count(source_path)
         with tempfile.TemporaryDirectory(prefix="auto-scoring-export-") as scratch:

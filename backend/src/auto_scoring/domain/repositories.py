@@ -295,8 +295,9 @@ class JobRepository(Protocol):
 
 class ExportRepository(Protocol):
     """Successful `Export` rows only (Issue #23) -- an in-flight or failed
-    attempt lives entirely as a `Job` (kind=``EXPORT``); nothing here ever
-    updates a row once added.
+    attempt lives entirely as a `Job` (kind=``EXPORT``). Rows are otherwise
+    append-only; ``repair_file_hash`` is the one narrow, documented exception
+    (see its own docstring).
     """
 
     def add(self, export: Export) -> None: ...
@@ -311,6 +312,24 @@ class ExportRepository(Protocol):
         """The most recently created export for ``submission_id``, or
         ``None`` -- what `domain.pdf_export.decide_reexport` compares a fresh
         request's review-version snapshot against.
+        """
+        ...
+
+    def repair_file_hash(self, export_id: str, file_sha256: str) -> None:
+        """Correct ``file_sha256`` for an already-committed `Export` row
+        (Issue #23 P1 review).
+
+        SQLite and the filesystem are not one transaction
+        (`adapters.atomic`'s own docstring): a crash between this row's
+        commit and the file write that follows it leaves a committed
+        `Export` whose file is missing. `jobs.export_processor.
+        ExportJobProcessor` detects that on a later run of the same job,
+        regenerates the PDF, and rewrites the file at ``Export.file_path`` --
+        but a fresh render is not guaranteed byte-identical to the lost one
+        (embedded generation timestamps), so its hash may differ from what
+        was originally recorded. This is the one place any `Export` field is
+        ever updated after `add`; every other field is immutable once
+        written.
         """
         ...
 

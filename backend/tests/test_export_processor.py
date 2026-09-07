@@ -281,3 +281,73 @@ async def test_a_prior_successful_export_survives_a_later_failed_attempt(
     assert result.outcome is ProcessingOutcome.FAILED
     assert _list_exports(session_factory) == [first_export]
     assert first_path.read_bytes() == first_bytes
+
+
+async def test_a_missing_file_after_a_prior_commit_is_regenerated_and_repaired(
+    session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """P1 review: a crash between `Export`'s DB commit and the file write
+    that follows it (`adapters.atomic`'s own documented risk) leaves a
+    committed row naming a file that was never written. A later run of the
+    same job must notice the file is missing, regenerate it, and repair the
+    row in place -- not treat the mere existence of the row as "already
+    done" (which would leave `reuse_existing` resolving to a non-existent
+    file forever after)."""
+    _seed_reviewed_submission(session_factory, store)
+    job = _seed_export_job(session_factory)
+    stale_export = Export(
+        id=export_id(job),
+        submission_id="sub-1",
+        job_id=job.id,
+        file_path="exports/answer_corrected.pdf",
+        file_sha256="0" * 64,  # deliberately wrong -- the "lost" file's real hash
+        created_at=at(),
+        review_versions=(),
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.exports.add(stale_export)
+        uow.commit()
+    assert not (store.root / stale_export.file_path).exists()
+
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    output_path = store.root / stale_export.file_path
+    assert output_path.exists()
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        exports = uow.exports.list_for_submission("sub-1")
+        assert len(exports) == 1  # repaired in place, never a second row
+        repaired = exports[0]
+        assert repaired.id == stale_export.id
+        assert repaired.file_sha256 == hashlib.sha256(output_path.read_bytes()).hexdigest()
+
+
+async def test_a_job_cancelled_before_publish_does_not_create_an_export(
+    session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """P2 review: cancelling the coroutine awaiting `to_thread(...)` does not
+    stop the underlying thread -- `_generate` keeps running regardless and
+    must itself notice, immediately before publishing, that the job's own
+    row has since moved to CANCELLED (as `JobQueueService._finalize_cancelled`
+    would have written it), and refuse to commit an `Export`/write a file for
+    a job the queue no longer considers RUNNING."""
+    _seed_reviewed_submission(session_factory, store)
+    job = _seed_export_job(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        cancelled = uow.jobs.get(job.id)
+        assert cancelled is not None
+        uow.jobs.save(
+            cancelled.transitioned_to(JobState.CANCELLED, updated_at=at()),
+            expected_state=JobState.RUNNING,
+        )
+        uow.commit()
+
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert "cancelled" in (result.error_message or "")
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.exports.list_for_submission("sub-1") == []
+    assert not store.exports_dir().exists()
