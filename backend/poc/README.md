@@ -54,3 +54,22 @@ and recording `AIGradingResult`s) must be added to this PoC before Issue #14
 is closed, once credentials are available. Only the selected adapter(s) and
 the `AIProvider` contract test are promoted afterward; see the doc's
 credentials and promotion sections.
+
+## Issue #25 -- queue throughput vs. the concurrency cap (`issue_25_queue_throughput/report.py`)
+
+Measures how long the queue takes to drain a batch of synthetic answers at
+several concurrency caps, given an assumed per-call provider latency. Feeds
+**decision E** (並列 AI 処理数) in
+[`docs/business-rules-and-evaluation-data.md`](../../docs/business-rules-and-evaluation-data.md)
+§3 -- as evidence only. The decision is the project owner's, and its remaining
+inputs (the chosen provider's rate limit, the real per-answer processing time,
+a real error rate) need decisions A/B and Issue #35's measurements against a
+real provider. Results and how to read them:
+[`docs/mvp-acceptance.md`](../../docs/mvp-acceptance.md) §5.
+
+```bash
+# From backend/. Fully synthetic -- generated answer PDFs, stand-in providers,
+# a temp app-data directory. No credentials, no real data.
+uv run python poc/issue_25_queue_throughput/report.py
+uv run python poc/issue_25_queue_throughput/report.py --answers 6 --latency 1.0
+```
