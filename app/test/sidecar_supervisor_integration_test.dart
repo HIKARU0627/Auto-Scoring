@@ -1,0 +1,255 @@
+@Tags(['sidecar'])
+@Timeout(Duration(minutes: 5))
+library;
+
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/sidecar_platform_io.dart';
+import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+/// Drives the real supervisor against the real Python sidecar: the pieces the
+/// unit tests deliberately fake (`Process.start`, the handshake file, the HTTP
+/// probe, the Job Object) are exactly the pieces this exercises.
+///
+/// Covers the three behaviours Issue #24's 検証 section names -- process
+/// cleanup, dynamic port, and crash recovery -- against a live process. Tagged
+/// `sidecar` like `sidecar_api_client_test.dart`, so `flutter test -x sidecar`
+/// still passes on a machine with no `uv`. Runs on the Windows CI runner,
+/// which is where the Job Object and `TerminateProcess` paths are real.
+///
+/// Uses the same `backend/.venv` console script as that file, and for the same
+/// reason: `uv run` would leave the sidecar as a surviving grandchild on
+/// Windows.
+void main() {
+  final backendDir = Directory(
+    '${Directory.current.path}/../backend',
+  ).absolute.path;
+  final sidecarExe = Platform.isWindows
+      ? '$backendDir/.venv/Scripts/auto-scoring-sidecar.exe'
+      : '$backendDir/.venv/bin/auto-scoring-sidecar';
+
+  late Directory appData;
+  late SidecarPlatformIo platform;
+  late SidecarSupervisor supervisor;
+
+  setUp(() async {
+    appData = await Directory.systemTemp.createTemp('supervisor_it_');
+    platform = SidecarPlatformIo();
+    supervisor = SidecarSupervisor(
+      platform: platform,
+      executablePath: sidecarExe,
+      appDataDirectory: '${appData.path}/app-data',
+    );
+  });
+
+  tearDown(() async {
+    await supervisor.shutdown();
+    supervisor.dispose();
+    platform.dispose();
+    await _deleteWithRetry(appData);
+  });
+
+  Future<SidecarConnection> startAndExpectReady() async {
+    await supervisor.start();
+    final state = supervisor.state.value;
+    expect(
+      state,
+      isA<SidecarReady>(),
+      reason: state is SidecarFailed
+          ? 'sidecar failed to start: ${state.failure} (exit ${state.exitCode})'
+          : 'sidecar did not become ready',
+    );
+    return (state as SidecarReady).connection;
+  }
+
+  test('starts a real sidecar on a dynamic port and reaches it', () async {
+    final connection = await startAndExpectReady();
+
+    // Dynamic port: nothing fixed, and it is a real loopback port the
+    // supervisor learned from the handshake, not a guess.
+    final port = Uri.parse(connection.baseUrl).port;
+    expect(port, greaterThan(0));
+    expect(Uri.parse(connection.baseUrl).host, '127.0.0.1');
+    expect(connection.token, isNotEmpty);
+
+    final client = SidecarApiClient(connection);
+    addTearDown(client.close);
+    expect(await client.isHealthy(), isTrue);
+    // The token really is this session's: a protected call succeeds with it.
+    expect(await client.listTests(), isA<List<TestSummary>>());
+  });
+
+  test('leaves no handshake file holding the token on disk', () async {
+    await startAndExpectReady();
+
+    // The supervisor deletes the per-attempt temp directory as soon as it has
+    // read the token (docs/windows-distribution.md §4). Nothing under the
+    // system temp root should still name it.
+    final leftovers = Directory.systemTemp
+        .listSync()
+        .whereType<Directory>()
+        .where((d) => d.path.contains('auto-scoring-'))
+        .where(
+          (d) => File(
+            '${d.path}${Platform.pathSeparator}handshake.json',
+          ).existsSync(),
+        );
+    expect(leftovers, isEmpty);
+  });
+
+  test('shutdown releases the port and the app-data lock', () async {
+    final connection = await startAndExpectReady();
+    final port = Uri.parse(connection.baseUrl).port;
+
+    await supervisor.shutdown();
+    expect(supervisor.state.value, isA<SidecarStopped>());
+
+    // Nothing is serving on that port any more -- the acceptance criterion
+    // "通常終了後にport/processが残らない".
+    //
+    // Asserted by probing the port rather than by re-binding it: a just-closed
+    // listener's port can still be refused by `bind` for a minute or two while
+    // connections the health probes opened sit in TIME_WAIT, which says
+    // nothing about whether a *process* survived. A refused connection does.
+    final orphan = SidecarApiClient(
+      SidecarConnection(baseUrl: 'http://127.0.0.1:$port', token: 'unused'),
+      timeout: const Duration(seconds: 2),
+    );
+    addTearDown(orphan.close);
+    expect(await orphan.isHealthy(), isFalse);
+
+    // The exclusive app-data lock is released too: a fresh supervisor over the
+    // same directory starts cleanly rather than being refused as
+    // "already running".
+    final second = SidecarSupervisor(
+      platform: platform,
+      executablePath: sidecarExe,
+      appDataDirectory: '${appData.path}/app-data',
+    );
+    addTearDown(second.dispose);
+    await second.start();
+    expect(supervisorFailureOf(second), isNull);
+    await second.shutdown();
+  });
+
+  test('a crashed sidecar is reported, and restart recovers', () async {
+    final first = await startAndExpectReady();
+
+    // Kill it the way an actual crash would: from outside, with no warning.
+    // `Process.run` rather than the supervisor's own kill, so the supervisor
+    // learns about it exactly as it would in production.
+    await _killListenerOn(first);
+    await _waitFor(() => supervisor.state.value is SidecarFailed);
+
+    expect(
+      supervisor.state.value,
+      isA<SidecarFailed>().having(
+        (s) => s.failure,
+        'failure',
+        SidecarFailure.crashed,
+      ),
+    );
+
+    // 再起動: a second sidecar over the same app-data, with a fresh port and
+    // a fresh token.
+    final second = await startAndExpectReady();
+    expect(second.token, isNot(first.token));
+
+    final client = SidecarApiClient(second);
+    addTearDown(client.close);
+    expect(await client.isHealthy(), isTrue);
+  });
+
+  test(
+    'a second sidecar over the same app-data is refused, not left running',
+    () async {
+      await startAndExpectReady();
+
+      final second = SidecarSupervisor(
+        platform: platform,
+        executablePath: sidecarExe,
+        appDataDirectory: '${appData.path}/app-data',
+        // The refusal is an immediate exit, so this must not need the full
+        // startup budget -- that it finishes at all within this timeout is
+        // itself the assertion that "exited early" short-circuits the wait.
+        startupTimeout: const Duration(seconds: 30),
+      );
+      addTearDown(second.dispose);
+
+      await second.start();
+
+      expect(
+        second.state.value,
+        isA<SidecarFailed>().having(
+          (s) => s.failure,
+          'failure',
+          SidecarFailure.alreadyRunning,
+        ),
+      );
+      // The first one is untouched and still serving.
+      expect(supervisor.state.value, isA<SidecarReady>());
+    },
+  );
+}
+
+SidecarFailure? supervisorFailureOf(SidecarSupervisor supervisor) =>
+    switch (supervisor.state.value) {
+      SidecarFailed(:final failure) => failure,
+      _ => null,
+    };
+
+/// Terminates whatever process is listening on [connection]'s port, without
+/// going through the supervisor.
+Future<void> _killListenerOn(SidecarConnection connection) async {
+  final port = Uri.parse(connection.baseUrl).port;
+  if (Platform.isWindows) {
+    // `netstat` + `taskkill` rather than a PowerShell one-liner: available on
+    // every Windows image without an execution-policy question.
+    final netstat = await Process.run('netstat', ['-ano', '-p', 'TCP']);
+    final line = const LineSplitter()
+        .convert(netstat.stdout as String)
+        .firstWhere(
+          (l) => l.contains(':$port ') && l.contains('LISTENING'),
+          orElse: () => '',
+        );
+    final pid = line
+        .split(RegExp(r'\s+'))
+        .where((s) => s.isNotEmpty)
+        .lastOrNull;
+    expect(pid, isNotNull, reason: 'no listener found on port $port');
+    await Process.run('taskkill', ['/F', '/PID', pid!]);
+    return;
+  }
+  final lsof = await Process.run('bash', [
+    '-c',
+    "ss -ltnpH 'sport = :$port' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2",
+  ]);
+  final pid = (lsof.stdout as String).trim();
+  expect(pid, isNotEmpty, reason: 'no listener found on port $port');
+  await Process.run('kill', ['-9', pid]);
+}
+
+Future<void> _waitFor(bool Function() condition) async {
+  for (var attempt = 0; attempt < 200; attempt++) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  fail('condition never became true');
+}
+
+/// Windows can hold a killed sidecar's SQLite WAL/shm files open for a moment
+/// after the process is gone (see `sidecar_api_client_test.dart`).
+Future<void> _deleteWithRetry(Directory dir) async {
+  for (var attempt = 0; attempt < 10; attempt++) {
+    try {
+      await dir.delete(recursive: true);
+      return;
+    } on FileSystemException {
+      if (attempt == 9) return; // a leaked temp dir must not fail the suite
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+}

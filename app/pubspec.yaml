@@ -47,6 +47,14 @@ dependencies:
   auto_scoring_api:
     path: packages/auto_scoring_api
   file_picker: ^12.2.0
+
+  # dart:ffi allocator, for the one Win32 struct `core/child_process_group.dart`
+  # hands to SetInformationJobObject. Chosen over adding a C++ plugin under
+  # `windows/runner/` for the same five kernel32 calls: no build-system change,
+  # nothing to keep in sync with the Flutter template, and the whole boundary
+  # stays in one analysable, testable Dart file. Already in the lockfile as a
+  # transitive dependency of pdfrx; declared here because we import it.
+  ffi: ^2.1.3
   http_parser: ^4.1.2
 
   # PDF viewer for the 添削レビュー画面 (Issue #21, simplified-design-spec.md
