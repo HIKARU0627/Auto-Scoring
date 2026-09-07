@@ -424,6 +424,15 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
    [ade-setup.md](./ade-setup.md)「必要環境」の導入が必要。Node.js は v18.19.1 で、
    `package.json` の `engines.node >=24.14.0` に満たないため更新も要る。
    **ただしツールを揃えても `pnpm run check` は Ubuntu では完走しない**（§8）。
+5. **日本語フォントの導入** — `sudo apt install fonts-ipafont-gothic`（`fonts-vlgothic` /
+   `fonts-takao-gothic` でも可）。PDF出力のテストは Windows 同梱フォントが無い環境では
+   ローカルの実在フォントを候補へ追記して走る（`backend/tests/font_support.py`）が、
+   Ubuntu 標準のフォントは**日本語と Latin のどちらか片方しか持たない** ——
+   `DroidSansFallbackFull` は唯一の漢字対応 TrueType なのに数字を持たず、`DejaVuSans` は
+   その逆で、同梱の Noto CJK は CFF アウトラインなので reportlab が読めない。
+   そのため**同一ページに点数（`4/5`）と日本語コメントの両方を描いて両方を検証する
+   2件だけが skip される**。上記のいずれかを入れると両方のグリフが揃い、skip は 0 になる
+   （[mvp-acceptance.md](./mvp-acceptance.md) §4）。
 
 3・4 が終わるまで、リモートランタイムで扱えるのは Auto-Scoring 以外のリポジトリに限る。
 
@@ -437,14 +446,14 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
 
 リモート実行の可否は次の通り。
 
-| gate                                       | Ubuntu   | 備考                                                   |
-| ------------------------------------------ | -------- | ------------------------------------------------------ |
-| `skills:check` / `format:check`            | 可       | Node のみ                                              |
-| `openapi:check`                            | 可       | Node のみ                                              |
-| `lint` / `typecheck`（app・backend）       | 可       | `flutter analyze`・Ruff・mypy はクロスプラットフォーム |
-| `test`（`flutter test` / `pytest`）        | 可       | 同上                                                   |
-| `build:backend`                            | 可       | パッケージ import のみ                                 |
-| **`build:app`（`flutter build windows`）** | **不可** | Windows ホストが必須                                   |
+| gate                                       | Ubuntu   | 備考                                                       |
+| ------------------------------------------ | -------- | ---------------------------------------------------------- |
+| `skills:check` / `format:check`            | 可       | Node のみ                                                  |
+| `openapi:check`                            | 要 Java  | `openapi-generator` が JRE を要求（`scripts/openapi.mjs`） |
+| `lint` / `typecheck`（app・backend）       | 可       | `flutter analyze`・Ruff・mypy はクロスプラットフォーム     |
+| `test`（`flutter test` / `pytest`）        | 可       | 同上。日本語フォント次第で backend 2件が skip（§7.5）      |
+| `build:backend`                            | 可       | パッケージ import のみ                                     |
+| **`build:app`（`flutter build windows`）** | **不可** | Windows ホストが必須                                       |
 
 したがって、リモート開発時の Windows build の検証は次のどちらかで担保する。
 

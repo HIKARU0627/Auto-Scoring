@@ -136,6 +136,14 @@ Annotationを一切含まない設問だけの出力はフォント未検出で�
 ファイルをアプリへ同梱するか、embeddable Google Noto Sans JPなどの
 再配布可能フォントを採用するかを別Issueで決定する必要がある。
 
+**テストだけの回避（製品挙動は不変）**: 上記の候補が1つも無い環境では、
+文字描画を伴うテストは`backend/tests/font_support.py`が
+**そのテストのassertionが必要とするグリフを実際に持つ**ローカルフォントを
+候補リストの末尾へ追記してから走る。Windowsでは本物が先に見つかるため
+何も起きず、**製品コードと`_JAPANESE_FONT_CANDIDATES`は変更していない**。
+描けるフォントがどれも無いときはassertionを緩めずskipする
+（[mvp-acceptance.md](./mvp-acceptance.md) §4）。
+
 ## 4. `Export`エンティティとJob
 
 Issue #23の実施内容「出力job、hash、生成時刻、元Submission、review version
@@ -281,6 +289,8 @@ ExportJobProcessor})`を組み立てて`JobQueueService`へ渡す。`job_process
   回転pageでも正しい位置に描画されること、フォント未検出時に
   `JapaneseFontNotFoundError`で失敗し出力ファイルを残さないこと、
   フォント未検出でも図形のみのAnnotationは影響を受けないことを検証。
+  点数と日本語コメントを同時に描く1件だけは、両方のグリフを持つフォントが
+  必要なため素のUbuntuではskipする（§3.2、mvp-acceptance.md §4.3）。
 - `backend/tests/test_export_processor.py`: 実SQLite + 実
   `PdfiumPypdfEngine`で、Export生成・記録・sha256一致・元PDF不変、
   未確認設問がある場合の拒否（Export行・ファイルとも作られない）、

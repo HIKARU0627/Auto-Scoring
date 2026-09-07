@@ -85,46 +85,73 @@ providerへ渡るものに生徒識別情報・ファイル名・submission id�
 
 ---
 
-## 4. プラットフォーム差 — Linuxで実行できないもの
+## 4. プラットフォーム差 — Linuxでの実行
 
 MVPの対象OSは Windows のみ（§2 (1)）で、CIは `windows-latest` で回る
-（`docs/quality-gates.md`）。開発用の Ubuntu 環境では次が**構成上**実行できない。
-いずれも本Issueの変更で生じたものではなく、`origin/main` でも同じである。
+（`docs/quality-gates.md`）。開発は一部 Ubuntu 上で行うため、**両OSで同じ検証強度が
+得られること**を要件として扱う。Issue #60 以前は Linux で常に21件が失敗しており、
+変更のたびに「既知の失敗か新規の失敗か」を人手で選り分ける必要があった。
 
-| 対象                                                                                   | 件数 | 原因                                                                                                                                                                                                                                | Windows CI |
-| -------------------------------------------------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| `test_export_processor.py` / `test_export_api.py` / `test_pdf_annotation_rendering.py` | 13   | `JapaneseFontNotFoundError`。PDF出力の文字描画はWindows同梱の日本語フォントを使う（`pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES`）。フォントの同梱・再配布を避けるための決定で、cross-platform化は別Issue（`docs/pdf-export.md`） | 通る       |
-| `app/test/pdf_review_page_test.dart` の overlay 系                                     | 8    | Flutter engine の Linux artifact に `libpdfium.so` が無く、pdfrx がPDFを描画できない                                                                                                                                                | 通る       |
+### 4.1 解消した21件（Issue #60）
 
-本Issueで追加したテストは**この件数を増やさない**方針で書いた。
+| 対象                                                                                   | 件数 | 原因                                                                                                                                                                      | 対処                                                                                                      |
+| -------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `test_export_processor.py` / `test_export_api.py` / `test_pdf_annotation_rendering.py` | 13   | `JapaneseFontNotFoundError`。PDF出力の文字描画はWindows同梱の日本語フォントを使う（`pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES`、`docs/pdf-export.md`）                | Issue #25 が `test_e2e_acceptance.py` に実装した手法を `backend/tests/font_support.py` へ切り出して横展開 |
+| `app/test/pdf_review_page_test.dart` の overlay 系                                     | 8    | `flutter test` が pdfium を解決できない。`pdfium_dart` はビルド済みFlutterアプリの隣か `.dart_tool/native_assets.yaml` しか見ず、Linux の `flutter test` にはどちらも無い | build hook が実際にダウンロード済みの `libpdfium.so` を `Pdfrx.pdfiumModulePath` へ渡す                   |
 
-- 元PDF不変（§2 (15)）を確認する出力シナリオは **○マークのみ**で出力する。
-  図形にはグリフが要らないので、フォントの有無によらず両OSで成立する。
-- 点数・コメントの**文字描画**を伴う出力は 2 本に分けた
-  （`test_the_exported_pdf_carries_the_reviewed_comment_text` /
-  `::_the_reviewed_score`）。分けたのは、**両方を同時に描けるフォントが
-  素の Linux イメージに無い**ため:
-  `DroidSansFallbackFull` は唯一の kanji 対応 TrueType だが Latin グリフを
-  一切持たず、`DejaVuSans` はその逆で、ディストリビューションが同梱する
-  Noto CJK は CFF アウトラインなので reportlab の `TTFont` が読めない。
-  1本のままだとどちらのマシンでも skip になる。
-- そのため両テストは、Windows のフォントが見つからない環境では
-  **必要なグリフを実際に持つ**ローカルフォントを候補リストへ追記してから走る
-  （`_install_font_covering`。Windows では本物が先に見つかるので何も起きない）。
-  結果として **Linux でも Windows CI でも実行される**。
-  該当フォントが1つも無い環境でのみ skip する。
-  以前は `skipif` で Windows 限定にしていたが、**ローカルで一度も走らない
-  テストだったために assertion が `exists()` と `size > 0` のまま気づかれず
-  残っていた**（レビュー ラウンド1 P2-1）。走らせられるようにしたこと自体が
-  その再発防止である。
-- Flutter の幅・focus・label テストは PDF の**描画結果**に依存しない。
+どちらも**assertionは一切変えていない**。Windows では従来どおり本番の解決経路が使われ、
+フォント候補への追記も pdfium のパス指定も起きない。
 
-検証後の件数（Ubuntu, 2026-09-07 時点、本ブランチ）:
+### 4.2 フォント解決の方針（`backend/tests/font_support.py`）
 
-| スイート | 結果                                       |
-| -------- | ------------------------------------------ |
-| backend  | 1049 passed / 13 failed（既知）/ 0 skipped |
-| Flutter  | 157 passed / 8 failed（既知）              |
+- Windows 同梱フォントが1つも無い環境でのみ、**そのテストが実際に必要とするグリフを
+  持つ**ローカルフォントを候補リストの**末尾へ追記**する。Windows では本物が先に
+  見つかるので何も起きない。
+- 「必要とするグリフ」は、そのテストの**assertionが依存する文字**であって、fixture が
+  ページに描くもの全部ではない。出力のパス・sha256・冪等性を見るテストは、隣に描かれた
+  点数がグリフになったか notdef になったかを問わない。ここを広く取ると、本来ちゃんと
+  検証できるテストまで skip になる。
+- どのフォントでも描けないときだけ `pytest.skip` する。assertion を緩めて緑にはしない。
+- reportlab のフォント登録はプロセス全体で名前をキーに持たれ、同名の再登録は黙って
+  無視される。そのため `lru_cache` だけでなく `pdfmetrics._fonts` も落とす
+  （`forget_registered_font`）。これを `backend/tests/conftest.py` の autouse fixture で
+  **全テスト共通**にしてあり、先に走ったモジュールが後続のフォントを決めてしまうことは無い。
+
+### 4.3 Ubuntu に残る skip 2件
+
+素の Ubuntu イメージには**日本語と Latin を同時に描けるフォントが無い**。
+`DroidSansFallbackFull` は唯一の漢字対応 TrueType だが数字を一切持たず、`DejaVuSans` は
+その逆で、同梱の Noto CJK は CFF アウトラインなので reportlab の `TTFont` が読めない。
+そのため、**同一ページに点数と日本語コメントの両方を描いて両方を検証する**次の2件だけが
+skip する。
+
+| skip するテスト                                                                                          | 検証できていないこと                                                                              |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `test_pdf_annotation_rendering.py::test_score_and_long_japanese_comment_text_render_within_their_rects`  | 点数と長文日本語コメントが**同時に**それぞれのrect内へ描かれること                                |
+| `test_export_processor.py::test_repair_regenerates_from_the_recorded_snapshot_not_a_later_review_change` | 修復生成されたPDFの点数が記録時のスナップショット（`4/5`）であり、後から入った `2/5` ではないこと |
+
+いずれも **Windows CI では実行される**。Ubuntu 側でも解消したい場合は、両方のグリフを
+持つ日本語フォントを1つ入れれば skip は 0 になる
+（`sudo apt install fonts-ipafont-gothic` など。
+[orca-remote-environment.md](./orca-remote-environment.md) §7.5）。
+
+なお Issue #25 の時点で、点数とコメントの文字描画を伴う受入テストを2本に分けてある
+（`test_the_exported_pdf_carries_the_reviewed_comment_text` / `::_the_reviewed_score`）。
+分けたのは同じ理由 —— 1本のままだと Linux では必ず skip になるからで、分けたことで
+**両OSで実行される**。以前は `skipif` で Windows 限定にしていたが、**ローカルで一度も
+走らないテストだったために assertion が `exists()` と `size > 0` のまま気づかれず残って
+いた**（レビュー ラウンド1 P2-1）。走らせられるようにしたこと自体がその再発防止である。
+
+### 4.4 件数
+
+| スイート | Issue #60 以前（`origin/main`）            | 現在（Ubuntu, 2026-09-07）         |
+| -------- | ------------------------------------------ | ---------------------------------- |
+| backend  | 1049 passed / 13 failed（既知）/ 0 skipped | 1060 passed / 0 failed / 2 skipped |
+| Flutter  | 157 passed / 8 failed（既知）              | 165 passed / 0 failed              |
+
+`pnpm run check` 全体は依然として Ubuntu では完走しない。`build:app`
+（`flutter build windows`）と `openapi:check`（Java 必須）が残るためで、これは
+テストの問題ではない（[orca-remote-environment.md](./orca-remote-environment.md) §8）。
 
 ---
 
