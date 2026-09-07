@@ -266,31 +266,119 @@ def test_run_reports_a_data_root_another_process_owns_and_writes_no_handshake(
     assert not handshake_file.exists()
 
 
-def test_run_writes_no_handshake_when_startup_fails(
+def test_run_records_an_unexpected_startup_failure_and_writes_no_handshake(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Same guarantee for every *other* startup failure (a failed migration, a
-    corrupt database): the handshake file is the promise "this port is
-    served", so it is only ever written once that promise can be kept."""
+    """Every *other* startup failure (a failed migration, a corrupt database):
+
+    * the traceback lands in `sidecar.log`, with the token scrubbed,
+    * the exit code is distinct from "already running",
+    * and no handshake file is left behind -- it is the promise "this port is
+      served", so it is only ever written once that promise can be kept.
+
+    The regression (Issue #24 review round 2): only `DataRootLockedError` was
+    caught, so anything else propagated out of `run` and Python's default
+    excepthook printed it to stderr *without going through logging*. It never
+    reached the rotating file log, and the Flutter supervisor drains the
+    sidecar's stderr -- so the error screen told the user to read a log that
+    did not contain the reason.
+    """
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "s3cr3t-token")
 
     def _boom(**_kwargs: object) -> object:
-        raise RuntimeError("migration failed")
+        raise RuntimeError("database is corrupt: s3cr3t-token")
 
     monkeypatch.setattr(sidecar, "create_app", _boom)
     handshake_file = tmp_path / "handshake.json"
+    data_root = tmp_path / "app-data"
 
-    with pytest.raises(RuntimeError):
-        run(
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    try:
+        exit_code = run(
             [
                 "--handshake-file",
                 str(handshake_file),
                 "--app-data-dir",
-                str(tmp_path / "app-data"),
+                str(data_root),
             ]
         )
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved
 
+    assert exit_code == sidecar.STARTUP_FAILED_EXIT_CODE
+    assert exit_code != ALREADY_RUNNING_EXIT_CODE
     assert not handshake_file.exists()
+
+    written = (data_root / sidecar.LOG_DIRECTORY_NAME / sidecar.LOG_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "Traceback (most recent call last)" in written
+    assert "RuntimeError: database is corrupt" in written
+    # The exception's own message carried the token; the filter has to reach
+    # into the traceback, not just the formatted message.
+    assert "s3cr3t-token" not in written
+    assert "***" in written
+
+
+def test_install_log_redaction_falls_back_to_stderr_when_the_file_log_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An app-data directory that cannot be written must not stop the sidecar
+    starting -- and must not raise from *here*.
+
+    `install_log_redaction` runs before `run`'s own exception handler is in
+    place, so an error escaping it would surface as exactly the unlogged
+    traceback that handler exists to prevent (Issue #24 review round 2).
+    """
+
+    def _deny(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("read-only volume")
+
+    monkeypatch.setattr(Path, "mkdir", _deny)
+
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    try:
+        install_log_redaction("token", tmp_path / "logs")  # must not raise
+        assert all(
+            not isinstance(handler, logging.handlers.RotatingFileHandler)
+            for handler in root.handlers
+        )
+    finally:
+        root.handlers = saved
+
+    assert "logging to stderr only" in capsys.readouterr().err
+
+
+def test_install_log_redaction_scrubs_the_token_from_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """`logger.exception` writes text that never passes through
+    `record.getMessage()`, so the filter has to scrub the traceback too."""
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    log_directory = tmp_path / "logs"
+    try:
+        install_log_redaction("s3cr3t-token", log_directory)
+        try:
+            raise RuntimeError("upstream said s3cr3t-token")
+        except RuntimeError:
+            logging.getLogger("auto_scoring.jobs.queue").exception("job failed")
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved
+
+    written = (log_directory / sidecar.LOG_FILENAME).read_text(encoding="utf-8")
+    assert "Traceback (most recent call last)" in written
+    assert "s3cr3t-token" not in written
+    assert "***" in written
 
 
 class TestDefaultAppDataDir:

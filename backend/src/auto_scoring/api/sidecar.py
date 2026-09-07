@@ -52,6 +52,21 @@ supervisor that spawned this process turns it into "Auto-Scoring はすでに
 (``app/lib/core/sidecar_supervisor.dart``, ``docs/windows-distribution.md`` §5).
 """
 
+STARTUP_FAILED_EXIT_CODE = 1
+"""Exit code for any *other* startup or serving failure.
+
+Distinct from `ALREADY_RUNNING_EXIT_CODE` so the supervisor can tell the one
+failure the user can act on apart from the ones only a log can explain. It is
+plain ``1`` because that is what an uncaught exception would already have
+produced -- the point of the constant is that the failure now reaches the log
+on its way out (`run`), not that the number changed.
+
+`app/lib/core/sidecar_supervisor.dart` needs no branch of its own for this:
+every non-3 exit already becomes `exitedDuringStartup` (or `crashed`, after
+the sidecar has served), and both of those screens point the user at
+`sidecar.log` -- which is now where the reason actually is.
+"""
+
 APP_NAME = "Auto-Scoring"
 """Directory name this app owns under the OS's per-user data location."""
 
@@ -124,6 +139,24 @@ class _RedactingFilter(logging.Filter):
         if self._secret in message:
             record.msg = message.replace(self._secret, "***")
             record.args = ()
+
+        # The formatted message is not the only thing a handler writes. Since
+        # `run` started logging startup failures with `logger.exception`, every
+        # record can carry a traceback too, and that text never passes through
+        # `getMessage()` -- a filter that only scrubbed the message would let a
+        # token through in an exception's own string (`create_app` is called
+        # with it, and any library that echoes an argument back into an error
+        # message would put it there).
+        #
+        # Formatting it here rather than leaving it to each handler's Formatter
+        # is what makes the scrub stick: `Formatter.format` reuses a non-None
+        # `exc_text` instead of re-deriving it, so every handler downstream of
+        # this filter writes the redacted copy.
+        if record.exc_info is not None:
+            if record.exc_text is None:
+                record.exc_text = logging.Formatter().formatException(record.exc_info)
+            if self._secret in record.exc_text:
+                record.exc_text = record.exc_text.replace(self._secret, "***")
         return True
 
 
@@ -146,16 +179,26 @@ def install_log_redaction(token: str, log_directory: Path | None = None) -> None
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     handlers: list[logging.Handler] = [logging.StreamHandler()]
 
+    file_log_error: OSError | None = None
     if log_directory is not None:
-        log_directory.mkdir(parents=True, exist_ok=True)
-        handlers.append(
-            logging.handlers.RotatingFileHandler(
-                log_directory / LOG_FILENAME,
-                maxBytes=LOG_MAX_BYTES,
-                backupCount=LOG_BACKUP_COUNT,
-                encoding="utf-8",
+        # Best effort. A log directory that cannot be created (app-data on a
+        # read-only volume, a permissions problem, a full disk) is a real
+        # failure, but it is not one worth refusing to start over -- and
+        # certainly not by raising *here*, before `run`'s handler is in place,
+        # where it would escape as exactly the unlogged traceback this whole
+        # arrangement exists to prevent. Carry on with stderr only and say so.
+        try:
+            log_directory.mkdir(parents=True, exist_ok=True)
+            handlers.append(
+                logging.handlers.RotatingFileHandler(
+                    log_directory / LOG_FILENAME,
+                    maxBytes=LOG_MAX_BYTES,
+                    backupCount=LOG_BACKUP_COUNT,
+                    encoding="utf-8",
+                )
             )
-        )
+        except OSError as error:
+            file_log_error = error
 
     for handler in handlers:
         handler.setFormatter(formatter)
@@ -166,6 +209,14 @@ def install_log_redaction(token: str, log_directory: Path | None = None) -> None
     root = logging.getLogger()
     root.handlers = handlers
     root.setLevel(logging.INFO)
+
+    if file_log_error is not None:
+        # Logged only once the handlers are installed, so it is itself visible.
+        logging.getLogger(__name__).warning(
+            "no file log at %s (%s); logging to stderr only",
+            log_directory,
+            file_log_error,
+        )
 
 
 def _emit_handshake(handshake: Handshake, destination: Path) -> None:
@@ -330,6 +381,19 @@ def run(argv: Sequence[str] | None = None) -> int:
         sock.close()
         logging.getLogger(__name__).error("%s", error)
         return ALREADY_RUNNING_EXIT_CODE
+    except Exception:
+        # Anything else: a corrupt database, a migration that fails, a
+        # permissions problem on app-data. Logged here rather than left to
+        # propagate, because Python's default excepthook writes the traceback
+        # straight to stderr without going through `logging` -- so it never
+        # reached the rotating file log installed a few lines above, and the
+        # Flutter supervisor drains the sidecar's stderr to keep its pipe from
+        # filling up (`app/lib/core/sidecar_platform_io.dart`). The reason for
+        # the failure was being discarded at both ends, while the error screen
+        # told the user to go read `sidecar.log` (Issue #24 review round 2).
+        sock.close()
+        logging.getLogger(__name__).exception("sidecar startup failed")
+        return STARTUP_FAILED_EXIT_CODE
 
     # Only now, once this process is certain it will go on to serve: an
     # earlier write (the original placement) meant every failure between it
@@ -352,7 +416,15 @@ def run(argv: Sequence[str] | None = None) -> int:
     # sockets=[sock], not host=/port= alone: uvicorn would otherwise bind a
     # *new* socket to config.port itself, reopening exactly the gap
     # _bind_socket exists to close.
-    uvicorn.Server(config).run(sockets=[sock])
+    try:
+        uvicorn.Server(config).run(sockets=[sock])
+    except Exception:
+        # Same reasoning as the startup handler above: after this point the
+        # supervisor reports a `crashed` sidecar and sends the user to the
+        # log, so the log has to say why. uvicorn owns the socket by now and
+        # closes it as it unwinds.
+        logging.getLogger(__name__).exception("sidecar stopped serving")
+        return STARTUP_FAILED_EXIT_CODE
     return 0
 
 
