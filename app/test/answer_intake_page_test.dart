@@ -751,4 +751,40 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  // ------------------------------------------------------------------ //
+  // Issue #25 acceptance: desktop standard / narrow width.
+  // ------------------------------------------------------------------ //
+  group('Issue #25: 受入 -- desktop標準幅と狭幅', () {
+    const desktopStandard = Size(1440, 900);
+    const desktopNarrow = Size(820, 720);
+
+    for (final (name, size) in [
+      ('desktop標準幅', desktopStandard),
+      ('狭幅', desktopNarrow),
+    ]) {
+      testWidgets('$name で答案取込画面のレイアウトが破綻しない', (tester) async {
+        await tester.binding.setSurfaceSize(size);
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final dependencies = AppDependencies(
+          listTests: () async => [_test()],
+          listSubmissions: (testId) async => const [],
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            AnswerIntakePage(dependencies: dependencies, pickFile: _fakePick),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        // The whole intake control set stays present at both widths -- a
+        // narrower window must not drop the picker or the upload action.
+        expect(find.byKey(const Key('test-picker')), findsOneWidget);
+        expect(find.text('ファイルを選択'), findsOneWidget);
+        expect(find.text('取り込む'), findsOneWidget);
+      });
+    }
+  });
 }

@@ -3192,4 +3192,105 @@ void main() {
       },
     );
   });
+
+  // ------------------------------------------------------------------ //
+  // Issue #25 acceptance: desktop standard / narrow width, focus order,
+  // and the accessibility labels the review screen is navigated by.
+  // ------------------------------------------------------------------ //
+  group('Issue #25: 受入 -- 幅・focus・accessibility label', () {
+    /// Wider and narrower than `_PdfReviewPageState`'s own 900px breakpoint.
+    /// `flutter test`'s default surface is 800x600, so every other test in
+    /// this file has only ever exercised the narrow branch -- the standard
+    /// desktop layout was never rendered at all until this group.
+    const desktopStandard = Size(1440, 900);
+    const desktopNarrow = Size(820, 720);
+
+    Future<void> pumpAt(WidgetTester tester, Size size) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        _wrap(
+          PdfReviewPage(
+            dependencies: _dependencies(
+              pdfBytes: _pocA4PortraitPdf(),
+              q1: _question(),
+              q2: _question(id: 'q-2', number: '2'),
+              recognitions: [
+                _recognition(),
+                _recognition(id: 'rec-2', questionId: 'q-2'),
+              ],
+              grades: [
+                _grade(),
+                _grade(id: 'grade-2', questionId: 'q-2'),
+              ],
+            ),
+            testId: 'test-1',
+            submissionId: 'sub-1',
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+    }
+
+    for (final (name, size) in [
+      ('desktop標準幅', desktopStandard),
+      ('狭幅', desktopNarrow),
+    ]) {
+      testWidgets('$name でレイアウトが破綻しない', (tester) async {
+        await pumpAt(tester, size);
+
+        // A RenderFlex overflow (or any other layout assertion) is reported
+        // as a framework exception, which `takeException` surfaces here
+        // instead of only at teardown -- so a broken layout names *which*
+        // width broke it.
+        expect(tester.takeException(), isNull);
+        // Both layouts keep the same controls: a narrow window rearranges
+        // the screen, it does not drop half of it.
+        expect(find.byKey(const Key('review-question-rail')), findsOneWidget);
+        expect(
+          find.byKey(const Key('review-submission-state')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('review-approve-button')), findsOneWidget);
+        expect(find.byType(PdfViewer), findsOneWidget);
+      });
+    }
+
+    testWidgets('狭幅でもキーボードだけで設問を移動して承認できる', (tester) async {
+      await pumpAt(tester, desktopNarrow);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(find.text('問2'), findsWidgets);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('主要なaccessibility labelが両方の幅で存在する', (tester) async {
+      final semantics = tester.ensureSemantics();
+      for (final size in [desktopStandard, desktopNarrow]) {
+        await pumpAt(tester, size);
+
+        // The PDF itself, and both confidence figures -- the three things a
+        // reviewer working by screen reader needs named. The confidence
+        // labels carry the level word ("高"/"中"/"低") as well as the
+        // percentage, so the value is never conveyed by color alone.
+        expect(find.bySemanticsLabel(RegExp('^答案PDF 問1 ページ1')), findsOneWidget);
+        expect(
+          find.bySemanticsLabel(RegExp('^OCR文字認識信頼度 .* [高中低]\$')),
+          findsOneWidget,
+        );
+        expect(
+          find.bySemanticsLabel(RegExp('^採点信頼度 .* [高中低]\$')),
+          findsOneWidget,
+        );
+      }
+      semantics.dispose();
+    });
+  });
 }
