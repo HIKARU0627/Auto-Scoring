@@ -55,6 +55,16 @@ jobs:
       - name: Restore Python environment
         run: uv sync --locked
         working-directory: backend
+      # TEMPORARY (Issue #57): is anything left alive and serving after the
+      # supervisor's kill? Remove once the question is answered.
+      - name: Diagnose the venv sidecar's process tree
+        run: |
+          1..3 | ForEach-Object {
+            Write-Host "--- run $_ ---"
+            pwsh -NoProfile -File scripts/diagnose-sidecar-process-tree.ps1 `
+              -SidecarPath backend/.venv/Scripts/auto-scoring-sidecar.exe
+          }
+
       - name: Check agent skill mirrors
         run: pnpm skills:check
       - name: Check formatting
@@ -110,6 +120,16 @@ jobs:
 
       - name: Bundle the Python sidecar (PyInstaller onedir)
         run: pnpm run package:sidecar
+
+      # TEMPORARY (Issue #57): the same measurement against what a user
+      # actually runs, to tell a product problem from a test-harness one.
+      - name: Diagnose the packaged sidecar's process tree
+        run: |
+          1..3 | ForEach-Object {
+            Write-Host "--- run $_ ---"
+            pwsh -NoProfile -File scripts/diagnose-sidecar-process-tree.ps1 `
+              -SidecarPath backend/dist/auto-scoring-sidecar/auto-scoring-sidecar.exe
+          }
 
       # The step this job exists for. A missing hidden import, data file or
       # native library cannot fail the PyInstaller build -- only running the
