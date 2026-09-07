@@ -28,6 +28,8 @@ import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/edit_review_request.dart';
+import 'package:auto_scoring_api/src/model/export_request_response.dart';
+import 'package:auto_scoring_api/src/model/export_response.dart';
 import 'package:auto_scoring_api/src/model/grade_result_response.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
@@ -75,6 +77,8 @@ part 'serializers.g.dart';
   DependencyGraphResponse,
   DependencyProvision,
   EditReviewRequest,
+  ExportRequestResponse,
+  ExportResponse,
   GradeResultResponse,
   HTTPValidationError,
   JobResponse,
@@ -143,6 +147,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(LocationInner)]),
         () => ListBuilder<LocationInner>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(ExportResponse)]),
+        () => ListBuilder<ExportResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(DependencyProvision)]),
