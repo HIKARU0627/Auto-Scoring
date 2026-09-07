@@ -10,6 +10,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 import 'app_harness.dart';
 
@@ -120,6 +121,49 @@ AnnotationResponse _annotation({
     ..comment = comment
     ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
 );
+
+JobResponse _jobFor(
+  String questionId, {
+  String state = 'succeeded',
+  bool? usable = true,
+  String? blockedOnQuestionId,
+}) => JobResponse(
+  (b) => b
+    ..id = 'job-$questionId'
+    ..kind = 'grading'
+    ..submissionId = 'sub-1'
+    ..questionId = questionId
+    ..state = state
+    ..usable = usable
+    ..blockedOnQuestionId = blockedOnQuestionId
+    ..attempts = 1
+    ..maxAttempts = 3
+    ..createdAt = DateTime.utc(2026, 1, 1)
+    ..updatedAt = DateTime.utc(2026, 1, 1),
+);
+
+/// A one-edge graph: 問1 must finish before 問2 may start.
+DependencyGraphResponse _dependencyGraph({String status = 'confirmed'}) =>
+    DependencyGraphResponse(
+      (b) => b
+        ..id = 'graph-1'
+        ..testId = 'test-1'
+        ..version = 1
+        ..status = status
+        ..questionIds.replace(const ['q-1', 'q-2'])
+        ..edges.replace([
+          DependencyEdgeModel(
+            (e) => e
+              ..fromQuestionId = 'q-1'
+              ..toQuestionId = 'q-2'
+              ..rationale = '問1の結論を使う'
+              ..provides.replace(const <DependencyProvision>[]),
+          ),
+        ])
+        ..unresolved.replace(const <UnresolvedQuestionModel>[])
+        ..createdAt = DateTime.utc(2026, 1, 1)
+        ..confirmedAt = status == 'confirmed' ? DateTime.utc(2026, 1, 1) : null,
+    );
 
 NormalizedRectResponse _rect(double x, double y, double w, double h) =>
     NormalizedRectResponse(
@@ -3055,6 +3099,170 @@ void main() {
   // `ref` is not a `SidecarApiException`, so nothing here would catch it
   // and it would surface as an unhandled async error.
   // ------------------------------------------------------------------ //
+
+  group('Issue #64: 設問依存DAGの進捗表示', () {
+    /// 問1 -> 問2, with the queue in whatever state [jobs] says.
+    AppDependencies graphDependencies({
+      required List<JobResponse> Function() jobs,
+      String graphStatus = 'confirmed',
+      bool graphAvailable = true,
+    }) => AppDependencies(
+      getSubmission: (_) async => _submission(state: 'ai_processing'),
+      listQuestions: (_) async => [
+        _question(),
+        _question(id: 'q-2', number: '2'),
+      ],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      getDependencyGraph: (_) async => graphAvailable
+          ? _dependencyGraph(status: graphStatus)
+          : throw SidecarApiException(
+              SidecarErrorKind.unknown,
+              'まだ分析されていません',
+              statusCode: 404,
+            ),
+      listJobs: (_) async => jobs(),
+      listRecognitions: (_, _) async => const [],
+      listGrades: (_, _) async => const [],
+      listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
+    );
+
+    testWidgets('draws what is running and what it is waiting on', (
+      tester,
+    ) async {
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          jobs: () => [
+            _jobFor('q-1', state: 'running', usable: null),
+            _jobFor(
+              'q-2',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-1'))).data,
+        'AI処理中',
+      );
+      // 「何が何待ちか」 -- the question the whole panel exists to answer.
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
+        '問1 待ち',
+      );
+      expect(find.byKey(const Key('dag-summary')), findsOneWidget);
+    });
+
+    testWidgets('an upstream finishing releases the downstream, live', (
+      tester,
+    ) async {
+      var q1Done = false;
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          jobs: () => [
+            if (q1Done)
+              _jobFor('q-1')
+            else
+              _jobFor('q-1', state: 'running', usable: null),
+            if (q1Done)
+              _jobFor('q-2', state: 'queued', usable: null)
+            else
+              _jobFor(
+                'q-2',
+                state: 'blocked',
+                usable: null,
+                blockedOnQuestionId: 'q-1',
+              ),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      // The reviewer is sitting on 問1; 問2's own progress used to stop being
+      // polled the moment the selected question was done, which is exactly
+      // when the rest of the submission is still working.
+      q1Done = true;
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      await tester.pump(AppMotion.emphasis);
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
+        '実行待ち',
+      );
+    });
+
+    testWidgets('a node selects its question, and follows the selection back', (
+      tester,
+    ) async {
+      await _pumpReview(
+        tester,
+        graphDependencies(jobs: () => [_jobFor('q-1'), _jobFor('q-2')]),
+      );
+      await _settlePdf(tester);
+
+      expect(find.text('問1'), findsWidgets);
+      await tester.tap(find.byKey(const Key('dag-node-q-2')));
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // The Inspector's own heading is the screen's answer to "which
+      // question am I on".
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('review-inspector')),
+          matching: find.text('問2'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('says so rather than lying when the latest graph is a draft', (
+      tester,
+    ) async {
+      // `/dependency-graph/analyze` always starts a new DRAFT version, and
+      // the sidecar only serves the latest -- so re-analyzing a registered
+      // test leaves a graph no job ever ran under.
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          graphStatus: 'draft',
+          jobs: () => [_jobFor('q-1'), _jobFor('q-2')],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('dag-unconfirmed-notice')), findsOneWidget);
+      expect(find.byKey(const Key('dag-node-q-1')), findsNothing);
+    });
+
+    testWidgets('a test with no graph at all just has no panel', (
+      tester,
+    ) async {
+      // A 404 here is normal, and must never become the screen's error
+      // state: the reviewer's actual work does not depend on the graph.
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          graphAvailable: false,
+          jobs: () => [_jobFor('q-1'), _jobFor('q-2')],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('dag-node-q-1')), findsNothing);
+      expect(find.byKey(const Key('dag-unconfirmed-notice')), findsNothing);
+      expect(find.byKey(const Key('review-shell-error')), findsNothing);
+      expect(find.byKey(const Key('review-inspector')), findsOneWidget);
+    });
+  });
+
   group('Issue #66: leaving the screen mid-request', () {
     testWidgets('a pending shell load does not throw once the page is gone', (
       tester,

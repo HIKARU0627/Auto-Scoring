@@ -8,11 +8,13 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/confidence_level.dart';
+import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
 
 /// 添削レビュー画面 (simplified-design-specification.md §16.5, Issue #21 + #22).
@@ -338,6 +340,12 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   int _questionIndex = 0;
   final Map<String, QuestionReviewState> _reviews = {};
   List<JobResponse> _jobs = const [];
+
+  /// The test's latest 設問依存グラフ (Issue #26), or `null` if the fetch
+  /// failed or none has been analyzed. Fetched once with the shell: a
+  /// confirmed graph is immutable, so unlike the jobs it has no reason to be
+  /// re-read on every poll tick.
+  DependencyGraphResponse? _dependencyGraph;
   Timer? _pollTimer;
 
   @override
@@ -452,7 +460,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     final shouldPoll =
         review == null ||
         review.loading ||
-        (question != null && _isAwaitingGrade(review, question.id));
+        (question != null && _isAwaitingGrade(review, question.id)) ||
+        _anyJobInFlight;
     if (shouldPoll == (_pollTimer != null)) return;
     if (shouldPoll) {
       _pollTimer = Timer.periodic(
@@ -464,6 +473,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       _pollTimer = null;
     }
   }
+
+  /// Whether *any* question of this submission still has a job the queue
+  /// could move on its own.
+  ///
+  /// Polling used to track only the selected question, which was enough when
+  /// the screen showed nothing about the others. The 進捗 panel (Issue #64)
+  /// shows all of them at once, and its whole point is watching an upstream
+  /// question finish and release a downstream one -- neither of which need
+  /// be the question the reviewer is sitting on. Without this the graph
+  /// would freeze the moment the selected question was done, which is
+  /// exactly when the rest of the submission is still working.
+  bool get _anyJobInFlight =>
+      _jobs.any((job) => !_terminalJobStates.contains(job.state));
 
   /// Set for the duration of one [_pollWhileProcessing] run -- a refresh
   /// occasionally takes longer than the 3-second tick interval (e.g. a slow
@@ -552,6 +574,21 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     }
   }
 
+  /// Best-effort fetch of the test's dependency graph, for the 進捗 panel
+  /// (Issue #64). A 404 is the normal answer for a test whose graph was
+  /// never analyzed, and the panel simply does not appear then -- the
+  /// reviewer's actual work (認識文字・採点・承認) does not depend on it, so
+  /// this must never turn into the screen's error state.
+  Future<void> _loadDependencyGraph() async {
+    try {
+      final graph = await _dependencies.getDependencyGraph(widget.testId);
+      if (!mounted) return;
+      setState(() => _dependencyGraph = graph);
+    } on SidecarApiException {
+      // No graph to draw; the panel stays hidden.
+    }
+  }
+
   QuestionResponse? get _currentQuestion =>
       _questionIndex >= 0 && _questionIndex < _questions.length
       ? _questions[_questionIndex]
@@ -587,6 +624,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         _questionIndex = 0;
       });
       await _refreshJobs();
+      await _loadDependencyGraph();
       _updatePolling();
       unawaited(_ensureReviewLoaded());
     } on SidecarApiException catch (error) {
@@ -754,6 +792,13 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   void _moveQuestion(int delta) => _selectQuestion(_questionIndex + delta);
+
+  /// [_selectQuestion] addressed by question id -- what the 進捗 panel has,
+  /// since a DAG node knows nothing about this screen's list order.
+  void _selectQuestionById(String questionId) {
+    final index = _questions.indexWhere((q) => q.id == questionId);
+    if (index >= 0) _selectQuestion(index);
+  }
 
   /// Whether the current question's data is fully loaded and free of a
   /// fetch error -- approving/rejecting data the reviewer cannot actually
@@ -1200,8 +1245,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                   SizedBox(width: AppLayout.inspectorWidth, child: inspector),
                 ],
               );
+        // Full width, above the rail rather than beside the PDF: the graph
+        // describes the whole submission, the same scope the rail has, and a
+        // band that keeps its height while the window narrows is what lets
+        // the diagram scroll instead of reflow (Issue #64 acceptance:
+        // desktop標準幅・狭幅の両方で破綻しない).
+        final dag = _buildDependencyDagSection();
         return Column(
           children: [
+            ?dag,
             Expanded(
               child: Row(
                 children: [
@@ -1215,6 +1267,75 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           ],
         );
       },
+    );
+  }
+
+  /// The 設問依存DAG 進捗 panel (Issue #64), or `null` when there is nothing
+  /// truthful to draw.
+  ///
+  /// Only a **confirmed** graph is drawn. `POST /dependency-graph/analyze`
+  /// always starts a new DRAFT version rather than touching the confirmed
+  /// one, so re-analyzing a test after registration leaves the *latest*
+  /// graph a draft that no job ever ran under -- and the sidecar only serves
+  /// the latest version. Drawing it would show a dependency structure the
+  /// running pipeline is not using. The notice says so rather than leaving
+  /// the panel silently missing.
+  Widget? _buildDependencyDagSection() {
+    final graph = _dependencyGraph;
+    if (graph == null) return null;
+    if (graph.status != 'confirmed') {
+      return Padding(
+        padding: AppSpacing.banner,
+        child: Text(
+          '最新の依存関係グラフが未確定のため、処理の進み方は表示できません。',
+          key: const Key('dag-unconfirmed-notice'),
+          style: context.texts.bodySmall,
+        ),
+      );
+    }
+    final layout = _buildDependencyDagLayout(graph);
+    if (layout == null) return null;
+    return DependencyDagPanel(
+      layout: layout,
+      selectedQuestionId: _currentQuestion?.id,
+      onQuestionSelected: _selectQuestionById,
+    );
+  }
+
+  /// Turns this screen's caches into the pure inputs `core` lays out.
+  ///
+  /// The review half of each node's state is whatever this screen happens to
+  /// have fetched -- `_ensureReviewLoaded` only loads the question being
+  /// looked at, so an unvisited question shows how far the *pipeline* got
+  /// and gains the human decision once it is opened. That is the same
+  /// trade-off the Navigation Rail's icons already make; loading every
+  /// question's review history on every poll tick would cost one request per
+  /// question per three seconds to colour in decisions the reviewer has, by
+  /// definition, not made yet.
+  DependencyDagLayout? _buildDependencyDagLayout(
+    DependencyGraphResponse graph,
+  ) {
+    final questions = <DagQuestion>[];
+    final released = <String>{};
+    for (final question in _questions) {
+      final job = _latestJobFor(question.id);
+      questions.add(
+        DagQuestion(
+          id: question.id,
+          label: question.number,
+          status: deriveDagNodeStatus(
+            job: job,
+            reviewAction: _reviews[question.id]?.effectiveReview?.action,
+          ),
+          blockedOnQuestionId: job?.blockedOnQuestionId,
+        ),
+      );
+      if (releasesDependents(job)) released.add(question.id);
+    }
+    return buildDependencyDagLayout(
+      questions: questions,
+      edges: graph.edges.toList(),
+      releasedQuestionIds: released,
     );
   }
 
