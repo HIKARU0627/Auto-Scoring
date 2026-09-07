@@ -49,6 +49,9 @@ class _FakeEngine:
     def stamp_markers(self, *args: object, **kwargs: object) -> None:
         raise NotImplementedError
 
+    def render_annotations(self, *args: object, **kwargs: object) -> None:
+        raise NotImplementedError
+
 
 def _line(text: str, x0: float, y0: float, x1: float, y1: float) -> TextLine:
     return TextLine(text=text, rect_pt=(x0, y0, x1, y1))

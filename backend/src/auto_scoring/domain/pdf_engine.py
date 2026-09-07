@@ -15,10 +15,33 @@ widen ``stamp_markers`` into real ``maru`` / ``batsu`` / comment glyphs.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from auto_scoring.domain.models import AnnotationKind, NormalizedRect
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
+
+
+@dataclass(frozen=True, kw_only=True)
+class AnnotationMark:
+    """One resolved, page-normalized annotation to draw (Issue #23).
+
+    Produced by `domain.pdf_export.build_export_marks` -- coordinate/text
+    resolution is entirely the domain's job (simplified-design-spec.md §12.1
+    "AIにPDF座標を直接決めさせない"); a `PdfEngine` only ever draws exactly
+    what it is told, at exactly the ``rect`` given, in the same displayed-page
+    normalized space (`NormalizedPoint`) as `stamp_markers`.
+
+    ``text`` is the label to draw for kinds that carry one: the confirmed
+    score (``AnnotationKind.SCORE``) or the reviewer's comment
+    (``AnnotationKind.COMMENT``); ``None`` for the pure-shape kinds (circle/
+    cross/triangle/underline/box), which need no font at all.
+    """
+
+    kind: AnnotationKind
+    rect: NormalizedRect
+    text: str | None = None
 
 
 class PdfEngine(Protocol):
@@ -63,5 +86,24 @@ class PdfEngine(Protocol):
 
         ``markers`` maps a 0-based page index to the points to stamp on it. The
         source file is never modified (simplified design spec sec. 35-4).
+        """
+        ...
+
+    def render_annotations(
+        self,
+        source: Path,
+        destination: Path,
+        marks: Mapping[int, Sequence[AnnotationMark]],
+    ) -> None:
+        """Write ``source`` to ``destination`` with each page's confirmed
+        annotations drawn as real glyphs (Issue #23): a stroked circle/cross/
+        triangle/underline/box for the pure-shape kinds, and Japanese-capable
+        rendered text for score/comment. Unlike `stamp_markers` (a single red
+        square, adopted from PoC 3 for test fixtures), this is the MVP output
+        path simplified-design-spec.md §14 describes.
+
+        ``marks`` maps a 0-based page index to the marks to draw on it, all
+        already resolved to page-normalized rects (`domain.pdf_export.
+        build_export_marks`). The source file is never modified (§35-4).
         """
         ...

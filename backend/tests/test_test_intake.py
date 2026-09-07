@@ -15,7 +15,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf import PdfiumPypdfEngine
 from auto_scoring.adapters.test_intake import register_test, repair_incomplete_test_registrations
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
-from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import PdfCorruptedError, PdfGeometryError
 from tests.support import at, make_test
@@ -58,6 +58,14 @@ class _BadGeometryPdfEngine:
         mark_size_pt: float = 8.0,
     ) -> None:
         self._delegate.stamp_markers(source, destination, markers, mark_size_pt=mark_size_pt)
+
+    def render_annotations(
+        self,
+        source: Path,
+        destination: Path,
+        marks: Mapping[int, Sequence[AnnotationMark]],
+    ) -> None:
+        self._delegate.render_annotations(source, destination, marks)
 
 
 def _pdf_bytes(*, pages: int = 1) -> bytes:

@@ -34,7 +34,7 @@ from auto_scoring.domain.models import (
     SubmissionState,
     TestStatus,
 )
-from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
@@ -884,6 +884,14 @@ class _RenderFailingPdfEngine:
         mark_size_pt: float = 8.0,
     ) -> None:
         self._delegate.stamp_markers(source, destination, markers, mark_size_pt=mark_size_pt)
+
+    def render_annotations(
+        self,
+        source: Path,
+        destination: Path,
+        marks: Mapping[int, Sequence[AnnotationMark]],
+    ) -> None:
+        self._delegate.render_annotations(source, destination, marks)
 
 
 def test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error(
