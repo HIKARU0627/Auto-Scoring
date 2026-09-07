@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageChops
 from pypdf import PdfReader, PdfWriter
-from pypdf.generic import NameObject, NumberObject
+from pypdf.generic import NameObject, NumberObject, RectangleObject
 
 import auto_scoring.adapters.pdf.pdfium_pypdf_engine as engine_module
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import (
@@ -35,6 +35,15 @@ def _write_pdf(path: Path, *, pages: int = 1, rotation: int = 0) -> None:
         page = writer.add_blank_page(width=_A4_W, height=_A4_H)
         if rotation:
             page[NameObject("/Rotate")] = NumberObject(rotation)
+    with path.open("wb") as handle:
+        writer.write(handle)
+
+
+def _write_pdf_with_mediabox_offset(path: Path, *, offset: tuple[float, float]) -> None:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=_A4_W, height=_A4_H)
+    left, bottom = offset
+    page.mediabox = RectangleObject((left, bottom, left + _A4_W, bottom + _A4_H))
     with path.open("wb") as handle:
         writer.write(handle)
 
@@ -64,6 +73,31 @@ def _has_red_within(png_bytes: bytes, rect: NormalizedRect, *, margin: float = 0
     red, green, _ = cropped.split()
     redness = ImageChops.subtract(red, green).point(lambda v: 255 if v > 60 else 0)
     return redness.getbbox() is not None
+
+
+def _redness_extent_within(
+    png_bytes: bytes, rect: NormalizedRect, *, margin: float = 0.05
+) -> tuple[int, int]:
+    """``(pixel_width, pixel_height)`` of the reddish bounding box found
+    within ``rect`` -- for asserting a mark's *shape*, e.g. that a
+    horizontal underline actually measures wide and short, not tall and
+    narrow (P2 review: an unrotated line drawn on a rotated page comes out
+    the wrong way around)."""
+    with Image.open(BytesIO(png_bytes)) as image:
+        rgb = image.convert("RGB")
+    width, height = rgb.size
+    left = max(0, int((rect.x - margin) * width))
+    top = max(0, int((rect.y - margin) * height))
+    right = min(width, int((rect.x + rect.width + margin) * width))
+    bottom = min(height, int((rect.y + rect.height + margin) * height))
+    cropped = rgb.crop((left, top, right, bottom))
+    red, green, _ = cropped.split()
+    redness = ImageChops.subtract(red, green).point(lambda v: 255 if v > 60 else 0)
+    bbox = redness.getbbox()
+    if bbox is None:
+        raise AssertionError("no reddish pixels found within the target rect")
+    bleft, btop, bright, bbottom = bbox
+    return bright - bleft, bbottom - btop
 
 
 @pytest.fixture(autouse=True)
@@ -182,6 +216,55 @@ def test_a_mark_still_lands_correctly_on_a_rotated_page(tmp_path: Path) -> None:
     engine = PdfiumPypdfEngine()
     engine.render_annotations(
         source, destination, {0: [AnnotationMark(kind=AnnotationKind.CIRCLE, rect=rect)]}
+    )
+
+    png = engine.render_page_png(destination, 0, scale=2.0)
+    assert _has_red_within(png, rect)
+
+
+@pytest.mark.parametrize("rotation", [90, 180, 270])
+def test_an_underline_stays_horizontal_as_displayed_on_a_rotated_page(
+    rotation: int, tmp_path: Path
+) -> None:
+    """A circle (the only shape the pre-existing rotated-page test used)
+    can't reveal a directional-content bug -- it looks the same rotated or
+    not. An underline can: it must render wide and short (spanning the
+    rect's displayed width, hugging its displayed bottom edge), never tall
+    and narrow, on every page rotation (P2 review)."""
+    source = tmp_path / "source.pdf"
+    _write_pdf(source, rotation=rotation)
+    destination = tmp_path / "out.pdf"
+    # Wide, short rect, as an underline beneath a line of text would be.
+    rect = NormalizedRect(x=0.2, y=0.4, width=0.5, height=0.04)
+
+    engine = PdfiumPypdfEngine()
+    engine.render_annotations(
+        source, destination, {0: [AnnotationMark(kind=AnnotationKind.UNDERLINE, rect=rect)]}
+    )
+
+    png = engine.render_page_png(destination, 0, scale=2.0)
+    pixel_width, pixel_height = _redness_extent_within(png, rect)
+    assert pixel_width > pixel_height * 3, (
+        f"expected a wide, short line (width={pixel_width}px, height={pixel_height}px)"
+    )
+
+
+def test_a_mark_lands_correctly_on_a_page_with_a_non_zero_mediabox_origin(tmp_path: Path) -> None:
+    """Regression test for P2 review: an earlier version of `render_annotations`
+    shifted every mark's coordinates by the page's own MediaBox origin before
+    merging, which is backwards for `merge_page` (it composites the overlay's
+    content stream using absolute coordinates, with no transform of its own)
+    -- every mark landed offset by the MediaBox origin on any page whose
+    MediaBox does not start at ``(0, 0)`` (PoC 3's own
+    ``a4-mediabox-offset`` fixture is exactly this case)."""
+    source = tmp_path / "source.pdf"
+    _write_pdf_with_mediabox_offset(source, offset=(100.0, 200.0))
+    destination = tmp_path / "out.pdf"
+    rect = NormalizedRect(x=0.3, y=0.3, width=0.2, height=0.1)
+
+    engine = PdfiumPypdfEngine()
+    engine.render_annotations(
+        source, destination, {0: [AnnotationMark(kind=AnnotationKind.BOX, rect=rect)]}
     )
 
     png = engine.render_page_png(destination, 0, scale=2.0)

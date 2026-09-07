@@ -7,6 +7,7 @@ BSD-3-Clause; pypdf: BSD-3-Clause) and need no commercial agreement.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from io import BytesIO
@@ -165,33 +166,81 @@ class PdfiumPypdfEngine:
 def _render_annotation_overlay(
     mediabox: RectangleObject, marks: Sequence[AnnotationMark], geometry: PageGeometry
 ) -> bytes:
-    """A one-page PDF, sized and positioned like ``mediabox``, with ``marks``
-    drawn via reportlab -- merged onto the real page by `render_annotations`
-    exactly as `_overlay_pdf` is (same-mediabox convention, so `merge_page`
-    needs no coordinate transform between the two).
+    """A one-page PDF with ``marks`` drawn via reportlab -- merged onto the
+    real page by `render_annotations`.
 
-    reportlab's `Canvas` always places its own origin at its page's
-    bottom-left, but ``mediabox`` may not start at ``(0, 0)`` (a non-zero
-    origin MediaBox, or a CropBox inset from it -- PoC 3's
-    ``a4-mediabox-offset``/``a4-cropbox-inset`` fixtures). Every mark is
-    drawn in coordinates already shifted by ``(left, bottom)`` below so the
-    *content* lines up with the un-shifted MediaBox `merge_page` composites
-    onto.
+    ``pypdf``'s ``merge_page`` concatenates the overlay's content stream
+    directly onto the target page's *own* content stream, with no
+    coordinate transform of its own; it never looks at the overlay's own
+    ``/MediaBox``. So the only thing that matters is that every drawing
+    operator this function emits already carries the correct **absolute**
+    PDF user-space coordinate -- the same one `stamp_markers`'s
+    `_filled_square`/`_overlay_pdf` pair uses (P2 review: an earlier version
+    of this function shifted coordinates by the page's own MediaBox origin,
+    which is exactly backwards -- `merge_page` needs absolute coordinates,
+    not ones relative to that origin, and doing so shifted every mark by the
+    MediaBox offset on any page whose MediaBox does not start at ``(0, 0)``,
+    e.g. PoC 3's ``a4-mediabox-offset``/``a4-cropbox-inset`` fixtures).
+    ``pagesize`` below only sizes this overlay's own, immediately-discarded
+    ``/MediaBox`` -- reportlab always declares one starting at ``(0, 0)``,
+    but since nothing ever reads it that has no bearing on where the
+    absolute-coordinate content this function emits ends up once merged.
     """
     left, bottom = float(mediabox.left), float(mediabox.bottom)
     right, top = float(mediabox.right), float(mediabox.top)
     buffer = BytesIO()
     pdf_canvas = canvas.Canvas(buffer, pagesize=(right - left, top - bottom))
     for mark in marks:
-        top_left = normalized_to_user_space(NormalizedPoint(mark.rect.x, mark.rect.y), geometry)
-        bottom_right = normalized_to_user_space(
-            NormalizedPoint(mark.rect.x + mark.rect.width, mark.rect.y + mark.rect.height), geometry
-        )
-        x0, x1 = sorted((top_left.x - left, bottom_right.x - left))
-        y0, y1 = sorted((top_left.y - bottom, bottom_right.y - bottom))
-        _draw_mark(pdf_canvas, mark, x0, y0, x1, y1)
+        _draw_mark_in_place(pdf_canvas, mark, geometry)
     pdf_canvas.save()
     return buffer.getvalue()
+
+
+def _draw_mark_in_place(
+    pdf_canvas: canvas.Canvas, mark: AnnotationMark, geometry: PageGeometry
+) -> None:
+    """Draw ``mark`` at its correct absolute position *and* orientation.
+
+    A rotated page (``/Rotate``) is a *display-time* transform: content
+    drawn in user space is rotated by the viewer, not by anything this
+    function does. `normalized_to_user_space` already accounts for that
+    correctly for a single *point* (PoC 3), but a naive port that only maps
+    the mark rect's two opposite corners and then draws an axis-aligned
+    shape/text between them (an earlier version of this function) only gets
+    the rect's *position and extent* right -- the *content*'s orientation
+    (an upright triangle, a horizontal underline, left-to-right text) stays
+    unrotated, so on a 90/270-degree page every directional mark comes out
+    sideways (P2 review; a circle -- rotation-symmetric -- can't reveal this,
+    which is why the existing rotated-page test missed it).
+
+    Fixed by mapping the rect's top-left/top-right/bottom-left corners
+    (not just two opposite ones) into user space: the vector from top-left
+    to top-right gives both the real width in points *and* the rotation
+    angle to counter-rotate the canvas by, and the vector to bottom-left
+    gives the real height. `canvas.translate`/`canvas.rotate` then let every
+    shape/text primitive keep being written in a simple, unrotated local
+    frame (identical to what this module drew before this fix) -- origin at
+    the rect's displayed top-left corner, local +x toward its displayed
+    right edge, local +y toward its displayed top edge -- while the
+    rotation is applied once, geometrically, instead of needing every
+    primitive to know about it.
+    """
+    top_left = normalized_to_user_space(NormalizedPoint(mark.rect.x, mark.rect.y), geometry)
+    top_right = normalized_to_user_space(
+        NormalizedPoint(mark.rect.x + mark.rect.width, mark.rect.y), geometry
+    )
+    bottom_left = normalized_to_user_space(
+        NormalizedPoint(mark.rect.x, mark.rect.y + mark.rect.height), geometry
+    )
+    width_pt = math.hypot(top_right.x - top_left.x, top_right.y - top_left.y)
+    height_pt = math.hypot(bottom_left.x - top_left.x, bottom_left.y - top_left.y)
+    angle_deg = math.degrees(math.atan2(top_right.y - top_left.y, top_right.x - top_left.x))
+
+    pdf_canvas.saveState()
+    pdf_canvas.translate(top_left.x, top_left.y)
+    pdf_canvas.rotate(angle_deg)
+    _draw_mark(pdf_canvas, mark, 0.0, -height_pt, width_pt, 0.0)
+    pdf_canvas.restoreState()
 
 
 _SHAPE_KINDS_NEEDING_TEXT = frozenset({AnnotationKind.SCORE, AnnotationKind.COMMENT})
@@ -223,6 +272,11 @@ def _draw_mark(
         pdf_canvas.rect(x0, y0, x1 - x0, y1 - y0, stroke=1, fill=0)
 
 
+#: Marks the last drawn line as cut off when even `_MIN_FONT_SIZE_PT` can't
+#: fit every wrapped line inside the mark's rect (P2 review).
+_ELLIPSIS = "…"
+
+
 def _draw_text(
     pdf_canvas: canvas.Canvas, text: str, x0: float, y0: float, x1: float, y1: float
 ) -> None:
@@ -236,12 +290,35 @@ def _draw_text(
     while font_size > _MIN_FONT_SIZE_PT and len(lines) * font_size * _LINE_HEIGHT_FACTOR > height:
         font_size -= 1.0
         lines = _wrap_text(pdf_canvas, text, font_name, font_size, width)
+    # Even at `_MIN_FONT_SIZE_PT`, `lines` may still be too many to fit
+    # `height`. Rather than let the remaining lines pile onto the same
+    # baseline (`max(y, y0)`, an earlier version of this function -- P2
+    # review: illegible overlapping text on any long comment against a
+    # small registered comment area), show only as many as actually fit and
+    # mark the cut with an ellipsis -- an explicit, honest overflow policy.
+    max_lines = max(1, int(height / (font_size * _LINE_HEIGHT_FACTOR)))
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = _truncate_with_ellipsis(pdf_canvas, lines[-1], font_name, font_size, width)
     pdf_canvas.setFillColorRGB(*_TEXT_RGB)
     pdf_canvas.setFont(font_name, font_size)
     y = y1 - font_size
     for line in lines:
-        pdf_canvas.drawString(x0, max(y, y0), line)
+        pdf_canvas.drawString(x0, y, line)
         y -= font_size * _LINE_HEIGHT_FACTOR
+
+
+def _truncate_with_ellipsis(
+    pdf_canvas: canvas.Canvas, line: str, font_name: str, font_size: float, max_width: float
+) -> str:
+    if pdf_canvas.stringWidth(line + _ELLIPSIS, font_name, font_size) <= max_width:
+        return line + _ELLIPSIS
+    truncated = line
+    while truncated and (
+        pdf_canvas.stringWidth(truncated + _ELLIPSIS, font_name, font_size) > max_width
+    ):
+        truncated = truncated[:-1]
+    return truncated + _ELLIPSIS
 
 
 def _wrap_text(
