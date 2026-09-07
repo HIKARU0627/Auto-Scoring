@@ -166,24 +166,33 @@ class _ExportDialogState extends State<ExportDialog> {
     if (jobId == null) return;
     try {
       final job = await widget.dependencies.getJob(jobId);
-      _transientPollFailures = 0;
       if (!mounted) return;
       switch (job.state) {
         case 'succeeded':
+          // Not resetting `_transientPollFailures` here -- only once
+          // `_loadExportedFile` itself succeeds (P2 review, round 2): a
+          // `getJob` that keeps succeeding while `listExports` keeps
+          // failing would otherwise reset the counter back to 0 every
+          // cycle (this method only ever increments it by 1 before
+          // scheduling the next poll), so the failure cap below could
+          // never actually trip and the dialog would spin forever.
           await _loadExportedFile(jobId);
         case 'failed':
+          _transientPollFailures = 0;
           setState(() {
             _stage = _ExportStage.failed;
             _lastObservedJobState = 'failed';
             _errorMessage = job.lastError ?? '出力に失敗しました';
           });
         case 'cancelled':
+          _transientPollFailures = 0;
           setState(() {
             _stage = _ExportStage.failed;
             _lastObservedJobState = 'cancelled';
             _errorMessage = '出力がキャンセルされました';
           });
         default:
+          _transientPollFailures = 0;
           _schedulePoll();
       }
     } on SidecarApiException catch (error) {
@@ -208,6 +217,7 @@ class _ExportDialogState extends State<ExportDialog> {
       final exports = await widget.dependencies.listExports(
         widget.submissionId,
       );
+      _transientPollFailures = 0;
       if (!mounted) return;
       final match = exports.where((export) => export.jobId == jobId);
       setState(() {

@@ -245,4 +245,38 @@ void main() {
       expect(requestCount, 2);
     },
   );
+
+  testWidgets(
+    'eventually reports failure instead of spinning forever when the job keeps '
+    'succeeding but its export result can never be fetched',
+    (tester) async {
+      // P2 review, round 2: `getJob` always succeeding used to reset the
+      // transient-failure counter to 0 every poll cycle, before
+      // `_loadExportedFile`'s own (at most +1 per cycle) increment ever had
+      // a chance to reach the cap -- so this scenario used to poll forever.
+      var listExportsAttempts = 0;
+      final dependencies = AppDependencies(
+        requestExport: (submissionId) async => ExportRequestResponse(
+          (b) => b
+            ..decision = 'accept_new'
+            ..jobId = 'job-1',
+        ),
+        getJob: (jobId) async => _job(state: 'succeeded'),
+        listExports: (submissionId) async {
+          listExportsAttempts += 1;
+          throw SidecarApiException(SidecarErrorKind.timeout, 'timed out');
+        },
+      );
+
+      await _pumpDialog(tester, dependencies);
+
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pump();
+      }
+
+      expect(find.byKey(const Key('export-dialog-error')), findsOneWidget);
+      expect(listExportsAttempts, 5);
+    },
+  );
 }
