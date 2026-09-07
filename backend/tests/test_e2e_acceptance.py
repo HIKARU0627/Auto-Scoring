@@ -55,13 +55,16 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image, ImageChops
+from PIL.Image import Image as PilImage
+from pypdf import PdfReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session, sessionmaker
 
-from auto_scoring.adapters.pdf.pdfium_pypdf_engine import (
-    JapaneseFontNotFoundError,
-    _ensure_japanese_font_registered,
-)
+import auto_scoring.adapters.pdf.pdfium_pypdf_engine as engine_module
+from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
@@ -119,6 +122,10 @@ _HOLD_TIMEOUT_SECONDS = 20.0
 #: would be.
 _MARKER_XY = (60, 700)
 _ANSWER_AREA = (0.05, 0.10, 0.60, 0.25)
+#: 点数配置領域 and コメント配置候補領域 (section 2 (7) / (6)) -- the export
+#: assertions below look for the drawn score and comment in exactly these.
+_SCORE_AREA = (0.70, 0.03, 0.90, 0.09)
+_COMMENT_AREA = (0.05, 0.30, 0.90, 0.42)
 
 #: What `ScriptedAIProvider.script` accepts for one call.
 AIOutcome = GradingResponse | Exception | Callable[[GradingRequest], GradingResponse]
@@ -261,6 +268,10 @@ class ScriptedAIProvider:
                 self.concurrency -= 1
 
 
+#: The AI's own comment proposal. Named so an export assertion can state
+#: "this one must *not* be on the page" -- the reviewer superseded it.
+AI_COMMENT = "理由をもう一段くわしく書きましょう。"
+
 #: The recognized answer text every scripted reading uses unless a scenario
 #: needs its own. Also the string the logging assertion searches for -- it
 #: has to be the *actual* answer body that flowed through the pipeline, not a
@@ -310,7 +321,7 @@ def grading_response(
         max_score=request.max_score,
         grading_confidence=grading_confidence,
         rationale="主旨は捉えているが、理由の記述がやや不足している。",
-        comment="理由をもう一段くわしく書きましょう。",
+        comment=AI_COMMENT,
         criteria=tuple(
             GradingCriterionOutcome(
                 criterion_id=criterion_id,
@@ -520,7 +531,7 @@ def _regions_for(number: str, page_index: int) -> list[dict[str, object]]:
             kind="score",
             label=number,
             page_index=page_index,
-            bbox=(0.70, 0.03, 0.90, 0.09),
+            bbox=_SCORE_AREA,
             text="5点",
         ),
         _region(
@@ -528,7 +539,7 @@ def _regions_for(number: str, page_index: int) -> list[dict[str, object]]:
             kind="annotation_area",
             label=number,
             page_index=page_index,
-            bbox=(0.05, 0.30, 0.90, 0.42),
+            bbox=_COMMENT_AREA,
         ),
         _region(
             region_id=f"model-answer-{number}",
@@ -1012,7 +1023,10 @@ def test_an_annotation_whose_target_text_is_not_on_the_page_falls_back_to_the_co
         },
     )
     assert edited.status_code == 201, edited.text
-    assert edited.json()["annotations"][0]["rect"] is not None
+    placed = edited.json()["annotations"][0]
+    # The reviewer's own coordinates, not merely "some rect is set now".
+    assert placed["rect"] == {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.03}
+    assert placed["source"] == "human"
 
 
 # --------------------------------------------------------------------------- #
@@ -1026,12 +1040,20 @@ def _review_version(client: TestClient, submission_id: str, question_id: str) ->
     return len(history.json())
 
 
+#: The reviewer's own comment. Deliberately different from the AI's
+#: (`grading_response`'s "理由をもう一段くわしく書きましょう。") so an export
+#: assertion can tell "drew the confirmed text" from "drew whatever comment
+#: it found first".
+CONFIRMED_COMMENT = "根拠の書き方がよくなりました。"
+
+
 def _confirm_question(
     client: TestClient,
     submission_id: str,
     question_id: str,
     *,
     annotations: list[dict[str, object]] | None = None,
+    score_awarded: int = 5,
 ) -> dict[str, Any]:
     """One reviewer's confirmation of one question, through `review/edit`.
 
@@ -1041,9 +1063,9 @@ def _confirm_question(
     """
     payload: dict[str, object] = {
         "expected_version": _review_version(client, submission_id, question_id),
-        "score_awarded": 5,
+        "score_awarded": score_awarded,
         "score_maximum": 5,
-        "comment": "根拠の書き方がよくなりました。",
+        "comment": CONFIRMED_COMMENT,
         "recognized_text": "光合成は葉緑体で行われ、水と二酸化炭素からデンプンをつくる",
         "criteria": [{"criterion_id": f"{question_id}:rubric:c1", "outcome": "pass"}],
     }
@@ -1125,32 +1147,45 @@ def test_correcting_approving_and_undoing_leaves_a_complete_history(
 # --------------------------------------------------------------------------- #
 # Scenario 5: export, without touching the original
 # --------------------------------------------------------------------------- #
+#: Where `_circle_annotation` puts its ○, as (x0, y0, x1, y1).
+_CIRCLE_AREA = (0.70, 0.05, 0.78, 0.10)
+
+
 def _circle_annotation() -> list[dict[str, object]]:
     """A ○ mark with an explicit rect and no text.
 
-    Text-free deliberately: drawing a score or a comment needs a Japanese-
-    capable font, which the MVP takes from Windows itself
-    (`pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES`), so a text-bearing
-    export can only run where such a font exists. That half is asserted by
-    `test_the_exported_pdf_carries_reviewed_score_and_comment_text` below,
-    which skips when no such font is installed. Everything this scenario is
-    actually about -- a new file is produced, the original is untouched --
-    holds on every platform, so it is asserted on every platform.
+    A shape rather than text, deliberately: a ○ needs no glyphs, so this
+    scenario -- a new file is produced, the original is untouched, the
+    confirmed mark is on the page -- holds on any machine regardless of
+    which fonts it has. The text-bearing half is asserted separately by
+    `test_the_exported_pdf_carries_the_reviewed_comment_text` and
+    `test_the_exported_pdf_carries_the_reviewed_score` below, which each
+    need a font carrying the glyphs they draw.
     """
-    return [{"kind": "circle", "x": 0.7, "y": 0.05, "width": 0.08, "height": 0.05}]
+    x0, y0, x1, y1 = _CIRCLE_AREA
+    return [{"kind": "circle", "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}]
 
 
 def _export(client: TestClient, submission_id: str) -> dict[str, Any]:
+    """Queue an export, wait for it, and return *this* export's record.
+
+    Selected by ``job_id`` rather than by taking the only entry: a re-export
+    after the review state has genuinely moved on leaves the earlier export
+    in place (docs/pdf-export.md section 5), and the score assertion below
+    depends on comparing exactly those two.
+    """
     response = client.post(f"/submissions/{submission_id}/export", headers=_AUTH)
     assert response.status_code == 202, response.text
     body: dict[str, Any] = response.json()
+    job_id = body["job_id"]
     _wait_for(
-        lambda: client.get(f"/jobs/{body['job_id']}", headers=_AUTH).json()["state"] == "succeeded",
-        f"export job {body['job_id']} never succeeded",
+        lambda: client.get(f"/jobs/{job_id}", headers=_AUTH).json()["state"] == "succeeded",
+        f"export job {job_id} never succeeded",
     )
     exports = client.get(f"/submissions/{submission_id}/exports", headers=_AUTH).json()
-    assert len(exports) == 1
-    exported: dict[str, Any] = exports[0]
+    matches = [export for export in exports if export["job_id"] == job_id]
+    assert len(matches) == 1, f"expected one export for job {job_id}, got {exports}"
+    exported: dict[str, Any] = matches[0]
     return exported
 
 
@@ -1182,12 +1217,19 @@ def test_exporting_a_fully_reviewed_answer_never_touches_the_original_pdf(
     exported = _export(client, submission_id)
 
     output = data_root / exported["file_path"]
-    assert output.exists()
     assert output != source
     assert output.name == "ans-a_corrected.pdf"
     assert _digest(source.read_bytes()) == before, "the original PDF was modified"
-    # A real PDF, with the answer's own page count -- not an empty file.
-    assert output.read_bytes().startswith(b"%PDF-")
+
+    # The output is a real, separately-generated PDF of this answer -- not a
+    # copy of the original under a new name, which every check above would
+    # otherwise have accepted (round 1 review made the same point about the
+    # text-bearing export test). The ○ the reviewer confirmed is drawn where
+    # they placed it, and the original page is blank in exactly that spot.
+    assert _digest(output.read_bytes()) != before
+    assert PdfReader(str(output)).pages.__len__() == _ANSWER_PAGE_COUNT
+    assert not _has_ink(_region_crop(source, 0, _CIRCLE_AREA))
+    assert _has_ink(_region_crop(output, 0, _CIRCLE_AREA)), "the confirmed ○ was not drawn"
 
 
 def test_export_is_refused_while_any_question_is_still_unconfirmed(
@@ -1209,55 +1251,212 @@ def test_export_is_refused_while_any_question_is_still_unconfirmed(
     assert refused.json()["detail"]["question_ids"] == [second]
 
 
-def _japanese_font_available() -> bool:
-    """Whether this machine has one of the Windows fonts PDF export needs.
+#: Fonts to try when none of `pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES`
+#: -- the Windows-shipped fonts the product itself uses -- exists.
+#:
+#: Without this, the text-bearing export tests below could only ever run on
+#: the windows-latest CI, and a test nobody can run locally is exactly how
+#: their assertions came to be `exists()` and `size > 0` in the first place
+#: (round 1 review). The list is *appended* to the production candidates, so
+#: on Windows the real fonts are still found first and nothing here is ever
+#: reached.
+#:
+#: Which entry gets used depends on the characters a given test actually
+#: draws, because coverage here is patchy: `DroidSansFallbackFull` is the
+#: only kanji-capable TrueType face on a stock Ubuntu image and it carries no
+#: Latin glyphs at all, while `DejaVuSans` is the reverse. (reportlab's
+#: `TTFont` also needs TrueType outlines, which rules out the CFF-flavoured
+#: Noto CJK OTCs those images do ship.) `_install_font_covering` picks per
+#: test rather than assuming one font serves both.
+_FALLBACK_FONTS = (
+    Path("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"),
+    Path("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf"),
+    Path("/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf"),
+    Path("/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf"),
+    Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+)
 
-    Imports the engine's own resolver rather than re-listing the candidate
-    paths, so this can never disagree with what the export will actually do.
+
+def _covers(font_path: Path, required: str) -> bool:
+    """Whether reportlab can load ``font_path`` *and* it has a glyph for every
+    character in ``required``.
+
+    Existence is not enough, and neither is loadability. A face missing the
+    glyphs draws notdef -- literally nothing on the page -- so a test relying
+    on it would fail for a reason that has nothing to do with the export
+    code. Checked with the same `subfontIndex=0` the engine itself uses.
     """
     try:
-        _ensure_japanese_font_registered()
-    except JapaneseFontNotFoundError:
+        font = TTFont(f"probe-{font_path.stem}", str(font_path), subfontIndex=0)
+    except Exception:
         return False
-    return True
+    return all(ord(character) in font.face.charToGlyph for character in required)
 
 
-@pytest.mark.skipif(
-    not _japanese_font_available(),
-    reason=(
-        "PDF export draws score and comment text with a Windows-shipped Japanese font "
-        "(pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES); the MVP targets Windows and CI "
-        "runs on windows-latest, but a Linux dev machine has none of them. "
-        "docs/mvp-acceptance.md records this platform split."
-    ),
-)
-def test_the_exported_pdf_carries_reviewed_score_and_comment_text(
-    client: TestClient, data_root: Path
-) -> None:
-    """The text-bearing half of scenario 5: the confirmed score and comment
-    are what actually get drawn onto the exported PDF.
+def _install_font_covering(monkeypatch: pytest.MonkeyPatch, required: str) -> None:
+    """Make the export engine resolve a font that can really draw ``required``.
+
+    A no-op on Windows, where the production candidates already cover both
+    Japanese and Latin. Elsewhere it appends the first suitable fallback, or
+    skips -- an honest "cannot verify on this machine", never a quietly
+    weakened assertion.
     """
+    original = engine_module._JAPANESE_FONT_CANDIDATES
+    if not any(candidate.exists() for candidate in original):
+        fallback = next(
+            (path for path in _FALLBACK_FONTS if path.exists() and _covers(path, required)),
+            None,
+        )
+        if fallback is None:
+            pytest.skip(
+                f"no installed TrueType font covers {required!r}; PDF export cannot draw "
+                "it on this machine (docs/mvp-acceptance.md section 4)"
+            )
+        monkeypatch.setattr(engine_module, "_JAPANESE_FONT_CANDIDATES", (*original, fallback))
+    # Dropped *after* patching: a resolution made against the old candidate
+    # list would otherwise still be handed back (see `_forget_registered_font`).
+    _forget_registered_font()
+
+
+def _forget_registered_font() -> None:
+    """Drop the engine's font registration, both caches of it.
+
+    `_ensure_japanese_font_registered` is `lru_cache`d, which
+    `test_pdf_annotation_rendering.py`'s fixture of the same name already
+    clears. That is not sufficient here. reportlab keeps its *own*
+    process-wide registry keyed by font name, and silently ignores a second
+    `registerFont` under a name it already holds -- so the first face bound
+    to `AutoScoringJPFont` in a process stays bound for the rest of it. The
+    two export tests below deliberately need different faces on Linux (no
+    single installed font covers both Japanese and Latin -- see
+    `_FALLBACK_FONTS`), so without dropping reportlab's entry too, whichever
+    test ran first would silently decide the font for the other, and the
+    second would assert against glyphs its face does not have.
+
+    On Windows this is inert: one font serves both tests, and re-registering
+    it is what would have happened anyway.
+    """
+    engine_module._ensure_japanese_font_registered.cache_clear()
+    pdfmetrics._fonts.pop(engine_module._JAPANESE_FONT_NAME, None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_font_registration() -> Iterator[None]:
+    """Every test in this module starts and ends with no font registered, so
+    neither leaks a fallback into the next one (or into another module)."""
+    _forget_registered_font()
+    yield
+    _forget_registered_font()
+
+
+def _page_text(pdf_path: Path, page_index: int) -> str:
+    return PdfReader(str(pdf_path)).pages[page_index].extract_text()
+
+
+def _region_crop(
+    pdf_path: Path, page_index: int, area: tuple[float, float, float, float]
+) -> PilImage:
+    """The rendered pixels inside ``area`` (normalized ``x0, y0, x1, y1``).
+
+    Rasterizing through the same `PdfiumPypdfEngine` the export used is the
+    methodology `test_pdf_annotation_rendering.py` established for "was this
+    mark really drawn here" -- reused rather than reinvented. Needed for
+    marks that carry no text (a ○ has no glyphs to extract), and independent
+    of which font the machine happens to have.
+    """
+    png = PdfiumPypdfEngine().render_page_png(pdf_path, page_index, scale=2.0)
+    with Image.open(BytesIO(png)) as image:
+        rgb = image.convert("RGB")
+    x0, y0, x1, y1 = area
+    width, height = rgb.size
+    return rgb.crop((int(x0 * width), int(y0 * height), int(x1 * width), int(y1 * height)))
+
+
+def _has_ink(crop: PilImage) -> bool:
+    """Whether anything was drawn in ``crop`` -- i.e. it is not blank paper.
+
+    `ImageChops.invert(...).getbbox()` is ``None`` for a wholly white
+    region, the same "is there a bounding box of non-background pixels" test
+    `test_pdf_annotation_rendering.py._redness_bbox` uses.
+    """
+    return ImageChops.invert(crop.convert("L")).getbbox() is not None
+
+
+def test_the_exported_pdf_carries_the_reviewed_comment_text(
+    client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One half of scenario 5's text output: the comment on the page is the
+    one the *reviewer* confirmed, not the AI's proposal and not nothing.
+
+    Read straight out of the output's text layer. The earlier version of this
+    test asserted only that the file existed and was non-empty, which an
+    exporter that copied the source verbatim would also have satisfied
+    (round 1 review) -- hence the third assertion below, which pins that the
+    source really has no such text to copy.
+    """
+    _install_font_covering(monkeypatch, CONFIRMED_COMMENT)
     _, submission_id = _reviewed_answer(
         client,
         data_root,
         annotations=[
-            {"kind": "score", "x": 0.7, "y": 0.03, "width": 0.2, "height": 0.06},
             {
                 "kind": "comment",
                 "x": 0.05,
                 "y": 0.30,
                 "width": 0.85,
                 "height": 0.12,
-                "comment": "根拠の書き方がよくなりました。",
-            },
+                "comment": CONFIRMED_COMMENT,
+            }
         ],
     )
 
     exported = _export(client, submission_id)
 
     output = data_root / exported["file_path"]
-    assert output.exists()
-    assert output.stat().st_size > 0
+    text = _page_text(output, 0)
+    assert CONFIRMED_COMMENT in text, f"confirmed comment missing from the export: {text!r}"
+    # The AI's own comment was superseded by the reviewer's edit. An exporter
+    # drawing whatever comment it found first would still pass without this.
+    assert AI_COMMENT not in text
+    # And the source has nothing of the sort to have been copied from.
+    assert CONFIRMED_COMMENT not in _page_text(
+        data_root / "submissions" / submission_id / "source.pdf", 0
+    )
+
+
+def test_the_exported_pdf_carries_the_reviewed_score(
+    client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: the score drawn in the 点数配置領域 is the confirmed
+    one, and it follows the reviewer when they change it.
+
+    Split from the comment test because the two need different glyphs, and no
+    single font on a stock Linux image covers both (see `_FALLBACK_FONTS`).
+    Splitting is what lets each half actually run outside Windows rather than
+    both being skipped.
+    """
+    _install_font_covering(monkeypatch, "0123456789/")
+    score_annotation = [{"kind": "score", "x": 0.70, "y": 0.03, "width": 0.20, "height": 0.06}]
+    test_id, submission_id = _reviewed_answer(client, data_root, annotations=score_annotation)
+
+    exported = _export(client, submission_id)
+
+    first = _page_text(data_root / exported["file_path"], 0)
+    assert "5/5" in first, f"the confirmed score is not on the exported page: {first!r}"
+
+    # Re-confirm the same answer at a different score. The re-export must
+    # carry the new one -- and not the old one, which is what distinguishes
+    # "draws the confirmed score" from "draws some score".
+    for question_id in _question_ids(test_id):
+        _confirm_question(
+            client, submission_id, question_id, annotations=score_annotation, score_awarded=2
+        )
+    regraded = _export(client, submission_id)
+
+    second = _page_text(data_root / regraded["file_path"], 0)
+    assert "2/5" in second, f"the re-confirmed score is not on the re-exported page: {second!r}"
+    assert "5/5" not in second
 
 
 # --------------------------------------------------------------------------- #
@@ -1300,7 +1499,11 @@ def test_job_and_review_state_survive_an_app_restart(
         # reviewer left off, not merely display it.
         _confirm_question(restarted, submission_id, second, annotations=_circle_annotation())
         exported = _export(restarted, submission_id)
-        assert (data_root / exported["file_path"]).exists()
+        carried = data_root / exported["file_path"]
+        # A real export produced *after* the restart -- the ○ confirmed
+        # before it and the one confirmed after are both on the page.
+        assert _has_ink(_region_crop(carried, 0, _CIRCLE_AREA))
+        assert _has_ink(_region_crop(carried, 1, _CIRCLE_AREA))
 
 
 def test_a_job_left_running_by_a_killed_sidecar_is_recovered_on_the_next_start(
