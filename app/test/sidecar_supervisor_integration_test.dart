@@ -120,7 +120,17 @@ void main() {
     // connections the health probes opened sit in TIME_WAIT, which says
     // nothing about whether a *process* survived.
     final probe = await sidecarStillServing(connection);
-    if (probe.serving) {
+    // Asked of the process directly, not through the port. This is the half of
+    // Issue #24's 「通常終了後にport/processが残らない」 that no HTTP answer can
+    // stand in for: whatever the port says, the process that was serving must
+    // be gone. It costs one `tasklist`/`ps` spawn, so it reads the state a few
+    // hundred milliseconds after `shutdown()` returned rather than at the
+    // instant it did.
+    final serverStillAlive =
+        listenerBeforeShutdown != null &&
+        await _isAlive(listenerBeforeShutdown);
+
+    if (probe.serving || serverStillAlive) {
       // TEMPORARY (Issue #57): this assertion fails intermittently on the
       // Windows CI runner and only there, so the evidence has to be collected
       // by the run that fails rather than reproduced afterwards.
@@ -130,10 +140,16 @@ void main() {
           connection: connection,
           appDataDirectory: '${appData.path}/app-data',
           listenerBeforeShutdown: listenerBeforeShutdown,
+          serverStillAlive: serverStillAlive,
           probeDetail: probe.detail,
         ),
       );
     }
+    expect(
+      serverStillAlive,
+      isFalse,
+      reason: 'the process that was serving is still running',
+    );
     expect(
       probe.serving,
       isFalse,
@@ -336,6 +352,7 @@ Future<String> _survivorReport({
   required SidecarConnection connection,
   required String appDataDirectory,
   required String? listenerBeforeShutdown,
+  required bool serverStillAlive,
   required String probeDetail,
 }) async {
   final port = Uri.parse(connection.baseUrl).port;
@@ -346,18 +363,13 @@ Future<String> _survivorReport({
     ..writeln('listener pid before shutdown: ${listenerBeforeShutdown ?? "-"}')
     ..writeln('what the probe that returned true saw: $probeDetail');
 
-  // First, and on purpose: one cheap spawn asking whether the process that was
-  // serving before the shutdown is still alive *now*. Everything below costs
-  // hundreds of milliseconds to seconds, which is long enough for a survivor
-  // that only outlives the shutdown briefly to be gone before it is looked
-  // for -- so an empty snapshot down there would not mean nobody was there
-  // when the probe ran.
-  if (listenerBeforeShutdown != null) {
-    report.writeln(
-      'is that pid still alive? '
-      '${await _isAlive(listenerBeforeShutdown) ? "yes" : "no"}',
-    );
-  }
+  // Measured by the caller, before any of the slower collection below: a
+  // survivor that only outlives the shutdown briefly would already be gone by
+  // the time the snapshot at the end runs, so an empty snapshot there does not
+  // mean nobody was there when the check ran.
+  report.writeln(
+    'was that pid still alive when checked? ${serverStillAlive ? "yes" : "no"}',
+  );
 
   // What the protected call actually got back. `_stillServing` only sees
   // "threw or did not", and dio's default validateStatus accepts any 2xx --
