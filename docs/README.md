@@ -31,6 +31,7 @@ the former is updated in the same PR.
 | [pdf-export.md](./pdf-export.md)                                           | 確定 Annotation を描画した添削済み PDF 出力                     |
 | [mvp-acceptance.md](./mvp-acceptance.md)                                   | 簡易設計書 §31 の全実装項目と、それを検証しているテストの対応表 |
 | [design-tokens.md](./design-tokens.md)                                     | 画面のデザイントークン（フォント選定・配色・余白・モーション）  |
+| [home-dashboard.md](./home-dashboard.md)                                   | ホーム画面が出す「次の一手」と進捗の決め方、状態の取得元        |
 
 ## PoC 記録
 
