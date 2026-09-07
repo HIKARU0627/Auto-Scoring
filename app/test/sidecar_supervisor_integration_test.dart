@@ -99,6 +99,9 @@ void main() {
 
   test('shutdown releases the port and the app-data lock', () async {
     final connection = await startAndExpectReady();
+    // Recorded before the shutdown, so a failure report below can say whether
+    // whatever is answering afterwards is the same process that was.
+    final listenerBeforeShutdown = await _listenerPidOn(connection);
 
     await supervisor.shutdown();
     expect(supervisor.state.value, isA<SidecarStopped>());
@@ -110,8 +113,22 @@ void main() {
     // listener's port can still be refused by `bind` for a minute or two while
     // connections the health probes opened sit in TIME_WAIT, which says
     // nothing about whether a *process* survived.
+    final stillServing = await _stillServing(connection);
+    if (stillServing) {
+      // TEMPORARY (Issue #57): this assertion fails intermittently on the
+      // Windows CI runner and only there, so the evidence has to be collected
+      // by the run that fails rather than reproduced afterwards.
+      // ignore: avoid_print
+      print(
+        await _survivorReport(
+          connection: connection,
+          appDataDirectory: '${appData.path}/app-data',
+          listenerBeforeShutdown: listenerBeforeShutdown,
+        ),
+      );
+    }
     expect(
-      await _stillServing(connection),
+      stillServing,
       isFalse,
       reason: 'the sidecar this session started is still answering',
     );
@@ -287,13 +304,12 @@ SidecarFailure? supervisorFailureOf(SidecarSupervisor supervisor) =>
       _ => null,
     };
 
-/// Terminates whatever process is listening on [connection]'s port, without
-/// going through the supervisor.
-Future<void> _killListenerOn(SidecarConnection connection) async {
+/// The process id listening on [connection]'s port, or `null` if nothing is.
+Future<String?> _listenerPidOn(SidecarConnection connection) async {
   final port = Uri.parse(connection.baseUrl).port;
   if (Platform.isWindows) {
-    // `netstat` + `taskkill` rather than a PowerShell one-liner: available on
-    // every Windows image without an execution-policy question.
+    // `netstat` rather than a PowerShell one-liner: available on every Windows
+    // image without an execution-policy question.
     final netstat = await Process.run('netstat', ['-ano', '-p', 'TCP']);
     final line = const LineSplitter()
         .convert(netstat.stdout as String)
@@ -301,21 +317,118 @@ Future<void> _killListenerOn(SidecarConnection connection) async {
           (l) => l.contains(':$port ') && l.contains('LISTENING'),
           orElse: () => '',
         );
-    final pid = line
-        .split(RegExp(r'\s+'))
-        .where((s) => s.isNotEmpty)
-        .lastOrNull;
-    expect(pid, isNotNull, reason: 'no listener found on port $port');
-    await Process.run('taskkill', ['/F', '/PID', pid!]);
-    return;
+    return line.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).lastOrNull;
   }
-  final lsof = await Process.run('bash', [
+  final ss = await Process.run('bash', [
     '-c',
     "ss -ltnpH 'sport = :$port' | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2",
   ]);
-  final pid = (lsof.stdout as String).trim();
-  expect(pid, isNotEmpty, reason: 'no listener found on port $port');
-  await Process.run('kill', ['-9', pid]);
+  final pid = (ss.stdout as String).trim();
+  return pid.isEmpty ? null : pid;
+}
+
+/// Terminates whatever process is listening on [connection]'s port, without
+/// going through the supervisor.
+Future<void> _killListenerOn(SidecarConnection connection) async {
+  final pid = await _listenerPidOn(connection);
+  final port = Uri.parse(connection.baseUrl).port;
+  expect(pid, isNotNull, reason: 'no listener found on port $port');
+  await Process.run(
+    Platform.isWindows ? 'taskkill' : 'kill',
+    Platform.isWindows ? ['/F', '/PID', pid!] : ['-9', pid!],
+  );
+}
+
+/// TEMPORARY (Issue #57): everything worth knowing about a sidecar that is
+/// still answering after `shutdown()` returned.
+///
+/// Collected here rather than reproduced by a separate script because the
+/// failure is intermittent and Windows-only: only the run that actually fails
+/// can say what was alive at that moment. Delete once the cause is settled.
+Future<String> _survivorReport({
+  required SidecarConnection connection,
+  required String appDataDirectory,
+  required String? listenerBeforeShutdown,
+}) async {
+  final port = Uri.parse(connection.baseUrl).port;
+  final report = StringBuffer()
+    ..writeln('=== Issue #57: something answered after shutdown ===')
+    ..writeln('port: $port')
+    ..writeln('app-data: $appDataDirectory')
+    ..writeln('listener pid before shutdown: ${listenerBeforeShutdown ?? "-"}');
+
+  // What the protected call actually got back. `_stillServing` only sees
+  // "threw or did not", and dio's default validateStatus accepts any 2xx --
+  // so an empty 204 would read as alive just as a full 200 would.
+  try {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final request =
+        await client.getUrl(Uri.parse('${connection.baseUrl}/tests'))
+          ..headers.set('Authorization', 'Bearer ${connection.token}');
+    final response = await request.close();
+    final body = await response.transform(const Utf8Decoder()).join();
+    report
+      ..writeln('GET /tests with this session token -> ${response.statusCode}')
+      ..writeln('  content-type: ${response.headers.contentType}')
+      ..writeln(
+        '  body: ${body.length > 500 ? "${body.substring(0, 500)}..." : body}',
+      );
+    client.close();
+  } on Object catch (error) {
+    report.writeln('GET /tests with this session token -> $error');
+  }
+
+  report.writeln(
+    'listener pid now: ${await _listenerPidOn(connection) ?? "-"}',
+  );
+  report.write(await _processSnapshot(port, appDataDirectory));
+  return report.toString();
+}
+
+/// Who owns [port], and every process whose command line names
+/// [appDataDirectory] -- which is unique to this test, so it picks out exactly
+/// the chain this supervisor started, however many processes deep it goes.
+Future<String> _processSnapshot(int port, String appDataDirectory) async {
+  try {
+    if (Platform.isWindows) {
+      // `$` is escaped throughout: this is a PowerShell script, and the only
+      // two values Dart fills in are the port and the marker.
+      final script =
+          """
+\$port = $port
+\$marker = '${appDataDirectory.replaceAll("'", "''")}'
+Write-Output '--- listeners on the port ---'
+Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction SilentlyContinue |
+  ForEach-Object {
+    \$owner = Get-CimInstance Win32_Process -Filter "ProcessId = \$(\$_.OwningProcess)" -ErrorAction SilentlyContinue
+    "pid \$(\$_.OwningProcess) \$(\$owner.Name) :: \$(\$owner.CommandLine)"
+  }
+Write-Output '--- processes started for this test app-data ---'
+Get-CimInstance Win32_Process |
+  Where-Object { \$_.CommandLine -and \$_.CommandLine.Contains(\$marker) } |
+  ForEach-Object { "pid \$(\$_.ProcessId) parent \$(\$_.ParentProcessId) \$(\$_.Name) :: \$(\$_.CommandLine)" }
+Write-Output '--- every sidecar-looking process ---'
+Get-CimInstance Win32_Process |
+  Where-Object { \$_.Name -match 'python|auto-scoring' } |
+  ForEach-Object { "pid \$(\$_.ProcessId) parent \$(\$_.ParentProcessId) \$(\$_.Name) :: \$(\$_.CommandLine)" }
+""";
+      final result = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        script,
+      ]);
+      return '${result.stdout}${result.stderr}';
+    }
+    final result = await Process.run('bash', [
+      '-c',
+      "echo '--- listeners on the port ---'; ss -ltnp 'sport = :$port'; "
+          "echo '--- processes for this app-data ---'; "
+          'ps -eo pid,ppid,args | grep -F "$appDataDirectory" | grep -v grep',
+    ]);
+    return '${result.stdout}${result.stderr}';
+  } on Object catch (error) {
+    return 'process snapshot failed: $error\n';
+  }
 }
 
 Future<void> _waitFor(bool Function() condition) async {

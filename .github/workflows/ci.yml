@@ -165,3 +165,49 @@ jobs:
           name: auto-scoring-sidecar-bundle
           path: backend/dist/auto-scoring-sidecar/
           if-no-files-found: error
+
+  # TEMPORARY (Issue #57): the shutdown assertion in
+  # `sidecar_supervisor_integration_test.dart` fails intermittently on this
+  # runner and nowhere else, so the only way to learn what is actually alive at
+  # that moment is to run it many times until it fails and let the test print
+  # its own evidence. Six legs in parallel, each looping until the first
+  # failure. Remove once the cause is settled.
+  flake-hunt:
+    name: Flake hunt (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.4
+          channel: stable
+          cache: true
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.7"
+          enable-cache: true
+      - name: Restore Flutter packages
+        run: flutter pub get
+        working-directory: app
+      - name: Restore Python environment
+        run: uv sync --locked
+        working-directory: backend
+      - name: Run the sidecar suite until it fails
+        working-directory: app
+        run: |
+          for ($i = 1; $i -le 12; $i++) {
+            Write-Host "=== leg ${{ matrix.leg }} iteration $i ==="
+            flutter test -t sidecar
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "reproduced on iteration $i"
+              exit 1
+            }
+          }
