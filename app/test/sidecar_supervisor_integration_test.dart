@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:dio/dio.dart';
 import 'package:auto_scoring_app/core/sidecar_platform_io.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,6 +81,10 @@ void main() {
     expect(await client.isHealthy(), isTrue);
     // The token really is this session's: a protected call succeeds with it.
     expect(await client.listTests(), isA<List<TestSummary>>());
+    // And the shutdown test's survivor check says so too. Without this, a
+    // `_stillServing` broken to always answer `false` would look fine: every
+    // other use of it asserts the negative.
+    expect((await _stillServing(connection)).serving, isTrue);
   });
 
   test('leaves no handshake file holding the token on disk', () async {
@@ -113,8 +118,8 @@ void main() {
     // listener's port can still be refused by `bind` for a minute or two while
     // connections the health probes opened sit in TIME_WAIT, which says
     // nothing about whether a *process* survived.
-    final stillServing = await _stillServing(connection);
-    if (stillServing) {
+    final probe = await _stillServing(connection);
+    if (probe.serving) {
       // TEMPORARY (Issue #57): this assertion fails intermittently on the
       // Windows CI runner and only there, so the evidence has to be collected
       // by the run that fails rather than reproduced afterwards.
@@ -124,11 +129,12 @@ void main() {
           connection: connection,
           appDataDirectory: '${appData.path}/app-data',
           listenerBeforeShutdown: listenerBeforeShutdown,
+          probeLog: probe.log,
         ),
       );
     }
     expect(
-      stillServing,
+      probe.serving,
       isFalse,
       reason: 'the sidecar this session started is still answering',
     );
@@ -173,7 +179,7 @@ void main() {
     expect(await health.isHealthy(), isTrue);
 
     // What the shutdown test asks instead.
-    expect(await _stillServing(ours), isFalse);
+    expect((await _stillServing(ours)).serving, isFalse);
   });
 
   test('a crashed sidecar is reported, and restart recovers', () async {
@@ -286,16 +292,56 @@ Future<HttpServer> _startForeignSidecar() async {
 /// test's sidecar can satisfy it on our behalf. That matters because
 /// `sidecar_api_client_test.dart` runs its own sidecar concurrently with this
 /// file, and Windows hands a just-released ephemeral port straight back out.
-Future<bool> _stillServing(SidecarConnection connection) async {
-  final client = SidecarApiClient(connection);
+///
+/// TEMPORARY (Issue #57): returns what it saw alongside the verdict. "Did not
+/// throw" is a looser test than it looks -- dio accepts any 2xx, and
+/// `listTests` turns an empty body into an empty list rather than an error --
+/// so the run that fails has to say which of those it actually got.
+Future<({bool serving, String log})> _stillServing(
+  SidecarConnection connection,
+) async {
+  final log = StringBuffer();
+  final dio = Dio()
+    ..interceptors.add(
+      InterceptorsWrapper(
+        onResponse: (response, handler) {
+          log.writeln(
+            '  transport: status=${response.statusCode} '
+            '(${response.statusMessage}) '
+            'redirect=${response.isRedirect} '
+            'headers=${response.headers.map} '
+            'dataType=${response.data.runtimeType} '
+            'data=${_truncated(response.data)}',
+          );
+          handler.next(response);
+        },
+        onError: (error, handler) {
+          log.writeln(
+            '  transport error: type=${error.type} '
+            'status=${error.response?.statusCode} '
+            'message=${error.message} '
+            'inner=${error.error.runtimeType}: ${error.error}',
+          );
+          handler.next(error);
+        },
+      ),
+    );
+  final client = SidecarApiClient(connection, dio: dio);
   try {
-    await client.listTests();
-    return true;
-  } on SidecarApiException {
-    return false;
+    final tests = await client.listTests();
+    log.writeln('  listTests returned ${tests.length} entries');
+    return (serving: true, log: log.toString());
+  } on SidecarApiException catch (error) {
+    log.writeln('  listTests threw $error');
+    return (serving: false, log: log.toString());
   } finally {
     client.close();
   }
+}
+
+String _truncated(Object? value) {
+  final text = '$value';
+  return text.length > 200 ? '${text.substring(0, 200)}...' : text;
 }
 
 SidecarFailure? supervisorFailureOf(SidecarSupervisor supervisor) =>
@@ -349,13 +395,16 @@ Future<String> _survivorReport({
   required SidecarConnection connection,
   required String appDataDirectory,
   required String? listenerBeforeShutdown,
+  required String probeLog,
 }) async {
   final port = Uri.parse(connection.baseUrl).port;
   final report = StringBuffer()
     ..writeln('=== Issue #57: something answered after shutdown ===')
     ..writeln('port: $port')
     ..writeln('app-data: $appDataDirectory')
-    ..writeln('listener pid before shutdown: ${listenerBeforeShutdown ?? "-"}');
+    ..writeln('listener pid before shutdown: ${listenerBeforeShutdown ?? "-"}')
+    ..writeln('what the probe that returned true actually saw:')
+    ..write(probeLog);
 
   // What the protected call actually got back. `_stillServing` only sees
   // "threw or did not", and dio's default validateStatus accepts any 2xx --
@@ -405,7 +454,7 @@ Get-NetTCPConnection -LocalPort \$port -State Listen -ErrorAction SilentlyContin
   }
 Write-Output '--- processes started for this test app-data ---'
 Get-CimInstance Win32_Process |
-  Where-Object { \$_.CommandLine -and \$_.CommandLine.Contains(\$marker) } |
+  Where-Object { \$_.CommandLine -and \$_.CommandLine.Contains(\$marker) -and \$_.ProcessId -ne \$PID } |
   ForEach-Object { "pid \$(\$_.ProcessId) parent \$(\$_.ParentProcessId) \$(\$_.Name) :: \$(\$_.CommandLine)" }
 Write-Output '--- every sidecar-looking process ---'
 Get-CimInstance Win32_Process |
