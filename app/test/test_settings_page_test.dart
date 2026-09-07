@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:built_collection/built_collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'app_harness.dart';
 
 TestResponse _test({String status = 'draft'}) {
   return TestResponse(
@@ -86,17 +90,22 @@ DependencyGraphResponse _dependencyGraph({
   );
 }
 
-Widget _wrap(Widget page) => MaterialApp(home: page);
-
-/// Pumps [page] with a tall viewport so every section of the settings
-/// screen (profile regions + dependency graph edges) is actually built and
+/// Opens テスト設定画面 for `test-1` with a tall viewport, so every section of
+/// the screen (profile regions + dependency graph edges) is actually built and
 /// findable, instead of sitting off-screen in the `ListView`'s lazy sliver.
-Future<void> _pumpSettings(WidgetTester tester, Widget page) async {
+Future<void> _pumpSettings(
+  WidgetTester tester,
+  AppDependencies dependencies,
+) async {
   tester.view.physicalSize = const Size(1400, 3200);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  await tester.pumpWidget(_wrap(page));
+  await pumpAppAt(
+    tester,
+    AppRoutes.testSettings('test-1'),
+    dependencies: dependencies,
+  );
   await tester.pumpAndSettle();
 }
 
@@ -110,10 +119,7 @@ void main() {
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
 
-    await _pumpSettings(
-      tester,
-      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-    );
+    await _pumpSettings(tester, dependencies);
 
     expect(find.text('テスト状態: 下書き'), findsOneWidget);
     expect(find.textContaining('問題文 ・ 設問1'), findsOneWidget);
@@ -143,10 +149,7 @@ void main() {
       analyzeProfile: (testId) async => _profile(),
     );
 
-    await _pumpSettings(
-      tester,
-      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-    );
+    await _pumpSettings(tester, dependencies);
 
     expect(find.text('まだ解析されていません。「自動解析」を実行してください。'), findsOneWidget);
 
@@ -173,10 +176,7 @@ void main() {
       ),
     );
 
-    await _pumpSettings(
-      tester,
-      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-    );
+    await _pumpSettings(tester, dependencies);
 
     await tester.tap(find.byKey(const Key('confirm-profile-button')));
     await tester.pumpAndSettle();
@@ -202,10 +202,7 @@ void main() {
       },
     );
 
-    await _pumpSettings(
-      tester,
-      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-    );
+    await _pumpSettings(tester, dependencies);
 
     await tester.tap(
       find.descendant(
@@ -236,10 +233,7 @@ void main() {
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
 
-    await _pumpSettings(
-      tester,
-      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-    );
+    await _pumpSettings(tester, dependencies);
 
     await tester.tap(
       find.descendant(
@@ -283,10 +277,7 @@ void main() {
         },
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       await tester.tap(
         find.byKey(const Key('analyze-dependency-graph-button')),
@@ -323,10 +314,7 @@ void main() {
                 ),
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       expect(find.textContaining('test-1:1 → test-1:2'), findsOneWidget);
 
@@ -365,10 +353,7 @@ void main() {
             },
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       await tester.tap(
         find.descendant(
@@ -412,10 +397,7 @@ void main() {
       getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
     );
 
-    await _pumpSettings(
-      tester,
-      TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-    );
+    await _pumpSettings(tester, dependencies);
 
     await tester.tap(
       find.descendant(
@@ -449,10 +431,7 @@ void main() {
             _dependencyGraph(status: 'confirmed'),
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       final analyzeButton = tester.widget<FilledButton>(
         find.byKey(const Key('analyze-dependency-graph-button')),
@@ -477,10 +456,7 @@ void main() {
         getDependencyGraph: (testId) async => _dependencyGraph(),
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       expect(find.text('第1層: test-1:1, test-1:2'), findsOneWidget);
       expect(find.text('第2層: test-1:2'), findsNothing);
@@ -503,10 +479,7 @@ void main() {
         ),
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       final completeButtonFinder = find.byKey(
         const Key('complete-registration-button'),
@@ -533,10 +506,7 @@ void main() {
             _dependencyGraph(status: 'confirmed'),
       );
 
-      await _pumpSettings(
-        tester,
-        TestSettingsPage(dependencies: dependencies, testId: 'test-1'),
-      );
+      await _pumpSettings(tester, dependencies);
 
       final completeButtonFinder = find.byKey(
         const Key('complete-registration-button'),
@@ -573,8 +543,10 @@ void main() {
           getDependencyGraph: (testId) async => _dependencyGraph(),
         );
 
-        await tester.pumpWidget(
-          _wrap(TestSettingsPage(dependencies: dependencies, testId: 'test-1')),
+        await pumpAppAt(
+          tester,
+          AppRoutes.testSettings('test-1'),
+          dependencies: dependencies,
         );
         await tester.pumpAndSettle();
 
@@ -598,5 +570,37 @@ void main() {
         }
       });
     }
+  });
+
+  // Issue #66 review (P2): `_loadAll` calls getTest -> getProfile ->
+  // getDependencyGraph in sequence, with a single `mounted` check after all
+  // three. Now that `AppDependencies` comes from a provider, resolving it
+  // again after a dispose would throw a `StateError` from `ref` -- which is
+  // not a `SidecarApiException`, so nothing here catches it and it surfaces
+  // as an unhandled async error.
+  testWidgets('leaving while the initial load is in flight does not throw', (
+    tester,
+  ) async {
+    final profile = Completer<ProfileResponse>();
+    final dependencies = AppDependencies(
+      getTest: (testId) async => _test(),
+      getProfile: (testId) => profile.future,
+      getDependencyGraph: (testId) async => _dependencyGraph(),
+    );
+
+    await pumpAppAt(
+      tester,
+      AppRoutes.testSettings('test-1'),
+      dependencies: dependencies,
+    );
+    await tester.pump();
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+
+    profile.complete(_profile());
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
   });
 }

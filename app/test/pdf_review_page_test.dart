@@ -9,7 +9,9 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
+
+import 'app_harness.dart';
 
 /// The PoC 3 (Issue #12) A4-portrait fixture: a real, tiny single-page PDF
 /// with the same 5 normalized test points stamped on it as red marks
@@ -283,7 +285,14 @@ ReviewActionResponse _reviewAction(
     ..submissionState = submissionState,
 );
 
-Widget _wrap(Widget child) => MaterialApp(home: child);
+/// Opens 添削レビュー画面 for `test-1` / `sub-1` with [dependencies] in place
+/// of a live sidecar.
+Future<void> _pumpReview(WidgetTester tester, AppDependencies dependencies) =>
+    pumpAppAt(
+      tester,
+      AppRoutes.pdfReview(testId: 'test-1', submissionId: 'sub-1'),
+      dependencies: dependencies,
+    );
 
 /// Pumps until pdfrx's real (native pdfium) document load settles.
 /// `tester.pump()` alone only advances the fake test clock, not the real
@@ -359,15 +368,7 @@ void main() {
       getSourcePdf: (_) => Completer<Uint8List>().future,
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
 
     expect(find.byKey(const Key('review-loading')), findsOneWidget);
   });
@@ -388,15 +389,7 @@ void main() {
       getSourcePdf: (_) async => _pocA4PortraitPdf(),
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
 
     expect(find.byKey(const Key('review-shell-error')), findsOneWidget);
@@ -418,15 +411,7 @@ void main() {
       getSourcePdf: (_) async => _pocA4PortraitPdf(),
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
 
     expect(find.byKey(const Key('review-empty-shell')), findsOneWidget);
@@ -473,15 +458,7 @@ void main() {
         submission: _submission(state: 'needs_review'),
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -545,15 +522,7 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -577,15 +546,7 @@ void main() {
       annotations: [_annotation(kind: 'circle', rect: mark)],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -630,15 +591,7 @@ void main() {
       annotations: [_annotation(kind: 'circle', rect: mark)],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -686,15 +639,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -725,15 +670,7 @@ void main() {
       q1: _question(),
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -773,15 +710,7 @@ void main() {
       grades: [_grade()],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -840,15 +769,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -892,15 +813,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -940,15 +853,7 @@ void main() {
       listReviews: (_, _) async => const [],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -989,15 +894,7 @@ void main() {
       listReviews: (_, _) async => const [],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -1046,15 +943,7 @@ void main() {
         listReviews: (_, _) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1078,15 +967,7 @@ void main() {
         grades: [_grade()],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1106,15 +987,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1134,15 +1007,7 @@ void main() {
         grades: [_grade()],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1183,15 +1048,7 @@ void main() {
         // hasLoaded is true, but there is still nothing to approve.
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1231,15 +1088,7 @@ void main() {
         listReviews: (_, _) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1298,15 +1147,7 @@ void main() {
       listReviews: (_, _) async => const [],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -1347,15 +1188,7 @@ void main() {
         listReviews: (_, _) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1388,15 +1221,7 @@ void main() {
         listReviews: (_, _) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1432,15 +1257,7 @@ void main() {
         listReviews: (_, _) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1513,15 +1330,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1585,15 +1394,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1644,15 +1445,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1698,15 +1491,7 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -1765,15 +1550,7 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -1844,15 +1621,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1925,15 +1694,7 @@ void main() {
         ],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -1996,15 +1757,7 @@ void main() {
         listReviews: (_, _) async => const [],
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -2093,15 +1846,7 @@ void main() {
       ],
     );
 
-    await tester.pumpWidget(
-      _wrap(
-        PdfReviewPage(
-          dependencies: dependencies,
-          testId: 'test-1',
-          submissionId: 'sub-1',
-        ),
-      ),
-    );
+    await _pumpReview(tester, dependencies);
     await tester.pump();
     await _settlePdf(tester);
 
@@ -2164,15 +1909,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -2229,15 +1966,7 @@ void main() {
             },
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -2322,15 +2051,7 @@ void main() {
             },
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -2394,15 +2115,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -2469,15 +2182,7 @@ void main() {
             },
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -2586,15 +2291,7 @@ void main() {
             },
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
       expect(find.text('4 / 5 点'), findsOneWidget);
@@ -2709,15 +2406,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -2817,15 +2506,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -2905,15 +2586,7 @@ void main() {
             },
       );
 
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: dependencies,
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
-        ),
-      );
+      await _pumpReview(tester, dependencies);
       await tester.pump();
       await _settlePdf(tester);
 
@@ -2956,15 +2629,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -3060,15 +2725,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -3122,15 +2779,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
 
@@ -3181,15 +2830,7 @@ void main() {
               },
         );
 
-        await tester.pumpWidget(
-          _wrap(
-            PdfReviewPage(
-              dependencies: dependencies,
-              testId: 'test-1',
-              submissionId: 'sub-1',
-            ),
-          ),
-        );
+        await _pumpReview(tester, dependencies);
         await tester.pump();
         await _settlePdf(tester);
         expect(find.text('設問1の答案'), findsOneWidget);
@@ -3263,28 +2904,23 @@ void main() {
     }) async {
       await tester.binding.setSurfaceSize(size);
       addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        _wrap(
-          PdfReviewPage(
-            dependencies: _dependencies(
-              pdfBytes: _pocA4PortraitPdf(),
-              q1: _question(),
-              q2: _question(id: 'q-2', number: '2'),
-              recognitions: [
-                _recognition(text: q1Answer),
-                _recognition(id: 'rec-2', questionId: 'q-2', text: q2Answer),
-              ],
-              // 承認 is refused until an AI grade exists, so both questions
-              // need one for Enter to do anything at all.
-              grades: [
-                _grade(),
-                _grade(id: 'grade-2', questionId: 'q-2'),
-              ],
-              approveReview: approveReview,
-            ),
-            testId: 'test-1',
-            submissionId: 'sub-1',
-          ),
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          q2: _question(id: 'q-2', number: '2'),
+          recognitions: [
+            _recognition(text: q1Answer),
+            _recognition(id: 'rec-2', questionId: 'q-2', text: q2Answer),
+          ],
+          // 承認 is refused until an AI grade exists, so both questions
+          // need one for Enter to do anything at all.
+          grades: [
+            _grade(),
+            _grade(id: 'grade-2', questionId: 'q-2'),
+          ],
+          approveReview: approveReview,
         ),
       );
       await tester.pump();
@@ -3409,5 +3045,69 @@ void main() {
       }
       semantics.dispose();
     });
+  });
+
+  // ------------------------------------------------------------------ //
+  // Issue #66 review (P2): the screen resolves `AppDependencies` from a
+  // provider now, and `ref` throws once a `ConsumerState` is disposed. A
+  // load that awaits between two of those calls must therefore not touch
+  // the provider again after the reviewer has left -- a `StateError` from
+  // `ref` is not a `SidecarApiException`, so nothing here would catch it
+  // and it would surface as an unhandled async error.
+  // ------------------------------------------------------------------ //
+  group('Issue #66: leaving the screen mid-request', () {
+    testWidgets('a pending shell load does not throw once the page is gone', (
+      tester,
+    ) async {
+      // `_loadShell` calls getSubmission -> listQuestions -> getSourcePdf in
+      // sequence; hold the middle one open across the dispose.
+      final questions = Completer<List<QuestionResponse>>();
+      final dependencies = AppDependencies(
+        getSubmission: (submissionId) async => _submission(),
+        listQuestions: (testId) => questions.future,
+        getSourcePdf: (submissionId) async => _pocA4PortraitPdf(),
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      questions.complete([_question()]);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+      'a pending question load does not throw once the page is gone',
+      (tester) async {
+        // Same for `_loadReview`: listRecognitions -> listGrades -> ... ->
+        // listReviews, with only one `mounted` check after all of them.
+        final grades = Completer<List<GradeResultResponse>>();
+        final dependencies = AppDependencies(
+          getSubmission: (submissionId) async => _submission(),
+          listQuestions: (testId) async => [_question()],
+          getSourcePdf: (submissionId) async => _pocA4PortraitPdf(),
+          listJobs: (submissionId) async => const [],
+          listRecognitions: (submissionId, questionId) async => const [],
+          listGrades: (submissionId, questionId) => grades.future,
+          listAnnotations: (submissionId, questionId) async => const [],
+          listReviews: (submissionId, questionId) async => const [],
+        );
+
+        await _pumpReview(tester, dependencies);
+        await _settlePdf(tester);
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+
+        grades.complete(const []);
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
   });
 }

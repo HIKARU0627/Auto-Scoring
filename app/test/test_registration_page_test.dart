@@ -1,9 +1,12 @@
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/test_registration/test_registration_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'app_harness.dart';
 
 TestResponse _test({String id = 'test-1', String status = 'draft'}) {
   return TestResponse(
@@ -19,8 +22,6 @@ Future<PickedPdfFile?> _fakeModelAnswerPick() async => const PickedPdfFile(
   path: 'C:/tmp/model-answer.pdf',
   name: 'model-answer.pdf',
 );
-
-Widget _wrap(Widget page) => MaterialApp(home: page);
 
 void main() {
   testWidgets('registers a test and navigates to the settings screen', (
@@ -55,10 +56,11 @@ void main() {
           : const PickedPdfFile(path: 'C:/tmp/manual.pdf', name: 'manual.pdf');
     }
 
-    await tester.pumpWidget(
-      _wrap(
-        TestRegistrationPage(dependencies: dependencies, pickFile: pickFile),
-      ),
+    await pumpAppAt(
+      tester,
+      AppRoutes.testRegistration,
+      dependencies: dependencies,
+      overrides: [pickPdfFileProvider.overrideWithValue(pickFile)],
     );
     await tester.pumpAndSettle();
 
@@ -126,10 +128,11 @@ void main() {
           : const PickedPdfFile(path: 'C:/tmp/manual.pdf', name: 'manual.pdf');
     }
 
-    await tester.pumpWidget(
-      _wrap(
-        TestRegistrationPage(dependencies: dependencies, pickFile: pickFile),
-      ),
+    await pumpAppAt(
+      tester,
+      AppRoutes.testRegistration,
+      dependencies: dependencies,
+      overrides: [pickPdfFileProvider.overrideWithValue(pickFile)],
     );
     await tester.enterText(find.byKey(const Key('test-name-field')), '国語 第1回');
     await tester.tap(find.byKey(const Key('model-answer-picker')));

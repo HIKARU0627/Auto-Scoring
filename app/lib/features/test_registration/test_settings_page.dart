@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
@@ -24,21 +25,21 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 /// -- the Issue #16 acceptance criterion "全必須項目確認後にだけ登録完了になる"
 /// and the Issue #16 追加要件 "設問依存関係を...明示確認するまでテストをreadyに
 /// しない".
-class TestSettingsPage extends StatefulWidget {
-  const TestSettingsPage({
-    super.key,
-    required this.dependencies,
-    required this.testId,
-  });
+class TestSettingsPage extends ConsumerStatefulWidget {
+  const TestSettingsPage({super.key, required this.testId});
 
-  final AppDependencies dependencies;
   final String testId;
 
   @override
-  State<TestSettingsPage> createState() => _TestSettingsPageState();
+  ConsumerState<TestSettingsPage> createState() => _TestSettingsPageState();
 }
 
-class _TestSettingsPageState extends State<TestSettingsPage> {
+class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
+  /// The sidecar operations this screen was opened against, captured once in
+  /// [initState] -- never re-resolved from the provider mid-request. See
+  /// [appDependenciesProvider] for why that rule exists.
+  late final AppDependencies _dependencies;
+
   TestResponse? _test;
   ProfileResponse? _profile;
   DependencyGraphResponse? _dependencyGraph;
@@ -58,6 +59,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
   @override
   void initState() {
     super.initState();
+    _dependencies = ref.read(appDependenciesProvider);
     _loadAll();
   }
 
@@ -67,16 +69,16 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
       _errorMessage = null;
     });
     try {
-      final test = await widget.dependencies.getTest(widget.testId);
+      final test = await _dependencies.getTest(widget.testId);
       ProfileResponse? profile;
       try {
-        profile = await widget.dependencies.getProfile(widget.testId);
+        profile = await _dependencies.getProfile(widget.testId);
       } on SidecarApiException catch (error) {
         if (error.statusCode != 404) rethrow;
       }
       DependencyGraphResponse? graph;
       try {
-        graph = await widget.dependencies.getDependencyGraph(widget.testId);
+        graph = await _dependencies.getDependencyGraph(widget.testId);
       } on SidecarApiException catch (error) {
         if (error.statusCode != 404) rethrow;
       }
@@ -112,7 +114,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
   }
 
   Future<void> _analyzeProfile() => _runGuarded(() async {
-    final profile = await widget.dependencies.analyzeProfile(widget.testId);
+    final profile = await _dependencies.analyzeProfile(widget.testId);
     if (!mounted) return;
     setState(() {
       _profile = profile;
@@ -123,10 +125,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
   Future<void> _saveProfile() => _runGuarded(() async {
     final regions = _editableRegions;
     if (regions == null) return;
-    final profile = await widget.dependencies.updateProfile(
-      widget.testId,
-      regions,
-    );
+    final profile = await _dependencies.updateProfile(widget.testId, regions);
     if (!mounted) return;
     setState(() {
       _profile = profile;
@@ -143,10 +142,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
     // this an edit made after the last explicit "保存" tap (or never saved
     // at all) would be silently discarded and the server would confirm a
     // stale, previously-persisted region set instead (Issue #16 review).
-    final saved = await widget.dependencies.updateProfile(
-      widget.testId,
-      regions,
-    );
+    final saved = await _dependencies.updateProfile(widget.testId, regions);
     if (!mounted) return;
     setState(() {
       _profile = saved;
@@ -156,7 +152,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
     // client's edit lands on the server before this confirm call reaches
     // it, the server rejects it as stale instead of silently approving
     // regions this reviewer never saw (Issue #16 review round 8).
-    final profile = await widget.dependencies.confirmProfile(
+    final profile = await _dependencies.confirmProfile(
       widget.testId,
       revision: saved.revision,
     );
@@ -188,7 +184,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
               ..promptText = region.text,
           ),
     ];
-    final graph = await widget.dependencies.analyzeDependencyGraph(
+    final graph = await _dependencies.analyzeDependencyGraph(
       widget.testId,
       overrides: overrides,
     );
@@ -203,7 +199,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
     final graph = _dependencyGraph;
     final edges = _editableEdges;
     if (graph == null || edges == null) return;
-    final confirmed = await widget.dependencies.confirmDependencyGraph(
+    final confirmed = await _dependencies.confirmDependencyGraph(
       widget.testId,
       version: graph.version,
       edges: edges,
@@ -217,9 +213,7 @@ class _TestSettingsPageState extends State<TestSettingsPage> {
   });
 
   Future<void> _completeRegistration() => _runGuarded(() async {
-    final result = await widget.dependencies.completeRegistration(
-      widget.testId,
-    );
+    final result = await _dependencies.completeRegistration(widget.testId);
     if (!mounted) return;
     setState(() => _test = result.test);
     _showSnackBar('テスト登録が完了しました');

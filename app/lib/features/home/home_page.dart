@@ -1,20 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:auto_scoring_app/core/app_dependencies.dart';
-import 'package:auto_scoring_app/features/answer_intake/answer_intake_page.dart';
-import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
-import 'package:auto_scoring_app/features/test_registration/test_registration_page.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
 
 /// Landing screen. Confirms the app boots and can reach the (stubbed) backend.
 ///
 /// `features` may depend on `core` and `api`.
-class HomePage extends StatelessWidget {
-  const HomePage({super.key, required this.dependencies});
-
-  final AppDependencies dependencies;
+class HomePage extends ConsumerWidget {
+  const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dependencies = ref.watch(appDependenciesProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Auto-Scoring')),
       body: Center(
@@ -37,12 +36,7 @@ class HomePage extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      TestRegistrationPage(dependencies: dependencies),
-                ),
-              ),
+              onPressed: () => context.push(AppRoutes.testRegistration),
               icon: const Icon(Icons.add_task),
               label: const Text('テスト登録'),
             ),
@@ -53,21 +47,13 @@ class HomePage extends StatelessWidget {
             // unreachable once its settings screen was closed (Issue #16
             // review).
             OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => TestListPage(dependencies: dependencies),
-                ),
-              ),
+              onPressed: () => context.push(AppRoutes.testList),
               icon: const Icon(Icons.list_alt),
               label: const Text('テスト一覧'),
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => AnswerIntakePage(dependencies: dependencies),
-                ),
-              ),
+              onPressed: () => context.push(AppRoutes.answerIntake),
               icon: const Icon(Icons.upload_file),
               label: const Text('答案取込'),
             ),

@@ -218,18 +218,19 @@ Flutter 起動
 | `SidecarFailed`   | エラー画面 + **再起動ボタン**                              |
 | `SidecarStopped`  | 終了中                                                     |
 
-スプラッシュとエラー画面は `MaterialApp.builder` で **Navigator 全体の上に重ねる**。
-`MaterialApp.home`（= Navigator の最下段のルート）に置いてはいけない: 答案取込や
+スプラッシュとエラー画面は `MaterialApp.router` の `builder` で **Router（=
+Navigator）全体の上に重ねる**。最下段のルートとして置いてはいけない: 答案取込や
 添削レビューを開いている最中にサイドカーが落ちると、エラー画面と再起動ボタンが
 push 済みのページの下に隠れ、ユーザーには「自分の画面が理由も示さず全リクエストに
 失敗し続ける」ようにしか見えない。
 
-サイドカーが使えなくなった時点で `Navigator.popUntil(isFirst)` により push 済みの
-ルートを畳む。各ページは push された時点の `AppDependencies`（= その時の
-`SidecarApiClient`）を握っており、放置すると閉じたクライアントを呼び続け、再起動が
-新しい port と token を発行しても届かないため。**作業中の画面は失われる**が、
-未送信の編集を持っていたサイドカー自身が死んでいる以上どのみち失われており、
-エラー画面はそれを隠さない。
+サイドカーが使えなくなった時点で `GoRouter.go(AppRoutes.starting)` により push 済みの
+ルートを畳む（go_router 導入前は `Navigator.popUntil(isFirst)`、
+[`technology-stack.md`](./technology-stack.md) §2.2）。各画面は
+`appDependenciesProvider` から `AppDependencies`（= その時の `SidecarApiClient`）を
+解決しており、放置すると閉じたクライアントを呼び続け、再起動が新しい port と token を
+発行しても届かないため。**作業中の画面は失われる**が、未送信の編集を持っていた
+サイドカー自身が死んでいる以上どのみち失われており、エラー画面はそれを隠さない。
 
 `SidecarFailed` の内訳と表示:
 

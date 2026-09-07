@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
@@ -15,14 +16,12 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 /// intends -- this dialog invents no new polling protocol of its own.
 Future<void> showExportDialog(
   BuildContext context, {
-  required AppDependencies dependencies,
   required String submissionId,
 }) {
   return showDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (dialogContext) =>
-        ExportDialog(dependencies: dependencies, submissionId: submissionId),
+    builder: (dialogContext) => ExportDialog(submissionId: submissionId),
   );
 }
 
@@ -45,25 +44,28 @@ enum _RetryStrategy { retryJob, requestNew }
 /// `_stage == running` covers "request in flight", "job queued/running",
 /// and "a transient polling failure we're still recovering from" -- the
 /// reviewer only needs to know it hasn't finished yet.
-class ExportDialog extends StatefulWidget {
+class ExportDialog extends ConsumerStatefulWidget {
   const ExportDialog({
     super.key,
-    required this.dependencies,
     required this.submissionId,
     this.pollInterval = const Duration(seconds: 1),
   });
 
-  final AppDependencies dependencies;
   final String submissionId;
 
   /// Overridable so widget tests don't need to wait on a real 1-second timer.
   final Duration pollInterval;
 
   @override
-  State<ExportDialog> createState() => _ExportDialogState();
+  ConsumerState<ExportDialog> createState() => _ExportDialogState();
 }
 
-class _ExportDialogState extends State<ExportDialog> {
+class _ExportDialogState extends ConsumerState<ExportDialog> {
+  /// The sidecar operations this screen was opened against, captured once in
+  /// [initState] -- never re-resolved from the provider mid-request. See
+  /// [appDependenciesProvider] for why that rule exists.
+  late final AppDependencies _dependencies;
+
   /// A transport-level failure while polling (sidecar unreachable, timeout,
   /// ...) says nothing about the job itself -- it may still be running or
   /// have already succeeded. Tolerate this many consecutive failures,
@@ -94,6 +96,7 @@ class _ExportDialogState extends State<ExportDialog> {
   @override
   void initState() {
     super.initState();
+    _dependencies = ref.read(appDependenciesProvider);
     _start();
   }
 
@@ -113,9 +116,7 @@ class _ExportDialogState extends State<ExportDialog> {
       _transientPollFailures = 0;
     });
     try {
-      final result = await widget.dependencies.requestExport(
-        widget.submissionId,
-      );
+      final result = await _dependencies.requestExport(widget.submissionId);
       if (!mounted) return;
       final existing = result.export_;
       if (existing != null) {
@@ -165,7 +166,7 @@ class _ExportDialogState extends State<ExportDialog> {
     final jobId = _jobId;
     if (jobId == null) return;
     try {
-      final job = await widget.dependencies.getJob(jobId);
+      final job = await _dependencies.getJob(jobId);
       if (!mounted) return;
       switch (job.state) {
         case 'succeeded':
@@ -214,9 +215,7 @@ class _ExportDialogState extends State<ExportDialog> {
 
   Future<void> _loadExportedFile(String jobId) async {
     try {
-      final exports = await widget.dependencies.listExports(
-        widget.submissionId,
-      );
+      final exports = await _dependencies.listExports(widget.submissionId);
       _transientPollFailures = 0;
       if (!mounted) return;
       final match = exports.where((export) => export.jobId == jobId);
@@ -258,7 +257,7 @@ class _ExportDialogState extends State<ExportDialog> {
       _errorMessage = null;
     });
     try {
-      await widget.dependencies.retryJob(jobId);
+      await _dependencies.retryJob(jobId);
       _schedulePoll();
     } on SidecarApiException catch (error) {
       if (!mounted) return;

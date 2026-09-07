@@ -64,6 +64,23 @@ dependencies:
   # pdfrx renders pages in.
   pdfrx: ^2.4.7
 
+  # State management and DI (docs/technology-stack.md §2). Every screen reads
+  # its collaborators from `core/app_dependencies.dart`'s provider instead of
+  # taking them through constructors, and widget tests swap them with
+  # `ProviderScope(overrides: ...)` -- see `test/app_harness.dart`.
+  #
+  # 3.3.2, not the newest 3.4.x: 3.4.1+ requires Dart >= 3.12 and this app is
+  # pinned to 3.11.1 (`.fvmrc`). Note that `riverpod` 3.x declares `test` as a
+  # regular dependency, which is why the lockfile grew a `test`/`shelf` subtree
+  # that nothing in `lib/` imports.
+  flutter_riverpod: ^3.3.2
+
+  # Declarative routing (docs/technology-stack.md §2). The route table is
+  # `lib/app_router.dart`; the paths features push to are `core/app_routes.dart`.
+  #
+  # 17.x, not 18.x: 18.0.0 requires Dart >= 3.12 (see above).
+  go_router: ^17.5.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
