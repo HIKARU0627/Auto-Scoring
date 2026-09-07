@@ -9,7 +9,6 @@ placement, rotation, and a missing-font failure.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from io import BytesIO
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from auto_scoring.adapters.pdf.pdfium_pypdf_engine import (
 )
 from auto_scoring.domain.models import AnnotationKind, NormalizedRect
 from auto_scoring.domain.pdf_engine import AnnotationMark
+from tests.font_support import install_font_covering
 
 _A4_W, _A4_H = 595.0, 842.0
 
@@ -100,16 +100,6 @@ def _redness_extent_within(
     return bright - bleft, bbottom - btop
 
 
-@pytest.fixture(autouse=True)
-def _reset_font_cache() -> Iterator[None]:
-    """Every test starts and ends with a clean font-registration cache, so a
-    test that forces `JapaneseFontNotFoundError` (below) never leaves a
-    later test unable to find the real font again."""
-    engine_module._ensure_japanese_font_registered.cache_clear()
-    yield
-    engine_module._ensure_japanese_font_registered.cache_clear()
-
-
 @pytest.mark.parametrize(
     "kind",
     [
@@ -157,7 +147,13 @@ def test_source_pdf_is_never_modified(tmp_path: Path) -> None:
     assert source.read_bytes() == original_bytes
 
 
-def test_score_and_long_japanese_comment_text_render_within_their_rects(tmp_path: Path) -> None:
+def test_score_and_long_japanese_comment_text_render_within_their_rects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both marks are asserted to have drawn, so both sets of glyphs are
+    genuinely required -- which is why this one test still skips on a Linux
+    machine carrying only the split-coverage fallbacks
+    (docs/mvp-acceptance.md section 4)."""
     source = tmp_path / "source.pdf"
     _write_pdf(source)
     destination = tmp_path / "out.pdf"
@@ -168,6 +164,8 @@ def test_score_and_long_japanese_comment_text_render_within_their_rects(tmp_path
     long_comment = (
         "この設問は根拠の説明が不十分であり、模範解答と比較すると論理の飛躍が見られます。" * 2
     )
+
+    install_font_covering(monkeypatch, "4/5" + long_comment)
 
     engine = PdfiumPypdfEngine()
     engine.render_annotations(

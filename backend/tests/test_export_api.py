@@ -31,6 +31,7 @@ from auto_scoring.domain.models import (
     NormalizedRect,
 )
 from auto_scoring.jobs.export_processor import ExportJobProcessor
+from tests.font_support import install_font_covering
 from tests.support import at, make_grade, make_question, make_review, make_submission, make_test
 
 _TOKEN = "export-test-token"
@@ -48,6 +49,18 @@ def client(session_factory: sessionmaker[Session], store: LocalFileStore) -> Ite
     )
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def score_font(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requested by every test that runs an export to completion here.
+
+    Unlike `test_export_processor.py`'s `japanese_font`, the fixtures here
+    seed a SCORE mark and no comment, so the glyphs the export needs are the
+    score's own (`domain/pdf_export._score_text` -> ``"4/5"``) -- Latin,
+    not Japanese (tests/font_support.py).
+    """
+    install_font_covering(monkeypatch, "0123456789/")
 
 
 def _write_source_pdf(path: Path) -> None:
@@ -119,6 +132,7 @@ def test_export_refuses_and_names_unconfirmed_questions(
     assert response.json()["detail"]["question_ids"] == ["q-1"]
 
 
+@pytest.mark.usefixtures("score_font")
 def test_export_queues_a_job_and_completes_through_the_real_queue(
     client: TestClient, session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -145,6 +159,7 @@ def test_export_queues_a_job_and_completes_through_the_real_queue(
     assert output_path.name == "答案A_corrected.pdf"
 
 
+@pytest.mark.usefixtures("score_font")
 def test_reexporting_unchanged_review_state_reuses_the_existing_export(
     client: TestClient, session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:
@@ -164,6 +179,7 @@ def test_reexporting_unchanged_review_state_reuses_the_existing_export(
     assert len(listing.json()) == 1
 
 
+@pytest.mark.usefixtures("score_font")
 def test_reexporting_when_the_previous_export_s_file_has_gone_missing_queues_a_fresh_one(
     client: TestClient, session_factory: sessionmaker[Session], store: LocalFileStore
 ) -> None:

@@ -58,12 +58,9 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageChops
 from PIL.Image import Image as PilImage
 from pypdf import PdfReader
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session, sessionmaker
 
-import auto_scoring.adapters.pdf.pdfium_pypdf_engine as engine_module
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
@@ -89,6 +86,7 @@ from auto_scoring.domain.pdf_intake import IntakeLimits
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from auto_scoring.jobs.settings import QueueSettings
+from tests.font_support import install_font_covering
 from tests.support import make_job
 
 _TOKEN = "e2e-acceptance-token"
@@ -1251,105 +1249,6 @@ def test_export_is_refused_while_any_question_is_still_unconfirmed(
     assert refused.json()["detail"]["question_ids"] == [second]
 
 
-#: Fonts to try when none of `pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES`
-#: -- the Windows-shipped fonts the product itself uses -- exists.
-#:
-#: Without this, the text-bearing export tests below could only ever run on
-#: the windows-latest CI, and a test nobody can run locally is exactly how
-#: their assertions came to be `exists()` and `size > 0` in the first place
-#: (round 1 review). The list is *appended* to the production candidates, so
-#: on Windows the real fonts are still found first and nothing here is ever
-#: reached.
-#:
-#: Which entry gets used depends on the characters a given test actually
-#: draws, because coverage here is patchy: `DroidSansFallbackFull` is the
-#: only kanji-capable TrueType face on a stock Ubuntu image and it carries no
-#: Latin glyphs at all, while `DejaVuSans` is the reverse. (reportlab's
-#: `TTFont` also needs TrueType outlines, which rules out the CFF-flavoured
-#: Noto CJK OTCs those images do ship.) `_install_font_covering` picks per
-#: test rather than assuming one font serves both.
-_FALLBACK_FONTS = (
-    Path("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf"),
-    Path("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf"),
-    Path("/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf"),
-    Path("/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf"),
-    Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-)
-
-
-def _covers(font_path: Path, required: str) -> bool:
-    """Whether reportlab can load ``font_path`` *and* it has a glyph for every
-    character in ``required``.
-
-    Existence is not enough, and neither is loadability. A face missing the
-    glyphs draws notdef -- literally nothing on the page -- so a test relying
-    on it would fail for a reason that has nothing to do with the export
-    code. Checked with the same `subfontIndex=0` the engine itself uses.
-    """
-    try:
-        font = TTFont(f"probe-{font_path.stem}", str(font_path), subfontIndex=0)
-    except Exception:
-        return False
-    return all(ord(character) in font.face.charToGlyph for character in required)
-
-
-def _install_font_covering(monkeypatch: pytest.MonkeyPatch, required: str) -> None:
-    """Make the export engine resolve a font that can really draw ``required``.
-
-    A no-op on Windows, where the production candidates already cover both
-    Japanese and Latin. Elsewhere it appends the first suitable fallback, or
-    skips -- an honest "cannot verify on this machine", never a quietly
-    weakened assertion.
-    """
-    original = engine_module._JAPANESE_FONT_CANDIDATES
-    if not any(candidate.exists() for candidate in original):
-        fallback = next(
-            (path for path in _FALLBACK_FONTS if path.exists() and _covers(path, required)),
-            None,
-        )
-        if fallback is None:
-            pytest.skip(
-                f"no installed TrueType font covers {required!r}; PDF export cannot draw "
-                "it on this machine (docs/mvp-acceptance.md section 4)"
-            )
-        monkeypatch.setattr(engine_module, "_JAPANESE_FONT_CANDIDATES", (*original, fallback))
-    # Dropped *after* patching: a resolution made against the old candidate
-    # list would otherwise still be handed back (see `_forget_registered_font`).
-    _forget_registered_font()
-
-
-def _forget_registered_font() -> None:
-    """Drop the engine's font registration, both caches of it.
-
-    `_ensure_japanese_font_registered` is `lru_cache`d, which
-    `test_pdf_annotation_rendering.py`'s fixture of the same name already
-    clears. That is not sufficient here. reportlab keeps its *own*
-    process-wide registry keyed by font name, and silently ignores a second
-    `registerFont` under a name it already holds -- so the first face bound
-    to `AutoScoringJPFont` in a process stays bound for the rest of it. The
-    two export tests below deliberately need different faces on Linux (no
-    single installed font covers both Japanese and Latin -- see
-    `_FALLBACK_FONTS`), so without dropping reportlab's entry too, whichever
-    test ran first would silently decide the font for the other, and the
-    second would assert against glyphs its face does not have.
-
-    On Windows this is inert: one font serves both tests, and re-registering
-    it is what would have happened anyway.
-    """
-    engine_module._ensure_japanese_font_registered.cache_clear()
-    pdfmetrics._fonts.pop(engine_module._JAPANESE_FONT_NAME, None)
-
-
-@pytest.fixture(autouse=True)
-def _reset_font_registration() -> Iterator[None]:
-    """Every test in this module starts and ends with no font registered, so
-    neither leaks a fallback into the next one (or into another module)."""
-    _forget_registered_font()
-    yield
-    _forget_registered_font()
-
-
 def _page_text(pdf_path: Path, page_index: int) -> str:
     return PdfReader(str(pdf_path)).pages[page_index].extract_text()
 
@@ -1395,7 +1294,7 @@ def test_the_exported_pdf_carries_the_reviewed_comment_text(
     (round 1 review) -- hence the third assertion below, which pins that the
     source really has no such text to copy.
     """
-    _install_font_covering(monkeypatch, CONFIRMED_COMMENT)
+    install_font_covering(monkeypatch, CONFIRMED_COMMENT)
     _, submission_id = _reviewed_answer(
         client,
         data_root,
@@ -1432,11 +1331,11 @@ def test_the_exported_pdf_carries_the_reviewed_score(
     one, and it follows the reviewer when they change it.
 
     Split from the comment test because the two need different glyphs, and no
-    single font on a stock Linux image covers both (see `_FALLBACK_FONTS`).
+    single font on a stock Linux image covers both (see `tests/font_support.py`).
     Splitting is what lets each half actually run outside Windows rather than
     both being skipped.
     """
-    _install_font_covering(monkeypatch, "0123456789/")
+    install_font_covering(monkeypatch, "0123456789/")
     score_annotation = [{"kind": "score", "x": 0.70, "y": 0.03, "width": 0.20, "height": 0.06}]
     test_id, submission_id = _reviewed_answer(client, data_root, annotations=score_annotation)
 
