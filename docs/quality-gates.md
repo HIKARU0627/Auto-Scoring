@@ -43,6 +43,40 @@ See [`sidecar-api.md`](./sidecar-api.md) §4.
 - `pnpm run bootstrap` points the current worktree at `.githooks/`
   (`git config core.hooksPath .githooks`).
 
+### Hook files must carry the executable bit
+
+`core.hooksPath` being set is not enough. Git skips a hook it cannot execute and
+says so only as a hint on stderr, so nothing fails and the hook simply never
+runs. Both hooks sat at `100644` from the day they were added until Issue #75,
+which is why `--no-verify` pushes had no effect either.
+
+A hook must be tracked as `100755` — that is the mode every clone checks out
+with — and, on POSIX, the checked-out file needs the bit as well, because that
+is what git tests before running it. To verify:
+
+```console
+$ git ls-files --stage .githooks/
+100755 9b4f0291... 0	.githooks/pre-commit
+100755 27237d0d... 0	.githooks/pre-push
+
+$ git hook run --ignore-missing pre-commit
+```
+
+`git hook run` executes the hook, or prints `hook was ignored because it's not
+set as executable` instead — the one command that answers "would git actually
+run this?".
+
+When adding a hook, set both modes:
+
+```sh
+chmod +x .githooks/<name>                      # this worktree (POSIX only)
+git update-index --chmod=+x .githooks/<name>   # the tracked mode
+```
+
+`pnpm run bootstrap` checks every file in `.githooks/` for both and **fails**
+rather than warns — a warning is what let this go unnoticed. Keep `.githooks/`
+free of non-hook files (notes, READMEs); the check has no way to tell them apart.
+
 ## Adding heavier gates
 
 Add integration / e2e / contract jobs directly to `.github/workflows/ci.yml` as
