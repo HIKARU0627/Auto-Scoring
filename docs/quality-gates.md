@@ -73,8 +73,36 @@ chmod +x .githooks/<name>                      # this worktree (POSIX only)
 git update-index --chmod=+x .githooks/<name>   # the tracked mode
 ```
 
-`pnpm run bootstrap` checks every file in `.githooks/` for both and **fails**
-rather than warns — a warning is what let this go unnoticed. Keep `.githooks/`
+### Hooks inherit git's environment
+
+**Rule: a hook must drop the inherited git environment before it shells out to
+any external tool.**
+
+```sh
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX
+```
+
+Git exports those four variables into every hook process, pointing at _this_
+repository, and everything the hook runs inherits them. A tool that calls git
+for its own purposes — locating a repository root, reading its own version,
+resolving config — therefore inspects this repository instead of wherever it
+actually lives. Nothing errors; the tool just quietly gets the wrong answer.
+
+The instance that surfaced here (Issue #75): Flutter shells out to git to
+identify its own SDK, so under a hook it read this repository and reported
+version `0.0.0-unknown`, failing `app/pubspec.yaml`'s `>=3.41.0` constraint.
+`flutter analyze` and `flutter test` broke inside the hook while working fine
+from a normal shell, which made every `git push` fail the moment the hooks
+started running. `.githooks/pre-push` carries the `unset` for that reason.
+
+Verify a new hook with `git hook run --ignore-missing <name>`. Running its
+`pnpm run check:*` script directly from a shell does **not** reproduce the hook
+environment, which is why this trap stayed invisible for as long as it did.
+
+### Where the check lives
+
+`pnpm run bootstrap` checks every file in `.githooks/` for both modes and
+**fails** rather than warns — a warning is what let this go unnoticed. Keep `.githooks/`
 free of non-hook files (notes, READMEs); the check has no way to tell them apart.
 
 ## Adding heavier gates

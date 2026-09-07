@@ -1,4 +1,11 @@
 #!/bin/sh
 set -eu
 
+# Git exports GIT_DIR & co. into hooks pointing at this repository, and every
+# tool the hook runs inherits them: flutter calls git to identify its own SDK,
+# so under a hook it read *this* repo and reported version 0.0.0-unknown, which
+# fails app/pubspec.yaml's SDK constraint. See docs/quality-gates.md
+# "Hooks inherit git's environment".
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX
+
 exec pnpm run check:pre-push
