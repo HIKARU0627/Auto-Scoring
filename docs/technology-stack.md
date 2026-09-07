@@ -70,7 +70,10 @@
 
 > 認証・動的ポート・OpenAPI → Dart 生成・接続情報の受け渡し（ハンドシェイク）の
 > 実装決定は [`sidecar-api.md`](./sidecar-api.md)（GitHub Issue #10）にまとめた。
-> 子プロセスの起動・kill とバンドルは Windows 配布 Issue で扱う。
+> **子プロセスの起動・監視・kill、Job Object による orphan 防止、`app-data/` の
+> 格納場所、二重起動の扱い、ログとアンインストール方針は
+> [`windows-distribution.md`](./windows-distribution.md)（GitHub Issue #24）で
+> 確定した**（実装: `app/lib/core/sidecar_supervisor.dart`）。
 
 ---
 
@@ -217,9 +220,13 @@ AGPL/商用ライセンス問題は無い）を`PdfEngine`実装の内部での�
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Python サイドカーの同梱 | **PyInstaller の onedir** で「インタプリタ＋依存＋DLL」を 1 ディレクトリにまとめ、Flutter の実行ファイル群に同梱                                 |
 | 却下した案              | Nuitka（起動・実行は速いがフックエコシステムが弱く、OpenCV/PyMuPDF 同梱で詰まりやすい）。PyInstaller onefile（一時展開が遅く AV 誤検知が増える） |
-| Windows インストーラ    | 第一候補 **MSIX**（`msix` pub パッケージ）。コード署名前提。要件が合わなければ **Inno Setup**                                                    |
-| 署名                    | Windows コード署名証明書が必要（SmartScreen 対策）。取得はユーザー側手配事項                                                                     |
+| Windows インストーラ    | **Inno Setup（Issue #24 で確定）**。第一候補だった MSIX は、署名必須でありながら証明書が未準備のため「unsigned test artifact」を作れず不適合     |
+| 署名                    | Windows コード署名証明書が必要（SmartScreen 対策）。取得はユーザー側手配事項。CI は unsigned のみ、署名は人間だけが行う                          |
 | 自動更新                | MVP では対象外（§31 後回し候補に準拠）。将来 `msix` + 配布サーバ or `auto_updater`                                                               |
+
+配布物の構成・`app-data/` の場所・ライフサイクル・障害復旧・署名手順は
+[`windows-distribution.md`](./windows-distribution.md)（GitHub Issue #24）が正本。
+MSIX を採用しない判断の根拠は同 §2。
 
 ---
 
@@ -334,7 +341,7 @@ Flutter/Python は `pnpm run` から各ツールを呼び出すラッパーに�
 | OCR          | `OCRProvider` 抽象。PoC 第一候補 Google Cloud Vision（クラウド不可時ローカル OCR）                  |
 | AI           | `AIProvider` 抽象。PoC 候補 Gemini / Claude / GPT。出力は JSON スキーマで構造化                     |
 | プロセス連携 | Flutter が Python サイドカーを子プロセス起動、localhost + 起動時トークン、動的ポート                |
-| 配布         | PyInstaller onedir で Python 同梱、MSIX（不可なら Inno Setup）、コード署名                          |
+| 配布         | PyInstaller onedir で Python 同梱、**Inno Setup**（MSIX は署名必須で不適合）、署名は人間の手作業    |
 | API 契約     | FastAPI OpenAPI schema を正本に Dart クライアントをコード生成しコミット                             |
 
 ---
