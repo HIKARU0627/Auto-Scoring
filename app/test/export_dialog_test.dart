@@ -171,4 +171,78 @@ void main() {
 
     expect(find.byKey(const Key('export-dialog-success')), findsOneWidget);
   });
+
+  testWidgets(
+    'a transient polling failure resumes observation instead of reporting the export as failed',
+    (tester) async {
+      var pollAttempts = 0;
+      final dependencies = AppDependencies(
+        requestExport: (submissionId) async => ExportRequestResponse(
+          (b) => b
+            ..decision = 'accept_new'
+            ..jobId = 'job-1',
+        ),
+        getJob: (jobId) async {
+          pollAttempts += 1;
+          if (pollAttempts <= 2) {
+            throw SidecarApiException(SidecarErrorKind.timeout, 'timed out');
+          }
+          return _job(state: 'succeeded');
+        },
+        listExports: (submissionId) async => [_export()],
+      );
+
+      await _pumpDialog(tester, dependencies);
+
+      // Two transient failures -- still just "running", never "failed".
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.byKey(const Key('export-dialog-progress')), findsOneWidget);
+      expect(find.byKey(const Key('export-dialog-error')), findsNothing);
+
+      // Third attempt succeeds.
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.byKey(const Key('export-dialog-success')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'retrying a cancelled job requests a fresh export instead of retrying the cancelled one',
+    (tester) async {
+      var requestCount = 0;
+      var retryJobCalled = false;
+      final dependencies = AppDependencies(
+        requestExport: (submissionId) async {
+          requestCount += 1;
+          return ExportRequestResponse(
+            (b) => b
+              ..decision = 'accept_new'
+              ..jobId = 'job-$requestCount',
+          );
+        },
+        getJob: (jobId) async => _job(state: 'cancelled'),
+        retryJob: (jobId) async {
+          retryJobCalled = true;
+          return _job(state: 'running');
+        },
+        listExports: (submissionId) async => [_export()],
+      );
+
+      await _pumpDialog(tester, dependencies);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+
+      expect(find.byKey(const Key('export-dialog-error')), findsOneWidget);
+      expect(requestCount, 1);
+
+      await tester.tap(find.byKey(const Key('export-dialog-retry-button')));
+      await tester.pump();
+
+      expect(retryJobCalled, isFalse);
+      expect(requestCount, 2);
+    },
+  );
 }

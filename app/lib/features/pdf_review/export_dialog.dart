@@ -28,9 +28,23 @@ Future<void> showExportDialog(
 
 enum _ExportStage { running, succeeded, unconfirmed, failed }
 
+/// What `_retry()` should do once the reviewer taps 再試行, derived from the
+/// *last actually-observed* job state (P2 review):
+///
+/// - [retryJob]: the sidecar told us the job is `failed` -- `POST
+///   /jobs/{id}/retry` requeues that same job.
+/// - [requestNew]: the job was `cancelled` (retrying a cancelled job is
+///   rejected by the sidecar -- it only accepts FAILED ones), or we were
+///   never able to observe its state at all (a transport failure persisted
+///   through every poll attempt, or the very first `requestExport` call
+///   itself failed before a job even existed) -- either way, the only thing
+///   left to do is ask for a brand new export.
+enum _RetryStrategy { retryJob, requestNew }
+
 /// One export attempt's lifecycle, from request through completion.
-/// `_stage == running` covers both "request in flight" and "job queued/
-/// running" -- the reviewer only needs to know it hasn't finished yet.
+/// `_stage == running` covers "request in flight", "job queued/running",
+/// and "a transient polling failure we're still recovering from" -- the
+/// reviewer only needs to know it hasn't finished yet.
 class ExportDialog extends StatefulWidget {
   const ExportDialog({
     super.key,
@@ -50,12 +64,32 @@ class ExportDialog extends StatefulWidget {
 }
 
 class _ExportDialogState extends State<ExportDialog> {
+  /// A transport-level failure while polling (sidecar unreachable, timeout,
+  /// ...) says nothing about the job itself -- it may still be running or
+  /// have already succeeded. Tolerate this many consecutive failures,
+  /// silently resuming polling, before finally giving up and reporting it
+  /// (P2 review: reporting immediately turned a hiccup into a dead-end
+  /// "retry" that the sidecar would reject with 409, since the job is
+  /// neither FAILED nor CANCELLED).
+  static const int _maxTransientPollFailures = 5;
+
   _ExportStage _stage = _ExportStage.running;
   String? _jobId;
   String? _filePath;
   String? _errorMessage;
   List<String> _unconfirmedQuestionIds = const [];
+
+  /// The job's own last-observed terminal state (`'failed'`/`'cancelled'`),
+  /// or `null` if it was never observed as terminal (still running, or every
+  /// observation attempt failed at the transport level) -- what [_retry]
+  /// uses to decide [_RetryStrategy].
+  String? _lastObservedJobState;
+  int _transientPollFailures = 0;
   Timer? _pollTimer;
+
+  _RetryStrategy get _retryStrategy => _lastObservedJobState == 'failed'
+      ? _RetryStrategy.retryJob
+      : _RetryStrategy.requestNew;
 
   @override
   void initState() {
@@ -74,6 +108,9 @@ class _ExportDialogState extends State<ExportDialog> {
       _stage = _ExportStage.running;
       _errorMessage = null;
       _unconfirmedQuestionIds = const [];
+      _jobId = null;
+      _lastObservedJobState = null;
+      _transientPollFailures = 0;
     });
     try {
       final result = await widget.dependencies.requestExport(
@@ -109,6 +146,8 @@ class _ExportDialogState extends State<ExportDialog> {
           _errorMessage = error.message;
         });
       } else {
+        // No job exists yet to retry -- `_retryStrategy` already defaults to
+        // `requestNew` while `_lastObservedJobState` is null.
         setState(() {
           _stage = _ExportStage.failed;
           _errorMessage = error.message;
@@ -127,6 +166,7 @@ class _ExportDialogState extends State<ExportDialog> {
     if (jobId == null) return;
     try {
       final job = await widget.dependencies.getJob(jobId);
+      _transientPollFailures = 0;
       if (!mounted) return;
       switch (job.state) {
         case 'succeeded':
@@ -134,11 +174,13 @@ class _ExportDialogState extends State<ExportDialog> {
         case 'failed':
           setState(() {
             _stage = _ExportStage.failed;
+            _lastObservedJobState = 'failed';
             _errorMessage = job.lastError ?? '出力に失敗しました';
           });
         case 'cancelled':
           setState(() {
             _stage = _ExportStage.failed;
+            _lastObservedJobState = 'cancelled';
             _errorMessage = '出力がキャンセルされました';
           });
         default:
@@ -146,9 +188,17 @@ class _ExportDialogState extends State<ExportDialog> {
       }
     } on SidecarApiException catch (error) {
       if (!mounted) return;
+      _transientPollFailures += 1;
+      if (_transientPollFailures < _maxTransientPollFailures) {
+        // Resume observation rather than reporting a failure the job may
+        // not actually have (see `_maxTransientPollFailures`'s docstring).
+        _schedulePoll();
+        return;
+      }
       setState(() {
         _stage = _ExportStage.failed;
-        _errorMessage = error.message;
+        _lastObservedJobState = null;
+        _errorMessage = '進捗の取得に失敗しました: ${error.message}';
       });
     }
   }
@@ -166,14 +216,31 @@ class _ExportDialogState extends State<ExportDialog> {
       });
     } on SidecarApiException catch (error) {
       if (!mounted) return;
+      // The export job itself succeeded -- only fetching its resulting
+      // `Export` row failed at the transport level. Resume observation the
+      // same way `_checkJob` does for a mid-poll transport failure, rather
+      // than reporting a job that actually succeeded as failed.
+      _transientPollFailures += 1;
+      if (_transientPollFailures < _maxTransientPollFailures) {
+        _schedulePoll();
+        return;
+      }
       setState(() {
         _stage = _ExportStage.failed;
-        _errorMessage = error.message;
+        _lastObservedJobState = null;
+        _errorMessage = '出力結果の取得に失敗しました: ${error.message}';
       });
     }
   }
 
   Future<void> _retry() async {
+    if (_retryStrategy == _RetryStrategy.requestNew) {
+      // The job was cancelled (retrying it is rejected by the sidecar --
+      // only a FAILED job can be requeued) or its state was never actually
+      // observed -- a fresh export request is the only thing left to try.
+      await _start();
+      return;
+    }
     final jobId = _jobId;
     if (jobId == null) return;
     setState(() {
@@ -262,7 +329,7 @@ class _ExportDialogState extends State<ExportDialog> {
           ),
           FilledButton(
             key: const Key('export-dialog-retry-button'),
-            onPressed: _jobId == null ? null : _retry,
+            onPressed: _retry,
             child: const Text('再試行'),
           ),
         ];
