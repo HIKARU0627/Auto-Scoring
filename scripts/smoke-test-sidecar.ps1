@@ -92,8 +92,15 @@ try {
         -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile `
         -ArgumentList @(
             '--port', '0',
-            '--handshake-file', $handshakeFile,
-            '--app-data-dir', $appDataDir
+            # Quoted explicitly. `-ArgumentList` joins its elements with single
+            # spaces into one command line and quotes nothing, so an unquoted
+            # path breaks apart at the first space -- which is every path under
+            # `C:\Users\Jane Doe\...`. CI never sees it: the runner's %TEMP%
+            # is the 8.3 short name `C:\Users\RUNNER~1\AppData\Local\Temp`.
+            # `-FilePath` above needs no quoting; that one is not part of the
+            # joined command line.
+            '--handshake-file', "`"$handshakeFile`"",
+            '--app-data-dir', "`"$appDataDir`""
         )
 
     Write-Step "Waiting up to ${TimeoutSeconds}s for the handshake"
