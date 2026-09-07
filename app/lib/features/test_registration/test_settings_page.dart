@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
+import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
@@ -497,7 +498,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     // parallel-execution plan (Issue #16 review round 3).
     final layers = graph == null
         ? null
-        : _computeLayers(graph.questionIds.toList(), edges ?? const []);
+        : dependencyExecutionLayers(
+            graph.questionIds.toList(),
+            edges ?? const [],
+          );
     return Card(
       child: Padding(
         padding: AppSpacing.card,
@@ -638,52 +642,6 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       label: Text(_isReady ? '登録完了済み' : '登録完了'),
     );
   }
-}
-
-/// Groups [questionIds] into parallel-execution layers via Kahn's algorithm
-/// over [edges] -- every question whose prerequisites are all in an earlier
-/// layer lands in the same layer, mirroring
-/// `domain.dependency_graph._kahn_layers` on the backend. Recomputed from
-/// the reviewer's *current* working edge set (not the server's last
-/// analyze/confirm response) so the displayed plan never goes stale after
-/// an edit (Issue #16 review round 3). Returns `null` if the edge set is
-/// not a DAG (a cycle a reviewer introduced but hasn't fixed yet) --
-/// `/dependency-graph/confirm` itself rejects a cyclic edge set, so this
-/// only ever surfaces as a transient in-progress-edit state here.
-List<List<String>>? _computeLayers(
-  List<String> questionIds,
-  List<DependencyEdgeModel> edges,
-) {
-  final remainingInDegree = {for (final id in questionIds) id: 0};
-  final adjacency = {for (final id in questionIds) id: <String>[]};
-  for (final edge in edges) {
-    final from = adjacency[edge.fromQuestionId];
-    if (from == null || !remainingInDegree.containsKey(edge.toQuestionId)) {
-      continue;
-    }
-    from.add(edge.toQuestionId);
-    remainingInDegree[edge.toQuestionId] =
-        remainingInDegree[edge.toQuestionId]! + 1;
-  }
-
-  final placed = <String>{};
-  final layers = <List<String>>[];
-  while (placed.length < questionIds.length) {
-    final layer =
-        questionIds
-            .where((id) => !placed.contains(id) && remainingInDegree[id] == 0)
-            .toList()
-          ..sort();
-    if (layer.isEmpty) return null;
-    placed.addAll(layer);
-    for (final id in layer) {
-      for (final neighbor in adjacency[id]!) {
-        remainingInDegree[neighbor] = remainingInDegree[neighbor]! - 1;
-      }
-    }
-    layers.add(layer);
-  }
-  return layers;
 }
 
 IconData _regionIcon(RegionKind kind) => switch (kind) {
