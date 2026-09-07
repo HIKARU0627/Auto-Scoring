@@ -10,13 +10,24 @@ Orca 自体の運用フロー（Issue → worktree → PR）は [ade-setup.md](.
 
 ## 構成
 
-| 役割            | ホスト                        | 内容                                                    |
-| --------------- | ----------------------------- | ------------------------------------------------------- |
-| クライアント    | Windows（`zeropro`）          | Orca アプリ / `orca` CLI。worktree・terminal を操作する |
-| ランタイム      | Ubuntu 24.04（`shijima`）     | `orca serve` が worktree・terminal・エージェントを実行  |
-| 経路            | Tailscale（`100.125.134.49`） | WebSocket `ws://<tailscale-ip>:6768`                    |
-| 管理用 SSH      | `ssh ubuntu`（鍵認証）        | ランタイムの起動・ログ確認・トラブルシューティング      |
-| Orca バージョン | 両側 1.4.197                  | クライアントとランタイムで一致させる                    |
+> **本書のプレースホルダ表記。** ホスト名・ユーザー名・IP アドレス・Orca 環境名は実値では
+> 書かない（`AGENTS.md`「Security」。pairing code と同じ扱い、§2）。読み替えは次の通り。
+>
+> | 表記             | 意味                                                      |
+> | ---------------- | --------------------------------------------------------- |
+> | `<windows-host>` | Windows クライアントのホスト名                            |
+> | `<ubuntu-host>`  | Ubuntu ランタイムのホスト名                               |
+> | `<user>`         | Ubuntu 側のログインユーザー名                             |
+> | `<tailscale-ip>` | ランタイムの Tailscale IP（`tailscale ip -4` で得られる） |
+> | `<runtime-env>`  | `orca environment add --name` で付ける Orca 環境名        |
+
+| 役割            | ホスト                          | 内容                                                    |
+| --------------- | ------------------------------- | ------------------------------------------------------- |
+| クライアント    | Windows（`<windows-host>`）     | Orca アプリ / `orca` CLI。worktree・terminal を操作する |
+| ランタイム      | Ubuntu 24.04（`<ubuntu-host>`） | `orca serve` が worktree・terminal・エージェントを実行  |
+| 経路            | Tailscale（`<tailscale-ip>`）   | WebSocket `ws://<tailscale-ip>:6768`                    |
+| 管理用 SSH      | `ssh ubuntu`（鍵認証）          | ランタイムの起動・ログ確認・トラブルシューティング      |
+| Orca バージョン | 両側 1.4.197                    | クライアントとランタイムで一致させる                    |
 
 クライアント⇔ランタイムの本経路は Tailscale 上の WebSocket であり、SSH ではない。
 SSH は本書の手順を流すための管理経路にすぎず、接続確立後は SSH を切っても
@@ -27,8 +38,8 @@ SSH は本書の手順を流すための管理経路にすぎず、接続確立�
 ### Windows 側
 
 - Orca がインストール済みで `orca --version` が通る。
-- Tailscale が動作し、`shijima` が同一 tailnet に見えている。
-- `~/.ssh/config` に `ubuntu`（`HostName 100.125.134.49` / `User hikaru`）が定義済み。
+- Tailscale が動作し、`<ubuntu-host>` が同一 tailnet に見えている。
+- `~/.ssh/config` に `ubuntu`（`HostName <tailscale-ip>` / `User <user>`）が定義済み。
 
 ### Ubuntu 側
 
@@ -204,7 +215,7 @@ WantedBy=default.target
 ```bash
 ssh ubuntu 'systemctl --user daemon-reload \
   && systemctl --user enable --now orca-serve.service \
-  && loginctl enable-linger hikaru'
+  && loginctl enable-linger "$USER"'
 ```
 
 状態とログ:
@@ -224,7 +235,7 @@ journal ではなくそのファイルから変数経由で受け渡す。
 
 ```powershell
 $code = ssh ubuntu "tr -d '\r' < ~/.local/state/orca/pairing-code | grep -o 'orca://pair?code=[A-Za-z0-9+/=]*' | tail -1"
-orca environment add --name shijima-runtime --pairing-code $code --json
+orca environment add --name <runtime-env> --pairing-code $code --json
 ssh ubuntu 'rm -f ~/.local/state/orca/pairing-code'
 ```
 
@@ -235,8 +246,8 @@ ssh ubuntu 'rm -f ~/.local/state/orca/pairing-code'
 
 ```powershell
 orca environment list --json
-orca environment show --environment shijima-runtime --json
-orca status --environment shijima-runtime --json
+orca environment show --environment <runtime-env> --json
+orca status --environment <runtime-env> --json
 ```
 
 pairing code はサーバー再起動をまたいで有効。`orca serve` を落として上げ直しても
@@ -251,31 +262,31 @@ paired device の一覧はランタイム側の `~/.config/orca/orca-devices.jso
 リモートランタイムは自分のリポジトリ一覧を持つ。Windows 側の登録は引き継がれない。
 
 ```powershell
-orca repo list --environment shijima-runtime --json
-orca repo add --environment shijima-runtime --path /home/hikaru/development/<repo> --json
+orca repo list --environment <runtime-env> --json
+orca repo add --environment <runtime-env> --path /home/<user>/development/<repo> --json
 ```
 
-> **Git Bash から実行しない。** MSYS2 のパス変換が `/home/hikaru/...` を
-> `C:/Program Files/Git/home/hikaru/...` に書き換え、
+> **Git Bash から実行しない。** MSYS2 のパス変換が `/home/<user>/...` を
+> `C:/Program Files/Git/home/<user>/...` に書き換え、
 > `Project path must be an absolute path` で失敗する。PowerShell から実行するか、
 > `MSYS_NO_PATHCONV=1` を付ける。
 
 ### 3.2 worktree を作る
 
 ```powershell
-orca worktree create --environment shijima-runtime --repo id:<repo-id> --name <name> --json
+orca worktree create --environment <runtime-env> --repo id:<repo-id> --name <name> --json
 ```
 
 `--host runtime:<environment-id>` は `--repo` と併用できず
 `Choose either --repo or project target flags, not both.` になる。リモートに登録済みの
-repo を使うときは `--environment <name>` + `--repo id:<repo-id>` を使う。
+repo を使うときは `--environment <runtime-env>` + `--repo id:<repo-id>` を使う。
 `--host runtime:<environment-id>` は `--project` / `--project-host-setup` と組み合わせる形。
 
 ### 3.3 terminal を動かす
 
 ```powershell
-orca terminal create --environment shijima-runtime --worktree "worktree:<worktree-id>" --command "<command>" --json
-orca terminal read --environment shijima-runtime --terminal <terminal-handle> --json
+orca terminal create --environment <runtime-env> --worktree "worktree:<worktree-id>" --command "<command>" --json
+orca terminal read --environment <runtime-env> --terminal <terminal-handle> --json
 ```
 
 ### 3.4 後片付け
@@ -284,8 +295,8 @@ worktree の削除は `id:` セレクタで指定する。`worktree:` セレク�
 `selector_not_found` になる。
 
 ```powershell
-orca worktree list --environment shijima-runtime --json
-orca worktree rm --environment shijima-runtime --worktree "id:<repo-id>::<abs-path>" --json
+orca worktree list --environment <runtime-env> --json
+orca worktree rm --environment <runtime-env> --worktree "id:<repo-id>::<abs-path>" --json
 ```
 
 ## 4. Tailscale と `--pairing-address`
@@ -327,19 +338,19 @@ orca worktree rm --environment shijima-runtime --worktree "id:<repo-id>::<abs-pa
 | ----- | ---------------------------------------------------------------------------------------------------------------------- |
 | repro | `ssh ubuntu 'systemctl --user restart orca-serve.service'` の後 `journalctl --user -u orca-serve.service` と `ss -tln` |
 | 期待  | ランタイムが ready になり `0.0.0.0:6768` が LISTEN                                                                     |
-| 実測  | 起動 10 秒で `0.0.0.0:6768` を LISTEN。`advertisedEndpoint: ws://100.125.134.49:6768`                                  |
+| 実測  | 起動 10 秒で `0.0.0.0:6768` を LISTEN。`advertisedEndpoint: ws://<tailscale-ip>:6768`                                  |
 | 判断  | 成立。ただし §1.1・§1.2 の表示サーバーと pty の対処が前提                                                              |
 
 ### 5.3 リモート worktree と terminal
 
-| 項目  | 内容                                                                                                                                                                                                                 |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| repro | `orca repo add` → `orca worktree create --environment shijima-runtime --repo id:<id> --name remote-probe-1` → `orca terminal create --command "uname -a && pwd && git branch --show-current"` → `orca terminal read` |
-| 期待  | Ubuntu 上に worktree が作られ、terminal が Linux 上で実行される                                                                                                                                                      |
-| 実測  | worktree `/home/hikaru/orca/workspaces/orca-remote-probe/remote-probe-1`（branch `remote-probe-1`）が生成。terminal 出力は `Linux shijima 7.0.0-31-generic ... x86_64` と当該パス                                    |
-| 判断  | 成立。Windows クライアントからリモート実行が通ることを確認。テスト worktree は削除済み                                                                                                                               |
+| 項目  | 内容                                                                                                                                                                                                               |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| repro | `orca repo add` → `orca worktree create --environment <runtime-env> --repo id:<id> --name remote-probe-1` → `orca terminal create --command "uname -a && pwd && git branch --show-current"` → `orca terminal read` |
+| 期待  | Ubuntu 上に worktree が作られ、terminal が Linux 上で実行される                                                                                                                                                    |
+| 実測  | worktree `/home/<user>/orca/workspaces/orca-remote-probe/remote-probe-1`（branch `remote-probe-1`）が生成。terminal 出力は `Linux <ubuntu-host> 7.0.0-31-generic ... x86_64` と当該パス                            |
+| 判断  | 成立。Windows クライアントからリモート実行が通ることを確認。テスト worktree は削除済み                                                                                                                             |
 
-検証用に Ubuntu 上へ最小リポジトリ `/home/hikaru/development/orca-remote-probe` を作り、
+検証用に Ubuntu 上へ最小リポジトリ `/home/<user>/development/orca-remote-probe` を作り、
 Orca に登録した。以降の疎通確認にも使えるため残してある（Auto-Scoring 本体とは無関係）。
 進行中の worktree（`issue-14`〜`issue-46` 等）には触れていない。
 
@@ -364,7 +375,7 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
 
 | 項目  | 内容                                                                                                                                                               |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| repro | `ssh ubuntu 'systemctl --user stop orca-serve.service'` → `orca status --environment shijima-runtime --json` → `start` → 再度 `orca status`                        |
+| repro | `ssh ubuntu 'systemctl --user stop orca-serve.service'` → `orca status --environment <runtime-env> --json` → `start` → 再度 `orca status`                          |
 | 期待  | 停止中は明示エラー、復帰後は再ペアリング無しで `connected`                                                                                                         |
 | 実測  | 停止中は `{"ok": false, "error": {"code": "remote_runtime_unavailable"}}`（exit 1）。起動から 10 秒で LISTEN、その後 `state: ready` / `connectionState: connected` |
 | 判断  | 成立。device token はサーバー再起動をまたいで有効。`orca environment add` の再実行は不要                                                                           |
@@ -375,15 +386,15 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | repro | §1.2 の `emit_redacted` を入れて再起動 → `journalctl --user -u orca-serve.service --since '-2 min' -o cat \| grep -c 'orca://pair?code='` と `ls -l ~/.local/state/orca/pairing-code` |
 | 期待  | journal に code が 0 件、pairing ファイルが `0600` で生成される                                                                                                                       |
-| 実測  | journal `0` 件。`-rw------- 1 hikaru hikaru` の `pairing-code` を 10 秒で生成。journal に残るのは「書き出した」旨の 1 行のみ                                                          |
+| 実測  | journal `0` 件。`-rw------- 1 <user> <user>` の `pairing-code` を 10 秒で生成。journal に残るのは「書き出した」旨の 1 行のみ                                                          |
 | 判断  | 成立。以後 token は journal を経由しない                                                                                                                                              |
 
-| 項目  | 内容                                                                                                                                       |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| repro | `rm ~/.config/orca/orca-devices.json` + サービス再起動 → 旧 code で登録済みの環境に対し `orca status --environment shijima-runtime --json` |
-| 期待  | 旧 token が拒否される                                                                                                                      |
-| 実測  | `{"ok": false, "error": {"code": "unauthorized", "message": "Remote Orca runtime rejected the pairing token."}}`                           |
-| 判断  | 成立。journal へ出てしまった 5 件の旧 code はこの手順で失効させ、§2 の経路で貼り直した                                                     |
+| 項目  | 内容                                                                                                                                     |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| repro | `rm ~/.config/orca/orca-devices.json` + サービス再起動 → 旧 code で登録済みの環境に対し `orca status --environment <runtime-env> --json` |
+| 期待  | 旧 token が拒否される                                                                                                                    |
+| 実測  | `{"ok": false, "error": {"code": "unauthorized", "message": "Remote Orca runtime rejected the pairing token."}}`                         |
+| 判断  | 成立。journal へ出てしまった 5 件の旧 code はこの手順で失効させ、§2 の経路で貼り直した                                                   |
 
 ### 5.7 削除・昇格条件
 
@@ -392,20 +403,20 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
 
 ## 6. トラブルシューティング
 
-| 症状                                                                | 原因と対処                                                                                              |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `ssh ubuntu "orca ..."` がスクリーンリーダーのヘルプを出す          | 非ログインシェルで `/usr/bin/orca` が引かれている。`ssh ubuntu 'bash -lc "orca ..."'` を使う            |
-| `Orca needs a usable display server`                                | `DISPLAY` / `XAUTHORITY` 未設定。§1.1。デスクトップ未ログインなら `xvfb` を入れる                       |
-| `Missing X server or $DISPLAY` の直後に `SIGSEGV`                   | `DISPLAY=:0` だけ設定し `XAUTHORITY` を渡していない。`.mutter-Xwaylandauth.*` を指定する                |
-| `pairing-code` ファイルができない                                   | Electron のパイプ出力バッファリングで ready 行が届いていない。`script -qefc` で pty を挟む（§1.2）      |
-| journal に pairing code が出てしまっている                          | `emit_redacted` 未適用。§1.2.1 で token を失効させ、redaction を入れてから貼り直す                      |
-| `Unknown key name 'StartLimitIntervalSec' in section 'Service'`     | `[Service]` ではなく `[Unit]` に置く（§1.3）                                                            |
-| `Project path must be an absolute path`（パスは絶対パスなのに）     | Git Bash の MSYS パス変換。PowerShell から実行するか `MSYS_NO_PATHCONV=1`（§3.1）                       |
-| `Choose either --repo or project target flags, not both.`           | `--host runtime:<id>` と `--repo` の併用。`--environment <name>` + `--repo id:<id>` にする（§3.2）      |
-| `selector_not_found`（worktree 削除時）                             | `worktree:` ではなく `id:<repo-id>::<abs-path>` を使う（§3.4）                                          |
-| `remote_runtime_unavailable`                                        | ランタイム停止・Tailscale 断。`systemctl --user status orca-serve.service` と `tailscale status` を確認 |
-| `unauthorized` / `rejected the pairing token`                       | ランタイム側の device store が作り直されている。`orca environment rm` して §2 で貼り直す                |
-| `The OS keyring is unavailable, so secrets are stored unencrypted.` | gnome-keyring 未解錠。デスクトップにログインして解錠するか、keyring を導入する                          |
+| 症状                                                                | 原因と対処                                                                                                |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `ssh ubuntu "orca ..."` がスクリーンリーダーのヘルプを出す          | 非ログインシェルで `/usr/bin/orca` が引かれている。`ssh ubuntu 'bash -lc "orca ..."'` を使う              |
+| `Orca needs a usable display server`                                | `DISPLAY` / `XAUTHORITY` 未設定。§1.1。デスクトップ未ログインなら `xvfb` を入れる                         |
+| `Missing X server or $DISPLAY` の直後に `SIGSEGV`                   | `DISPLAY=:0` だけ設定し `XAUTHORITY` を渡していない。`.mutter-Xwaylandauth.*` を指定する                  |
+| `pairing-code` ファイルができない                                   | Electron のパイプ出力バッファリングで ready 行が届いていない。`script -qefc` で pty を挟む（§1.2）        |
+| journal に pairing code が出てしまっている                          | `emit_redacted` 未適用。§1.2.1 で token を失効させ、redaction を入れてから貼り直す                        |
+| `Unknown key name 'StartLimitIntervalSec' in section 'Service'`     | `[Service]` ではなく `[Unit]` に置く（§1.3）                                                              |
+| `Project path must be an absolute path`（パスは絶対パスなのに）     | Git Bash の MSYS パス変換。PowerShell から実行するか `MSYS_NO_PATHCONV=1`（§3.1）                         |
+| `Choose either --repo or project target flags, not both.`           | `--host runtime:<id>` と `--repo` の併用。`--environment <runtime-env>` + `--repo id:<id>` にする（§3.2） |
+| `selector_not_found`（worktree 削除時）                             | `worktree:` ではなく `id:<repo-id>::<abs-path>` を使う（§3.4）                                            |
+| `remote_runtime_unavailable`                                        | ランタイム停止・Tailscale 断。`systemctl --user status orca-serve.service` と `tailscale status` を確認   |
+| `unauthorized` / `rejected the pairing token`                       | ランタイム側の device store が作り直されている。`orca environment rm` して §2 で貼り直す                  |
+| `The OS keyring is unavailable, so secrets are stored unencrypted.` | gnome-keyring 未解錠。デスクトップにログインして解錠するか、keyring を導入する                            |
 
 ## 7. 未了項目（人手が必要）
 
