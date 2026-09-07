@@ -440,6 +440,109 @@ Defender のスキャン（`-TimeoutSeconds` の既定値が大きい理由）�
 
 `flutter test -x sidecar` で実サイドカー起動テストを除外できる（`uv` の無い環境向け）。
 
+### 7.3 Issue #57: 生存判定の緩さと、未確定の flaky（調査中）
+
+`sidecar_supervisor_integration_test.dart` の
+`shutdown releases the port and the app-data lock` が Windows CI で不定期に
+`Expected: false / Actual: <true>` で落ちる（Issue
+[#57](https://github.com/HIKARU0627/Auto-Scoring/issues/57)、PR #58）。
+**真因は未確定のまま**である。誤った分析を 2 回積んだので、確定した事実と
+未確定の事実を分けて記録する。
+
+#### 実測で否定された仮説（どちらも誤り）
+
+- **「並行実行中の別テストのサイドカーが解放直後のポートを掴んだ」** —
+  判定をセッショントークン付きの保護されたエンドポイント（`GET /tests`）へ
+  変えたあとも同じ形で落ちた。`/tests` は
+  `protected = APIRouter(dependencies=[Depends(require_token)])` 配下で認証
+  必須、トークンは `secrets.token_urlsafe(32)`（256bit）を
+  `hmac.compare_digest` で比較する（`api/auth.py`）。**別インスタンスがこちらの
+  トークンで 2xx を返すことはあり得ない。**
+- **「venv ランチャーの孫プロセスが生き残って応答していた」** — テスト自身に
+  計装を入れて Windows CI で 2 件再現させたところ、失敗した瞬間に、ポートを
+  listen しているプロセスも、`python|auto-scoring` にマッチするプロセスも、
+  このテストの app-data を CommandLine に持つプロセスも、**1 つも存在しなかった**。
+  ただしこの観測はレポート収集時点のもので、レポートの最初の一手が返るまでに
+  数百ミリ秒かかる。**「判定が走った瞬間に誰もいなかった」ことの証明ではない。**
+
+#### 確定した事実: 旧判定には実在する緩さがあった
+
+`test/sidecar_probe_test.dart` が自前サーバーに対して実測している:
+
+| 相手の応答                                | 旧判定      | 現判定      |
+| ----------------------------------------- | ----------- | ----------- |
+| 200 + JSON 空配列（生きているサイドカー） | serving     | serving     |
+| 200 + ボディ無し                          | **serving** | not serving |
+| 204 No Content                            | **serving** | not serving |
+| 200 だがボディが配列でない                | not serving | not serving |
+| accept 直後に切断                         | not serving | not serving |
+| ヘッダ途中で切断                          | not serving | not serving |
+| ヘッダ完結・ボディ切り詰め                | not serving | not serving |
+| 401（別インスタンス）                     | not serving | not serving |
+
+旧判定は生成クライアントの `listTests()` が例外を投げるかどうかだけを見ていた。
+dio の既定 `validateStatus` はあらゆる 2xx を通し、`listTests` はボディが無ければ
+`const []` を返して例外を投げない。そのため **200 + 空ボディと 204 を
+「サーブしている」と誤読していた**。判定は `test/sidecar_probe.dart` の
+`sidecarStillServing` に切り出し、生の HTTP で
+**「200 かつ JSON 配列のボディ」だけ**を serving と数えるようにした。
+
+#### 未確定: CI で観測された `true` の真因
+
+上の表のとおり、**プロセス終了中の socket が出す形は旧判定でも正しく
+not serving と判定されていた**。したがって「切れかけた接続を成功と誤読した」
+だけでは観測を説明できない。厳密化は実在した欠陥を潰したが、**CI で起きた
+ことの原因だと断定する根拠は無い**。
+
+厳密化後、flake-hunt（Windows 6 leg × 12 反復 = 72 サンプル）を 2 回走らせて
+いずれも再現しなかったが、**これは根拠として弱い**。緩い判定のままでも直前の
+90 サンプルで再現しておらず（再現したのはその前の 58 サンプル中 2 件）、
+陰性が出ること自体に前科がある。計装を足した前後で再現率が落ちたことから、
+**計装自体がリクエスト経路にイベントループのホップを足して窓をずらしている
+（観測者効果）**疑いもあり、切り分けられていない。
+
+#### 受入条件を直接守る assertion
+
+ポート越しの応答では上記の曖昧さから逃れられないので、
+**shutdown 前に listen socket を所有していたプロセスが、shutdown 後に消えて
+いること**を、プロセスに直接聞く assertion を足した（`tasklist` / `ps`）。
+原因が「短命な生存者」であっても、これは決定的に検出できる。あわせて、
+判定が `true` を返した場合と、そのプロセスが生きていた場合に、証拠
+（生のステータス・ヘッダ・ボディ長、ポートの所有 pid とその CommandLine、
+この app-data を持つプロセス全部、サイドカーらしきプロセス全部）を CI ログへ
+出す計装を残してある。**Issue #57 は open のままなので、次に再現したときに
+証拠が残る。**
+
+#### 参考: 実行ファイルの形が本番とテストで違う
+
+Windows CI 上の実測（正常終了時、3 回ずつ）:
+
+- `backend/.venv/Scripts/auto-scoring-sidecar.exe`（テストが起動する）は
+  トランポリン → venv の `python.exe` → ベースインタプリタの 3 段で、
+  **listen socket を所有するのは孫**。supervisor が `kill` して `exitCode` を
+  待つのは先頭のプロセスだけ。
+- `backend/dist/auto-scoring-sidecar/auto-scoring-sidecar.exe`（利用者が動かす、
+  PyInstaller **onedir**）は**単一プロセス**で、spawn した pid 自身が socket を
+  所有する。
+
+どちらも `TerminateProcess` の 1ms 後には連鎖ごと消えていた。この違いは
+「本番では `kill` + `exitCode` の待ちが完全な保証になるが、テストが起動する
+形では孫のティアダウンが非同期で保証されない」ことを意味する。真因が未確定
+なので、これが今回の flaky と関係するかどうかも未確定である。
+
+#### 副次的に直した、同種の前提
+
+- `sidecar_api_client_test.dart` の
+  `a sidecar that is not running surfaces as unavailable` は、エフェメラル
+  ポートを bind → close して「空いているポート」を得ていた。空いているのは
+  誰かが取るまでで、`--port 0` のサイドカーに配られるのはまさにそのポート。
+  どの OS のエフェメラル範囲より下で `--port 0` が絶対に当たらない固定ポート
+  （1）に変えた。
+- `leaves no handshake file holding the token on disk` は `%TEMP%` 全体を舐めて
+  いた。`%TEMP%` はマシン全体で共有され、中断された過去の実行や実アプリの
+  セッションが残したディレクトリまで拾う。テスト実行中に**増えた**分だけを
+  見るようにした。
+
 ---
 
 ## 8. コード署名（人間だけが行う手順）
