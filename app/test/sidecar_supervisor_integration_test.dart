@@ -83,21 +83,18 @@ void main() {
   });
 
   test('leaves no handshake file holding the token on disk', () async {
+    // Scoped to what appears *during* this test rather than to everything
+    // matching under the system temp root: `%TEMP%` is shared with every other
+    // process on the machine, so a directory an interrupted earlier run (or a
+    // real app session) left behind is not this supervisor's leak.
+    final before = _handshakeDirectories();
+
     await startAndExpectReady();
 
     // The supervisor deletes the per-attempt temp directory as soon as it has
-    // read the token (docs/windows-distribution.md §4). Nothing under the
-    // system temp root should still name it.
-    final leftovers = Directory.systemTemp
-        .listSync()
-        .whereType<Directory>()
-        .where((d) => d.path.contains('auto-scoring-'))
-        .where(
-          (d) => File(
-            '${d.path}${Platform.pathSeparator}handshake.json',
-          ).existsSync(),
-        );
-    expect(leftovers, isEmpty);
+    // read the token (docs/windows-distribution.md §4), so by the time the
+    // sidecar is ready its handshake directory is already gone.
+    expect(_handshakeDirectories().difference(before), isEmpty);
   });
 
   test('shutdown releases the port and the app-data lock', () async {
@@ -221,6 +218,19 @@ void main() {
     },
   );
 }
+
+/// Every directory under the system temp root that currently holds a sidecar
+/// handshake file.
+Set<String> _handshakeDirectories() => Directory.systemTemp
+    .listSync()
+    .whereType<Directory>()
+    .where((d) => d.path.contains('auto-scoring-'))
+    .where(
+      (d) =>
+          File('${d.path}${Platform.pathSeparator}handshake.json').existsSync(),
+    )
+    .map((d) => d.path)
+    .toSet();
 
 /// Stands in for *another* sidecar instance that has been handed the port ours
 /// just released, with the only two behaviours [_stillServing] depends on.
