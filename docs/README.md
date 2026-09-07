@@ -30,6 +30,7 @@ the former is updated in the same PR.
 | [review-edit-history.md](./review-edit-history.md)                         | レビューの修正・承認・Undo と追記のみの履歴                     |
 | [pdf-export.md](./pdf-export.md)                                           | 確定 Annotation を描画した添削済み PDF 出力                     |
 | [mvp-acceptance.md](./mvp-acceptance.md)                                   | 簡易設計書 §31 の全実装項目と、それを検証しているテストの対応表 |
+| [design-tokens.md](./design-tokens.md)                                     | 画面のデザイントークン（フォント選定・配色・余白・モーション）  |
 
 ## PoC 記録
 
