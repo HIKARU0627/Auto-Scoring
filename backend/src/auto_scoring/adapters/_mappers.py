@@ -13,6 +13,7 @@ from auto_scoring.db.orm import (
     AnswerImageRow,
     DependencyEdgeRow,
     DependencyGraphRow,
+    ExportRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -39,6 +40,7 @@ from auto_scoring.domain.models import (
     CriterionOutcome,
     CriterionResult,
     ErrorCategory,
+    Export,
     GradeResult,
     GradeResultContextEntry,
     GradingSource,
@@ -47,6 +49,7 @@ from auto_scoring.domain.models import (
     JobState,
     NormalizedRect,
     Question,
+    QuestionReviewVersion,
     RecognitionResult,
     Review,
     ReviewAction,
@@ -447,6 +450,41 @@ def job_from_row(row: JobRow) -> Job:
         dependency_graph_version=row.dependency_graph_version,
         created_at=row.created_at,
         updated_at=row.updated_at,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Export
+# --------------------------------------------------------------------------- #
+def _review_version_to_json(entry: QuestionReviewVersion) -> dict[str, Any]:
+    return {"question_id": entry.question_id, "version": entry.version}
+
+
+def _review_version_from_json(data: dict[str, Any]) -> QuestionReviewVersion:
+    return QuestionReviewVersion(question_id=data["question_id"], version=data["version"])
+
+
+def export_to_row(export: Export) -> ExportRow:
+    return ExportRow(
+        id=export.id,
+        submission_id=export.submission_id,
+        job_id=export.job_id,
+        file_path=export.file_path,
+        file_sha256=export.file_sha256,
+        review_versions=[_review_version_to_json(v) for v in export.review_versions],
+        created_at=export.created_at,
+    )
+
+
+def export_from_row(row: ExportRow) -> Export:
+    return Export(
+        id=row.id,
+        submission_id=row.submission_id,
+        job_id=row.job_id,
+        file_path=row.file_path,
+        file_sha256=row.file_sha256,
+        review_versions=tuple(_review_version_from_json(v) for v in row.review_versions),
+        created_at=row.created_at,
     )
 
 

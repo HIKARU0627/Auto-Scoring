@@ -18,7 +18,7 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.domain.models import NormalizedRect, TestStatus
-from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import IntakeLimits
 from tests.support import make_question, make_test
@@ -369,6 +369,14 @@ class _SlowPdfEngine:
         mark_size_pt: float = 8.0,
     ) -> None:
         self._delegate.stamp_markers(source, destination, markers, mark_size_pt=mark_size_pt)
+
+    def render_annotations(
+        self,
+        source: Path,
+        destination: Path,
+        marks: Mapping[int, Sequence[AnnotationMark]],
+    ) -> None:
+        self._delegate.render_annotations(source, destination, marks)
 
 
 def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) -> None:

@@ -12,6 +12,7 @@ export 'package:auto_scoring_api/src/model/date.dart';
 
 export 'package:auto_scoring_api/src/api/default_api.dart';
 export 'package:auto_scoring_api/src/api/dependency_graph_api.dart';
+export 'package:auto_scoring_api/src/api/export_api.dart';
 export 'package:auto_scoring_api/src/api/jobs_api.dart';
 export 'package:auto_scoring_api/src/api/recognitions_api.dart';
 export 'package:auto_scoring_api/src/api/review_api.dart';
@@ -31,6 +32,8 @@ export 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 export 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 export 'package:auto_scoring_api/src/model/dependency_provision.dart';
 export 'package:auto_scoring_api/src/model/edit_review_request.dart';
+export 'package:auto_scoring_api/src/model/export_request_response.dart';
+export 'package:auto_scoring_api/src/model/export_response.dart';
 export 'package:auto_scoring_api/src/model/grade_result_response.dart';
 export 'package:auto_scoring_api/src/model/http_validation_error.dart';
 export 'package:auto_scoring_api/src/model/job_response.dart';

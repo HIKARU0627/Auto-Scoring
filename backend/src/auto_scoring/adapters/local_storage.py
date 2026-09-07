@@ -23,8 +23,10 @@ Rules this class enforces:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 from uuid import uuid4
 
@@ -136,13 +138,27 @@ class LocalFileStore:
     def exports_dir(self) -> Path:
         return self._resolve("exports")
 
-    def allocate_export_path(self, original_name: str) -> Path:
-        """Next free ``<stem>_corrected.pdf`` / ``<stem>_corrected_N.pdf`` (§2 (14))."""
+    def allocate_export_path(self, original_name: str, *, reserved: Iterable[str] = ()) -> Path:
+        """Next free ``<stem>_corrected.pdf`` / ``<stem>_corrected_N.pdf`` (§2 (14)).
+
+        ``reserved`` is a set of already-recorded ``Export.file_path``
+        values (root-relative, forward-slash -- the same format that field
+        is stored in) for the same submission, in addition to whatever this
+        method's own ``.exists()`` check already sees on disk (Issue #23 P1
+        review, round 3). A path some other `Export` row already claims
+        must never be handed out again here, even when that row's own file
+        write is exactly what failed and left nothing on disk for
+        ``.exists()`` to catch -- otherwise a second, unrelated export could
+        silently claim (and, once written, occupy) the same path, and a
+        later repair of the first row would overwrite the second one's
+        file out from under it.
+        """
         stem = Path(original_name).stem or "submission"
         exports = self.exports_dir()
+        reserved_paths = set(reserved)
         candidate = exports / f"{stem}_corrected.pdf"
         counter = 2
-        while candidate.exists():
+        while candidate.exists() or self._relative_path(candidate) in reserved_paths:
             candidate = exports / f"{stem}_corrected_{counter}.pdf"
             counter += 1
         return candidate
@@ -194,6 +210,13 @@ class LocalFileStore:
             raise ValueError(f"path {path} escapes storage root {self._root}")
         return resolved
 
+    def _relative_path(self, path: Path) -> str:
+        """``path`` (already under this store's root) as the same
+        root-relative, forward-slash string every stored ``*_path`` field
+        (``Submission.source_pdf_path``, ``Export.file_path``, ...) uses.
+        """
+        return str(path.relative_to(self._root)).replace("\\", "/")
+
     @staticmethod
     def _delete_tree(path: Path) -> None:
         try:
@@ -201,3 +224,19 @@ class LocalFileStore:
         except FileNotFoundError:
             if path.exists():
                 raise
+
+
+def file_matches_sha256(path: Path, expected_sha256: str) -> bool:
+    """Whether ``path`` exists and its content's sha256 digest equals
+    ``expected_sha256`` (Issue #23 P1/P2 review).
+
+    Shared by `jobs.export_processor.ExportJobProcessor` (idempotent-replay
+    safety: an `Export` row surviving a crash between its own DB commit and
+    the file write that follows it) and `api.export_router` (never telling a
+    reviewer a `reuse_existing` export is ready when its recorded file has
+    since gone missing or been corrupted) so both agree on exactly one
+    definition of "this recorded output is actually still there, intact".
+    """
+    if not path.exists():
+        return False
+    return hashlib.sha256(path.read_bytes()).hexdigest() == expected_sha256

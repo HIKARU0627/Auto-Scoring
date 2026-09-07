@@ -657,6 +657,80 @@
         "title": "EditReviewRequest",
         "type": "object"
       },
+      "ExportRequestResponse": {
+        "description": "Result of ``POST .../export``: `decision` is one of\n`domain.pdf_export.ReexportDecision`'s values.\n\n``job_id`` is set (and the HTTP status is 202) for\n``accept_new``/``accept_new_superseding`` -- a fresh `Job` was queued;\npoll it via `api.jobs_router`. ``export`` is set (status 200) for\n``reuse_existing`` -- nothing was queued, the existing export already\nreflects the current review state.",
+        "properties": {
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "export": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExportResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "ExportRequestResponse",
+        "type": "object"
+      },
+      "ExportResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_sha256": {
+            "title": "File Sha256",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "submission_id",
+          "job_id",
+          "file_path",
+          "file_sha256",
+          "created_at"
+        ],
+        "title": "ExportResponse",
+        "type": "object"
+      },
       "GradeResultResponse": {
         "properties": {
           "comment": {
@@ -2037,6 +2111,114 @@
           }
         ],
         "summary": "Get Submission"
+      }
+    },
+    "/submissions/{submission_id}/export": {
+      "post": {
+        "operationId": "request_export_submissions__submission_id__export_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportRequestResponse"
+                }
+              }
+            },
+            "description": "The current review state was already exported; no new job was queued (`decision: reuse_existing`)."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Export",
+        "tags": [
+          "export"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/exports": {
+      "get": {
+        "operationId": "list_exports_submissions__submission_id__exports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExportResponse"
+                  },
+                  "title": "Response List Exports Submissions  Submission Id  Exports Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Exports",
+        "tags": [
+          "export"
+        ]
       }
     },
     "/submissions/{submission_id}/jobs": {

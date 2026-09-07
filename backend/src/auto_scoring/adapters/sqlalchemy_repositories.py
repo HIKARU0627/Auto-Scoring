@@ -26,6 +26,7 @@ from auto_scoring.db.orm import (
     AnswerImageRow,
     DependencyEdgeRow,
     DependencyGraphRow,
+    ExportRow,
     GradeResultRow,
     JobRow,
     QuestionRow,
@@ -44,6 +45,7 @@ from auto_scoring.domain.dependency_graph import (
 from auto_scoring.domain.models import (
     Annotation,
     AnswerImage,
+    Export,
     GradeResult,
     GradingSource,
     Job,
@@ -526,6 +528,45 @@ class SqlAlchemyJobRepository:
             .order_by(JobRow.created_at)
         )
         return [m.job_from_row(row) for row in rows]
+
+
+class SqlAlchemyExportRepository:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, export: Export) -> None:
+        self._session.add(m.export_to_row(export))
+        self._session.flush()
+
+    def get(self, export_id: str) -> Export | None:
+        row = self._session.get(ExportRow, export_id)
+        return m.export_from_row(row) if row is not None else None
+
+    def list_for_submission(self, submission_id: str) -> list[Export]:
+        rows = self._session.scalars(
+            select(ExportRow)
+            .where(ExportRow.submission_id == submission_id)
+            .order_by(ExportRow.created_at)
+        )
+        return [m.export_from_row(row) for row in rows]
+
+    def latest_for_submission(self, submission_id: str) -> Export | None:
+        row = self._session.scalars(
+            select(ExportRow)
+            .where(ExportRow.submission_id == submission_id)
+            .order_by(ExportRow.created_at.desc())
+            .limit(1)
+        ).first()
+        return m.export_from_row(row) if row is not None else None
+
+    def all_file_paths(self) -> frozenset[str]:
+        return frozenset(self._session.scalars(select(ExportRow.file_path)))
+
+    def repair_file_hash(self, export_id: str, file_sha256: str) -> None:
+        self._session.execute(
+            update(ExportRow).where(ExportRow.id == export_id).values(file_sha256=file_sha256)
+        )
+        self._session.flush()
 
 
 class SqlAlchemyDependencyGraphRepository:

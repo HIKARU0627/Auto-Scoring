@@ -21,6 +21,7 @@ from auto_scoring.domain.dependency_graph import DependencyGraph
 from auto_scoring.domain.models import (
     Annotation,
     AnswerImage,
+    Export,
     GradeResult,
     GradingSource,
     Job,
@@ -292,6 +293,64 @@ class JobRepository(Protocol):
         ...
 
 
+class ExportRepository(Protocol):
+    """Successful `Export` rows only (Issue #23) -- an in-flight or failed
+    attempt lives entirely as a `Job` (kind=``EXPORT``). Rows are otherwise
+    append-only; ``repair_file_hash`` is the one narrow, documented exception
+    (see its own docstring).
+    """
+
+    def add(self, export: Export) -> None: ...
+    def get(self, export_id: str) -> Export | None: ...
+
+    def list_for_submission(self, submission_id: str) -> list[Export]:
+        """Every export for ``submission_id``, oldest first (for "保存先表示"
+        / export history display)."""
+        ...
+
+    def latest_for_submission(self, submission_id: str) -> Export | None:
+        """The most recently created export for ``submission_id``, or
+        ``None`` -- what `domain.pdf_export.decide_reexport` compares a fresh
+        request's review-version snapshot against.
+        """
+        ...
+
+    def all_file_paths(self) -> frozenset[str]:
+        """Every ``file_path`` recorded by any `Export` row, across every
+        submission (Issue #23 P1 review, round 4).
+
+        ``exports/<original-stem>_corrected[_N].pdf`` names are derived from
+        the *source* file's stem alone, with no submission id in the path
+        (`adapters.local_storage.LocalFileStore.allocate_export_path`), so
+        two different submissions that happen to share an original filename
+        share the same export-path namespace too. `jobs.export_processor.
+        ExportJobProcessor._create_new_export` reserves every path this
+        returns -- not just the ones from `list_for_submission` on its own
+        submission -- so a path a *different* submission's Export row
+        already claims (even one whose file write failed and left nothing
+        on disk yet) can never be handed to a second, unrelated export.
+        """
+        ...
+
+    def repair_file_hash(self, export_id: str, file_sha256: str) -> None:
+        """Correct ``file_sha256`` for an already-committed `Export` row
+        (Issue #23 P1 review).
+
+        SQLite and the filesystem are not one transaction
+        (`adapters.atomic`'s own docstring): a crash between this row's
+        commit and the file write that follows it leaves a committed
+        `Export` whose file is missing. `jobs.export_processor.
+        ExportJobProcessor` detects that on a later run of the same job,
+        regenerates the PDF, and rewrites the file at ``Export.file_path`` --
+        but a fresh render is not guaranteed byte-identical to the lost one
+        (embedded generation timestamps), so its hash may differ from what
+        was originally recorded. This is the one place any `Export` field is
+        ever updated after `add`; every other field is immutable once
+        written.
+        """
+        ...
+
+
 class DependencyGraphRepository(Protocol):
     """One test's dependency-graph versions (Issue #26).
 
@@ -338,6 +397,7 @@ class UnitOfWork(Protocol):
     annotations: AnnotationRepository
     reviews: ReviewRepository
     jobs: JobRepository
+    exports: ExportRepository
     dependency_graphs: DependencyGraphRepository
 
     def __enter__(self) -> UnitOfWork: ...

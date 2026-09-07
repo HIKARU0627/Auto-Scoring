@@ -37,6 +37,7 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
+from auto_scoring.api.export_router import build_export_router
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
@@ -47,7 +48,7 @@ from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.ai_provider import AIProvider
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
-from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, Submission, TestStatus
+from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, JobKind, Submission, TestStatus
 from auto_scoring.domain.ocr import OCRProvider
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -58,11 +59,13 @@ from auto_scoring.domain.pdf_intake import (
 )
 from auto_scoring.domain.scoring import clamp_score
 from auto_scoring.jobs.clock import Clock
+from auto_scoring.jobs.export_processor import ExportJobProcessor
 from auto_scoring.jobs.grading_processor import GradingJobProcessor
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.queue import JobQueueService
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
+from auto_scoring.jobs.routing_processor import ByKindJobProcessor
 from auto_scoring.jobs.settings import QueueSettings
 
 _PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
@@ -163,6 +166,7 @@ def create_app(
     recognition_settings: RecognitionSettings | None = None,
     ai_provider: AIProvider | None = None,
     grading_settings: GradingSettings | None = None,
+    export_processor: JobProcessor | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -227,6 +231,15 @@ def create_app(
     reading/grade) rather than raising, so every question routes to needs-
     review until a real adapter is injected. All four are ignored when
     ``job_processor`` is supplied directly.
+
+    ``export_processor`` (Issue #23) defaults to `auto_scoring.jobs.
+    export_processor.ExportJobProcessor`, handling ``JobKind.EXPORT`` jobs
+    (the annotated-PDF output, ``api.export_router``). Ignored when
+    ``job_processor`` is supplied directly -- that parameter still means "the
+    whole queue's processor, for every kind"; otherwise ``export_processor``
+    is composed alongside the grading processor via `jobs.routing_processor.
+    ByKindJobProcessor` so `JobQueueService` itself still only ever holds one
+    processor object.
     """
     queue_service_holder: dict[str, JobQueueService] = {}
     lock_handle_holder: dict[str, IO[bytes]] = {}
@@ -312,6 +325,19 @@ def create_app(
     app = FastAPI(title="Auto-Scoring Sidecar", version=__version__, lifespan=_lifespan)
     app.state.api_token = api_token or generate_token()
 
+    engine = pdf_engine or PdfiumPypdfEngine()
+
+    # PDFium is not safe to call concurrently from multiple threads of the
+    # same process (pypdfium2's own multithreading guidance). Shared by every
+    # caller that offloads PDFium work to a worker thread to free the event
+    # loop: submission intake (`_run_intake` below) and, since Issue #23, the
+    # export job processor -- one lock, so a render in either never overlaps
+    # a render in the other. Every intake request was already fully
+    # serialized before this lock existed -- the event loop ran each one to
+    # completion with nothing else interleaved -- so this isn't a throughput
+    # regression, just the same serialization moved off the loop.
+    pdfium_lock = threading.Lock()
+
     default_recognition_processor = RecognitionJobProcessor(
         session_factory,
         store,
@@ -319,7 +345,7 @@ def create_app(
         settings=recognition_settings,
         clock=clock,
     )
-    default_job_processor = GradingJobProcessor(
+    default_grading_processor = GradingJobProcessor(
         session_factory,
         store,
         default_recognition_processor,
@@ -327,9 +353,22 @@ def create_app(
         grading_settings=grading_settings,
         clock=clock,
     )
+    default_export_processor = ExportJobProcessor(
+        session_factory, store, engine, pdfium_lock, clock=clock
+    )
+    # `job_processor`, if supplied directly, fully replaces the queue's
+    # processor for every kind (existing override semantics, e.g. tests
+    # exercising queue mechanics with a `tests/fakes.py` fake); otherwise
+    # `EXPORT` jobs are routed to `export_processor`/`default_export_processor`
+    # and everything else to the grading processor -- see
+    # `jobs.routing_processor.ByKindJobProcessor`.
+    effective_job_processor = job_processor or ByKindJobProcessor(
+        default=default_grading_processor,
+        overrides={JobKind.EXPORT: export_processor or default_export_processor},
+    )
     queue_service = JobQueueService(
         session_factory,
-        job_processor or default_job_processor,
+        effective_job_processor,
         settings=queue_settings,
         clock=clock,
     )
@@ -369,7 +408,6 @@ def create_app(
 
         atexit.register(_cleanup_scratch)
 
-    engine = pdf_engine or PdfiumPypdfEngine()
     preprocessor = image_preprocessor or OpenCvImagePreprocessor()
     limits = intake_limits or IntakeLimits()
 
@@ -405,16 +443,6 @@ def create_app(
         capacity=threading.Semaphore(max_concurrent_uploads),
     )
 
-    # PDFium is not safe to call concurrently from multiple threads of the
-    # same process (pypdfium2's own multithreading guidance); this lock
-    # serializes actual intake runs so offloading them to a worker thread
-    # (below) frees the event loop without risking two renders touching
-    # PDFium at once. Every intake request was already fully serialized
-    # before this change too -- the event loop ran each one to completion
-    # with nothing else interleaved -- so this isn't a throughput regression,
-    # just the same serialization moved off the loop.
-    intake_lock = threading.Lock()
-
     def _run_intake(
         *,
         test_id: str,
@@ -424,7 +452,7 @@ def create_app(
         student_label: str | None,
         now: datetime,
     ) -> SubmissionIntakeResult:
-        with intake_lock, SqlAlchemyUnitOfWork(session_factory) as uow:
+        with pdfium_lock, SqlAlchemyUnitOfWork(session_factory) as uow:
             return intake_submission(
                 uow,
                 store,
@@ -557,11 +585,12 @@ def create_app(
             store,
             engine,
             intake_limits=limits,
-            pdfium_lock=intake_lock,
+            pdfium_lock=pdfium_lock,
         )
     )
     protected.include_router(build_recognitions_router(session_factory, store))
     protected.include_router(build_review_router(session_factory, store, queue_service))
+    protected.include_router(build_export_router(session_factory, store, queue_service))
 
     app.include_router(protected)
     return app

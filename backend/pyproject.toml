@@ -15,6 +15,11 @@ dependencies = [
     "pydantic>=2.9,<3.0",
     "pypdf>=6.16",
     "pypdfium2>=5.13",
+    # Annotated-PDF export (Issue #23): renders Japanese comment/score text
+    # with an embedded font. pypdf/pypdfium2 have no text-layout or
+    # font-embedding API; reportlab is BSD-licensed (no AGPL/commercial-
+    # license issue, unlike PyMuPDF -- docs/poc-3-pdf-coordinates.md).
+    "reportlab>=4.2,<5.0",
     "sqlalchemy>=2.0,<3.0",
 ]
 
@@ -76,6 +81,12 @@ ignore_missing_imports = true
 # opencv-python-headless ships no inline types; pin the boundary here (only
 # adapters/image/opencv_preprocessor.py imports cv2).
 module = ["cv2.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# reportlab ships no inline types; pin the boundary here (only
+# adapters/pdf/pdfium_pypdf_engine.py imports it).
+module = ["reportlab.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -143,6 +143,12 @@ fixture で 0〜1 正規化
 [`poc-3-pdf-coordinates.md`](./poc-3-pdf-coordinates.md)。承認が後日出た場合は同じ
 `PdfEngine` 契約に `PyMuPDFEngine` を追加して差し替える。
 
+**Issue #23（添削済みPDF出力）で `reportlab` を追加**: `pypdf`/`pypdfium2` には
+テキストレイアウト・フォント埋め込みAPIが無く、添削コメントの日本語テキストを
+PDFへ描画するには不十分だった。`reportlab`（BSD系ライセンス、PyMuPDFのような
+AGPL/商用ライセンス問題は無い）を`PdfEngine`実装の内部でのみ使用する形で追加した。
+詳細は[`pdf-export.md`](./pdf-export.md) §3。
+
 ### 3.2 画像処理
 
 | 要素   | 決定                                     | 備考                                                           |
