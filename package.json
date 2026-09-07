@@ -1,8 +1,9 @@
 {
-  "name": "agent-dev-template",
+  "name": "auto-scoring",
   "version": "0.1.0",
   "private": true,
-  "description": "Reusable multi-agent development environment: shared Agent Skills, AGENTS.md contract, GitHub App attribution, git hooks, and CI gates.",
+  "description": "Auto-Scoring: human-in-the-loop AI grading assistant for handwritten answer PDFs (Flutter desktop + Python sidecar).",
+  "license": "MIT",
   "scripts": {
     "bootstrap": "pwsh -NoProfile -File scripts/bootstrap-worktree.ps1",
     "github-app-setup": "pwsh -NoProfile -File scripts/configure-github-app-git-attribution.ps1",

@@ -207,11 +207,15 @@ void main() {
 
   test('a sidecar that is not running surfaces as unavailable', () async {
     final connection = await ensureSidecar();
-    // A port that was free a moment ago and has nothing listening now: the
-    // OS refuses the connection immediately.
-    final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    final deadPort = probe.port;
-    await probe.close();
+
+    // A port nothing can be listening on, so the OS refuses the connection
+    // immediately. Fixed rather than obtained by binding an ephemeral port and
+    // closing it again: that is only free until something takes it, and the
+    // sidecars this suite starts with `--port 0` are handed exactly those
+    // ports -- eagerly enough on Windows to have made
+    // `sidecar_supervisor_integration_test.dart` flaky (Issue #57). 1 is below
+    // every OS's ephemeral range, so no `--port 0` can ever land on it.
+    const deadPort = 1;
 
     final client = SidecarApiClient(
       SidecarConnection(
