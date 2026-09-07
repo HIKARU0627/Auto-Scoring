@@ -3,8 +3,10 @@
 GitHub Issue [#26](https://github.com/HIKARU0627/Auto-Scoring/issues/26)（親
 [#3](https://github.com/HIKARU0627/Auto-Scoring/issues/3)）。1件の答案が複数
 ページ・複数設問を含む場合に、採点前へ設問同士の依存関係を分析し、人間が確認し
-たDAGをテスト単位で保存する。後続の処理キュー（Issue #26の対象外、将来Issue）
-はこのDAGに基づいて独立設問だけを並列実行する想定。
+たDAGをテスト単位で保存する。後続の処理キュー（Issue #26の対象外）
+はこのDAGに基づいて独立設問だけを並列実行する（[job-queue.md](./job-queue.md)、
+Issue #18）。確定済みDAGを添削レビュー画面で進捗として見せるのは
+[dependency-dag-progress-view.md](./dependency-dag-progress-view.md)（Issue #64）。
 
 依存: [#10](https://github.com/HIKARU0627/Auto-Scoring/issues/10)（認証付き
 サイドカーAPI基盤）、[#11](https://github.com/HIKARU0627/Auto-Scoring/issues/11)
