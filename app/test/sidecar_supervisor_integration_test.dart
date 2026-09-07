@@ -102,24 +102,22 @@ void main() {
 
   test('shutdown releases the port and the app-data lock', () async {
     final connection = await startAndExpectReady();
-    final port = Uri.parse(connection.baseUrl).port;
 
     await supervisor.shutdown();
     expect(supervisor.state.value, isA<SidecarStopped>());
 
-    // Nothing is serving on that port any more -- the acceptance criterion
+    // Our sidecar is gone -- the acceptance criterion
     // "通常終了後にport/processが残らない".
     //
-    // Asserted by probing the port rather than by re-binding it: a just-closed
+    // Probed rather than checked by re-binding the port: a just-closed
     // listener's port can still be refused by `bind` for a minute or two while
     // connections the health probes opened sit in TIME_WAIT, which says
-    // nothing about whether a *process* survived. A refused connection does.
-    final orphan = SidecarApiClient(
-      SidecarConnection(baseUrl: 'http://127.0.0.1:$port', token: 'unused'),
-      timeout: const Duration(seconds: 2),
+    // nothing about whether a *process* survived.
+    expect(
+      await _stillServing(connection),
+      isFalse,
+      reason: 'the sidecar this session started is still answering',
     );
-    addTearDown(orphan.close);
-    expect(await orphan.isHealthy(), isFalse);
 
     // The exclusive app-data lock is released too: a fresh supervisor over the
     // same directory starts cleanly rather than being refused as
@@ -133,6 +131,35 @@ void main() {
     await second.start();
     expect(supervisorFailureOf(second), isNull);
     await second.shutdown();
+  });
+
+  test('another sidecar holding the port is not read as a survivor', () async {
+    // The regression guard for the assertion above. Issue #57's flake was the
+    // shutdown check reading a *different* test's sidecar, handed the port
+    // ours had just released, as our own survivor. Reproduced here without any
+    // timing at all: a stand-in that behaves towards a foreign caller exactly
+    // as the real sidecar does -- `/healthz` unauthenticated and answering
+    // everyone, every other route rejecting a token it never minted with 401.
+    // Both halves of that behaviour are pinned against the real sidecar by
+    // `sidecar_api_client_test.dart`.
+    //
+    // Re-binding the genuinely released port would put the timing back: on
+    // Windows `bind` can be refused for minutes while the health probes'
+    // connections sit in TIME_WAIT.
+    final foreign = await _startForeignSidecar();
+    addTearDown(() => foreign.close(force: true));
+    final ours = SidecarConnection(
+      baseUrl: 'http://127.0.0.1:${foreign.port}',
+      token: 'the-token-our-sidecar-had',
+    );
+
+    // What the old probe saw, and why it reported a false positive.
+    final health = SidecarApiClient(ours);
+    addTearDown(health.close);
+    expect(await health.isHealthy(), isTrue);
+
+    // What the shutdown test asks instead.
+    expect(await _stillServing(ours), isFalse);
   });
 
   test('a crashed sidecar is reported, and restart recovers', () async {
@@ -193,6 +220,55 @@ void main() {
       expect(supervisor.state.value, isA<SidecarReady>());
     },
   );
+}
+
+/// Stands in for *another* sidecar instance that has been handed the port ours
+/// just released, with the only two behaviours [_stillServing] depends on.
+Future<HttpServer> _startForeignSidecar() async {
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  server.listen((request) async {
+    final response = request.response;
+    if (request.uri.path == '/healthz') {
+      response
+        ..headers.contentType = ContentType.json
+        ..write('{"status": "ok"}');
+    } else {
+      response.statusCode = HttpStatus.unauthorized;
+    }
+    await response.close();
+  });
+  return server;
+}
+
+/// Whether the sidecar that [connection] was minted for is still serving.
+///
+/// A *protected* call carrying that session's token, deliberately not the
+/// `/healthz` probe this used to be (Issue #57). `/healthz` needs no auth, so
+/// every sidecar instance answers `{"status": "ok"}` to anyone -- which makes
+/// "someone answers on this port" indistinguishable from "our sidecar survived".
+/// The token is what tells the port's occupant apart, and it separates all
+/// three outcomes:
+///
+/// * our sidecar is still up -- the token is still valid, so the call succeeds
+///   (the leak this file exists to catch);
+/// * a *different* sidecar holds the port -- it minted a different token, so
+///   the call is refused with 401;
+/// * nothing is listening -- the connection is refused.
+///
+/// So "the protected call did not succeed" is the assertion, and no other
+/// test's sidecar can satisfy it on our behalf. That matters because
+/// `sidecar_api_client_test.dart` runs its own sidecar concurrently with this
+/// file, and Windows hands a just-released ephemeral port straight back out.
+Future<bool> _stillServing(SidecarConnection connection) async {
+  final client = SidecarApiClient(connection);
+  try {
+    await client.listTests();
+    return true;
+  } on SidecarApiException {
+    return false;
+  } finally {
+    client.close();
+  }
 }
 
 SidecarFailure? supervisorFailureOf(SidecarSupervisor supervisor) =>
