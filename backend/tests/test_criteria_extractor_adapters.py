@@ -68,7 +68,7 @@ _VALID_EXTRACTION = {
 
 #: A 2xx body that parses as JSON but is not a valid extraction -- a string
 #: where the score belongs.
-_MALFORMED_EXTRACTION = {
+_MALFORMED_EXTRACTION: dict[str, Any] = {
     "questions": [
         {
             "number": "問1",
@@ -345,7 +345,7 @@ def test_the_prompt_states_the_length_limit_the_schema_no_longer_carries() -> No
 
 def test_bounds_are_still_enforced_locally_after_the_wire_schema_drops_them() -> None:
     """The pair to the two tests above: nothing was actually relaxed."""
-    over_the_bound = {
+    over_the_bound: dict[str, Any] = {
         "questions": [
             {
                 "number": "問1",

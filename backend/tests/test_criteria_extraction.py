@@ -386,7 +386,9 @@ def test_a_note_at_the_length_limit_still_takes_the_duplicate_warning() -> None:
         question.note is not None and len(question.note) <= MAX_CRITERIA_TEXT_CHARS
         for question in draft.questions
     )
-    assert "設問番号" in draft.questions[1].note or ""
+    renamed_note = draft.questions[1].note
+    assert renamed_note is not None
+    assert "設問番号" in renamed_note
 
 
 def test_page_number_shaped_total_is_reported_as_no_total() -> None:
