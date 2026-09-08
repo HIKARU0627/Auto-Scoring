@@ -875,10 +875,10 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 
   記録するのは次のどちらかを満たす値だけ。
 
-  | 条件                             | 対象                                                                                                                                                                                                                              |
-  | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | **こちらが送った値と照合できる** | `questionId`（リクエストの ID と一致した場合のみ）、`criteria[].id`（人間ラベルが挙げる rubric criterion の ID のみ）、descriptor の `model`/`prompt_version`/`structured_output_mode`（この run が構成した組と一致する場合のみ） |
-  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数）                                                                                  |
+  | 条件                             | 対象                                                                                                                                                                                                                                                  |
+  | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | **こちらが送った値と照合できる** | `questionId`（リクエストの ID と一致した場合のみ）、`criteria[].id`（人間ラベルが挙げる rubric criterion の ID のみ）、descriptor の `model`/`prompt_version`/`structured_output_mode`（この run が構成した値と**フィールドごとに**一致する場合のみ） |
+  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数）                                                                                                      |
 
   それ以外はすべて固定の marker に置き換える。自由文（`recognition.text`・
   `comment`・`rationale`・`criteria[].rationale`・`annotations[].target`/
@@ -888,6 +888,17 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   はこのセルを従来どおり `mismatched`（criterion なら不一致）として数える —
   **食い違いという情報は失わずに、食い違いの中身だけを落とす**。
 
+- **照合できなかった descriptor フィールドは marker ではなく fingerprint に
+  する**。「安全にする」と「測れる」は両立させる。descriptor を
+  `(model, prompt_version, structured_output_mode)` の**組**として照合すると、
+  呼び出し前に model が分からないアダプタで必ず失敗する
+  （`CodexAppServerProvider.describe()` は `AUTO_SCORING_CODEX_MODEL` 未設定なら
+  解決前は `"default"`、解決後は実際のモデル名を返す）。組で照合していたときは
+  正常応答でも 3 フィールドすべてが同じ marker に潰れ、**異なる Codex モデルや
+  異なるプロンプトの記録が同じ `descriptor_key` に集約されて比較指標が混ざって
+  いた**。フィールドごとに照合し、照合できなかったものは fingerprint にすれば、
+  値は出さないまま別の設定は別の bucket に残る（`questionId` の marker を
+  正解ラベルの ID と一致させなかったのと同じ理由）。
 - **応答由来の deployment metadata は fingerprint にする**。
   `descriptor.version`（Gemini の `modelVersion`、OpenRouter の routed model +
   upstream）は provider が中身を決める文字列で、「非空」以外の検証が無い。
@@ -902,7 +913,14 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   **正常だった応答が schema 違反として集計されて違反率が水増しされる**という
   形で静かに歪む（`type: "comment"` の注釈に `comment: null` を書いていた不具合）。
   ここで落とせば、その種の間違いは静かな歪みではなく即座の失敗になる。
-- **`--images` と画像 identity**。- **`--images` と画像 identity**。`input.answer_image_ref` が `sha256:<hex>` 形式なら、
+- **`--images` と画像 identity**。- **有料の呼び出しを始める前に、`report.py` が拒否するデータを拒否する**。
+  `input.max_score` と `ground_truth.maxScore` の照合
+  （`validate_input_matches_truth`。§3.5）を `_plan()` でも行う。ブロック単位の
+  検証は両方通るため、これを見ないと `--dry-run` は成功し、本番実行は全セル分の
+  課金をしたうえで `report.py` が 1 件も集計できない、という結果になる。
+  **このスクリプトは他人のお金を使う**ので、`--dry-run` が「本番でも通る」を
+  意味しないなら dry-run の価値が下がる。
+- **`--images` と画像 identity**。`input.answer_image_ref` が `sha256:<hex>` 形式なら、
   `<images>/<hex>.png`（`.jpg`/`.jpeg` も探す）を読んで**内容ハッシュを照合**する。
   差し替わった・作り直された切り出し画像で採点したものが「同一データでの比較」に
   見えてしまうのを防ぐ（§3.12）。`sha256:` 以外の参照はディレクトリ内の単純な

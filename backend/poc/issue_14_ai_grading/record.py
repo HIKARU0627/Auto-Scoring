@@ -253,17 +253,18 @@ def _plan(
         for index, question in enumerate(questions):
             if not isinstance(question, dict):
                 raise _DatasetError(f"{path} question {index}: must be a JSON object")
+            locator = f"{path} question {index}"
             try:
                 input_record = GradingInputRecord.from_mapping(question["input"])
             except KeyError:
-                raise _DatasetError(f"{path} question {index}: has no 'input' block") from None
+                raise _DatasetError(f"{locator}: has no 'input' block") from None
             except ValidationError:
                 # Deliberately not the ValidationError's own message:
                 # pydantic keeps the offending value under ``input_value``,
                 # which here is transcribed student answer text (AGENTS.md
                 # "Security"; report.py's `_sanitize_validation_error`).
-                raise _DatasetError(f"{path} question {index}: 'input' failed validation") from None
-            truth = _ground_truth(question, locator=f"{path} question {index}")
+                raise _DatasetError(f"{locator}: 'input' failed validation") from None
+            truth = _ground_truth(question, locator=locator)
             image = _load_image(
                 images, input_record.answer_image_ref, locator=f"{path} question {index}"
             )
@@ -349,13 +350,6 @@ _UNVERIFIED_QUESTION_ID = "[unverified: provider returned a different questionId
 #: so it carries no content -- because collapsing several unrecognized ids
 #: onto one string would put duplicate ids in the array.
 _UNVERIFIED_CRITERION_ID_PREFIX = "[unverified-criterion-"
-
-#: Written in place of a descriptor string that does not match any provider
-#: this run configured. Should never appear: every such string comes from
-#: local configuration, not from a response. If it ever does appear, an
-#: adapter has started echoing a response value into its descriptor, and
-#: that is exactly what must not reach the file unnoticed.
-_UNVERIFIED_DESCRIPTOR = "[unverified: not a configured value]"
 
 
 def _wire_response(
@@ -491,74 +485,109 @@ def _assert_still_parses(body: dict[str, Any]) -> None:
         ) from None
 
 
-def _configured_descriptors(provider: AIProvider) -> frozenset[tuple[str, str, str]]:
-    """``(model, prompt_version, structured_output_mode)`` for every link
-    this run could grade through.
+@dataclass(frozen=True, kw_only=True)
+class _DescriptorAllowlist:
+    """The descriptor strings this run configured, **field by field**.
 
-    These three are set from local configuration when an adapter is built
-    and are never assigned from a response -- but "never" is a property of
-    today's adapters, not of the format, and the field next to them
-    (``version``) *is* response-derived. Matching against what this run
-    actually configured turns "these strings happen to be safe" into
-    something checked on every write, so an adapter that later starts
-    echoing a routed model name into its own descriptor cannot quietly put
-    provider text into a recorded file.
+    Deliberately not a set of whole ``(model, prompt_version,
+    structured_output_mode)`` triples. A triple only matches when every
+    field was known before the first call, and one adapter's model is not:
+    ``CodexAppServerProvider.describe()`` reports ``"default"`` until Codex
+    resolves the model, then reports the resolved name. Matching triples
+    therefore failed on *every* Codex response, collapsing all three fields
+    onto one marker -- so two runs against different Codex models, or
+    different prompts, landed in the same ``descriptor_key`` bucket and
+    their metrics were pooled (code review finding).
+
+    Per-field matching plus a fingerprint for the unmatched (below) keeps
+    both properties at once: nothing unverified is written, and two
+    different configurations stay two different buckets. It is the same
+    reasoning that keeps an unverified ``questionId`` distinguishable from
+    the label's id rather than equal to it.
+    """
+
+    models: frozenset[str]
+    prompt_versions: frozenset[str]
+    structured_output_modes: frozenset[str]
+
+
+def _configured_descriptors(provider: AIProvider) -> _DescriptorAllowlist:
+    """What every link this run could grade through declares up front.
 
     ``providers`` is how :class:`FallbackAIProvider` exposes its chain; a
     single adapter has no such attribute and is its own only link.
     """
     children: Sequence[AIProvider] = getattr(provider, "providers", None) or (provider,)
-    return frozenset(
-        (descriptor.model, descriptor.prompt_version, descriptor.structured_output_mode)
-        for descriptor in (child.describe() for child in children)
+    descriptors = [child.describe() for child in children]
+    return _DescriptorAllowlist(
+        models=frozenset(descriptor.model for descriptor in descriptors),
+        prompt_versions=frozenset(descriptor.prompt_version for descriptor in descriptors),
+        structured_output_modes=frozenset(
+            descriptor.structured_output_mode for descriptor in descriptors
+        ),
     )
 
 
-def _version_fingerprint(version: str | None) -> str | None:
-    """A content-free stand-in for the deployment identifier a provider
-    reported (``modelVersion``, or OpenRouter's routed model + upstream).
+def _fingerprint(value: str) -> str:
+    """A content-free stand-in that still tells two different values apart.
 
-    That string is chosen by the provider and validated by nothing but
-    "non-blank", so an anomalous response can carry free text into it --
-    and it is written even when the response body itself was a schema
-    violation, since a failed cell still records the descriptor of the
-    configuration that was attempted (code review finding). Redacting the
-    successful path alone does not close it.
-
-    Hashing keeps the one thing the field is for: two calls that ran
-    against *different* deployments still land in different
-    ``descriptor_key`` buckets, and two against the same one still share a
-    bucket (docs/poc-2-ai-grading.md section 3.3). What is given up is the
-    human-readable deployment name, which for a given run is in the
-    operator's own console and logs -- not something that has to live in a
-    file that also holds student work. 16 hex characters is 64 bits, far
-    more than enough to keep a handful of deployments apart, and short
-    enough to stay readable in the results table's ``config`` column.
+    16 hex characters is 64 bits -- far more than enough to keep a handful
+    of models and deployments in separate ``descriptor_key`` buckets, and
+    short enough to stay readable in the results table's ``config`` column.
     """
-    if version is None:
-        return None
-    return "sha256:" + hashlib.sha256(version.encode("utf-8")).hexdigest()[:16]
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def _verified_or_fingerprint(value: str, allowed: frozenset[str]) -> str:
+    """``value`` if this run configured it, otherwise a fingerprint of it.
+
+    A fingerprint rather than a fixed marker, because "we could not verify
+    this" is not a reason to make two different values indistinguishable:
+    that would pool two configurations' results into one bucket, which is a
+    measurement error rather than a privacy one. Safe and measurable are
+    not in tension here.
+    """
+    return value if value in allowed else _fingerprint(value)
 
 
 def _wire_descriptor(
-    descriptor: ProviderDescriptor, *, configured: frozenset[tuple[str, str, str]]
+    descriptor: ProviderDescriptor, *, configured: _DescriptorAllowlist
 ) -> dict[str, Any]:
     """The ``descriptor`` block ``report.py`` requires on every recorded cell.
 
-    ``provider`` is deliberately *not* part of it: ``report.py`` takes the
-    provider id from the cell's key in ``recorded`` and would reject an
-    extra field here (``_DescriptorInput``, ``extra="forbid"``).
+    ``model`` / ``prompt_version`` / ``structured_output_mode`` are written
+    verbatim when this run configured them, and as a fingerprint when it did
+    not -- which happens legitimately for an adapter that only learns its
+    model from the service (Codex app-server), and would also happen if an
+    adapter ever started echoing a response value into its own descriptor.
+    Either way nothing unverified is written and two different values stay
+    distinguishable.
+
+    ``version`` is response-derived by definition (Gemini's ``modelVersion``,
+    OpenRouter's routed model + upstream, Codex's CLI user agent), validated
+    by nothing but "non-blank", and written even for a cell whose body was a
+    schema violation -- so it is always fingerprinted (code review finding).
+    Hashing keeps what the field is for: two calls that ran against
+    different deployments stay in different ``descriptor_key`` buckets
+    (docs/poc-2-ai-grading.md section 3.3). What is given up is the
+    human-readable deployment name, which for a given run is in the
+    operator's own console and logs -- not something that has to live in a
+    file that also holds student work.
+
+    ``provider`` is deliberately *not* part of this block: ``report.py``
+    takes the provider id from the cell's key in ``recorded`` and would
+    reject an extra field here (``_DescriptorInput``, ``extra="forbid"``).
     """
-    identity = (descriptor.model, descriptor.prompt_version, descriptor.structured_output_mode)
-    model, prompt_version, structured_output_mode = (
-        identity if identity in configured else (_UNVERIFIED_DESCRIPTOR,) * 3
-    )
     return {
-        "model": model,
-        "version": _version_fingerprint(descriptor.version),
-        "prompt_version": prompt_version,
+        "model": _verified_or_fingerprint(descriptor.model, configured.models),
+        "version": None if descriptor.version is None else _fingerprint(descriptor.version),
+        "prompt_version": _verified_or_fingerprint(
+            descriptor.prompt_version, configured.prompt_versions
+        ),
         "temperature": descriptor.temperature,
-        "structured_output_mode": structured_output_mode,
+        "structured_output_mode": _verified_or_fingerprint(
+            descriptor.structured_output_mode, configured.structured_output_modes
+        ),
     }
 
 
@@ -566,7 +595,7 @@ def _call_with_backoff(
     provider: AIProvider,
     cell: _Cell,
     *,
-    configured: frozenset[tuple[str, str, str]],
+    configured: _DescriptorAllowlist,
     sleep: Callable[[float], None],
 ) -> tuple[str, dict[str, Any], float]:
     """One cell's outcome, retrying transient failures per section 7.2.

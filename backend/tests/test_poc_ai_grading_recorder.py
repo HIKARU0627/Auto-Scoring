@@ -16,6 +16,7 @@ import hashlib
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -524,3 +525,71 @@ def test_report_py_reads_back_exactly_what_record_py_wrote(dataset: Path) -> Non
     violations = [outcome for outcome in outcomes if outcome.schema_violation]
     assert [outcome.provider for outcome in violations] == ["gemini"]
     assert not any(outcome.unavailable for outcome in outcomes)
+
+
+# --- anonymisation must not cost the harness its ability to measure ---
+
+
+class _LateResolvingProvider(_StubProvider):
+    """Reports a placeholder model until the service resolves the real one.
+
+    This is ``CodexAppServerProvider``: with ``AUTO_SCORING_CODEX_MODEL``
+    unset, ``describe()`` answers ``"default"`` until the first
+    ``thread/start`` comes back, and the real model name afterwards.
+    """
+
+    def __init__(self, resolved_model: str) -> None:
+        super().__init__()
+        self._resolved_model = resolved_model
+        self.name = "codex-app-server"
+
+    def describe(self) -> ProviderDescriptor:
+        return ProviderDescriptor(
+            provider=self.name,
+            model="default",
+            version="codex-cli/1.2.3",
+            prompt_version="v1",
+            temperature=0.0,
+            structured_output_mode="json_schema",
+        )
+
+    def grade(self, request: GradingRequest) -> GradingResponse:
+        response = super().grade(request)
+        return replace(
+            response, descriptor=replace(response.descriptor, model=self._resolved_model)
+        )
+
+
+def test_two_late_resolved_models_stay_in_two_buckets(dataset: Path, tmp_path: Path) -> None:
+    """A model this run could not know up front must still be *distinguished*.
+
+    Matching the descriptor as one ``(model, prompt_version,
+    structured_output_mode)`` triple failed on every Codex response -- the
+    model differs before and after the call -- and collapsed all three
+    fields onto a single marker, so two runs against different Codex models
+    landed in the same ``descriptor_key`` bucket and had their metrics
+    pooled (code review finding). Safe and measurable are not in tension:
+    a fingerprint gives both.
+    """
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "sample-01.json").write_text(
+        (dataset / "sample-01.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    _run(dataset, _LateResolvingProvider("gpt-5-codex"))
+    _run(other, _LateResolvingProvider("gpt-5-codex-mini"))
+
+    first = _cell(dataset, "codex-app-server", "ocr_clean")["descriptor"]
+    second = json.loads((other / "sample-01.json").read_text(encoding="utf-8"))["questions"][0][
+        "recorded"
+    ]["codex-app-server"]["ocr_clean"]["descriptor"]
+
+    # Neither model name reaches the file...
+    assert "gpt-5-codex" not in json.dumps([first, second])
+    # ...and the two configurations are still two configurations.
+    assert first["model"] != second["model"]
+    # The fields this run *did* configure keep their real values, instead of
+    # being dragged into the marker with the model.
+    assert first["prompt_version"] == second["prompt_version"] == "v1"
+    assert first["structured_output_mode"] == second["structured_output_mode"] == "json_schema"
