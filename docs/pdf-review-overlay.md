@@ -44,15 +44,17 @@ REST エンドポイントは Issue #21 着手時点で存在しなかった（�
 （`docs/poc-3-pdf-coordinates.md`）が座標往復を検証したのと同じレンダリング
 エンジンであるため、正規化座標の変換契約をそのまま使える。
 
-### 2.3 Confidenceの高/中/低の閾値は表示専用の仮決定
+### 2.3 Confidenceの高/中/低の閾値は表示専用（業務閾値とは別物）
 
-低Confidenceの基準値は業務ルールとして未決定
-（`docs/business-rules-and-evaluation-data.md` §3 (C)、
-`docs/data-model-and-local-storage.md` §9）。本画面はテキスト/アイコンでの
-区別が受入条件のため、`ConfidenceLevel`（`app/lib/core/confidence_level.dart`）
-に **表示分類専用**（0.9以上=高、0.7以上=中、それ未満=低）の閾値を仮に置いた。
-この閾値は何もゲーティングしない（自動確定・ブロックの類は一切行わない）。
-業務閾値が確定したら、この分類も合わせて見直すこと。
+低Confidenceの基準値は固定値を置かない運用に確定した（Issue #81。
+`docs/business-rules-and-evaluation-data.md` §3 (C)、
+`docs/data-model-and-local-storage.md` §9）。業務閾値は backend 側の設定値
+（既定 0.80）で、運用しながら調整される -- つまり画面側が焼き込んでよい定数ではない。
+本画面はテキスト/アイコンでの区別が受入条件のため、`ConfidenceLevel`
+（`app/lib/core/confidence_level.dart`）に **表示分類専用**（0.9以上=高、0.7以上=中、
+それ未満=低）の閾値を置いている。この閾値は何もゲーティングしない
+（自動確定・ブロックの類は一切行わない）。業務閾値の運用値が動いても表示分類は
+追随しないので、実運用の分布が見えた時点で分類の妥当性を見直すこと。
 
 ### 2.4 annotationの表示位置は`anchor_text`から解決する（R3レビュー対応）
 

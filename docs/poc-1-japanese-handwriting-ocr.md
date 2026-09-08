@@ -16,13 +16,14 @@ GitHub Issue #13（親 Issue #3）の PoC。簡易設計書 §8.3 の `OCRProvid
 
 ### 0.1 現在のステータス
 
-| 項目                               | 状態                                                             |
-| ---------------------------------- | ---------------------------------------------------------------- |
-| メトリクス計算・集計パイプライン   | **実装済み**（`backend/src/auto_scoring/domain/ocr_metrics.py`） |
-| `OCRProvider` 契約 + contract test | **実装済み**（`backend/tests/test_ocr_provider_contract.py`）    |
-| 合成フィクスチャでの集計再現       | **実装済み**（`uv run python poc/run_ocr_eval.py`）              |
-| 実 OCR アダプタ（Google/Azure 等） | **未実装**（credentials・評価データセット待ち。§7・§9）          |
-| 実測値・採用判断                   | **未実施**（同上）                                               |
+| 項目                               | 状態                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------- |
+| メトリクス計算・集計パイプライン   | **実装済み**（`backend/src/auto_scoring/domain/ocr_metrics.py`）          |
+| `OCRProvider` 契約 + contract test | **実装済み**（`backend/tests/test_ocr_provider_contract.py`）             |
+| 合成フィクスチャでの集計再現       | **実装済み**（`uv run python poc/run_ocr_eval.py`）                       |
+| 実 OCR アダプタ（Google/Azure 等） | **未実装**（credentials・評価データセット待ち。§7・§9）                   |
+| 実測値                             | **未実施**（同上）                                                        |
+| 採用 OCR                           | **確定: Google Document AI**（実測ではなくオーナー判断。Issue #81。§9.3） |
 
 ---
 
@@ -70,8 +71,10 @@ GitHub Issue #13（親 Issue #3）の PoC。簡易設計書 §8.3 の `OCRProvid
 
 ## 2. 比較候補
 
-第一候補 Google Cloud Vision に加え、比較可能な候補を**最低 1 つ**評価する
-（簡易設計書 §8.3、technology-stack.md §3.5）。
+PoC 1 の設計時点では第一候補を Google Cloud Vision とし、比較可能な候補を**最低 1 つ**
+評価する計画だった（簡易設計書 §8.3、technology-stack.md §3.5）。実測前に
+[Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81) で
+**Google Document AI** が採用に確定したため、以下の表は当時の比較計画の記録である。
 
 | ID      | 候補                                                | 位置づけ                                           |
 | ------- | --------------------------------------------------- | -------------------------------------------------- |
@@ -194,13 +197,14 @@ samples: 4
 可能なら各サービスのデータ保持オプトアウト／ゼロデータ保持を有効にする
 （決定書 §6.6）。
 
-### 7.2 rate limit 時の扱い（暫定。最終値は §3 E = Issue で確定）
+### 7.2 rate limit 時の扱い（PoC ハーネスの規約。MVP の並列度は決定書 §3 E）
 
 - 指数バックオフ（初期 1s、上限 32s、最大 5 回）で再試行する。
 - 恒常的な 429 / quota 超過は**失敗として記録**し、推測で埋めない。当該設問は
   `ConfidenceBand.LOW` 相当の「要確認」に落とす。
 - PoC のハーネスは逐次実行（並列度 1）を既定とし、レート制限に当たった候補は
-  その旨を結果表の注記に残す。MVP の並列度は PoC 2 後に確定（決定書 §3 E）。
+  その旨を結果表の注記に残す。MVP の並列度は決定書 §3 E で**既定 4**に確定
+  （Issue #81。設定値であることは維持）。
 
 ### 7.3 実測前に本 PoC へ追加するもの
 
@@ -281,14 +285,14 @@ samples: 4
 - いずれの場合も「どのくらいの割合が手動確認に回るか」を §8 の失敗率＋低
   Confidence 率から見積もり、MVP のリリースノートに記載する。
 
-### 9.3 採用 OCR・fallback・rate limit の決定（本 PoC クローズ時に確定）
+### 9.3 採用 OCR・fallback・rate limit の決定
 
-| 決定項目                | 記入欄                                                           |
-| ----------------------- | ---------------------------------------------------------------- |
-| 採用 OCR（第一候補）    | _本 PoC クローズ時に確定（第一候補: `gcv`）_                     |
-| クラウド不可時 fallback | _未確定（候補: `local` = PaddleOCR 日本語）_                     |
-| rate limit 時の扱い     | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）    |
-| 低 Confidence 閾値      | 分布を PoC 2 と合わせて §3 (C) で確定（本 PoC では分布のみ提出） |
+| 決定項目                | 記入欄                                                                      |
+| ----------------------- | --------------------------------------------------------------------------- |
+| 採用 OCR                | **Google Document AI**（Issue #81。本 PoC の実測を待たずオーナーが確定）    |
+| クラウド不可時 fallback | _未確定（候補: `local` = PaddleOCR 日本語）_                                |
+| rate limit 時の扱い     | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）               |
+| 低 Confidence 閾値      | **固定値を置かない**（Issue #81。設定値のまま既定 0.80 で運用調整。§3 (C)） |
 
 ---
 
@@ -318,12 +322,12 @@ samples: 4
 昇格しないもの: 不採用候補のアダプタ、`poc/` 配下のハーネス、合成フィクスチャ。
 不採用アダプタは削除する。
 
-Issue #19（`docs/ocr-recognition-pipeline.md`）は、実アダプタの採用・実測が
-未実施のまま（§0.1・§9.3は依然未確定）、本番パイプライン（`JobProcessor`実装・
-永続化・Confidence運用・手動入力API）を`OCRProvider`ダミー実装
-（`NullOCRProvider`）の上に構築した。実アダプタの追加はここでの決定を変えない
-——採用OCRが決まり次第、そのアダプタを`OCRProviderContract`のサブクラスとして
-追加し、`create_app(ocr_provider=...)`で差し替えるだけでよい。
+Issue #19（`docs/ocr-recognition-pipeline.md`）は、実アダプタの実装・実測が
+未実施のまま、本番パイプライン（`JobProcessor`実装・永続化・Confidence運用・
+手動入力API）を`OCRProvider`ダミー実装（`NullOCRProvider`）の上に構築した。
+採用 OCR が Google Document AI に確定（Issue #81）してもここでの決定は変わらない
+——そのアダプタを`OCRProviderContract`のサブクラスとして追加し、
+`create_app(ocr_provider=...)`で差し替えるだけでよい。
 
 ---
 

@@ -56,7 +56,7 @@ Issueの受入条件は「前提Questionがusableな結果を返した時だけ�
 ら後続を解放してはならない、という3値（未完了 / usable / usableでない）が要る。
 `Job`に`usable: bool | None`を追加した（`SUCCEEDED`遷移時にのみ設定。
 `FAILED`/`CANCELLED`は常にusableでない扱い）。実際のConfidence判定基準
-（business-rules-and-evaluation-data.md §3 (C)、閾値は未確定）は`JobProcessor`
+（business-rules-and-evaluation-data.md §3 (C)。閾値は設定値で、既定0.80）は`JobProcessor`
 の実装側の責務とし、本Issueのキューは`ProcessingResult.usable`という既に判定
 済みのbool値を受け取るだけに留める。
 
@@ -135,15 +135,18 @@ technology-stack.md §3 は「設定管理: pydantic-settings」と書いてい�
 経由せず、素のキーワード引数として並列度を渡している。本Issueもこの既存の慣習
 に合わせ、`auto_scoring.jobs.settings.QueueSettings`を素の`dataclass`にし、
 `create_app(..., queue_settings: QueueSettings | None = None)`として渡す。新しい
-必須依存パッケージは追加しない。既定値: `max_concurrency=2`
-（technology-stack.md §3.4「既定2〜3」、business-rules-and-evaluation-data.md
-§3 (E)「PoC後に判断」までの暫定値）、`max_attempts=3`（既存の
+必須依存パッケージは追加しない。既定値: `max_concurrency=4`
+（technology-stack.md §3.4、business-rules-and-evaluation-data.md §3 (E)。
+Issue #18 時点の暫定値2から、[Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81)
+でオーナーが確定した4へ変更した。設定値であることは変わらず、採用providerの
+レート制限は未実測なので、下記のbackoff・キュー再投入は引き続き必須）、
+`max_attempts=3`（既存の
 `Job.max_attempts`既定と一致）、指数backoff
 （`initial_backoff_seconds=1.0`、`backoff_multiplier=2.0`、
 `max_backoff_seconds=30.0`）。
 
-Confidence閾値（business-rules-and-evaluation-data.md §3 (C)、PoC後に判断）は
-`QueueSettings`に含めない -- 本Issoueのキューは`usable`という既に判定済みの
+Confidence閾値（business-rules-and-evaluation-data.md §3 (C)。固定値を置かず
+設定値のまま運用調整すると確定、既定0.80）は`QueueSettings`に含めない -- 本Issoueのキューは`usable`という既に判定済みの
 値を受け取るだけで、閾値そのものを参照するコードを持たないため、ここに置くと
 使われない設定値になる。閾値は`JobProcessor`の具象実装（後続Issue）が持つ設定
 に属する。
