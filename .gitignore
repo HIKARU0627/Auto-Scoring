@@ -13,7 +13,12 @@
 # Broad on purpose: `.env` + `.env*.local` alone let `.env.production`,
 # `.env.staging` and `.env.test` through, and this repository is public, so a
 # file nobody thought to add here is published the moment it is created.
+# `*.env` covers the other half of the habit (`production.env`, `local.env`).
+# Case variants like `.ENV` stay uncovered -- gitignore has no case-insensitive
+# match -- which is one more reason the real defence is that credentials live
+# in 1Password and ADC rather than in a file at all.
 .env*
+*.env
 !.env.example
 
 # Editor / OS
