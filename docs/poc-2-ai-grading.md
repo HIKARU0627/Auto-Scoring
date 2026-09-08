@@ -16,17 +16,21 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 
 ### 0.1 現在のステータス
 
-| 項目                                          | 状態                                                                            |
-| --------------------------------------------- | ------------------------------------------------------------------------------- |
-| Pydantic 構造化出力スキーマ                   | **実装済み**（`backend/src/auto_scoring/domain/ai_grading.py`）                 |
-| `AIProvider` ポート + contract test           | **実装済み**（`backend/tests/test_ai_provider_contract.py`）                    |
-| メトリクス計算・集計パイプライン              | **実装済み**（`backend/src/auto_scoring/domain/ai_grading_metrics.py`）         |
-| 合成フィクスチャでの集計再現                  | **実装済み**（`uv run python poc/issue_14_ai_grading/report.py`）               |
-| 実データ（2教科×問1）の書き起こし・接地       | **実施済み（予備調査、§6 参照）**。5 件・のべ 5 設問                            |
-| 直接 vendor API アダプタ（Gemini/Claude/GPT） | **未実装**（credentials 待ち。§7・§9）                                          |
-| OpenRouter / Codex app-server アダプタ        | **実装済み**（Issue #44。§7.0・§7.3。`adapters/ai_grading/`）                   |
-| 実データでの AI 呼び出し・実測値              | **未実施**（§7.4 の live probe が未記入。#35 のスコープ）                       |
-| 採用 provider                                 | **確定: 優先度つきフォールバック**（実測ではなくオーナー判断。Issue #81。§9.3） |
+| 項目                                           | 状態                                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- |
+| Pydantic 構造化出力スキーマ                    | **実装済み**（`backend/src/auto_scoring/domain/ai_grading.py`）                 |
+| `AIProvider` ポート + contract test            | **実装済み**（`backend/tests/test_ai_provider_contract.py`）                    |
+| メトリクス計算・集計パイプライン               | **実装済み**（`backend/src/auto_scoring/domain/ai_grading_metrics.py`）         |
+| 合成フィクスチャでの集計再現                   | **実装済み**（`uv run python poc/issue_14_ai_grading/report.py`）               |
+| 実データ（2教科×問1）の書き起こし・接地        | **実施済み（予備調査、§6 参照）**。5 件・のべ 5 設問                            |
+| Vertex AI（Gemini）/ OpenAI 直接アダプタ       | **実装済み**（Issue #35。§7.0・§7.3。`adapters/ai_grading/`）                   |
+| OpenRouter / Codex app-server アダプタ         | **実装済み**（Issue #44。§7.0・§7.3。`adapters/ai_grading/`）                   |
+| 優先度つきフォールバックのチェーン             | **実装済み**（Issue #35。`fallback_provider.py` + `factory.py`）                |
+| live-provider パス（実 API 呼び出しの記録）    | **実装済み**（Issue #35。`poc/issue_14_ai_grading/record.py`。§4.3）            |
+| 4 経路の live 疎通（**合成フィクスチャのみ**） | **実施済み**（Issue #35。§7.4）                                                 |
+| 実データでの AI 呼び出し・実測値               | **未実施**（§6.3・§12。データ件数と人間ラベルが §6.2 の下限に届かないため）     |
+| 採用 provider                                  | **確定: 優先度つきフォールバック**（実測ではなくオーナー判断。Issue #81。§9.3） |
+| provider 採用判断（#35 が求めた実測比較）      | **保留**（§12。母数不足。MVP は手動採点 fallback を継続）                       |
 
 ---
 
@@ -102,16 +106,30 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一データ・同一 rubric
 で比較する（簡易設計書 §9、決定書 §3 (B)）。
 
-| ID       | 候補                                                 | 位置づけ |
-| -------- | ---------------------------------------------------- | -------- |
-| `gemini` | Google Gemini（構造化 JSON 出力 / `responseSchema`） | 候補 1   |
-| `claude` | Anthropic Claude（tool-use / 構造化出力）            | 候補 2   |
-| `gpt`    | OpenAI GPT（JSON Schema / structured outputs）       | 候補 3   |
+候補 ID は、決定書 §3 (B)（Issue #81）が確定した**フォールバックチェーンの 4 リンク**
+そのものであり、各アダプタの `AIProvider.name` と同じ綴りを使う。ハーネス
+（`report.py` の `_CANONICAL_PROVIDER_IDS`）はこの 4 つ以外の provider ID を
+実データセットで拒否する。
 
-必須比較: 上記のうち最低 2 候補。時間が許せば全候補。ベンダー固有アダプタは
-本 PoC ではまだ実装しない（決定書 §3.1 B「モデル固有のプロンプト最適化・
-トークン最適化・モデル固有の JSON モードに依存したパースを本実装しない」に従い、
-実測して確定するのは本 PoC のクローズ時）。
+| ID                 | 候補                                                       | 優先度 | アダプタ                       |
+| ------------------ | ---------------------------------------------------------- | ------ | ------------------------------ |
+| `gemini`           | Google Gemini（**Vertex AI + ADC**、`responseJsonSchema`） | ①      | `vertex_gemini_provider.py`    |
+| `codex-app-server` | Codex CLI app-server（運用者の `codex login` セッション）  | ②      | `codex_app_server_provider.py` |
+| `openrouter`       | OpenRouter（オープンウェイトモデル。単一鍵で複数ベンダー） | ③      | `openrouter_provider.py`       |
+| `openai`           | OpenAI GPT（JSON Schema / structured outputs）             | ④      | `openai_provider.py`           |
+
+**以前の ID 集合（`gemini`/`claude`/`gpt`）からの変更（Issue #35）**: 旧 ID は
+「3 つのベンダー」を指しており、`claude`・`gpt` はこのリポジトリのどのアダプタからも
+生成されえない値だった。live-provider パス（§4.3）は各セルを**実際に応答した
+アダプタの descriptor**でキーづけするため、旧 ID のままでは OpenRouter で記録した
+実データセットがハーネスに拒否される一方、再現不能な手書きの `claude` セルは通って
+しまう。Anthropic Claude は候補から消えたのではなく、決定書 §3 (B) が
+**OpenRouter 経由の 1 モデル**として扱う構成に変わったということである。
+
+必須比較: 上記のうち最低 2 候補。時間が許せば全候補。決定書 §3.1 B
+「モデル固有のプロンプト最適化・トークン最適化・モデル固有の JSON モードに依存した
+パースを本実装しない」は引き続き守る: プロンプトは全アダプタ共通
+（`adapters/ai_grading/_prompt.py`）で、構造化出力の指定方法だけが経路ごとに異なる。
 
 ハーネス（`report.py`）はこれを機械的にも強制する: データセット全体で
 「実際の応答が記録された provider」が 2 種類未満の場合、`evaluated cells: 0`
@@ -614,8 +632,9 @@ sample_ref`（PDF ファイル名・ページ・設問番号）を転記した�
 
 **正規の provider 候補 ID を強制する**: `_canonical_providers`（§3.11）に
 よる正規化は前後の空白を除去するだけで、大文字小文字の違い（`"gemini"`
-と `"Gemini"`）は捉えられない。決定書は候補 ID を `gemini`/`claude`/`gpt`
-と固定している（§2）ため、実データでの run（`--dataset` が同梱の合成
+と `"Gemini"`）は捉えられない。決定書は候補 ID を固定している（§2。Issue #35 で
+`gemini`/`codex-app-server`/`openrouter`/`openai` へ更新）ため、実データでの
+run（`--dataset` が同梱の合成
 フィクスチャ以外を指す場合）では、正規化後の ID がこの固定集合のいずれか
 と完全一致（大文字小文字区別）することを追加で検証する。合成フィクスチャ
 モード（`--dataset` 省略時の既定パス）はこの検証から明示的に除外する
@@ -803,9 +822,8 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 に加え、教科ごとの distinct `submissionId` 件数（日本史 3・世界史 2。§3.11・
 §6.2 参照）が出力される（credentials 未整備を推測で埋めない設計。§6.2
 参照）。実 AI
-呼び出しの live-provider パスは、credentials が揃い次第、**Issue #14 を閉じる
-前に本 PoC へ追加する**（§7.3）。呼び出し時も request/response 本文はログに
-残さない。
+呼び出しで `recorded` を埋める live-provider パスは **§4.3**（Issue #35 で実装）。
+呼び出し時も request/response 本文はログに残さない。
 
 ハーネスが比較対象とする provider × 入力モードの組は、データセット全体に
 一度でも記録された provider 名 × `ocr_clean`/`ocr_noisy` の全組み合わせ
@@ -821,6 +839,57 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 応答がない 2 候補も、この判定では候補として数えない）。実データ収集の途中で
 1 候補分しか live-provider 呼び出しをまだ終えていない場合、または 2 候補が
 まだ同じ答案で揃っていない場合は、条件を満たしてから再実行する。
+
+### 4.3 live-provider パス（実 API を呼んで `recorded` を埋める。Issue #35）
+
+`report.py` は記録済みの応答を集計するだけで、応答を**作る**側は Issue #14 時点で
+未実装だった（README がそう明言していた）。それが `record.py` である。
+
+```bash
+cd backend
+# .env.local に §7.1 の設定（Gemini は ADC のため鍵なし）
+uv run --env-file .env.local python poc/issue_14_ai_grading/record.py \
+    --dataset "<local eval-dataset dir>" --images "<local crops dir>" \
+    [--variant ocr_clean|ocr_noisy|both] [--limit N] [--overwrite] [--dry-run]
+# その後、同じディレクトリを report.py に渡す
+uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset dir>"
+```
+
+呼ぶ provider は `create_ai_provider()`（= `AUTO_SCORING_AI_GRADING_TRANSPORT`）から
+取る。ハーネス専用の別の provider 選択機構を作らないのは、MVP で実際に動く構成と
+測定する構成がずれないようにするためである。
+
+設計上の要点:
+
+- **セルのキーは応答から決まる**。`response.descriptor.provider`、つまり実際に採点した
+  アダプタ名で `recorded[<provider>][<variant>]` に書く。単一アダプタならそのアダプタ、
+  フォールバックチェーンなら**実際に応答したリンク**になる（決定書 §3 (B)
+  「どの provider で採点したかを結果に残す」）。
+- **`--images` と画像 identity**。`input.answer_image_ref` が `sha256:<hex>` 形式なら、
+  `<images>/<hex>.png`（`.jpg`/`.jpeg` も探す）を読んで**内容ハッシュを照合**する。
+  差し替わった・作り直された切り出し画像で採点したものが「同一データでの比較」に
+  見えてしまうのを防ぐ（§3.12）。`sha256:` 以外の参照はディレクトリ内の単純な
+  ファイル名として扱い（パス区切りと `..` は拒否）、内容は照合できない旨を前提とする。
+- **失敗を捏造しない**。schema 検証に落ちた応答は `schema_violation: true`、
+  リトライを使い切った呼び出しは `unavailable: true` として記録する。どちらも
+  「まだ試していない（pending）」とは区別される。生の応答本文は記録しない
+  （アダプタが例外に載せない設計＝答案テキストを漏らさないため。§3.7）ので、
+  `schema_violation` マーカーが「応答は返ったが検証に落ちた」を表す唯一の手段である
+  （`report.py` の `_recorded_outcomes`）。
+- **リトライは §7.2 の方針**。`ProviderUnavailable` 系のみ指数バックオフ
+  （初期 1s・上限 32s・最大 5 回）で再試行し、`SchemaViolation` は再試行しない
+  （同じモデルに同じ要求を送っても再現するため。`ai-grading-pipeline.md`）。
+- **1 セルごとに書き戻す**（アトミック置換）。実データでの実行は課金を伴うため、
+  最後のセルでのクラッシュで全部やり直しにならないようにする。既に記録済みのセルは
+  既定でスキップするので、中断した実行はそのまま再開できる。
+- **標準出力に答案内容を出さない**。進捗行は連番・入力モード・provider ID・結果・
+  所要時間だけである。
+- **リポジトリ内の合成フィクスチャへの書き込みは拒否する**。実 provider の応答本文が
+  コミットに入らないようにするため（§11）。配線のリハーサルはフィクスチャを
+  リポジトリ外へコピーしてから行う。
+
+`--dry-run` は credentials なしでデータセットと切り出し画像の検証だけを行い、
+provider を一切呼ばない。
 
 ---
 
@@ -945,36 +1014,47 @@ distinct submissions (answers, by submissionId) per subject -- decision record s
 
 ### 6.3 実 AI プロバイダでの実測
 
-**未実施。** credentials（§7）と実 AI アダプタが未整備のため。credentials が
-揃い次第、§6.2 の予備調査データおよび（可能であれば）決定書 §6.2 の下限を
-満たす追加データで実測し、§8 の表を埋める。
+**実データでは未実施。** credentials とアダプタは揃った（§7.1・§7.3・§7.4 で
+4 経路すべて live 疎通済み）が、実測を行っても**採用判断の根拠にならない**
+ためである。オーナーが提供できる実データは 12 教科 × 各 1 答案の計 12 答案が
+すべてで、決定書 §6.2 が要求する 60 答案・のべ 300 設問以上と、§6.3 が要求する
+現役採点者 2 名の独立ラベルを満たさない。詳細と再開条件は **§12**。
+
+配線・認証・構造化出力・失敗分類・記録形式の live 確認は、合成フィクスチャのみを
+送信して §7.4 に記録した。
 
 ---
 
 ## 7. credentials と rate limit
 
-### 7.0 3 つの呼び出し経路（Issue #44）
+### 7.0 4 つの呼び出し経路（Issue #44 / #35）
 
-`AIProvider` adapter は次の 3 経路のいずれでも差し替え可能である。
+`AIProvider` adapter は次の 4 経路のいずれでも差し替え可能である。
 `ProviderDescriptor`/`descriptor_key`（§3.3 の再現性 identity）はどの経路でも
 同じ形（provider/model/version/prompt_version/temperature/
 structured_output_mode）のまま保たれ、経路の違いは `provider` フィールドの値
-（`gemini`/`claude`/`gpt` 対 `openrouter` 対 `codex-app-server`）と `version`
+（`gemini` / `codex-app-server` / `openrouter` / `openai`。§2）と `version`
 の埋まり方だけに現れる。既存 contract test（`AIProviderContract`,
 `backend/tests/test_ai_provider_contract.py`）はどの経路のアダプタにも同一の
 まま適用される（§7.3 が実装済みのサブクラスを列挙する）。
 
-| 経路                 | 実装                                                                        | 認証方式                                              | コスト                                                             | latency                                               | 対応状況                               |
-| -------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- | -------------------------------------- |
-| 直接 vendor API      | 未実装（§0.1・§2 参照）                                                     | 各社ごとの API key                                    | 各社の従量課金（トークン単価。§8.1 の cost 閾値と同じ単位）        | 各社 API のネットワーク往復のみ                       | 未実装                                 |
-| **OpenRouter**       | `backend/src/auto_scoring/adapters/ai_grading/openrouter_provider.py`       | 単一 API key（OpenRouter 自身の key）                 | 各社原価 + OpenRouter の手数料（数 %。モデルごとに異なる）         | 直接呼び出し + OpenRouter ゲートウェイの追加ホップ    | 実装済み（§7.1.1 参照）                |
-| **Codex app-server** | `backend/src/auto_scoring/adapters/ai_grading/codex_app_server_provider.py` | Codex CLI の既存ログイン（ChatGPT プラン or API key） | ChatGPT サブスクリプション上限内は追加課金なし（サブスク外は別途） | `codex` サブプロセス起動 + JSON-RPC 往復（実測 §7.4） | 実装済み、プロトコルは実験的（§7.1.2） |
+| 経路                          | 実装                                                                        | 認証方式                                              | コスト                                                               | latency                                               | 対応状況                               |
+| ----------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------- |
+| **Vertex AI（Gemini）**       | `backend/src/auto_scoring/adapters/ai_grading/vertex_gemini_provider.py`    | **ADC**（API キーは組織ポリシーで禁止）               | Google Cloud の従量課金（トークン単価。§8.1 の cost 閾値と同じ単位） | Vertex AI へのネットワーク往復のみ                    | 実装済み（Issue #35。§7.1）            |
+| **直接 vendor API（OpenAI）** | `backend/src/auto_scoring/adapters/ai_grading/openai_provider.py`           | OpenAI の API key                                     | 従量課金（トークン単価）                                             | OpenAI API へのネットワーク往復のみ                   | 実装済み（Issue #35。§7.1）            |
+| **OpenRouter**                | `backend/src/auto_scoring/adapters/ai_grading/openrouter_provider.py`       | 単一 API key（OpenRouter 自身の key）                 | 各社原価 + OpenRouter の手数料（数 %。モデルごとに異なる）           | 直接呼び出し + OpenRouter ゲートウェイの追加ホップ    | 実装済み（§7.1.1 参照）                |
+| **Codex app-server**          | `backend/src/auto_scoring/adapters/ai_grading/codex_app_server_provider.py` | Codex CLI の既存ログイン（ChatGPT プラン or API key） | ChatGPT サブスクリプション上限内は追加課金なし（サブスク外は別途）   | `codex` サブプロセス起動 + JSON-RPC 往復（実測 §7.4） | 実装済み、プロトコルは実験的（§7.1.2） |
+
+4 経路は排他ではなく、決定書 §3 (B) の優先度つきフォールバックとして
+**この順に並べて 1 つの `AIProvider` にまとめられる**
+（`fallback_provider.py`。§7.3）。
 
 トレードオフの要点:
 
 - **鍵管理**: 直接 API は候補ごとに個別の鍵を管理する必要があるのに対し、
   OpenRouter は単一鍵で複数候補を切り替えられる。Codex app-server は API
-  key をこのリポジトリ側で一切保持しない（後述）。
+  key をこのリポジトリ側で一切保持しない（後述）。Vertex AI も鍵を持たない
+  （ADC。運用者の `gcloud` ログインまたはホストの workload identity）。
 - **コスト**: OpenRouter は原価に手数料が乗る。Codex app-server は運用者が
   既に持つ ChatGPT/Codex サブスクリプションの範囲内であれば追加コストなしで
   試せるが、大量の採点呼び出しをサブスクリプション個人利用の範囲外で行うこと
@@ -1000,13 +1080,59 @@ structured_output_mode）のまま保たれ、経路の違いは `provider` フ�
 または OS キーチェーン（`keyring`）に置く。リポジトリ・ログ・Issue・
 スクリーンショットに含めない（`AGENTS.md`「Security」）。
 
-#### 直接 vendor API（未実装）
+#### Gemini（Vertex AI + ADC）
 
-| 候補     | 必要な設定                                                                                                                                                                                                              |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gemini` | ADC（`gcloud auth application-default login`）+ `AUTO_SCORING_VERTEX_PROJECT` + `AUTO_SCORING_VERTEX_LOCATION` + `AUTO_SCORING_GEMINI_MODEL`。**API キーは使えない**（オーナーの組織ポリシーが禁止）ため Vertex AI 経由 |
-| `claude` | `AUTO_SCORING_ANTHROPIC_API_KEY` + `AUTO_SCORING_ANTHROPIC_MODEL`                                                                                                                                                       |
-| `gpt`    | `AUTO_SCORING_OPENAI_API_KEY` + `AUTO_SCORING_OPENAI_MODEL`                                                                                                                                                             |
+**API キーの設定項目は存在しない。** 本プロジェクトの Google Cloud 組織ポリシーが
+Gemini の API キーを禁止しているため、認証は Application Default Credentials
+だけである。旧 `AUTO_SCORING_GEMINI_API_KEY` / `AUTO_SCORING_ANTHROPIC_API_KEY` /
+`AUTO_SCORING_ANTHROPIC_MODEL` は削除した（Anthropic Claude は §2 のとおり
+OpenRouter 経由の 1 モデルとして扱う）。
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project <your-gcp-project>
+```
+
+| 設定                           | 内容                                                                                                                                           |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTO_SCORING_GEMINI_MODEL`    | Vertex AI のモデル ID（例: `gemini-2.5-flash`）                                                                                                |
+| `AUTO_SCORING_VERTEX_LOCATION` | 省略可（未設定時は `global`）。`global` は専用ホスト名を持ち、リージョン値はホスト名の接頭辞になる。`.env.example` は `us-central1` を例示する |
+| `AUTO_SCORING_VERTEX_PROJECT`  | 省略可。ADC が解決するプロジェクトと課金先を分けたいときだけ設定する（Issue #89 で導入された変数名。`.env.example` と綴りを揃える）            |
+
+**GCP プロジェクト ID はリポジトリに保存しない。** 実行時に ADC から読む
+（`_google_adc.AdcTokenSource`）。本書・`.env.example`・コミットに実値が入らない
+のはこのためである（`AGENTS.md`「Security」）。
+
+構造化出力は `generationConfig.responseJsonSchema` に
+`_schema.strict_ai_grading_result_schema()` をそのまま渡す。Vertex の旧来の
+`responseSchema`（OpenAPI 3.0 サブセット。`$defs`/`$ref` 不可）ではなく
+`responseJsonSchema` を使うのは、**スキーマの写しを 2 つ持たないため**である:
+写しがあれば `domain.ai_grading.AIGradingResult` から独立に drift し、
+アダプタ自身が要求した形の応答をローカル検証が落とす、という壊れ方をする。
+実際に受理されることは live probe（§7.4）で確認した。
+
+##### 依存関係: なぜ `google-auth` だけを足したか
+
+Vertex AI の呼び出し自体は素の HTTPS であり、既存の `httpx` で足りる。足りない
+のは ADC のトークン取得だけなので、`google-auth` のみを追加し、SDK
+（`google-genai` / `google-cloud-aiplatform`）は入れていない
+（`AGENTS.md`「Architecture」: 既存の依存で足りないときだけ追加する）。
+`google-auth` が同梱する transport は `requests` / `urllib3` 用で、どちらも
+本プロジェクトの依存ではないため、`httpx` 上に約 15 行の transport を書いて
+3 つ目の HTTP ライブラリを増やさないようにした（`_google_adc._HttpxAuthRequest`）。
+
+#### 直接 vendor API（OpenAI）
+
+| 設定                          | 内容                                   |
+| ----------------------------- | -------------------------------------- |
+| `AUTO_SCORING_OPENAI_API_KEY` | OpenAI の API key                      |
+| `AUTO_SCORING_OPENAI_MODEL`   | OpenAI のモデル名（例: `gpt-4o-mini`） |
+
+OpenRouter の API は OpenAI 互換であるため、呼び出し経路は共通の基底クラス
+（`_openai_chat.ChatCompletionsAIProvider`）にまとめてある。差分は base URL と、
+各経路固有のリクエストフィールド 1 つずつだけである: OpenRouter は
+zero-data-retention のルーティング指定、OpenAI は `store: false`
+（応答をアカウントのログに保存しない、リクエスト単位のオプトアウト。決定書 §6.6）。
 
 #### OpenRouter
 
@@ -1381,30 +1507,53 @@ contract test は green だが、実際の `codex login` 済み環境での動�
   「要確認」に落とす（`ProviderUnavailable`。§9.2）。
 - PoC のハーネスは逐次実行（並列度 1）を既定とする。MVP の並列度は本 PoC 後に
   確定する（決定書 §3 E）。
-- OpenRouter / Codex app-server のいずれも、現時点の adapter 実装
-  （`grade()` 単体）はこのバックオフをまだ内蔵していない。恒常的な失敗は
-  `ProviderUnavailable` として一度で送出されるため、再試行ポリシーは
-  呼び出し側（将来のジョブプロセッサ、または `report.py` の live-provider
-  パス）が §7.2 の方針で実装する（Issue #14 の既存方針をそのまま踏襲。
-  再試行そのものは本 Issue #44 のスコープ外）。
+- 4 経路のいずれも、adapter 実装（`grade()` 単体）はこのバックオフを内蔵しない。
+  恒常的な失敗は `ProviderUnavailable`（および 429/5xx/timeout のサブクラス）
+  として一度で送出され、再試行ポリシーは**呼び出し側**が持つ。PoC 側の
+  呼び出し元である live-provider パスは §7.2 のとおり実装済みである
+  （`record.py`: `ProviderUnavailable` 系のみ 1s→32s の指数バックオフで最大 5 回、
+  使い切ったら `unavailable: true` として記録。`SchemaViolation` は再試行しない）。
+  本番側の呼び出し元はキューの retry 層である（`docs/job-queue.md`）。
+  なお**フォールバックは再試行ではない**: 別 provider への切り替えは回復を待たず
+  1 回で行う（`ai-grading-pipeline.md`）。
 
-### 7.3 実装済み・未実装の一覧（Issue #44 で追加したもの）
+### 7.3 実装済み・未実装の一覧（Issue #44 / #35）
 
-- `AIProvider` 実アダプタ: OpenRouter (`openrouter_provider.py`)・Codex
-  app-server (`codex_app_server_provider.py`) は実装済み。直接 vendor API
-  （Gemini/Claude/GPT）は引き続き未実装（credentials 待ち。#35 のスコープ）。
+- `AIProvider` 実アダプタ: **4 経路すべて実装済み** —
+  Vertex AI/Gemini (`vertex_gemini_provider.py`、#35)、Codex app-server
+  (`codex_app_server_provider.py`、#44)、OpenRouter
+  (`openrouter_provider.py`、#44)、OpenAI (`openai_provider.py`、#35)。
+- 優先度つきフォールバックの合成アダプタ: `fallback_provider.py`
+  （`backend/tests/test_ai_grading_fallback_provider.py`）。
+  `ProviderUnavailable`（サブクラス含む）と `SchemaViolation` で次のリンクへ
+  落とし、使い切ったら**最後の例外をそのまま送出**して queue の分類を保つ。
+  成功したリンクの `ProviderDescriptor` をそのまま返し、チェーン自身の名前で
+  上書きしない（決定書 §3 (B)「どの provider で採点したかを結果に残す」）。
+- HTTP 失敗の分類: `_http.raise_classified_unavailable()` が 429 →
+  `ProviderRateLimitedError`、5xx → `ProviderServerError`、timeout →
+  `ProviderTimeoutError` に振り分ける（それ以外は素の `ProviderUnavailable`）。
+  `ai-grading-pipeline.md`「どの失敗で次へ落とすか」とキューの `ErrorCategory`
+  は**具体的な例外型**で分岐するため、以前のように 429 まで素の
+  `ProviderUnavailable` にしていると分類できるはずの失敗が `UNKNOWN` に落ちる。
+- live-provider パス: `poc/issue_14_ai_grading/record.py`
+  （`backend/tests/test_poc_ai_grading_recorder.py`。§4.3）。**#35 で実装済み**。
 - 各アダプタ用の `AIProviderContract` サブクラス:
+  `backend/tests/test_ai_provider_vertex_gemini_contract.py`・
   `backend/tests/test_ai_provider_openrouter_contract.py`・
-  `backend/tests/test_ai_provider_codex_app_server_contract.py`。どちらも
+  `backend/tests/test_ai_provider_openai_contract.py`・
+  `backend/tests/test_ai_provider_codex_app_server_contract.py`。いずれも
   オフラインの fake transport（`httpx.MockTransport` / 自作の
-  `_FakeAppServerTransport`）で contract を検証し、実キー・実ログインを
-  必要としない（Issue #44 検証方針）。
+  `_FakeAppServerTransport`）と偽の ADC 資格情報で contract を検証し、
+  実キー・実ログイン・`gcloud` ログインを必要としない。
 - 設定 → adapter の切り替え: `factory.create_ai_provider()`
   （`backend/tests/test_ai_grading_provider_factory.py`）。
-  `AUTO_SCORING_AI_GRADING_TEMPERATURE` は有限・非負に加えて、
-  OpenRouter 選択時は OpenAI 互換の上限 2.0 も検証する
-  （コードレビュー指摘: 超過値は remote 4xx として失敗するより先に
-  config error として拒否する）。
+  `AUTO_SCORING_AI_GRADING_TRANSPORT` は**カンマ区切りの優先度リスト**で、
+  認証情報が揃っているリンクだけをチェーンに組む。1 つも揃っていなければ
+  空のチェーンを返さず `AIProviderConfigError` で落とす。
+  `AUTO_SCORING_AI_GRADING_TEMPERATURE` は有限・非負に加えて上限 2.0 も検証する
+  （OpenAI 互換 API と Vertex AI の Gemini はどちらも 0〜2。コードレビュー指摘:
+  超過値は remote 4xx として失敗するより先に config error として拒否する）。
+  `codex_app_server` だけを選んだときはこの変数を読まない（Codex には温度が無い）。
 - 両 adapter が共有する strict-mode JSON Schema:
   `_schema.strict_ai_grading_result_schema()`
   （`backend/tests/test_ai_grading_strict_schema.py`。§7.1.1）。
@@ -1419,102 +1568,112 @@ contract test は green だが、実際の `codex login` 済み環境での動�
 - `turn/completed.turn.items` が `itemsView: "notLoaded"` で空のときの
   `item/completed` 通知へのフォールバック（`peek_thread_items()`。上記
   参照）。
-- `poc/issue_14_ai_grading/report.py` の live-provider パス（設問 →
-  `AIProvider.grade()` → `AIGradingResult` 録画、`--live` 相当のオプション）
-  は**未実装のまま**（#35 のスコープ。実データでの評価実施そのものが本
-  Issue #44 の対象外であるため）。録画する各セルには `descriptor`
+- live-provider パスは `report.py` の `--live` オプションではなく**別スクリプト
+  `record.py`** にした（#35）。`report.py` は既に 1,400 行あり、集計の純粋さ
+  （credentials 不要・ネットワーク不要でいつでも再実行できる、§4.1）を保つ方が
+  価値が高いと判断したためである。録画する各セルには `descriptor`
   （model/version/**prompt_version**/temperature/structured_output_mode）を
-  必ず含める設計はそのまま踏襲する（§3.3）。
+  必ず含める設計はそのまま踏襲している（§3.3）。
+- `report.py` の変更（#35）: 候補 ID 集合を §2 の 4 つへ更新し、記録セルに
+  3 つ目の結果マーカー `schema_violation: true` を追加した。アダプタは
+  schema 検証に落ちた**生の応答本文を例外に載せない**設計（答案テキストを
+  漏らさないため。§3.7）なので、このマーカーが無いと live 実行時の schema
+  violation を「検証に落ちる応答を捏造して書き込む」形でしか表現できない。
+  3 つの結果（`response` / `schema_violation` / `unavailable`）は排他で、
+  同時に 2 つ以上記録されたセルは拒否する。
 
 実測・選定後は §10 に従い、不採用アダプタを削除して採用アダプタだけを MVP へ
 昇格する。
 
 ### 7.4 live probe（実際の呼び出し。技術プローブ、`pnpm run check` には含まれない）
 
-`AGENTS.md`「Verification」の技術プローブ要件（repro command・期待結果・
-実測値・決定・削除/昇格条件をすべて記録する）に従い、実際に OpenRouter /
-Codex app-server を叩く確認は次のコマンドで手動実施し、結果をこの節に
-追記する。どちらも credentials（OpenRouter の API key、または Codex CLI の
-既存ログイン）を必要とするため CI では実行しない。
+`AGENTS.md`「Verification」の技術プローブ要件（repro command・期待結果・実測値・
+決定・削除/昇格条件をすべて記録する）に従う。credentials を必要とするため CI では
+実行しない。
 
-#### OpenRouter live probe
+**送ったデータについて（重要）**: 以下の probe は**リポジトリ内の合成フィクスチャ
+（`backend/tests/fixtures/ai_grading/`、架空の設問・模範解答・答案テキストと 8x8 の
+合成 PNG）だけ**を外部 API に送信して実施した。実際の添削データは 1 バイトも
+送っていない。実データでの実測は §12 のとおり保留である。
 
-```bash
-cd backend
-# backend/.env.local に AUTO_SCORING_OPENROUTER_API_KEY / _MODEL を設定してから
-# (`uv run` は既定でこのファイルを読まないため --env-file で明示的に渡す):
-uv run --env-file .env.local python -c "
-from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
-from auto_scoring.domain.ai_provider import GradingRequest
-from PIL import Image
-import io, os
+#### repro command（4 経路共通）
 
-provider = OpenRouterAIProvider(
-    api_key=os.environ['AUTO_SCORING_OPENROUTER_API_KEY'],
-    model=os.environ['AUTO_SCORING_OPENROUTER_MODEL'],
-    prompt_version='live-probe-v1',
-)
-# 8x8の白PNG。実モデルが画像をデコードできることを要求するため、
-# PNG署名の8byteのみ(デコード不能)ではなく実際にデコード可能な画像を渡す。
-buf = io.BytesIO()
-Image.new('RGB', (8, 8), color=(255, 255, 255)).save(buf, format='PNG')
-request = GradingRequest(
-    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=buf.getvalue(),
-    ocr_text='2', model_answer='2', rubric_text='正しい数値が書かれていれば5点。', max_score=5,
-)
-response = provider.grade(request)
-print(response.score, response.max_score, response.grading_confidence)
-"
-```
-
-- **repro command**: 上記。
-- **期待結果**: 例外を投げず、`score <= max_score` かつ
-  `0.0 <= grading_confidence <= 1.0` の 1 行が出力される。
-- **実測値**: _未実施（credentials 未取得のため。本 PR のマージ時点では
-  記入なし。credentials が用意でき次第、担当者が本節を更新する）_。
-- **判断・削除/昇格条件**: 実測が得られ、かつ contract test（§7.3）が green
-  であれば adapter を維持する。実測で `SchemaViolation`/`ProviderUnavailable`
-  以外の未分類の例外が出た場合は adapter のバグとして修正する。
-
-#### Codex app-server live probe
+配線のリハーサルは、合成フィクスチャをリポジトリ外へコピーし（`record.py` は
+リポジトリ内への書き込みを拒否する。§4.3）、`recorded` を空にしてから実行する。
 
 ```bash
 cd backend
-# 事前に `codex login` を完了させておく（ChatGPT プランまたは API key）。
-uv run python -c "
-from auto_scoring.adapters.ai_grading.codex_app_server_provider import CodexAppServerProvider
-from auto_scoring.domain.ai_provider import GradingRequest
-from PIL import Image
-import io
-
-provider = CodexAppServerProvider(prompt_version='live-probe-v1')
-# 8x8の白PNG。PNG署名の8byteのみ(デコード不能)ではなく、Codexの画像読み込みが
-# 実際にデコードできる画像を渡す。
-buf = io.BytesIO()
-Image.new('RGB', (8, 8), color=(255, 255, 255)).save(buf, format='PNG')
-request = GradingRequest(
-    question_id='probe-1', prompt_text='1+1は何ですか。', answer_image=buf.getvalue(),
-    ocr_text='2', model_answer='2', rubric_text='正しい数値が書かれていれば5点。', max_score=5,
-)
-try:
-    response = provider.grade(request)
-    print(response.score, response.max_score, response.grading_confidence)
-finally:
-    provider.close()
-"
+# 1) 合成フィクスチャをリポジトリ外の作業ディレクトリへコピーし、
+#    各 questions[].recorded を {} にする
+# 2) 経路ごとに環境変数を設定して録画する（例は Vertex AI/Gemini）
+AUTO_SCORING_AI_GRADING_TRANSPORT=gemini \
+AUTO_SCORING_GEMINI_MODEL=gemini-2.5-flash \
+AUTO_SCORING_AI_GRADING_PROMPT_VERSION=poc2-live-v1 \
+uv run python poc/issue_14_ai_grading/record.py \
+    --dataset "<コピー先>" --images tests/fixtures/ai_grading/images
+# 3) 集計する
+uv run python poc/issue_14_ai_grading/report.py --dataset "<コピー先>"
 ```
 
-- **repro command**: 上記。
-- **期待結果**: `codex app-server` サブプロセスが起動し、例外を投げず
-  `score <= max_score` かつ `0.0 <= grading_confidence <= 1.0` の 1 行が
-  出力される。
-- **実測値**: _未実施（ローカルの Codex ログイン状態に依存するため。本 PR
-  のマージ時点では記入なし。実施できる担当者が本節を更新する）_。
-- **判断・削除/昇格条件**: 実測で §7.1.2 の未決事項（プロトコル安定性・
-  エラー応答形状）が問題にならないことを確認できれば adapter を維持する。
-  `turn/completed` 通知が届かない、メソッド名やパラメータ形状が拒否される
-  等の互換性問題が実際に発生した場合は、§7.1.2 の記録を更新した上で
-  adapter の対応バージョン範囲を明記するか、実装を見直す。
+他の経路は `AUTO_SCORING_AI_GRADING_TRANSPORT` と対応する設定を差し替えるだけで、
+コマンドは同じである（`codex_app_server` / `openrouter` + `_MODEL` + `_API_KEY` /
+`openai` + `_MODEL` + `_API_KEY`）。
+
+**期待結果**: 例外を投げず、各セルが `response`（または明示的な
+`schema_violation` / `unavailable`）として記録され、`report.py` が非ゼロ終了せずに
+集計表を出す。
+
+#### 実測値（2026-09-08。合成フィクスチャ 3 答案 × 2 入力モード = 6 セル）
+
+| 経路             | 設定                                       | 結果         | 1 セルあたり latency（実測レンジ）                              |
+| ---------------- | ------------------------------------------ | ------------ | --------------------------------------------------------------- |
+| Vertex AI/Gemini | `gemini-2.5-flash`、location `global`、ADC | 6/6 response | 3.4 – 11.8 s                                                    |
+| Codex app-server | 既定モデル（`codex login` 済みのホスト）   | 1/1 response | 24.1 s（1 セルのみ実施）                                        |
+| OpenRouter       | `qwen/qwen2.5-vl-72b-instruct`             | 6/6 response | 4.2 – 10.8 s                                                    |
+| OpenAI           | `gpt-4o-mini`                              | 2/2 response | 3.1 – 4.0 s（2 セルのみ実施）                                   |
+| 4 経路チェーン   | 上記 4 つを優先度順で構成                  | 1/1 response | 10.2 s。① Gemini が応答し、そのセルは `gemini` として記録された |
+
+`report.py --dataset` は Gemini + OpenRouter の 12 セルに対して exit 0 で
+集計表を出した（比較ゲート・config 分離・latency 集計がいずれも live 応答で動作）。
+
+**この表から精度を読まないこと。** 送ったのは架空の設問・架空の正解ラベルであり、
+一致率・criterion 一致率の類は**測定していない**（合成フィクスチャの
+`ground_truth` は人間採点者が付けたラベルではない。§1.4）。ここで確認したのは
+配線・認証・構造化出力・失敗分類・記録形式だけである。
+
+#### 観察された知見
+
+1. **Vertex AI の `responseJsonSchema` は `$defs`/`$ref` を含む strict スキーマを
+   そのまま受理する**。Vertex 用にスキーマの写しを作る必要はなかった（§7.1）。
+2. **`responseJsonSchema` は `maxLength` を強制しない**。初回の probe で
+   `gemini-2.5-flash` が 120 文字を超える `comment` を返し、他に問題のない応答が
+   `parse_ai_grading_result` で落ちた（6 セル中 1 セル）。スキーマの形は守るが
+   文字列長の制約は守らない、という挙動である。
+   → 共有プロンプト（`_prompt.GRADING_SYSTEM_INSTRUCTIONS`）に
+   「スキーマが示す長さ制限をすべて守ること／超過は切り詰めではなく全体が無効に
+   なること」を明示する 1 文を追加したところ、同じセルで再現しなくなった。
+   ベンダー名も具体的な数値も含まない指示であり、特定 provider への最適化ではない。
+   **書式の不一致が採点品質の差として集計されるのを防ぐための修正**である。
+3. **OpenRouter の zero-data-retention 指定は routing を絞る**。`data_collection:
+"deny"` + `zdr: true` を付けた状態で `qwen/qwen2.5-vl-72b-instruct` は
+   upstream `Parasail` にルーティングされ、その値が
+   `ProviderDescriptor.version` に記録された（§3.3 の config 分離が live で機能する）。
+4. **Codex app-server は他の 3 経路よりはっきり遅い**（24.1 s 対 3〜12 s）。
+   `codex` サブプロセス起動 + JSON-RPC 往復のオーバーヘッドである。1 セルのみの
+   観測なので分布は不明だが、§8.1 の p95 ≤ 12s を満たすかは実データ実測時に
+   確認すべき論点として記録しておく。
+5. **cost は記録していない**。Vertex AI も Codex app-server も 1 回の呼び出しに
+   対する課金額を応答で返さない。単価表をリポジトリに持てば必ず陳腐化するため、
+   `record.py` は `cost_usd` を書かない。結果として `report.py` の
+   「cost 計測件数」は 0/n となり、§8.1 の cost ゲートは**判定不能**として扱われる
+   （§8.1 の「計測が不完全な行はそのままでは採用根拠にしない」規定どおり）。
+   実データ実測を行う際は、課金コンソールの実績から別途算出する必要がある。
+
+**判断・削除/昇格条件**: 4 経路とも contract test が green で、live 呼び出しが
+`SchemaViolation`/`ProviderUnavailable` 以外の未分類の例外を出さなかったため、
+4 アダプタとも維持する。§10 の「不採用アダプタを削除する」は provider 採用判断を
+前提とするが、その判断は §12 のとおり保留であり、決定書 §3 (B) は 4 経路すべてを
+チェーンの一部として採用している。したがって**現時点で削除すべきアダプタは無い**。
 
 ---
 
@@ -1557,28 +1716,33 @@ finally:
   ある設定が閾値を満たし、別の設定が満たさない場合、`provider` 単位ではなく
   `config` 単位で採用可否を記録する。
 
-### 8.2 結果表（実測は本 PoC クローズ時に記入）
+### 8.2 結果表（未記入。§12 のとおり実データ実測を保留）
 
-`uv run python poc/issue_14_ai_grading/report.py` の実データ実行結果をそのまま
-貼り付ける（列は `to_markdown_table` の出力に準拠。cost は 1,000 設問あたり。
-`config` は §3.3 の識別子、`latency件数`/`cost件数` は §3.2 の計測件数）。
+`uv run python poc/issue_14_ai_grading/report.py --dataset <実データ>` の出力を
+そのまま貼り付ける欄である（列は `to_markdown_table` の出力に準拠。cost は
+1,000 設問あたり、`config` は §3.3 の識別子、`latency件数`/`cost件数` は §3.2 の
+計測件数）。
 
-| provider         | config | 教科   | 入力        | 完全一致率 | 許容点差内率 | criterion一致率 | schema違反率 | 対応不一致率 | p50 latency | p95 latency | latency件数 | cost/1k | cost件数 | 平均Recognition Conf | 平均Grading Conf | 高Conf誤り率 | 低Conf誤り率 |
-| ---------------- | ------ | ------ | ----------- | ---------- | ------------ | --------------- | ------------ | ------------ | ----------- | ----------- | ----------- | ------- | -------- | -------------------- | ---------------- | ------------ | ------------ |
-| `gemini`         | _TBD_  | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `gemini`         | _TBD_  | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `gemini`         | _TBD_  | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `gemini`         | _TBD_  | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | _TBD_  | 日本史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | _TBD_  | 日本史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | _TBD_  | 世界史 | `ocr_clean` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
-| `claude` / `gpt` | _TBD_  | 世界史 | `ocr_noisy` | _TBD_      | _TBD_        | _TBD_           | _TBD_        | _TBD_        | _TBD_       | _TBD_       | _TBD_       | _TBD_   | _TBD_    | _TBD_                | _TBD_            | _TBD_        | _TBD_        |
+**現時点では空欄のままとする。** ハーネスも 4 経路のアダプタも live-provider
+パスも動くが（§7.4）、埋めるべき実データが決定書 §6.2 の下限に届かず、
+§6.3 の人間ラベルも存在しない。母数 12 答案・人間ラベル無しで算出した
+「一致率」をこの表に書けば、**それが独り歩きして採用根拠として引用される**。
+何が足りないかは §12 に数値で記録した。
 
-### 8.3 人間採点との不一致例（実測後に記入）
+| provider           | config | 教科   | 入力        | 完全一致率 | 許容点差内率 | criterion一致率 | schema違反率 | 対応不一致率 | p50 latency | p95 latency | latency件数 | cost/1k | cost件数 | 平均Recognition Conf | 平均Grading Conf | 高Conf誤り率 | 低Conf誤り率 |
+| ------------------ | ------ | ------ | ----------- | ---------- | ------------ | --------------- | ------------ | ------------ | ----------- | ----------- | ----------- | ------- | -------- | -------------------- | ---------------- | ------------ | ------------ |
+| `gemini`           | _保留_ | _保留_ | `ocr_clean` | _保留_     | _保留_       | _保留_          | _保留_       | _保留_       | _保留_      | _保留_      | _保留_      | _保留_  | _保留_   | _保留_               | _保留_           | _保留_       | _保留_       |
+| `codex-app-server` | _保留_ | _保留_ | `ocr_clean` | _保留_     | _保留_       | _保留_          | _保留_       | _保留_       | _保留_      | _保留_      | _保留_      | _保留_  | _保留_   | _保留_               | _保留_           | _保留_       | _保留_       |
+| `openrouter`       | _保留_ | _保留_ | `ocr_clean` | _保留_     | _保留_       | _保留_          | _保留_       | _保留_       | _保留_      | _保留_      | _保留_      | _保留_  | _保留_   | _保留_               | _保留_           | _保留_       | _保留_       |
+| `openai`           | _保留_ | _保留_ | `ocr_clean` | _保留_     | _保留_       | _保留_          | _保留_       | _保留_       | _保留_      | _保留_      | _保留_      | _保留_  | _保留_   | _保留_               | _保留_           | _保留_       | _保留_       |
 
-_本 PoC クローズ時、実 AI 応答と人間正解ラベルの不一致（criterion 単位）を
-最低 3 件、答案本文を含めない形（`questionId` と得点差・criterion 差分のみ）
-で記入する。_
+（`ocr_noisy` 行・教科別の行も同様。実測時は `report.py` の出力をそのまま貼る。）
+
+### 8.3 人間採点との不一致例（未記入。§12）
+
+_実 AI 応答と人間正解ラベルの不一致（criterion 単位）を最低 3 件、答案本文を
+含めない形（`questionId` と得点差・criterion 差分のみ）で記入する欄。§6.3 の
+人間正解ラベルが存在しないため、比較対象そのものが無い。_
 
 ---
 
@@ -1609,12 +1773,12 @@ _本 PoC クローズ時、実 AI 応答と人間正解ラベルの不一致（c
 
 ### 9.3 採用 provider/model・fallback・再試行条件・cost 上限の決定
 
-| 決定項目            | 記入欄                                                                                                                                                                       |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 採用 provider/model | **優先度つきフォールバック**（Issue #81。本 PoC の実測を待たずオーナーが確定）: ① Gemini API → ② Codex App Server → ③ OpenRouter（オープンウェイトモデル）→ ④ OpenAI API     |
-| fallback            | 上記の順序そのものが fallback である。どの失敗で次へ落とすかは [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)「AI モデル: 優先度つきフォールバック」（実装は別 Issue） |
-| 再試行条件          | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）                                                                                                                |
-| cost 上限           | _未確定（§8.1 の 3 USD/1,000 設問を暫定上限とし、実測後に確定）_                                                                                                             |
+| 決定項目            | 記入欄                                                                                                                                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 採用 provider/model | **優先度つきフォールバック**（Issue #81。本 PoC の実測を待たずオーナーが確定）: ① Gemini API → ② Codex App Server → ③ OpenRouter（オープンウェイトモデル）→ ④ OpenAI API                                           |
+| fallback            | 上記の順序そのものが fallback である。どの失敗で次へ落とすかは [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)「AI モデル: 優先度つきフォールバック」（実装は別 Issue）                                       |
+| 再試行条件          | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）                                                                                                                                                      |
+| cost 上限           | _未確定（§8.1 の 3 USD/1,000 設問を暫定上限とし、実測後に確定）_。実測が保留である理由は §12。なお 1 回の呼び出しの課金額を応答で返さない経路があるため、実測時は課金コンソールの実績から算出する（§7.4 の観察 5） |
 
 ---
 
@@ -1628,9 +1792,14 @@ _本 PoC クローズ時、実 AI 応答と人間正解ラベルの不一致（c
   （ポート・型）、`domain/ai_grading_metrics.py`（Grading Confidence の
   継続評価に使う）。
 
-昇格しないもの: 不採用候補のアダプタ、`poc/` 配下のハーネス、合成フィクスチャ、
-`_ReplayAIProvider` などのテスト専用スキャフォールド。不採用アダプタは削除する
-（Issue #14 受入条件）。
+昇格しないもの: 不採用候補のアダプタ、`poc/` 配下のハーネス（`report.py`・
+`record.py`）、合成フィクスチャ、`_ReplayAIProvider` などのテスト専用
+スキャフォールド。
+
+**「不採用アダプタを削除する」は現時点では該当が無い**（Issue #35）。決定書
+§3 (B) が確定した構成は単一 provider の選択ではなく 4 経路の優先度つき
+フォールバックであり、4 つとも採用構成の一部だからである。削除対象が生じるのは、
+実データ実測（§12.4）の結果としてチェーンからリンクを外す判断が出たときである。
 
 ---
 
@@ -1649,4 +1818,96 @@ _本 PoC クローズ時、実 AI 応答と人間正解ラベルの不一致（c
       統計値のみ）
 - [ ] `.env.example` に実キーが含まれていない（プレースホルダのみ）
 - [ ] 合成フィクスチャ（`tests/fixtures/ai_grading/`）に実データ・実ベンダー名
-      が混入していない
+      が混入していない。`images/` に入ってよいのは合成した 8x8 PNG だけで、
+      実答案の切り出し画像は決して置かない
+- [ ] `record.py` の実行結果（`recorded` を埋めた JSON）がリポジトリ内に無い。
+      `record.py` はリポジトリ内フィクスチャへの書き込みを拒否するが、
+      手でコピーして戻していないことを確認する
+
+---
+
+## 12. provider 採用判断の保留（Issue #35 の着地）
+
+Issue #35 は「本番規模データで AI 採点を実測し、MVP で採用する provider/model を
+確定する」ことを求めていた。**実測に必要な配線はすべて実装したが、採用判断は
+下さない。** Issue 本文自身が認めている以下の着地を取る。
+
+> 満たさない場合は追加検証条件…と MVP の手動採点 fallback 継続を明記する。
+
+### 12.1 何が実装されたか
+
+| 項目                                | 状態                                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------- |
+| live-provider パス（実 API → 記録） | 実装済み。`poc/issue_14_ai_grading/record.py`（§4.3）                     |
+| Vertex AI（Gemini、ADC）アダプタ    | 実装済み。`vertex_gemini_provider.py`（§7.1）                             |
+| OpenAI 直接アダプタ                 | 実装済み。`openai_provider.py`（§7.1）                                    |
+| 優先度つきフォールバックのチェーン  | 実装済み。`fallback_provider.py` + `factory.py`（§7.3）                   |
+| 失敗分類（429/5xx/timeout）         | 実装済み。`_http.py`（§7.3）                                              |
+| 4 経路の live 疎通                  | 実施済み。**合成フィクスチャのみ送信**（§7.4）                            |
+| 実データでの精度実測                | **未実施（保留）**。理由は §12.2                                          |
+| 採用 provider/model の確定          | **保留**。決定書 §3 (B) のチェーン構成自体は Issue #81 で確定済み（§9.3） |
+
+### 12.2 なぜ採用判断を下せないか（数字）
+
+オーナーが提供できる評価データは **12 教科 × 各 1 答案 = 計 12 答案**が
+すべてであり、これ以上は用意できないとオーナーが明言している。
+
+| 決定書 §6.2 / §6.3 の要求        | 要求値                      | 現有                                               | 不足                             |
+| -------------------------------- | --------------------------- | -------------------------------------------------- | -------------------------------- |
+| 教科 × テスト                    | 2 教科 × 各 1 テスト        | 12 教科 × 各 1 テスト                              | 教科数は充足（むしろ超過）       |
+| 答案数                           | 計 60 答案以上（各教科 30） | 計 12 答案（各教科 1）                             | **48 答案不足。1 教科あたり 29** |
+| 設問数                           | のべ 300 設問以上           | 書き起こし済みは のべ 5 設問                       | **のべ 295 設問以上不足**        |
+| 人間の正解ラベル（§6.3）         | 現役採点者 2 名の独立採点   | **0 名**（本エージェントの単独読み取りのみ、§6.2） | **2 名分すべて不足**             |
+| 採点者間一次一致率のベースライン | 記録必須                    | **無し**                                           | 全部                             |
+
+**母数 12 答案・人間の正解ラベル 0 名という条件では、§8.1 の採用閾値
+（完全一致率 ≥60%・許容点差内率 ≥90%・criterion 別一致率 ≥85%）を「満たした」とも
+「満たさなかった」とも判定できない。** 一致率を計算する相手（人間の確定ラベル）が
+存在せず、仮に §6.2 の予備調査データ 5 設問で数字を出しても、1 設問の当たり外れが
+20 ポイント動く母数である。
+
+**この文書に「精度◯%」を書かないのは意図的である。** 母数と限界を併記しない数値は
+独り歩きし、採用根拠として引用される。§8.2・§8.3 を空欄のままにしているのも同じ
+理由による。
+
+### 12.3 決定: MVP は手動採点 fallback を継続する
+
+§9.2 をそのまま MVP の既定動作として確定する。
+
+- AI 採点は**候補提示のみ**とし、人間の承認なしに点数・コメントを確定・PDF 出力
+  しない（決定書 §2 (17)）。
+- 低 Grading Confidence または schema violation を返した設問は自動確定せず、
+  「採点要確認」として人間が採点する導線を通す（簡易設計書 §8.2）。
+- Confidence 閾値による自動確定（人間レビューのスキップ）は**引き続き実装しない**
+  （決定書 §3.1 C）。
+- `create_app()` の既定 `AIProvider` は `NullAIProvider` のままとする。実チェーンは
+  `create_ai_provider()` で構成できるが、注入は本 Issue の対象外
+  （`ai-grading-pipeline.md`）。
+
+この決定は「実測できなかったから先送り」ではない。決定書 §3 (B) が確定した構成は
+**単一 provider の選択ではなく優先度つきフォールバック**であり、どれか 1 つを
+「採用」して他を削除する判断はそもそも不要である（§7.4 の削除/昇格条件も参照）。
+実測が決めるのは「チェーンの並び順を変えるか」「cost 上限をいくらにするか」であって、
+MVP を人間確認なしで動かしてよいかどうかではない。
+
+### 12.4 データが揃った時点で何をすれば再開できるか
+
+1. **データを揃える**。決定書 §6.2 の下限（2 教科 × 各 1 テスト × 各 30 答案以上、
+   計 60 答案・のべ 300 設問以上）と §6.4 の二次利用許諾。
+2. **人間ラベルを作る**。§6.3 の手順（現役採点者 2 名が独立採点、不一致は 3 人目
+   または合議）。採点者間一次一致率も記録する（これが §8.1 の閾値を読むための
+   ベースラインになる）。
+3. **書き起こす**。`backend/tests/fixtures/ai_grading/README.md` のスキーマに従い、
+   1 答案 = 1 JSON。答案領域の切り出し画像を別ディレクトリに置き、
+   `input.answer_image_ref` を `sha256:<hex>` にする（§4.3 が内容ハッシュを照合する）。
+4. **録画する**。§4.3 の `record.py` を経路ごとに実行する（`--dry-run` で先に
+   データセットを検証できる）。最低 2 候補を**同じ答案・同じ入力モード**で
+   record すること（§4.2 の比較ゲート）。
+5. **集計する**。§4.1/§4.2 の `report.py`。出力をそのまま §8.2 に貼る。
+6. **判断する**。§8.1 の閾値と、2 の採点者間一致率ベースラインを比較する。
+   cost は §7.4 の観察 5 のとおり課金コンソールの実績から別途算出する。
+   結果を §9.3 の表に記入し、必要ならチェーンの並び順を見直す。
+
+未着手のまま残る関連項目: OCR（決定書 §3 A、Google Document AI）の実アダプタは
+別 Issue、キューの並列度 4 の飽和動作と実 provider のレート制限（決定書 §3.1 E）は
+実データ実測とセットで確認する。

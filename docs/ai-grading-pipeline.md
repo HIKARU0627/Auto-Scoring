@@ -25,13 +25,22 @@ Issue #20 の実装時点では §3 (B) は未確定で、既定の`AIProvider`�
 
 | 優先度 | provider                             | 現状のアダプタ                                            |
 | ------ | ------------------------------------ | --------------------------------------------------------- |
-| 1      | Gemini API                           | 未実装                                                    |
+| 1      | Gemini API（Vertex AI + ADC）        | `adapters/ai_grading/vertex_gemini_provider.py`（#35）    |
 | 2      | Codex App Server                     | `adapters/ai_grading/codex_app_server_provider.py`（#44） |
 | 3      | OpenRouter（オープンウェイトモデル） | `adapters/ai_grading/openrouter_provider.py`（#44）       |
-| 4      | OpenAI API                           | 未実装                                                    |
+| 4      | OpenAI API                           | `adapters/ai_grading/openai_provider.py`（#35）           |
 
-上から順に試し、失敗したら次へ落とす。**本Issue（#81）はこの層をどこに置くかの設計を
-記録するところまでで、フォールバック自体の実装は別Issue**である。
+上から順に試し、失敗したら次へ落とす。本Issue（#81）はこの層をどこに置くかの設計を
+記録するところまでだった。**設計どおりの実装は Issue #35 で完了している**:
+合成アダプタ `adapters/ai_grading/fallback_provider.py` の `FallbackAIProvider` と、
+`AUTO_SCORING_AI_GRADING_TRANSPORT` をカンマ区切りの優先度リストとして読む
+`create_ai_provider()`。4 経路すべての live 疎通は
+[`poc-2-ai-grading.md`](./poc-2-ai-grading.md) §7.4 に記録した。
+
+なお ① は **Vertex AI 経由**である。Gemini の **API キーは組織ポリシーで禁止**されて
+いるため、認証は Application Default Credentials（ADC）に限られる。GCP プロジェクト ID
+は ADC から実行時に読むので、リポジトリには一切保存しない
+（`adapters/ai_grading/_google_adc.py`）。
 
 #### 層の置き場所: `AIProvider`ポートの内側の合成アダプタ
 
@@ -49,25 +58,30 @@ Issue #20 の実装時点では §3 (B) は未確定で、既定の`AIProvider`�
   そのまま満たす1つのサブクラスとしてテストでき、`create_app(ai_provider=...)`の
   注入経路も既存のまま使える。
 
-`create_ai_provider()`（`adapters/ai_grading/factory.py`、#44）は現在
-`AUTO_SCORING_AI_GRADING_TRANSPORT`を**1つ**だけ受け取る。フォールバック実装Issueでは
-これを優先度順のリスト（例: カンマ区切り）へ広げ、**認証情報が揃っているものだけを
-チェーンに組む**（揃っていないproviderで失敗を1段消費しない）。認証情報の持ち方は
-既存方針どおり`.env.example` / `backend/.env.local`で、実キーはコミットしない。
+`create_ai_provider()`（`adapters/ai_grading/factory.py`）は
+`AUTO_SCORING_AI_GRADING_TRANSPORT`を**カンマ区切りの優先度リスト**として受け取り
+（既定の並びは `gemini,codex_app_server,openrouter,openai`）、**認証情報が揃っている
+ものだけをチェーンに組む**（揃っていないproviderで失敗を1段消費しない。#35 で実装）。
+1つも揃っていなければ空のチェーンを作らず`AIProviderConfigError`で落とす
+（「設定済みに見えるのに1問も採点しない」状態を作らないため）。値が1つだけのときは
+チェーンを作らずそのアダプタ自体を返すので、既存の呼び出し・`.env.local`はそのまま
+動く。認証情報の持ち方は既存方針どおり`.env.example` / `backend/.env.local`で、
+実キーはコミットしない（Gemini は鍵ではなく ADC）。
 
 #### どの失敗で次へ落とすか
 
 `GradingJobProcessor`が既に分類している例外（後述「エラー分類」）を、そのまま
 フォールバックの判断にも使う。新しい例外型は追加しない。
 
-| 失敗                                              | 次のproviderへ落とす | 理由                                                                                   |
-| ------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------- |
-| `ProviderRateLimitedError`（429）                 | 落とす               | そのproviderの枠が空くのを待つより、別providerで進む方が速い                           |
-| `ProviderServerError`（5xx）                      | 落とす               | provider側の障害。同じ相手へのretryは同じ結果になりやすい                              |
-| `ProviderTimeoutError`                            | 落とす               | 同上。ただし1 provider内でのretryは行わず、1回で次へ落とす                             |
-| `SchemaViolation`（構造化出力に従わない）         | 落とす               | モデル固有の能力差。同じモデルへ再送しても直らないが、別モデルなら通りうる             |
-| 認証情報不足・設定不正（`AIProviderConfigError`） | チェーン構築時に除外 | 実行時ではなく組み立て時に落とす（上記）                                               |
-| 応答の対応不一致（手順7、criterion id不一致）     | 落とさない           | ポートの外（processor）で判定するため合成アダプタからは見えない。現状どおり`PERMANENT` |
+| 失敗                                                          | 次のproviderへ落とす | 理由                                                                                                         |
+| ------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `ProviderRateLimitedError`（429）                             | 落とす               | そのproviderの枠が空くのを待つより、別providerで進む方が速い                                                 |
+| `ProviderServerError`（5xx）                                  | 落とす               | provider側の障害。同じ相手へのretryは同じ結果になりやすい                                                    |
+| `ProviderTimeoutError`                                        | 落とす               | 同上。ただし1 provider内でのretryは行わず、1回で次へ落とす                                                   |
+| `SchemaViolation`（構造化出力に従わない）                     | 落とす               | モデル固有の能力差。同じモデルへ再送しても直らないが、別モデルなら通りうる                                   |
+| 認証情報不足・設定不正（`AIProviderConfigError`）             | チェーン構築時に除外 | 実行時ではなく組み立て時に落とす（上記）                                                                     |
+| 素の`ProviderUnavailable`（実行時の401/4xx・transport error） | 落とす               | 表に無い経路。構築時には有効だった認証情報が呼び出し時に拒否される場合であり、チェーンが存在する理由そのもの |
+| 応答の対応不一致（手順7、criterion id不一致）                 | 落とさない           | ポートの外（processor）で判定するため合成アダプタからは見えない。現状どおり`PERMANENT`                       |
 
 チェーンを全部使い切ったときは、**最後に観測した例外をそのまま送出する**。
 `ProviderRateLimitedError` / `ProviderServerError` / `ProviderTimeoutError` は
@@ -84,7 +98,7 @@ business-rules-and-evaluation-data.md §3.1 E のとおり引き続き必要）�
 再現性と、後からの一致率比較（provider別集計、`domain/ai_grading_metrics.py`）が
 provider単位で成立するのはこの1点にかかっている。スキーマ変更は不要。
 
-#### 既定は依然 `NullAIProvider`
+#### 既定は依然 `NullAIProvider`（DI 未接続）
 
 Issue #20 は本番**パイプライン**（境界・schema検証・永続化・分類・Confidence運用・
 前提設問contextの受け渡し）を実装し、`create_app()`の`job_processor`既定値を
@@ -101,7 +115,9 @@ needs_review（`Job.usable=False`）に倒れる。`AIProvider`のcontract test
 新しいサブクラスを追加するだけで済むよう、`domain/ai_provider.py`のポート定義は
 変更していない（例外の分類粒度を上げた点を除く。後述）。
 
-実キーでの疎通・schema・cleanup 検証は #54（実APIキー未提供のため未着手）。
+実キーでの疎通・schema 検証は Issue #35 で 4 経路すべて実施済み
+（[`poc-2-ai-grading.md`](./poc-2-ai-grading.md) §7.4。合成フィクスチャのみを送信）。
+`create_app()` への注入自体は依然未接続で、既定は `NullAIProvider` のままである。
 
 ### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
 
