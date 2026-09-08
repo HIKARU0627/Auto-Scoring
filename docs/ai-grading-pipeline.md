@@ -5,6 +5,11 @@ GitHub Issue [#20](https://github.com/HIKARU0627/Auto-Scoring/issues/20)（親
 OCR結果・模範解答・rubric・配点から構造化された採点候補を生成し、人間確認前の
 提案として保存する本番パイプラインを実装する。
 
+> **⚠ 採点の入力はIssue #95 決定10で変わった。** **答案のページ画像が主入力**であり、
+> OCR結果は得られていれば添える補助情報になった（模範解答も必須ではない）。
+> 現在の仕様は [`simplified-design-specification.md`](./simplified-design-specification.md)
+> §8.1・§9.1 が正。本書は実装当時の記録として残してある。
+
 依存: [#26](https://github.com/HIKARU0627/Auto-Scoring/issues/26)（設問依存関係
 DAG。`auto_scoring.domain.dependency_graph`）、[#16](https://github.com/HIKARU0627/Auto-Scoring/issues/16)
 （テスト登録・プロファイル）、[#19](https://github.com/HIKARU0627/Auto-Scoring/issues/19)
