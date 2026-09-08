@@ -116,6 +116,9 @@ Future<List<AnnotationResponse>> _unavailableListAnnotations(
 Future<List<JobResponse>> _unavailableListJobs(String submissionId) async =>
     _unavailable();
 
+Future<List<JobResponse>> _unavailableStartGrading(String submissionId) async =>
+    _unavailable();
+
 Future<List<ReviewResponse>> _unavailableListReviews(
   String submissionId,
   String questionId,
@@ -299,6 +302,15 @@ typedef ListAnnotations =
 /// (添削レビュー画面のpolling, Issue #21 P1 review).
 typedef ListJobs = Future<List<JobResponse>> Function(String submissionId);
 
+/// Creates and queues one submission's per-question AI 採点 jobs, returning
+/// every job it now has (Issue #80). Called automatically right after a
+/// successful 取込 whose outcome was `ai_processed`, and from the 添削レビュー
+/// screen for a submission that has no jobs at all -- see
+/// `docs/job-queue.md`「起票のタイミング」for why both, and for how the
+/// 409 (no confirmed dependency graph, or a concurrent creation) and 404
+/// answers are meant to reach the reviewer.
+typedef StartGrading = Future<List<JobResponse>> Function(String submissionId);
+
 /// The full append-only operation history for one submission-question,
 /// oldest first (Issue #22 §19). Its length is the ``expectedVersion`` the
 /// next mutating review call for this submission-question must pass.
@@ -452,6 +464,7 @@ class AppDependencies {
     this.listGrades = _unavailableListGrades,
     this.listAnnotations = _unavailableListAnnotations,
     this.listJobs = _unavailableListJobs,
+    this.startGrading = _unavailableStartGrading,
     this.listReviews = _unavailableListReviews,
     this.editReview = _unavailableEditReview,
     this.rejectReview = _unavailableRejectReview,
@@ -496,6 +509,7 @@ class AppDependencies {
       listGrades = client.listGrades,
       listAnnotations = client.listAnnotations,
       listJobs = client.listJobs,
+      startGrading = client.startGrading,
       listReviews = client.listReviews,
       editReview = client.editReview,
       rejectReview = client.rejectReview,
@@ -533,6 +547,7 @@ class AppDependencies {
   final ListGrades listGrades;
   final ListAnnotations listAnnotations;
   final ListJobs listJobs;
+  final StartGrading startGrading;
   final ListReviews listReviews;
   final EditReview editReview;
   final RejectReview rejectReview;
