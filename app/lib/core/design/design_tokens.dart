@@ -133,6 +133,13 @@ abstract final class AppLayout {
   /// prose, not fields.
   static const double messageMaxWidth = 480;
 
+  /// ホーム画面の内容幅. Wider than a form because its cards carry a progress
+  /// bar and a row of state counts side by side, and narrower than the window
+  /// because a maximised desktop would otherwise stretch one card across the
+  /// whole screen and leave the eye travelling from a test's name to its
+  /// buttons (Issue #68).
+  static const double dashboardMaxWidth = 800;
+
   /// An `AlertDialog`'s content, so a progress row and a path both get the
   /// same dialog width instead of one sized to its text.
   static const double dialogContentWidth = 360;

@@ -109,7 +109,10 @@ void main() {
       expect(find.byType(HomePage), findsOneWidget);
 
       // Exactly what HomePage does: push a real page on top of the gate.
-      await tester.tap(find.widgetWithText(FilledButton, 'テスト登録'));
+      // By key, not by text: ホーム画面 cannot reach this fake sidecar, so it
+      // is showing its own error state -- and the entry-point row is
+      // deliberately the one part that survives it (Issue #68).
+      await tester.tap(find.byKey(const Key('home-open-test-registration')));
       await tester.pumpAndSettle();
       expect(find.byType(TestRegistrationPage), findsOneWidget);
 
