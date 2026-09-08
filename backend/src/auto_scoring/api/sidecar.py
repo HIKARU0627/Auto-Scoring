@@ -12,11 +12,12 @@ Design decisions live in ``docs/technology-stack.md`` §1.1-§1.2 and
 * If the requested port is taken the sidecar falls back to any free port, so a
   second instance (or an unrelated process holding the port) does not block
   startup.
-* The token is written only to the handshake channel. A logging filter redacts
-  it -- and this host's configuration values (`api.secret_redaction`) -- from
-  anything that reaches the application log, including records this project
-  never wrote itself (httpx logs every request URL at INFO, and the Vertex
-  adapter builds that URL out of configuration).
+* The token is written only to the handshake channel. A logging filter
+  removes it, and this host's configuration values, from every record that
+  reaches the log -- but only where they appear *verbatim*
+  (`api.secret_redaction` documents that limit). What a library does to a
+  value before printing it is outside that filter's reach, so libraries do
+  not get to print at INFO here at all: see `_VERBOSE_LOGGERS`.
 * The handshake is written *after* ``create_app`` succeeds, so a handshake file
   never advertises a ``host:port`` this process will not go on to serve
   (``docs/windows-distribution.md`` §4).
@@ -87,6 +88,33 @@ specification.md §28 wants a durable record of AI/OCR/PDF successes and
 failures across sessions. Size-based rather than time-based since usage is
 bursty (a whole class of answers in one afternoon, then nothing for a week).
 """
+
+
+#: The only logger trees this process lets speak at INFO. Everything else --
+#: any library now or later, `httpx` and `httpcore` above all -- stays at the
+#: root level below, which is WARNING.
+#:
+#: Deny by default, because the alternative lost three times running (review
+#: rounds 1-3). httpx logs every request URL at INFO, and the Vertex adapter
+#: builds that URL out of ``AUTO_SCORING_VERTEX_PROJECT`` /
+#: ``AUTO_SCORING_GEMINI_MODEL`` / ``AUTO_SCORING_VERTEX_LOCATION``, so a key
+#: pasted into any of them was written to a log that outlives the session.
+#: Masking the value out of that line cannot be made to hold: httpx lowercases
+#: the host, so an uppercase character in the value already defeated an exact
+#: match (round 3), and percent-encoding or truncation would defeat the next
+#: attempt. **A URL this app never needed in its log is not worth a game of
+#: catch-up: it is not logged at all.**
+#:
+#: Nothing is lost that anyone reads: which provider answered and with what
+#: model is recorded on `GradeResult` (Issue #20's reproducibility triple),
+#: and a failed call's category is on `Job.last_error`. Both survive a
+#: restart, unlike a log line, and neither carries a URL.
+#:
+#: ``uvicorn`` stays because its access log is this app's *own* loopback
+#: routes (no configuration in the path, and the bearer token travels in a
+#: header the filter scrubs); ``alembic`` because first-launch migration
+#: progress is the slowest, least observable part of startup.
+_VERBOSE_LOGGERS = ("auto_scoring", "uvicorn", "alembic")
 
 
 class Handshake(TypedDict):
@@ -230,7 +258,13 @@ def install_log_redaction(
 
     root = logging.getLogger()
     root.handlers = handlers
-    root.setLevel(logging.INFO)
+    # WARNING at the root, INFO only for _VERBOSE_LOGGERS: see that constant
+    # for why a library's INFO output is refused rather than filtered. A
+    # child logger set to INFO still reaches these handlers -- propagation
+    # does not re-check the root logger's own level.
+    root.setLevel(logging.WARNING)
+    for name in _VERBOSE_LOGGERS:
+        logging.getLogger(name).setLevel(logging.INFO)
 
     if file_log_error is not None:
         # Logged only once the handlers are installed, so it is itself visible.

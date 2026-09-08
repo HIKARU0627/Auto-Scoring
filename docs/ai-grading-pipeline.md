@@ -169,7 +169,19 @@ HTTP応答本文にも出ないことを確認する（既知の悪いメッセ�
 テキストがプロセスを出る2か所がこれを適用する: `install_log_redaction`
 （このプロセスがログを設定する唯一の場所。uvicorn は `log_config=None` で起動する
 ので uvicorn のロガーも root のハンドラを通る）と `build_ai_provider`
-（reason を作る唯一の場所）。詳細と教訓は `docs/quality-gates.md`
+（reason を作る唯一の場所）。
+
+**ただしマスクだけでは足りない（レビュー3回目 P2）。** httpx は URL のホスト名を
+小文字化するため、`AUTO_SCORING_VERTEX_LOCATION` に大文字を含む値を入れると完全一致の
+置換をすり抜けた（パスは `***` になるのにホスト名には残る）。値の表現形を決めるのは
+ライブラリ側なので、照合を足し続ける勝負にはならない。**リクエストURLのログを消すのを
+やめ、出さないことにした**: `api/sidecar.py` の `_VERBOSE_LOGGERS` が INFO を許すのは
+`auto_scoring` / `uvicorn` / `alembic` だけで、root は WARNING。httpx も httpcore も、
+まだ足していない将来の依存も、既定で INFO を出せない。失うものは無い -- どの provider が
+どのモデルで採点したかは `GradeResult` の再現性3つ組に、失敗のカテゴリは
+`Job.last_error` に残り、どちらも再起動をまたいで残りURLを含まない。
+
+詳細と教訓は `docs/quality-gates.md`
 「新しい公開経路を作ったら、そこへ流れ込むものを全部見直す」。
 
 実キーでの疎通・schema 検証は Issue #35 で 4 経路すべて実施済み

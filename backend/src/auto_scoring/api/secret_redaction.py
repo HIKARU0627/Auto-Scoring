@@ -24,6 +24,26 @@ This is a safety net, not a licence: a message that quotes a configuration
 value is still a bug (`adapters.ai_grading.factory`'s module docstring
 forbids it), because the net only knows the values this process was
 configured with.
+
+**What this covers, and what it does not.** :func:`redact` is a verbatim
+substring replacement. It therefore covers a value that reaches the text
+exactly as it was configured -- which is the case for every string this
+project writes itself, since those are built by interpolating the value.
+
+It does **not** cover a value that something transformed on the way:
+
+* case folding -- httpx lowercases a URL's host, so an uppercase character
+  in ``AUTO_SCORING_VERTEX_LOCATION`` already slipped past (review round 3);
+* percent-encoding, JSON escaping, or any other quoting;
+* truncation, or a value split across two log arguments.
+
+That list is not claimed to be complete, and it is exactly why it must not
+be the only control: matching a value requires knowing every form it can
+take, which is a race against libraries this project does not control and
+loses one round late every time. The control that does not depend on
+knowing those forms is `api.sidecar._VERBOSE_LOGGERS`: a library that might
+render a configuration value into a URL is not permitted to log at INFO in
+this process at all.
 """
 
 from __future__ import annotations

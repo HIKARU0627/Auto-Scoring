@@ -183,27 +183,31 @@ def test_startup_migrations_do_not_dismantle_the_log_configuration(
     assert "s3cr3t-token" not in written, "redaction filter was lost during migrations"
 
 
-def test_a_configuration_value_in_a_request_url_never_reaches_the_file_log(
-    tmp_path: Path,
-) -> None:
-    """Review round 2, the leak this gate exists for.
+def test_a_provider_request_url_never_reaches_the_file_log(tmp_path: Path) -> None:
+    """Review rounds 2 and 3, the leak this app's logging policy exists for.
 
-    The Vertex adapter builds ``AUTO_SCORING_VERTEX_PROJECT`` and
-    ``AUTO_SCORING_GEMINI_MODEL`` into the request URL, httpx logs that URL
-    at INFO, and the sidecar runs the root logger at INFO with a rotating
-    file handler -- so a key pasted into either variable was written to a
-    log that outlives the session, by a code path that never goes through
-    one of this project's own log calls. A 4xx is enough to see it; no
-    successful grading is needed.
+    The Vertex adapter builds ``AUTO_SCORING_VERTEX_LOCATION`` (and project,
+    and model) into the request URL, and httpx logs that URL at INFO into a
+    file log that outlives the session -- so a key pasted into any of those
+    variables was written to disk by a code path that never touches one of
+    this project's own log calls. A 4xx is enough to see it.
 
-    Deliberately end to end (real adapter, real httpx client over
-    `MockTransport`, real handlers) rather than a filter unit test: what
-    round 2 showed is that reasoning about *which* strings reach the log is
-    exactly what goes wrong, so this asserts on the bytes on disk.
+    The location here contains **uppercase characters on purpose**: round 2
+    was fixed by masking the value out of the line, and round 3 showed that
+    httpx lowercases the host, so the masked-for string no longer matched
+    what was printed. This test therefore looks for both spellings, and the
+    fix it holds in place is not a better mask -- it is that httpx does not
+    log at INFO here at all (`sidecar._VERBOSE_LOGGERS`).
+
+    End to end (real adapter, real httpx client over `MockTransport`, real
+    handlers, assertions on the bytes on disk) because what these rounds
+    showed is that reasoning about which strings reach the log is exactly
+    what goes wrong.
     """
-    project = "sk-pasted-into-vertex-project-DO-NOT-USE"
+    location = "sk-Secret-Accidentally-Pasted"
     environment = {
-        "AUTO_SCORING_VERTEX_PROJECT": project,
+        "AUTO_SCORING_VERTEX_LOCATION": location,
+        "AUTO_SCORING_VERTEX_PROJECT": "sk-also-pasted-into-project",
         "AUTO_SCORING_GEMINI_MODEL": "gemini-2.5-flash",
     }
     log_directory = tmp_path / "logs"
@@ -219,7 +223,11 @@ def test_a_configuration_value_in_a_request_url_never_reaches_the_file_log(
         provider = VertexGeminiAIProvider(
             model=environment["AUTO_SCORING_GEMINI_MODEL"],
             prompt_version="v1",
-            tokens=AdcTokenSource(credentials=_FakeCredentials(), project_id=project),
+            location=location,
+            tokens=AdcTokenSource(
+                credentials=_FakeCredentials(),
+                project_id=environment["AUTO_SCORING_VERTEX_PROJECT"],
+            ),
             client=httpx.Client(
                 transport=httpx.MockTransport(
                     lambda _request: httpx.Response(404, json={"error": "no such model"})
@@ -228,16 +236,54 @@ def test_a_configuration_value_in_a_request_url_never_reaches_the_file_log(
         )
         with pytest.raises(ProviderUnavailable):
             provider.grade(_VALID_REQUEST)
+        # Proves the log is not simply dead: this app's own records still
+        # reach the file at INFO, so the absences below mean "httpx was
+        # refused", not "nothing is being written at all".
+        logging.getLogger("auto_scoring.jobs.queue").info("job finished")
     finally:
+        for handler in root.handlers:
+            handler.close()
         root.handlers = saved_handlers
         root.setLevel(saved_level)
 
     written = (log_directory / sidecar.LOG_FILENAME).read_text(encoding="utf-8")
-    # The record really was emitted -- otherwise this test would pass just as
-    # well against a build that logs nothing at all.
-    assert "HTTP Request" in written
-    assert project not in written
-    assert "***" in written
+    assert "job finished" in written
+    assert "HTTP Request" not in written
+    assert "aiplatform.googleapis.com" not in written
+    assert location not in written
+    assert location.lower() not in written
+    assert environment["AUTO_SCORING_VERTEX_PROJECT"] not in written
+
+
+def test_a_library_may_not_log_at_info_but_this_app_may(tmp_path: Path) -> None:
+    """The policy itself, stated once without any adapter in the way: INFO is
+    allowed for this app, uvicorn and alembic, and refused for everything
+    else (`sidecar._VERBOSE_LOGGERS`).
+
+    Deny by default is what makes it hold for the *next* library too -- the
+    one nobody has added yet, whose INFO line nobody has read.
+    """
+    log_directory = tmp_path / "logs"
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    try:
+        install_log_redaction("session-token", log_directory)
+        logging.getLogger("httpx").info("HTTP Request: POST https://host/secret-path")
+        logging.getLogger("some.future.dependency").info("chatty startup banner")
+        logging.getLogger("auto_scoring.jobs.queue").info("job finished")
+        logging.getLogger("uvicorn.access").info("127.0.0.1 - GET /healthz 200")
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
+
+    written = (log_directory / sidecar.LOG_FILENAME).read_text(encoding="utf-8")
+    assert "secret-path" not in written
+    assert "chatty startup banner" not in written
+    assert "job finished" in written
+    assert "GET /healthz" in written
 
 
 def test_emit_handshake_writes_one_json_line(tmp_path: Path) -> None:
