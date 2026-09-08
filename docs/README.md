@@ -32,6 +32,7 @@ the former is updated in the same PR.
 | [mvp-acceptance.md](./mvp-acceptance.md)                                   | 簡易設計書 §31 の全実装項目と、それを検証しているテストの対応表 |
 | [design-tokens.md](./design-tokens.md)                                     | 画面のデザイントークン（フォント選定・配色・余白・モーション）  |
 | [home-dashboard.md](./home-dashboard.md)                                   | ホーム画面が出す「次の一手」と進捗の決め方、状態の取得元        |
+| [dependency-dag-progress-view.md](./dependency-dag-progress-view.md)       | 添削レビュー画面で AI 処理の進捗を依存 DAG として見せる         |
 
 ## PoC 記録
 

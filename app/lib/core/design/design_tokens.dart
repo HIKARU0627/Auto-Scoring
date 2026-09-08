@@ -149,6 +149,31 @@ abstract final class AppLayout {
   /// hairline with nothing around it.
   static const double hairline = 1;
 
+  /// One node in the 設問依存DAG panel (Issue #64). Wide enough for
+  /// 設問番号 plus the longest state label (`AI処理中`, `問12 待ち`) on two
+  /// lines at `labelLarge`/`labelSmall`, and no wider: the diagram's whole
+  /// value is seeing several layers at once.
+  static const double dagNodeWidth = 116;
+  static const double dagNodeHeight = 64;
+
+  /// The 設問依存DAG panel's height when expanded, as **exactly three node
+  /// rows** plus the diagram's own padding and gaps (`DagMetrics`' defaults:
+  /// [AppSpacing.lg] around, [AppSpacing.md] between). Written as that sum
+  /// rather than as 248 so it stays a whole number of rows if the node size
+  /// changes -- a band that ends mid-node reads as broken rather than as
+  /// scrollable.
+  ///
+  /// Three rows because that is a plausible number of questions to be
+  /// running in parallel; beyond it the diagram scrolls, and the panel never
+  /// costs the PDF viewer more than this fixed band.
+  static const double dagPanelHeight =
+      AppSpacing.lg * 2 + dagNodeHeight * 3 + AppSpacing.md * 2;
+
+  /// The hairline that says a node is actively running. Two pixels, because
+  /// it is the only thing on this screen allowed to move continuously and it
+  /// should be findable without being loud (`docs/design-tokens.md` §5).
+  static const double activityBarHeight = 2;
+
   /// A `Divider` used as a section break inside a scrolling column. Unlike
   /// [hairline] this is the rule *plus* the space it reserves above and below
   /// it, which is why it is a spacing step rather than 1.
@@ -165,9 +190,16 @@ abstract final class AppLayout {
 ///
 /// Issue #67 defines these and applies them in one place (`AppErrorBanner`);
 /// per-screen application is deliberately left to later issues so that the
-/// vocabulary is settled first. [stateChange] and [standard] therefore have no
-/// call site yet -- they are the half of the vocabulary those issues will
-/// reach for, not leftovers.
+/// vocabulary is settled first.
+///
+/// The 設問依存DAG panel (Issue #64) is the first of those, and holds the one
+/// documented exception to "nothing moves on its own": a node whose job is
+/// `RUNNING` carries a continuously-moving hairline
+/// ([AppLayout.activityBarHeight]), because "this one is working right now"
+/// is not a state change that can be announced once and then stopped. It is
+/// bounded on purpose -- only the running nodes, only a low-contrast 2px bar,
+/// and it disappears the moment the job leaves `RUNNING`. See
+/// `docs/design-tokens.md` §5.
 abstract final class AppMotion {
   /// 150ms -- a control changing state under the pointer/keyboard. Short
   /// enough to feel like a response rather than an animation.
