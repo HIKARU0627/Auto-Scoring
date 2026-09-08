@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -359,40 +358,19 @@ ReviewActionResponse _reviewAction(
 /// 承認 has to have looked at the material first, exactly as a reviewer does.
 /// A no-op when the panel already fits.
 Future<void> _revealMaterial(WidgetTester tester) async {
-  final inspector = find.byKey(const Key('review-inspector'));
-  if (inspector.evaluate().isEmpty) return;
-  // Page through, exactly as 「続きを表示」 does, rather than jumping to the
-  // end: since Issue #85 a row is recorded when its *own* end has been in the
-  // viewport, and a jump skips everything in between without showing it. A
-  // helper that jumped would be claiming the reviewer read something the
-  // screen never displayed.
+  // Press 「続きを表示」 -- the control the screen itself offers -- rather than
+  // driving the scroll position. The button has to take the reviewer to the
+  // unread material, and that is not always downwards (Issue #85, レビュー
+  // 5回目 P2), so a helper that scrolled down by hand would pass while the
+  // offered way out did nothing.
   //
-  // Deliberately a no-op unless the gate is actually closed. If it scrolled
+  // Deliberately a no-op unless the gate is actually closed. If it pressed
   // regardless, a regression that made the gate fire on a panel with nothing
   // below the fold would slip through every test that calls this.
-  for (var page = 0; page < 40; page++) {
-    if (find
-        .byKey(const Key('review-unread-material-notice'))
-        .evaluate()
-        .isEmpty) {
-      return;
-    }
-    final position = tester
-        .state<ScrollableState>(
-          // `.first`: the panel's own scroll view, not the one every
-          // `TextField` carries inside it (修正コメント欄はその中にある).
-          find
-              .descendant(of: inspector, matching: find.byType(Scrollable))
-              .first,
-        )
-        .position;
-    if (position.pixels >= position.maxScrollExtent) return;
-    position.jumpTo(
-      math.min(
-        position.pixels + position.viewportDimension * 0.9,
-        position.maxScrollExtent,
-      ),
-    );
+  for (var page = 0; page < 60; page++) {
+    final reveal = find.byKey(const Key('review-reveal-material-button'));
+    if (reveal.evaluate().isEmpty) return;
+    await tester.tap(reveal);
     await tester.pumpAndSettle();
   }
 }
@@ -4798,12 +4776,14 @@ void main() {
         findsOneWidget,
       );
 
-      // 上まで戻って実際に目を通せば、また承認できる。
-      await tester.drag(
-        find.byKey(const Key('review-inspector')),
-        const Offset(0, 2000),
-      );
-      await tester.pumpAndSettle();
+      // 未読は**上**にあるので、案内もそう言うこと。
+      expect(find.textContaining('この上にまだ'), findsOneWidget);
+
+      // そして、画面が差し出す復帰操作そのもので戻れること。「続きを表示」が
+      // 常に下へ動く実装だと、末尾にいるここでは移動先が現在位置と同じになり、
+      // 何度押しても無反応のまま抜けられない（レビュー5回目 P2）。手でドラッグ
+      // して確かめると、その壊れ方を見逃す。
+      await _revealMaterial(tester);
       expect(
         tester
             .widget<FilledButton>(
@@ -4844,6 +4824,61 @@ void main() {
         find.byKey(const Key('review-note-field')),
         findsOneWidget,
         reason: 'the note itself must not be dropped either',
+      );
+    });
+
+    testWidgets('末尾へ飛ばしても、通っていない範囲が残っていれば既読にならない', (tester) async {
+      // レビュー5回目 P1。ビューポートより高い行 -- 根拠本文がまさにそれで、
+      // いちばん読ませたいもの -- を、上端を見たあと一気に末尾へ飛ばす。
+      // 「上端と下端の両方が画面に入ったか」で判定すると、あいだが空白のまま
+      // 既読になる。スクロールバーを掴んで末尾へ落としても同じことが起きる。
+      await pumpAt(
+        tester,
+        desktopStandard,
+        reviewableQuestion(rationale: '（デモ）採点根拠の文がここに入ります。' * 60),
+      );
+      final position = tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byKey(const Key('review-inspector')),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      expect(
+        position.maxScrollExtent,
+        greaterThan(0),
+        reason: 'the premise: the 根拠 is taller than the panel',
+      );
+
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNull,
+        reason: '飛ばしたぶんの本文は一度も表示されていない',
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
+      );
+
+      // 送って読めば、ちゃんと開く。
+      await _revealMaterial(tester);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
       );
     });
 

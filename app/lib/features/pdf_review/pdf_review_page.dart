@@ -352,6 +352,11 @@ const double _materialPageOverlap = 0.9;
 const String _materialTop = '#top';
 const String _materialBottom = '#bottom';
 
+/// How much of a row may be missing before it still counts as covered, as a
+/// fraction of that row's height. A rounding allowance, not a licence to skip
+/// -- at a 2525px 根拠 this is under three pixels.
+const double _materialCoverEpsilon = 0.001;
+
 class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// The sidecar operations this screen was opened against, captured once in
   /// [initState] -- never re-resolved from the provider mid-request. See
@@ -367,38 +372,55 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the rest of it (Issue #85).
   final _inspectorScrollController = ScrollController();
 
-  /// The 判断材料 rows whose **end has actually been on screen**, by row id.
+  /// Per 判断材料 row, **which parts of it have been on screen**, as merged
+  /// fractions of that row's own height.
   ///
-  /// Recorded per row rather than for the panel as a whole, and that is the
-  /// whole design. Three earlier versions asked a single scroll number
-  /// whether everything had been seen, and a single scroll number cannot
-  /// answer it: `maxScrollExtent` and the material's own height are facts
-  /// about the current layout, so a relayout un-saw material that had been
-  /// displayed in full (レビュー1・2回目), and `extentAfter == 0` is evidence
-  /// gathered about *the material that was there when it was measured*, so
-  /// reusing it after a poll replaced a row above the fold marked material
-  /// as read that nobody had ever seen (レビュー3・4回目).
+  /// A union of intervals rather than a pair of edges, and that is the whole
+  /// design. Four earlier versions asked a scroll number, or a pair of edge
+  /// markers, whether a row had been read, and neither can answer it:
+  ///
+  /// - `maxScrollExtent` and the material's own height are facts about the
+  ///   current layout, so a relayout un-saw material that had been displayed
+  ///   in full (レビュー1・2回目).
+  /// - `extentAfter == 0` is evidence gathered about *the material that was
+  ///   there when it was measured*, so reusing it after a poll replaced a row
+  ///   above the fold marked material read that nobody had seen (レビュー3・
+  ///   4回目).
+  /// - "both edges have been on screen" says nothing about the middle. Drag
+  ///   the scrollbar from the top of a 2525px 根拠 straight to the end and
+  ///   both edges have been seen with the whole body skipped (レビュー5回目)
+  ///   -- and a block taller than the viewport is exactly the 根拠本文, the
+  ///   thing this gate exists for.
   ///
   /// **証拠は、それが証明する材料そのものに紐づいていなければならない。**
-  /// A row counts as seen when **both edges** of its block have been inside
-  /// the viewport -- not just the end. The end alone is not enough: a poll
-  /// that replaces a row above the fold with a *longer* one pushes that
-  /// row's end down into view while its beginning stays off screen, and the
-  /// row would be marked read without a word of it having been shown
-  /// (レビュー4回目 P2-1). Relayout cannot add an entry, because markers are
-  /// only ever recorded where they actually are.
-  final Set<String> _seenMaterialRowIds = {};
+  /// Fractions rather than pixels so that a rewrap -- the same words at a
+  /// different width -- does not un-cover what was covered: the *proportion*
+  /// of a row that has been shown survives relayout, where a pixel range
+  /// would not. Intervals are merged on the way in, so a row holds a handful
+  /// at most.
+  final Map<String, List<(double, double)>> _materialSeenRanges = {};
 
   /// Two markers per row -- one at each edge of its block
-  /// ([_materialRowEdge]). Kept across rebuilds so a marker keeps its
-  /// identity in the tree; keys are row ids, so this is bounded by the rows
-  /// this session has actually fetched.
+  /// ([_materialRowEdge]) -- to measure that row's extent against the
+  /// viewport. Kept across rebuilds so a marker keeps its identity in the
+  /// tree; keys are row ids, so this is bounded by the rows this session has
+  /// actually fetched.
   final Map<String, GlobalKey> _materialRowKeys = {};
 
   /// The Inspector's scroll viewport, to measure the markers against.
   final GlobalKey _inspectorViewportKey = GlobalKey(
     debugLabel: 'review-inspector-viewport',
   );
+
+  /// Whether the nearest unread 判断材料 is *above* the current view rather
+  /// than below it.
+  ///
+  /// A poll can replace a row off the top of the panel while the reviewer is
+  /// parked at the bottom, and then 「続きを表示」 has to go *up*. Sending it
+  /// down there moved nothing, which is a button that does nothing
+  /// (レビュー5回目 P2). Held as state because it is a fact about the last
+  /// layout, and build must not go measuring render objects.
+  bool _unreadIsAbove = false;
 
   /// Whether the markers have been measured for the material now on screen.
   ///
@@ -1160,7 +1182,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     // notice must not be inherited from the question just left.
     //
     // Nothing about what has been *read* is reset here:
-    // [_seenMaterialRowIds] names rows, so coming back to a question already
+    // [_materialSeenRanges] is keyed by row, so coming back to a question already
     // read through does not ask the reviewer to read it again. Only the
     // *measurement* is invalidated -- the next question's markers have not
     // been placed yet.
@@ -1208,22 +1230,25 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         review.hasLoaded;
   }
 
-  /// Whether every row the Inspector is currently showing has had its end on
-  /// screen ([_seenMaterialRowIds]).
+  /// Whether every row the Inspector is currently showing has been covered
+  /// end to end ([_materialSeenRanges]).
   ///
-  /// True immediately when the panel does not scroll at all -- every marker
-  /// is inside the viewport on the first measurement -- which is the ordinary
-  /// case at 1280x720 and the reason this gate costs a reviewer nothing
-  /// there.
+  /// True immediately when the panel does not scroll at all -- every row is
+  /// wholly inside the viewport on the first measurement -- which is the
+  /// ordinary case at 1280x720 and the reason this gate costs a reviewer
+  /// nothing there.
   bool get _materialFullyRead {
     final question = _currentQuestion;
     final review = _currentReview;
     if (question == null || review == null || !review.hasLoaded) return false;
-    return _materialRowIds(question, review).every(
-      (id) =>
-          _seenMaterialRowIds.contains('$id$_materialTop') &&
-          _seenMaterialRowIds.contains('$id$_materialBottom'),
-    );
+    return _materialRowIds(question, review).every(_isRowCovered);
+  }
+
+  bool _isRowCovered(String id) {
+    final ranges = _materialSeenRanges[id];
+    if (ranges == null || ranges.length != 1) return false;
+    return ranges.single.$1 <= _materialCoverEpsilon &&
+        ranges.single.$2 >= 1 - _materialCoverEpsilon;
   }
 
   /// The rows the Inspector is showing for [question] right now, in the order
@@ -1233,7 +1258,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// `Recognition`, a `GradeResult` and an `Annotation` are written once and
   /// never edited, so a human correction, a re-grade and an Undo each arrive
   /// as *different rows* (`docs/review-edit-history.md`).
-  ///
   List<String> _materialRowIds(
     QuestionResponse question,
     QuestionReviewState review,
@@ -1254,13 +1278,13 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   ];
 
   /// A zero-height marker at one edge of [id]'s block, [edge] being
-  /// `_materialTop` or `_materialBottom`. Their positions are what
-  /// [_recordMaterialSeen] measures.
+  /// `_materialTop` or `_materialBottom`. The pair gives that row's extent,
+  /// which [_recordMaterialSeen] intersects with the viewport.
   ///
   /// Markers rather than a wrapper around each block: a wrapper is a widget
-  /// in the layout, and this screen has already been burnt twice by
-  /// measuring something the measurement itself changed. A zero-height box
-  /// cannot move what it is measuring.
+  /// in the layout, and this screen has already been burnt by measuring
+  /// something the measurement itself changed. A zero-height box cannot move
+  /// what it is measuring.
   Widget _materialRowEdge(String id, String edge) => SizedBox.shrink(
     key: _materialRowKeys.putIfAbsent(
       '$id$edge',
@@ -1268,65 +1292,149 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     ),
   );
 
-  /// Records every row whose end is inside the Inspector's viewport right
-  /// now.
+  /// The y of one of [id]'s markers in the viewport's coordinates, or `null`
+  /// if it is not in the tree.
+  double? _markerY(String id, String edge, RenderBox viewport) {
+    final marker = _materialRowKeys['$id$edge']?.currentContext
+        ?.findRenderObject();
+    if (marker is! RenderBox || !marker.attached || !marker.hasSize) {
+      return null;
+    }
+    return marker.localToGlobal(Offset.zero, ancestor: viewport).dy;
+  }
+
+  /// Records the part of each row that is inside the viewport right now, and
+  /// which way the nearest unread material lies.
   ///
-  /// Geometry rather than scroll offsets: the question is "has the end of
-  /// *this row* been shown", and only the row's own position can answer it.
+  /// Geometry rather than scroll offsets: the question is "has *this part of
+  /// this row* been shown", and only the row's own position can answer it.
   /// Reads render objects, so it must run after layout -- every one of its
   /// three triggers does ([_buildInspector]).
   void _recordMaterialSeen() {
     final question = _currentQuestion;
     final review = _currentReview;
-    // Not while the panel is showing a spinner or an error: those markers
-    // are not the material, and marking them read would hand the reviewer an
-    // enabled 承認 for content they have not been shown yet.
+    // Not while the panel is showing a spinner or an error: those are not the
+    // material, and marking them read would hand the reviewer an enabled 承認
+    // for content they have not been shown yet.
     if (question == null || review == null || !review.hasLoaded) return;
     if (review.loading || review.error != null) return;
     final viewport = _inspectorViewportKey.currentContext?.findRenderObject();
     if (viewport is! RenderBox || !viewport.attached || !viewport.hasSize) {
       return;
     }
-    final seen = <String>[];
+    final height = viewport.size.height;
+    final updated = <String, List<(double, double)>>{};
+    double? firstUnreadY;
     for (final id in _materialRowIds(question, review)) {
-      for (final edge in const [_materialTop, _materialBottom]) {
-        final key = _materialRowKeys['$id$edge'];
-        final marker = key?.currentContext?.findRenderObject();
-        if (marker is! RenderBox || !marker.attached || !marker.hasSize) {
-          continue;
-        }
-        final y = marker.localToGlobal(Offset.zero, ancestor: viewport).dy;
-        if (y >= -_materialReadEpsilon &&
-            y <= viewport.size.height + _materialReadEpsilon) {
-          seen.add('$id$edge');
-        }
+      final top = _markerY(id, _materialTop, viewport);
+      final bottom = _markerY(id, _materialBottom, viewport);
+      if (top == null || bottom == null) continue;
+      final rowHeight = bottom - top;
+      final visibleTop = math.max(top, 0.0);
+      final visibleBottom = math.min(bottom, height);
+      final existing = updated[id] ?? _materialSeenRanges[id] ?? const [];
+      if (visibleBottom > visibleTop) {
+        // A row shorter than a hair is covered the moment any of it shows.
+        final merged = rowHeight <= _materialReadEpsilon
+            ? const [(0.0, 1.0)]
+            : _mergedRanges(
+                existing,
+                (visibleTop - top) / rowHeight,
+                (visibleBottom - top) / rowHeight,
+              );
+        if (!_sameRanges(existing, merged)) updated[id] = merged;
       }
+      firstUnreadY ??= _firstGapY(updated[id] ?? existing, top, rowHeight);
     }
-    final isNew = seen.any((id) => !_seenMaterialRowIds.contains(id));
-    if (!isNew && _materialMeasured) return;
+    final unreadIsAbove = firstUnreadY != null && firstUnreadY < 0;
+    if (updated.isEmpty &&
+        _materialMeasured &&
+        unreadIsAbove == _unreadIsAbove) {
+      return;
+    }
     _setStateIfMounted(() {
       _materialMeasured = true;
-      _seenMaterialRowIds.addAll(seen);
+      _unreadIsAbove = unreadIsAbove;
+      _materialSeenRanges.addAll(updated);
     });
   }
 
-  /// Brings the next screenful of 判断材料 into view.
+  /// Where the first not-yet-covered part of a row sits in viewport
+  /// coordinates, or `null` when the row is covered end to end.
+  double? _firstGapY(
+    List<(double, double)> ranges,
+    double top,
+    double rowHeight,
+  ) {
+    if (ranges.isNotEmpty &&
+        ranges.first.$1 <= _materialCoverEpsilon &&
+        ranges.first.$2 >= 1 - _materialCoverEpsilon) {
+      return null;
+    }
+    final gapStart = ranges.isEmpty || ranges.first.$1 > _materialCoverEpsilon
+        ? 0.0
+        : ranges.first.$2;
+    return top + gapStart * rowHeight;
+  }
+
+  /// [ranges] with `[start, end]` merged in, kept sorted and non-overlapping.
+  static List<(double, double)> _mergedRanges(
+    List<(double, double)> ranges,
+    double start,
+    double end,
+  ) {
+    final merged = <(double, double)>[];
+    var lower = start;
+    var upper = end;
+    for (final range in ranges) {
+      if (range.$2 < lower - _materialCoverEpsilon) {
+        merged.add(range);
+      } else if (range.$1 > upper + _materialCoverEpsilon) {
+        // Everything from here on is beyond the new range; flush it first.
+        merged.add((lower, upper));
+        lower = double.nan;
+        merged.add(range);
+      } else {
+        lower = math.min(lower, range.$1);
+        upper = math.max(upper, range.$2);
+      }
+    }
+    if (!lower.isNaN) {
+      merged.add((lower, upper));
+    }
+    merged.sort((a, b) => a.$1.compareTo(b.$1));
+    return merged;
+  }
+
+  static bool _sameRanges(List<(double, double)> a, List<(double, double)> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Brings the next screenful of unread 判断材料 into view.
   ///
-  /// **One page at a time, not a jump to the end** (レビュー4回目). Since a row
-  /// is recorded when its own end has been inside the viewport, a jump would
-  /// skip straight past everything in between and leave those rows unread --
-  /// the button would promise 「続きを表示」 and not deliver it. Paging shows
-  /// each screenful for real, which is the same thing the gate is asking for.
-  /// The overlap keeps a line of context and stops a row from falling exactly
-  /// between two pages.
+  /// **One page at a time, not a jump** (レビュー4回目). Only what actually
+  /// passes the viewport is recorded, so a jump would skip straight past
+  /// everything in between -- the button would promise 「続きを表示」 and not
+  /// deliver it. The overlap keeps a line of context and stops a row from
+  /// falling exactly between two pages.
+  ///
+  /// **Towards the unread material, which is not always downwards**
+  /// (レビュー5回目 P2). A poll can replace a row off the top of the panel
+  /// while the reviewer is parked at the bottom; sending them further down
+  /// there moves nothing at all, and a button that does nothing is a broken
+  /// button.
   void _revealRestOfMaterial() {
     if (!_inspectorScrollController.hasClients) return;
     final position = _inspectorScrollController.position;
+    final page = position.viewportDimension * _materialPageOverlap;
     _inspectorScrollController.animateTo(
-      math.min(
-        position.pixels + position.viewportDimension * _materialPageOverlap,
-        position.maxScrollExtent,
-      ),
+      _unreadIsAbove
+          ? math.max(position.pixels - page, position.minScrollExtent)
+          : math.min(position.pixels + page, position.maxScrollExtent),
       duration: AppMotion.emphasis,
       curve: AppMotion.standard,
     );
@@ -1424,8 +1532,12 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (_blockedOnUnreadMaterial) {
       _revealRestOfMaterial();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('判断材料が画面外に残っていました。表示したうえで、もう一度 Enter で承認できます。'),
+        SnackBar(
+          content: Text(
+            _unreadIsAbove
+                ? '判断材料が画面外に残っていました。上に戻して表示したうえで承認できます。'
+                : '判断材料が画面外に残っていました。表示したうえで、もう一度 Enter で承認できます。',
+          ),
         ),
       );
       return;
@@ -2643,11 +2755,16 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         child: Row(
           key: const Key('review-unread-material-notice'),
           children: [
-            const Icon(Icons.arrow_downward, size: AppIconSize.inline),
+            Icon(
+              _unreadIsAbove ? Icons.arrow_upward : Icons.arrow_downward,
+              size: AppIconSize.inline,
+            ),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
               child: Text(
-                'この下にまだ判断材料があります。末尾まで表示すると承認できます。',
+                _unreadIsAbove
+                    ? 'この上にまだ見ていない判断材料があります。表示すると承認できます。'
+                    : 'この下にまだ判断材料があります。最後まで表示すると承認できます。',
                 style: context.texts.bodySmall,
               ),
             ),
