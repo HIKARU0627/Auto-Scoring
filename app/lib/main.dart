@@ -60,7 +60,10 @@ ThemeMode? get _requestedThemeMode =>
 /// Where the app lands and which theme it wears are not decisions a shipped
 /// build may take from its environment. The screenshot script builds
 /// `--debug` (`docs/linux-desktop-development.md` §2), so this is on exactly
-/// where it is needed; `flutter build windows --release` compiles it out.
+/// where it is needed, and a release build takes the `null` branch --
+/// `kDebugMode` is a compile-time constant. That the branch is then *removed*
+/// from a Windows release build has not been measured; what is guaranteed here
+/// is only that it is never taken (§4.4).
 String? _screenshotEnvironment(String name) =>
     kDebugMode ? Platform.environment[name] : null;
 
