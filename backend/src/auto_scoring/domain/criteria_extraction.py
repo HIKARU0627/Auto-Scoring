@@ -86,10 +86,15 @@ MAX_CRITERIA_TEXT_CHARS = 4_000
 #: thousand-row editing screen a reviewer cannot work through.
 MAX_EXTRACTED_QUESTIONS = 200
 
-#: Bound on a question number. Kept below ``domain.test_registration``'s own
-#: ``_MAX_QUESTION_NUMBER_BYTES`` (40 bytes) so a number that survives this
-#: schema still has a chance of becoming a `Question`; the longer values
-#: that regularly appear in real material are things like "問1(2)ア".
+#: Bound on a question number, in **characters**. Deliberately not the same
+#: bound as ``domain.test_registration``'s ``_MAX_QUESTION_NUMBER_BYTES``,
+#: which is 40 *bytes* -- 30 Japanese characters is 90 bytes, so a number
+#: that satisfies this one can still be rejected there. That is intended:
+#: this bound exists to stop a runaway generation from becoming a question
+#: number at all, while the byte bound protects a filename component and
+#: belongs where the filename is built. A number between the two surfaces as
+#: a 422 at confirm time naming the byte limit, which a reviewer can act on
+#: -- not as a silent truncation. Real numbers are short ("問1(2)ア").
 MAX_QUESTION_NUMBER_CHARS = 30
 
 
