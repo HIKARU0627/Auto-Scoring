@@ -33,11 +33,19 @@ class DependencyDagPanel extends StatefulWidget {
   const DependencyDagPanel({
     super.key,
     required this.layout,
+    required this.maxCanvasHeight,
     required this.selectedQuestionId,
     required this.onQuestionSelected,
   });
 
   final DependencyDagLayout layout;
+
+  /// The tallest the diagram band may be here and now -- a share of the pane
+  /// this panel shares with the PDF viewer, not a constant
+  /// (`AppLayout.dagPanelMaxHeightFraction`, Issue #85). Below one node row it
+  /// is not worth opening at all, and the header's counts answer
+  /// 「まだ動いているのか」 on their own.
+  final double maxCanvasHeight;
 
   /// The question the rest of the screen is showing, highlighted here so the
   /// diagram doubles as "where am I".
@@ -143,23 +151,23 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
 
   @override
   Widget build(BuildContext context) {
+    final canvasHeight = math.min(
+      widget.layout.size.height,
+      math.min(AppLayout.dagPanelHeight, widget.maxCanvasHeight),
+    );
+    // Only as tall as the diagram, up to the band's maximum, up to what the
+    // window can spare. A test with two questions must not reserve the same
+    // slice of the PDF viewer as one with twelve, and no test may reserve a
+    // slice of a short window that the 判断材料 needs more (Issue #85).
+    final fits = canvasHeight >= AppLayout.dagNodeHeight;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildHeader(context),
-        if (_expanded) ...[
+        _buildHeader(context, fits: fits),
+        if (_expanded && fits) ...[
           const Divider(height: AppLayout.hairline),
-          SizedBox(
-            // Only as tall as the diagram, up to the band's maximum. A test
-            // with two questions must not reserve the same slice of the PDF
-            // viewer as one with twelve.
-            height: math.min(
-              widget.layout.size.height,
-              AppLayout.dagPanelHeight,
-            ),
-            child: _buildCanvas(),
-          ),
+          SizedBox(height: canvasHeight, child: _buildCanvas()),
         ],
         const Divider(height: AppLayout.hairline),
       ],
@@ -169,7 +177,7 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
   /// The header carries the summary itself, so collapsing the panel to buy
   /// the PDF viewer back its vertical space does not cost the reviewer the
   /// answer to 「まだ動いているのか」.
-  Widget _buildHeader(BuildContext context) {
+  Widget _buildHeader(BuildContext context, {required bool fits}) {
     final layout = widget.layout;
     // Straight off `DagNodeProgress`, so every state lands in exactly one
     // bucket and the three always add up to the number of nodes -- 未処理
@@ -205,9 +213,21 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
           ),
           IconButton(
             key: const Key('dag-toggle-button'),
-            tooltip: _expanded ? '依存グラフを閉じる' : '依存グラフを開く',
-            icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
-            onPressed: () => setState(() => _expanded = !_expanded),
+            // Disabled rather than hidden when the window is too short for
+            // even one node row: a control that disappears reads as a bug,
+            // and the reason ("make the window taller") is something the
+            // reviewer can act on.
+            tooltip: fits
+                ? (_expanded ? '依存グラフを閉じる' : '依存グラフを開く')
+                : '画面の高さが足りないため、依存グラフは表示できません',
+            icon: Icon(
+              !fits
+                  ? Icons.unfold_less
+                  : (_expanded ? Icons.expand_less : Icons.expand_more),
+            ),
+            onPressed: fits
+                ? () => setState(() => _expanded = !_expanded)
+                : null,
           ),
         ],
       ),
@@ -255,40 +275,54 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
                 thumbVisibility: layout.size.height > constraints.maxHeight,
                 child: SingleChildScrollView(
                   controller: _vertical,
-                  child: SizedBox.fromSize(
-                    size: layout.size,
-                    child: AnimatedBuilder(
-                      animation: _controller,
-                      builder: (context, _) => Stack(
-                        children: [
-                          Positioned.fill(
-                            child: CustomPaint(
-                              key: const Key('dag-edges'),
-                              painter: DagEdgePainter(
-                                edges: layout.edges,
-                                revealing: _revealingEdgeKeys,
-                                progress: _controller.value,
-                                pendingColor: context.colors.outlineVariant,
-                                satisfiedColor: context.colors.onSurfaceVariant,
-                                revealColor: context.statusColors.success,
+                  // As wide as the band, so the diagram sits in the middle of
+                  // it. `spreadAcross` has already widened the gaps as far as
+                  // an arrow stays readable; whatever width is still left over
+                  // is split evenly instead of all landing on the right, which
+                  // is what left the nodes hugging the left three fifths of a
+                  // standard-width window (Issue #85).
+                  child: SizedBox(
+                    width: math.max(layout.size.width, constraints.maxWidth),
+                    height: layout.size.height,
+                    child: Center(
+                      child: SizedBox.fromSize(
+                        size: layout.size,
+                        child: AnimatedBuilder(
+                          animation: _controller,
+                          builder: (context, _) => Stack(
+                            children: [
+                              Positioned.fill(
+                                child: CustomPaint(
+                                  key: const Key('dag-edges'),
+                                  painter: DagEdgePainter(
+                                    edges: layout.edges,
+                                    revealing: _revealingEdgeKeys,
+                                    progress: _controller.value,
+                                    pendingColor: context.colors.outlineVariant,
+                                    satisfiedColor:
+                                        context.colors.onSurfaceVariant,
+                                    revealColor: context.statusColors.success,
+                                  ),
+                                ),
                               ),
-                            ),
+                              for (final node in layout.nodes)
+                                Positioned.fromRect(
+                                  rect: node.rect,
+                                  child: _DagNodeCard(
+                                    node: node,
+                                    selected:
+                                        node.id == widget.selectedQuestionId,
+                                    releasedHighlight:
+                                        _releasedNodeIds.contains(node.id)
+                                        ? 1 - _controller.value
+                                        : 0,
+                                    onSelected: () =>
+                                        widget.onQuestionSelected(node.id),
+                                  ),
+                                ),
+                            ],
                           ),
-                          for (final node in layout.nodes)
-                            Positioned.fromRect(
-                              rect: node.rect,
-                              child: _DagNodeCard(
-                                node: node,
-                                selected: node.id == widget.selectedQuestionId,
-                                releasedHighlight:
-                                    _releasedNodeIds.contains(node.id)
-                                    ? 1 - _controller.value
-                                    : 0,
-                                onSelected: () =>
-                                    widget.onQuestionSelected(node.id),
-                              ),
-                            ),
-                        ],
+                        ),
                       ),
                     ),
                   ),

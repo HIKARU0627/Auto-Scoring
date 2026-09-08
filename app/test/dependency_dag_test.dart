@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
+import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
 
 DependencyEdgeModel _edge(String from, String to) => DependencyEdgeModel(
@@ -341,6 +342,76 @@ void main() {
         ),
         isNull,
       );
+    });
+
+    // ---------------------------------------------------------------- //
+    // Issue #85: a 3-layer diagram is ~480px wide, and in a full-width band
+    // it sat in the left three fifths of the window with nothing to its
+    // right. The slack goes into the gaps between layers, where the arrows
+    // are, and stops before an arrow reads as two unrelated groups.
+    // ---------------------------------------------------------------- //
+    test('spreads the gaps between layers to fill the width it is given', () {
+      final natural = buildDependencyDagLayout(
+        questions: [_question('q1'), _question('q2')],
+        edges: [_edge('q1', 'q2')],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+      )!;
+      // padding*2 + 2 columns + 1 gap.
+      expect(natural.size.width, 230);
+
+      final spread = buildDependencyDagLayout(
+        questions: [_question('q1'), _question('q2')],
+        edges: [_edge('q1', 'q2')],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+        availableWidth: 260,
+      )!;
+      expect(spread.size.width, 260);
+      // Only the gap grew: the nodes are the same size, and the first one is
+      // still where the padding puts it.
+      final first = spread.nodes.firstWhere((n) => n.id == 'q1').rect;
+      final second = spread.nodes.firstWhere((n) => n.id == 'q2').rect;
+      expect(first, const Rect.fromLTWH(5, 5, 100, 40));
+      expect(second.width, 100);
+      expect(second.left - first.right, 50);
+      // The rows are untouched -- this is a horizontal decision only.
+      expect(spread.size.height, natural.size.height);
+    });
+
+    test('stops spreading at the cap, and never shrinks to fit', () {
+      final capped = buildDependencyDagLayout(
+        questions: [_question('q1'), _question('q2')],
+        edges: [_edge('q1', 'q2')],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+        availableWidth: 100000,
+      )!;
+      // padding*2 + 2 columns + the capped gap (3x the 20 this test set).
+      expect(capped.size.width, 210 + 20 * AppLayout.dagColumnGapSpreadLimit);
+
+      // Narrower than the diagram needs: it keeps its natural size and the
+      // panel scrolls, because a fitted diagram loses the label legibility
+      // that is the whole reason the nodes are the size they are.
+      final squeezed = buildDependencyDagLayout(
+        questions: [_question('q1'), _question('q2')],
+        edges: [_edge('q1', 'q2')],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+        availableWidth: 50,
+      )!;
+      expect(squeezed.size.width, 230);
+    });
+
+    test('a single-layer diagram has no gap to spend the slack on', () {
+      final layout = buildDependencyDagLayout(
+        questions: [_question('q1'), _question('q2')],
+        edges: const [],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+        availableWidth: 1000,
+      )!;
+      expect(layout.size.width, 110);
     });
 
     test('counts the states the collapsed header summarises', () {

@@ -192,17 +192,35 @@ AppDependencies _dependencies({
   List<AnnotationResponse> annotations = const [],
   List<ReviewResponse> reviews = const [],
   SubmissionResponse? submission,
+  DependencyGraphResponse? graph,
+  List<JobResponse> jobs = const [],
   EditReview? editReview,
   RejectReview? rejectReview,
   RegradeReview? regradeReview,
   ApproveReview? approveReview,
   UndoReview? undoReview,
 }) {
-  final questions = [q1, ?q2];
+  final questions = [
+    q1,
+    ?q2,
+    if (graph != null)
+      for (final id in graph.questionIds.where(
+        (id) => id != q1.id && id != q2?.id,
+      ))
+        _question(id: id, number: id.split('-').last),
+  ];
   return AppDependencies(
     getSubmission: (submissionId) async => submission ?? _submission(),
     listQuestions: (testId) async => questions,
     getSourcePdf: (submissionId) async => pdfBytes,
+    getDependencyGraph: (testId) async =>
+        graph ??
+        (throw SidecarApiException(
+          SidecarErrorKind.unknown,
+          'まだ分析されていません',
+          statusCode: 404,
+        )),
+    listJobs: (submissionId) async => jobs,
     listRecognitions: (submissionId, questionId) async =>
         recognitions.where((r) => r.questionId == questionId).toList(),
     listGrades: (submissionId, questionId) async =>
@@ -4117,5 +4135,230 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  });
+
+  // ------------------------------------------------------------------ //
+  // Issue #85 acceptance: the 判断材料 承認 is a decision about, and the
+  // button that takes that decision, on the same screen -- at both widths
+  // the screenshots in Issue #71 were taken at.
+  // ------------------------------------------------------------------ //
+  group('Issue #85: 受入 -- 判断材料と承認が同じ画面にある', () {
+    /// The two sizes Issue #71's evaluation material was captured at, and
+    /// the two Issue #85 states its acceptance criteria in.
+    const desktopStandard = Size(1280, 720);
+    const desktopNarrow = Size(700, 720);
+
+    /// 問1..問5 with 問2→問3→問5 and 問4→問5: three execution layers of the
+    /// same shape as the captured screenshots, so the panel's band is the
+    /// size it actually is in front of a reviewer rather than the smallest
+    /// one a test could get away with.
+    DependencyGraphResponse fiveQuestionGraph() => DependencyGraphResponse(
+      (b) => b
+        ..id = 'graph-1'
+        ..testId = 'test-1'
+        ..version = 1
+        ..status = 'confirmed'
+        ..questionIds.replace(const ['q-1', 'q-2', 'q-3', 'q-4', 'q-5'])
+        ..edges.replace([
+          for (final (from, to) in const [
+            ('q-2', 'q-3'),
+            ('q-3', 'q-5'),
+            ('q-4', 'q-5'),
+          ])
+            DependencyEdgeModel(
+              (e) => e
+                ..fromQuestionId = from
+                ..toQuestionId = to
+                ..rationale = '前の設問の結論を使う'
+                ..provides.replace(const <DependencyProvision>[]),
+            ),
+        ])
+        ..unresolved.replace(const <UnresolvedQuestionModel>[])
+        ..createdAt = DateTime.utc(2026, 1, 1)
+        ..confirmedAt = DateTime.utc(2026, 1, 1),
+    );
+
+    /// Everything 承認 is a decision about, at the length the demo data
+    /// (`scripts/seed-demo-app-data.py`) produces: recognized text, a score,
+    /// a rationale, a 総評コメント and a two-criterion rubric with an
+    /// outcome on each.
+    AppDependencies reviewableQuestion({
+      String rationale = '（デモ）採点根拠の文がここに入ります。',
+      String comment = '（デモ）総評コメントがここに入ります。',
+      int criterionCount = 2,
+    }) {
+      final rubric = [
+        for (var i = 1; i <= criterionCount; i++)
+          RubricCriterionResponse(
+            (b) => b
+              ..id = 'c-$i'
+              ..description = '採点基準$iの説明がここに入ります'
+              ..maxPoints = 1
+              ..position = i - 1,
+          ),
+      ];
+      return _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(rubric: rubric),
+        recognitions: [_recognition(text: '（デモ）問1 の答案として読み取った文字列がここに入ります。')],
+        grades: [
+          _grade(
+            rationale: rationale,
+            comment: comment,
+            criteria: [
+              for (final criterion in rubric)
+                CriterionResultResponse(
+                  (b) => b
+                    ..criterionId = criterion.id
+                    ..outcome = 'pass'
+                    ..confidence = 0.9,
+                ),
+            ],
+          ),
+        ],
+        graph: fiveQuestionGraph(),
+      );
+    }
+
+    Future<void> pumpAt(
+      WidgetTester tester,
+      Size size,
+      AppDependencies dependencies,
+    ) async {
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+    }
+
+    /// Fails naming the widget, rather than leaving a bare rect comparison
+    /// for a later reader to decode.
+    void expectWithin(WidgetTester tester, Size size, String key) {
+      final finder = find.byKey(Key(key));
+      expect(finder, findsOneWidget, reason: key);
+      final rect = tester.getRect(finder);
+      expect(rect.height, greaterThan(0), reason: key);
+      expect(
+        rect.top >= 0 && rect.bottom <= size.height,
+        isTrue,
+        reason: '$key is outside the $size viewport: $rect',
+      );
+    }
+
+    testWidgets('1280x720 で認識文字・点数・根拠・コメント・基準ごとの判定が承認ボタンと'
+        '同じ画面内に収まる', (tester) async {
+      await pumpAt(tester, desktopStandard, reviewableQuestion());
+
+      expect(tester.takeException(), isNull);
+      for (final key in const [
+        'review-recognition-text',
+        'review-score',
+        'review-rationale',
+        'review-grade-comment',
+        'rubric-criterion-c-1',
+        'rubric-criterion-c-2',
+        'review-approve-button',
+      ]) {
+        expectWithin(tester, desktopStandard, key);
+      }
+    });
+
+    testWidgets('1280x720 で進捗パネルはInspectorの高さを奪わない', (tester) async {
+      await pumpAt(tester, desktopStandard, reviewableQuestion());
+
+      // The band is charged to the PDF viewer's pane: the Inspector and the
+      // question rail beside it still start at the top of the body and run
+      // to the action bar, while the viewer starts below the band.
+      final inspector = tester.getRect(
+        find.byKey(const Key('review-inspector')),
+      );
+      final rail = tester.getRect(
+        find.byKey(const Key('review-question-rail')),
+      );
+      final viewer = tester.getRect(find.byType(PdfViewer));
+      expect(inspector.top, rail.top);
+      expect(
+        viewer.top,
+        greaterThan(inspector.top),
+        reason: 'the 進捗 band sits above the viewer, not above everything',
+      );
+      expect(
+        inspector.height,
+        greaterThan(viewer.height),
+        reason:
+            'the band is charged to the viewer; full-width above everything, '
+            'both panes would have lost the same height to it',
+      );
+    });
+
+    testWidgets('進捗パネルの縦占有は画面高に応じて変わる', (tester) async {
+      double bandHeight(WidgetTester tester) {
+        final viewer = tester.getRect(find.byType(PdfViewer));
+        final rail = tester.getRect(
+          find.byKey(const Key('review-question-rail')),
+        );
+        return viewer.top - rail.top;
+      }
+
+      await pumpAt(tester, const Size(1280, 1000), reviewableQuestion());
+      final tall = bandHeight(tester);
+
+      await tester.binding.setSurfaceSize(desktopStandard);
+      await tester.pump();
+      await _settlePdf(tester);
+      final short = bandHeight(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(
+        short,
+        lessThan(tall),
+        reason: 'a fixed band would cost the same 320px at either height',
+      );
+    });
+
+    testWidgets('標準幅でノードが左に寄らず、帯の中央に置かれる', (tester) async {
+      await pumpAt(tester, desktopStandard, reviewableQuestion());
+
+      final band = tester.getRect(find.byKey(const Key('dag-edges')));
+      final viewer = tester.getRect(find.byType(PdfViewer));
+      final leftGap = band.left - viewer.left;
+      final rightGap = viewer.right - band.right;
+      expect(
+        (leftGap - rightGap).abs(),
+        lessThan(1),
+        reason: 'left $leftGap vs right $rightGap: the diagram hugged one edge',
+      );
+      // ...and it is not a token gesture: the diagram spreads across most of
+      // the band rather than sitting in the left three fifths of it.
+      expect(band.width / viewer.width, greaterThan(0.6));
+    });
+
+    testWidgets('700x720 で下部の操作列が見切れず、「元に戻す」が完全に読める', (tester) async {
+      await pumpAt(tester, desktopNarrow, reviewableQuestion());
+
+      expect(tester.takeException(), isNull);
+      for (final key in const [
+        'review-undo-button',
+        'review-regrade-button',
+        'review-edit-button',
+        'review-reject-button',
+        'review-approve-button',
+      ]) {
+        expectWithin(tester, desktopNarrow, key);
+      }
+      // The label itself, not just the button's box: the old horizontal
+      // scroll view left the button in the tree at full width with its
+      // leading edge clipped off the screen, which every "is it there?"
+      // assertion passes.
+      final label = find.text('元に戻す (Ctrl+Z)');
+      expect(label, findsOneWidget);
+      final rect = tester.getRect(label);
+      expect(
+        rect.left >= 0 && rect.right <= desktopNarrow.width,
+        isTrue,
+        reason: '「元に戻す」 is clipped by the viewport: $rect',
+      );
+    });
   });
 }

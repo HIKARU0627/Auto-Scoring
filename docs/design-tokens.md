@@ -322,7 +322,10 @@ Material 既定の `outlineVariant` も同程度である。境界を見つけ�
 `standard` 24（Material既定）・`display` 40（パネル内の空状態）・`hero` 48（全画面エラー）。
 
 `AppLayout`: `narrowBreakpoint` 900（添削レビューが Inspector を PDF の下へ回す幅、
-Issue #21 の受入条件）・`inspectorWidth` 360・`formMaxWidth` 640（フォームの
+Issue #21 の受入条件）・`inspectorWidth` 440（Issue #85 で 360 から拡げた。
+このパネルには承認の判断材料が全部入るので、折り返した行数だけ材料が下へ流れる。
+隣のビューアは使っていない幅を手放しただけで、設問1問ぶんの答案領域に800pxは要らない）・
+`formMaxWidth` 640（フォームの
 読みやすい行長）・`messageMaxWidth` 480（文章なので フォームより狭い）・
 `dashboardMaxWidth` 800（ホーム画面の内容幅）・`dialogContentWidth` 360・
 `hairline` 1・`sectionDivider` 24。
@@ -334,8 +337,20 @@ Issue #21 の受入条件）・`inspectorWidth` 360・`formMaxWidth` 640（フ�
 
 設問依存DAGパネル（Issue #64）の寸法もここにある: `dagNodeWidth` 116・
 `dagNodeHeight` 64（設問番号と最長の状態ラベルが2行で収まる最小）・
-`dagPanelHeight` 216（展開時のバンドの高さ。図はこの中をスクロールするので、
+`dagPanelHeight` 272（展開時のバンドの高さの上限。図はこの中をスクロールするので、
 設問が増えてもPDFビューアから奪う高さは変わらない）・`activityBarHeight` 2。
+
+Issue #85 で、この高さの決め方に2つの上限を足した。
+
+- `dagPanelMaxHeightFraction` 0.3 — バンドは**共有するペインの高さの3割まで**。
+  固定値だけだと高さの低いウィンドウで割を食うのは常に判断材料のほうになる
+  （1280x720で画面の45%を占め、根拠・コメント・基準ごとの判定を画面外へ押し出して
+  いた）。**この画面の縦は判断材料が先に取り、進捗は余りを取る。**
+- `dagColumnGapSpreadLimit` 3 — 幅が余ったぶんは層間のギャップに回し、
+  元の幅の3倍で止める。ギャップは矢印が描かれる場所で、このパネルが見せたい
+  「上流が終わって下流が動き出す」はそこにある。ノード自体は広げない
+  （`dagNodeWidth` で既に読める）。ピクセル上限ではなく倍数なのは、
+  ギャップの基準値を将来変えても意味が変わらないようにするため。
 
 ## 5. モーション
 

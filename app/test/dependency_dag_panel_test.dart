@@ -44,6 +44,7 @@ Future<void> _pumpPanel(
   ValueChanged<String>? onQuestionSelected,
   String? selectedQuestionId,
   Size size = const Size(1200, 800),
+  double maxCanvasHeight = AppLayout.dagPanelHeight,
   bool disableAnimations = false,
   Brightness brightness = Brightness.light,
 }) async {
@@ -63,6 +64,7 @@ Future<void> _pumpPanel(
             children: [
               DependencyDagPanel(
                 layout: layout,
+                maxCanvasHeight: maxCanvasHeight,
                 selectedQuestionId: selectedQuestionId,
                 onQuestionSelected: onQuestionSelected ?? (_) {},
               ),
@@ -149,6 +151,53 @@ void main() {
     // the reviewer the answer to 「まだ動いているのか」.
     expect(find.byKey(const Key('dag-node-q1')), findsNothing);
     expect(find.text('実行中 1 ・ 待機 2 ・ 完了 0'), findsOneWidget);
+  });
+
+  // ------------------------------------------------------------------ //
+  // Issue #85: the band is a share of the height the pane it shares with the
+  // PDF viewer actually has, not a fixed slice of every window.
+  // ------------------------------------------------------------------ //
+  testWidgets('the band only takes the height it is allowed', (tester) async {
+    double panelHeight(WidgetTester tester) =>
+        tester.getSize(find.byType(DependencyDagPanel)).height;
+
+    await _pumpPanel(tester, _layout(), maxCanvasHeight: 80);
+    final tight = panelHeight(tester);
+    // The diagram itself is taller than either allowance and scrolls inside
+    // whatever band it is given.
+    expect(
+      tester.getRect(find.byKey(const Key('dag-edges'))).height,
+      greaterThan(160),
+    );
+
+    await _pumpPanel(tester, _layout(), maxCanvasHeight: 160);
+    expect(panelHeight(tester) - tight, 80);
+  });
+
+  testWidgets('below one node row the diagram does not open at all, and says '
+      'why', (tester) async {
+    await _pumpPanel(tester, _layout(), maxCanvasHeight: 20);
+
+    // The header -- and so the answer to 「まだ動いているのか」 -- is still
+    // there; only the diagram is gone.
+    expect(find.text('実行中 1 ・ 待機 2 ・ 完了 0'), findsOneWidget);
+    expect(find.byKey(const Key('dag-node-q1')), findsNothing);
+    // Disabled rather than removed: a control that vanishes reads as a bug,
+    // and the reason is something the reviewer can act on.
+    final toggle = tester.widget<IconButton>(
+      find.byKey(const Key('dag-toggle-button')),
+    );
+    expect(toggle.onPressed, isNull);
+    expect(toggle.tooltip, contains('画面の高さ'));
+  });
+
+  testWidgets('a diagram narrower than its band is centred in it, not left '
+      'aligned', (tester) async {
+    await _pumpPanel(tester, _layout(), size: const Size(1200, 800));
+
+    final canvas = tester.getRect(find.byKey(const Key('dag-edges')));
+    expect(canvas.left, greaterThan(0));
+    expect((canvas.left - (1200 - canvas.right)).abs(), lessThan(1));
   });
 
   testWidgets('a submission whose jobs are not enqueued yet reads as 待機', (

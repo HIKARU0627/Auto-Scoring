@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1544,40 +1545,85 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         final narrow = constraints.maxWidth < AppLayout.narrowBreakpoint;
         final rail = _buildNavigationRail();
         final inspector = _buildInspector(narrow: narrow);
-        // The narrow (stacked) layout splits height by flex ratio, not a
-        // fixed pixel size for the Inspector -- a fixed height plus the
-        // action bar could exceed a short viewport's total height (a
-        // landscape phone, a short desktop window) and overflow. Flexible
-        // shares always fit, and the Inspector already scrolls internally
-        // if its content doesn't fit its share (P2 review).
-        final viewerAndInspector = narrow
-            ? Column(
-                children: [
-                  Expanded(flex: 3, child: _buildPdfViewer()),
-                  Expanded(flex: 2, child: inspector),
-                ],
-              )
-            : Row(
-                children: [
-                  Expanded(child: _buildPdfViewer()),
-                  SizedBox(width: AppLayout.inspectorWidth, child: inspector),
-                ],
-              );
-        // Full width, above the rail rather than beside the PDF: the graph
-        // describes the whole submission, the same scope the rail has, and a
-        // band that keeps its height while the window narrows is what lets
-        // the diagram scroll instead of reflow (Issue #64 acceptance:
-        // desktop標準幅・狭幅の両方で破綻しない).
-        final dag = _buildDependencyDagSection();
+        // The 進捗パネル band is charged to the PDF viewer, not to the whole
+        // screen. It used to sit full-width above everything, which meant the
+        // Inspector -- the only thing on this screen 承認 is a decision about
+        // -- lost the band's height too, and at 1280x720 that pushed 根拠・
+        // コメント・基準ごとの判定 below the fold while 承認して次へ stayed
+        // visible (Issue #85). Beside the PDF the band also stops being a
+        // 1280px-wide strip holding a ~480px diagram, which is what left the
+        // nodes in the left three fifths of the window.
+        //
+        // At a narrow width the Inspector is stacked under the viewer and so
+        // shares the pane, and the band's share shrinks with it. The narrow
+        // (stacked) layout splits height by flex ratio, not a fixed pixel size
+        // for the Inspector -- a fixed height plus the action bar could exceed
+        // a short viewport's total height (a landscape phone, a short desktop
+        // window) and overflow. Flexible shares always fit, and the Inspector
+        // already scrolls internally if its content doesn't fit its share
+        // (P2 review).
+        final viewerPane = Column(
+          children: [
+            // 「AI採点を開始」 sits above the height budget, not inside it
+            // (Issue #80). It is a call to action with a button in it, so it
+            // takes its natural height and is never the thing that gets
+            // squeezed -- and what the 進捗 band may take is a share of what
+            // is left *after* it. Measuring the band against the whole pane
+            // instead overflowed a short window by the notice's own height.
+            ?_buildStartGradingSection(),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, remaining) => Column(
+                  children: [
+                    ?_buildDependencyDagDiagram(remaining),
+                    Expanded(
+                      child: narrow
+                          ? LayoutBuilder(
+                              builder: (context, stacked) {
+                                // Two fifths of the pane, but never less than
+                                // the pinned 修正コメント band -- that band is
+                                // a fixed-height child, so a share smaller
+                                // than it overflows the Inspector's own column
+                                // by the difference rather than making the
+                                // panel smaller. A plain `Expanded(flex: 2)`
+                                // has no floor, and once Issue #80 added the
+                                // 「AI採点を開始」 notice above this pane, two
+                                // fifths of what was left fell under it.
+                                final inspectorHeight = math
+                                    .max(
+                                      stacked.maxHeight * 0.4,
+                                      AppLayout.reviewNoteBandHeight,
+                                    )
+                                    .clamp(0.0, stacked.maxHeight);
+                                return Column(
+                                  children: [
+                                    Expanded(child: _buildPdfViewer()),
+                                    SizedBox(
+                                      height: inspectorHeight,
+                                      child: inspector,
+                                    ),
+                                  ],
+                                );
+                              },
+                            )
+                          : _buildPdfViewer(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
         return Column(
           children: [
-            ?dag,
             Expanded(
               child: Row(
                 children: [
                   rail,
                   const VerticalDivider(width: AppLayout.hairline),
-                  Expanded(child: viewerAndInspector),
+                  Expanded(child: viewerPane),
+                  if (!narrow)
+                    SizedBox(width: AppLayout.inspectorWidth, child: inspector),
                 ],
               ),
             ),
@@ -1591,14 +1637,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// The band above the rail: 「AI採点を開始」 when nothing has been queued
   /// for this submission yet, then the 設問依存DAG 進捗 panel (Issue #64).
   /// `null` when there is neither.
-  Widget? _buildDependencyDagSection() {
-    final start = _buildStartGradingSection();
-    final diagram = _buildDependencyDagDiagram();
-    if (start == null) return diagram;
-    if (diagram == null) return start;
-    return Column(mainAxisSize: MainAxisSize.min, children: [start, diagram]);
-  }
-
   /// 「この答案のAI採点はまだ開始されていません」+「AI採点を開始」, or `null`
   /// once any job exists (Issue #80, `docs/dependency-dag-progress-view.md`
   /// §1.11).
@@ -1685,7 +1723,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the latest version. Drawing it would show a dependency structure the
   /// running pipeline is not using. The notice says so rather than leaving
   /// the panel silently missing.
-  Widget? _buildDependencyDagDiagram() {
+  Widget? _buildDependencyDagDiagram(BoxConstraints pane) {
     final graph = _dependencyGraph;
     if (graph == null) return null;
     if (graph.status != 'confirmed') {
@@ -1698,10 +1736,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         ),
       );
     }
-    final layout = _buildDependencyDagLayout(graph);
+    final layout = _buildDependencyDagLayout(graph, pane.maxWidth);
     if (layout == null) return null;
     return DependencyDagPanel(
       layout: layout,
+      maxCanvasHeight: pane.maxHeight * AppLayout.dagPanelMaxHeightFraction,
       selectedQuestionId: _currentQuestion?.id,
       onQuestionSelected: _selectQuestionById,
     );
@@ -1721,6 +1760,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// they go through the same [_questionStatus] (Issue #84).
   DependencyDagLayout? _buildDependencyDagLayout(
     DependencyGraphResponse graph,
+    double availableWidth,
   ) {
     final questions = <DagQuestion>[];
     final released = <String>{};
@@ -1740,6 +1780,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       questions: questions,
       edges: graph.edges.toList(),
       releasedQuestionIds: released,
+      availableWidth: availableWidth,
     );
   }
 
@@ -1889,30 +1930,58 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (question == null) {
       return const SizedBox.shrink();
     }
-    return SingleChildScrollView(
-      key: const Key('review-inspector'),
-      padding: AppSpacing.panel,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('問${question.number}', style: context.texts.titleLarge),
-          const SizedBox(height: AppSpacing.sm),
-          _buildQuestionStateChip(question),
-          const SizedBox(height: AppSpacing.lg),
-          if (review == null || review.loading)
-            const Center(
-              key: Key('review-question-loading'),
-              child: Padding(
-                padding: AppSpacing.page,
-                child: CircularProgressIndicator(),
-              ),
-            )
-          else if (review.error != null)
-            _buildQuestionError(review.error!)
-          else
-            _buildQuestionContent(question, review),
+    final showsContent =
+        review != null && !review.loading && review.error == null;
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            key: const Key('review-inspector'),
+            padding: AppSpacing.panel,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Heading and state on one line rather than stacked: this
+                // panel is the only place the 判断材料 lives, and every row it
+                // does not spend on a heading is a row of 根拠/コメント/
+                // 基準ごとの判定 that gets to stay on screen with the 承認
+                // button (Issue #85). The badge is still the *question's*
+                // state, still reading `_questionStatus` like the rail and
+                // the panel do, and still adjacent to the 問N it belongs to
+                // (Issue #84) -- only the axis it is stacked on changed.
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '問${question.number}',
+                        style: context.texts.titleLarge,
+                      ),
+                    ),
+                    _buildQuestionStateChip(question),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                if (review == null || review.loading)
+                  const Center(
+                    key: Key('review-question-loading'),
+                    child: Padding(
+                      padding: AppSpacing.page,
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
+                else if (review.error != null)
+                  _buildQuestionError(review.error!)
+                else
+                  _buildQuestionContent(question, review),
+              ],
+            ),
+          ),
+        ),
+        if (showsContent) ...[
+          const Divider(height: AppLayout.hairline),
+          _buildNoteField(),
         ],
-      ),
+      ],
     );
   }
 
@@ -2128,24 +2197,40 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         if (question.rubric.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
           Text('採点基準', style: context.texts.labelLarge),
+          // One line per criterion, not a `ListTile` with the 判定 on a
+          // second line under it: a dense tile costs 64px each, and a rubric
+          // of four criteria alone was taller than the space the whole panel
+          // had at 1280x720 (Issue #85). Icon *and* Japanese label are both
+          // still there -- the 判定 must never be carried by colour alone
+          // (Issue #25).
           for (final criterion in question.rubric)
-            ListTile(
+            Padding(
               key: Key('rubric-criterion-${criterion.id}'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                _criterionIcon(
-                  _criterionOutcomeFor(criterion.id, review.displayGrade),
-                ),
-              ),
-              title: Text(
-                '${criterion.description}（${criterion.maxPoints}点）',
-                style: context.textRoles.questionText,
-              ),
-              subtitle: Text(
-                _criterionLabel(
-                  _criterionOutcomeFor(criterion.id, review.displayGrade),
-                ),
+              padding: const EdgeInsets.only(top: AppSpacing.xs),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    _criterionIcon(
+                      _criterionOutcomeFor(criterion.id, review.displayGrade),
+                    ),
+                    size: AppIconSize.dense,
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  Expanded(
+                    child: Text(
+                      '${criterion.description}（${criterion.maxPoints}点）',
+                      style: context.textRoles.questionText,
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Text(
+                    _criterionLabel(
+                      _criterionOutcomeFor(criterion.id, review.displayGrade),
+                    ),
+                    style: context.texts.labelLarge,
+                  ),
+                ],
               ),
             ),
         ],
@@ -2164,20 +2249,43 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               ),
             ),
         ],
-        const Divider(height: AppLayout.sectionDivider),
-        Text('修正コメント', style: context.texts.titleSmall),
-        TextField(
-          key: const Key('review-note-field'),
-          controller: _noteController,
-          focusNode: _noteFocusNode,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'このセッション内でのみ保持されるメモです',
-            border: OutlineInputBorder(),
-          ),
-          onChanged: _saveNote,
-        ),
       ],
+    );
+  }
+
+  /// 修正/却下/再判定 の理由欄。
+  ///
+  /// Pinned under the scrolling 判断材料 rather than sitting at the bottom of
+  /// it (Issue #85). Two reasons, and they point the same way: it is an
+  /// *input*, so it belongs next to the buttons that consume it rather than
+  /// buried under the rubric; and keeping it out of the scroll region is what
+  /// lets "scrolled to the end" mean "saw all of the 判断材料" exactly, which
+  /// is the condition 承認 is gated on ([_materialFullyRead]).
+  Widget _buildNoteField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.sm,
+        AppSpacing.lg,
+        AppSpacing.lg,
+      ),
+      child: TextField(
+        key: const Key('review-note-field'),
+        controller: _noteController,
+        focusNode: _noteFocusNode,
+        // Starts at one line and grows to three as it is typed into: three
+        // empty lines held open at the bottom of the panel are three lines of
+        // 採点基準 that the 判断材料 above does not get.
+        minLines: 1,
+        maxLines: 3,
+        decoration: const InputDecoration(
+          isDense: true,
+          labelText: '修正コメント',
+          hintText: 'このセッション内でのみ保持されるメモです',
+          border: OutlineInputBorder(),
+        ),
+        onChanged: _saveNote,
+      ),
     );
   }
 
@@ -2186,57 +2294,64 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       elevation: AppElevation.raised,
       child: Padding(
         padding: AppSpacing.actionBar,
-        // Scrolls horizontally instead of overflowing at a narrow desktop
-        // width (Issue #21 acceptance: desktopの標準/狭幅表示) -- every
-        // button stays reachable by keyboard focus traversal regardless.
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          reverse: true,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              OutlinedButton.icon(
-                key: const Key('review-undo-button'),
-                onPressed: _canUndo ? _undo : null,
-                icon: const Icon(Icons.undo),
-                label: const Text('元に戻す (Ctrl+Z)'),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              OutlinedButton.icon(
-                key: const Key('review-regrade-button'),
-                onPressed: _canDecide ? _regrade : null,
-                icon: const Icon(Icons.autorenew),
-                label: const Text('再判定 (R)'),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              OutlinedButton.icon(
-                key: const Key('review-edit-button'),
-                onPressed: _canDecide ? _showEditDialog : null,
-                icon: const Icon(Icons.edit_outlined),
-                label: const Text('修正 (E)'),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              OutlinedButton.icon(
-                key: const Key('review-reject-button'),
-                // Disabled while the question's data is still loading (or
-                // failed to load) -- rejecting content the reviewer cannot
-                // actually see yet would silently confirm a decision made
-                // on nothing (P2 review).
-                onPressed: _canDecide ? _reject : null,
-                icon: const Icon(Icons.close),
-                label: const Text('却下 (X)'),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              FilledButton.icon(
-                key: const Key('review-approve-button'),
-                onPressed: _canApprove ? _approveAndNext : null,
-                icon: const Icon(Icons.check),
-                label: const Text('承認して次へ (Enter)'),
-              ),
-            ],
-          ),
-        ),
+        child: _buildActionButtons(),
       ),
+    );
+  }
+
+  Widget _buildActionButtons() {
+    return
+    // Wraps onto a second line instead of scrolling horizontally at a
+    // narrow desktop width (Issue #21 acceptance: desktopの標準/狭幅表示).
+    //
+    // It used to be a `reverse: true` horizontal scroll view, which starts
+    // pinned to its *end*: at 700px the row's leading button, 元に戻す,
+    // was scrolled off the left edge and rendered as 「戻す (Ctrl+Z)」 with
+    // its icon gone. Undo is the only way back from a wrong 承認, so it is
+    // the one label on this bar that must never be half-readable, and a
+    // reviewer has no reason to suspect a bar with no visible scrollbar of
+    // hiding a control (Issue #85). Wrapping keeps every button whole and
+    // costs a second row only when they genuinely do not fit.
+    Wrap(
+      alignment: WrapAlignment.end,
+      spacing: AppSpacing.md,
+      runSpacing: AppSpacing.sm,
+      children: [
+        OutlinedButton.icon(
+          key: const Key('review-undo-button'),
+          onPressed: _canUndo ? _undo : null,
+          icon: const Icon(Icons.undo),
+          label: const Text('元に戻す (Ctrl+Z)'),
+        ),
+        OutlinedButton.icon(
+          key: const Key('review-regrade-button'),
+          onPressed: _canDecide ? _regrade : null,
+          icon: const Icon(Icons.autorenew),
+          label: const Text('再判定 (R)'),
+        ),
+        OutlinedButton.icon(
+          key: const Key('review-edit-button'),
+          onPressed: _canDecide ? _showEditDialog : null,
+          icon: const Icon(Icons.edit_outlined),
+          label: const Text('修正 (E)'),
+        ),
+        OutlinedButton.icon(
+          key: const Key('review-reject-button'),
+          // Disabled while the question's data is still loading (or
+          // failed to load) -- rejecting content the reviewer cannot
+          // actually see yet would silently confirm a decision made
+          // on nothing (P2 review).
+          onPressed: _canDecide ? _reject : null,
+          icon: const Icon(Icons.close),
+          label: const Text('却下 (X)'),
+        ),
+        FilledButton.icon(
+          key: const Key('review-approve-button'),
+          onPressed: _canApprove ? _approveAndNext : null,
+          icon: const Icon(Icons.check),
+          label: const Text('承認して次へ (Enter)'),
+        ),
+      ],
     );
   }
 }
