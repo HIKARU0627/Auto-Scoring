@@ -78,6 +78,33 @@ class CrossPageRegionError(TestRegistrationError):
     """
 
 
+class QuestionsInUseError(TestRegistrationError):
+    """Rebuilding this test's questions would destroy grading data.
+
+    `build_questions_and_rubrics`' callers rebuild by **deleting every
+    `Question` row and re-inserting** (see `confirm_profile`'s own comment on
+    why replace-not-merge is right for a retry). Six tables carry a
+    ``question_id`` foreign key declared ``ON DELETE CASCADE`` -- answer
+    images, recognitions, grades, criterion results, annotations, review
+    history. So once a submission has been imported for this test, that
+    delete is not a rebuild, it is **an irreversible loss of every answer
+    image and every grade**, and re-inserting a `Question` with an identical
+    id does not bring any of it back.
+
+    Until Issue #103 this was unreachable by accident rather than by rule:
+    the only rebuild path was `/profile/confirm`, a submission requires the
+    test to be READY, READY requires a confirmed profile, and confirming an
+    already-confirmed profile is a 409. Issue #103 added a second rebuild
+    path with no such lifecycle in front of it -- a test made READY through
+    the pre-Issue-#103 `SCORE`-region route has no confirmed criteria, so
+    `/criteria/confirm` reached the delete on a test that was already being
+    graded (code review P1).
+
+    The rule now exists in its own right, and both paths state it, rather
+    than one of them being safe because of a coincidence somewhere else.
+    """
+
+
 class QuestionNumberTooLongError(TestRegistrationError):
     """A question's number/label is too long to become part of a safe
     on-disk filename (see `_MAX_QUESTION_NUMBER_BYTES`).
@@ -139,6 +166,36 @@ _MAX_SQLITE_INTEGER = 2**63 - 1
 #: review round 6). Bounded in UTF-8 bytes, not characters: a multi-byte
 #: character costs more of the shared budget than an ASCII one.
 _MAX_QUESTION_NUMBER_BYTES = 40
+
+
+def ensure_questions_can_be_rebuilt(*, test_id: str, submission_count: int) -> None:
+    """Refuse to rebuild a test's questions once answers have been imported.
+
+    Checked on the **server**, not in the screen: AGENTS.md ("Architecture")
+    requires an invariant this important to be guaranteed by something other
+    than UI state, and the screen is not the only caller of these endpoints.
+
+    ``submission_count`` is the caller's read of the test's submissions
+    inside the same transaction as the rebuild. That read and the delete are
+    not isolated from a submission created in between by a *different*
+    process -- but importing an answer requires the test to be READY with a
+    confirmed dependency graph, and this app is a single-operator desktop
+    tool, so the remaining window is not one a person can drive. Stated here
+    rather than left for a reader to wonder about.
+
+    The message names the way forward, not just the refusal: a reviewer who
+    has to correct a wrong 配点 needs to know that the answer is a new test,
+    and that nothing they already have is going to be taken away.
+    """
+    if submission_count <= 0:
+        return
+    raise QuestionsInUseError(
+        f"このテストにはすでに答案が {submission_count} 件取り込まれています。"
+        "設問と配点を作り直すと、取り込んだ答案の画像・文字認識結果・採点結果・"
+        "レビュー履歴がすべて失われ、元に戻せません。"
+        "配点を直すには、新しいテストとして登録し直してください。"
+        "いまのテストと答案はそのまま残ります。"
+    )
 
 
 def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:

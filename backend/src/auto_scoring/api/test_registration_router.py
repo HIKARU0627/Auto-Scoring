@@ -90,7 +90,11 @@ from auto_scoring.domain.profile import (
     RegionKind,
 )
 from auto_scoring.domain.test_material import TestMaterial
-from auto_scoring.domain.test_registration import build_questions_and_rubrics
+from auto_scoring.domain.test_registration import (
+    QuestionsInUseError,
+    build_questions_and_rubrics,
+    ensure_questions_can_be_rebuilt,
+)
 
 #: Intake failures that are a size problem, not a content problem, and so
 #: deserve 413 rather than 400. Covers both validation families: PDFs go
@@ -834,6 +838,20 @@ def build_test_registration_router(
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc
 
+            # Unreachable today -- a submission needs the test READY, READY
+            # needs a confirmed profile, and re-confirming one is a 409 above
+            # -- so this path is safe by a chain of coincidences elsewhere
+            # rather than by a rule of its own. Issue #103's review found the
+            # other rebuild path where that chain does not exist; stating the
+            # rule here too means neither path depends on the coincidence
+            # holding after the next lifecycle change.
+            try:
+                ensure_questions_can_be_rebuilt(
+                    test_id=test_id,
+                    submission_count=len(uow.submissions.list_for_test(test_id)),
+                )
+            except QuestionsInUseError as exc:
+                raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
             try:
                 questions, rubrics = build_questions_and_rubrics(
                     test_id,

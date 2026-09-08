@@ -36,8 +36,9 @@ from auto_scoring.domain.criteria_extraction import (
     ExtractedCriterionOutput,
     ExtractedQuestionOutput,
 )
-from auto_scoring.domain.models import ScoringMethod
+from auto_scoring.domain.models import Question, ScoringMethod
 from auto_scoring.domain.pdf_intake import IntakeLimits
+from tests.support import make_answer_image, make_submission
 
 _TOKEN = "criteria-token"
 
@@ -50,7 +51,7 @@ class _FakeExtractor:
     def __init__(
         self, output: CriteriaExtractionOutput | None = None, error: Exception | None = None
     ) -> None:
-        self.output = output or CriteriaExtractionOutput()
+        self.output = output or CriteriaExtractionOutput(questions=())
         self.error = error
         self.requests: list[CriteriaExtractionRequest] = []
 
@@ -297,7 +298,7 @@ def test_rendering_holds_the_shared_pdfium_lock_and_the_provider_call_does_not(
         held_during_extract.append(not pdfium_lock.acquire(blocking=False))
         if held_during_extract[-1] is False:
             pdfium_lock.release()
-        return CriteriaExtractionOutput()
+        return CriteriaExtractionOutput(questions=())
 
     extractor.extract = observing_extract  # type: ignore[method-assign]
     app = create_app(
@@ -486,6 +487,60 @@ def test_confirm_refuses_a_non_integer_revision(client: TestClient) -> None:
         ).status_code
         == 422
     )
+
+
+def test_confirming_refuses_once_answers_exist_and_destroys_nothing(
+    client: TestClient, data_root: Path
+) -> None:
+    """Code review P1 -- **data loss**, the heaviest finding of the round.
+
+    Rebuilding deletes every `Question` row and re-inserts. Six tables carry
+    a ``question_id`` foreign key declared ``ON DELETE CASCADE``, so on a test
+    that is already being graded that delete takes every answer image, every
+    recognition, every grade and the whole review history with it -- and
+    re-inserting a `Question` with the same id brings none of it back.
+
+    Before the fix this returned 200 and silently emptied those tables: the
+    reviewer lost the marking they had already done, and the screen told them
+    it had worked.
+    """
+    test_id = _register_test(client)
+    draft = client.post(f"/tests/{test_id}/criteria/extract", headers=_auth()).json()
+    questions = [dict(question) for question in draft["questions"]]
+    questions[1]["points"] = 15
+    saved = client.put(
+        f"/tests/{test_id}/criteria",
+        headers=_auth(),
+        json={"questions": questions, "declared_total_points": 20},
+    )
+
+    # A test that is already being graded: one submission, with an answer
+    # image hanging off a question row.
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        uow.questions.add(
+            Question(id=f"{test_id}:問1", test_id=test_id, number="問1", page=1, points=5)
+        )
+        uow.submissions.add(make_submission(id="sub-1", test_id=test_id))
+        uow.answer_images.replace_for_submission(
+            "sub-1",
+            [make_answer_image(id="img-1", submission_id="sub-1", question_id=f"{test_id}:問1")],
+        )
+        uow.commit()
+
+    response = client.post(
+        f"/tests/{test_id}/criteria/confirm",
+        headers=_auth(),
+        json={"revision": saved.json()["revision"]},
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    # Says what to do, not only that it refused.
+    assert "新しいテストとして登録し直して" in detail
+    assert "そのまま残ります" in detail
+
+    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+        assert len(uow.answer_images.list_for_submission("sub-1")) == 1
+        assert uow.questions.get(f"{test_id}:問1") is not None
 
 
 def test_confirm_is_refused_while_any_points_are_unknown(

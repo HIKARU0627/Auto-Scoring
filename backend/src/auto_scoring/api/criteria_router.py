@@ -67,7 +67,11 @@ from auto_scoring.domain.criteria_extraction import (
 from auto_scoring.domain.models import DomainError, Test
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.profile import Profile, ProfileStatus, Region
-from auto_scoring.domain.test_registration import build_questions_and_rubrics
+from auto_scoring.domain.test_registration import (
+    QuestionsInUseError,
+    build_questions_and_rubrics,
+    ensure_questions_can_be_rebuilt,
+)
 
 #: Every integer that crosses this module's wire boundary.
 #:
@@ -358,6 +362,18 @@ def build_criteria_router(
         up with exactly this set, not this set plus whatever an earlier
         attempt left behind.
         """
+        # Before the delete below, not after: six tables cascade off
+        # `questions.id`, so rebuilding a test that already has answers
+        # destroys every answer image and every grade it has, and
+        # re-inserting the same ids brings none of it back
+        # (`ensure_questions_can_be_rebuilt`).
+        try:
+            ensure_questions_can_be_rebuilt(
+                test_id=test.id,
+                submission_count=len(uow.submissions.list_for_test(test.id)),
+            )
+        except QuestionsInUseError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         try:
             questions, rubrics = build_questions_and_rubrics(
                 test.id,

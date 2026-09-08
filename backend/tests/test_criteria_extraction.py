@@ -391,6 +391,26 @@ def test_a_note_at_the_length_limit_still_takes_the_duplicate_warning() -> None:
     assert "設問番号" in renamed_note
 
 
+def test_a_response_with_no_questions_field_is_a_schema_violation() -> None:
+    """Code review P2-1.
+
+    ``{}`` used to parse cleanly, because ``questions`` had a default -- so a
+    provider returning an empty object produced a valid-looking empty draft
+    that overwrote whatever the reviewer had. The schema this app *sends*
+    always required the field; the local check did not enforce the rule it
+    asked for.
+    """
+    with pytest.raises(ValidationError):
+        parse_criteria_extraction("{}")
+
+
+def test_an_explicit_empty_question_list_is_still_accepted() -> None:
+    """The pair to the test above: "I read it and found nothing" is a real
+    answer and must stay distinguishable from "I did not answer"."""
+    output = parse_criteria_extraction('{"questions": []}')
+    assert output.questions == ()
+
+
 def test_page_number_shaped_total_is_reported_as_no_total() -> None:
     """Issue #95 decision 5 (案A): a footer ``(k/m)`` is a page number, and
     the schema's ``null`` is where a model that followed the instruction

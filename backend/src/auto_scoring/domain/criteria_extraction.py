@@ -190,9 +190,22 @@ class CriteriaExtractionOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    questions: tuple[ExtractedQuestionOutput, ...] = Field(
-        default=(), max_length=MAX_EXTRACTED_QUESTIONS
-    )
+    #: **Required, with no default.** A missing ``questions`` and an explicit
+    #: ``questions: []`` are different facts: the second is the model saying
+    #: "I read this document and found no questions", the first is the model
+    #: not answering at all. With a default they collapsed, and
+    #: ``parse_criteria_extraction('{}')`` succeeded -- so a provider
+    #: returning an empty object produced a valid-looking empty draft that
+    #: overwrote whatever the reviewer had (code review P2-1). The schema
+    #: this app *sends* has always listed ``questions`` as required
+    #: (`_prompt.strict_criteria_extraction_schema`); the local check simply
+    #: did not enforce the rule it asked for.
+    #:
+    #: The other fields keep their defaults on purpose: for them, "absent"
+    #: and "null / empty" denote the same fact (no total was stated, no page
+    #: was unreadable, no note), so accepting both is the same rule written
+    #: twice rather than a weaker one.
+    questions: tuple[ExtractedQuestionOutput, ...] = Field(max_length=MAX_EXTRACTED_QUESTIONS)
     #: The total stated *in the document* (満点), if it states one. Compared
     #: against the sum of the per-question values by :func:`criteria_totals`
     #: -- a mismatch is the cheapest available signal that a question was
