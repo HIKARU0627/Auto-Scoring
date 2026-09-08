@@ -388,3 +388,29 @@ def test_timeout_is_classified_as_a_timeout() -> None:
 
     with pytest.raises(ProviderTimeoutError):
         _make_provider(client).grade(_VALID_REQUEST)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"choices": [None]},
+        {"choices": "not a list"},
+        {"choices": {"0": {"message": {"content": "{}"}}}},
+        {"choices": [{"message": None}]},
+        {"choices": [{"message": {"content": 42}}]},
+        {"choices": [{}]},
+    ],
+)
+def test_a_malformed_2xx_envelope_is_a_schema_violation(body: dict[str, object]) -> None:
+    """The shared Chat Completions path must turn any 2xx body into one of
+    the two exceptions the ``AIProvider`` port declares. `FallbackAIProvider`
+    falls through on exactly those, so an adapter leaking anything else
+    stops the whole chain (code review finding; the same check exists for
+    the Vertex AI adapter)."""
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+        base_url="https://openrouter.test/api/v1",
+    )
+
+    with pytest.raises(SchemaViolation):
+        _make_provider(client).grade(_VALID_REQUEST)

@@ -176,3 +176,22 @@ def test_describe_follows_the_last_attempted_child() -> None:
 def test_an_empty_chain_is_rejected_at_construction() -> None:
     with pytest.raises(ValueError, match="at least one provider"):
         FallbackAIProvider([])
+
+
+def test_an_exception_outside_the_port_contract_is_not_swallowed() -> None:
+    """Deliberate, and the counterpart to each adapter's malformed-envelope
+    tests: the chain falls through on exactly the two exceptions the
+    ``AIProvider`` port declares, and an adapter raising anything else is a
+    bug that must stay visible.
+
+    Routing around it would mean the same malformed body trips the same
+    adapter on every request while the chain quietly runs on the
+    second-choice model, reporting nothing. The fix belongs in the adapter,
+    which is why the three chain-stopping failures found in review were all
+    fixed there rather than here (code review finding)."""
+    first = _StubProvider("first", AttributeError("'NoneType' object has no attribute 'get'"))
+    second = _StubProvider("second")
+
+    with pytest.raises(AttributeError):
+        FallbackAIProvider([first, second]).grade(_VALID_REQUEST)
+    assert second.calls == 0

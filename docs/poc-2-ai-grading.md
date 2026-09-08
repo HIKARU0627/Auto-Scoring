@@ -865,6 +865,30 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   アダプタ名で `recorded[<provider>][<variant>]` に書く。単一アダプタならそのアダプタ、
   フォールバックチェーンなら**実際に応答したリンク**になる（決定書 §3 (B)
   「どの provider で採点したかを結果に残す」）。
+- **答案本文を記録しない（受入条件）**。Issue #35 の受入条件は
+  「secret・答案本文・生徒識別情報がログ・**出力**・リポジトリに残らない」で
+  あり、リポジトリ外に書くから安全、ではない。**schema 検証は匿名化ではない**:
+  schema 上正しい `recognition.text` は生徒の答案そのもので、`comment` /
+  `rationale` は日常的にそれを引用し、`annotations[].target` は定義上答案から
+  切り出した文字列である。そこで記録するのは
+  `ai_grading_metrics.evaluate_sample` が実際に読む項目だけにした。
+
+  | 記録する                                        | 用途                                |
+  | ----------------------------------------------- | ----------------------------------- |
+  | `questionId` / `grading.maxScore`               | 別設問への応答を弾く対応チェック    |
+  | `grading.score`                                 | 完全一致率・許容点差内率            |
+  | `criteria[].id` / `criteria[].result`           | criterion 別一致率                  |
+  | `recognition.confidence` / `grading.confidence` | Confidence 2 列と較正ゲート（§8.1） |
+  | `criteria[].confidence` / `annotations[].type`  | 数値と enum のみ。内容を持たない    |
+
+  それ以外の自由文（`recognition.text`・`comment`・`rationale`・
+  `criteria[].rationale`・`annotations[].target`/`comment`）は固定文字列
+  `[redacted: PoC 2 records no free text]` に置き換える。**削除ではなく置換**
+  なのは、ワイヤスキーマがこれらを必須にしているためで、セルは `report.py` が
+  読み戻すときに `parse_ai_grading_result` を通る必要がある（Issue #14 受入条件:
+  記録済みセルも信頼せず検証する）。置換にすることで、手書きフィクスチャと
+  live 記録のファイル形式が 1 つに保たれ、伏せたことがデータ上に見える。
+
 - **`--images` と画像 identity**。`input.answer_image_ref` が `sha256:<hex>` 形式なら、
   `<images>/<hex>.png`（`.jpg`/`.jpeg` も探す）を読んで**内容ハッシュを照合**する。
   差し替わった・作り直された切り出し画像で採点したものが「同一データでの比較」に
@@ -884,9 +908,15 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   既定でスキップするので、中断した実行はそのまま再開できる。
 - **標準出力に答案内容を出さない**。進捗行は連番・入力モード・provider ID・結果・
   所要時間だけである。
-- **リポジトリ内の合成フィクスチャへの書き込みは拒否する**。実 provider の応答本文が
-  コミットに入らないようにするため（§11）。配線のリハーサルはフィクスチャを
-  リポジトリ外へコピーしてから行う。
+- **リポジトリ配下への書き込みは拒否する**。`--dataset` を解決した結果が
+  リポジトリルート配下なら（symlink 経由も含めて）実行しない。同梱フィクスチャ
+  ディレクトリとの完全一致だけを見ていたときは、フィクスチャを作業ツリー内の
+  別ディレクトリへコピーして指定すれば実 API 応答を書き込めた（§11）。
+  配線のリハーサルはリポジトリ外へコピーしてから行う。
+- **検証に失敗した値をエラーメッセージに出さない**。`answer_image_ref` が
+  不正だった場合、その値は「安全なハッシュ」ではない（答案本文や氏名が入り得る）。
+  `main()` は例外メッセージを stderr に出すため、報告するのは固定の理由と
+  ファイル名・設問インデックスだけにする。
 
 `--dry-run` は credentials なしでデータセットと切り出し画像の検証だけを行い、
 provider を一切呼ばない。

@@ -61,6 +61,21 @@ class FallbackAIProvider:
     ``GradingJobProcessor``, and stays ``PERMANENT`` -- the chain never sees
     it.
 
+    **Anything else propagates and stops the chain, deliberately.** That
+    list is exactly the exception contract ``domain.ai_provider.AIProvider``
+    declares, so an exception outside it is an adapter bug, not a provider
+    outage -- and routing around a bug is how a provider stays broken for
+    months without anyone noticing, since a chain that recovers reports
+    nothing. It also would not be one provider's bug: the same malformed
+    body that trips one adapter would trip it on every request, so the
+    "recovery" is really "silently run on the second-choice model forever".
+    The place that failure gets fixed is the adapter boundary, where each
+    one turns an arbitrary remote body into one of the two declared
+    exceptions -- see the malformed-envelope tests in each adapter's
+    contract test (code review finding: three separate ways for the chain
+    to stop early all turned out to be adapters leaking an undeclared
+    exception, not the chain being too strict).
+
     When every child has failed, **the last observed exception is re-raised
     unchanged**, so the queue keeps classifying it exactly as it would
     without a chain (``jobs.grading_processor``: timeout/429/5xx stay
