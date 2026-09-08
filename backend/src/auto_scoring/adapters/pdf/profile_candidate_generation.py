@@ -5,9 +5,10 @@ Supersedes `adapters.pdf.annotation_markers` (Issue #15/PoC 4's tagged-square
 stand-in) as the actual candidate source for test registration --
 `annotation_markers` stays in place only for its own PoC regression tests
 (see docs/poc-4-multi-layout-profiles.md "PoC限定・要再確認"). Like the
-heuristic dependency analyzer (Issue #26), a real AI/OCR-backed extraction
-remains PoC-pending (docs/technology-stack.md §3.5); this is a
-deterministic, offline stand-in that looks for a question-number pattern
+heuristic dependency analyzer (Issue #26), a real AI/OCR-backed extraction is
+not wired: the services were decided in Issue #81 (docs/technology-stack.md
+§3.5) but have no adapters yet. So this remains a deterministic, offline
+stand-in that looks for a question-number pattern
 ("問1", "大問2", ...) in each page's text lines and buckets the text
 following it into that question's answer/rubric/model-answer candidates.
 

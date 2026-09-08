@@ -42,10 +42,15 @@ PoC 4（Issue #15）の `adapters.pdf.annotation_markers` は、PDFのSquare注�
 （`adapters.pdf.profile_candidate_generation`）に置き換えた。`annotation_markers` は
 PoC 4自身の回帰テスト用にそのまま残す。
 
-`AIProvider`/`OCRProvider` の具体サービス選定はPoC後まで未確定
-（`technology-stack.md` §3.5）のため、Issue #26のヒューリスティック依存関係analyzer
-（`ReferenceHeuristicDependencyAnalyzer`）と同じ方針を取る: **外部AI呼び出しを行わない、
-決定的なテキストパターンマッチング**。
+**Issue #16 実装時点で** `AIProvider`/`OCRProvider` の具体サービス選定が未確定だった
+ため、Issue #26のヒューリスティック依存関係analyzer
+（`ReferenceHeuristicDependencyAnalyzer`）と同じ方針を取っている: **外部AI呼び出しを
+行わない、決定的なテキストパターンマッチング**。
+
+> サービス選定はその後 Issue #81 で確定した（OCR: Google Document AI、AI: 優先度つき
+> フォールバック。`technology-stack.md` §3.5）。ただし実アダプタは未実装で、ここの
+> ヒューリスティック実装は**接続待ちのまま変えていない**。AI/OCR を使った候補生成へ
+> 置き換えるかどうかは別途判断する。
 
 - `adapters.pdf.text_layout_extraction.extract_text_lines` が pypdfium2 の
   `PdfTextPage`（`count_chars`/`get_text_range`/`count_rects`/`get_rect`）を使い、

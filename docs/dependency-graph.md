@@ -363,10 +363,9 @@ confirmされてもv1は書き換わらずCONFIRMEDのまま残る。設問が�
 ### 候補生成: ヒューリスティック analyzer
 
 Issue本文は「問題文、模範解答、採点マニュアル、ページ/設問構造からdependency
-候補と根拠を生成する」を要求するが、`AIProvider` の具体サービス選定は
-technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Question` ドメイン
-モデル（#11）にも問題文（OCR/抽出前のPDFテキスト）を保存する列がまだ無い。
-そのため:
+候補と根拠を生成する」を要求するが、**Issue #26 実装時点では** `AIProvider` の具体
+サービス選定が未確定であり、`Question` ドメインモデル（#11）にも問題文（OCR/抽出前の
+PDFテキスト）を保存する列がまだ無かった。そのため:
 
 - `auto_scoring.domain.dependency_analysis.DependencyAnalyzer` を
   `OCRProvider`/`AIProvider` と同じ抽象境界として定義した。
@@ -394,7 +393,10 @@ technology-stack.md §3.5のとおりPoC 2後まで未確定であり、`Questio
   済みrubric文言が漏れてanalyzerに読まれてしまう（レビュー指摘）。
 - 将来 `AIProvider` ベースの analyzer に差し替える場合も、`DependencyAnalyzer`
   を実装する新しいadapterを `build_dependency_graph_router(..., analyzer=...)`
-  に渡すだけでよい。
+  に渡すだけでよい。サービス選定はその後 Issue #81 で確定した（AI: 優先度つき
+  フォールバック、OCR: Google Document AI。technology-stack.md §3.5）が、実
+  アダプタが未実装のため**接続待ちで、ここのヒューリスティック実装は変えて
+  いない**。差し替えるかどうかは実アダプタが揃った時点で判断する。
 - 設問番号は任意の非空文字列を許容するため、一方が他方の接頭辞になり得る
   （例:「問1」と「問1-1」）。`_question_number_pattern` の数字境界チェック
   （`(?<!\d)…(?!\d)`）は「問1」を「問10」の内部にマッチさせない一方で、

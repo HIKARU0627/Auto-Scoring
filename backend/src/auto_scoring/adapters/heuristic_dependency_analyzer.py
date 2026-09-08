@@ -1,11 +1,12 @@
 """A deterministic, offline `DependencyAnalyzer` (Issue #26).
 
-No `AIProvider`/OCR call is wired here: the concrete AI service is still
-PoC-pending (docs/technology-stack.md §3.5), so this adapter looks for
-explicit cross-question references in a question's own text -- "問1を踏まえて"
-style phrasing -- which is enough to exercise the analyze -> draft -> human
-review -> confirm -> version pipeline end to end without an external call.
-It is registered behind `DependencyAnalyzer` precisely so a future
+No `AIProvider`/OCR call is wired here. At the time of Issue #26 the concrete
+AI service was still undecided; it has since been decided (docs/technology-
+stack.md §3.5, Issue #81) but has no adapter yet, so this one stands: it looks
+for explicit cross-question references in a question's own text -- "問1を踏ま
+えて" style phrasing -- which is enough to exercise the analyze -> draft ->
+human review -> confirm -> version pipeline end to end without an external
+call. It is registered behind `DependencyAnalyzer` precisely so an
 AIProvider-backed analyzer can replace it without touching callers. See
 docs/dependency-graph.md "候補生成: ヒューリスティック analyzer" for the recorded
 decision and its limits.
