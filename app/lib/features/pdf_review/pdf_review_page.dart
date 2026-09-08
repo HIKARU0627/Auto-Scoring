@@ -572,11 +572,9 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
       setState(() => _submission = submission);
-      await _refreshJobs();
-      _updatePolling();
       // Silent: a background poll should not flash the loading spinner or
       // an error banner over content the reviewer is already looking at.
-      await _ensureReviewLoaded(forceReload: true, silent: true);
+      await _refreshJobsAndQuestion(silent: true);
     } on SidecarApiException {
       // Transient poll failure -- retried on the next tick rather than
       // surfaced as an error banner.
@@ -622,9 +620,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     } on SidecarApiException {
       // Fall through to refreshing the question data regardless.
     }
-    await _refreshJobs();
-    _updatePolling();
-    await _loadReview(question, forceReload: true);
+    await _refreshJobsAndQuestion(question: question);
   }
 
   /// Best-effort refresh of every job for this submission. A failure here
@@ -648,6 +644,42 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     await _refetchDependencyGraphIfSuperseded();
   }
 
+  /// Re-reads this submission's jobs **and** everything that has to agree
+  /// with them, then re-evaluates polling.
+  ///
+  /// Exists as one method rather than three lines copied to each call site
+  /// because "refresh the jobs and forget what travels with them" is a
+  /// mistake this screen has now made twice. Issue #64 refreshed the jobs
+  /// without the dependency graph they run under, drawing one version's
+  /// execution on another version's structure; 「AI採点を開始」 refreshed the
+  /// jobs without the grades they produce, so a submission whose jobs came
+  /// back already `succeeded` showed レビュー待ち in the diagram over an
+  /// Inspector with nothing in it -- and, because
+  /// [_isAwaitingGrade] reads "terminal job, no grade" as "nothing to wait
+  /// for", polling stopped too, leaving it that way until a manual 更新
+  /// (review round 2, P2).
+  ///
+  /// The graph half already lives inside [_refreshJobs]. The question half is
+  /// here. **Anything else that must be re-read alongside a job belongs in
+  /// this method**, once, for every caller -- that is the whole point of it
+  /// existing.
+  ///
+  /// [question] defaults to whichever question is selected; [_refreshQuestion]
+  /// passes the one an in-flight action was actually for, which may no longer
+  /// be the selected one by the time it resolves. [silent] is for background
+  /// polling, which must not flash a spinner or an error banner over content
+  /// the reviewer is already reading.
+  Future<void> _refreshJobsAndQuestion({
+    QuestionResponse? question,
+    bool silent = false,
+  }) async {
+    await _refreshJobs();
+    _updatePolling();
+    final target = question ?? _currentQuestion;
+    if (target == null) return;
+    await _loadReview(target, forceReload: true, silent: silent);
+  }
+
   /// 「AI採点を開始」 -- `POST /submissions/{id}/jobs` (Issue #80).
   ///
   /// Offered only while this submission has no jobs at all
@@ -665,8 +697,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     });
     try {
       await _dependencies.startGrading(widget.submissionId);
-      await _refreshJobs();
-      _updatePolling();
+      // Not just the jobs: a fast (or already-existing) grading run can have
+      // this submission's jobs back as `succeeded` by the time the POST
+      // returns, and the empty grades fetched before the kickoff would then
+      // sit there unrefreshed with polling switched off.
+      await _refreshJobsAndQuestion();
     } on SidecarApiException catch (error) {
       if (!mounted) return;
       setState(() => _gradingFailure = GradingKickoffFailure.of(error));

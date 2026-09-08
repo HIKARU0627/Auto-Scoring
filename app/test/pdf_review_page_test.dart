@@ -3452,6 +3452,8 @@ void main() {
     AppDependencies gradingDependencies({
       required List<JobResponse> Function() jobs,
       StartGrading? startGrading,
+      List<RecognitionResponse> Function()? recognitions,
+      List<GradeResultResponse> Function()? grades,
     }) => AppDependencies(
       getSubmission: (_) async => _submission(state: 'ai_processed'),
       listQuestions: (_) async => [
@@ -3463,8 +3465,15 @@ void main() {
       listJobs: (_) async => jobs(),
       startGrading:
           startGrading ?? (submissionId) async => const <JobResponse>[],
-      listRecognitions: (_, _) async => const [],
-      listGrades: (_, _) async => const [],
+      // Read through a callback, like `jobs`, so a test can let results
+      // appear at the same moment the kickoff returns.
+      listRecognitions: (_, questionId) async =>
+          (recognitions?.call() ?? const [])
+              .where((r) => r.questionId == questionId)
+              .toList(),
+      listGrades: (_, questionId) async => (grades?.call() ?? const [])
+          .where((g) => g.questionId == questionId)
+          .toList(),
       listAnnotations: (_, _) async => const [],
       listReviews: (_, _) async => const [],
     );
@@ -3517,6 +3526,54 @@ void main() {
         tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
         '問1 待ち',
       );
+    });
+
+    testWidgets('起票が終わったジョブを返してきても、採点結果まで取り直す', (tester) async {
+      // 起票のPOSTが返った時点でキューが既に走り終えている場合 -- 短いDAG、
+      // 速いprovider、あるいは他の経路で先に起票されていた場合 --
+      // ジョブだけを取り直すと、起票前に取った**空の採点結果**が残る。
+      // しかも `_isAwaitingGrade` は「終端ジョブ + 採点結果なし」を
+      // 「待つものは無い」と読むのでポーリングも止まり、DAGが「レビュー待ち」
+      // と言っているのにインスペクタが空のまま、手動更新まで固まる
+      // (review round 2, P2)。
+      var jobs = <JobResponse>[];
+      var graded = false;
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => jobs,
+          recognitions: () => graded ? [_recognition()] : const [],
+          // ジョブより後に作られた採点結果。`_isAwaitingGrade` が「今回の
+          // 試行の結果だ」と判断できる並びにしてある。
+          grades: () =>
+              graded ? [_grade(createdAt: DateTime.utc(2026, 1, 2))] : const [],
+          startGrading: (submissionId) async {
+            graded = true;
+            jobs = [_jobFor('q-1'), _jobFor('q-2')];
+            return jobs;
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-question-empty')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      // ポーリングは止まる（終端ジョブ + 採点結果あり）ので settle できる。
+      // 止まったうえで結果が出ていることが、この修正が効いている証拠になる
+      // -- 取り直していなければ、空のまま settle してしまう。
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-1'))).data,
+        'レビュー待ち',
+      );
+      expect(
+        find.text('光合成によって酸素が発生する'),
+        findsOneWidget,
+        reason: '起票のあと、ジョブと一緒に採点結果も取り直していること',
+      );
+      expect(find.byKey(const Key('review-question-empty')), findsNothing);
     });
 
     testWidgets('ジョブが1件でもあれば「AI採点を開始」は出さない', (tester) async {
