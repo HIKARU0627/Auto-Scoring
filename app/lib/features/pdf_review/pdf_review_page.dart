@@ -344,6 +344,14 @@ int _compareQuestionNumbers(String a, String b) {
 /// not (Issue #85).
 const double _materialReadEpsilon = 1;
 
+/// How much of a screenful 「続きを表示」 advances by. Less than one, so two
+/// consecutive pages overlap and no row falls between them.
+const double _materialPageOverlap = 0.9;
+
+/// The two edges of a 判断材料 row, as suffixes on its marker's key.
+const String _materialTop = '#top';
+const String _materialBottom = '#bottom';
+
 class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// The sidecar operations this screen was opened against, captured once in
   /// [initState] -- never re-resolved from the provider mid-request. See
@@ -359,40 +367,46 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the rest of it (Issue #85).
   final _inspectorScrollController = ScrollController();
 
-  /// Every [_materialIdentity] whose end has been on screen. **What has been
-  /// shown**, named by the material itself rather than by any measurement of
-  /// how it happened to be drawn.
+  /// The 判断材料 rows whose **end has actually been on screen**, by row id.
   ///
-  /// Two earlier versions of this recorded a *rendered* quantity, and both
-  /// mistook a change of layout for a change of material. `maxScrollExtent`
-  /// is the material's height minus the viewport, so shrinking the window --
-  /// or typing a third line into 修正コメント -- un-saw material that had just
-  /// been displayed in full. Replacing it with the material's own height was
-  /// only half a fix: text rewraps, so widening the window changes that
-  /// height too, and reading a long 根拠 at 700px and then widening to 1280px
-  /// un-saw it as well (レビュー2回目 P2).
+  /// Recorded per row rather than for the panel as a whole, and that is the
+  /// whole design. Three earlier versions asked a single scroll number
+  /// whether everything had been seen, and a single scroll number cannot
+  /// answer it: `maxScrollExtent` and the material's own height are facts
+  /// about the current layout, so a relayout un-saw material that had been
+  /// displayed in full (レビュー1・2回目), and `extentAfter == 0` is evidence
+  /// gathered about *the material that was there when it was measured*, so
+  /// reusing it after a poll replaced a row above the fold marked material
+  /// as read that nobody had ever seen (レビュー3・4回目).
   ///
-  /// **Anything drawn is a fact about the drawing, not about the material.**
-  /// So this keys on the rows the Inspector is showing. A layout change is
-  /// invisible to it; a poll delivering the grade, an edit, or an Undo
-  /// restoring the AI's row all change it, because they change which rows
-  /// are on screen.
-  ///
-  /// A [Set] rather than "the last key per question": an Undo that puts the
-  /// material back the way it was is material that *has* been read, and
-  /// asking for it to be read again would be make-work. It holds one short
-  /// string per distinct state a reviewer has actually read through in this
-  /// session.
-  final Set<String> _seenMaterialKeys = {};
+  /// **証拠は、それが証明する材料そのものに紐づいていなければならない。**
+  /// A row counts as seen when **both edges** of its block have been inside
+  /// the viewport -- not just the end. The end alone is not enough: a poll
+  /// that replaces a row above the fold with a *longer* one pushes that
+  /// row's end down into view while its beginning stays off screen, and the
+  /// row would be marked read without a word of it having been shown
+  /// (レビュー4回目 P2-1). Relayout cannot add an entry, because markers are
+  /// only ever recorded where they actually are.
+  final Set<String> _seenMaterialRowIds = {};
 
-  /// Whether any 判断材料 is below the fold right now -- the one thing here
-  /// that *is* a fact about the current layout, and used only to decide
-  /// whether to show the notice, never to record what has been read.
+  /// Two markers per row -- one at each edge of its block
+  /// ([_materialRowEdge]). Kept across rebuilds so a marker keeps its
+  /// identity in the tree; keys are row ids, so this is bounded by the rows
+  /// this session has actually fetched.
+  final Map<String, GlobalKey> _materialRowKeys = {};
+
+  /// The Inspector's scroll viewport, to measure the markers against.
+  final GlobalKey _inspectorViewportKey = GlobalKey(
+    debugLabel: 'review-inspector-viewport',
+  );
+
+  /// Whether the markers have been measured for the material now on screen.
   ///
-  /// Held as state rather than read off [_inspectorScrollController] during
-  /// build: a scroll controller only knows about the *last* layout, so the
-  /// notice would otherwise drift a frame behind the panel it describes.
-  bool _materialOverflows = false;
+  /// Distinct from "nothing has been seen": before the first measurement the
+  /// answer is *unknown*, and drawing 「この下にまだ判断材料があります」 over a
+  /// panel that in fact fits -- for the one frame between building it and
+  /// measuring it -- would be a flash of a false statement.
+  bool _materialMeasured = false;
 
   bool _loadingShell = true;
   String? _shellError;
@@ -1145,13 +1159,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     // Whether it overflows is unknown until that panel has laid out, and the
     // notice must not be inherited from the question just left.
     //
-    // Nothing about what has been *read* is reset here: [_seenMaterialKeys]
-    // is keyed by the material itself, so coming back to a question already
-    // read through does not ask the reviewer to read it again.
+    // Nothing about what has been *read* is reset here:
+    // [_seenMaterialRowIds] names rows, so coming back to a question already
+    // read through does not ask the reviewer to read it again. Only the
+    // *measurement* is invalidated -- the next question's markers have not
+    // been placed yet.
     if (_inspectorScrollController.hasClients) {
       _inspectorScrollController.jumpTo(0);
     }
-    _materialOverflows = false;
+    _materialMeasured = false;
     // Only move the viewer when the target question is on a different page --
     // staying on the same page keeps whatever zoom/scroll the reviewer set
     // (Issue #21 acceptance: "Question/Submission移動、zoom/scrollを保った
@@ -1192,83 +1208,125 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         review.hasLoaded;
   }
 
-  /// Whether the current question's 判断材料 has been on screen all the way
-  /// to its end at least once ([_seenMaterialKeys]).
+  /// Whether every row the Inspector is currently showing has had its end on
+  /// screen ([_seenMaterialRowIds]).
   ///
-  /// True as soon as the panel does not scroll at all, which is the ordinary
-  /// case at 1280x720 now that the 進捗パネル is charged to the PDF viewer
-  /// rather than to the whole screen -- this gate is what makes that hold for
-  /// a long 根拠 or a twelve-criterion rubric too, not only for the
-  /// comfortable case.
+  /// True immediately when the panel does not scroll at all -- every marker
+  /// is inside the viewport on the first measurement -- which is the ordinary
+  /// case at 1280x720 and the reason this gate costs a reviewer nothing
+  /// there.
   bool get _materialFullyRead {
     final question = _currentQuestion;
     final review = _currentReview;
     if (question == null || review == null || !review.hasLoaded) return false;
-    return _seenMaterialKeys.contains(_materialIdentity(question, review));
+    return _materialRowIds(question, review).every(
+      (id) =>
+          _seenMaterialRowIds.contains('$id$_materialTop') &&
+          _seenMaterialRowIds.contains('$id$_materialBottom'),
+    );
   }
 
-  /// Which rows the Inspector is showing for [question] right now.
+  /// The rows the Inspector is showing for [question] right now, in the order
+  /// they are drawn.
   ///
-  /// Ids are enough because the history is append-only: a `Recognition`, a
-  /// `GradeResult` and an `Annotation` are written once and never edited, so
-  /// a human correction, a re-grade and an Undo each arrive as *different
-  /// rows* (`docs/review-edit-history.md`). Two panels showing the same ids
-  /// are therefore showing the same words, whatever width they were laid out
-  /// at -- which is the whole point of keying on this rather than on any
-  /// measurement of the result.
+  /// Ids are enough to name them because the history is append-only: a
+  /// `Recognition`, a `GradeResult` and an `Annotation` are written once and
+  /// never edited, so a human correction, a re-grade and an Undo each arrive
+  /// as *different rows* (`docs/review-edit-history.md`).
   ///
-  /// 採点基準 rides along on `question.id`: the rubric belongs to the
-  /// question and this screen fetches the question list once, so it cannot
-  /// change under a stable id here. The 判定 beside each criterion comes from
-  /// `displayGrade`, which is in the key on its own account.
-  String _materialIdentity(
+  List<String> _materialRowIds(
     QuestionResponse question,
     QuestionReviewState review,
   ) => [
-    question.id,
-    review.latestOcrRecognition?.id,
-    review.latestGradingRecognition?.id,
-    review.effectiveHumanRecognition?.id,
-    review.latestAiGrade?.id,
-    review.displayGrade?.id,
+    if (review.latestOcrRecognition case final row?) 'ocr:${row.id}',
+    if (review.latestGradingRecognition case final row?) 'grading:${row.id}',
+    if (review.effectiveHumanRecognition case final row?) 'human:${row.id}',
+    if (review.latestAiGrade case final row?) 'grade:${row.id}',
+    if (review.displayGrade case final row? when row.source_ == 'human')
+      'human-grade:${row.id}',
+    // 採点基準 has no row of its own -- its definition belongs to the
+    // question -- but the 判定 beside each criterion comes from
+    // `displayGrade`, so the block is tracked under whichever grade is
+    // currently answering for it.
+    if (question.rubric.isNotEmpty) 'rubric:${review.displayGrade?.id ?? '-'}',
     for (final annotation in _fallbackAnnotationsFor(question, review))
-      annotation.id,
-  ].map((id) => id ?? '-').join(' ');
+      'annotation:${annotation.id}',
+  ];
 
-  /// Records that the 判断材料 currently on screen has been shown to its end.
+  /// A zero-height marker at one edge of [id]'s block, [edge] being
+  /// `_materialTop` or `_materialBottom`. Their positions are what
+  /// [_recordMaterialSeen] measures.
   ///
-  /// Called both while the reviewer drags and from the post-frame check in
-  /// [_buildInspector], because "it all fits, so all of it has been seen"
-  /// never produces a scroll notification at all.
-  void _recordMaterialRead(ScrollMetrics metrics) {
+  /// Markers rather than a wrapper around each block: a wrapper is a widget
+  /// in the layout, and this screen has already been burnt twice by
+  /// measuring something the measurement itself changed. A zero-height box
+  /// cannot move what it is measuring.
+  Widget _materialRowEdge(String id, String edge) => SizedBox.shrink(
+    key: _materialRowKeys.putIfAbsent(
+      '$id$edge',
+      () => GlobalKey(debugLabel: 'material-row:$id$edge'),
+    ),
+  );
+
+  /// Records every row whose end is inside the Inspector's viewport right
+  /// now.
+  ///
+  /// Geometry rather than scroll offsets: the question is "has the end of
+  /// *this row* been shown", and only the row's own position can answer it.
+  /// Reads render objects, so it must run after layout -- every one of its
+  /// three triggers does ([_buildInspector]).
+  void _recordMaterialSeen() {
     final question = _currentQuestion;
     final review = _currentReview;
-    // Not while the panel is showing a spinner or an error: an empty panel
-    // trivially "fits", and marking it read there would hand the reviewer an
-    // enabled 承認 for material they have not been shown yet.
+    // Not while the panel is showing a spinner or an error: those markers
+    // are not the material, and marking them read would hand the reviewer an
+    // enabled 承認 for content they have not been shown yet.
     if (question == null || review == null || !review.hasLoaded) return;
     if (review.loading || review.error != null) return;
-    if (!metrics.hasContentDimensions) return;
-    // The metrics answer exactly one question -- "is the end of it on screen
-    // *now*" -- and that answer is spent here rather than kept. What is kept
-    // is the material's identity, which no relayout can change.
-    final overflows = metrics.maxScrollExtent > _materialReadEpsilon;
-    final key = _materialIdentity(question, review);
-    final newlySeen =
-        metrics.extentAfter <= _materialReadEpsilon &&
-        !_seenMaterialKeys.contains(key);
-    if (!newlySeen && overflows == _materialOverflows) return;
+    final viewport = _inspectorViewportKey.currentContext?.findRenderObject();
+    if (viewport is! RenderBox || !viewport.attached || !viewport.hasSize) {
+      return;
+    }
+    final seen = <String>[];
+    for (final id in _materialRowIds(question, review)) {
+      for (final edge in const [_materialTop, _materialBottom]) {
+        final key = _materialRowKeys['$id$edge'];
+        final marker = key?.currentContext?.findRenderObject();
+        if (marker is! RenderBox || !marker.attached || !marker.hasSize) {
+          continue;
+        }
+        final y = marker.localToGlobal(Offset.zero, ancestor: viewport).dy;
+        if (y >= -_materialReadEpsilon &&
+            y <= viewport.size.height + _materialReadEpsilon) {
+          seen.add('$id$edge');
+        }
+      }
+    }
+    final isNew = seen.any((id) => !_seenMaterialRowIds.contains(id));
+    if (!isNew && _materialMeasured) return;
     _setStateIfMounted(() {
-      _materialOverflows = overflows;
-      if (newlySeen) _seenMaterialKeys.add(key);
+      _materialMeasured = true;
+      _seenMaterialRowIds.addAll(seen);
     });
   }
 
-  /// Takes the reviewer to the part of the 判断材料 that is still off screen.
+  /// Brings the next screenful of 判断材料 into view.
+  ///
+  /// **One page at a time, not a jump to the end** (レビュー4回目). Since a row
+  /// is recorded when its own end has been inside the viewport, a jump would
+  /// skip straight past everything in between and leave those rows unread --
+  /// the button would promise 「続きを表示」 and not deliver it. Paging shows
+  /// each screenful for real, which is the same thing the gate is asking for.
+  /// The overlap keeps a line of context and stops a row from falling exactly
+  /// between two pages.
   void _revealRestOfMaterial() {
     if (!_inspectorScrollController.hasClients) return;
+    final position = _inspectorScrollController.position;
     _inspectorScrollController.animateTo(
-      _inspectorScrollController.position.maxScrollExtent,
+      math.min(
+        position.pixels + position.viewportDimension * _materialPageOverlap,
+        position.maxScrollExtent,
+      ),
       duration: AppMotion.emphasis,
       curve: AppMotion.standard,
     );
@@ -1281,10 +1339,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     final review = _currentReview;
     if (!_canDecide) return false;
     if (review!.isConfirmed || review.latestAiGrade == null) return false;
-    // Only while something really is below the fold. What is measured is the
-    // material alone -- the notice floats over the panel rather than sitting
-    // in it (`_buildInspector`), so it can never be its own evidence.
-    return _materialOverflows && !_materialFullyRead;
+    // Only once the markers have actually been measured for what is on
+    // screen. Before that, "no row has been seen" is ignorance rather than a
+    // fact, and the notice would flash over a panel that in fact fits.
+    return _materialMeasured && !_materialFullyRead;
   }
 
   /// Whether "承認して次へ" may act: [_canDecide], and either the question is
@@ -1757,34 +1815,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                   children: [
                     ?_buildDependencyDagDiagram(remaining),
                     Expanded(
+                      // A flex share, with nothing in the Inspector that
+                      // insists on a height of its own. It had briefly needed
+                      // a floor, because 修正コメント欄 was pinned below the
+                      // scrolling material and a share smaller than that band
+                      // overflowed rather than shrinking. The field is back
+                      // inside the scroll region (レビュー4回目 P2-2), so a
+                      // share of any size fits again -- the panel just scrolls.
                       child: narrow
-                          ? LayoutBuilder(
-                              builder: (context, stacked) {
-                                // Two fifths of the pane, but never less than
-                                // the pinned 修正コメント band -- that band is
-                                // a fixed-height child, so a share smaller
-                                // than it overflows the Inspector's own column
-                                // by the difference rather than making the
-                                // panel smaller. A plain `Expanded(flex: 2)`
-                                // has no floor, and once Issue #80 added the
-                                // 「AI採点を開始」 notice above this pane, two
-                                // fifths of what was left fell under it.
-                                final inspectorHeight = math
-                                    .max(
-                                      stacked.maxHeight * 0.4,
-                                      AppLayout.reviewNoteBandHeight,
-                                    )
-                                    .clamp(0.0, stacked.maxHeight);
-                                return Column(
-                                  children: [
-                                    Expanded(child: _buildPdfViewer()),
-                                    SizedBox(
-                                      height: inspectorHeight,
-                                      child: inspector,
-                                    ),
-                                  ],
-                                );
-                              },
+                          ? Column(
+                              children: [
+                                Expanded(flex: 3, child: _buildPdfViewer()),
+                                Expanded(flex: 2, child: inspector),
+                              ],
                             )
                           : _buildPdfViewer(),
                     ),
@@ -2110,12 +2153,9 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (question == null) {
       return const SizedBox.shrink();
     }
-    final showsContent =
-        review != null && !review.loading && review.error == null;
-    // 「いま末尾が画面に出ているか」を測り直す契機は3つあり、**3つとも要る。**
-    // 「材料が変わったか」は材料の識別子だけで答えられるが、こちらは現在の
-    // レイアウトについての問いなので、レイアウトが変わり得るたびに測り直す
-    // ほかない。分けたぶん、片方だけ更新されない状態が作れてしまう。
+    // 「その行の末尾が画面に出たか」を測り直す契機は3つあり、**3つとも要る。**
+    // 「材料が変わったか」は行のidだけで答えられるが、こちらは現在のレイアウト
+    // についての問いなので、レイアウトが変わり得るたびに測り直すほかない。
     //
     // 1. 指が動かしたとき — `ScrollNotification`（下）。
     // 2. この画面が build されたとき — 直下の post-frame。最初のレイアウト、
@@ -2126,15 +2166,13 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     //    `ScrollMetricsNotification`（下）。進捗パネルを畳むのはそのパネル
     //    自身の `setState` なので、この画面は build されない。指も触れて
     //    いないので 1 も 2 も鳴らないまま、Inspector のビューポートだけが
-    //    広がる。`maxScrollExtent` が 79.4 から 0 になっても未読のままで、
-    //    ポーリングの止まった設問ではそのまま直らなかった
-    //    （レビュー3回目 P2）。
+    //    広がる（レビュー3回目 P2）。
     //
-    // 2 と 3 が重なって鳴るのは無害である。`_recordMaterialRead` は本当に
+    // 2 と 3 が重なって鳴るのは無害である。`_recordMaterialSeen` は本当に
     // 変わったときしか `setState` しないので、余分な測り直しはそこで止まる。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_inspectorScrollController.hasClients) return;
-      _recordMaterialRead(_inspectorScrollController.position);
+      if (!mounted) return;
+      _recordMaterialSeen();
     });
     return Column(
       children: [
@@ -2148,66 +2186,85 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           // panel read as unread because the unread notice was in it. The
           // gate locked itself. Above the action bar it was the same loop
           // through the viewport instead of through the content. A `Stack` is
-          // the only placement that costs neither: what gets measured is the
-          // 判断材料 and nothing else (Issue #85, レビュー1回目 P2).
+          // the only placement that costs neither (Issue #85, レビュー1回目 P2).
           child: Stack(
             children: [
-              // Trigger 3: the metrics changed with neither a gesture nor a
-              // build of this screen behind it. Dispatched from a microtask
-              // rather than during layout, so reacting with `setState` is
-              // safe here.
+              // Trigger 3.  Dispatched from a microtask rather than during
+              // layout, so reacting with `setState` is safe here.
               NotificationListener<ScrollMetricsNotification>(
-                onNotification: (notification) {
-                  _recordMaterialRead(notification.metrics);
+                onNotification: (_) {
+                  _recordMaterialSeen();
                   return false;
                 },
                 // Trigger 1: the reviewer dragging, live.
                 child: NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    _recordMaterialRead(notification.metrics);
+                  onNotification: (_) {
+                    _recordMaterialSeen();
                     return false;
                   },
-                  child: SingleChildScrollView(
-                    key: const Key('review-inspector'),
-                    controller: _inspectorScrollController,
-                    padding: AppSpacing.panel,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        // Heading and state on one line rather than stacked:
-                        // this panel is the only place the 判断材料 lives, and
-                        // every row it does not spend on a heading is a row of
-                        // 根拠/コメント/基準ごとの判定 that gets to stay on
-                        // screen with the 承認 button (Issue #85). The badge is
-                        // still the *question's* state, still reading
-                        // `_questionStatus` like the rail and the panel do, and
-                        // still adjacent to the 問N it belongs to (Issue #84) --
-                        // only the axis it is stacked on changed.
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '問${question.number}',
-                                style: context.texts.titleLarge,
+                  // `KeyedSubtree` rather than putting the global key on the
+                  // scroll view itself: `review-inspector` is the key the
+                  // tests and the reveal action address it by, and a widget
+                  // has room for one key.
+                  child: KeyedSubtree(
+                    key: _inspectorViewportKey,
+                    child: SingleChildScrollView(
+                      key: const Key('review-inspector'),
+                      controller: _inspectorScrollController,
+                      padding: AppSpacing.panel,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Heading and state on one line rather than
+                          // stacked: this panel is the only place the 判断材料
+                          // lives, and every row it does not spend on a
+                          // heading is a row of 根拠/コメント/基準ごとの判定
+                          // that gets to stay on screen with the 承認 button
+                          // (Issue #85). The badge is still the *question's*
+                          // state, still reading `_questionStatus` like the
+                          // rail and the panel do, and still adjacent to the
+                          // 問N it belongs to (Issue #84) -- only the axis it
+                          // is stacked on changed.
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '問${question.number}',
+                                  style: context.texts.titleLarge,
+                                ),
                               ),
-                            ),
-                            _buildQuestionStateChip(question),
+                              _buildQuestionStateChip(question),
+                            ],
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          if (review == null || review.loading)
+                            const Center(
+                              key: Key('review-question-loading'),
+                              child: Padding(
+                                padding: AppSpacing.page,
+                                child: CircularProgressIndicator(),
+                              ),
+                            )
+                          else if (review.error != null)
+                            _buildQuestionError(review.error!)
+                          else ...[
+                            _buildQuestionContent(question, review),
+                            // 修正コメント欄はスクロールする側に戻した
+                            // (レビュー4回目 P2-2)。1行から3行へ伸びる**可変高**
+                            // なので、固定の帯として下端に留めると、3行入力した
+                            // ときに帯を越えて桁あふれし、判断材料の領域が高さ0に
+                            // なって「続きを表示」にすら届かなくなっていた ---
+                            // 承認ゲートを原理的に満たせない画面である。
+                            //
+                            // 留める理由も無くなった。ゲートは「行ごとに末尾が
+                            // 画面に出たか」で決まるようになり、スクロール量とは
+                            // 無関係なので、メモ欄がスクロール領域の中にあっても
+                            // 判定は1pxも変わらない。
+                            const Divider(height: AppLayout.sectionDivider),
+                            _buildNoteField(),
                           ],
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
-                        if (review == null || review.loading)
-                          const Center(
-                            key: Key('review-question-loading'),
-                            child: Padding(
-                              padding: AppSpacing.page,
-                              child: CircularProgressIndicator(),
-                            ),
-                          )
-                        else if (review.error != null)
-                          _buildQuestionError(review.error!)
-                        else
-                          _buildQuestionContent(question, review),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -2222,10 +2279,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             ],
           ),
         ),
-        if (showsContent) ...[
-          const Divider(height: AppLayout.hairline),
-          _buildNoteField(),
-        ],
       ],
     );
   }
@@ -2326,6 +2379,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (ocrRecognition != null)
+          _materialRowEdge('ocr:${ocrRecognition.id}', _materialTop),
         Text('AI認識文字', style: context.texts.titleSmall),
         const SizedBox(height: AppSpacing.xs),
         if (ocrRecognition == null)
@@ -2342,6 +2397,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             label: 'OCR文字認識信頼度',
             confidence: ocrRecognition.confidence.toDouble(),
           ),
+          _materialRowEdge('ocr:${ocrRecognition.id}', _materialBottom),
         ],
         // The AI grader's own reading is a *second*, distinct AI-sourced row
         // (docs/ai-grading-pipeline.md "AI graderが訂正した認識結果を保持する")
@@ -2349,6 +2405,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // see whether/how the grader corrected what OCR read (P2 review).
         if (gradingRecognition != null) ...[
           const SizedBox(height: AppSpacing.sm),
+          _materialRowEdge('grading:${gradingRecognition.id}', _materialTop),
           Text(
             '採点AIの認識結果',
             key: const Key('review-grading-recognition-label'),
@@ -2365,6 +2422,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             label: '採点AI文字認識信頼度',
             confidence: gradingRecognition.confidence.toDouble(),
           ),
+          _materialRowEdge('grading:${gradingRecognition.id}', _materialBottom),
         ],
         // A human correction never overwrites the AI's row (append-only
         // history, §19/§35-5) -- shown as its own, clearly-labeled entry
@@ -2372,6 +2430,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // confidence (always 1.0) is never mistaken for the AI's.
         if (humanRecognition != null) ...[
           const SizedBox(height: AppSpacing.sm),
+          _materialRowEdge('human:${humanRecognition.id}', _materialTop),
           _ProvenanceLabel(
             key: const Key('review-human-recognition-label'),
             text: '人による修正',
@@ -2381,8 +2440,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             key: const Key('review-human-recognition-text'),
             style: context.textRoles.recognizedText,
           ),
+          _materialRowEdge('human:${humanRecognition.id}', _materialBottom),
         ],
         const Divider(height: AppLayout.sectionDivider),
+        if (aiGrade != null)
+          _materialRowEdge('grade:${aiGrade.id}', _materialTop),
         Text('採点', style: context.texts.titleSmall),
         const SizedBox(height: AppSpacing.xs),
         if (aiGrade == null)
@@ -2420,9 +2482,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               style: context.textRoles.gradingComment,
             ),
           ],
+          _materialRowEdge('grade:${aiGrade.id}', _materialBottom),
         ],
         if (humanGrade != null) ...[
           const SizedBox(height: AppSpacing.sm),
+          _materialRowEdge('human-grade:${humanGrade.id}', _materialTop),
           _ProvenanceLabel(
             key: const Key('review-human-grade-label'),
             text: '人による確定',
@@ -2432,6 +2496,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             key: const Key('review-human-score'),
             style: context.textRoles.score,
           ),
+          _materialRowEdge('human-grade:${humanGrade.id}', _materialBottom),
         ],
         // The rubric's own definition (description + 配点) is shown
         // whenever the question has one, independent of whether AI/human
@@ -2441,6 +2506,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // review).
         if (question.rubric.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
+          _materialRowEdge(
+            'rubric:${review.displayGrade?.id ?? '-'}',
+            _materialTop,
+          ),
           Text('採点基準', style: context.texts.labelLarge),
           // One line per criterion, not a `ListTile` with the 判定 on a
           // second line under it: a dense tile costs 64px each, and a rubric
@@ -2479,10 +2548,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               ),
             ),
         ],
+        _materialRowEdge(
+          'rubric:${review.displayGrade?.id ?? '-'}',
+          _materialBottom,
+        ),
         if (fallbackAnnotations.isNotEmpty) ...[
           const Divider(height: AppLayout.sectionDivider),
           Text('設問コメント', style: context.texts.titleSmall),
-          for (final annotation in fallbackAnnotations)
+          for (final annotation in fallbackAnnotations) ...[
+            _materialRowEdge('annotation:${annotation.id}', _materialTop),
             ListTile(
               key: Key('fallback-annotation-${annotation.id}'),
               dense: true,
@@ -2493,6 +2567,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                 style: context.textRoles.gradingComment,
               ),
             ),
+            _materialRowEdge('annotation:${annotation.id}', _materialBottom),
+          ],
         ],
       ],
     );

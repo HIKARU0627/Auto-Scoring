@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -358,27 +359,42 @@ ReviewActionResponse _reviewAction(
 /// 承認 has to have looked at the material first, exactly as a reviewer does.
 /// A no-op when the panel already fits.
 Future<void> _revealMaterial(WidgetTester tester) async {
-  // Deliberately a no-op unless the gate is actually closed. If it silently
-  // scrolled every time, a regression that made the gate fire on a panel with
-  // nothing below the fold would slip through every test that calls this.
-  if (find
-      .byKey(const Key('review-unread-material-notice'))
-      .evaluate()
-      .isEmpty) {
-    return;
-  }
   final inspector = find.byKey(const Key('review-inspector'));
   if (inspector.evaluate().isEmpty) return;
-  final scrollable = tester.state<ScrollableState>(
-    find.descendant(of: inspector, matching: find.byType(Scrollable)),
-  );
-  // Driven through the scroll position rather than by tapping 「続きを表示」:
-  // in a viewport this short the button itself can be partly below the fold,
-  // and a test that means to say "the reviewer read to the end" should not
-  // depend on where that button happens to land. The button's own path is
-  // covered by the Issue #85 group.
-  scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
-  await tester.pumpAndSettle();
+  // Page through, exactly as 「続きを表示」 does, rather than jumping to the
+  // end: since Issue #85 a row is recorded when its *own* end has been in the
+  // viewport, and a jump skips everything in between without showing it. A
+  // helper that jumped would be claiming the reviewer read something the
+  // screen never displayed.
+  //
+  // Deliberately a no-op unless the gate is actually closed. If it scrolled
+  // regardless, a regression that made the gate fire on a panel with nothing
+  // below the fold would slip through every test that calls this.
+  for (var page = 0; page < 40; page++) {
+    if (find
+        .byKey(const Key('review-unread-material-notice'))
+        .evaluate()
+        .isEmpty) {
+      return;
+    }
+    final position = tester
+        .state<ScrollableState>(
+          // `.first`: the panel's own scroll view, not the one every
+          // `TextField` carries inside it (修正コメント欄はその中にある).
+          find
+              .descendant(of: inspector, matching: find.byType(Scrollable))
+              .first,
+        )
+        .position;
+    if (position.pixels >= position.maxScrollExtent) return;
+    position.jumpTo(
+      math.min(
+        position.pixels + position.viewportDimension * 0.9,
+        position.maxScrollExtent,
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
 }
 
 /// Opens 添削レビュー画面 for `test-1` / `sub-1` with [dependencies] in place
@@ -4299,20 +4315,15 @@ void main() {
       ]) {
         expectWithin(tester, desktopStandard, key);
       }
-      // Nothing was left below the fold, so the 承認 gate never closes and
+      // Every 判断材料 row was on screen, so the 承認 gate never closes and
       // the reviewer is not asked to scroll for material already in front of
-      // them. Asserted on the scroll metrics as well as on the notice, so a
-      // failure says *how much* did not fit rather than only that something
-      // did not: this content is deliberately longer than the demo seed's
+      // them. This content is deliberately longer than the demo seed's
       // (`scripts/seed-demo-app-data.py` writes no 総評コメント and shorter
-      // 採点基準), and it fits 1280x720 with little to spare.
-      final inspector = tester.state<ScrollableState>(
-        find.descendant(
-          of: find.byKey(const Key('review-inspector')),
-          matching: find.byType(Scrollable),
-        ),
-      );
-      expect(inspector.position.maxScrollExtent, 0);
+      // 採点基準), and it still fits 1280x720.
+      //
+      // Not asserted on `maxScrollExtent`: the panel also carries 修正コメント
+      // 欄, which is an input rather than 判断材料, so the panel may scroll a
+      // little without any of the material being off screen.
       expect(
         find.byKey(const Key('review-unread-material-notice')),
         findsNothing,
@@ -4447,10 +4458,12 @@ void main() {
       await pumpAt(tester, const Size(1280, 1000), dependencies);
 
       final inspector = tester.state<ScrollableState>(
-        find.descendant(
-          of: find.byKey(const Key('review-inspector')),
-          matching: find.byType(Scrollable),
-        ),
+        find
+            .descendant(
+              of: find.byKey(const Key('review-inspector')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
       );
       expect(
         inspector.position.maxScrollExtent,
@@ -4523,11 +4536,20 @@ void main() {
         isNotNull,
       );
       // ...and that Enter press was not silence: it said why, and brought the
-      // rest of the material up, which is also the only route a keyboard-only
+      // next screenful up, which is also the only route a keyboard-only
       // reviewer has to it (↑/↓ are 設問移動 here).
       expect(find.byType(SnackBar), findsOneWidget);
       expect(find.textContaining('判断材料が画面外に残っていました'), findsOneWidget);
       await tester.pumpAndSettle();
+
+      // One press is one page, not the whole panel: with a rubric this long
+      // the reviewer has more to read, and the gate is still closed.
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
+      );
+      // Reading the rest of it does open the gate.
+      await _revealMaterial(tester);
       expect(
         tester
             .widget<FilledButton>(
@@ -4666,7 +4688,11 @@ void main() {
         tester,
         const Size(700, 1200),
         reviewableQuestion(
-          criterionCount: 0,
+          // Two criteria: enough that a 判断材料 row is below the fold while
+          // the band is open, few enough that folding the band away brings
+          // all of them on screen. Either side of that and the test asserts
+          // nothing.
+          criterionCount: 2,
           rationale: '',
           comment: '',
           // A finished job whose grade is newer than it, so this question is
@@ -4686,21 +4712,10 @@ void main() {
       await tester.tap(find.byKey(const Key('dag-toggle-button')));
       await tester.pumpAndSettle();
 
-      final inspector = tester.state<ScrollableState>(
-        find.descendant(
-          of: find.byKey(const Key('review-inspector')),
-          matching: find.byType(Scrollable),
-        ),
-      );
-      expect(
-        inspector.position.maxScrollExtent,
-        0,
-        reason: 'the premise: folding the band away makes it all fit',
-      );
       expect(
         find.byKey(const Key('review-unread-material-notice')),
         findsNothing,
-        reason: 'nothing is below the fold any more',
+        reason: 'every 判断材料 row is on screen now',
       );
       expect(
         tester
@@ -4710,6 +4725,125 @@ void main() {
             .onPressed,
         isNotNull,
         reason: 'the whole of it is on screen, so it has been shown',
+      );
+    });
+
+    testWidgets('画面の上の方が別の行に差し替わったら、末尾にいても未読に戻る', (tester) async {
+      // レビュー4回目 P2-1。**逆向きの誤爆**で、こちらの方が重い。1〜3回目は
+      // 「見たのに未読」だったが、これは「**見ていないのに既読**」である。
+      //
+      // 末尾まで読んで止まっているところへ、ポーリングが**画面より上**の行を
+      // 差し替える。材料は変わったのに `extentAfter` は 0 のままなので、
+      // 「末尾にいる」を新しい材料の既読の証拠に流用すると、見たことのない
+      // 行に対して承認が有効になる。
+      var replaced = false;
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(),
+        listQuestions: (_) async => [_question()],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listJobs: (_) async => [_jobFor('q-1')],
+        listRecognitions: (_, _) async => [
+          if (!replaced)
+            _recognition(text: '（デモ）はじめに読み取った文字列です。')
+          else
+            // 別 ID で、**前より長い**。長いのが要点である: 末尾にいる読み手の
+            // 上でこの行が伸びると、行の**下端だけが画面に入ってくる**
+            // (実測で top=-113 / bottom=56、ビューポート高 214)。下端が見えた
+            // ことだけを既読の根拠にすると、一言も表示されていない行が既読に
+            // なる。
+            _recognition(
+              id: 'rec-replaced',
+              text: '（デモ）あとで読み直した文字列です。' * 6,
+              createdAt: DateTime.utc(2026, 1, 2),
+            ),
+        ],
+        listGrades: (_, _) async => [
+          _grade(
+            rationale: '（デモ）採点根拠の文がここに入ります。' * 6,
+            createdAt: DateTime.utc(2026, 1, 3),
+          ),
+        ],
+        listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
+      );
+
+      await pumpAt(tester, desktopNarrow, dependencies);
+      await _revealMaterial(tester);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+        reason: 'the premise: read to the end, at the end, gate open',
+      );
+
+      replaced = true;
+      await tester.tap(find.byKey(const Key('review-refresh-button')));
+      await tester.pumpAndSettle();
+      await _settlePdf(tester);
+
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNull,
+        reason: '差し替わった認識文字は画面の上にあり、まだ見られていない',
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
+      );
+
+      // 上まで戻って実際に目を通せば、また承認できる。
+      await tester.drag(
+        find.byKey(const Key('review-inspector')),
+        const Offset(0, 2000),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+        reason: '差し替わった行を見たあとは承認できる',
+      );
+    });
+
+    testWidgets('修正コメントを3行打っても、低い画面で判断材料が潰れない', (tester) async {
+      // レビュー4回目 P2-2。メモ欄は1行から3行まで伸びる**可変高**である。
+      // 固定高だと決めつけて下限を置いていたので、3行入力すると桁あふれし、
+      // 判断材料の領域が高さ0になって「続きを表示」にも届かなくなっていた
+      // ---- 承認ゲートを原理的に満たせない状態である。
+      await pumpAt(
+        tester,
+        const Size(700, 400),
+        reviewableQuestion(criterionCount: 4),
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('review-note-field')),
+        '1行目\n2行目\n3行目',
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(tester.takeException(), isNull);
+      // 判断材料が読める高さで残っていること。ここが 0 になると、
+      // ゲートを満たす手段が画面から消える。
+      final inspector = tester.getRect(
+        find.byKey(const Key('review-inspector')),
+      );
+      expect(inspector.height, greaterThan(0));
+      expect(
+        find.byKey(const Key('review-note-field')),
+        findsOneWidget,
+        reason: 'the note itself must not be dropped either',
       );
     });
 
@@ -4776,8 +4910,15 @@ void main() {
         reviewableQuestion(criterionCount: 24),
       );
 
-      await tester.tap(find.byKey(const Key('review-reveal-material-button')));
-      await tester.pumpAndSettle();
+      // 「続きを表示」 advances one screenful per press, so that every row it
+      // claims to have shown really did appear. Press it until there is
+      // nothing left to show.
+      for (var page = 0; page < 40; page++) {
+        final button = find.byKey(const Key('review-reveal-material-button'));
+        if (button.evaluate().isEmpty) break;
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+      }
 
       expect(
         find.byKey(const Key('review-unread-material-notice')),

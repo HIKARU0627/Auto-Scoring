@@ -209,16 +209,6 @@ abstract final class AppLayout {
   /// [hairline] this is the rule *plus* the space it reserves above and below
   /// it, which is why it is a spacing step rather than 1.
   static const double sectionDivider = AppSpacing.xl;
-
-  /// The 修正コメント band pinned under the 添削レビュー Inspector's scrolling
-  /// 判断材料: the field itself plus the rule and padding around it.
-  ///
-  /// It is a fixed-height child, so the Inspector's share of a stacked narrow
-  /// layout has to be at least this or the column overflows by the
-  /// difference. 40% of a short pane is not: Issue #80 put a 「AI採点を開始」
-  /// notice above that pane, and 40% of what was left came to less than this
-  /// band (Issue #85).
-  static const double reviewNoteBandHeight = 88;
 }
 
 /// Motion tokens.
