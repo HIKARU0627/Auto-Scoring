@@ -21,6 +21,7 @@ doc/ExportApi.md
 doc/ExportRequestResponse.md
 doc/ExportResponse.md
 doc/GradeResultResponse.md
+doc/GradingAvailabilityResponse.md
 doc/HTTPValidationError.md
 doc/JobResponse.md
 doc/JobsApi.md
@@ -87,6 +88,7 @@ lib/src/model/edit_review_request.dart
 lib/src/model/export_request_response.dart
 lib/src/model/export_response.dart
 lib/src/model/grade_result_response.dart
+lib/src/model/grading_availability_response.dart
 lib/src/model/http_validation_error.dart
 lib/src/model/job_response.dart
 lib/src/model/location_inner.dart

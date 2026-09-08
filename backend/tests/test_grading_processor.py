@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_provider import (
@@ -390,6 +391,43 @@ async def test_mismatched_response_fails_permanently_without_persisting_a_grade(
 
     assert result.outcome is ProcessingOutcome.FAILED
     assert result.error_category is ErrorCategory.PERMANENT
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_an_unconfigured_host_fails_the_job_and_writes_no_grade(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ocr_provider: _ScriptedOCRProvider,
+) -> None:
+    """Issue #97: on a host where no AI provider could be built, a grading
+    Job must end FAILED/`PERMANENT` -- not SUCCEEDED with a 0-point,
+    confidence-0.0 `GradeResult` that reads, in the review UI, exactly like a
+    real provider that graded the answer and awarded nothing.
+
+    `PERMANENT` because no number of retries installs credentials on this
+    machine; the reason belongs to the whole app (``GET
+    /grading/availability``), not to each question's `last_error`.
+    """
+    _seed(session_factory, store)
+    recognition = RecognitionJobProcessor(session_factory, store, ocr_provider)
+    processor = GradingJobProcessor(
+        session_factory,
+        store,
+        recognition,
+        UnconfiguredAIProvider("AUTO_SCORING_AI_GRADING_TRANSPORT is required"),
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_category is ErrorCategory.PERMANENT
+    # The reason names a variable, but `last_error` is built from the
+    # provider's `name` alone (`GradingJobProcessor._failed`) -- assert the
+    # configuration text does not travel into per-question storage.
+    assert result.error_message is not None
+    assert "AUTO_SCORING_AI_GRADING_TRANSPORT" not in result.error_message
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.grades.history("sub-1", "q-1") == []
 

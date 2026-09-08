@@ -35,8 +35,9 @@ from typing import TypedDict
 
 import uvicorn
 
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
-from auto_scoring.api.app import create_app
+from auto_scoring.api.app import build_ai_provider, create_app
 from auto_scoring.api.auth import generate_token
 
 LOOPBACK = "127.0.0.1"
@@ -371,8 +372,29 @@ def run(argv: Sequence[str] | None = None) -> int:
     # function duplicating that -- see create_app()'s docstring for why
     # session_factory is reserved for callers (Issue #26's tests) that need
     # to hand in an already-migrated database instead.
+    #
+    # The one place that reads this host's AI-grading configuration (Issue
+    # #97). `create_app` deliberately does not: a decision taken from
+    # `os.environ` inside it would be inherited by every test that builds an
+    # app, and would then differ between a developer machine with a `gcloud`
+    # login and a CI runner without one (docs/quality-gates.md). Here, in the
+    # composition root, there is exactly one real environment to read.
+    #
+    # `build_ai_provider` never raises: a host with no usable credentials
+    # still gets an app that imports answers, serves review and exports PDFs,
+    # and says on every screen that grading is unavailable.
+    ai_provider = build_ai_provider(os.environ)
+    if isinstance(ai_provider, UnconfiguredAIProvider):
+        # Warning, not error: the sidecar is about to serve normally. The
+        # reason names variables and prerequisites, never their values
+        # (`api.app.build_ai_provider`), so it is safe in a log file that
+        # outlives the session.
+        logging.getLogger(__name__).warning(
+            "AI grading is unavailable on this host: %s", ai_provider.reason
+        )
+
     try:
-        app = create_app(api_token=token, data_root=args.app_data_dir)
+        app = create_app(api_token=token, data_root=args.app_data_dir, ai_provider=ai_provider)
     except DataRootLockedError as error:
         # The one startup failure with a name the user understands, so it
         # gets an exit code of its own rather than an anonymous traceback.

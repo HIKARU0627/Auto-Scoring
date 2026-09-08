@@ -15,7 +15,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from auto_scoring.adapters.ai.null_provider import NullAIProvider
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
     AIProvider,
@@ -189,20 +189,15 @@ class TestReplayAIProviderContract(AIProviderContract):
         return _ReplayAIProvider()
 
 
-def test_null_ai_provider_declares_a_name_and_reproducibility_metadata() -> None:
-    """`NullAIProvider` (Issue #20) is the real, shipped placeholder adapter
-    until the provider chain decided in business-rules-and-evaluation-data.md
-    section 3 (B) (Issue #81) is implemented.
+def test_unconfigured_ai_provider_declares_a_name_and_reproducibility_metadata() -> None:
+    """`UnconfiguredAIProvider` (Issue #97) is the adapter a host with no
+    usable credentials gets, and it still has to satisfy the port.
 
-    Not tested via the full `AIProviderContract` mixin: that mixin's
-    ``test_schema_violation_never_falls_back_to_free_text_parsing`` relies on
-    `_ReplayAIProvider`'s own ``question_id == "malformed"`` convention for
-    simulating a bad response -- `NullAIProvider` never parses anything at
-    all (it never calls a network), so there is no malformed response for it
-    to raise on; forcing it to special-case that sentinel just to satisfy the
-    test would be fabricated behaviour, not a real contract check.
+    Not tested via the full `AIProviderContract` mixin: that mixin requires
+    `grade()` to return a validated `GradingResponse`, which this adapter
+    deliberately never does -- there is nothing here that could grade.
     """
-    provider = NullAIProvider()
+    provider = UnconfiguredAIProvider("AUTO_SCORING_EXAMPLE is not set")
     assert isinstance(provider, AIProvider)
     assert provider.name
     descriptor = provider.describe()
@@ -211,18 +206,17 @@ def test_null_ai_provider_declares_a_name_and_reproducibility_metadata() -> None
     assert descriptor.model
 
 
-def test_null_ai_provider_is_always_unusable_and_never_fabricates() -> None:
-    """Issue #20: honest about not being configured, mirroring
-    `NullOCRProvider` -- confidence 0.0, never a guessed score/reading."""
-    provider = NullAIProvider()
+def test_unconfigured_ai_provider_raises_rather_than_returning_an_empty_grade() -> None:
+    """Issue #97, the whole reason this replaced `NullAIProvider`: a
+    response of "score 0, confidence 0.0" is persisted as a `GradeResult`
+    and is indistinguishable in the review UI from a real provider that read
+    the answer and awarded nothing. Raising `ProviderUnavailable` instead
+    routes the Job to FAILED/`PERMANENT` and writes no grade at all.
+    """
+    provider = UnconfiguredAIProvider("AUTO_SCORING_EXAMPLE is not set")
 
-    response = provider.grade(_VALID_REQUEST)
-
-    assert response.grading_confidence == 0.0
-    assert response.recognition_confidence == 0.0
-    assert response.score == 0
-    assert response.recognition_text == ""
-    assert response.annotations == ()
+    with pytest.raises(ProviderUnavailable):
+        provider.grade(_VALID_REQUEST)
 
 
 def test_replay_provider_preserves_annotation_candidates() -> None:

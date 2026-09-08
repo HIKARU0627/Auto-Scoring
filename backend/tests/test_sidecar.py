@@ -3,13 +3,16 @@
 import json
 import logging
 import logging.handlers
+import os
 import socket
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 import uvicorn
 
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.api import sidecar
 from auto_scoring.api.sidecar import (
@@ -22,6 +25,24 @@ from auto_scoring.api.sidecar import (
 )
 from auto_scoring.db.engine import sqlite_url
 from auto_scoring.db.migrator import upgrade
+
+
+@pytest.fixture(autouse=True)
+def _pinned_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`run()` resolves the AI-grading provider from this host's own
+    environment (Issue #97). Pin the answer for every test in this file, so
+    none of them probes the machine for a `codex` binary or a `gcloud`
+    login -- the difference between a developer box and a CI runner that
+    docs/quality-gates.md records as "ホストを見る判定はテストへ注入する".
+
+    The one test that cares which provider arrives installs its own
+    (`test_run_starts_and_serves_on_a_host_with_no_ai_credentials`).
+    """
+    monkeypatch.setattr(
+        sidecar,
+        "build_ai_provider",
+        lambda _env: UnconfiguredAIProvider("pinned by the test suite"),
+    )
 
 
 def test_bind_socket_zero_returns_an_open_socket_on_a_free_loopback_port() -> None:
@@ -213,6 +234,59 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     assert sockets[0].getsockname()[1] == payload["port"]
     assert sockets[0].fileno() != -1
     sockets[0].close()
+
+
+def test_run_starts_and_serves_on_a_host_with_no_ai_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #97's acceptance criterion for an unconfigured machine: the app
+    still starts. Answer intake, review and PDF export do not need a grading
+    provider, and refusing to start without one would take all three away to
+    punish a missing API key.
+
+    Also pins *where* that decision is taken: `run()` reads this process's
+    environment and hands the result to `create_app`, rather than
+    `create_app` reaching for `os.environ` itself -- which would make every
+    test that builds an app inherit whatever the machine it runs on happens
+    to have configured.
+    """
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args: None)
+
+    seen: dict[str, Mapping[str, str]] = {}
+    provider = UnconfiguredAIProvider("no transport configured on this host")
+
+    def fake_build(env: Mapping[str, str]) -> UnconfiguredAIProvider:
+        seen["env"] = env
+        return provider
+
+    monkeypatch.setattr(sidecar, "build_ai_provider", fake_build)
+
+    captured: dict[str, Any] = {}
+
+    def fake_server_run(self: uvicorn.Server, sockets: list[socket.socket] | None = None) -> None:
+        captured["config"] = self.config
+        if sockets is not None:
+            for sock in sockets:
+                sock.close()
+
+    monkeypatch.setattr(uvicorn.Server, "run", fake_server_run)
+
+    handshake_file = tmp_path / "handshake.json"
+    exit_code = run(
+        [
+            "--handshake-file",
+            str(handshake_file),
+            "--app-data-dir",
+            str(tmp_path / "app-data"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert handshake_file.is_file()
+    assert seen["env"] is os.environ
+    assert captured["config"].app.state.ai_provider is provider
 
 
 def test_self_test_imports_native_backed_modules_without_a_handshake_file() -> None:
