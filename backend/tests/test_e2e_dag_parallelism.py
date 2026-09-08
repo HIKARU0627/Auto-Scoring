@@ -26,11 +26,12 @@ Issue #50 (docs/job-queue.md) landed on after a test whose result depended on
 how many rounds the workers got through before the test coroutine ran again
 failed deterministically on Linux and not at all on Windows.
 
-`max_concurrency=2` throughout is the *provisional* default
-(business-rules-and-evaluation-data.md section 3 (E) -- the real value is the
-project owner's decision, pending Issue #35's measurements). These tests
-assert the queue honours whatever value it is given; they do not assert that
-2 is the right one.
+`max_concurrency=2` throughout is deliberately *not* `QueueSettings`' own
+default (4 since Issue #81, business-rules-and-evaluation-data.md section
+3 (E)). The DAG below has exactly two runnable roots, so 2 is the largest cap
+these scenarios can actually saturate -- and a latch that only opens at a cap
+the queue can reach is what makes "and still in parallel" a real assertion.
+These tests assert the queue honours whatever value it is given.
 """
 
 from __future__ import annotations
@@ -52,7 +53,8 @@ from tests.fakes import FakeClock, FakeJobProcessor, ProcessingSpan, peak_overla
 from tests.support import EPOCH, make_submission
 from tests.support import seed_confirmed_dependency_graph as _seed
 
-#: The provisional concurrency cap under test (section 3 (E), still undecided).
+#: The concurrency cap under test -- the module docstring explains why it is
+#: 2 rather than the configured default of 4 (section 3 (E)).
 _MAX_CONCURRENCY = 2
 
 #: A 3-page answer whose questions cover every shape the acceptance names:
@@ -193,8 +195,8 @@ async def test_a_low_confidence_prerequisite_blocks_only_its_own_downstream(
 ) -> None:
     """q1 succeeds but is not usable (business-rules-and-evaluation-data.md
     section 4.4's low-Confidence case, decided by the processor at whatever
-    threshold section 3 (C) eventually fixes -- scripted here so the test
-    does not depend on that undecided value).
+    threshold section 3 (C) is currently configured with -- scripted here so
+    the test does not depend on that operationally-tuned value).
 
     Its dependents q3/q4 -- and q5 behind them -- must stay BLOCKED and must
     never be handed to the provider at all. q2, which does not depend on q1,
