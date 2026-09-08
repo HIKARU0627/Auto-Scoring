@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
 from collections.abc import Mapping
+from pathlib import Path
 
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
 from auto_scoring.adapters.ai_grading.codex_app_server_provider import CodexAppServerProvider
@@ -149,19 +151,29 @@ def _build(
             prompt_version=prompt_version,
             temperature=temperature,
         )
-    # codex_app_server: no credential lives here at all -- authentication is
+    # codex_app_server: no API key lives here at all -- authentication is
     # the operator's own `codex login` session on this host (docs/poc-2-ai-
-    # grading.md section 7.1), which this process cannot inspect, so there
-    # is nothing to check and nothing that could mark it "not configured".
+    # grading.md section 7.1). That session state is not inspectable from
+    # this process, but the executable that would carry it *is*: a host
+    # where `codex` is not installed cannot possibly grade anything, so
+    # leaving this link in the chain there just guarantees one wasted
+    # failure ahead of every provider below it -- exactly what
+    # docs/ai-grading-pipeline.md's "認証情報が揃っているものだけをチェーンに
+    # 組む" rules out (code review finding). Being installed is necessary,
+    # not sufficient: a host with `codex` but no login still fails at call
+    # time, and the chain falls through then.
     #
     # No temperature either: Codex app-server's protocol has no sampling-
     # temperature parameter, so CodexAppServerProvider does not accept one
     # (see codex_app_server_provider._UNCONFIGURABLE_TEMPERATURE -- code
     # review finding).
+    executable = values.get("AUTO_SCORING_CODEX_EXECUTABLE", "").strip() or "codex"
+    if shutil.which(executable) is None and not Path(executable).is_file():
+        raise _MissingCredentials(f"the {executable!r} executable was not found on this host")
     return CodexAppServerProvider(
         model=values.get("AUTO_SCORING_CODEX_MODEL", "").strip() or None,
         prompt_version=prompt_version,
-        executable=values.get("AUTO_SCORING_CODEX_EXECUTABLE", "").strip() or "codex",
+        executable=executable,
     )
 
 

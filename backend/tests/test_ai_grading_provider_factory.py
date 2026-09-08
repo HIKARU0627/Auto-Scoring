@@ -1,5 +1,7 @@
 """Tests for the config-driven ``AIProvider`` transport switch (Issues #44, #35)."""
 
+import shutil
+
 import pytest
 
 from auto_scoring.adapters.ai_grading import factory
@@ -237,3 +239,43 @@ def test_gemini_never_accepts_an_api_key(_adc_missing: None) -> None:
                 "AUTO_SCORING_GEMINI_API_KEY": "should-be-ignored",
             }
         )
+
+
+def test_codex_is_skipped_when_its_executable_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/ai-grading-pipeline.md: "認証情報が揃っているものだけをチェーンに
+    組む". A host without `codex` cannot grade anything through it, so
+    leaving the link in guarantees one wasted failure ahead of every
+    provider below it (code review finding)."""
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    provider = create_ai_provider(
+        {
+            "AUTO_SCORING_AI_GRADING_TRANSPORT": "codex_app_server,openrouter",
+            "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+            **_OPENROUTER_CREDENTIALS,
+        }
+    )
+
+    assert isinstance(provider, OpenRouterAIProvider)
+
+
+def test_codex_is_included_when_its_executable_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Being installed is necessary, not sufficient: a host with `codex`
+    but no login still fails at call time, and the chain falls through
+    then. That is a runtime failure, not a construction-time one."""
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/local/bin/{name}")
+
+    provider = create_ai_provider(
+        {
+            "AUTO_SCORING_AI_GRADING_TRANSPORT": "codex_app_server,openrouter",
+            "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+            **_OPENROUTER_CREDENTIALS,
+        }
+    )
+
+    assert isinstance(provider, FallbackAIProvider)
+    assert [child.name for child in provider.providers] == ["codex-app-server", "openrouter"]
