@@ -2,10 +2,12 @@
 
 business-rules-and-evaluation-data.md section 3 (B): the project owner chose
 an **ordered fallback chain** (Gemini API -> Codex App Server -> OpenRouter ->
-OpenAI API; Issue #81), not a single vendor. Two of the four have adapters
-(Issue #44, `adapters/ai_grading/`), the composite that tries them in order
-does not exist yet, and no chain is wired into `create_app` (docs/ai-grading-
-pipeline.md "AIモデル: 優先度つきフォールバック"; live probe in Issue #54).
+OpenAI API; Issue #81), not a single vendor. All four now have adapters and
+the composite that tries them in order exists
+(`adapters/ai_grading/fallback_provider.py`, Issues #44/#35), but **no chain
+is wired into `create_app` yet**: `create_ai_provider()` still has no caller
+(docs/ai-grading-pipeline.md "AIモデル: 優先度つきフォールバック"), so this
+remains the default an unconfigured deployment gets.
 
 Mirrors `auto_scoring.adapters.ocr.null_provider.NullOCRProvider`: rather
 than raising (which `GradingJobProcessor` would have to guess a retry

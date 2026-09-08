@@ -92,7 +92,7 @@ class AdcTokenSource:
     ``project_id`` is whatever ADC resolved (the ADC file's
     ``quota_project_id`` for a user credential, the service account's own
     project for a service-account credential). A caller may override it
-    with ``AUTO_SCORING_VERTEX_PROJECT_ID`` for a host whose ADC resolves
+    with ``AUTO_SCORING_VERTEX_PROJECT`` for a host whose ADC resolves
     to a different project than the one Vertex AI should be billed to; it
     is never read from a committed file.
     """
@@ -123,7 +123,7 @@ class AdcTokenSource:
         if not resolved_project or not resolved_project.strip():
             raise AdcCredentialsError(
                 "Google Application Default Credentials resolved no project id. Set "
-                "AUTO_SCORING_VERTEX_PROJECT_ID, or re-run `gcloud auth "
+                "AUTO_SCORING_VERTEX_PROJECT, or re-run `gcloud auth "
                 "application-default set-quota-project <project>`."
             )
         self._credentials = credentials

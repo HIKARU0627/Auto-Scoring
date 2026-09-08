@@ -1,9 +1,12 @@
-"""Tests for the config-driven ``AIProvider`` transport switch (Issue #44)."""
+"""Tests for the config-driven ``AIProvider`` transport switch (Issues #44, #35)."""
 
 import pytest
 
+from auto_scoring.adapters.ai_grading import factory
+from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError
 from auto_scoring.adapters.ai_grading.codex_app_server_provider import CodexAppServerProvider
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
+from auto_scoring.adapters.ai_grading.fallback_provider import FallbackAIProvider
 from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
 
 _COMMON = {
@@ -113,3 +116,124 @@ def test_create_ai_provider_ignores_temperature_for_codex_app_server() -> None:
         }
     )
     assert isinstance(provider, CodexAppServerProvider)
+
+
+# --- Issue #35: the transport list builds the Issue #81 fallback chain ---
+
+
+class _FakeAdcTokenSource:
+    """Stands in for ADC so these tests do not depend on whether the host
+    running them happens to have a `gcloud` login."""
+
+    project_id = "test-project"
+
+    def __init__(self, *, project_id: str | None = None) -> None:
+        if project_id:
+            self.project_id = project_id
+
+    def bearer_token(self) -> str:  # pragma: no cover - never called offline
+        return "fake"
+
+
+@pytest.fixture
+def _adc_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(factory, "AdcTokenSource", _FakeAdcTokenSource)
+
+
+@pytest.fixture
+def _adc_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(**_kwargs: object) -> None:
+        raise AdcCredentialsError("no ADC on this host")
+
+    monkeypatch.setattr(factory, "AdcTokenSource", _raise)
+
+
+def test_a_transport_list_builds_the_priority_chain(_adc_available: None) -> None:
+    """business-rules-and-evaluation-data.md section 3 (B): the adopted
+    configuration is the order itself, not a single vendor."""
+    provider = create_ai_provider(
+        {
+            "AUTO_SCORING_AI_GRADING_TRANSPORT": "gemini,codex_app_server,openrouter,openai",
+            "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+            "AUTO_SCORING_GEMINI_MODEL": "gemini-2.5-flash",
+            **_OPENROUTER_CREDENTIALS,
+            "AUTO_SCORING_OPENAI_API_KEY": "key",
+            "AUTO_SCORING_OPENAI_MODEL": "gpt-4o-mini",
+        }
+    )
+    assert isinstance(provider, FallbackAIProvider)
+    assert [child.name for child in provider.providers] == [
+        "gemini",
+        "codex-app-server",
+        "openrouter",
+        "openai",
+    ]
+
+
+def test_transports_without_credentials_are_left_out_of_the_chain(_adc_missing: None) -> None:
+    """docs/ai-grading-pipeline.md: an unconfigured provider must not
+    consume one step of the chain by failing at call time."""
+    provider = create_ai_provider(
+        {
+            "AUTO_SCORING_AI_GRADING_TRANSPORT": "gemini,openrouter,openai",
+            "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+            "AUTO_SCORING_GEMINI_MODEL": "gemini-2.5-flash",
+            **_OPENROUTER_CREDENTIALS,
+        }
+    )
+    # Gemini has no ADC here and OpenAI has no key, so only OpenRouter is
+    # buildable -- and a one-link chain is just that adapter.
+    assert isinstance(provider, OpenRouterAIProvider)
+
+
+def test_no_configured_transport_at_all_is_an_error_not_an_empty_chain(
+    _adc_missing: None,
+) -> None:
+    """An empty chain would grade nothing while looking configured."""
+    with pytest.raises(AIProviderConfigError, match="usable credentials"):
+        create_ai_provider(
+            {
+                "AUTO_SCORING_AI_GRADING_TRANSPORT": "gemini,openai",
+                "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+                "AUTO_SCORING_GEMINI_MODEL": "gemini-2.5-flash",
+            }
+        )
+
+
+def test_a_repeated_transport_is_rejected() -> None:
+    """Silently de-duplicating would leave the operator believing a
+    provider they listed twice is tried twice."""
+    with pytest.raises(AIProviderConfigError, match="twice"):
+        create_ai_provider(
+            {
+                "AUTO_SCORING_AI_GRADING_TRANSPORT": "openrouter,openrouter",
+                "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+                **_OPENROUTER_CREDENTIALS,
+            }
+        )
+
+
+def test_one_unknown_entry_rejects_the_whole_list() -> None:
+    with pytest.raises(AIProviderConfigError, match="unknown transport"):
+        create_ai_provider(
+            {
+                "AUTO_SCORING_AI_GRADING_TRANSPORT": "openrouter,bogus",
+                "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+                **_OPENROUTER_CREDENTIALS,
+            }
+        )
+
+
+def test_gemini_never_accepts_an_api_key(_adc_missing: None) -> None:
+    """Gemini API keys are blocked by organization policy, so a key in the
+    environment must not make the Gemini link buildable -- the operator
+    needs the ADC error, not a chain that silently drops the candidate."""
+    with pytest.raises(AIProviderConfigError, match="usable credentials"):
+        create_ai_provider(
+            {
+                "AUTO_SCORING_AI_GRADING_TRANSPORT": "gemini",
+                "AUTO_SCORING_AI_GRADING_PROMPT_VERSION": "v1",
+                "AUTO_SCORING_GEMINI_MODEL": "gemini-2.5-flash",
+                "AUTO_SCORING_GEMINI_API_KEY": "should-be-ignored",
+            }
+        )
