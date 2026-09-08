@@ -32,7 +32,6 @@ reviewable result and nothing else.
 
 from __future__ import annotations
 
-from asyncio import to_thread
 from collections.abc import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -307,7 +306,7 @@ def build_criteria_router(
         uow.commit()
 
     @router.post("/tests/{test_id}/criteria/extract", response_model=CriteriaResponse)
-    async def extract_criteria(
+    def extract_criteria(
         test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
     ) -> CriteriaResponse:
         """Read the registered 採点基準PDF with the configured model.
@@ -320,6 +319,15 @@ def build_criteria_router(
 
         The result is a **proposal**. It is stored as a DRAFT and nothing
         downstream reads it until a human confirms it.
+
+        Deliberately a **synchronous** handler, like ``/profile/analyze``:
+        FastAPI runs those in its worker threadpool, so the per-test lock
+        below and the minute-long provider call are held off the event loop.
+        Written as ``async def`` with ``await to_thread(...)`` inside, the
+        two blocking calls would move off the loop but ``with
+        test_locks.for_test(...)`` would not -- a second extraction of the
+        same test would then block the whole sidecar for as long as the
+        first one takes to answer (code review of this Issue).
         """
         _get_test_or_404(uow, test_id)
         with test_locks.for_test(test_id):
@@ -334,12 +342,7 @@ def build_criteria_router(
                 )
             source = criteria_pdf_path(store, test_id)
             try:
-                # Rendering is CPU-bound and the provider call is a long
-                # network wait; both are synchronous. Offloaded so one
-                # extraction does not block the event loop for every other
-                # request, the same rule `create_test`/`analyze_profile`
-                # follow for their own blocking work.
-                request = await to_thread(build_extraction_request, pdf_engine, source)
+                request = build_extraction_request(pdf_engine, source)
             except FileNotFoundError as exc:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
@@ -352,7 +355,7 @@ def build_criteria_router(
                 raise HTTPException(422, detail=str(exc)) from exc
 
             try:
-                output = await to_thread(extractor.extract, request)
+                output = extractor.extract(request)
             except SchemaViolation as exc:
                 # The model answered, but not in a shape that can be
                 # trusted with point values. 502, and **nothing is saved**:
