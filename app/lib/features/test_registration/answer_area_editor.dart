@@ -122,7 +122,12 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
   @override
   void didUpdateWidget(AnswerAreaEditor oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.regions.length != oldWidget.regions.length) {
+    final index = _selectedIndex;
+    if (index != null && index >= widget.regions.length) {
+      // Only when the index no longer addresses anything -- a reload that
+      // returned fewer regions. Clearing on *any* length change would also
+      // clear the selection this widget just set on a box the reviewer drew,
+      // since the parent rebuilds with the longer list a frame later.
       _selectedIndex = null;
     }
   }
@@ -149,6 +154,9 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
 
   void _deleteRegion(int index) {
     final next = [...widget.regions]..removeAt(index);
+    // Cleared explicitly: every later index shifts down by one, so keeping
+    // the selection would move the highlight onto a box nobody selected.
+    setState(() => _selectedIndex = null);
     _emit(next);
   }
 

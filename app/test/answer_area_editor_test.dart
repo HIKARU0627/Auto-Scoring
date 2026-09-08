@@ -485,6 +485,50 @@ void main() {
       expect(regions().single.bbox.x1, closeTo(0.6, 0.02));
     });
 
+    testWidgets('a box you just drew is selected, so it can be adjusted', (
+      tester,
+    ) async {
+      // Otherwise the reviewer draws a rectangle and has to hunt for it and
+      // click it before nudging an edge -- and the drawn rectangle is almost
+      // never right the first time.
+      await _pumpEditor(tester, regions: const [], undetected: const ['問1']);
+
+      final surface = find.byKey(const Key('answer-area-draw-surface-0'));
+      final topLeft = tester.getTopLeft(surface);
+      final size = tester.getSize(surface);
+      await _dragBy(
+        tester,
+        topLeft + Offset(size.width * 0.2, size.height * 0.2),
+        Offset(size.width * 0.4, size.height * 0.3),
+      );
+
+      // The resize handle only exists on the selected box.
+      expect(find.byKey(const Key('answer-area-resize-0')), findsOneWidget);
+    });
+
+    testWidgets('deleting clears the selection instead of moving it', (
+      tester,
+    ) async {
+      final regions = await _pumpEditor(
+        tester,
+        regions: [
+          _region(regionId: 'a0'),
+          _region(regionId: 'a1', label: '問2', y0: 0.5, y1: 0.7),
+        ],
+      );
+
+      await tester.tap(find.byKey(const Key('answer-area-box-1')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('answer-area-resize-1')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('answer-area-delete-0')));
+      await tester.pumpAndSettle();
+
+      expect(regions(), hasLength(1));
+      // Index 0 is now the surviving box -- it must not inherit the ring.
+      expect(find.byKey(const Key('answer-area-resize-0')), findsNothing);
+    });
+
     testWidgets('every field stays reachable by typing numbers', (
       tester,
     ) async {
