@@ -564,7 +564,9 @@ def _regions_for(number: str, page_index: int) -> list[dict[str, object]]:
 def register_ready_test(client: TestClient, *, name: str = "理科 第1回") -> str:
     """Acceptance scenario 1, through the real endpoints.
 
-    Register the two PDFs, generate profile candidates, have the reviewer
+    Register the criteria PDF (plus a reference PDF, which is what automatic
+    candidate generation reads the page layout from), generate profile
+    candidates, have the reviewer
     replace them with the confirmed regions, confirm the profile, then
     analyze and confirm the question dependency graph, and finally complete
     registration. Returns the test id, now `ready` -- which is the gate
@@ -573,11 +575,15 @@ def register_ready_test(client: TestClient, *, name: str = "理科 第1回") -> 
     created = client.post(
         "/tests",
         headers=_AUTH,
-        data={"name": name, "subject": "理科"},
-        files={
-            "model_answer": ("model-answer.pdf", _registration_pdf(), "application/pdf"),
-            "manual": ("manual.pdf", _registration_pdf(), "application/pdf"),
-        },
+        data={"name": name, "subject": "理科", "material_roles": ["reference"]},
+        files=[
+            ("criteria", ("02_criteria.pdf", _registration_pdf(), "application/pdf")),
+            # Automatic candidate generation reads the *page layout* from a
+            # model-answer-shaped document. Issue #101 made that optional, so
+            # this scenario -- which goes on to call /profile/analyze --
+            # registers one explicitly as a `reference` material.
+            ("materials", ("reference.pdf", _registration_pdf(), "application/pdf")),
+        ],
     )
     assert created.status_code == 201, created.text
     test_id: str = created.json()["id"]

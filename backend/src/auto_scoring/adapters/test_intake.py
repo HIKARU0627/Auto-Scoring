@@ -1,18 +1,34 @@
-"""Validate, store, and register a new test's two PDFs (Issue #16).
+"""Validate, store, and register a test's material files (Issues #16, #101).
 
-Mirrors `adapters.submission_intake`'s validate-then-store shape, but for the
-two registration PDFs (model answer + marking manual) instead of one answer
-PDF: no OCR/answer-area extraction happens here, only the same PDF-safety
-checks (`domain.pdf_intake`) followed by an atomic write of both files plus
-the new `Test` row (`adapters.atomic.transactional_operation`: the DB commit
-happens before either file is written, so a failure leaves neither a row nor
-a file behind).
+Mirrors `adapters.submission_intake`'s validate-then-store shape. What changed
+in Issue #101 is *what* gets registered: not a fixed pair of PDFs (a model
+answer and a marking manual) but a **required grading-criteria PDF plus any
+number of optional role-tagged files**.
+
+The model-answer PDF is gone as a required input. It does not exist in real
+grading material -- the criteria PDF already contains the model answer, and no
+document with "the answers written into the answer boxes" is distributed at
+all, which is what the old profile-analysis flow assumed (Issue #95 decision
+1). A model answer that a reviewer does happen to have is attached as a
+`REFERENCE` material like any other extra file.
+
+Writes stay atomic the same way they were: `adapters.atomic
+.transactional_operation` commits the DB before any file is written, so a
+failure leaves neither a row nor a file behind.
+
+**This module extracts nothing from the files it stores.** Turning a criteria
+PDF into per-question points and rubrics is separate work (Issue #95 decision
+A) that Issue #101 deliberately does not do -- so a test registered here has
+its materials attached but is **not yet gradable**, and callers must not imply
+otherwise.
 """
 
 from __future__ import annotations
 
+import hashlib
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +37,8 @@ from auto_scoring.adapters.atomic import FinalizationError, transactional_operat
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.text_layout_extraction import extract_text_lines
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.intake_template import MaterialRole
+from auto_scoring.domain.material_intake import validate_material_upload
 from auto_scoring.domain.models import ScoringMethod, Test, TestStatus
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
@@ -29,19 +47,28 @@ from auto_scoring.domain.pdf_intake import (
     PdfEncryptedError,
     PdfGeometryError,
     validate_page_count,
-    validate_upload_bytes,
 )
+from auto_scoring.domain.test_material import TestMaterial
 
 #: Marks a `Test` directory as having gone through `register_test` at least
 #: once -- written before the DB commit, never removed. Its only purpose is
 #: to let `repair_incomplete_test_registrations` tell a test created by
-#: *this* Issue's PDF-based registration flow apart from one that predates
-#: it entirely (migration 0011 backfills `status='draft'` onto every
-#: pre-existing row, none of which were ever registered with PDFs -- see
-#: that function's own docstring). A permanent tag, not a "still pending"
-#: flag: once both PDFs are also on disk, the row is a normal, complete
-#: registration regardless of whether this file is still there.
+#: this PDF-based registration flow apart from one that predates it entirely
+#: (migration 0011 backfills `status='draft'` onto every pre-existing row,
+#: none of which were ever registered with files -- see that function's own
+#: docstring). A permanent tag, not a "still pending" flag: once the
+#: materials are also on disk, the row is a normal, complete registration
+#: regardless of whether this file is still there.
 _REGISTRATION_MARKER_FILENAME = ".registration-marker"
+
+
+@dataclass(frozen=True, kw_only=True)
+class MaterialUpload:
+    """One file being attached, before it has been validated or stored."""
+
+    role: MaterialRole
+    filename: str
+    data: bytes
 
 
 def _registration_marker_path(store: LocalFileStore, test_id: str) -> Path:
@@ -65,10 +92,8 @@ def _validate_one_pdf(pdf_engine: PdfEngine, path: Path, limits: IntakeLimits) -
     # of 90, makes `PdfEngine.page_geometry` raise a `ValueError` (see
     # `adapters.pdf.pdfium_pypdf_engine.PageGeometry`'s own validation) --
     # but nothing here called it, so registration would persist the test
-    # anyway and only discover the problem the first time `/profile/analyze`
-    # calls `page_geometry` and gets an unhandled 500, leaving an unusable
-    # draft behind (Issue #16 review). Validate every page now, while
-    # intake can still reject it as a normal `PdfIntakeError` instead.
+    # anyway and only discover the problem the first time something rendered
+    # it, leaving an unusable draft behind (Issue #16 review).
     for page_index in range(page_count):
         try:
             pdf_engine.page_geometry(path, page_index)
@@ -78,32 +103,89 @@ def _validate_one_pdf(pdf_engine: PdfEngine, path: Path, limits: IntakeLimits) -
             # `page_geometry` (pypdf) can fail in ways other than the
             # `ValueError` its own box-validation raises -- e.g. `KeyError`/
             # `TypeError` resolving an inherited MediaBox/CropBox/rotation
-            # through a broken page tree, or one of pypdf's own parse
-            # errors. None of those are a "the geometry is invalid" problem
-            # this test should carry `PdfGeometryError`'s more specific
-            # message; they mean the page itself couldn't be read (Issue
-            # #16 review round 7).
+            # through a broken page tree. None of those mean "the geometry is
+            # invalid"; they mean the page could not be read (Issue #16
+            # review round 7).
             raise PdfCorruptedError(
                 f"could not determine page {page_index + 1}'s geometry: {exc}"
             ) from exc
         try:
-            # `page_geometry`/`page_count`/`is_encrypted` above are all
-            # pypdf-backed, but `generate_profile_candidates` (the first
-            # thing that will actually read this file's text, via
-            # `_question_blocks`) uses pypdfium2 directly -- pypdf can
-            # parse, and silently repair, a PDF whose structure pypdfium2's
-            # own stricter parser refuses outright. Without exercising that
-            # exact code path here, such a file would pass intake, get
-            # persisted, and only fail once `/profile/analyze` calls it,
-            # leaving a persisted draft with no profile and no documented
-            # way back in (docs/test-registration.md's "不正PDFを安全に
-            # 拒否する" contract must hold at intake, not partway through
-            # analysis -- Issue #16 review round 7).
+            # The checks above are pypdf-backed, but pdfium is what actually
+            # renders and extracts text later, and pypdf can parse -- and
+            # silently repair -- a PDF pdfium's stricter parser refuses
+            # outright. Exercising that path here keeps "an invalid PDF is
+            # rejected at intake" true rather than deferring the failure to
+            # whatever first tries to read the file (Issue #16 review round 7).
             extract_text_lines(path, page_index)
         except Exception as exc:
             raise PdfCorruptedError(
                 f"page {page_index + 1} could not be parsed with pdfium: {exc}"
             ) from exc
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ValidatedMaterial:
+    role: MaterialRole
+    filename: str
+    extension: str
+    data: bytes
+    sha256: str
+
+
+def _validate_uploads(
+    pdf_engine: PdfEngine,
+    uploads: Sequence[MaterialUpload],
+    limits: IntakeLimits,
+) -> list[_ValidatedMaterial]:
+    """Validate every upload before any of them is written, de-duplicated by
+    (role, content).
+
+    All-or-nothing on purpose: a batch that would fail on its third file must
+    not leave the first two attached, because the reviewer's retry would then
+    have to reason about which half landed.
+
+    **The de-duplication lives here, not in the callers.** Two files with
+    different names but identical bytes are one material under
+    ``uq_test_materials_test_role_hash``, so inserting both fails the
+    constraint and takes every other material in the same request down with
+    it -- and real material makes that reachable, since a subject folder can
+    ship the same document twice under two names. Both `register_test` and
+    `attach_materials` write materials, and putting the rule in the one
+    function they share is what stops it from being fixed on one path and left
+    broken on the other (which is exactly what happened: review round 1 fixed
+    `attach_materials`, round 2 found `register_test` still broken).
+
+    The first upload of a duplicate pair wins, so the reviewer's own ordering
+    decides which file name is remembered.
+    """
+    validated: dict[tuple[MaterialRole, str], _ValidatedMaterial] = {}
+    with tempfile.TemporaryDirectory(prefix="auto-scoring-test-intake-") as scratch_dir:
+        for index, upload in enumerate(uploads):
+            extension = validate_material_upload(
+                role=upload.role,
+                filename=upload.filename,
+                data=upload.data,
+                limits=limits,
+            )
+            if extension == "pdf":
+                # Word/Excel are stored as opaque bytes: nothing in this app
+                # opens them yet (Issue #95 decision 3 registers them so a
+                # reviewer can quote from them, and the LLM extraction that
+                # would read them is separate work). Their signature check in
+                # `validate_material_upload` is all that is claimed about
+                # them, and no more is implied here.
+                scratch = Path(scratch_dir) / f"material-{index}.pdf"
+                scratch.write_bytes(upload.data)
+                _validate_one_pdf(pdf_engine, scratch, limits)
+            item = _ValidatedMaterial(
+                role=upload.role,
+                filename=upload.filename,
+                extension=extension,
+                data=upload.data,
+                sha256=hashlib.sha256(upload.data).hexdigest(),
+            )
+            validated.setdefault((item.role, item.sha256), item)
+    return list(validated.values())
 
 
 def register_test(
@@ -113,119 +195,196 @@ def register_test(
     *,
     name: str,
     subject: str | None,
-    model_answer_filename: str,
-    model_answer_mime: str | None,
-    model_answer_data: bytes,
-    manual_filename: str,
-    manual_mime: str | None,
-    manual_data: bytes,
+    materials: Sequence[MaterialUpload],
     limits: IntakeLimits | None = None,
     now: datetime,
     id_factory: Callable[[], str] = lambda: uuid4().hex,
-) -> Test:
-    """Validate both PDFs, then create the `Test` row and store both files.
+) -> tuple[Test, list[TestMaterial]]:
+    """Validate every material, then create the `Test` row and store the files.
 
-    Raises a `PdfIntakeError` subclass for either PDF's validation failure --
-    neither PDF is stored and no `Test` row is created in that case.
+    ``materials`` must include exactly one
+    :attr:`~auto_scoring.domain.intake_template.MaterialRole.GRADING_CRITERIA`
+    file -- the one required input (Issue #95 decision 1). The caller's own
+    signature is what makes that unmissable at the HTTP boundary; the check
+    here is what makes it true for every caller.
+
+    Raises a validation error for any material -- no file is stored and no
+    `Test` row is created in that case.
     """
     limits = limits or IntakeLimits()
-    validate_upload_bytes(
-        filename=model_answer_filename,
-        declared_mime=model_answer_mime,
-        data=model_answer_data,
-        limits=limits,
-    )
-    validate_upload_bytes(
-        filename=manual_filename, declared_mime=manual_mime, data=manual_data, limits=limits
-    )
+    validated = _validate_uploads(pdf_engine, materials, limits)
 
-    with tempfile.TemporaryDirectory(prefix="auto-scoring-test-intake-") as scratch_dir:
-        model_answer_scratch = Path(scratch_dir) / "model-answer.pdf"
-        manual_scratch = Path(scratch_dir) / "manual.pdf"
-        model_answer_scratch.write_bytes(model_answer_data)
-        manual_scratch.write_bytes(manual_data)
-
-        _validate_one_pdf(pdf_engine, model_answer_scratch, limits)
-        _validate_one_pdf(pdf_engine, manual_scratch, limits)
-
-        test = Test(
-            id=id_factory(),
-            name=name,
-            subject=subject,
-            default_scoring_method=ScoringMethod.ADDITIVE,
-            created_at=now,
+    # Counted after de-duplication (`_validate_uploads`), so sending the same
+    # criteria file twice is one criteria file rather than a rejection.
+    criteria_count = sum(1 for item in validated if item.role is MaterialRole.GRADING_CRITERIA)
+    if criteria_count != 1:
+        raise ValueError(
+            f"a test must be registered with exactly one grading-criteria file, "
+            f"got {criteria_count}"
         )
-        # Written before the DB commit below (and independent of the two
-        # PDFs' own staged writes) so it exists even if this attempt gets no
-        # further than that commit -- see `_REGISTRATION_MARKER_FILENAME`'s
-        # docstring for why `repair_incomplete_test_registrations` needs
-        # this signal to exist regardless of whether the PDFs ever reach
-        # disk.
-        store.write_atomic(_registration_marker_path(store, test.id), b"")
-        try:
-            with transactional_operation(uow, store) as staged:
-                uow.tests.add(test)
-                staged.add(store.test_model_answer_pdf_path(test.id), model_answer_data)
-                staged.add(store.test_manual_pdf_path(test.id), manual_data)
-        except FinalizationError:
-            # The Test row already committed (transactional_operation only
-            # guarantees "DB commit before file write", not that the write
-            # also succeeds) but one or both PDFs failed to reach disk (full
-            # disk, permissions, ...). Left alone, this id would linger
-            # forever as a `draft` test with missing files -- unusable
-            # (neither PDF can be analyzed) and, since the caller never
-            # received this id (the request as a whole is about to raise),
-            # unreachable for a retry too. Compensate by removing the
-            # now-file-less row in a fresh transaction on the same
-            # already-committed session, and any partial file (e.g. the
-            # model-answer PDF, staged before a failing manual PDF) that did
-            # reach disk -- an orphaned file with no owning row would never
-            # be cleaned up by anything else. The client's only path forward
-            # is to submit the two PDFs again, which mints a fresh id anyway.
-            uow.tests.delete(test.id)
-            uow.commit()
-            store.delete_test(test.id)
-            raise
 
-    return test
+    test = Test(
+        id=id_factory(),
+        name=name,
+        subject=subject,
+        default_scoring_method=ScoringMethod.ADDITIVE,
+        created_at=now,
+    )
+    # Written before the DB commit below (and independent of the materials'
+    # own staged writes) so it exists even if this attempt gets no further
+    # than that commit -- see `_REGISTRATION_MARKER_FILENAME`'s docstring.
+    store.write_atomic(_registration_marker_path(store, test.id), b"")
+
+    stored: list[TestMaterial] = []
+    try:
+        with transactional_operation(uow, store) as staged:
+            uow.tests.add(test)
+            for item in validated:
+                material_id = id_factory()
+                path = store.test_material_path(test.id, material_id, item.extension)
+                material = TestMaterial(
+                    id=material_id,
+                    test_id=test.id,
+                    role=item.role,
+                    stored_path=store.relative_path(path),
+                    sha256=item.sha256,
+                    size_bytes=len(item.data),
+                    original_filename=item.filename,
+                    created_at=now,
+                )
+                uow.test_materials.add(material)
+                staged.add(path, item.data)
+                stored.append(material)
+    except FinalizationError:
+        # The rows already committed (transactional_operation only guarantees
+        # "DB commit before file write", not that the write also succeeds)
+        # but one or more files failed to reach disk. Left alone, this id
+        # would linger forever as a `draft` test with missing files --
+        # unusable, and unreachable for a retry since the caller never
+        # received the id (the request is about to raise). Compensate by
+        # removing the row in a fresh transaction on the same session, and
+        # any partial file that did land -- an orphaned file with no owning
+        # row would never be cleaned up by anything else.
+        uow.tests.delete(test.id)
+        uow.commit()
+        store.delete_test(test.id)
+        raise
+
+    return test, stored
+
+
+def attach_materials(
+    uow: SqlAlchemyUnitOfWork,
+    store: LocalFileStore,
+    pdf_engine: PdfEngine,
+    *,
+    test_id: str,
+    materials: Sequence[MaterialUpload],
+    limits: IntakeLimits | None = None,
+    now: datetime,
+    id_factory: Callable[[], str] = lambda: uuid4().hex,
+) -> list[TestMaterial]:
+    """Add materials to a test that already exists.
+
+    This is what makes the weekly flow work in both directions: answers for an
+    already-registered test arrive as submissions, and a 添削資料 that turns up
+    later can still be attached without re-registering the test (Issue #101).
+
+    Re-attaching a file that is already there under the same role returns the
+    existing material rather than a second copy: the intake screen retries only
+    the rows that failed, and a row can fail *after* its write committed.
+
+    Two further cases this has to get right, both reachable from one ordinary
+    retry:
+
+    * **the same content twice in one request.** Collapsed before any write --
+      otherwise the unique constraint rejects the second insert and takes every
+      other material in the request down with it.
+    * **a row whose file is missing.** Re-staged rather than reported as
+      already-attached, so an interrupted earlier attempt heals instead of
+      leaving a material that can never be opened.
+
+    Returns one material per distinct (role, content), so the result can be
+    shorter than ``materials``.
+    """
+    limits = limits or IntakeLimits()
+    validated = _validate_uploads(pdf_engine, materials, limits)
+
+    fresh: list[_ValidatedMaterial] = []
+    repairs: list[tuple[TestMaterial, _ValidatedMaterial]] = []
+    attached: list[TestMaterial] = []
+    for item in validated:
+        existing = uow.test_materials.find_by_content(test_id, role=item.role, sha256=item.sha256)
+        if existing is None:
+            fresh.append(item)
+        elif store.resolve_stored_path(existing.stored_path).is_file():
+            attached.append(existing)
+        else:
+            # The row is there but its file is not. `transactional_operation`
+            # commits the DB *before* writing, so a crash or a full disk
+            # between the two leaves exactly this -- and the plain
+            # "already attached, nothing to do" answer would report success
+            # for a material that cannot be opened, permanently. Re-stage the
+            # bytes to the path the row already names, which is the one repair
+            # that leaves the row and the file agreeing.
+            repairs.append((existing, item))
+
+    if not fresh and not repairs:
+        return attached
+
+    with transactional_operation(uow, store) as staged:
+        for existing, item in repairs:
+            staged.add(store.resolve_stored_path(existing.stored_path), item.data)
+            attached.append(existing)
+        for item in fresh:
+            material_id = id_factory()
+            path = store.test_material_path(test_id, material_id, item.extension)
+            material = TestMaterial(
+                id=material_id,
+                test_id=test_id,
+                role=item.role,
+                stored_path=store.relative_path(path),
+                sha256=item.sha256,
+                size_bytes=len(item.data),
+                original_filename=item.filename,
+                created_at=now,
+            )
+            uow.test_materials.add(material)
+            staged.add(path, item.data)
+            attached.append(material)
+    return attached
 
 
 def repair_incomplete_test_registrations(
     uow: SqlAlchemyUnitOfWork, store: LocalFileStore
 ) -> list[str]:
     """Delete any `DRAFT` test that went through `register_test` but whose
-    registration PDF(s) are missing on disk.
+    grading-criteria file is missing on disk.
 
-    `register_test`'s own `FinalizationError` handler above already
-    compensates for a failed PDF write within the same request/process --
-    but a process crash or power loss between `transactional_operation`'s DB
-    commit and those file writes completing leaves the same broken state
-    with no exception handler ever running to notice, exactly like
-    `submission_intake.repair_incomplete_submissions` covers for submissions
-    (see its own docstring). Unlike a `Submission`, `Test` has no
-    intermediate `error` state to move into: a test missing either
-    registration PDF cannot be analyzed at all, so (matching what
-    `register_test`'s own compensation above already does) the only usable
-    recovery is to delete the row outright -- the client's next step is to
-    submit the two PDFs again, which mints a fresh id anyway. Call this once
-    at startup (`api/app.py::create_app`), the same way
-    `LocalFileStore.sweep_temp`/`repair_incomplete_submissions` catch what a
-    prior run left in this state before it could shut down cleanly.
+    `register_test`'s own `FinalizationError` handler already compensates for
+    a failed file write within the same request -- but a process crash or
+    power loss between `transactional_operation`'s DB commit and those writes
+    completing leaves the same broken state with no exception handler ever
+    running to notice, exactly like
+    `submission_intake.repair_incomplete_submissions` covers for submissions.
+    Unlike a `Submission`, `Test` has no intermediate `error` state to move
+    into: a test whose criteria file is gone cannot be analyzed at all, so
+    (matching what `register_test`'s compensation does) the only usable
+    recovery is to delete the row outright. Call this once at startup.
 
-    Gated on `_REGISTRATION_MARKER_FILENAME`, not merely "PDFs missing" --
+    Gated on `_REGISTRATION_MARKER_FILENAME`, not merely "a file is missing":
     migration 0011 backfills `status='draft'` onto every `Test` row that
-    predates this Issue's PDF-based registration flow, none of which were
-    ever registered with PDFs to begin with. An earlier version of this
-    function used "PDFs missing" alone as the trigger, which classified
-    every such pre-existing row as an interrupted registration and deleted
-    it -- cascading to its Questions and Submissions -- on the first
-    startup after upgrading a production database past that migration
-    (Issue #16 review round 5, data-loss). Only a row the marker's own
-    docstring says went through `register_test` is ever a candidate here.
+    predates PDF-based registration, and migration 0015 gives every row
+    material entries for the two legacy paths whether or not those files were
+    ever written. An earlier version of this function used "files missing"
+    alone as the trigger, which classified every such pre-existing row as an
+    interrupted registration and deleted it -- cascading to its Questions and
+    Submissions -- on the first startup after upgrading (Issue #16 review
+    round 5, data-loss). Only a row the marker says went through
+    `register_test` is ever a candidate here.
 
-    Only ever considers `DRAFT` tests: a test cannot reach `READY` without
-    both PDFs already having been readable (`/profile/analyze` reads them
-    directly), so a `READY` test missing either file would be a different,
+    Only ever considers `DRAFT` tests: a `READY` test's materials were already
+    read to confirm its profile, so one missing a file now is a different,
     later problem this sweep does not attempt to diagnose.
 
     Returns the ids removed this way.
@@ -236,11 +395,14 @@ def repair_incomplete_test_registrations(
             continue
         if not _registration_marker_path(store, test.id).is_file():
             continue
-        expected_paths = (
-            store.test_model_answer_pdf_path(test.id),
-            store.test_manual_pdf_path(test.id),
-        )
-        if all(path.is_file() for path in expected_paths):
+        criteria = [
+            material
+            for material in uow.test_materials.list_for_test(test.id)
+            if material.role is MaterialRole.GRADING_CRITERIA
+        ]
+        if criteria and all(
+            store.resolve_stored_path(material.stored_path).is_file() for material in criteria
+        ):
             continue
         uow.tests.delete(test.id)
         uow.commit()

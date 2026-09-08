@@ -1,5 +1,8 @@
 # 添削レビュー画面 (PDF + Annotation Overlay)
 
+> **Issue #101 で画面が変わった。** 「答案取込画面」は 資料取込画面 (`/intake`) に
+> 統合された。状態の対応表はこの文書のものを引き続き使う。
+
 GitHub Issue [#21](https://github.com/HIKARU0627/Auto-Scoring/issues/21)（親
 [#3](https://github.com/HIKARU0627/Auto-Scoring/issues/3)）の実装記録。対象は
 Flutter側の添削レビュー画面（`app/lib/features/pdf_review/`）と、それを支える

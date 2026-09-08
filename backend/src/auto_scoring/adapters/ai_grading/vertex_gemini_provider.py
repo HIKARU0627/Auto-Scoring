@@ -68,7 +68,7 @@ _LABEL = "Vertex AI"
 _STRUCTURED_OUTPUT_MODE = "response_json_schema"
 
 
-def _endpoint(*, location: str, project_id: str, model: str) -> str:
+def vertex_generate_content_endpoint(*, location: str, project_id: str, model: str) -> str:
     """The ``generateContent`` URL for one model.
 
     The ``global`` location has its own hostname (no region prefix); every
@@ -147,7 +147,7 @@ class VertexGeminiAIProvider:
         self._prompt_version = prompt_version
         self._temperature = temperature
         self._tokens = tokens
-        self._endpoint = _endpoint(
+        self._endpoint = vertex_generate_content_endpoint(
             location=location.strip(), project_id=tokens.project_id, model=model
         )
         self._client = client or httpx.Client(timeout=timeout_seconds)

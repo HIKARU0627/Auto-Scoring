@@ -498,23 +498,27 @@ class _EntryPointRow extends StatelessWidget {
       spacing: AppSpacing.sm,
       runSpacing: AppSpacing.sm,
       children: [
+        // One entry point, not two. "テスト登録" and "答案取込" were separate
+        // buttons whose names said nothing about what they were for, and they
+        // stood in the wrong order -- answers had to exist before a test could
+        // be finished (Issue #101).
         OutlinedButton.icon(
-          key: const Key('home-open-test-registration'),
-          onPressed: () => onOpen(AppRoutes.testRegistration),
-          icon: const Icon(Icons.add_task),
-          label: const Text('テスト登録'),
-        ),
-        OutlinedButton.icon(
-          key: const Key('home-open-answer-intake'),
-          onPressed: () => onOpen(AppRoutes.answerIntake),
-          icon: const Icon(Icons.upload_file),
-          label: const Text('答案取込'),
+          key: const Key('home-open-intake'),
+          onPressed: () => onOpen(AppRoutes.intake),
+          icon: const Icon(Icons.drive_folder_upload),
+          label: const Text('資料を取り込む'),
         ),
         OutlinedButton.icon(
           key: const Key('home-open-test-list-footer'),
           onPressed: () => onOpen(AppRoutes.testList),
           icon: const Icon(Icons.list_alt),
           label: const Text('テスト一覧'),
+        ),
+        OutlinedButton.icon(
+          key: const Key('home-open-settings'),
+          onPressed: () => onOpen(AppRoutes.settings),
+          icon: const Icon(Icons.settings),
+          label: const Text('設定'),
         ),
       ],
     );

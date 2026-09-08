@@ -335,7 +335,7 @@ void main() {
       final action = dashboard.nextAction;
       expect(action.headline, contains('取込に失敗'));
       expect(action.detail, contains('国語 第1回'));
-      expect(action.route, AppRoutes.answerIntake);
+      expect(action.route, AppRoutes.intake);
     });
 
     test('取込失敗があっても取込済みが先', () {
@@ -380,7 +380,7 @@ void main() {
         test: [buildSubmission(id: 's1', testId: 't1', state: 'exported')],
       });
 
-      expect(dashboard.nextAction.route, AppRoutes.answerIntake);
+      expect(dashboard.nextAction.route, AppRoutes.intake);
     });
 
     test('載せきれなかったテストがあるとき、不在も件数も範囲を明示する', () {
@@ -465,7 +465,7 @@ void main() {
       final dashboard = build(const {});
 
       expect(dashboard.isEmpty, isTrue);
-      expect(dashboard.nextAction.route, AppRoutes.testRegistration);
+      expect(dashboard.nextAction.route, AppRoutes.intake);
     });
   });
 }

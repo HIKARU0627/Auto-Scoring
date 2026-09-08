@@ -1,4 +1,9 @@
-"""Unit tests for `adapters.test_intake.register_test` (Issue #16)."""
+"""Unit tests for `adapters.test_intake` (Issues #16, #101).
+
+Registration takes a list of role-tagged materials now, not a fixed pair of
+PDFs -- the grading criteria is the one required file and the model answer
+is gone entirely (Issue #95 decision 1). File names here are synthetic.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +18,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from auto_scoring.adapters.atomic import FinalizationError
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf import PdfiumPypdfEngine
-from auto_scoring.adapters.test_intake import register_test, repair_incomplete_test_registrations
+from auto_scoring.adapters.test_intake import (
+    MaterialUpload,
+    attach_materials,
+    register_test,
+    repair_incomplete_test_registrations,
+)
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.intake_template import MaterialRole
+from auto_scoring.domain.material_intake import MaterialIntakeError
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import PdfCorruptedError, PdfGeometryError
@@ -68,6 +80,13 @@ class _BadGeometryPdfEngine:
         self._delegate.render_annotations(source, destination, marks)
 
 
+#: A ZIP container's leading bytes. `domain.material_intake` checks the
+#: signature, not that the archive is a well-formed workbook -- nothing in this
+#: app opens Word/Excel yet, so claiming more would be claiming more than is
+#: true.
+_XLSX_BYTES = b"PK\x03\x04" + b"\x00" * 64
+
+
 def _pdf_bytes(*, pages: int = 1) -> bytes:
     writer = PdfWriter()
     for _ in range(pages):
@@ -77,21 +96,57 @@ def _pdf_bytes(*, pages: int = 1) -> bytes:
     return buffer.getvalue()
 
 
+def _default_materials() -> list[MaterialUpload]:
+    """The required criteria PDF plus one reference PDF.
+
+    Two files rather than one so the tests below can still fail the *second*
+    staged write and observe the compensation, which is what several of them
+    are about.
+    """
+    return [
+        MaterialUpload(
+            role=MaterialRole.GRADING_CRITERIA,
+            filename="02_criteria.pdf",
+            data=_pdf_bytes(),
+        ),
+        MaterialUpload(
+            role=MaterialRole.REFERENCE,
+            filename="reference.pdf",
+            data=_pdf_bytes(),
+        ),
+    ]
+
+
+#: How many material files `failing_write_atomic` has seen this test. Reset
+#: per test by `_is_second_material`'s own caller creating a fresh list --
+#: materials are named by a random id now, so "fail on the manual PDF" is no
+#: longer expressible by name and "fail on the second one" is the equivalent.
+_STAGED: list[str] = []
+
+
+def _is_second_material(path: Path) -> bool:
+    if path.parent.name != "materials":
+        return False
+    _STAGED.append(path.name)
+    return len(_STAGED) == 2
+
+
 def test_a_finalization_failure_does_not_leave_a_permanently_broken_draft(
     store: LocalFileStore,
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Simulates a disk-full/permissions failure writing one of the two
-    registration PDFs, after the `Test` row already committed. Unlike a
-    `Submission` (which has an `error` state to retry into), a `Test` has no
-    such state -- so the only way to avoid a permanently unusable, file-less
-    draft is to compensate by removing the row itself (Issue #16 review).
+    """Simulates a disk-full/permissions failure writing one of the registered
+    materials, after the `Test` row already committed. Unlike a `Submission`
+    (which has an `error` state to retry into), a `Test` has no such state --
+    so the only way to avoid a permanently unusable, file-less draft is to
+    compensate by removing the row itself (Issue #16 review).
     """
+    _STAGED.clear()
     real_write_atomic = LocalFileStore.write_atomic
 
     def failing_write_atomic(self: LocalFileStore, path: Path, data: bytes) -> Path:
-        if path.name == "manual.pdf":
+        if _is_second_material(path):
             raise OSError("simulated disk-full failure")
         return real_write_atomic(self, path, data)
 
@@ -104,12 +159,7 @@ def test_a_finalization_failure_does_not_leave_a_permanently_broken_draft(
             _ENGINE,
             name="国語",
             subject=None,
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
 
@@ -122,19 +172,21 @@ def test_a_finalization_failure_does_not_leave_orphaned_files(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The model-answer PDF (staged before the failing manual PDF) must not
-    be left on disk once the compensating delete removes the `Test` row it
+    """The first material (staged before the failing second one) must not be
+    left on disk once the compensating delete removes the `Test` row it
     belonged to -- an orphaned file with no owning row would never be
     cleaned up by anything.
     """
+    _STAGED.clear()
     real_write_atomic = LocalFileStore.write_atomic
     written_test_ids: list[str] = []
 
     def failing_write_atomic(self: LocalFileStore, path: Path, data: bytes) -> Path:
-        if path.name == "manual.pdf":
+        if _is_second_material(path):
             raise OSError("simulated disk-full failure")
-        if path.name == "model-answer.pdf":
-            written_test_ids.append(path.parent.name)
+        if path.parent.name == "materials":
+            # `tests/<test-id>/materials/<material-id>.pdf`
+            written_test_ids.append(path.parent.parent.name)
         return real_write_atomic(self, path, data)
 
     monkeypatch.setattr(LocalFileStore, "write_atomic", failing_write_atomic)
@@ -146,12 +198,7 @@ def test_a_finalization_failure_does_not_leave_orphaned_files(
             _ENGINE,
             name="国語",
             subject=None,
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
 
@@ -178,12 +225,7 @@ def test_rejects_a_pdf_with_invalid_page_geometry(
             _BadGeometryPdfEngine(_ENGINE),
             name="国語",
             subject=None,
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
 
@@ -212,12 +254,7 @@ def test_rejects_a_pdf_whose_geometry_lookup_fails_with_a_non_value_error(
             _BadGeometryPdfEngine(_ENGINE, exc=exc),
             name="国語",
             subject=None,
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
 
@@ -256,12 +293,7 @@ def test_rejects_a_pdf_pypdf_accepts_but_pdfium_cannot_extract_text_from(
             _ENGINE,
             name="国語",
             subject=None,
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
 
@@ -273,25 +305,28 @@ def test_happy_path_registers_a_draft_test(
     store: LocalFileStore, session_factory: sessionmaker[Session]
 ) -> None:
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        test = register_test(
+        test, materials = register_test(
             uow,
             store,
             _ENGINE,
             name="国語",
             subject="国語",
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
 
-    assert store.test_model_answer_pdf_path(test.id).exists()
-    assert store.test_manual_pdf_path(test.id).exists()
+    assert [material.role for material in materials] == [
+        MaterialRole.GRADING_CRITERIA,
+        MaterialRole.REFERENCE,
+    ]
+    for material in materials:
+        assert store.resolve_stored_path(material.stored_path).is_file()
+    # The reviewer's own file name survives, so "which of my files became the
+    # 採点基準?" stays answerable after import.
+    assert materials[0].original_filename == "02_criteria.pdf"
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.tests.get(test.id) is not None
+        assert len(uow.test_materials.list_for_test(test.id)) == 2
     # `repair_incomplete_test_registrations` relies on this marker to tell a
     # test created through this flow apart from one that predates it
     # entirely (Issue #16 review round 5) -- a normal registration must
@@ -328,7 +363,8 @@ def test_repair_removes_a_marked_test_left_incomplete_by_a_prior_crash(
     store: LocalFileStore, session_factory: sessionmaker[Session]
 ) -> None:
     """Unlike the pre-existing-row case above, a test that *does* carry the
-    registration marker but is still missing a PDF really did go through
+    registration marker but is still missing its criteria file really did go
+    through
     `register_test` and really was interrupted -- the sweep must still
     catch that (this is `repair_incomplete_test_registrations` itself,
     isolated from the process-crash simulation
@@ -336,21 +372,17 @@ def test_repair_removes_a_marked_test_left_incomplete_by_a_prior_crash(
     already covers via a failing `write_atomic`).
     """
     with SqlAlchemyUnitOfWork(session_factory) as uow:
-        test = register_test(
+        test, materials = register_test(
             uow,
             store,
             _ENGINE,
             name="国語",
             subject=None,
-            model_answer_filename="model-answer.pdf",
-            model_answer_mime="application/pdf",
-            model_answer_data=_pdf_bytes(),
-            manual_filename="manual.pdf",
-            manual_mime="application/pdf",
-            manual_data=_pdf_bytes(),
+            materials=_default_materials(),
             now=at(),
         )
-    store.test_manual_pdf_path(test.id).unlink()
+    criteria = next(m for m in materials if m.role is MaterialRole.GRADING_CRITERIA)
+    store.resolve_stored_path(criteria.stored_path).unlink()
 
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         removed = repair_incomplete_test_registrations(uow, store)
@@ -358,3 +390,363 @@ def test_repair_removes_a_marked_test_left_incomplete_by_a_prior_crash(
     assert removed == [test.id]
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.tests.get(test.id) is None
+
+
+# --------------------------------------------------------------------------- #
+# Issue #101: role-tagged materials
+# --------------------------------------------------------------------------- #
+def test_a_test_can_be_registered_without_a_model_answer(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Acceptance criterion 3. The model-answer PDF does not exist in real
+    grading material, and requiring it is what made registration unusable.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, materials = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="模範解答なし",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                )
+            ],
+            now=at(),
+        )
+
+    assert [material.role for material in materials] == [MaterialRole.GRADING_CRITERIA]
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.tests.get(test.id) is not None
+
+
+def test_registering_without_grading_criteria_is_refused(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    with SqlAlchemyUnitOfWork(session_factory) as uow, pytest.raises(ValueError):
+        register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="基準なし",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.REFERENCE, filename="reference.pdf", data=_pdf_bytes()
+                )
+            ],
+            now=at(),
+        )
+
+
+def test_a_spreadsheet_can_be_attached_as_an_annotation_resource(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """添削資料 arrive as Word or Excel in real material, and are the single
+    most useful optional input -- rejecting them would drop the reviewer's own
+    comment wording on the floor (Issue #95 decision 3).
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        _, materials = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="添削資料つき",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                ),
+                MaterialUpload(
+                    role=MaterialRole.ANNOTATION_RESOURCE,
+                    filename="03_resource.xlsx",
+                    data=_XLSX_BYTES,
+                ),
+            ],
+            now=at(),
+        )
+
+    resource = next(m for m in materials if m.role is MaterialRole.ANNOTATION_RESOURCE)
+    assert store.resolve_stored_path(resource.stored_path).is_file()
+    assert resource.stored_path.endswith(".xlsx")
+
+
+def test_a_spreadsheet_cannot_be_registered_as_the_grading_criteria(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Everything downstream opens the criteria as a PDF. Accepting a
+    spreadsheet here would register something unusable and only surface it
+    much later.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow, pytest.raises(MaterialIntakeError):
+        register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="表計算の基準",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.xlsx",
+                    data=_XLSX_BYTES,
+                )
+            ],
+            now=at(),
+        )
+
+
+def test_content_that_does_not_match_its_extension_is_refused(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    with SqlAlchemyUnitOfWork(session_factory) as uow, pytest.raises(MaterialIntakeError):
+        register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="偽装",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                ),
+                MaterialUpload(
+                    role=MaterialRole.ANNOTATION_RESOURCE,
+                    filename="03_resource.xlsx",
+                    data=b"MZ\x90\x00 not a spreadsheet",
+                ),
+            ],
+            now=at(),
+        )
+
+
+def test_reattaching_the_same_file_returns_the_existing_material(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Retrying a batch that failed part-way through must not multiply
+    materials: a row can fail *after* its write committed, so the retry has
+    to recognize its own earlier success (Issue #101: 成功した分は残る).
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, _ = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="再送",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                )
+            ],
+            now=at(),
+        )
+
+    sample = MaterialUpload(
+        role=MaterialRole.ANNOTATION_SAMPLE, filename="04_1_sample.pdf", data=_pdf_bytes()
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        first = attach_materials(uow, store, _ENGINE, test_id=test.id, materials=[sample], now=at())
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        second = attach_materials(
+            uow, store, _ENGINE, test_id=test.id, materials=[sample], now=at()
+        )
+
+    assert [material.id for material in first] == [material.id for material in second]
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.test_materials.list_for_test(test.id)) == 2
+
+
+def test_two_identical_files_in_one_request_become_one_material(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Same bytes, same role, two names -- one material.
+
+    Without collapsing them the unique constraint rejects the second insert and
+    the *whole* attach fails, taking unrelated materials in the same request
+    with it. A subject folder shipping the same document twice under two names
+    is ordinary, not exotic.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, _ = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="重複",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                )
+            ],
+            now=at(),
+        )
+
+    same = _pdf_bytes(pages=2)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        attached = attach_materials(
+            uow,
+            store,
+            _ENGINE,
+            test_id=test.id,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.ANNOTATION_SAMPLE,
+                    filename="04_1_sample.pdf",
+                    data=same,
+                ),
+                MaterialUpload(
+                    role=MaterialRole.ANNOTATION_SAMPLE,
+                    filename="04_2_sample.pdf",
+                    data=same,
+                ),
+                MaterialUpload(
+                    role=MaterialRole.REFERENCE,
+                    filename="reference.pdf",
+                    data=_pdf_bytes(),
+                ),
+            ],
+            now=at(),
+        )
+
+    assert len(attached) == 2
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        roles = [m.role for m in uow.test_materials.list_for_test(test.id)]
+    assert sorted(role.value for role in roles) == [
+        "annotation_sample",
+        "grading_criteria",
+        "reference",
+    ]
+
+
+def test_a_material_row_whose_file_is_missing_is_repaired_not_reported_done(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """`transactional_operation` commits the DB before writing files, so a
+    crash between the two leaves a row with no file.
+
+    Answering the retry with "already attached" would report success for a
+    material that can never be opened -- permanently, because every later
+    attempt gets the same answer. The retry must re-stage the bytes instead.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, _ = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="欠損",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                )
+            ],
+            now=at(),
+        )
+
+    sample = MaterialUpload(
+        role=MaterialRole.ANNOTATION_SAMPLE, filename="04_1_sample.pdf", data=_pdf_bytes()
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        [attached] = attach_materials(
+            uow, store, _ENGINE, test_id=test.id, materials=[sample], now=at()
+        )
+
+    # Simulate the interrupted write: the row survived, the file did not.
+    store.resolve_stored_path(attached.stored_path).unlink()
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        [repaired] = attach_materials(
+            uow, store, _ENGINE, test_id=test.id, materials=[sample], now=at()
+        )
+
+    assert repaired.id == attached.id
+    assert store.resolve_stored_path(repaired.stored_path).is_file()
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.test_materials.list_for_test(test.id)) == 2
+
+
+def test_new_registration_also_collapses_identical_files(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """The sibling of `test_two_identical_files_in_one_request_become_one_material`.
+
+    Round 1 fixed `attach_materials` and left `register_test` inserting both
+    copies, so registering a criteria file plus two identically-contented
+    reference files failed the unique constraint and took the whole
+    registration with it. The rule now lives in `_validate_uploads`, which both
+    paths go through -- this test is what stops it from drifting back to one
+    of them.
+    """
+    same = _pdf_bytes(pages=2)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, materials = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="重複つき登録",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                ),
+                MaterialUpload(role=MaterialRole.REFERENCE, filename="ref-a.pdf", data=same),
+                MaterialUpload(role=MaterialRole.REFERENCE, filename="ref-b.pdf", data=same),
+            ],
+            now=at(),
+        )
+
+    assert len(materials) == 2
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.test_materials.list_for_test(test.id)) == 2
+    for material in materials:
+        assert store.resolve_stored_path(material.stored_path).is_file()
+
+
+def test_sending_the_criteria_twice_is_one_criteria_not_a_rejection(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """The "exactly one criteria" check runs on de-duplicated uploads.
+
+    Otherwise a retry that resent the same file would be rejected for having
+    two of something it has one of.
+    """
+    criteria = _pdf_bytes()
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        _, materials = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="基準を二度送る",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=criteria,
+                ),
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria (1).pdf",
+                    data=criteria,
+                ),
+            ],
+            now=at(),
+        )
+
+    assert [m.role for m in materials] == [MaterialRole.GRADING_CRITERIA]

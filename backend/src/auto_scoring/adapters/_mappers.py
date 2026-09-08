@@ -22,6 +22,7 @@ from auto_scoring.db.orm import (
     RubricCriterionRow,
     RubricRow,
     SubmissionRow,
+    TestMaterialRow,
     TestRow,
 )
 from auto_scoring.domain.dependency_graph import (
@@ -31,6 +32,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
     UnresolvedQuestion,
 )
+from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
@@ -62,6 +64,7 @@ from auto_scoring.domain.models import (
     Test,
     TestStatus,
 )
+from auto_scoring.domain.test_material import TestMaterial
 
 
 def rect_to_json(rect: NormalizedRect | None) -> dict[str, float] | None:
@@ -192,6 +195,35 @@ def rubric_from_rows(row: RubricRow, criteria: list[RubricCriterionRow]) -> Rubr
             )
             for c in ordered
         ),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# TestMaterial
+# --------------------------------------------------------------------------- #
+def test_material_to_row(material: TestMaterial) -> TestMaterialRow:
+    return TestMaterialRow(
+        id=material.id,
+        test_id=material.test_id,
+        role=material.role,
+        stored_path=material.stored_path,
+        sha256=material.sha256,
+        size_bytes=material.size_bytes,
+        original_filename=material.original_filename,
+        created_at=material.created_at,
+    )
+
+
+def test_material_from_row(row: TestMaterialRow) -> TestMaterial:
+    return TestMaterial(
+        id=row.id,
+        test_id=row.test_id,
+        role=MaterialRole(row.role),
+        stored_path=row.stored_path,
+        sha256=row.sha256,
+        size_bytes=row.size_bytes,
+        original_filename=row.original_filename,
+        created_at=row.created_at,
     )
 
 

@@ -13,12 +13,30 @@ library;
 import 'dart:typed_data';
 
 import 'package:auto_scoring_api/auto_scoring_api.dart';
+import 'package:built_collection/built_collection.dart';
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 
 export 'package:auto_scoring_api/auto_scoring_api.dart'
     show
         AnnotationEditRequest,
+        AttributionProposalResponse,
+        ClassificationAvailabilityResponse,
+        ClassificationEstimateModel,
+        ClassificationNeed,
+        IntakeCostModel,
+        IntakePlanResponse,
+        IntakeRuleModel,
+        IntakeTemplateModel,
+        MaterialRole,
+        PlannedFileModel,
+        PlannedGroupModel,
+        Requirement,
+        RoleProposalResponse,
+        RoleSource,
+        RuleScope,
+        ScannedFileModel,
+        TestMaterialResponse,
         AnnotationResponse,
         BoundingBoxResponse,
         CompleteRegistrationResponse,
@@ -160,10 +178,14 @@ class SidecarApiClient {
       interceptors: const [],
     );
     _uploadApi = uploadGenerated.getDefaultApi();
-    // Registering a test uploads two PDFs in one request, same rationale as
-    // createSubmission below -- it needs the longer intake timeout, not the
+    // Registering a test uploads several files in one request, same rationale
+    // as createSubmission below -- it needs the longer intake timeout, not the
     // near-instant default.
     _uploadTestRegistrationApi = uploadGenerated.getTestRegistrationApi();
+    _intakeApi = generated.getIntakeApi();
+    // Classification uploads one PDF and waits on a provider round trip, so it
+    // shares the upload client's headroom rather than the near-instant default.
+    _uploadIntakeApi = uploadGenerated.getIntakeApi();
     _recognitionsApi = generated.getRecognitionsApi();
     _reviewApi = generated.getReviewApi();
     _jobsApi = generated.getJobsApi();
@@ -201,6 +223,7 @@ class SidecarApiClient {
   late final ReviewApi _reviewApi;
   late final JobsApi _jobsApi;
   late final ExportApi _exportApi;
+  late final IntakeApi _intakeApi;
 
   /// A second Dio/client pair, configured with [intakeTimeout] instead of
   /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
@@ -213,6 +236,192 @@ class SidecarApiClient {
   final Dio _uploadDio;
   late final DefaultApi _uploadApi;
   late final TestRegistrationApi _uploadTestRegistrationApi;
+  late final IntakeApi _uploadIntakeApi;
+
+  /// Plan a scanned batch against a saved 取込の型 (Issue #101).
+  ///
+  /// **Sends no file bytes** -- only names, sizes and content digests. The
+  /// rules assign what they can and the response says how many files would
+  /// still cost an LLM call, which is what the pre-flight "how many calls"
+  /// number is built from. Asking costs nothing.
+  Future<IntakePlanResponse> planIntake({
+    required String templateId,
+    required String rootName,
+    required List<ScannedFileModel> files,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _intakeApi.planIntakeIntakePlanPost(
+        planRequest: PlanRequest(
+          (builder) => builder
+            ..templateId = templateId
+            ..rootName = rootName
+            ..files.replace(files),
+        ),
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Every saved 取込の型 (設定画面).
+  Future<List<IntakeTemplateModel>> listIntakeTemplates({
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _intakeApi.listTemplatesIntakeTemplatesGet(
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Replace the saved 取込の型 with [templates].
+  ///
+  /// Whole-list replace, not per-template upsert: the settings screen edits a
+  /// list (rows are reordered and removed), and a merge would have to guess
+  /// whether an absent template was deleted or simply not sent.
+  Future<List<IntakeTemplateModel>> saveIntakeTemplates(
+    List<IntakeTemplateModel> templates, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _intakeApi.saveTemplatesIntakeTemplatesPut(
+        saveTemplatesRequest: SaveTemplatesRequest(
+          (builder) => builder..templates.replace(templates),
+        ),
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The per-call price the reviewer entered, or `null` for "not set".
+  ///
+  /// `null` is not zero. This app cannot know what a provider charges -- it
+  /// depends on the provider, the model and the day -- so the screen says the
+  /// price is unknown rather than printing an invented figure.
+  Future<double?> intakeCost({CancelToken? cancelToken}) async {
+    try {
+      final response = await _intakeApi.getIntakeCostIntakeCostGet(
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response).classificationUnitCost?.toDouble();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Record the per-call price. `null` clears it back to "not set".
+  Future<double?> saveIntakeCost(
+    double? unitCost, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _intakeApi.saveIntakeCostIntakeCostPut(
+        intakeCostModel: IntakeCostModel(
+          (builder) => builder..classificationUnitCost = unitCost,
+        ),
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response).classificationUnitCost?.toDouble();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Whether this host can classify at all, and if not, why.
+  ///
+  /// Never throws: like grading availability, "no provider configured" is a
+  /// state the screen renders -- rules still work and the reviewer can assign
+  /// every role by hand.
+  Future<ClassificationAvailabilityResponse> classificationAvailability({
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _intakeApi
+          .classificationAvailabilityIntakeClassificationAvailabilityGet(
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Ask what one file is, from its first page.
+  ///
+  /// One file per call on purpose: progress, partial results and cancellation
+  /// then need nothing but ordinary HTTP. Callers send only files the rules
+  /// did not match.
+  Future<RoleProposalResponse> classifyMaterial({
+    required String path,
+    CancelToken? cancelToken,
+  }) async {
+    final MultipartFile file;
+    try {
+      file = await MultipartFile.fromFile(path);
+    } catch (error) {
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
+      final response = await _uploadIntakeApi
+          .classifyMaterialIntakeClassifyPost(
+            file: file,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Ask which of [candidates] one answer belongs to.
+  ///
+  /// **Never call this with fewer than two candidates.** With one the answer
+  /// is already decided and the sidecar refuses -- spending a provider call to
+  /// confirm a foregone conclusion is exactly what the reviewer's own
+  /// narrowing step exists to avoid.
+  Future<AttributionProposalResponse> attributeAnswer({
+    required String path,
+    required List<({String id, String label})> candidates,
+    CancelToken? cancelToken,
+  }) async {
+    final MultipartFile file;
+    try {
+      file = await MultipartFile.fromFile(path);
+    } catch (error) {
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
+      final response = await _uploadIntakeApi
+          .attributeAnswerIntakeAttributePost(
+            file: file,
+            candidateIds: BuiltList<String>([
+              for (final candidate in candidates) candidate.id,
+            ]),
+            candidateLabels: BuiltList<String>([
+              for (final candidate in candidates) candidate.label,
+            ]),
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
 
   /// Liveness probe. Never throws: an unreachable sidecar is a state the UI
   /// renders, not an error. The endpoint itself needs no auth.
@@ -378,29 +587,36 @@ class SidecarApiClient {
     }
   }
 
-  /// Register a new test (テスト登録画面, Issue #16): both PDFs are validated
-  /// and stored, and a `draft` [TestResponse] is created. No profile exists
-  /// yet -- call [analyzeProfile] next. Uses the same longer intake timeout
-  /// as [createSubmission], since both PDFs are read and validated server-side
-  /// before the sidecar responds.
+  /// Register a new test from its 採点基準PDF plus any optional role-tagged
+  /// materials (Issue #101).
+  ///
+  /// There is no model-answer parameter: that document does not exist in real
+  /// grading material, and requiring it is what made registration unusable
+  /// (Issue #95 decision 1). A model answer a reviewer happens to have goes in
+  /// [materials] under [MaterialRole.reference] like any other extra file.
+  ///
+  /// Uses the longer intake timeout, like [createSubmission]: every PDF is
+  /// read and validated server-side before the sidecar responds.
+  ///
+  /// **Registering does not make the test gradable.** Points and rubrics still
+  /// have to come from somewhere, and extracting them from the criteria PDF is
+  /// separate work -- callers must say so rather than implying grading can
+  /// start.
   Future<TestResponse> createTest({
     required String name,
     String? subject,
-    required String modelAnswerPath,
-    required String manualPath,
+    required String criteriaPath,
+    List<({MaterialRole role, String path})> materials = const [],
     CancelToken? cancelToken,
   }) async {
-    final MultipartFile modelAnswer;
-    final MultipartFile manual;
+    final MultipartFile criteria;
+    final List<MultipartFile> extras;
     try {
-      modelAnswer = await MultipartFile.fromFile(
-        modelAnswerPath,
-        contentType: MediaType('application', 'pdf'),
-      );
-      manual = await MultipartFile.fromFile(
-        manualPath,
-        contentType: MediaType('application', 'pdf'),
-      );
+      criteria = await MultipartFile.fromFile(criteriaPath);
+      extras = [
+        for (final material in materials)
+          await MultipartFile.fromFile(material.path),
+      ];
     } catch (error) {
       throw SidecarApiException(
         SidecarErrorKind.unknown,
@@ -409,13 +625,95 @@ class SidecarApiClient {
     }
     try {
       final response = await _uploadTestRegistrationApi.createTestTestsPost(
-        manual: manual,
-        modelAnswer: modelAnswer,
+        criteria: criteria,
+        // Positional pairing: `materials[i]` is the file for
+        // `materialRoles[i]`. The sidecar rejects a length mismatch rather
+        // than shifting every role by one.
+        materials: BuiltList<MultipartFile>(extras),
+        materialRoles: BuiltList<String>([
+          for (final material in materials) material.role.name,
+        ]),
         name: name,
         subject: subject,
         cancelToken: cancelToken,
       );
       return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Attach more materials to a test that already exists (Issue #101).
+  ///
+  /// The weekly flow needs this: 添削資料 that turn up after the test was
+  /// registered must be attachable without re-registering it. Re-sending a
+  /// file already attached under the same role returns the existing material
+  /// rather than a second copy, so retrying a partially-failed batch is safe.
+  Future<List<TestMaterialResponse>> addMaterials(
+    String testId, {
+    required List<({MaterialRole role, String path})> materials,
+    CancelToken? cancelToken,
+  }) async {
+    final List<MultipartFile> files;
+    try {
+      files = [
+        for (final material in materials)
+          await MultipartFile.fromFile(material.path),
+      ];
+    } catch (error) {
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
+      final response = await _uploadTestRegistrationApi
+          .addMaterialsTestsTestIdMaterialsPost(
+            testId: testId,
+            materials: BuiltList<MultipartFile>(files),
+            materialRoles: BuiltList<String>([
+              for (final material in materials) material.role.name,
+            ]),
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Which file became which role for [testId].
+  ///
+  /// The answer to "did my 採点基準 actually land as the 採点基準?", which is
+  /// only answerable after import because the name the reviewer chose the file
+  /// by is carried through.
+  Future<List<TestMaterialResponse>> listMaterials(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .listMaterialsTestsTestIdMaterialsGet(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Delete a test and everything under it (Issue #101).
+  ///
+  /// Importing into the wrong test is an ordinary mistake, and the reviewer
+  /// finds out after the fact -- so the completion screen offers this rather
+  /// than leaving `app-data/` as the only remedy.
+  Future<void> deleteTest(String testId, {CancelToken? cancelToken}) async {
+    try {
+      await _testRegistrationApi.deleteTestTestsTestIdDelete(
+        testId: testId,
+        cancelToken: cancelToken,
+      );
     } on DioException catch (error) {
       throw _translate(error);
     }

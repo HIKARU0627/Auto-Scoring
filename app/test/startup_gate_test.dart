@@ -4,7 +4,7 @@ import 'dart:ui' show AppExitResponse;
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
 import 'package:auto_scoring_app/features/home/home_page.dart';
-import 'package:auto_scoring_app/features/test_registration/test_registration_page.dart';
+import 'package:auto_scoring_app/features/intake/intake_page.dart';
 import 'package:auto_scoring_app/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -112,9 +112,9 @@ void main() {
       // By key, not by text: ホーム画面 cannot reach this fake sidecar, so it
       // is showing its own error state -- and the entry-point row is
       // deliberately the one part that survives it (Issue #68).
-      await tester.tap(find.byKey(const Key('home-open-test-registration')));
+      await tester.tap(find.byKey(const Key('home-open-intake')));
       await tester.pumpAndSettle();
-      expect(find.byType(TestRegistrationPage), findsOneWidget);
+      expect(find.byType(IntakePage), findsOneWidget);
 
       app.platform.crashRunningProcess(-1);
       await tester.pumpAndSettle();
@@ -130,7 +130,7 @@ void main() {
       expect(find.text('バックエンドが予期せず終了しました。'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, '再起動'), findsOneWidget);
       // The pushed page is dropped rather than left holding a closed client.
-      expect(find.byType(TestRegistrationPage), findsNothing);
+      expect(find.byType(IntakePage), findsNothing);
 
       // And the button actually works from here.
       app.platform.handshake = '{"host":"127.0.0.1","port":5678,"token":"t2"}';

@@ -18,8 +18,14 @@ abstract final class AppRoutes {
   /// `main.dart`.
   static const String starting = '/starting';
 
-  /// テスト登録画面.
-  static const String testRegistration = '/tests/new';
+  /// 資料取込画面 — choose a folder, check what will be imported, import
+  /// (Issue #101). Replaced the separate テスト登録 and 答案取込 screens.
+  static const String intake = '/intake';
+
+  /// 設定画面. One screen with tabs; Issue #101 fills in the 取込の型 tab and
+  /// Issue #96's API-key tab is meant to join it there rather than becoming a
+  /// second settings screen.
+  static const String settings = '/settings';
 
   /// テスト一覧画面.
   static const String testList = '/tests';
@@ -28,9 +34,6 @@ abstract final class AppRoutes {
   static const String testSettingsPattern = '/tests/:testId/settings';
   static String testSettings(String testId) =>
       '/tests/${Uri.encodeComponent(testId)}/settings';
-
-  /// 答案取込画面.
-  static const String answerIntake = '/intake';
 
   /// 添削レビュー画面 for one submission of one test.
   static const String pdfReviewPattern =

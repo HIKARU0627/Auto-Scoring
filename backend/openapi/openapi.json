@@ -203,6 +203,101 @@
         "title": "ApproveReviewRequest",
         "type": "object"
       },
+      "AttributionProposalResponse": {
+        "description": "``test_id`` is ``null`` for \"could not tell\".\n\nExpect that often. The observed answer sheets carry a course-name field\nthat is printed on some, blank on others and handwritten on the rest, and\nevery sheet inspected had blank student name/id fields -- so a first page\nfrequently identifies nothing at all.",
+        "properties": {
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "test_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Id"
+          }
+        },
+        "required": [
+          "test_id",
+          "confidence"
+        ],
+        "title": "AttributionProposalResponse",
+        "type": "object"
+      },
+      "Body_add_materials_tests__test_id__materials_post": {
+        "properties": {
+          "material_roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Material Roles",
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Materials",
+            "type": "array"
+          }
+        },
+        "required": [
+          "materials",
+          "material_roles"
+        ],
+        "title": "Body_add_materials_tests__test_id__materials_post",
+        "type": "object"
+      },
+      "Body_attribute_answer_intake_attribute_post": {
+        "properties": {
+          "candidate_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Ids",
+            "type": "array"
+          },
+          "candidate_labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Labels",
+            "type": "array"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "candidate_ids",
+          "candidate_labels"
+        ],
+        "title": "Body_attribute_answer_intake_attribute_post",
+        "type": "object"
+      },
+      "Body_classify_material_intake_classify_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_classify_material_intake_classify_post",
+        "type": "object"
+      },
       "Body_create_submission_tests__test_id__submissions_post": {
         "properties": {
           "file": {
@@ -231,15 +326,25 @@
       },
       "Body_create_test_tests_post": {
         "properties": {
-          "manual": {
+          "criteria": {
             "contentMediaType": "application/octet-stream",
-            "title": "Manual",
+            "title": "Criteria",
             "type": "string"
           },
-          "model_answer": {
-            "contentMediaType": "application/octet-stream",
-            "title": "Model Answer",
-            "type": "string"
+          "material_roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Material Roles",
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Materials",
+            "type": "array"
           },
           "name": {
             "title": "Name",
@@ -259,8 +364,7 @@
         },
         "required": [
           "name",
-          "model_answer",
-          "manual"
+          "criteria"
         ],
         "title": "Body_create_test_tests_post",
         "type": "object"
@@ -297,6 +401,70 @@
         ],
         "title": "BoundingBoxResponse",
         "type": "object"
+      },
+      "ClassificationAvailabilityResponse": {
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "ClassificationAvailabilityResponse",
+        "type": "object"
+      },
+      "ClassificationEstimateModel": {
+        "description": "What the confirmation screen shows *before* anything is sent.\n\n``pending`` is the only number that costs money. ``not_needed`` is what a\ntemplate's rules already covered for free -- acceptance criterion 8 is\nthat those files are never sent at all, and this is the number that makes\nthat visible to the reviewer rather than only true in the code.",
+        "properties": {
+          "cached": {
+            "title": "Cached",
+            "type": "integer"
+          },
+          "not_needed": {
+            "title": "Not Needed",
+            "type": "integer"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "unsupported": {
+            "title": "Unsupported",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending",
+          "cached",
+          "unsupported",
+          "not_needed"
+        ],
+        "title": "ClassificationEstimateModel",
+        "type": "object"
+      },
+      "ClassificationNeed": {
+        "description": "Whether this file would cost an LLM call, and if not, why not.\n\nThis is what makes the pre-flight \"how many calls, roughly how much\"\nnumber on the confirmation screen honest: each file lands in exactly one\nof these, and only :attr:`PENDING` is charged for.",
+        "enum": [
+          "not_needed",
+          "pending",
+          "cached",
+          "unsupported"
+        ],
+        "title": "ClassificationNeed",
+        "type": "string"
       },
       "CompleteRegistrationResponse": {
         "properties": {
@@ -842,6 +1010,101 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IntakeCostModel": {
+        "description": "The per-call price the reviewer entered, or ``null`` for \"not set\".\n\n``null`` is not zero. Zero is a reviewer stating their usage is free; null\nis this app admitting it does not know the price and will say so on screen\nrather than showing an invented figure.",
+        "properties": {
+          "classification_unit_cost": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification Unit Cost"
+          }
+        },
+        "title": "IntakeCostModel",
+        "type": "object"
+      },
+      "IntakePlanResponse": {
+        "properties": {
+          "estimate": {
+            "$ref": "#/components/schemas/ClassificationEstimateModel"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/PlannedGroupModel"
+            },
+            "title": "Groups",
+            "type": "array"
+          }
+        },
+        "required": [
+          "groups",
+          "estimate"
+        ],
+        "title": "IntakePlanResponse",
+        "type": "object"
+      },
+      "IntakeRuleModel": {
+        "properties": {
+          "pattern": {
+            "title": "Pattern",
+            "type": "string"
+          },
+          "requirement": {
+            "$ref": "#/components/schemas/Requirement",
+            "default": "optional"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MaterialRole"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuleScope"
+          }
+        },
+        "required": [
+          "scope",
+          "pattern",
+          "role"
+        ],
+        "title": "IntakeRuleModel",
+        "type": "object"
+      },
+      "IntakeTemplateModel": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/IntakeRuleModel"
+            },
+            "title": "Rules",
+            "type": "array"
+          },
+          "split_child_directories": {
+            "default": true,
+            "title": "Split Child Directories",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "rules"
+        ],
+        "title": "IntakeTemplateModel",
+        "type": "object"
+      },
       "JobResponse": {
         "properties": {
           "attempts": {
@@ -972,6 +1235,19 @@
         "title": "ManualRecognitionRequest",
         "type": "object"
       },
+      "MaterialRole": {
+        "description": "What one file is, once a human has confirmed it.\n\nMirrors the material kinds Issue #95 recorded for the real batches. Note\nwhat is *not* here: there is no \"model answer\" role. The model-answer PDF\nwas dropped as a required input (Issue #95 decision 1) because it does\nnot exist in the real material -- a model answer that happens to be on\nhand is imported as :attr:`REFERENCE`.",
+        "enum": [
+          "student_answer",
+          "grading_criteria",
+          "annotation_resource",
+          "annotation_sample",
+          "reference",
+          "ignore"
+        ],
+        "title": "MaterialRole",
+        "type": "string"
+      },
       "NormalizedBBoxModel": {
         "properties": {
           "x0": {
@@ -1044,6 +1320,108 @@
           "height_pt"
         ],
         "title": "PageFormatModel",
+        "type": "object"
+      },
+      "PlanRequest": {
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ScannedFileModel"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "root_name": {
+            "title": "Root Name",
+            "type": "string"
+          },
+          "template_id": {
+            "title": "Template Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id",
+          "root_name",
+          "files"
+        ],
+        "title": "PlanRequest",
+        "type": "object"
+      },
+      "PlannedFileModel": {
+        "properties": {
+          "classification": {
+            "$ref": "#/components/schemas/ClassificationNeed"
+          },
+          "relative_path": {
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterialRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role_source": {
+            "$ref": "#/components/schemas/RoleSource"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "relative_path",
+          "sha256",
+          "size_bytes",
+          "role",
+          "role_source",
+          "classification"
+        ],
+        "title": "PlannedFileModel",
+        "type": "object"
+      },
+      "PlannedGroupModel": {
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/PlannedFileModel"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "missing_required_roles_if_new": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialRole"
+            },
+            "title": "Missing Required Roles If New",
+            "type": "array"
+          },
+          "suggested_name": {
+            "title": "Suggested Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "suggested_name",
+          "files",
+          "missing_required_roles_if_new"
+        ],
+        "title": "PlannedGroupModel",
         "type": "object"
       },
       "ProfileResponse": {
@@ -1380,6 +1758,16 @@
         "title": "RegionModel",
         "type": "object"
       },
+      "Requirement": {
+        "description": "How badly a role is needed, for the confirmation screen's own warning.\n\nOnly :attr:`REQUIRED` is enforced, and only for a group that creates a\n*new* test -- a group that adds files to an already-registered test needs\nno grading criteria, because that test already has one (Issue #101, the\nsecond-week flow). The enforcement itself is not here: it is the\n``POST /tests`` signature, which cannot be called without the criteria\nfile at all (``AGENTS.md``: guarantee invariants with real constraints,\nnot with UI state).",
+        "enum": [
+          "required",
+          "recommended",
+          "optional"
+        ],
+        "title": "Requirement",
+        "type": "string"
+      },
       "ReviewActionResponse": {
         "description": "The new `Review` row plus whatever it produced, and the submission's\nstate right after re-syncing it (Issue #22 acceptance: \"\u672a\u78ba\u8a8d\u8a2d\u554f\u304c\u6b8b\u308b\nSubmission\u306f\u51fa\u529b\u53ef\u80fd\u72b6\u614b\u306b\u306a\u3089\u306a\u3044\") -- so the review screen can update\nits `SubmissionState` chip without a second round trip.",
         "properties": {
@@ -1531,6 +1919,47 @@
         "title": "ReviewResponse",
         "type": "object"
       },
+      "RoleProposalResponse": {
+        "description": "``role`` is ``null`` when the classifier could not tell.\n\nThat is a real answer, not a failure: the reviewer picks, exactly as they\nwould for a file no rule matched.",
+        "properties": {
+          "cached": {
+            "title": "Cached",
+            "type": "boolean"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterialRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "confidence",
+          "cached"
+        ],
+        "title": "RoleProposalResponse",
+        "type": "object"
+      },
+      "RoleSource": {
+        "description": "Where a file's proposed role came from.\n\nRendered on the confirmation screen, because \"a rule matched this name\"\nand \"a model looked at the first page and guessed\" deserve different\namounts of the reviewer's attention -- and :attr:`UNRESOLVED` deserves\nall of it.",
+        "enum": [
+          "rule",
+          "llm",
+          "human",
+          "unresolved"
+        ],
+        "title": "RoleSource",
+        "type": "string"
+      },
       "RubricCriterionResponse": {
         "properties": {
           "description": {
@@ -1557,6 +1986,55 @@
           "position"
         ],
         "title": "RubricCriterionResponse",
+        "type": "object"
+      },
+      "RuleScope": {
+        "description": "What a rule's pattern is matched against.",
+        "enum": [
+          "file",
+          "folder"
+        ],
+        "title": "RuleScope",
+        "type": "string"
+      },
+      "SaveTemplatesRequest": {
+        "properties": {
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/IntakeTemplateModel"
+            },
+            "title": "Templates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "templates"
+        ],
+        "title": "SaveTemplatesRequest",
+        "type": "object"
+      },
+      "ScannedFileModel": {
+        "properties": {
+          "relative_path": {
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "relative_path",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "ScannedFileModel",
         "type": "object"
       },
       "ScoreRequest": {
@@ -1703,6 +2181,56 @@
           "created_at"
         ],
         "title": "SubmissionResponse",
+        "type": "object"
+      },
+      "TestMaterialResponse": {
+        "description": "One registered file, and the role it was registered under.\n\n``original_filename`` is the name the reviewer chose the file by. It is\ncarried purely so \"which of my files became the \u63a1\u70b9\u57fa\u6e96?\" stays\nanswerable after import; nothing matches on it, because names in real\nmaterial are not reliable evidence (`domain.intake_template`).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MaterialRole"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "test_id",
+          "role",
+          "sha256",
+          "size_bytes",
+          "created_at"
+        ],
+        "title": "TestMaterialResponse",
         "type": "object"
       },
       "TestResponse": {
@@ -1921,6 +2449,320 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/intake-cost": {
+      "get": {
+        "operationId": "get_intake_cost_intake_cost_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeCostModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Intake Cost",
+        "tags": [
+          "intake"
+        ]
+      },
+      "put": {
+        "operationId": "save_intake_cost_intake_cost_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeCostModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeCostModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Intake Cost",
+        "tags": [
+          "intake"
+        ]
+      }
+    },
+    "/intake-templates": {
+      "get": {
+        "operationId": "list_templates_intake_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IntakeTemplateModel"
+                  },
+                  "title": "Response List Templates Intake Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Templates",
+        "tags": [
+          "intake"
+        ]
+      },
+      "put": {
+        "operationId": "save_templates_intake_templates_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveTemplatesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IntakeTemplateModel"
+                  },
+                  "title": "Response Save Templates Intake Templates Put",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Templates",
+        "tags": [
+          "intake"
+        ]
+      }
+    },
+    "/intake/attribute": {
+      "post": {
+        "description": "Ask which of the offered tests one answer belongs to.\n\nThe candidate set is the caller's: the tests this batch would create\nplus the already-registered ones the reviewer has narrowed to. **A\ncaller with a single candidate must not call this at all** -- the\nreviewer has already decided, and asking a provider to choose from a\nlist of one spends money to confirm a foregone conclusion. That is\nthe ordinary case from week two onward, which is why the reviewer's\nnarrowing step is the real cost control here and the classifier is\nthe fallback.",
+        "operationId": "attribute_answer_intake_attribute_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_attribute_answer_intake_attribute_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributionProposalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Attribute Answer",
+        "tags": [
+          "intake"
+        ]
+      }
+    },
+    "/intake/classification-availability": {
+      "get": {
+        "operationId": "classification_availability_intake_classification_availability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClassificationAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Classification Availability",
+        "tags": [
+          "intake"
+        ]
+      }
+    },
+    "/intake/classify": {
+      "post": {
+        "description": "Propose what one file is, from its first page.\n\nCallers send only files a template's rules did not match: a matched\nfile must never reach this endpoint (acceptance criterion 8). Nothing\nhere enforces that -- there is no way for this endpoint to know which\ntemplate the caller used -- so the guarantee lives where the decision\nis made, in `domain.intake_plan.build_plan` and its tests.",
+        "operationId": "classify_material_intake_classify_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_classify_material_intake_classify_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleProposalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Classify Material",
+        "tags": [
+          "intake"
+        ]
+      }
+    },
+    "/intake/plan": {
+      "post": {
+        "operationId": "plan_intake_intake_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Plan Intake",
+        "tags": [
+          "intake"
+        ]
       }
     },
     "/jobs/{job_id}": {
@@ -3217,6 +4059,7 @@
         "summary": "List Tests"
       },
       "post": {
+        "description": "Register a test from its \u63a1\u70b9\u57fa\u6e96PDF plus any optional materials.\n\n``criteria`` is the one required file (Issue #95 decision 1). **There\nis no model-answer parameter**: that document does not exist in real\ngrading material, and requiring it is what made this screen unusable.\nA model answer a reviewer happens to have goes in ``materials`` with\nthe ``reference`` role like any other extra file.\n\nRegistering does **not** make the test gradable. Points and rubrics\nstill have to come from somewhere, and extracting them from the\ncriteria PDF is separate work (Issue #95 decision A) -- callers must\nsay so rather than implying grading can start.",
         "operationId": "create_test_tests_post",
         "requestBody": {
           "content": {
@@ -3262,6 +4105,45 @@
       }
     },
     "/tests/{test_id}": {
+      "delete": {
+        "description": "Delete a test and everything under it.\n\nExposed because importing into the wrong test is an ordinary mistake,\nnot an exotic one: the reviewer finds out after the fact, and without\nthis the only remedy would be editing `app-data/` by hand. The bulk\ndelete itself already existed (`adapters.purge.purge_test`: rows\ncascade, files are removed, and the deletion is written to the audit\nlog per business-rules \u00a72 (11)) -- it simply had no HTTP route.",
+        "operationId": "delete_test_tests__test_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Test",
+        "tags": [
+          "test-registration"
+        ]
+      },
       "get": {
         "operationId": "get_test_tests__test_id__get",
         "parameters": [
@@ -3564,6 +4446,118 @@
         "summary": "List Versions",
         "tags": [
           "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/materials": {
+      "get": {
+        "description": "Which file became which role for this test.\n\nThe answer to \"did my \u63a1\u70b9\u57fa\u6e96 actually land as the \u63a1\u70b9\u57fa\u6e96?\", which\nis only answerable after import if the name the reviewer chose the\nfile by survives -- so `original_filename` is carried through.",
+        "operationId": "list_materials_tests__test_id__materials_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestMaterialResponse"
+                  },
+                  "title": "Response List Materials Tests  Test Id  Materials Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Materials",
+        "tags": [
+          "test-registration"
+        ]
+      },
+      "post": {
+        "description": "Attach more materials to a test that already exists.\n\nThe weekly flow needs this in both directions: answers for an\nalready-registered test arrive as submissions, and a \u6dfb\u524a\u8cc7\u6599 that\nturns up later must be attachable without re-registering the test.\n\nRe-sending a file already attached under the same role returns the\nexisting material instead of a second copy, so retrying a batch that\nfailed part-way through is safe (Issue #101: \u6210\u529f\u3057\u305f\u5206\u306f\u6b8b\u308b).",
+        "operationId": "add_materials_tests__test_id__materials_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_materials_tests__test_id__materials_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestMaterialResponse"
+                  },
+                  "title": "Response Add Materials Tests  Test Id  Materials Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Materials",
+        "tags": [
+          "test-registration"
         ]
       }
     },

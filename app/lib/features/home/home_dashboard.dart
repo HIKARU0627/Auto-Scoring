@@ -381,7 +381,7 @@ class HomeDashboard {
             '答案取込画面で対象のテストを選ぶと、失敗した答案が一覧に出ます'
             '（${failed.test.name}）$_loadedScopeNote',
         actionLabel: '答案取込を開く',
-        route: AppRoutes.answerIntake,
+        route: AppRoutes.intake,
       );
     }
     if (_firstDraftTest case final draft?) {
@@ -436,7 +436,7 @@ class HomeDashboard {
                   '問題がなければAI採点もそのまま始まります'
             : 'ほかに$hiddenTestCount件のテストがあり、そちらの答案は数えていません',
         actionLabel: '答案を取り込む',
-        route: AppRoutes.answerIntake,
+        route: AppRoutes.intake,
       );
     }
     // ここは [tests] が空の分岐なので、[hiddenTestCount] も必ず 0 である
@@ -452,7 +452,7 @@ class HomeDashboard {
           '模範解答と採点マニュアルのPDFを登録し、回答欄と設問依存関係を確認すると、'
           '答案を取り込めるようになります',
       actionLabel: 'テストを登録する',
-      route: AppRoutes.testRegistration,
+      route: AppRoutes.intake,
     );
   }
 }

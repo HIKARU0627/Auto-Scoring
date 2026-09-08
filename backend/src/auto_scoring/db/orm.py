@@ -38,6 +38,7 @@ from sqlalchemy.schema import DDL
 
 from auto_scoring.db.base import Base
 from auto_scoring.domain.dependency_graph import DependencyGraphStatus, DependencyProvision
+from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     AnnotationKind,
     AnswerImageStatus,
@@ -91,6 +92,51 @@ class TestRow(Base):
     status: Mapped[TestStatus] = mapped_column(
         _enum(TestStatus), nullable=False, default=TestStatus.DRAFT
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class TestMaterialRow(Base):
+    """One registered file of a test, with its confirmed role (Issue #101).
+
+    Replaces the two fixed PDF slots registration used to have -- see
+    `domain.test_material.TestMaterial` for why a list, not a pair.
+
+    ``uq_test_materials_test_role_hash`` makes re-attaching the *same* file
+    under the same role a detectable duplicate rather than a second copy on
+    disk: the intake screen can retry a partially-failed batch (Issue #101:
+    "成功した分は残る") and must not multiply materials each time it does.
+    The same file may still be attached under two different roles, which is
+    legitimate -- a criteria PDF a reviewer also wants kept as reference.
+    """
+
+    __tablename__ = "test_materials"
+    __table_args__ = (
+        # Every `MaterialRole` value *except* `ignore`, which is the role of
+        # a file the reviewer chose not to import -- a stored row can never
+        # carry it. `domain.test_material.TestMaterial` rejects it too; this
+        # is the constraint that also holds for a write bypassing the domain
+        # (mirrors `ck_submissions_state_valid`).
+        CheckConstraint(
+            "role IN ('student_answer', 'grading_criteria', 'annotation_resource', "
+            "'annotation_sample', 'reference')",
+            name="ck_test_materials_role_valid",
+        ),
+        CheckConstraint("size_bytes >= 0", name="ck_test_materials_size_non_negative"),
+        CheckConstraint(
+            "original_filename IS NULL OR length(original_filename) <= 255",
+            name="ck_test_materials_original_filename_length",
+        ),
+        UniqueConstraint("test_id", "role", "sha256", name="uq_test_materials_test_role_hash"),
+        Index("ix_test_materials_test_id", "test_id"),
+    )
+
+    id: Mapped[str] = _pk()
+    test_id: Mapped[str] = mapped_column(ForeignKey("tests.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[MaterialRole] = mapped_column(_enum(MaterialRole), nullable=False)
+    stored_path: Mapped[str] = mapped_column(String, nullable=False)
+    sha256: Mapped[str] = mapped_column(String, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    original_filename: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

@@ -57,10 +57,10 @@ void main() {
 
   final screens = <String, String>{
     'ホーム画面': AppRoutes.home,
-    'テスト登録画面': AppRoutes.testRegistration,
+    '資料取込画面': AppRoutes.intake,
     'テスト一覧画面': AppRoutes.testList,
     'テスト設定画面': AppRoutes.testSettings('test-1'),
-    '答案取込画面': AppRoutes.answerIntake,
+    '設定画面': AppRoutes.settings,
     '添削レビュー画面': AppRoutes.pdfReview(testId: 'test-1', submissionId: 'sub-1'),
   };
 

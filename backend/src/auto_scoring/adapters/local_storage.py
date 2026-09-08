@@ -25,12 +25,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
 from uuid import uuid4
 
 _TEMP_SUFFIX = ".part"
+
+#: Bound on the file extension `test_material_path` interpolates. Short and
+#: alphanumeric: the value comes from a reviewer-chosen file name, and
+#: everything else about that name is deliberately not used (see that method).
+_MATERIAL_EXTENSION_PATTERN = re.compile(r"[a-z0-9]{1,8}")
 
 #: Windows device names reserved regardless of extension (``CON.png`` still
 #: addresses the ``CON`` device via most Win32 APIs). Checked against the
@@ -120,6 +126,34 @@ class LocalFileStore:
         """The registered marking-manual PDF (Issue #16, simplified-design-spec.md §23)."""
         return self._resolve("tests", test_id, "manual.pdf")
 
+    def test_material_path(self, test_id: str, material_id: str, extension: str) -> Path:
+        """Where one role-tagged registration file lives (Issue #101).
+
+        Named by the material's own id rather than by its role, because a
+        test may hold several files of the same role (four 添削サンプル in
+        one real subject folder) and because the reviewer's own file name is
+        not safe to use as a path segment -- real material contains a name
+        with a doubled extension and one with whitespace before its
+        extension. The name they chose is kept as
+        `TestMaterial.original_filename`, for display only.
+
+        ``extension`` is bounded to a short alphanumeric run: it is the one
+        part of this path derived from the uploaded file rather than from an
+        id this app minted, so it is validated here rather than trusted.
+        """
+        if not _MATERIAL_EXTENSION_PATTERN.fullmatch(extension):
+            raise ValueError(f"unsafe material extension: {extension!r}")
+        return self._resolve("tests", test_id, "materials", f"{material_id}.{extension}")
+
+    def resolve_stored_path(self, stored_path: str) -> Path:
+        """A root-relative ``*_path`` field (``TestMaterial.stored_path``,
+        ``Submission.source_pdf_path``) back to an absolute path.
+
+        Goes through ``_resolve`` so a stored value that has been tampered
+        with cannot address a file outside the store root.
+        """
+        return self._resolve(*stored_path.split("/"))
+
     def submission_dir(self, submission_id: str) -> Path:
         return self._resolve("submissions", submission_id)
 
@@ -158,7 +192,7 @@ class LocalFileStore:
         reserved_paths = set(reserved)
         candidate = exports / f"{stem}_corrected.pdf"
         counter = 2
-        while candidate.exists() or self._relative_path(candidate) in reserved_paths:
+        while candidate.exists() or self.relative_path(candidate) in reserved_paths:
             candidate = exports / f"{stem}_corrected_{counter}.pdf"
             counter += 1
         return candidate
@@ -210,10 +244,13 @@ class LocalFileStore:
             raise ValueError(f"path {path} escapes storage root {self._root}")
         return resolved
 
-    def _relative_path(self, path: Path) -> str:
+    def relative_path(self, path: Path) -> str:
         """``path`` (already under this store's root) as the same
         root-relative, forward-slash string every stored ``*_path`` field
-        (``Submission.source_pdf_path``, ``Export.file_path``, ...) uses.
+        (``Submission.source_pdf_path``, ``TestMaterial.stored_path``,
+        ``Export.file_path``, ...) uses.
+
+        The inverse of :meth:`resolve_stored_path`.
         """
         return str(path.relative_to(self._root)).replace("\\", "/")
 

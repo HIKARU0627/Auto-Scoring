@@ -6,7 +6,7 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/features/home/home_dashboard.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
-import 'package:auto_scoring_app/features/test_registration/test_registration_page.dart';
+import 'package:auto_scoring_app/features/intake/intake_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
 
 import 'app_harness.dart';
@@ -190,7 +190,7 @@ void main() {
     await tester.tap(find.byKey(const Key('home-next-up-action')));
     await tester.pumpAndSettle();
 
-    expect(find.byType(TestRegistrationPage), findsOneWidget);
+    expect(find.byType(IntakePage), findsOneWidget);
   });
 
   testWidgets('AI処理中しか無いときは、押せるのが更新だけになる', (tester) async {

@@ -1,11 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:auto_scoring_app/core/app_routes.dart';
-import 'package:auto_scoring_app/features/answer_intake/answer_intake_page.dart';
 import 'package:auto_scoring_app/features/home/home_page.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
-import 'package:auto_scoring_app/features/test_registration/test_registration_page.dart';
+import 'package:auto_scoring_app/features/intake/intake_page.dart';
+import 'package:auto_scoring_app/features/settings/settings_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
 
 import 'app_harness.dart';
@@ -28,10 +28,10 @@ import 'app_harness.dart';
 void main() {
   final locations = <String, Type>{
     AppRoutes.home: HomePage,
-    AppRoutes.testRegistration: TestRegistrationPage,
+    AppRoutes.intake: IntakePage,
     AppRoutes.testList: TestListPage,
     AppRoutes.testSettings('test-1'): TestSettingsPage,
-    AppRoutes.answerIntake: AnswerIntakePage,
+    AppRoutes.settings: SettingsPage,
     AppRoutes.pdfReview(testId: 'test-1', submissionId: 'sub-1'): PdfReviewPage,
   };
 

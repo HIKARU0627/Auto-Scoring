@@ -1,5 +1,13 @@
 # 再開可能な設問DAG対応並列AI処理キュー
 
+> **Issue #101 で画面が変わった。** 「答案取込画面」は 資料取込画面 (`/intake`) に
+> 統合された。**起票の規則そのものは変えていない** -- 取込1件につき1回、
+> `createSubmission` が `ai_processed` を返したときだけ呼ぶ。呼ぶ場所が
+> `app/lib/features/intake/intake_page.dart` に移っただけである。
+> 起票の失敗は取込の失敗として扱わず、取込結果の行に理由を併記する
+> （新規登録直後のテストは確定DAGを持たないため、これは異常ではなく通常の状態）。
+> 詳細は [`intake-and-settings.md`](./intake-and-settings.md)。
+
 GitHub Issue [#18](https://github.com/HIKARU0627/Auto-Scoring/issues/18)（親
 [#3](https://github.com/HIKARU0627/Auto-Scoring/issues/3)）。複数答案の
 OCR/AI処理を制限付きで並列実行し、アプリ再起動や一時障害後も安全に再開できるよ
