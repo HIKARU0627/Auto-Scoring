@@ -12,8 +12,12 @@ Design decisions live in ``docs/technology-stack.md`` §1.1-§1.2 and
 * If the requested port is taken the sidecar falls back to any free port, so a
   second instance (or an unrelated process holding the port) does not block
   startup.
-* The token is written only to the handshake channel. A logging filter redacts
-  it from anything that reaches the application log.
+* The token is written only to the handshake channel. A logging filter
+  removes it, and this host's configuration values, from every record that
+  reaches the log -- but only where they appear *verbatim*
+  (`api.secret_redaction` documents that limit). What a library does to a
+  value before printing it is outside that filter's reach, so libraries do
+  not get to print at INFO here at all: see `_VERBOSE_LOGGERS`.
 * The handshake is written *after* ``create_app`` succeeds, so a handshake file
   never advertises a ``host:port`` this process will not go on to serve
   (``docs/windows-distribution.md`` §4).
@@ -35,9 +39,11 @@ from typing import TypedDict
 
 import uvicorn
 
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
-from auto_scoring.api.app import create_app
+from auto_scoring.api.app import build_ai_provider, create_app
 from auto_scoring.api.auth import generate_token
+from auto_scoring.api.secret_redaction import configuration_secrets, redact
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
@@ -84,6 +90,42 @@ bursty (a whole class of answers in one afternoon, then nothing for a week).
 """
 
 
+#: The only logger trees this process lets speak at INFO. Everything else --
+#: any library now or later, `httpx` and `httpcore` above all -- stays at the
+#: root level below, which is WARNING.
+#:
+#: Deny by default, because the alternative lost three times running (review
+#: rounds 1-3). httpx logs every request URL at INFO, and the Vertex adapter
+#: builds that URL out of ``AUTO_SCORING_VERTEX_PROJECT`` /
+#: ``AUTO_SCORING_GEMINI_MODEL`` / ``AUTO_SCORING_VERTEX_LOCATION``, so a key
+#: pasted into any of them was written to a log that outlives the session.
+#: Masking the value out of that line cannot be made to hold: httpx lowercases
+#: the host, so an uppercase character in the value already defeated an exact
+#: match (round 3), and percent-encoding or truncation would defeat the next
+#: attempt. **A URL this app never needed in its log is not worth a game of
+#: catch-up: it is not logged at all.**
+#:
+#: What replaces it is *not* the URL rendered more carefully -- it is a
+#: diagnosis assembled from parts that cannot carry configuration
+#: (`domain.ai_provider.ProviderAttempt`: the adapter's literal id, the
+#: exception class, the HTTP status number). A successful grade is
+#: attributed by `GradeResult`'s reproducibility triple (Issue #20); a
+#: *failed* one has no `GradeResult` at all, which is why the same record
+#: also goes to `Job.last_error` and to a WARNING from
+#: `adapters.ai_grading.fallback_provider` for each link a chain fell
+#: through. Saying only "the triple covers it" was wrong, and review round 4
+#: caught it: on a fully-failed chain there is no triple to read.
+#:
+#: That covers those three parts, for the failures the port declares. It is
+#: not a claim that every failure is diagnosable.
+#:
+#: ``uvicorn`` stays because its access log is this app's *own* loopback
+#: routes (no configuration in the path, and the bearer token travels in a
+#: header the filter scrubs); ``alembic`` because first-launch migration
+#: progress is the slowest, least observable part of startup.
+_VERBOSE_LOGGERS = ("auto_scoring", "uvicorn", "alembic")
+
+
 class Handshake(TypedDict):
     """The single JSON line the parent process reads to reach the sidecar."""
 
@@ -128,16 +170,23 @@ def _bind_socket(requested: int, host: str = LOOPBACK) -> socket.socket:
 
 
 class _RedactingFilter(logging.Filter):
-    """Replaces the bearer token with ``***`` in every log record."""
+    """Replaces every known secret with ``***`` in every log record.
 
-    def __init__(self, secret: str) -> None:
+    The log half of `api.secret_redaction`'s gate: the session token plus
+    this host's configuration values (review round 2 -- a value reaches the
+    log through code that never calls a logger of ours, such as httpx's
+    INFO-level request URL).
+    """
+
+    def __init__(self, secrets: Sequence[str]) -> None:
         super().__init__()
-        self._secret = secret
+        self._secrets = tuple(secret for secret in secrets if secret)
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        if self._secret in message:
-            record.msg = message.replace(self._secret, "***")
+        scrubbed = redact(message, self._secrets)
+        if scrubbed != message:
+            record.msg = scrubbed
             record.args = ()
 
         # The formatted message is not the only thing a handler writes. Since
@@ -155,13 +204,22 @@ class _RedactingFilter(logging.Filter):
         if record.exc_info is not None:
             if record.exc_text is None:
                 record.exc_text = logging.Formatter().formatException(record.exc_info)
-            if self._secret in record.exc_text:
-                record.exc_text = record.exc_text.replace(self._secret, "***")
+            record.exc_text = redact(record.exc_text, self._secrets)
         return True
 
 
-def install_log_redaction(token: str, log_directory: Path | None = None) -> None:
-    """Route logging through handlers that all scrub ``token``.
+def install_log_redaction(
+    token: str,
+    log_directory: Path | None = None,
+    *,
+    secrets: Sequence[str] = (),
+) -> None:
+    """Route logging through handlers that all scrub ``token`` and ``secrets``.
+
+    ``secrets`` is this host's configuration values (`configuration_secrets`)
+    -- the single gate described there. Empty by default so a caller that
+    only wants the session token scrubbed, and every test that installs
+    logging, says nothing about the machine's environment.
 
     Always to stderr; additionally to a rotating file under ``log_directory``
     when one is given. The file is what makes the log useful in a
@@ -200,15 +258,22 @@ def install_log_redaction(token: str, log_directory: Path | None = None) -> None
         except OSError as error:
             file_log_error = error
 
+    scrubbed = (token, *secrets)
     for handler in handlers:
         handler.setFormatter(formatter)
         # A filter instance per handler, not one shared -- logging holds
         # filters per handler and this keeps each handler independent.
-        handler.addFilter(_RedactingFilter(token))
+        handler.addFilter(_RedactingFilter(scrubbed))
 
     root = logging.getLogger()
     root.handlers = handlers
-    root.setLevel(logging.INFO)
+    # WARNING at the root, INFO only for _VERBOSE_LOGGERS: see that constant
+    # for why a library's INFO output is refused rather than filtered. A
+    # child logger set to INFO still reaches these handlers -- propagation
+    # does not re-check the root logger's own level.
+    root.setLevel(logging.WARNING)
+    for name in _VERBOSE_LOGGERS:
+        logging.getLogger(name).setLevel(logging.INFO)
 
     if file_log_error is not None:
         # Logged only once the handlers are installed, so it is itself visible.
@@ -364,15 +429,47 @@ def run(argv: Sequence[str] | None = None) -> int:
     # the same file as the live instance. Harmless at one line, and the
     # alternative (logging to a file only once the lock is held) would drop
     # exactly the records worth keeping.
-    install_log_redaction(token, args.app_data_dir / LOG_DIRECTORY_NAME)
+    # `configuration_secrets(os.environ)`, not just the session token: the
+    # Vertex adapter builds AUTO_SCORING_VERTEX_PROJECT and
+    # AUTO_SCORING_GEMINI_MODEL into every request URL, and httpx logs that
+    # URL at INFO -- so a key pasted into the wrong variable reached this
+    # file log through a path that has nothing to do with our own log calls
+    # (review round 2). Gating the log itself covers that path and the ones
+    # nobody has found yet.
+    install_log_redaction(
+        token,
+        args.app_data_dir / LOG_DIRECTORY_NAME,
+        secrets=configuration_secrets(os.environ),
+    )
 
     # data_root only, no session_factory: create_app() builds the database
     # itself (migrations, engine, the startup repair sweep) rather than this
     # function duplicating that -- see create_app()'s docstring for why
     # session_factory is reserved for callers (Issue #26's tests) that need
     # to hand in an already-migrated database instead.
+    #
+    # The one place that reads this host's AI-grading configuration (Issue
+    # #97). `create_app` deliberately does not: a decision taken from
+    # `os.environ` inside it would be inherited by every test that builds an
+    # app, and would then differ between a developer machine with a `gcloud`
+    # login and a CI runner without one (docs/quality-gates.md). Here, in the
+    # composition root, there is exactly one real environment to read.
+    #
+    # `build_ai_provider` never raises: a host with no usable credentials
+    # still gets an app that imports answers, serves review and exports PDFs,
+    # and says on every screen that grading is unavailable.
+    ai_provider = build_ai_provider(os.environ)
+    if isinstance(ai_provider, UnconfiguredAIProvider):
+        # Warning, not error: the sidecar is about to serve normally. The
+        # reason names variables and prerequisites, never their values
+        # (`api.app.build_ai_provider`), so it is safe in a log file that
+        # outlives the session.
+        logging.getLogger(__name__).warning(
+            "AI grading is unavailable on this host: %s", ai_provider.reason
+        )
+
     try:
-        app = create_app(api_token=token, data_root=args.app_data_dir)
+        app = create_app(api_token=token, data_root=args.app_data_dir, ai_provider=ai_provider)
     except DataRootLockedError as error:
         # The one startup failure with a name the user understands, so it
         # gets an exit code of its own rather than an anonymous traceback.

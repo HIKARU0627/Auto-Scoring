@@ -22,16 +22,21 @@ rather than in ``GradingJobProcessor`` or the queue's retry layer:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from auto_scoring.domain.ai_provider import (
     AIProvider,
     GradingRequest,
     GradingResponse,
+    ProviderAttempt,
     ProviderDescriptor,
+    ProviderFailure,
     ProviderUnavailable,
     SchemaViolation,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FallbackAIProvider:
@@ -116,17 +121,33 @@ class FallbackAIProvider:
         return self._last_attempted.describe()
 
     def grade(self, request: GradingRequest) -> GradingResponse:
-        last_failure: Exception | None = None
+        last_failure: ProviderFailure | None = None
+        attempts: list[ProviderAttempt] = []
         for provider in self._providers:
             self._last_attempted = provider
             try:
                 return provider.grade(request)
             except (ProviderUnavailable, SchemaViolation) as exc:
-                # Never logged and never wrapped: the exception messages
-                # from these adapters are already body-free (AGENTS.md
-                # "Security"), and re-raising the original unchanged at the
-                # end of the chain is what keeps the queue's existing
-                # error classification correct.
+                attempt = ProviderAttempt(
+                    provider=provider.name,
+                    error=type(exc).__name__,
+                    status_code=exc.status_code,
+                )
+                attempts.append(attempt)
+                # WARNING, and only the `ProviderAttempt`: never the
+                # exception's message, which is not this layer's to vet.
+                # Without this line a fall-through is invisible -- the
+                # caller only ever sees the last link's failure, and on a
+                # *successful* fall-through it sees nothing at all, so
+                # "Vertex has been 403ing all afternoon and every grade
+                # came from OpenAI" would go unnoticed (Issue #97 review
+                # round 4).
+                logger.warning("AI provider attempt failed: %s", attempt)
                 last_failure = exc
         assert last_failure is not None  # the loop runs at least once (non-empty chain)
+        # The original exception object, re-raised unchanged in class,
+        # message and traceback -- that is what keeps the queue's error
+        # classification correct. Only the structured record of how the
+        # whole chain died is added, which no single child could know.
+        last_failure.attempts = tuple(attempts)
         raise last_failure

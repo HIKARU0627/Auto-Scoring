@@ -176,6 +176,9 @@ Future<List<ExportResponse>> _unavailableListExports(
   String submissionId,
 ) async => _unavailable();
 
+Future<GradingAvailabilityResponse> _unavailableGradingAvailability() async =>
+    _unavailable();
+
 Future<JobResponse> _unavailableGetJob(String jobId) async => _unavailable();
 
 Future<JobResponse> _unavailableRetryJob(String jobId) async => _unavailable();
@@ -183,6 +186,11 @@ Future<JobResponse> _unavailableRetryJob(String jobId) async => _unavailable();
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
+
+/// Whether this installation can AI-grade at all, and if not, why
+/// (Issue #97). Asked once per sidecar connection by the composition
+/// root, which puts the answer above every screen.
+typedef GetGradingAvailability = Future<GradingAvailabilityResponse> Function();
 
 /// Fetches every submission already imported for [testId].
 typedef ListSubmissions =
@@ -443,6 +451,7 @@ final appDependenciesProvider = Provider<AppDependencies>(
 class AppDependencies {
   const AppDependencies({
     this.healthCheck = _stubHealthCheck,
+    this.gradingAvailability = _unavailableGradingAvailability,
     this.listTests = _unavailableListTests,
     this.listSubmissions = _unavailableListSubmissions,
     this.getSubmission = _unavailableGetSubmission,
@@ -488,6 +497,7 @@ class AppDependencies {
   /// typedef without it to hold.
   AppDependencies.fromClient(SidecarApiClient client)
     : healthCheck = client.isHealthy,
+      gradingAvailability = client.gradingAvailability,
       listTests = client.listTests,
       listSubmissions = client.listSubmissions,
       getSubmission = client.getSubmission,
@@ -526,6 +536,7 @@ class AppDependencies {
   /// healthy so widget tests need not stand one up.
   final Future<bool> Function() healthCheck;
 
+  final GetGradingAvailability gradingAvailability;
   final ListTests listTests;
   final ListSubmissions listSubmissions;
   final GetSubmission getSubmission;

@@ -12,8 +12,18 @@ works and yields that one adapter directly, which is what every existing
 caller and ``.env.local`` passes.
 
 ``docs/poc-2-ai-grading.md`` section 7.1 lists each transport's variables.
-This module only maps that configuration onto adapters; it is still not
-wired into ``api.app.create_app`` (that wiring is future MVP work).
+This module only maps that configuration onto adapters; the wiring into the
+running app is ``api.app.build_ai_provider`` (Issue #97).
+
+**No message raised from this module may quote a configuration value** --
+only variable names, the fixed set of supported transport ids, and text this
+module wrote itself. Since Issue #97 these messages are published: they
+become ``UnconfiguredAIProvider.reason``, which ``GET /grading/availability``
+returns and the app shows on screen and the sidecar writes to its log. An
+operator who pastes an API key into the wrong variable (review round 1, P2:
+``AUTO_SCORING_AI_GRADING_TEMPERATURE`` was echoed back verbatim) must not
+have it read back to them from all three. ``test_grading_availability.py``
+enforces this by putting a sentinel in each variable in turn.
 """
 
 from __future__ import annotations
@@ -162,9 +172,12 @@ def _parse_transports(values: Mapping[str, str]) -> tuple[str, ...]:
         )
     unknown = [transport for transport in transports if transport not in _KNOWN_TRANSPORTS]
     if unknown:
+        # Says how many, never which: what an operator typed into this
+        # variable is a value, and values are not published (module
+        # docstring). The supported set below is what they need anyway.
         raise AIProviderConfigError(
-            f"{_TRANSPORT_ENV_VAR} lists unknown transport(s) {unknown}; supported values are "
-            f"{list(_KNOWN_TRANSPORTS)}"
+            f"{_TRANSPORT_ENV_VAR} lists {len(unknown)} unknown transport(s); supported values "
+            f"are {list(_KNOWN_TRANSPORTS)}"
         )
     if len(set(transports)) != len(transports):
         # A repeat is always a configuration mistake, and a silently-deduped
@@ -220,9 +233,17 @@ def _build(
     # temperature parameter, so CodexAppServerProvider does not accept one
     # (see codex_app_server_provider._UNCONFIGURABLE_TEMPERATURE -- code
     # review finding).
-    executable = values.get("AUTO_SCORING_CODEX_EXECUTABLE", "").strip() or "codex"
+    configured_executable = values.get("AUTO_SCORING_CODEX_EXECUTABLE", "").strip()
+    executable = configured_executable or "codex"
     if not executable_available(executable):
-        raise _MissingCredentials(f"the {executable!r} executable was not found on this host")
+        # Names the variable when one was set, and only the built-in default
+        # otherwise -- a configured path is a value, and values are not
+        # published (module docstring).
+        raise _MissingCredentials(
+            "the executable named by AUTO_SCORING_CODEX_EXECUTABLE was not found on this host"
+            if configured_executable
+            else "the 'codex' executable was not found on this host"
+        )
     return CodexAppServerProvider(
         model=values.get("AUTO_SCORING_CODEX_MODEL", "").strip() or None,
         prompt_version=prompt_version,
@@ -288,15 +309,16 @@ def _parse_temperature(values: Mapping[str, str]) -> float:
     try:
         value = float(raw)
     except ValueError as exc:
+        # The offending value is deliberately not quoted back (module
+        # docstring): a key pasted into the wrong variable lands here, and
+        # this text is published. The variable's name is enough to fix it.
         raise AIProviderConfigError(
-            f"AUTO_SCORING_AI_GRADING_TEMPERATURE must be a number, got {raw!r}"
+            "AUTO_SCORING_AI_GRADING_TEMPERATURE could not be read as a number"
         ) from exc
     if not math.isfinite(value) or value < 0:
-        raise AIProviderConfigError(
-            f"AUTO_SCORING_AI_GRADING_TEMPERATURE must be finite and >= 0, got {value!r}"
-        )
+        raise AIProviderConfigError("AUTO_SCORING_AI_GRADING_TEMPERATURE must be finite and >= 0")
     if value > _MAX_TEMPERATURE:
         raise AIProviderConfigError(
-            f"AUTO_SCORING_AI_GRADING_TEMPERATURE must be <= {_MAX_TEMPERATURE}, got {value!r}"
+            f"AUTO_SCORING_AI_GRADING_TEMPERATURE must be <= {_MAX_TEMPERATURE}"
         )
     return value

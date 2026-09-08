@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_provider import (
@@ -17,10 +18,12 @@ from auto_scoring.domain.ai_provider import (
     GradingCriterionOutcome,
     GradingRequest,
     GradingResponse,
+    ProviderAttempt,
     ProviderDescriptor,
     ProviderRateLimitedError,
     ProviderServerError,
     ProviderTimeoutError,
+    ProviderUnavailable,
     SchemaViolation,
 )
 from auto_scoring.domain.dependency_graph import (
@@ -390,6 +393,133 @@ async def test_mismatched_response_fails_permanently_without_persisting_a_grade(
 
     assert result.outcome is ProcessingOutcome.FAILED
     assert result.error_category is ErrorCategory.PERMANENT
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (401, "gemini ProviderUnavailable status=401"),
+        (403, "gemini ProviderUnavailable status=403"),
+        (404, "gemini ProviderUnavailable status=404"),
+    ],
+)
+async def test_a_failed_call_records_which_provider_failed_and_how(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+    status: int,
+    expected: str,
+) -> None:
+    """Issue #97 review round 4: a revoked ADC login (401), a project without
+    aiplatform enabled (403) and a misspelled ``AUTO_SCORING_GEMINI_MODEL``
+    (404) must not all read as "call failed" -- they are the three things a
+    first launch on a new machine actually hits, and they need different
+    answers from the operator.
+
+    `Job.last_error` is where this has to live: on a total failure there is
+    no `GradeResult` to carry the provider triple, and this string is what
+    the jobs API returns.
+    """
+    _seed(session_factory, store)
+    ai_provider.name = "gemini"
+    ai_provider.script(ProviderUnavailable("request failed", status_code=status))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_message is not None
+    assert expected in result.error_message
+
+
+async def test_an_exhausted_chain_records_every_link_in_last_error(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """ "Vertex was 403 so it fell through to OpenRouter, which was 401" --
+    the intermediate links, which the last exception on its own cannot
+    describe (`FallbackAIProvider` fills them in)."""
+    _seed(session_factory, store)
+    failure = ProviderUnavailable("request failed", status_code=401)
+    failure.attempts = (
+        ProviderAttempt(provider="gemini", error="ProviderUnavailable", status_code=403),
+        ProviderAttempt(provider="openrouter", error="ProviderUnavailable", status_code=401),
+    )
+    ai_provider.script(failure)
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_message is not None
+    assert "gemini ProviderUnavailable status=403" in result.error_message
+    assert "openrouter ProviderUnavailable status=401" in result.error_message
+
+
+async def test_the_recorded_diagnosis_is_assembled_not_filtered(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """The rule rounds 1-3 arrived at, applied to the diagnosis round 4 asked
+    for: `Job.last_error` is built from a literal provider id, an exception
+    class name and a number. Even an adapter whose *message* quotes
+    configuration cannot put it there, because the message is not used at
+    all.
+    """
+    _seed(session_factory, store)
+    ai_provider.script(
+        ProviderUnavailable(
+            "gemini request failed for project sk-secret-pasted-DO-NOT-USE", status_code=403
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_message is not None
+    assert "status=403" in result.error_message
+    assert "sk-secret-pasted-DO-NOT-USE" not in result.error_message
+
+
+async def test_an_unconfigured_host_fails_the_job_and_writes_no_grade(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ocr_provider: _ScriptedOCRProvider,
+) -> None:
+    """Issue #97: on a host where no AI provider could be built, a grading
+    Job must end FAILED/`PERMANENT` -- not SUCCEEDED with a 0-point,
+    confidence-0.0 `GradeResult` that reads, in the review UI, exactly like a
+    real provider that graded the answer and awarded nothing.
+
+    `PERMANENT` because no number of retries installs credentials on this
+    machine; the reason belongs to the whole app (``GET
+    /grading/availability``), not to each question's `last_error`.
+    """
+    _seed(session_factory, store)
+    recognition = RecognitionJobProcessor(session_factory, store, ocr_provider)
+    processor = GradingJobProcessor(
+        session_factory,
+        store,
+        recognition,
+        UnconfiguredAIProvider("AUTO_SCORING_AI_GRADING_TRANSPORT is required"),
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_category is ErrorCategory.PERMANENT
+    # The reason names a variable, but `last_error` is built from the
+    # provider's `name` alone (`GradingJobProcessor._failed`) -- assert the
+    # configuration text does not travel into per-question storage.
+    assert result.error_message is not None
+    assert "AUTO_SCORING_AI_GRADING_TRANSPORT" not in result.error_message
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.grades.history("sub-1", "q-1") == []
 

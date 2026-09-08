@@ -9,6 +9,8 @@ on the response (or per-provider agreement metrics would attribute every
 grade to the chain instead of the model that produced it).
 """
 
+import logging
+
 import pytest
 
 from auto_scoring.adapters.ai_grading.fallback_provider import FallbackAIProvider
@@ -16,6 +18,7 @@ from auto_scoring.domain.ai_provider import (
     AIProvider,
     GradingRequest,
     GradingResponse,
+    ProviderAttempt,
     ProviderDescriptor,
     ProviderRateLimitedError,
     ProviderServerError,
@@ -171,6 +174,76 @@ def test_describe_follows_the_last_attempted_child() -> None:
     with pytest.raises(ProviderServerError):
         chain.grade(_VALID_REQUEST)
     assert chain.describe().provider == "second"
+
+
+def test_an_exhausted_chain_records_every_link_it_tried() -> None:
+    """Issue #97 review round 4: the last link's failure alone cannot say
+    that Vertex was 403 *before* OpenRouter was 401 -- and after the request
+    URL stopped being logged (`api.sidecar._VERBOSE_LOGGERS`) nothing else
+    said it either. Every attempt is recorded, in the order tried."""
+    chain = FallbackAIProvider(
+        [
+            _StubProvider("gemini", ProviderUnavailable("forbidden", status_code=403)),
+            _StubProvider("openrouter", ProviderUnavailable("unauthorized", status_code=401)),
+        ]
+    )
+
+    with pytest.raises(ProviderUnavailable) as raised:
+        chain.grade(_VALID_REQUEST)
+
+    assert raised.value.attempts == (
+        ProviderAttempt(provider="gemini", error="ProviderUnavailable", status_code=403),
+        ProviderAttempt(provider="openrouter", error="ProviderUnavailable", status_code=401),
+    )
+
+
+def test_a_link_with_no_http_response_records_no_status() -> None:
+    """A timeout or a transport error has no status number, and one is not
+    invented -- ``None`` says "there was no response" rather than implying
+    some code was seen."""
+    chain = FallbackAIProvider([_StubProvider("openai", ProviderTimeoutError("timed out"))])
+
+    with pytest.raises(ProviderTimeoutError) as raised:
+        chain.grade(_VALID_REQUEST)
+
+    assert raised.value.attempts == (
+        ProviderAttempt(provider="openai", error="ProviderTimeoutError", status_code=None),
+    )
+
+
+def test_a_fall_through_is_logged_even_when_the_chain_then_succeeds(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Otherwise "Vertex has been 403ing all afternoon and every grade came
+    from OpenAI" is invisible: the caller is handed a perfectly good grade
+    and no exception is ever raised."""
+    chain = FallbackAIProvider(
+        [
+            _StubProvider("gemini", ProviderUnavailable("forbidden", status_code=403)),
+            _StubProvider("openai"),
+        ]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        chain.grade(_VALID_REQUEST)
+
+    assert "gemini ProviderUnavailable status=403" in caplog.text
+
+
+def test_the_logged_attempt_never_carries_the_exception_message() -> None:
+    """The same rule as everywhere else in Issue #97: what is published is
+    assembled from a literal provider id, an exception class name and a
+    number -- never filtered out of text this layer does not control."""
+    message = "forbidden for project sk-secret-pasted-DO-NOT-USE"
+    chain = FallbackAIProvider(
+        [_StubProvider("gemini", ProviderUnavailable(message, status_code=403))]
+    )
+
+    with pytest.raises(ProviderUnavailable) as raised:
+        chain.grade(_VALID_REQUEST)
+
+    assert str(raised.value.attempts[0]) == "gemini ProviderUnavailable status=403"
+    assert "sk-secret-pasted-DO-NOT-USE" not in str(raised.value.attempts[0])
 
 
 def test_an_empty_chain_is_rejected_at_construction() -> None:

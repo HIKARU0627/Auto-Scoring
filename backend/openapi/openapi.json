@@ -804,6 +804,31 @@
         "title": "GradeResultResponse",
         "type": "object"
       },
+      "GradingAvailabilityResponse": {
+        "description": "Whether this sidecar can AI-grade at all, and if not, why (Issue #97).\n\nThe app asks once per connection and keeps a banner above every screen\nwhile ``available`` is false. That banner is the whole point: without it,\na host with no credentials still imports answers, still enqueues grading\njobs, and the reviewer only ever sees each question fail -- with no way\nto tell \"this machine cannot grade\" apart from \"the AI could not read\nthis answer\".\n\n``reason`` never contains a credential: it is `UnconfiguredAIProvider.\nreason`, which names configuration variables and host prerequisites only\n(see `build_ai_provider`).",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "GradingAvailabilityResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1852,6 +1877,30 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/grading/availability": {
+      "get": {
+        "description": "Whether AI grading is configured on this host (Issue #97).\n\nBehind the bearer token, unlike ``/healthz``: it reports on this\ninstallation's configuration, which is nobody's business but the\napp's -- and it is not a liveness probe, so nothing needs it before\nthe handshake has been read.",
+        "operationId": "grading_availability_grading_availability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradingAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Grading Availability"
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz_healthz_get",

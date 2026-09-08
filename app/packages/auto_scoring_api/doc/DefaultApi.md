@@ -11,6 +11,7 @@ Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**createSubmissionTestsTestIdSubmissionsPost**](DefaultApi.md#createsubmissionteststestidsubmissionspost) | **POST** /tests/{test_id}/submissions | Create Submission
 [**getSubmissionSubmissionsSubmissionIdGet**](DefaultApi.md#getsubmissionsubmissionssubmissionidget) | **GET** /submissions/{submission_id} | Get Submission
+[**gradingAvailabilityGradingAvailabilityGet**](DefaultApi.md#gradingavailabilitygradingavailabilityget) | **GET** /grading/availability | Grading Availability
 [**healthzHealthzGet**](DefaultApi.md#healthzhealthzget) | **GET** /healthz | Healthz
 [**listSubmissionsTestsTestIdSubmissionsGet**](DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
 [**listTestsTestsGet**](DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
@@ -91,6 +92,45 @@ Name | Type | Description  | Notes
 ### Return type
 
 [**SubmissionResponse**](SubmissionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **gradingAvailabilityGradingAvailabilityGet**
+> GradingAvailabilityResponse gradingAvailabilityGradingAvailabilityGet()
+
+Grading Availability
+
+Whether AI grading is configured on this host (Issue #97).  Behind the bearer token, unlike ``/healthz``: it reports on this installation's configuration, which is nobody's business but the app's -- and it is not a liveness probe, so nothing needs it before the handshake has been read.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getDefaultApi();
+
+try {
+    final response = api.gradingAvailabilityGradingAvailabilityGet();
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling DefaultApi->gradingAvailabilityGradingAvailabilityGet: $e\n');
+}
+```
+
+### Parameters
+This endpoint does not need any parameter.
+
+### Return type
+
+[**GradingAvailabilityResponse**](GradingAvailabilityResponse.md)
 
 ### Authorization
 

@@ -31,6 +31,7 @@ import 'package:auto_scoring_api/src/model/edit_review_request.dart';
 import 'package:auto_scoring_api/src/model/export_request_response.dart';
 import 'package:auto_scoring_api/src/model/export_response.dart';
 import 'package:auto_scoring_api/src/model/grade_result_response.dart';
+import 'package:auto_scoring_api/src/model/grading_availability_response.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
@@ -80,6 +81,7 @@ part 'serializers.g.dart';
   ExportRequestResponse,
   ExportResponse,
   GradeResultResponse,
+  GradingAvailabilityResponse,
   HTTPValidationError,
   JobResponse,
   LocationInner,

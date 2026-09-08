@@ -69,6 +69,7 @@ Class | Method | HTTP request | Description
 ------------ | ------------- | ------------- | -------------
 [*DefaultApi*](doc/DefaultApi.md) | [**createSubmissionTestsTestIdSubmissionsPost**](doc/DefaultApi.md#createsubmissionteststestidsubmissionspost) | **POST** /tests/{test_id}/submissions | Create Submission
 [*DefaultApi*](doc/DefaultApi.md) | [**getSubmissionSubmissionsSubmissionIdGet**](doc/DefaultApi.md#getsubmissionsubmissionssubmissionidget) | **GET** /submissions/{submission_id} | Get Submission
+[*DefaultApi*](doc/DefaultApi.md) | [**gradingAvailabilityGradingAvailabilityGet**](doc/DefaultApi.md#gradingavailabilitygradingavailabilityget) | **GET** /grading/availability | Grading Availability
 [*DefaultApi*](doc/DefaultApi.md) | [**healthzHealthzGet**](doc/DefaultApi.md#healthzhealthzget) | **GET** /healthz | Healthz
 [*DefaultApi*](doc/DefaultApi.md) | [**listSubmissionsTestsTestIdSubmissionsGet**](doc/DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
 [*DefaultApi*](doc/DefaultApi.md) | [**listTestsTestsGet**](doc/DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
@@ -127,6 +128,7 @@ Class | Method | HTTP request | Description
  - [ExportRequestResponse](doc/ExportRequestResponse.md)
  - [ExportResponse](doc/ExportResponse.md)
  - [GradeResultResponse](doc/GradeResultResponse.md)
+ - [GradingAvailabilityResponse](doc/GradingAvailabilityResponse.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)

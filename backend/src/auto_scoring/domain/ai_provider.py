@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Protocol, runtime_checkable
 
@@ -38,7 +39,68 @@ from auto_scoring.domain.models import AnnotationKind, CriterionOutcome, Criteri
 _NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
-class SchemaViolation(Exception):
+@dataclass(frozen=True, kw_only=True)
+class ProviderAttempt:
+    """One failed call, in terms that cannot carry configuration (Issue #97,
+    review round 4).
+
+    Silencing libraries' INFO logging (`api.sidecar`) took a provider
+    failure's only diagnosis with it: a chain that dies 403 -> 401 reached
+    the operator as "call failed", so "re-run ``gcloud auth
+    application-default login``" (401), "enable aiplatform on the project"
+    (403) and "``AUTO_SCORING_GEMINI_MODEL`` is misspelled" (404) all looked
+    identical. Diagnosis had to come back -- but built out of safe parts,
+    not filtered out of unsafe ones, which is the mistake rounds 1-3 kept
+    repeating.
+
+    Every field is therefore either a literal written in this repository or
+    a number:
+
+    * ``provider`` -- the adapter's own ``name`` class attribute
+      (``"gemini"``, ``"openrouter"``, ...). Never ``describe().model``,
+      which is configuration.
+    * ``error`` -- the exception *class* name, one of this port's own. It
+      maps 1:1 onto the `auto_scoring.domain.models.ErrorCategory` the queue
+      records, so the two can be read together.
+    * ``status_code`` -- the HTTP status number, or ``None`` where there was
+      no response (a timeout, a transport error, a non-HTTP transport).
+
+    Nothing else may be added: not an exception message, a response body, a
+    URL, or a header.
+    """
+
+    provider: str
+    error: str
+    status_code: int | None = None
+
+    def __str__(self) -> str:
+        status = "" if self.status_code is None else f" status={self.status_code}"
+        return f"{self.provider} {self.error}{status}"
+
+
+class ProviderFailure(Exception):
+    """Base of the two failures this port declares, carrying the structured
+    diagnosis :class:`ProviderAttempt` describes.
+
+    ``attempts`` is empty for a single adapter's own failure -- the caller
+    knows which provider it called -- and is filled in by
+    `adapters.ai_grading.fallback_provider.FallbackAIProvider` when a chain
+    is exhausted, so the *intermediate* links are not lost behind the last
+    one ("Vertex was 403 so it fell through to OpenRouter, which was 401").
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        status_code: int | None = None,
+        attempts: Sequence[ProviderAttempt] = (),
+    ) -> None:
+        super().__init__(*args)
+        self.status_code = status_code
+        self.attempts: tuple[ProviderAttempt, ...] = tuple(attempts)
+
+
+class SchemaViolation(ProviderFailure):
     """The provider's raw response failed structured-output validation.
 
     Raised instead of falling back to free-text parsing (Issue #14
@@ -50,7 +112,7 @@ class SchemaViolation(Exception):
     """
 
 
-class ProviderUnavailable(Exception):
+class ProviderUnavailable(ProviderFailure):
     """The provider could not be reached (timeout, rate limit, transport error).
 
     Distinct from :class:`SchemaViolation`: this is a call failure, not a

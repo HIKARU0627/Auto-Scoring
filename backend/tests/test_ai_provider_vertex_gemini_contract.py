@@ -17,6 +17,7 @@ from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, Ad
 from auto_scoring.adapters.ai_grading.vertex_gemini_provider import VertexGeminiAIProvider
 from auto_scoring.domain.ai_provider import (
     AIProvider,
+    ProviderFailure,
     ProviderRateLimitedError,
     ProviderServerError,
     ProviderTimeoutError,
@@ -155,14 +156,35 @@ def test_a_failed_call_does_not_keep_the_previous_deployment() -> None:
         (500, ProviderServerError),
         (503, ProviderServerError),
         (401, ProviderUnavailable),
+        (403, ProviderUnavailable),
+        (404, ProviderUnavailable),
     ],
 )
-def test_http_failures_are_classified(status: int, expected: type[Exception]) -> None:
+def test_http_failures_are_classified(status: int, expected: type[ProviderFailure]) -> None:
     """docs/ai-grading-pipeline.md keys both the fallback decision and the
-    queue's ``ErrorCategory`` on these specific types."""
+    queue's ``ErrorCategory`` on these specific types.
+
+    The status *number* is carried on the exception as well (Issue #97
+    review round 4): it is the one part of a failed call that tells an
+    operator a revoked login (401) from a project without the API enabled
+    (403) from a misspelled model (404), and a number cannot carry
+    configuration the way a message or a URL can.
+    """
     provider = _make_provider(lambda request: httpx.Response(status, json={"error": "x"}))
-    with pytest.raises(expected):
+    with pytest.raises(expected) as raised:
         provider.grade(_VALID_REQUEST)
+    assert raised.value.status_code == status
+
+
+def test_a_timeout_carries_no_status_number() -> None:
+    """There was no response, so no code is invented for one."""
+
+    def _timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    with pytest.raises(ProviderTimeoutError) as raised:
+        _make_provider(_timeout).grade(_VALID_REQUEST)
+    assert raised.value.status_code is None
 
 
 def test_timeout_is_classified_as_a_timeout() -> None:

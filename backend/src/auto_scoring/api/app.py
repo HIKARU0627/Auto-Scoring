@@ -6,7 +6,7 @@ import atexit
 import tempfile
 import threading
 from asyncio import to_thread
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +17,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring import __version__
-from auto_scoring.adapters.ai.null_provider import NullAIProvider
+from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
@@ -41,6 +42,7 @@ from auto_scoring.api.export_router import build_export_router
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
+from auto_scoring.api.secret_redaction import configuration_secrets, redact
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
@@ -150,6 +152,93 @@ def _submission_response(result_submission: Submission, *, is_retry: bool) -> Su
     )
 
 
+#: How `build_ai_provider` reaches the provider chain. Injected so a test can
+#: state which world it is in -- by binding `create_ai_provider`'s own two
+#: host probes (``executable_available``, ``token_source_factory``) before
+#: passing it here -- instead of inheriting whatever this machine happens to
+#: have installed. That is the rule docs/quality-gates.md records as
+#: "ホストを見る判定はテストへ注入する".
+AIProviderFactory = Callable[[Mapping[str, str]], AIProvider]
+
+#: The `UnconfiguredAIProvider.reason` `create_app` falls back to when no
+#: ``ai_provider`` was injected at all. Not reachable from the sidecar (which
+#: always passes `build_ai_provider`'s result, configured or not); it is what
+#: a test or a schema export gets, and it says so rather than claiming
+#: something about this host's credentials.
+_NO_PROVIDER_INJECTED = "no AI grading provider was supplied to create_app()"
+
+
+class GradingAvailabilityResponse(BaseModel):
+    """Whether this sidecar can AI-grade at all, and if not, why (Issue #97).
+
+    The app asks once per connection and keeps a banner above every screen
+    while ``available`` is false. That banner is the whole point: without it,
+    a host with no credentials still imports answers, still enqueues grading
+    jobs, and the reviewer only ever sees each question fail -- with no way
+    to tell "this machine cannot grade" apart from "the AI could not read
+    this answer".
+
+    ``reason`` never contains a credential: it is `UnconfiguredAIProvider.
+    reason`, which names configuration variables and host prerequisites only
+    (see `build_ai_provider`).
+    """
+
+    available: bool
+    reason: str | None = None
+
+
+def build_ai_provider(
+    env: Mapping[str, str],
+    *,
+    factory: AIProviderFactory = create_ai_provider,
+) -> AIProvider:
+    """Build the configured provider chain, degrading to
+    `UnconfiguredAIProvider` instead of refusing to start (Issue #97).
+
+    `create_ai_provider` raises when this host has no usable credentials --
+    correct for a batch job, wrong for the sidecar: importing answers,
+    reviewing them and exporting annotated PDFs do not need a grading
+    provider, and losing all three because one is missing would be a far
+    worse failure than not grading. So the failure becomes a *state* the app
+    can render (``GET /grading/availability``) rather than a crash, and the
+    provider that state names raises on every `grade()` call so no question
+    is ever silently recorded as "graded, 0点".
+
+    Both failure paths keep configuration values out of the reason string,
+    which is published by ``GET /grading/availability``, shown on screen, and
+    written to the sidecar log:
+
+    * `AIProviderConfigError` is required to name variables only, never
+      quote their values -- stated in `adapters.ai_grading.factory`'s module
+      docstring and enforced by the leak matrix in
+      ``tests/test_grading_availability.py``. It was *not* true when this
+      function was first written (review round 1, P2: an unparseable
+      ``AUTO_SCORING_AI_GRADING_TEMPERATURE`` was echoed back verbatim, so a
+      key pasted into the wrong variable was displayed and logged). Those
+      messages predate there being any published channel at all; adding one
+      is what made them a disclosure question, and the rule now lives with
+      the messages rather than as an assumption made here.
+    * Anything else is an adapter constructing itself unexpectedly badly. Its
+      message could be anything (an httpx proxy URL with credentials in it,
+      say), so only the exception *type* survives -- the same discipline
+      `adapters.ai_grading._google_adc` applies to google-auth's own errors.
+    """
+    try:
+        return factory(env)
+    except AIProviderConfigError as error:
+        reason = str(error)
+    except Exception as error:
+        reason = (
+            f"building the AI grading provider failed ({type(error).__name__}); see the sidecar log"
+        )
+    # Scrubbed even though neither message above is supposed to contain a
+    # value: this is the other half of `api.secret_redaction`'s gate (the log
+    # filter is the first), and the point of a gate is that it does not
+    # depend on every message upstream of it being written correctly. Round
+    # 1's leak was precisely an upstream message that was not.
+    return UnconfiguredAIProvider(redact(reason, configuration_secrets(env)))
+
+
 def create_app(
     *,
     api_token: str | None = None,
@@ -224,13 +313,21 @@ def create_app(
     ``ocr_provider`` defaults to `auto_scoring.adapters.ocr.null_provider.
     NullOCRProvider` -- the chosen OCR service (Google Document AI,
     business-rules-and-evaluation-data.md section 3 (A), Issue #81) has no
-    adapter yet. ``ai_provider`` defaults to `auto_scoring.adapters.ai.
-    null_provider.NullAIProvider` for the same reason -- section 3 (B)'s
-    fallback chain is not implemented yet (docs/ai-grading-pipeline.md).
-    Both null adapters are honest about not being configured yet (confidence
-    0.0, never a fabricated reading/grade) rather than raising, so every
-    question routes to needs-review until a real adapter is injected. All
-    four are ignored when
+    adapter yet, and that null adapter is honest about it (confidence 0.0,
+    never a fabricated reading) rather than raising, so every question routes
+    to needs-review until a real one is injected.
+
+    ``ai_provider`` has no such default any more (Issue #97). Section 3 (B)'s
+    fallback chain *is* implemented, and this function is deliberately not
+    the place that decides whether this host can run it: reading `os.environ`
+    (and, through it, probing for a `codex` executable and a `gcloud` login)
+    here would make every test that builds an app inherit whatever the
+    machine it runs on happens to have configured. The composition root --
+    `auto_scoring.api.sidecar.run` -- calls `build_ai_provider` and passes
+    the result in; omitting it yields an `UnconfiguredAIProvider` that raises
+    on every call, so a caller who forgot cannot silently record fabricated
+    grades. Whichever arrives is published by ``GET /grading/availability``
+    (`GradingAvailabilityResponse`). All of these are ignored when
     ``job_processor`` is supplied directly.
 
     ``export_processor`` (Issue #23) defaults to `auto_scoring.jobs.
@@ -346,11 +443,16 @@ def create_app(
         settings=recognition_settings,
         clock=clock,
     )
+    grading_provider = ai_provider or UnconfiguredAIProvider(_NO_PROVIDER_INJECTED)
+    # Published on `app.state` for the same reason as `queue_service` below:
+    # it is how a caller that built this app (`api.sidecar.run`, and its
+    # test) can see what it actually got, without going through HTTP.
+    app.state.ai_provider = grading_provider
     default_grading_processor = GradingJobProcessor(
         session_factory,
         store,
         default_recognition_processor,
-        ai_provider or NullAIProvider(),
+        grading_provider,
         grading_settings=grading_settings,
         clock=clock,
     )
@@ -474,6 +576,19 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @protected.get("/grading/availability")
+    def grading_availability() -> GradingAvailabilityResponse:
+        """Whether AI grading is configured on this host (Issue #97).
+
+        Behind the bearer token, unlike ``/healthz``: it reports on this
+        installation's configuration, which is nobody's business but the
+        app's -- and it is not a liveness probe, so nothing needs it before
+        the handshake has been read.
+        """
+        if isinstance(grading_provider, UnconfiguredAIProvider):
+            return GradingAvailabilityResponse(available=False, reason=grading_provider.reason)
+        return GradingAvailabilityResponse(available=True)
 
     @protected.post("/score")
     def score(request: ScoreRequest) -> ScoreResponse:

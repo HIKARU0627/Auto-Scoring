@@ -1957,9 +1957,12 @@ Issue #35 は「本番規模データで AI 採点を実測し、MVP で採用�
   「採点要確認」として人間が採点する導線を通す（簡易設計書 §8.2）。
 - Confidence 閾値による自動確定（人間レビューのスキップ）は**引き続き実装しない**
   （決定書 §3.1 C）。
-- `create_app()` の既定 `AIProvider` は `NullAIProvider` のままとする。実チェーンは
-  `create_ai_provider()` で構成できるが、注入は本 Issue の対象外
-  （`ai-grading-pipeline.md`）。
+- `create_app()` への実チェーンの注入は本 Issue の対象外とした（当時の既定は
+  `NullAIProvider`）。**Issue #97 で接続済み**: `api/sidecar.py` の `run()` が
+  `build_ai_provider(os.environ)` を呼び、認証情報が1つも無いホストでは
+  `UnconfiguredAIProvider`（採点は必ず失敗し、`GradeResult` を書かない）に
+  なったうえで、その事実が `GET /grading/availability` からアプリの全画面に
+  出る（`ai-grading-pipeline.md`「アプリ本体への接続」）。
 
 この決定は「実測できなかったから先送り」ではない。決定書 §3 (B) が確定した構成は
 **単一 provider の選択ではなく優先度つきフォールバック**であり、どれか 1 つを
