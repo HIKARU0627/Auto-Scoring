@@ -86,12 +86,15 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
   /// request on top of the first.
   bool _startingGrading = false;
 
-  /// The submission whose grading kickoff failed, i.e. what
-  /// [_ErrorKind.startGrading]'s retry would re-run. `null` when the failure
-  /// was a 404 -- the answer itself is gone, so re-sending the same request
-  /// cannot change the outcome and the banner offers no retry
-  /// (`core/grading_kickoff.dart`).
-  String? _retryableGradingSubmissionId;
+  /// How the last grading kickoff failed, or `null`. Its
+  /// [GradingKickoffFailure.retryable] is what decides whether the banner
+  /// offers 「AI採点を開始」 at all.
+  GradingKickoffFailure? _gradingFailure;
+
+  /// The submission that failure was for, i.e. what the retry would re-run.
+  /// The retry targets *that* answer, not whatever the picker happens to
+  /// show now.
+  String? _failedGradingSubmissionId;
 
   String? _errorMessage;
   _ErrorKind? _errorKind;
@@ -284,6 +287,8 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
       if (_errorKind == _ErrorKind.startGrading) {
         _errorMessage = null;
         _errorKind = null;
+        _gradingFailure = null;
+        _failedGradingSubmissionId = null;
       }
     });
     try {
@@ -291,12 +296,12 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
       return true;
     } on SidecarApiException catch (error) {
       if (!mounted) return false;
+      final failure = GradingKickoffFailure.of(error);
       setState(() {
-        _errorMessage = gradingKickoffErrorMessage(error);
+        _errorMessage = failure.message;
         _errorKind = _ErrorKind.startGrading;
-        _retryableGradingSubmissionId = gradingKickoffIsRetryable(error)
-            ? submissionId
-            : null;
+        _gradingFailure = failure;
+        _failedGradingSubmissionId = submissionId;
       });
       return false;
     } finally {
@@ -426,13 +431,15 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
     // already on the sidecar, so re-uploading it would be a duplicate (409).
     // Its retry re-runs `POST .../jobs` for that one submission and nothing
     // else (Issue #80).
-    final retryGradingFor = _retryableGradingSubmissionId;
+    final retryGradingFor = _failedGradingSubmissionId;
+    final canRetryGrading =
+        (_gradingFailure?.retryable ?? false) && retryGradingFor != null;
     final VoidCallback? retry = switch (_errorKind) {
       _ErrorKind.listLoad =>
         _loadingSubmissions ? null : () => _selectTest(_selectedTestId),
       _ErrorKind.filePick => _isSubmitting ? null : _pickFile,
       _ErrorKind.startGrading =>
-        _startingGrading || retryGradingFor == null
+        _startingGrading || !canRetryGrading
             ? null
             : () => _startGrading(retryGradingFor),
       _ErrorKind.submit || null => _canSubmit ? _submit : null,
@@ -442,8 +449,7 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
       onRetry: retry,
       // A 404 leaves nothing to re-run, so the button goes away rather than
       // sitting there disabled forever (`core/grading_kickoff.dart`).
-      retryable:
-          _errorKind != _ErrorKind.startGrading || retryGradingFor != null,
+      retryable: _errorKind != _ErrorKind.startGrading || canRetryGrading,
       retryLabel: _errorKind == _ErrorKind.startGrading
           ? startGradingLabel
           : '再試行',

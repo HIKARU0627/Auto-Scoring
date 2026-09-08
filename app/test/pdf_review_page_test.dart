@@ -3575,6 +3575,44 @@ void main() {
       );
     });
 
+    testWidgets('404 のあとは「AI採点を開始」を出さない', (tester) async {
+      // 答案そのものが無いという答えは、同じ要求を投げ直しても変わらない。
+      // 取込画面は再試行ボタンを出さないのに、こちらは `finally` で
+      // ボタンが復活し、「答案が見つかりません」の真上から何度でも
+      // 押せていた (review round 1, P2-2)。
+      var attempts = 0;
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => const [],
+          startGrading: (submissionId) async {
+            attempts++;
+            throw SidecarApiException(
+              SidecarErrorKind.badResponse,
+              'submission not found',
+              statusCode: 404,
+            );
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await _pumpTimes(tester, 5);
+
+      expect(attempts, 1);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('review-start-grading-error')))
+            .data,
+        contains('見つかりません'),
+      );
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsNothing,
+      );
+    });
+
     testWidgets('確定DAGが無いときの409は理由を出すだけで、画面をエラーにしない', (tester) async {
       // レビュアーは答案・認識文字・採点を読み続けられる。グラフが無いことを
       // 画面のエラー状態にしないのと同じ扱い

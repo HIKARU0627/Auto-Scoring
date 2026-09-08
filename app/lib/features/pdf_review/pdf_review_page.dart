@@ -363,12 +363,17 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// disabled rather than able to fire a second request on top of the first.
   bool _startingGrading = false;
 
-  /// Why the last 「AI採点を開始」 failed, or `null`. Deliberately *not*
-  /// [_shellError]: the reviewer can still read the answer, the recognized
-  /// text and the grades while grading refuses to start, exactly as a missing
-  /// dependency graph does not become this screen's error state either
-  /// (`docs/dependency-dag-progress-view.md` §1.7, §1.11).
-  String? _gradingError;
+  /// How the last 「AI採点を開始」 failed, or `null`. Carries both the text to
+  /// show and whether pressing again could change anything
+  /// ([GradingKickoffFailure]) -- keeping only the message is what let a 404
+  /// leave the button live above its own 「答案が見つかりません」 (review
+  /// round 1, P2-2).
+  ///
+  /// Deliberately *not* [_shellError]: the reviewer can still read the answer,
+  /// the recognized text and the grades while grading refuses to start,
+  /// exactly as a missing dependency graph does not become this screen's error
+  /// state either (`docs/dependency-dag-progress-view.md` §1.7, §1.11).
+  GradingKickoffFailure? _gradingFailure;
 
   @override
   void initState() {
@@ -656,7 +661,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   Future<void> _startGrading() async {
     setState(() {
       _startingGrading = true;
-      _gradingError = null;
+      _gradingFailure = null;
     });
     try {
       await _dependencies.startGrading(widget.submissionId);
@@ -664,7 +669,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       _updatePolling();
     } on SidecarApiException catch (error) {
       if (!mounted) return;
-      setState(() => _gradingError = gradingKickoffErrorMessage(error));
+      setState(() => _gradingFailure = GradingKickoffFailure.of(error));
     } finally {
       if (mounted) setState(() => _startingGrading = false);
     }
@@ -1461,7 +1466,13 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the second one may be said out loud.
   Widget? _buildStartGradingSection() {
     if (!_jobsLoaded || _jobs.isNotEmpty) return null;
-    final error = _gradingError;
+    final failure = _gradingFailure;
+    // A failure the sidecar already answered "there is no such submission" to
+    // takes the button away entirely. Leaving it live -- directly above its
+    // own 「答案が見つかりません」 -- invited the reviewer to re-send a request
+    // whose answer cannot change, which is exactly what the intake screen was
+    // already careful not to do (`core/grading_kickoff.dart`).
+    final canStart = failure?.retryable ?? true;
     return Padding(
       padding: AppSpacing.banner,
       child: Column(
@@ -1483,22 +1494,25 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
                   style: context.texts.bodyMedium,
                 ),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              FilledButton.icon(
-                key: const Key('review-start-grading-button'),
-                onPressed: _startingGrading ? null : () => _startGrading(),
-                icon: const Icon(Icons.play_arrow),
-                label: const Text(startGradingLabel),
-              ),
+              if (canStart) ...[
+                const SizedBox(width: AppSpacing.sm),
+                FilledButton.icon(
+                  key: const Key('review-start-grading-button'),
+                  onPressed: _startingGrading ? null : () => _startGrading(),
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text(startGradingLabel),
+                ),
+              ],
             ],
           ),
-          if (error != null) ...[
+          if (failure != null) ...[
             const SizedBox(height: AppSpacing.sm),
-            // `retryable: false`: the 「AI採点を開始」 button right above *is*
-            // the retry, and a second one inside the banner would be two
-            // controls for one action.
+            // `retryable: false` on the banner regardless: when a retry is
+            // worth offering, the 「AI採点を開始」 button right above *is* it,
+            // and a second one inside the banner would be two controls for one
+            // action; when it is not, there is nothing to offer at all.
             AppErrorBanner(
-              message: error,
+              message: failure.message,
               messageKey: const Key('review-start-grading-error'),
               retryable: false,
             ),
