@@ -357,11 +357,34 @@ def test_a_verified_crop_is_returned_by_content_hash(tmp_path: Path) -> None:
     assert record._load_image(tmp_path, f"sha256:{digest}", locator="loc") == data
 
 
-def test_recording_into_the_committed_fixtures_is_refused() -> None:
+@pytest.mark.parametrize(
+    "inside_repo",
+    [
+        _FIXTURES,
+        _FIXTURES.parent,
+        Path(__file__).resolve().parents[2],
+    ],
+)
+def test_recording_anywhere_inside_the_repository_is_refused(inside_repo: Path) -> None:
     """A real provider's response body must never reach a commit
-    (docs/poc-2-ai-grading.md section 11)."""
+    (docs/poc-2-ai-grading.md section 11).
+
+    Refusing only the bundled fixture directory was not enough: copying the
+    fixtures to any other directory in the working tree and pointing
+    ``--dataset`` there was enough to write live provider output into a
+    tracked path (code review finding)."""
     with pytest.raises(SystemExit, match="refusing to record"):
-        record.main(["--dataset", str(_FIXTURES), "--images", str(_FIXTURES / "images")])
+        record.main(["--dataset", str(inside_repo), "--images", str(_FIXTURES / "images")])
+
+
+def test_a_symlink_pointing_back_into_the_repository_is_refused(tmp_path: Path) -> None:
+    """The check resolves before comparing, so an out-of-tree name is not a
+    way around it."""
+    link = tmp_path / "looks-external"
+    link.symlink_to(_FIXTURES, target_is_directory=True)
+
+    with pytest.raises(SystemExit, match="refusing to record"):
+        record.main(["--dataset", str(link), "--images", str(_FIXTURES / "images")])
 
 
 def test_a_dry_run_validates_without_credentials_or_calls(

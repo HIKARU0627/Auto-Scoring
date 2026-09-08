@@ -30,9 +30,10 @@ docs/poc-2-ai-grading.md section 11):
 * **It never prints student content.** Progress lines carry an index, the
   input variant, the provider id, the outcome, and a duration -- never
   question text, OCR text, a rubric, a score, or a response body.
-* **It never writes into the repository.** ``--dataset`` pointing at the
-  committed synthetic fixtures is refused outright: a real provider's
-  response body must not end up in a commit.
+* **It never writes into the repository.** Any ``--dataset`` that resolves
+  to a path under the repository root is refused outright -- not just the
+  bundled fixture directory -- so a copy of the fixtures made *inside* the
+  working tree cannot become a place real provider output lands.
 * **It verifies image identity.** An ``answer_image_ref`` of the form
   ``sha256:<hex>`` is checked against the bytes actually read, so a stale or
   swapped crop cannot silently make two providers look like they were
@@ -70,7 +71,13 @@ from auto_scoring.domain.ai_provider import (
     SchemaViolation,
 )
 
-_BUNDLED_FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "ai_grading"
+#: The repository this script lives in. Nothing under it may be recorded
+#: into: a real provider's response body must never reach a commit
+#: (docs/poc-2-ai-grading.md section 11), and refusing only the bundled
+#: fixture directory left "copy the fixtures somewhere else in the repo and
+#: point --dataset there" wide open (code review finding). Resolved, so a
+#: symlink pointing back inside the repository is caught too.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 #: Mirrors ``report.py``'s ``_INPUT_VARIANTS`` -- the two evaluation modes
 #: docs/poc-2-ai-grading.md section 2.1 compares every candidate on.
@@ -484,6 +491,23 @@ def _write_atomically(path: Path, document: dict[str, Any]) -> None:
         raise
 
 
+def _is_inside_repository(dataset: Path) -> bool:
+    """Whether ``dataset`` resolves to somewhere inside this repository.
+
+    ``resolve()`` on both sides is the point: an earlier version compared
+    the bundled fixture directory for equality only, so copying the
+    fixtures to any other directory in the working tree -- or pointing a
+    symlink from outside back into it -- was enough to write live provider
+    output into a tracked path (code review finding).
+    """
+    try:
+        return dataset.resolve().is_relative_to(_REPOSITORY_ROOT)
+    except OSError:
+        # An unresolvable path is not a "safe" path; let the dataset loader
+        # report it properly instead of treating it as outside the repo.
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -508,13 +532,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     dataset: Path = args.dataset
-    if dataset.resolve() == _BUNDLED_FIXTURES.resolve():
-        # The bundled fixtures are committed, and a real provider's response
-        # body must never be (docs/poc-2-ai-grading.md section 11). Copy
-        # them elsewhere first to rehearse the wiring.
+    if _is_inside_repository(dataset):
         raise SystemExit(
-            "refusing to record into the committed synthetic fixtures "
-            f"({_BUNDLED_FIXTURES}) -- copy them to a directory outside the repository first"
+            "refusing to record into a dataset inside this repository -- a real provider's "
+            "response body must never reach a commit (docs/poc-2-ai-grading.md section 11). "
+            "Copy the dataset to a directory outside the repository first."
         )
     variants = _INPUT_VARIANTS if args.variant == "both" else (args.variant,)
 
