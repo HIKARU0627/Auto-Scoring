@@ -48,8 +48,49 @@ Future<SubmissionResponse> _unavailableCreateSubmission({
 Future<TestResponse> _unavailableCreateTest({
   required String name,
   String? subject,
-  required String modelAnswerPath,
-  required String manualPath,
+  required String criteriaPath,
+  List<({MaterialRole role, String path})> materials = const [],
+}) async => _unavailable();
+
+Future<List<TestMaterialResponse>> _unavailableAddMaterials(
+  String testId, {
+  required List<({MaterialRole role, String path})> materials,
+}) async => _unavailable();
+
+Future<List<TestMaterialResponse>> _unavailableListMaterials(
+  String testId,
+) async => _unavailable();
+
+Future<void> _unavailableDeleteTest(String testId) async => _unavailable();
+
+Future<IntakePlanResponse> _unavailablePlanIntake({
+  required String templateId,
+  required String rootName,
+  required List<ScannedFileModel> files,
+}) async => _unavailable();
+
+Future<List<IntakeTemplateModel>> _unavailableListIntakeTemplates() async =>
+    _unavailable();
+
+Future<double?> _unavailableIntakeCost() async => _unavailable();
+
+Future<double?> _unavailableSaveIntakeCost(double? unitCost) async =>
+    _unavailable();
+
+Future<List<IntakeTemplateModel>> _unavailableSaveIntakeTemplates(
+  List<IntakeTemplateModel> templates,
+) async => _unavailable();
+
+Future<ClassificationAvailabilityResponse>
+_unavailableClassificationAvailability() async => _unavailable();
+
+Future<RoleProposalResponse> _unavailableClassifyMaterial({
+  required String path,
+}) async => _unavailable();
+
+Future<AttributionProposalResponse> _unavailableAttributeAnswer({
+  required String path,
+  required List<({String id, String label})> candidates,
 }) async => _unavailable();
 
 Future<TestResponse> _unavailableGetTest(String testId) async => _unavailable();
@@ -211,14 +252,75 @@ typedef CreateSubmission =
       String? studentLabel,
     });
 
-/// Registers a new test's model-answer + marking-manual PDFs (テスト登録画面,
-/// Issue #16). Creates a `draft` test; no profile exists yet.
+/// Registers a new test from its 採点基準PDF plus any optional role-tagged
+/// materials (Issue #101). Creates a `draft` test; no profile exists yet.
+///
+/// **No model-answer parameter.** That document does not exist in real
+/// grading material (Issue #95 decision 1); one a reviewer happens to have is
+/// passed in [materials] under [MaterialRole.reference].
 typedef CreateTest =
     Future<TestResponse> Function({
       required String name,
       String? subject,
-      required String modelAnswerPath,
-      required String manualPath,
+      required String criteriaPath,
+      List<({MaterialRole role, String path})> materials,
+    });
+
+/// Attaches more materials to a test that already exists (Issue #101) -- the
+/// weekly flow, where 添削資料 turn up after the test was registered.
+typedef AddMaterials =
+    Future<List<TestMaterialResponse>> Function(
+      String testId, {
+      required List<({MaterialRole role, String path})> materials,
+    });
+
+/// Which file became which role for one test.
+typedef ListMaterials =
+    Future<List<TestMaterialResponse>> Function(String testId);
+
+/// Deletes a test and everything under it -- what the completion screen offers
+/// when a batch went into the wrong one.
+typedef DeleteTest = Future<void> Function(String testId);
+
+/// Plans a scanned batch against a saved 取込の型. Sends no file bytes.
+typedef PlanIntake =
+    Future<IntakePlanResponse> Function({
+      required String templateId,
+      required String rootName,
+      required List<ScannedFileModel> files,
+    });
+
+/// Every saved 取込の型 (設定画面).
+typedef ListIntakeTemplates = Future<List<IntakeTemplateModel>> Function();
+
+/// The per-call price the reviewer entered, or `null` for "not set".
+typedef GetIntakeCost = Future<double?> Function();
+
+/// Records the per-call price; `null` clears it.
+typedef SaveIntakeCost = Future<double?> Function(double? unitCost);
+
+/// Replaces the saved 取込の型 with the given list.
+typedef SaveIntakeTemplates =
+    Future<List<IntakeTemplateModel>> Function(
+      List<IntakeTemplateModel> templates,
+    );
+
+/// Whether this host can classify at all, and if not, why.
+typedef GetClassificationAvailability =
+    Future<ClassificationAvailabilityResponse> Function();
+
+/// Asks what one file is, from its first page. One file per call.
+typedef ClassifyMaterial =
+    Future<RoleProposalResponse> Function({required String path});
+
+/// Asks which of the offered tests one answer belongs to.
+///
+/// Never called with fewer than two candidates: with one, the reviewer has
+/// already decided and the sidecar refuses the call.
+typedef AttributeAnswer =
+    Future<AttributionProposalResponse> Function({
+      required String path,
+      required List<({String id, String label})> candidates,
     });
 
 /// One test's current registration state (テスト設定画面).
@@ -457,6 +559,17 @@ class AppDependencies {
     this.getSubmission = _unavailableGetSubmission,
     this.createSubmission = _unavailableCreateSubmission,
     this.createTest = _unavailableCreateTest,
+    this.addMaterials = _unavailableAddMaterials,
+    this.listMaterials = _unavailableListMaterials,
+    this.deleteTest = _unavailableDeleteTest,
+    this.planIntake = _unavailablePlanIntake,
+    this.listIntakeTemplates = _unavailableListIntakeTemplates,
+    this.intakeCost = _unavailableIntakeCost,
+    this.saveIntakeCost = _unavailableSaveIntakeCost,
+    this.saveIntakeTemplates = _unavailableSaveIntakeTemplates,
+    this.classificationAvailability = _unavailableClassificationAvailability,
+    this.classifyMaterial = _unavailableClassifyMaterial,
+    this.attributeAnswer = _unavailableAttributeAnswer,
     this.getTest = _unavailableGetTest,
     this.listTestRegistrations = _unavailableListTestRegistrations,
     this.analyzeProfile = _unavailableAnalyzeProfile,
@@ -503,6 +616,17 @@ class AppDependencies {
       getSubmission = client.getSubmission,
       createSubmission = client.createSubmission,
       createTest = client.createTest,
+      addMaterials = client.addMaterials,
+      listMaterials = client.listMaterials,
+      deleteTest = client.deleteTest,
+      planIntake = client.planIntake,
+      listIntakeTemplates = client.listIntakeTemplates,
+      intakeCost = client.intakeCost,
+      saveIntakeCost = client.saveIntakeCost,
+      saveIntakeTemplates = client.saveIntakeTemplates,
+      classificationAvailability = client.classificationAvailability,
+      classifyMaterial = client.classifyMaterial,
+      attributeAnswer = client.attributeAnswer,
       getTest = client.getTest,
       listTestRegistrations = client.listTestRegistrations,
       analyzeProfile = client.analyzeProfile,
@@ -542,6 +666,17 @@ class AppDependencies {
   final GetSubmission getSubmission;
   final CreateSubmission createSubmission;
   final CreateTest createTest;
+  final AddMaterials addMaterials;
+  final ListMaterials listMaterials;
+  final DeleteTest deleteTest;
+  final PlanIntake planIntake;
+  final ListIntakeTemplates listIntakeTemplates;
+  final GetIntakeCost intakeCost;
+  final SaveIntakeCost saveIntakeCost;
+  final SaveIntakeTemplates saveIntakeTemplates;
+  final GetClassificationAvailability classificationAvailability;
+  final ClassifyMaterial classifyMaterial;
+  final AttributeAnswer attributeAnswer;
   final GetTest getTest;
   final ListTestRegistrations listTestRegistrations;
   final AnalyzeProfile analyzeProfile;

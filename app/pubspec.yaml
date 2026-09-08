@@ -57,6 +57,22 @@ dependencies:
   ffi: ^2.1.3
   http_parser: ^4.1.2
 
+  # Content digests for the intake screen's folder scan (Issue #101): the
+  # sidecar keys its classification cache on them, so the same file is never
+  # sent to a provider twice. Already in the lockfile as a transitive
+  # dependency; declared here because `lib/core/folder_scan.dart` imports it.
+  crypto: ^3.0.6
+
+  # Joining and relativizing the paths that scan produces, on both path
+  # separators. Already in the lockfile as a transitive dependency.
+  path: ^1.9.0
+
+  # The generated `auto_scoring_api` client takes BuiltList-typed parameters
+  # for repeated multipart fields (Issue #101's `materials`/`material_roles`),
+  # so `lib/api/` constructs them directly rather than only tests doing so.
+  # Version pinned to match that package's own dependency.
+  built_collection: '>=5.1.1 <6.0.0'
+
   # PDF viewer for the 添削レビュー画面 (Issue #21, simplified-design-spec.md
   # §13/§15). Wraps pdfium -- the same rendering engine PoC 3
   # (docs/poc-3-pdf-coordinates.md) verified 0..1 normalized coordinates
@@ -92,10 +108,6 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
-  # Only used directly by widget tests to build BuiltList-typed fields
-  # (e.g. DependencyGraphResponse.layers) on the generated auto_scoring_api
-  # models -- version pinned to match that package's own dependency.
-  built_collection: '>=5.1.1 <6.0.0'
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
