@@ -19,7 +19,8 @@ DAG。`auto_scoring.domain.dependency_graph`）、[#16](https://github.com/HIKAR
 ### AIモデル: 優先度つきフォールバック（業務ルール §3 (B)、Issue #81 で確定）
 
 Issue #20 の実装時点では §3 (B) は未確定で、既定の`AIProvider`を
-`auto_scoring.adapters.ai.null_provider.NullAIProvider`に置いた（下記）。
+`NullAIProvider`（当時の`adapters/ai/null_provider.py`）に置いた。この既定は
+Issue #97 で無くなっている（下記「アプリ本体への接続」）。
 [Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81)で
 プロジェクトオーナーが確定した内容は**単一モデルの選択ではない**:
 
@@ -105,26 +106,52 @@ business-rules-and-evaluation-data.md §3.1 E のとおり引き続き必要）�
 再現性と、後からの一致率比較（provider別集計、`domain/ai_grading_metrics.py`）が
 provider単位で成立するのはこの1点にかかっている。スキーマ変更は不要。
 
-#### 既定は依然 `NullAIProvider`（DI 未接続）
+#### アプリ本体への接続（Issue #97 で完了）
 
 Issue #20 は本番**パイプライン**（境界・schema検証・永続化・分類・Confidence運用・
 前提設問contextの受け渡し）を実装し、`create_app()`の`job_processor`既定値を
 `RecognitionJobProcessor`（Issue #19）から`GradingJobProcessor`（後述、
-`RecognitionJobProcessor`を内部で合成する）へ置き換えた。上記アダプタとチェーンが
-揃うまで、その`GradingJobProcessor`が呼ぶ`ai_provider`の既定値は
-`auto_scoring.adapters.ai.null_provider.NullAIProvider`のままにする。
-`NullOCRProvider`（Issue #19）と同じ理由（正直に「未設定」を報告する）で、
-`NullAIProvider`は常にConfidence 0.0・score 0・空の認識文字列を返し、
-ネットワークに一切アクセスしない。結果として、実アダプタが
-`create_app(ai_provider=...)`で注入されるまで、すべての設問が自動的に
-needs_review（`Job.usable=False`）に倒れる。`AIProvider`のcontract test
-（`backend/tests/test_ai_provider_contract.py`の`AIProviderContract`）へ
-新しいサブクラスを追加するだけで済むよう、`domain/ai_provider.py`のポート定義は
-変更していない（例外の分類粒度を上げた点を除く。後述）。
+`RecognitionJobProcessor`を内部で合成する）へ置き換えた。ただし、その
+`GradingJobProcessor`が呼ぶ`ai_provider`の既定値は`NullAIProvider`のままで、
+`create_ai_provider()`（Issue #35 で完成）には**呼び出し側が存在しなかった**。
+Issue #80 で取込のあと採点ジョブが起票されるようになっても、そのジョブは
+何もしなかった。Issue #97 がこれを繋いだ。
+
+**どこで環境を読むか: `create_app()` ではなく composition root（`api/sidecar.py`
+の `run()`）。** `create_app()` の中で`os.environ`を読むと、アプリを組み立てる
+テスト全部が「そのマシンにたまたま入っている設定」を引き継ぐ -- `gcloud` ログイン
+のある開発機と無い CI runner で結果が変わる。これは Issue #35 で実際に CI を
+落とした失敗そのものであり、`docs/quality-gates.md`「ホストを見る判定はテストへ
+注入する」が禁じている形である。`run()` が
+`api.app.build_ai_provider(os.environ)` を呼び、結果を
+`create_app(ai_provider=...)` へ渡す。実環境は1つしか無い場所で1回読む。
+
+**認証情報が1つも無いホスト: 起動する。ただし黙らない。**
+`create_ai_provider()`は`AIProviderConfigError`で落ちるが、`build_ai_provider()`
+はそれを**状態**へ変換する -- 採点以外（取込・レビュー・PDF出力）はプロバイダを
+必要としないのに、鍵が無いという理由でその3つまで失うのは、採点できないことより
+はるかに悪い失敗であるため。
+
+| 決めたこと                                       | そうした理由                                                                                                                                                                                                               |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NullAIProvider`を`UnconfiguredAIProvider`へ置換 | `NullAIProvider`は score 0・confidence 0.0 の`GradeResult`を**永続化する**。レビュー画面では「実プロバイダが答案を読んで0点を付けた」と見分けがつかない。これがこの Issue の消したかった「AIが採点したが空だった」そのもの |
+| `grade()`で`ProviderUnavailable`を送出           | `GradingJobProcessor`が既に`PERMANENT`へ分類する。設問のJobはFAILEDで終わり、retryもされず（retryしても鍵は増えない）、`GradeResult`行は1つも書かれない                                                                    |
+| 理由はJobではなくアプリ全体で1回言う             | 理由はどの設問でも同じ1文であり、`Job.last_error`にはprovider例外文言を入れない規約（AGENTS.md「Security」）がある。`GET /grading/availability`が`{available, reason}`を返し、アプリはそれを**全画面の上の帯**として出す   |
+| 帯は消せない／`reason`をそのまま出す             | 閉じられる帯は「消したまま採点されない」状態を作れてしまう。`reason`は英語だが、設定変数名とホスト前提条件だけを含み（値は含まない）、実際に直せる人が読む唯一の手がかり                                                   |
+| 応答が無いときは帯を**出さない**                 | 「サイドカーが応えなかった」と「採点が使えない」は別の事実。前者を後者と断定すると、一度の通信失敗が設定不備の告知になる（`app/lib/core/widgets/grading_unavailable_banner.dart`）                                         |
+
+`reason`に資格情報の値を入れないことは2重に担保する: `create_ai_provider()`の
+`AIProviderConfigError`は変数**名**からしか組み立てられておらず（`factory.py`）、
+それ以外の想定外例外は**例外型名だけ**を残して本文を捨てる（`_google_adc`が
+google-auth のメッセージに対して既に採っている規律と同じ）。
+`backend/tests/test_grading_availability.py`がこの2経路を偽の資格情報で固定する。
 
 実キーでの疎通・schema 検証は Issue #35 で 4 経路すべて実施済み
 （[`poc-2-ai-grading.md`](./poc-2-ai-grading.md) §7.4。合成フィクスチャのみを送信）。
-`create_app()` への注入自体は依然未接続で、既定は `NullAIProvider` のままである。
+
+**OCR 側（`NullOCRProvider`）は依然未接続である。** Document AI のアダプタが
+無いため（本Issueの対象外、業務ルール §3 (A)）、`GradingJobProcessor`が採点へ
+渡すOCRテキストは空のままで、実際に設問が採点されるにはそのアダプタが要る。
 
 ### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
 
@@ -378,7 +405,7 @@ Issue #20追加受入条件「使用したgraph versionと前提result version�
 
 - `backend/tests/test_ai_provider_contract.py`: `ProviderTimeoutError`等の
   新しい例外階層、`PrerequisiteAnswer`のバリデーション（provides要求データの
-  必須化、空白ocr_textの許容）、`NullAIProvider`のcontract相当テスト。
+  必須化、空白ocr_textの許容）、`UnconfiguredAIProvider`のcontract相当テスト。
 - `backend/tests/test_grading_context.py`: `build_prerequisite_context`/
   `build_context_entries`のunit test（各provisionの受け渡し、確定DAGに無い
   設問が混入しないこと、不足時に捏造せず例外を送出すること）。
@@ -396,7 +423,14 @@ context`への記録、依存先Jobが前提未完了の間`BLOCKED`のままで
   重複question_id拒否）のunit test。
 - `backend/tests/test_migrations.py`（既存ファイルの一部）:
   `0012_grade_result_ai_metadata`のhead revision反映確認。
-- 実AIサービスを使うテストはこのIssueには存在しない（`NullAIProvider`が
-  唯一の同梱アダプタで、ネットワークに一切アクセスしないため）。実アダプタを
-  追加する後続Issueが、そのアダプタ専用のlive probe commandを
-  `docs/poc-2-ai-grading.md`の方針に従って追加する。
+- `backend/tests/test_grading_availability.py`（Issue #97）: `build_ai_provider`
+  の2つの失敗経路（設定不足・想定外例外）と、そのどちらでも資格情報の値が
+  `reason`へ出ないこと、`GET /grading/availability`の応答と認証要求。ホストの
+  `codex`/ADC の有無は両方とも注入する。
+- `backend/tests/test_sidecar.py`（Issue #97）: 認証情報の無いホストでも
+  `run()`が起動し、環境を読む場所が composition root であること。
+- 実AIサービスを呼ぶテストはこのリポジトリに1つも無い。Issue #20 時点では
+  同梱アダプタが`NullAIProvider`だけだったためで、実アダプタが揃った今も
+  同じである -- 各アダプタの contract test は`httpx.MockTransport`と偽の
+  資格情報で書き、live 疎通は`docs/poc-2-ai-grading.md`の probe command で
+  手元から行う（結果は §7.4）。
