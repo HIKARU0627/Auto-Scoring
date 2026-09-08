@@ -271,25 +271,38 @@ void main() {
       expect(dashboard.nextAction.detail, isNot(contains('ほかに')));
     });
 
-    test('レビュー待ちを「採点済み」と断定しない', () {
+    test('レビュー待ちの答案について、採点が始まったとも終わったとも断定しない', () {
       // `ai_processed` は取込時の画像前処理・回答欄抽出まで終わった状態で、
       // OCR/AI採点はその先から始まる (backend の submission_intake.py)。
-      // Issue #80 で答案取込画面が取込直後に採点ジョブを起票するようになった
-      // ので「開始済み」までは言えるが、答案の `state` は採点の完了を追わない
-      // ため、終わったかどうかは依然として分からない
-      // (docs/home-dashboard.md §3.1)。
+      //
+      // ホームが知らないのは「終わったか」だけではない。**始まったかどうかも
+      // 知らない**: 起票が409や通信断で失敗した答案と、Issue #80 より前に
+      // 取り込まれた答案は `ai_processed` のままジョブ0件で止まっていて、
+      // ホームは `listJobs` を引かないのでそれを見分けられない
+      // (docs/home-dashboard.md §3.1、review round 1 P2-1)。
       final test = buildTest(id: 't1');
       final dashboard = build({
         test: [buildSubmission(id: 's1', testId: 't1', state: 'ai_processed')],
       });
 
       final detail = dashboard.nextAction.detail;
-      expect(detail, contains('AI採点は開始済み'));
-      expect(detail, contains('採点が終わっているかはホームでは分かりません'));
-      // 「採点済み」「採点が終わりました」の類は言わない。
+      expect(detail, contains('取込と回答欄の抽出は終わっています'));
+      expect(detail, contains('AI採点が始まっているかどうかはホームでは分かりません'));
+      // 「開始済み」も「採点済み」も、ホームは知らない。
+      expect(detail, isNot(contains('開始済み')));
       expect(detail, isNot(contains('採点済みです')));
-      expect(detail, isNot(contains('採点が終わっています')));
+      expect(detail, isNot(contains('採点中')));
       expect(dashboard.nextAction.headline, isNot(contains('採点済み')));
+    });
+
+    test('答案が1件も無いときも、採点が必ず始まるとは言わない', () {
+      // 回答欄が揃わなければ要確認で止まり、起票そのものが失敗することもある。
+      final test = buildTest(id: 't1');
+      final dashboard = build({test: const []});
+
+      final detail = dashboard.nextAction.detail;
+      expect(detail, contains('問題がなければ'));
+      expect(detail, isNot(contains('AI採点の開始まで自動で行われます')));
     });
 
     test('要確認が無くレビュー待ちだけならそちらを開く', () {
