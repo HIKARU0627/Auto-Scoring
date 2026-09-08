@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring import __version__
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.ai_classification.factory import create_material_classifier
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
@@ -39,6 +40,7 @@ from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
 from auto_scoring.api.export_router import build_export_router
+from auto_scoring.api.intake_router import ClassifierFactory, build_intake_router
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
@@ -256,6 +258,7 @@ def create_app(
     ai_provider: AIProvider | None = None,
     grading_settings: GradingSettings | None = None,
     export_processor: JobProcessor | None = None,
+    material_classifier_factory: ClassifierFactory | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -295,6 +298,12 @@ def create_app(
     more than one `create_app` against the same ``data_root`` fixture to
     simulate a process restart -- releasing the lock (see below) before the
     next one is built.
+
+    ``material_classifier_factory`` supplies the intake router's AI
+    classifier (Issue #101). Omitted, it reads the same provider
+    configuration grading does; a test passes a fake so it never depends on
+    what credentials the host happens to have (``AGENTS.md``: inject
+    boundaries from outside the core).
 
     ``job_processor``/``queue_settings``/``clock`` configure Issue #18's
     parallel job queue (`auto_scoring.jobs.queue.JobQueueService`).
@@ -700,6 +709,20 @@ def create_app(
             session_factory,
             store,
             engine,
+            intake_limits=limits,
+            pdfium_lock=pdfium_lock,
+        )
+    )
+    protected.include_router(
+        build_intake_router(
+            store,
+            engine,
+            # Built per request rather than once here: an operator who fixes
+            # their credentials should not have to restart the app, and a
+            # host with none is a normal state this router reports rather
+            # than a startup failure (mirrors `build_ai_provider`'s reasoning
+            # for grading).
+            material_classifier_factory or create_material_classifier,
             intake_limits=limits,
             pdfium_lock=pdfium_lock,
         )

@@ -17,7 +17,7 @@ from auto_scoring.adapters.ai_grading._openai_chat import (
     ChatCompletionsAIProvider,
 )
 
-_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 #: OpenAI does not train on API inputs by default, but it does retain
 #: completions for the account's dashboard/logs unless the request opts out.
@@ -30,7 +30,7 @@ _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 #: It does not shorten OpenAI's own abuse-monitoring retention, which is not
 #: request-controllable; the payload is still limited to one question's
 #: material with no student-identifying data (decision record section 2 (2)).
-_NO_RESPONSE_STORAGE = {"store": False}
+NO_RESPONSE_STORAGE = {"store": False}
 
 
 class OpenAIAIProvider(ChatCompletionsAIProvider):
@@ -51,7 +51,7 @@ class OpenAIAIProvider(ChatCompletionsAIProvider):
         model: str,
         prompt_version: str,
         temperature: float = 0.0,
-        base_url: str = _DEFAULT_BASE_URL,
+        base_url: str = OPENAI_BASE_URL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         client: httpx.Client | None = None,
     ) -> None:
@@ -61,7 +61,7 @@ class OpenAIAIProvider(ChatCompletionsAIProvider):
             prompt_version=prompt_version,
             base_url=base_url,
             label="OpenAI",
-            extra_payload=_NO_RESPONSE_STORAGE,
+            extra_payload=NO_RESPONSE_STORAGE,
             temperature=temperature,
             timeout_seconds=timeout_seconds,
             client=client,

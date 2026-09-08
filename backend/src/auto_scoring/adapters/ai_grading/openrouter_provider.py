@@ -20,7 +20,7 @@ from auto_scoring.adapters.ai_grading._openai_chat import (
     ChatCompletionsAIProvider,
 )
 
-_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 #: OpenRouter's provider-routing preference restricting a request to
 #: zero-data-retention upstream providers -- request-level enforcement so
@@ -42,7 +42,7 @@ _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 #: Whether OpenRouter honours both constraints for every upstream is
 #: unverified against a live call -- see the live probe in
 #: docs/poc-2-ai-grading.md section 7.4.
-_ZERO_DATA_RETENTION_PROVIDER_PREFERENCE = {"data_collection": "deny", "zdr": True}
+ZERO_DATA_RETENTION_PROVIDER_PREFERENCE = {"data_collection": "deny", "zdr": True}
 
 
 class OpenRouterAIProvider(ChatCompletionsAIProvider):
@@ -62,7 +62,7 @@ class OpenRouterAIProvider(ChatCompletionsAIProvider):
         model: str,
         prompt_version: str,
         temperature: float = 0.0,
-        base_url: str = _DEFAULT_BASE_URL,
+        base_url: str = OPENROUTER_BASE_URL,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         client: httpx.Client | None = None,
     ) -> None:
@@ -72,7 +72,7 @@ class OpenRouterAIProvider(ChatCompletionsAIProvider):
             prompt_version=prompt_version,
             base_url=base_url,
             label="OpenRouter",
-            extra_payload={"provider": _ZERO_DATA_RETENTION_PROVIDER_PREFERENCE},
+            extra_payload={"provider": ZERO_DATA_RETENTION_PROVIDER_PREFERENCE},
             temperature=temperature,
             timeout_seconds=timeout_seconds,
             client=client,
