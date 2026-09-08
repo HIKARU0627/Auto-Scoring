@@ -243,6 +243,155 @@ class TestAnswerLayoutUpload:
         _upload_layout(client, test_id, pages=1)
         assert _upload_layout(client, test_id, pages=3).json()["page_count"] == 3
 
+    def test_uploading_a_sheet_creates_the_profile_to_draw_on(self, client: TestClient) -> None:
+        """A test registered without a model-answer PDF has no profile at all,
+        and with no profile there is no page format to place a region on --
+        so "領域を手動追加" had nothing to add to and the manual path was
+        unreachable (Issue #105 review round 1, P1).
+
+        Uploading the sheet *is* the act of saying which document the
+        coordinates are for, so it is where the profile starts existing.
+        """
+        test_id = _register_test(client)
+        assert client.get(f"/tests/{test_id}/profile", headers=_auth()).status_code == 404
+
+        _upload_layout(client, test_id, pages=2)
+
+        profile = client.get(f"/tests/{test_id}/profile", headers=_auth())
+        assert profile.status_code == 200, profile.text
+        body = profile.json()
+        assert body["status"] == "draft"
+        assert body["regions"] == []
+        assert len(body["pages"]) == 2
+
+    def test_the_manual_path_works_with_no_detection_at_all(self, client: TestClient) -> None:
+        """The whole point of the profile existing after an upload: a host
+        with no image-capable provider, or a reviewer who would rather draw
+        the boxes, must be able to get from a fresh test to a saved region set
+        without calling a provider once.
+        """
+        test_id = _register_test(client)
+        _upload_layout(client, test_id)
+        saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={
+                "regions": [
+                    {
+                        "region_id": "manual-0",
+                        "kind": "answer_area",
+                        "page_index": 0,
+                        "bbox": {"x0": 0.1, "y0": 0.2, "x1": 0.6, "y1": 0.4},
+                        "label": "問1",
+                        "confirmed": False,
+                        "text": None,
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+    def test_replacing_the_sheet_bumps_the_revision(self, client: TestClient) -> None:
+        """The regions are coordinates *on this sheet*, so swapping the sheet
+        changes what every one of them means. A confirm pinned to a revision
+        reviewed against the old sheet has to be rejected as stale.
+        """
+        test_id = _register_test(client)
+        _upload_layout(client, test_id)
+        before = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["revision"]
+
+        _upload_layout(client, test_id)
+        after = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["revision"]
+        assert after > before
+
+        stale = client.post(
+            f"/tests/{test_id}/profile/confirm", headers=_auth(), json={"revision": before}
+        )
+        assert stale.status_code == 409
+
+    def test_a_shorter_sheet_reports_the_regions_it_cannot_keep(
+        self, client: TestClient, data_root: Path
+    ) -> None:
+        """Regions on a page the new sheet does not have cannot be
+        reinterpreted -- but they were somebody's work, so the count comes
+        back rather than vanishing.
+        """
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1")
+        _upload_layout(client, test_id, pages=2)
+        saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={
+                "regions": [
+                    {
+                        "region_id": f"manual-{page}",
+                        "kind": "answer_area",
+                        "page_index": page,
+                        "bbox": {"x0": 0.1, "y0": 0.2, "x1": 0.6, "y1": 0.4},
+                        "label": "問1",
+                        "confirmed": False,
+                        "text": None,
+                    }
+                    for page in (0, 1)
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+        replaced = _upload_layout(client, test_id, pages=1)
+        assert replaced.json()["dropped_region_count"] == 1
+        kept = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()
+        assert [r["page_index"] for r in kept["regions"]] == [0]
+
+    def test_a_confirmed_profile_freezes_its_answer_sheet_too(
+        self, client: TestClient, data_root: Path
+    ) -> None:
+        """Otherwise the sheet a finished test was confirmed against could be
+        swapped afterwards, leaving confirmed coordinates pointing at a
+        document nobody reviewed.
+        """
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1")
+        _upload_layout(client, test_id)
+        detected = _detect(client, test_id).json()
+        saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={
+                "regions": [
+                    *detected["regions"],
+                    {
+                        "region_id": "question-1",
+                        "kind": "question",
+                        "page_index": 0,
+                        "bbox": {"x0": 0.0, "y0": 0.0, "x1": 0.4, "y1": 0.1},
+                        "label": "問1",
+                        "confirmed": False,
+                        "text": "問1",
+                    },
+                    {
+                        "region_id": "score-1",
+                        "kind": "score",
+                        "page_index": 0,
+                        "bbox": {"x0": 0.8, "y0": 0.0, "x1": 0.9, "y1": 0.1},
+                        "label": "問1",
+                        "confirmed": False,
+                        "text": "5点",
+                    },
+                ]
+            },
+        ).json()
+        client.post(
+            f"/tests/{test_id}/profile/confirm",
+            headers=_auth(),
+            json={"revision": saved["revision"]},
+        )
+
+        response = _upload_layout(client, test_id)
+        assert response.status_code == 409
+        assert "confirmed" in response.json()["detail"]
+
     def test_requires_auth(self, client: TestClient) -> None:
         test_id = _register_test(client)
         response = client.put(
@@ -324,7 +473,10 @@ class TestDetection:
         _upload_layout(client, test_id)
 
         assert _detect(client, test_id).status_code == 502
-        assert client.get(f"/tests/{test_id}/profile", headers=_auth()).status_code == 404
+        # The profile itself exists (uploading the sheet created it), so what
+        # has to be empty is its *regions* -- a partially-applied detection
+        # looks exactly like a complete one on the overlay.
+        assert client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["regions"] == []
 
     def test_an_unreachable_provider_is_503_and_saves_nothing(
         self, client: TestClient, data_root: Path, detector: _FakeDetector
@@ -335,7 +487,7 @@ class TestDetection:
         _upload_layout(client, test_id)
 
         assert _detect(client, test_id).status_code == 503
-        assert client.get(f"/tests/{test_id}/profile", headers=_auth()).status_code == 404
+        assert client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["regions"] == []
 
     def test_a_schema_violation_is_502(
         self, client: TestClient, data_root: Path, detector: _FakeDetector

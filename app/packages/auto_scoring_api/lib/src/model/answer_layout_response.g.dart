@@ -12,6 +12,8 @@ class _$AnswerLayoutResponse extends AnswerLayoutResponse {
   @override
   final String? detectionUnavailableReason;
   @override
+  final int? droppedRegionCount;
+  @override
   final int? pageCount;
   @override
   final String testId;
@@ -23,6 +25,7 @@ class _$AnswerLayoutResponse extends AnswerLayoutResponse {
   _$AnswerLayoutResponse._(
       {required this.detectionAvailable,
       this.detectionUnavailableReason,
+      this.droppedRegionCount,
       this.pageCount,
       required this.testId})
       : super._();
@@ -41,6 +44,7 @@ class _$AnswerLayoutResponse extends AnswerLayoutResponse {
     return other is AnswerLayoutResponse &&
         detectionAvailable == other.detectionAvailable &&
         detectionUnavailableReason == other.detectionUnavailableReason &&
+        droppedRegionCount == other.droppedRegionCount &&
         pageCount == other.pageCount &&
         testId == other.testId;
   }
@@ -50,6 +54,7 @@ class _$AnswerLayoutResponse extends AnswerLayoutResponse {
     var _$hash = 0;
     _$hash = $jc(_$hash, detectionAvailable.hashCode);
     _$hash = $jc(_$hash, detectionUnavailableReason.hashCode);
+    _$hash = $jc(_$hash, droppedRegionCount.hashCode);
     _$hash = $jc(_$hash, pageCount.hashCode);
     _$hash = $jc(_$hash, testId.hashCode);
     _$hash = $jf(_$hash);
@@ -61,6 +66,7 @@ class _$AnswerLayoutResponse extends AnswerLayoutResponse {
     return (newBuiltValueToStringHelper(r'AnswerLayoutResponse')
           ..add('detectionAvailable', detectionAvailable)
           ..add('detectionUnavailableReason', detectionUnavailableReason)
+          ..add('droppedRegionCount', droppedRegionCount)
           ..add('pageCount', pageCount)
           ..add('testId', testId))
         .toString();
@@ -81,6 +87,11 @@ class AnswerLayoutResponseBuilder
   set detectionUnavailableReason(String? detectionUnavailableReason) =>
       _$this._detectionUnavailableReason = detectionUnavailableReason;
 
+  int? _droppedRegionCount;
+  int? get droppedRegionCount => _$this._droppedRegionCount;
+  set droppedRegionCount(int? droppedRegionCount) =>
+      _$this._droppedRegionCount = droppedRegionCount;
+
   int? _pageCount;
   int? get pageCount => _$this._pageCount;
   set pageCount(int? pageCount) => _$this._pageCount = pageCount;
@@ -98,6 +109,7 @@ class AnswerLayoutResponseBuilder
     if ($v != null) {
       _detectionAvailable = $v.detectionAvailable;
       _detectionUnavailableReason = $v.detectionUnavailableReason;
+      _droppedRegionCount = $v.droppedRegionCount;
       _pageCount = $v.pageCount;
       _testId = $v.testId;
       _$v = null;
@@ -126,6 +138,7 @@ class AnswerLayoutResponseBuilder
               r'AnswerLayoutResponse',
               'detectionAvailable'),
           detectionUnavailableReason: detectionUnavailableReason,
+          droppedRegionCount: droppedRegionCount,
           pageCount: pageCount,
           testId: BuiltValueNullFieldError.checkNotNull(
               testId, r'AnswerLayoutResponse', 'testId'),

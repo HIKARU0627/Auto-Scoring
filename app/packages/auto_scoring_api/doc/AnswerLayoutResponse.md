@@ -10,6 +10,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **detectionAvailable** | **bool** |  | 
 **detectionUnavailableReason** | **String** |  | [optional] 
+**droppedRegionCount** | **int** |  | [optional] [default to 0]
 **pageCount** | **int** |  | 
 **testId** | **String** |  | 
 

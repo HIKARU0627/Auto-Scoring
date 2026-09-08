@@ -184,6 +184,11 @@
             ],
             "title": "Detection Unavailable Reason"
           },
+          "dropped_region_count": {
+            "default": 0,
+            "title": "Dropped Region Count",
+            "type": "integer"
+          },
           "page_count": {
             "anyOf": [
               {

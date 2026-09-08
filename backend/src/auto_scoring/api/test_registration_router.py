@@ -348,6 +348,11 @@ class AnswerLayoutResponse(BaseModel):
     #: names* only (`adapters.answer_area_detection.factory`). ``None`` when
     #: it is available.
     detection_unavailable_reason: str | None = None
+    #: How many existing regions a replacement answer sheet left behind
+    #: because their page no longer exists (a 3-page sheet swapped for a
+    #: 1-page one). Always ``0`` on `GET`. Reported rather than dropped in
+    #: silence -- the coordinates were somebody's work.
+    dropped_region_count: int = 0
 
 
 class UpdateProfileRequest(BaseModel):
@@ -373,12 +378,28 @@ class CompleteRegistrationResponse(BaseModel):
     dependency_graph_confirmed: bool
 
 
+class _AnswerLayoutConfirmedError(Exception):
+    """The reference answer sheet cannot be replaced: the profile confirmed
+    against it is immutable (Issue #105 review round 1, P2).
+
+    Internal to this module -- `upload_answer_layout` turns it into a 409.
+    Raised from inside `_store_answer_layout`, which runs in a worker thread,
+    so it must be an exception rather than an `HTTPException` raised there.
+    """
+
+    def __init__(self, test_id: str) -> None:
+        super().__init__(
+            f"test {test_id!r}'s profile is already confirmed; its reference answer sheet "
+            "cannot be replaced, because the confirmed answer areas are coordinates on it"
+        )
+
+
 def _intake_http_exception(exc: PdfIntakeError | MaterialIntakeError) -> HTTPException:
     status_code = _INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
     return HTTPException(status_code, detail=str(exc))
 
 
-def _pdf_intake_http_exception(exc: PdfIntakeError) -> HTTPException:
+def _intake_http_exception(exc: PdfIntakeError) -> HTTPException:
     return _intake_http_exception(exc)
 
 
@@ -573,7 +594,7 @@ def build_test_registration_router(
             try:
                 data = await _read_upload_within_limit(upload, limits.max_size_bytes)
             except PdfIntakeError as exc:
-                raise _pdf_intake_http_exception(exc) from exc
+                raise _intake_http_exception(exc) from exc
             read.append(
                 MaterialUpload(
                     role=role,
@@ -626,7 +647,7 @@ def build_test_registration_router(
         try:
             criteria_data = await _read_upload_within_limit(criteria, limits.max_size_bytes)
         except PdfIntakeError as exc:
-            raise _pdf_intake_http_exception(exc) from exc
+            raise _intake_http_exception(exc) from exc
         all_materials = [
             MaterialUpload(
                 role=MaterialRole.GRADING_CRITERIA,
@@ -825,7 +846,7 @@ def build_test_registration_router(
                     ),
                 ) from exc
             except PdfIntakeError as exc:
-                raise _pdf_intake_http_exception(exc) from exc
+                raise _intake_http_exception(exc) from exc
             except DomainError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc
 
@@ -1089,10 +1110,14 @@ def build_test_registration_router(
     # ----------------------------------------------------------------- #
     # 回答欄 (Issue #105)
     # ----------------------------------------------------------------- #
-    def _store_answer_layout(test_id: str, data: bytes) -> None:
-        """Validate one uploaded answer sheet and commit it as this test's
-        layout reference. Raises `PdfIntakeError` without touching the stored
-        file when anything about it is unusable.
+    def _validated_signature(data: bytes) -> FormatSignature:
+        """Parse one uploaded answer sheet in a scratch directory and return
+        the format its pages describe.
+
+        Raises `PdfIntakeError` without touching anything stored: a corrupt or
+        absurdly-sized upload must not destroy the sheet the current answer
+        areas were drawn on, and must not be discovered later by an
+        out-of-memory render inside `/detect`.
         """
         with tempfile.TemporaryDirectory(prefix="auto-scoring-answer-layout-") as scratch_dir:
             scratch = Path(scratch_dir) / "upload.pdf"
@@ -1107,6 +1132,7 @@ def build_test_registration_router(
                 if pdf_engine.is_encrypted(scratch):
                     raise PdfEncryptedError("the answer sheet PDF is password protected")
                 validate_page_count(page_count, limits)
+                geometries = []
                 for index in range(page_count):
                     try:
                         geometry = pdf_engine.page_geometry(scratch, index)
@@ -1121,9 +1147,62 @@ def build_test_registration_router(
                         geometry.displayed_height * RENDER_SCALE,
                         limits,
                     )
-            store.write_atomic(store.test_answer_layout_pdf_path(test_id), data)
+                    geometries.append(geometry)
+        return FormatSignature(
+            pages=tuple(
+                PageFormat(width_pt=g.displayed_width, height_pt=g.displayed_height)
+                for g in geometries
+            )
+        )
 
-    def _answer_layout_response(test_id: str) -> AnswerLayoutResponse:
+    def _store_answer_layout(test_id: str, data: bytes) -> int:
+        """Commit one answer sheet as this test's layout reference and bring
+        the profile into line with it. Returns how many regions were dropped.
+
+        **The sheet and the profile are one artefact, so they move together.**
+        The profile's regions are coordinates *on this sheet*; swapping the
+        sheet changes what every one of them means. So this runs under the
+        same per-test lock as `/detect` and `PUT /profile`, bumps `revision`
+        (a confirm pinned to a revision reviewed against the *old* sheet is
+        then rejected as stale), and refuses outright once the profile is
+        confirmed -- without which another client could swap the sheet under
+        a reviewer mid-review, or change the sheet a finished test was
+        confirmed against (Issue #105 review round 1, P2).
+
+        It also *creates* the profile when there is none. That is what makes
+        the manual path reachable at all: a test registered without a
+        model-answer PDF has no profile, and with no profile there is no
+        page format to draw a region on -- so "領域を手動追加" had nothing to
+        add to (Issue #105 review round 1, P1). Uploading the sheet is
+        precisely the act of saying which document the coordinates are for.
+        """
+        signature = _validated_signature(data)
+        with _profile_lock(test_id):
+            try:
+                existing: Profile | None = profile_store.load(test_id)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and existing.status is ProfileStatus.CONFIRMED:
+                raise _AnswerLayoutConfirmedError(test_id)
+
+            # Regions on a page the new sheet does not have cannot be
+            # reinterpreted -- but they are reported rather than dropped in
+            # silence, because they were somebody's work.
+            kept = [
+                region
+                for region in (existing.regions if existing else ())
+                if region.page_index < len(signature.pages)
+            ]
+            dropped = (len(existing.regions) if existing else 0) - len(kept)
+
+            store.write_atomic(store.test_answer_layout_pdf_path(test_id), data)
+            profile = Profile.from_candidates(test_id, test_id, signature, kept)
+            profile_store.save(
+                replace(profile, revision=(existing.revision + 1 if existing else 1))
+            )
+        return dropped
+
+    def _answer_layout_response(test_id: str, *, dropped: int = 0) -> AnswerLayoutResponse:
         path = store.test_answer_layout_pdf_path(test_id)
         page_count: int | None = None
         if path.exists():
@@ -1135,6 +1214,7 @@ def build_test_registration_router(
             page_count=page_count,
             detection_available=unavailable is None,
             detection_unavailable_reason=unavailable,
+            dropped_region_count=dropped,
         )
 
     @router.get("/tests/{test_id}/answer-layout", response_model=AnswerLayoutResponse)
@@ -1196,15 +1276,17 @@ def build_test_registration_router(
                 data=data,
                 limits=limits,
             )
-            await to_thread(_store_answer_layout, test_id, data)
+            dropped = await to_thread(_store_answer_layout, test_id, data)
+        except _AnswerLayoutConfirmedError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         except PdfIntakeError as exc:
-            raise _pdf_intake_http_exception(exc) from exc
+            raise _intake_http_exception(exc) from exc
         except OSError as exc:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"could not save the answer sheet to disk: {exc}",
             ) from exc
-        return _answer_layout_response(test_id)
+        return _answer_layout_response(test_id, dropped=dropped)
 
     @router.get(
         "/tests/{test_id}/answer-layout/pdf",

@@ -13,6 +13,7 @@ part 'answer_layout_response.g.dart';
 /// Properties:
 /// * [detectionAvailable]
 /// * [detectionUnavailableReason]
+/// * [droppedRegionCount]
 /// * [pageCount]
 /// * [testId]
 @BuiltValue()
@@ -23,6 +24,9 @@ abstract class AnswerLayoutResponse
 
   @BuiltValueField(wireName: r'detection_unavailable_reason')
   String? get detectionUnavailableReason;
+
+  @BuiltValueField(wireName: r'dropped_region_count')
+  int? get droppedRegionCount;
 
   @BuiltValueField(wireName: r'page_count')
   int? get pageCount;
@@ -36,7 +40,8 @@ abstract class AnswerLayoutResponse
       _$AnswerLayoutResponse;
 
   @BuiltValueHook(initializeBuilder: true)
-  static void _defaults(AnswerLayoutResponseBuilder b) => b;
+  static void _defaults(AnswerLayoutResponseBuilder b) =>
+      b..droppedRegionCount = 0;
 
   @BuiltValueSerializer(custom: true)
   static Serializer<AnswerLayoutResponse> get serializer =>
@@ -69,6 +74,13 @@ class _$AnswerLayoutResponseSerializer
       yield serializers.serialize(
         object.detectionUnavailableReason,
         specifiedType: const FullType.nullable(String),
+      );
+    }
+    if (object.droppedRegionCount != null) {
+      yield r'dropped_region_count';
+      yield serializers.serialize(
+        object.droppedRegionCount,
+        specifiedType: const FullType(int),
       );
     }
     yield r'page_count';
@@ -122,6 +134,14 @@ class _$AnswerLayoutResponseSerializer
           ) as String?;
           if (valueDes == null) continue;
           result.detectionUnavailableReason = valueDes;
+          break;
+        case r'dropped_region_count':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(int),
+          ) as int?;
+          if (valueDes == null) continue;
+          result.droppedRegionCount = valueDes;
           break;
         case r'page_count':
           final valueDes = serializers.deserialize(
