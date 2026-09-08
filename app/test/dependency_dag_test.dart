@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
-import 'package:auto_scoring_app/core/design/app_status_tone.dart';
+import 'package:auto_scoring_app/core/question_status.dart';
 
 DependencyEdgeModel _edge(String from, String to) => DependencyEdgeModel(
   (b) => b
@@ -43,30 +43,10 @@ JobResponse _job({
     ).add(Duration(seconds: createdAtSeconds)),
 );
 
-ReviewResponse _review({
-  String action = 'approved',
-  String? regradeJobId,
-  int createdAtSeconds = 0,
-}) => ReviewResponse(
-  (b) => b
-    ..id = 'review-1'
-    ..submissionId = 'sub-1'
-    ..questionId = 'q1'
-    ..action = action
-    ..version = 1
-    ..aiGradeResultId = 'grade-1'
-    ..regradeJobId = regradeJobId
-    ..createdAt = DateTime.utc(
-      2026,
-      1,
-      1,
-    ).add(Duration(seconds: createdAtSeconds)),
-);
-
 DagQuestion _question(
   String id, {
   String? label,
-  DagNodeStatus status = DagNodeStatus.pending,
+  QuestionStatus status = QuestionStatus.pending,
   String? blockedOnQuestionId,
 }) => DagQuestion(
   id: id,
@@ -115,126 +95,6 @@ void main() {
     });
   });
 
-  group('deriveDagNodeStatus', () {
-    test('has no job and no review: 未処理', () {
-      expect(
-        deriveDagNodeStatus(job: null, review: null),
-        DagNodeStatus.pending,
-      );
-    });
-
-    test('maps each queue state to its own node state', () {
-      for (final (state, expected) in const [
-        ('blocked', DagNodeStatus.blocked),
-        ('queued', DagNodeStatus.queued),
-        ('running', DagNodeStatus.running),
-        ('failed', DagNodeStatus.failed),
-        ('cancelled', DagNodeStatus.cancelled),
-      ]) {
-        expect(
-          deriveDagNodeStatus(job: _job(state: state), review: null),
-          expected,
-          reason: state,
-        );
-      }
-    });
-
-    test('a live job outranks an older review decision', () {
-      // Re-submission under a newer graph version, or a 再判定 request,
-      // creates a fresh job while the append-only review history still holds
-      // the previous attempt's 承認 -- showing 承認済み over it would say the
-      // opposite of what is happening.
-      expect(
-        deriveDagNodeStatus(
-          job: _job(state: 'running'),
-          review: _review(),
-        ),
-        DagNodeStatus.running,
-      );
-    });
-
-    test('succeeded but not usable is 要確認, not レビュー待ち', () {
-      // The queue itself judged the result untrustworthy and is holding
-      // everything downstream (docs/job-queue.md) -- a stronger statement
-      // than "nobody has reviewed it yet".
-      expect(
-        deriveDagNodeStatus(
-          job: _job(state: 'succeeded', usable: false),
-          review: null,
-        ),
-        DagNodeStatus.needsCheck,
-      );
-    });
-
-    test('a succeeded job carries the human decision when there is one', () {
-      for (final (action, expected) in const [
-        (null, DagNodeStatus.graded),
-        ('approved', DagNodeStatus.approved),
-        ('modified', DagNodeStatus.approved),
-        ('rejected', DagNodeStatus.rejected),
-        ('regrade_requested', DagNodeStatus.regradeRequested),
-        ('undone', DagNodeStatus.graded),
-      ]) {
-        expect(
-          deriveDagNodeStatus(
-            job: _job(state: 'succeeded', usable: true),
-            review: action == null ? null : _review(action: action),
-          ),
-          expected,
-          reason: '$action',
-        );
-      }
-    });
-
-    test('再判定待ち ends when the job the request created succeeds', () {
-      // Nothing ever closes a `regrade_requested` row -- the replacement
-      // grade lands as a new GradeResult, not a new Review -- so treating
-      // the action as the state left the node stuck on 再判定待ち with a
-      // fresh grade on screen unmentioned (review round 1, P2).
-      final review = _review(
-        action: 'regrade_requested',
-        regradeJobId: 'job-regrade',
-      );
-      expect(
-        deriveDagNodeStatus(
-          job: _job(state: 'succeeded', usable: true, id: 'job-regrade'),
-          review: review,
-        ),
-        DagNodeStatus.graded,
-      );
-      // Still outstanding while only the *superseded* attempt is known.
-      expect(
-        deriveDagNodeStatus(
-          job: _job(state: 'succeeded', usable: true, id: 'job-original'),
-          review: review,
-        ),
-        DagNodeStatus.regradeRequested,
-      );
-    });
-
-    test('再判定待ち also ends for any job that ran after the request', () {
-      // The replacement job is normally named by the review, but a job
-      // created afterwards for another reason (a re-submission under a newer
-      // graph version) did not produce the result the reviewer rejected
-      // either.
-      final review = _review(action: 'regrade_requested', createdAtSeconds: 10);
-      expect(
-        deriveDagNodeStatus(
-          job: _job(state: 'succeeded', usable: true, createdAtSeconds: 20),
-          review: review,
-        ),
-        DagNodeStatus.graded,
-      );
-      expect(
-        deriveDagNodeStatus(
-          job: _job(state: 'succeeded', usable: true, createdAtSeconds: 5),
-          review: review,
-        ),
-        DagNodeStatus.regradeRequested,
-      );
-    });
-  });
-
   group('releasesDependents', () {
     test('reads the persisted usable flag, not the job state', () {
       // A SUCCEEDED job can be not-usable (low Confidence), and a FAILED one
@@ -253,50 +113,30 @@ void main() {
     });
   });
 
-  group('DagNodeStatus presentation', () {
-    test('every state has its own icon and label, not just a colour', () {
-      // Issue #25's rule: colour only sharpens a distinction that already
-      // survives without it.
-      final labels = DagNodeStatus.values.map((s) => s.label).toSet();
-      final icons = DagNodeStatus.values.map((s) => s.icon).toSet();
-      expect(labels, hasLength(DagNodeStatus.values.length));
-      expect(icons, hasLength(DagNodeStatus.values.length));
-    });
-
-    test('only 要確認 pulls the eye, and only a failure is danger', () {
-      final attention = DagNodeStatus.values
-          .where((s) => s.tone == AppStatusTone.attention)
-          .toSet();
-      final danger = DagNodeStatus.values
-          .where((s) => s.tone == AppStatusTone.danger)
-          .toSet();
-      expect(attention, {DagNodeStatus.needsCheck});
-      expect(danger, {DagNodeStatus.failed});
-    });
-
+  group('DagNodeProgress', () {
     test('未処理 counts as 待機, never as 完了', () {
       // A submission whose per-question jobs have not been enqueued yet has
       // nothing finished; reporting every node as 完了 was the one lie a
       // collapsed panel left standing (review round 1, P2).
-      expect(DagNodeStatus.pending.progress, DagNodeProgress.waiting);
+      expect(QuestionStatus.pending.progress, DagNodeProgress.waiting);
       expect(
-        DagNodeStatus.values
+        QuestionStatus.values
             .where((s) => s.progress == DagNodeProgress.settled)
             .toSet(),
         {
-          DagNodeStatus.needsCheck,
-          DagNodeStatus.failed,
-          DagNodeStatus.cancelled,
-          DagNodeStatus.graded,
-          DagNodeStatus.rejected,
-          DagNodeStatus.approved,
+          QuestionStatus.needsCheck,
+          QuestionStatus.failed,
+          QuestionStatus.cancelled,
+          QuestionStatus.graded,
+          QuestionStatus.rejected,
+          QuestionStatus.approved,
         },
       );
       expect(
-        DagNodeStatus.values
+        QuestionStatus.values
             .where((s) => s.progress == DagNodeProgress.running)
             .toSet(),
-        {DagNodeStatus.running},
+        {QuestionStatus.running},
       );
     });
   });
@@ -459,7 +299,7 @@ void main() {
           _question(
             'q2',
             label: '2',
-            status: DagNodeStatus.blocked,
+            status: QuestionStatus.blocked,
             blockedOnQuestionId: 'q1',
           ),
         ],
@@ -474,7 +314,9 @@ void main() {
 
     test('a blocked node with no recorded prerequisite still says so', () {
       final layout = buildDependencyDagLayout(
-        questions: [_question('q1', label: '1', status: DagNodeStatus.blocked)],
+        questions: [
+          _question('q1', label: '1', status: QuestionStatus.blocked),
+        ],
         edges: const [],
         releasedQuestionIds: const {},
         metrics: metrics,
@@ -504,15 +346,15 @@ void main() {
     test('counts the states the collapsed header summarises', () {
       final layout = buildDependencyDagLayout(
         questions: [
-          _question('q1', status: DagNodeStatus.running),
-          _question('q2', status: DagNodeStatus.blocked),
-          _question('q3', status: DagNodeStatus.approved),
+          _question('q1', status: QuestionStatus.running),
+          _question('q2', status: QuestionStatus.blocked),
+          _question('q3', status: QuestionStatus.approved),
         ],
         edges: const [],
         releasedQuestionIds: const {},
         metrics: metrics,
       )!;
-      expect(layout.countWhere((s) => s == DagNodeStatus.running), 1);
+      expect(layout.countWhere((s) => s == QuestionStatus.running), 1);
       expect(
         layout.countWhere((s) => s.progress == DagNodeProgress.waiting),
         1,
@@ -522,9 +364,9 @@ void main() {
         1,
       );
       expect(layout.statusById, {
-        'q1': DagNodeStatus.running,
-        'q2': DagNodeStatus.blocked,
-        'q3': DagNodeStatus.approved,
+        'q1': QuestionStatus.running,
+        'q2': QuestionStatus.blocked,
+        'q3': QuestionStatus.approved,
       });
     });
   });

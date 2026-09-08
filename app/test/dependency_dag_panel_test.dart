@@ -6,6 +6,7 @@ import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_theme.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/question_status.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 
 DependencyEdgeModel _edge(String from, String to) => DependencyEdgeModel(
@@ -18,9 +19,9 @@ DependencyEdgeModel _edge(String from, String to) => DependencyEdgeModel(
 
 /// q1 and q2 run in parallel; q3 waits for q1.
 DependencyDagLayout _layout({
-  DagNodeStatus q1 = DagNodeStatus.running,
-  DagNodeStatus q2 = DagNodeStatus.queued,
-  DagNodeStatus q3 = DagNodeStatus.blocked,
+  QuestionStatus q1 = QuestionStatus.running,
+  QuestionStatus q2 = QuestionStatus.queued,
+  QuestionStatus q3 = QuestionStatus.blocked,
   Set<String> released = const {},
 }) => buildDependencyDagLayout(
   questions: [
@@ -30,7 +31,7 @@ DependencyDagLayout _layout({
       id: 'q3',
       label: '3',
       status: q3,
-      blockedOnQuestionId: q3 == DagNodeStatus.blocked ? 'q1' : null,
+      blockedOnQuestionId: q3 == QuestionStatus.blocked ? 'q1' : null,
     ),
   ],
   edges: [_edge('q1', 'q3')],
@@ -159,9 +160,9 @@ void main() {
     await _pumpPanel(
       tester,
       _layout(
-        q1: DagNodeStatus.pending,
-        q2: DagNodeStatus.pending,
-        q3: DagNodeStatus.pending,
+        q1: QuestionStatus.pending,
+        q2: QuestionStatus.pending,
+        q3: QuestionStatus.pending,
       ),
     );
 
@@ -259,7 +260,7 @@ void main() {
 
     await _pumpPanel(
       tester,
-      _layout(q1: DagNodeStatus.graded, released: const {'q1'}),
+      _layout(q1: QuestionStatus.graded, released: const {'q1'}),
     );
     await tester.pump();
 
@@ -278,7 +279,7 @@ void main() {
 
   testWidgets('the moment an upstream finishes and the downstream is '
       'released is announced once, then the diagram settles', (tester) async {
-    await _pumpPanel(tester, _layout(q1: DagNodeStatus.queued));
+    await _pumpPanel(tester, _layout(q1: QuestionStatus.queued));
     // Nothing is being announced before the transition -- a diagram that is
     // always mid-animation cannot make one moment stand out.
     expect(_painter(tester).revealing, isEmpty);
@@ -287,8 +288,8 @@ void main() {
     await _pumpPanel(
       tester,
       _layout(
-        q1: DagNodeStatus.graded,
-        q3: DagNodeStatus.queued,
+        q1: QuestionStatus.graded,
+        q3: QuestionStatus.queued,
         released: const {'q1'},
       ),
     );
@@ -316,14 +317,14 @@ void main() {
   ) async {
     await _pumpPanel(
       tester,
-      _layout(q1: DagNodeStatus.queued),
+      _layout(q1: QuestionStatus.queued),
       disableAnimations: true,
     );
     await _pumpPanel(
       tester,
       _layout(
-        q1: DagNodeStatus.graded,
-        q3: DagNodeStatus.queued,
+        q1: QuestionStatus.graded,
+        q3: QuestionStatus.queued,
         released: const {'q1'},
       ),
       disableAnimations: true,

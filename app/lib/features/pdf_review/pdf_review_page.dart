@@ -13,6 +13,8 @@ import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
+import 'package:auto_scoring_app/core/question_status.dart';
+import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
@@ -396,6 +398,48 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       }
     }
     return latest;
+  }
+
+  /// The state of one question, for **every** place on this screen that shows
+  /// one: the 処理の進み方 panel, the Navigation Rail, and the Inspector's
+  /// badge (Issue #84).
+  ///
+  /// Deliberately the only route to a question's state. The three used to
+  /// derive their own -- the panel from `Job` + `Review`, the rail from
+  /// whether this screen had fetched that question yet, the Inspector badge
+  /// from the *答案's* state -- and drifted into saying different things
+  /// about the same 問1: 承認済み in the panel, ⚠要確認 in the Inspector,
+  /// an undifferentiated hourglass in the rail. Same inputs through one
+  /// function is what makes that impossible rather than merely fixed.
+  ///
+  /// Note what is *not* folded in here: whether this screen has finished
+  /// fetching that question, and whether that fetch failed. Those are facts
+  /// about the Inspector's content, not about the question -- the Inspector
+  /// shows a spinner and a retry banner for them -- and letting the rail
+  /// paint them was how it came to answer a different question from the one
+  /// the panel beside it was answering.
+  QuestionStatus _questionStatus(QuestionResponse question) =>
+      deriveQuestionStatus(
+        job: _latestJobFor(question.id),
+        review: _reviews[question.id]?.effectiveReview,
+      );
+
+  /// The words for [_questionStatus], with a blocked question naming the
+  /// prerequisite it is waiting on -- the same string the DAG node prints,
+  /// via the same `core` rule.
+  String _questionStatusLabel(QuestionResponse question) =>
+      _questionStatus(question).labelWaitingFor(_blockedOnNumber(question));
+
+  /// The 設問番号 of the question [question]'s job is waiting on, or `null`
+  /// when it is not blocked (or the prerequisite is not in this submission's
+  /// own question list, which a graph fetched for the whole test can name).
+  String? _blockedOnNumber(QuestionResponse question) {
+    final blockedOn = _latestJobFor(question.id)?.blockedOnQuestionId;
+    if (blockedOn == null) return null;
+    for (final candidate in _questions) {
+      if (candidate.id == blockedOn) return candidate.number;
+    }
+    return null;
   }
 
   /// Whether [questionId]'s AI processing might still produce (or replace)
@@ -1219,8 +1263,12 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_appBarTitle()),
+        title: Text(_appBarTitle(), overflow: TextOverflow.ellipsis),
         actions: [
+          if (!_loadingShell) ...[
+            _buildSubmissionStateChip(),
+            const SizedBox(width: AppSpacing.md),
+          ],
           IconButton(
             key: const Key('review-export-button'),
             tooltip: 'PDF出力',
@@ -1282,11 +1330,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       builder: (context, constraints) {
         // Below this width the Inspector moves under the PDF viewer instead
         // of beside it (Issue #21 acceptance: desktopの標準/狭幅表示). The
-        // Navigation Rail itself always stays a vertical rail on the left --
-        // it only switches to icon-only labels -- since `NavigationRail`
-        // does not support a horizontal layout.
+        // Navigation Rail is unaffected: it stays a vertical rail on the left
+        // at every width (`NavigationRail` has no horizontal layout), labels
+        // included (see [_buildNavigationRail]).
         final narrow = constraints.maxWidth < AppLayout.narrowBreakpoint;
-        final rail = _buildNavigationRail(narrow: narrow);
+        final rail = _buildNavigationRail();
         final inspector = _buildInspector(narrow: narrow);
         // The narrow (stacked) layout splits height by flex ratio, not a
         // fixed pixel size for the Inspector -- a fixed height plus the
@@ -1369,11 +1417,13 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// The review half of each node's state is whatever this screen happens to
   /// have fetched -- `_ensureReviewLoaded` only loads the question being
   /// looked at, so an unvisited question shows how far the *pipeline* got
-  /// and gains the human decision once it is opened. That is the same
-  /// trade-off the Navigation Rail's icons already make; loading every
+  /// and gains the human decision once it is opened. Loading every
   /// question's review history on every poll tick would cost one request per
   /// question per three seconds to colour in decisions the reviewer has, by
   /// definition, not made yet.
+  ///
+  /// The rail and the Inspector make exactly the same trade-off, because
+  /// they go through the same [_questionStatus] (Issue #84).
   DependencyDagLayout? _buildDependencyDagLayout(
     DependencyGraphResponse graph,
   ) {
@@ -1385,10 +1435,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         DagQuestion(
           id: question.id,
           label: question.number,
-          status: deriveDagNodeStatus(
-            job: job,
-            review: _reviews[question.id]?.effectiveReview,
-          ),
+          status: _questionStatus(question),
           blockedOnQuestionId: job?.blockedOnQuestionId,
         ),
       );
@@ -1407,15 +1454,18 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// (the standard workaround for this widget) lets it size to its natural
   /// height and scroll the excess instead (P2 review), while still filling
   /// the full available height when destinations already fit.
-  Widget _buildNavigationRail({required bool narrow}) {
+  Widget _buildNavigationRail() {
     final rail = NavigationRail(
       key: const Key('review-question-rail'),
       selectedIndex: _questionIndex,
       onDestinationSelected: _selectQuestion,
       extended: false,
-      labelType: narrow
-          ? NavigationRailLabelType.none
-          : NavigationRailLabelType.all,
+      // 設問番号 is shown at every width. Dropping the labels at narrow
+      // widths bought 16px and cost the reviewer the one thing the rail is
+      // indexed by: five destinations became five unlabelled icons, and with
+      // the old undifferentiated hourglass, five *identical* unlabelled
+      // icons (Issue #84).
+      labelType: NavigationRailLabelType.all,
       destinations: [
         for (final question in _questions)
           NavigationRailDestination(
@@ -1435,30 +1485,30 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   /// The rail is the reviewer's map of the whole submission, so its icons say
-  /// how far each question has got. Shape carries that on its own (Issue #25);
-  /// the tone only sharpens the one distinction worth finding at a glance --
-  /// which questions failed to load and still need a person.
+  /// how far each question has got -- read from [_questionStatus], the same
+  /// place the 処理の進み方 panel reads (Issue #84).
   ///
-  /// Nothing here is [AppStatusTone.attention]: a question waiting to be
-  /// reviewed is the *normal* state on this screen, and colouring it would
-  /// leave the whole rail shouting.
-  Icon _questionStatusIcon(QuestionResponse question) {
-    final review = _reviews[question.id];
-    final (icon, tone) = switch (review) {
-      null => (Icons.hourglass_empty, AppStatusTone.neutral),
-      _ when review.loading => (Icons.hourglass_empty, AppStatusTone.neutral),
-      _ when review.error != null => (
-        Icons.error_outline,
-        AppStatusTone.danger,
+  /// It used to read `_reviews[question.id]` instead, which only this
+  /// screen's *currently open* question ever has: every other question came
+  /// out as one undifferentiated `hourglass_empty`, collapsing 要確認・
+  /// 実行待ち・レビュー待ち into one picture while the panel directly above
+  /// was drawing all three apart. Nothing new has to be fetched to fix that
+  /// -- `_jobs` already covers the whole submission.
+  ///
+  /// The state's word rides along as a tooltip and as the semantics label:
+  /// the rail is too narrow for a second line of text, and the icon alone
+  /// would leave 「どういう意味の形か」 to be guessed (Issue #25).
+  Widget _questionStatusIcon(QuestionResponse question) {
+    final status = _questionStatus(question);
+    final label = '問${question.number} ${_questionStatusLabel(question)}';
+    return Tooltip(
+      message: label,
+      excludeFromSemantics: true,
+      child: Semantics(
+        label: label,
+        child: Icon(status.icon, color: status.tone.color(context)),
       ),
-      _ => switch (review.effectiveReview?.action) {
-        'approved' || 'modified' => (Icons.check_circle, AppStatusTone.success),
-        'rejected' => (Icons.cancel_outlined, AppStatusTone.neutral),
-        'regrade_requested' => (Icons.autorenew, AppStatusTone.neutral),
-        _ => (Icons.radio_button_unchecked, AppStatusTone.neutral),
-      },
-    };
-    return Icon(icon, color: tone.color(context));
+    );
   }
 
   Widget _buildPdfViewer() {
@@ -1552,7 +1602,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         children: [
           Text('問${question.number}', style: context.texts.titleLarge),
           const SizedBox(height: AppSpacing.sm),
-          _buildSubmissionStateChip(),
+          _buildQuestionStateChip(question),
           const SizedBox(height: AppSpacing.lg),
           if (review == null || review.loading)
             const Center(
@@ -1571,13 +1621,55 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// The badge directly under the 問N heading. It says what *that question*
+  /// is, and nothing else (Issue #84).
+  ///
+  /// What used to sit here was the **答案全体** の state. Both readings were
+  /// individually correct, and that was the problem: two grains of state
+  /// stood one above the other under a heading naming a single question, so
+  /// the panel could say 問1 承認済み while this said ⚠要確認 -- and the
+  /// 承認して次へ button sat under both. 答案 state has not been dropped, it
+  /// moved to the AppBar next to the 答案's own name
+  /// ([_buildSubmissionStateChip]).
+  Widget _buildQuestionStateChip(QuestionResponse question) {
+    final status = _questionStatus(question);
+    final toneColor = status.tone.color(context);
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Chip(
+        key: const Key('review-question-state'),
+        avatar: Icon(status.icon, size: AppIconSize.dense, color: toneColor),
+        label: Text(_questionStatusLabel(question)),
+        // 形・枠線・日本語ラベルの三重表現。DAGノードが状態のトーンで枠を
+        // 描くのと同じ規則で、こちらだけ枠が無いと同じ状態が違う見え方に
+        // なる (Issue #25 / #84)。
+        side: BorderSide(
+          color: status.tone == AppStatusTone.neutral
+              ? context.colors.outlineVariant
+              : toneColor,
+        ),
+      ),
+    );
+  }
+
+  /// 答案1件ぶんの取込状態。AppBar に置いてあるのは、そこが**答案の名前**が
+  /// 出ている唯一の場所だからである (Issue #84)。ラベルにも「答案:」を付けて、
+  /// 位置と語の両方で対象を名指す -- 設問見出しの直下にあったときは、どちらも
+  /// 無かった。
   Widget _buildSubmissionStateChip() {
-    final state = _submission?.state ?? 'unprocessed';
-    final (icon, label, tone) = _submissionStateVisual(state);
-    return Chip(
+    final visual = SubmissionStatusVisual.of(_submission?.state);
+    return Row(
       key: const Key('review-submission-state'),
-      avatar: Icon(icon, size: AppIconSize.dense, color: tone.color(context)),
-      label: Text(label),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          visual.icon,
+          size: AppIconSize.dense,
+          color: visual.tone.color(context),
+        ),
+        const SizedBox(width: AppSpacing.xs),
+        Text('答案: ${visual.label}', style: context.textRoles.uiLabel),
+      ],
     );
   }
 
@@ -1853,25 +1945,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 }
-
-/// アイコン・日本語ラベル・強調度。色だけで状態を表さない (Issue #25) ため、
-/// この3つは常に一緒に決める。AI処理中に色を割かないのが要点 -- 進行中は
-/// 一番よくある状態で、そこを塗ると 要確認 が埋もれる。
-(IconData, String, AppStatusTone) _submissionStateVisual(String state) =>
-    switch (state) {
-      'unprocessed' => (Icons.hourglass_empty, '未処理', AppStatusTone.neutral),
-      'ai_processing' => (Icons.autorenew, 'AI処理中', AppStatusTone.neutral),
-      'ai_processed' => (
-        Icons.check_circle_outline,
-        'AI処理済み',
-        AppStatusTone.success,
-      ),
-      'needs_review' => (Icons.warning_amber, '要確認', AppStatusTone.attention),
-      'reviewed' => (Icons.verified_outlined, '確認済み', AppStatusTone.success),
-      'exported' => (Icons.file_download_done, '出力済み', AppStatusTone.success),
-      'error' => (Icons.error_outline, 'エラー', AppStatusTone.danger),
-      _ => (Icons.help_outline, state, AppStatusTone.neutral),
-    };
 
 /// The outcome a grade recorded for [criterionId], or `null` if [grade] is
 /// `null` or never judged that criterion (e.g. grading hasn't reached this

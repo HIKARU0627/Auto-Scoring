@@ -8,6 +8,7 @@ import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/question_status.dart';
 
 /// 添削レビュー画面の「処理の進み方」パネル (Issue #64).
 ///
@@ -60,7 +61,7 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
   /// than recomputed because the layout object is rebuilt from scratch on
   /// every poll tick -- identity tells us nothing, the contents do.
   Set<String> _satisfiedEdgeKeys = const {};
-  Map<String, DagNodeStatus> _statusById = const {};
+  Map<String, QuestionStatus> _statusById = const {};
 
   /// Which edges/nodes the *current* run of [_controller] is announcing.
   Set<String> _revealingEdgeKeys = const {};
@@ -123,8 +124,8 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
     final newlySatisfied = satisfied.difference(_satisfiedEdgeKeys);
     final released = {
       for (final entry in statuses.entries)
-        if (_statusById[entry.key] == DagNodeStatus.blocked &&
-            entry.value != DagNodeStatus.blocked)
+        if (_statusById[entry.key] == QuestionStatus.blocked &&
+            entry.value != QuestionStatus.blocked)
           entry.key,
     };
     _satisfiedEdgeKeys = satisfied;
@@ -430,7 +431,9 @@ class _DagNodeCardState extends State<_DagNodeCard> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: AppSpacing.xs),
-                    _ActivityBar(running: node.status == DagNodeStatus.running),
+                    _ActivityBar(
+                      running: node.status == QuestionStatus.running,
+                    ),
                   ],
                 ),
               ),

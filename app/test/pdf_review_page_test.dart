@@ -551,9 +551,12 @@ void main() {
       expect(find.bySemanticsLabel('OCR文字認識信頼度 55% 低'), findsOneWidget);
       expect(find.bySemanticsLabel('採点信頼度 97% 高'), findsOneWidget);
 
-      // The submission's processing state is identifiable via icon + text.
+      // 答案 and 設問 each have their own state readout, and each names its
+      // own scope: the 答案's sits in the AppBar beside the 答案's name and
+      // says so in words, the 設問's under the 問N heading (Issue #84).
       expect(find.byKey(const Key('review-submission-state')), findsOneWidget);
-      expect(find.text('要確認'), findsOneWidget);
+      expect(find.text('答案: 要確認'), findsOneWidget);
+      expect(find.byKey(const Key('review-question-state')), findsOneWidget);
 
       semantics.dispose();
     },
@@ -928,7 +931,9 @@ void main() {
           'manual refresh must pick up results that arrived after '
           'the initial (empty) load',
     );
-    expect(find.text('AI処理済み'), findsOneWidget);
+    // The refreshed 答案 state lands in the AppBar, where it names its own
+    // scope rather than reading as the selected 設問's (Issue #84).
+    expect(find.text('答案: AI処理済み'), findsOneWidget);
   });
 
   testWidgets('blocks 承認/却下 while the current question is still loading or '
@@ -3429,6 +3434,267 @@ void main() {
       expect(find.byKey(const Key('dag-unconfirmed-notice')), findsNothing);
       expect(find.byKey(const Key('review-shell-error')), findsNothing);
       expect(find.byKey(const Key('review-inspector')), findsOneWidget);
+    });
+  });
+
+  group('Issue #84: 同じ設問の状態を、3箇所が同じ語とアイコンで出す', () {
+    /// 4 questions with a 問1 -> 問3 edge, so the diagram, the rail and the
+    /// Inspector all have something to say about each of them and one of
+    /// them is genuinely 前提待ち.
+    ///
+    /// [submissionState] is the *答案's* state, deliberately picked to
+    /// contradict 問1's own state -- that contradiction, read as if it were
+    /// 問1's, is Issue #84.
+    AppDependencies statesDependencies({
+      required List<JobResponse> jobs,
+      List<ReviewResponse> reviews = const [],
+      String submissionState = 'needs_review',
+    }) => AppDependencies(
+      getSubmission: (_) async => _submission(state: submissionState),
+      listQuestions: (_) async => [
+        _question(),
+        _question(id: 'q-2', number: '2'),
+        _question(id: 'q-3', number: '3'),
+        _question(id: 'q-4', number: '4'),
+      ],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      getDependencyGraph: (_) async => _dependencyGraph(from: 'q-1', to: 'q-3'),
+      listJobs: (_) async => jobs,
+      listRecognitions: (_, _) async => const [],
+      listGrades: (_, _) async => const [],
+      listAnnotations: (_, _) async => const [],
+      listReviews: (submissionId, questionId) async =>
+          reviews.where((r) => r.questionId == questionId).toList(),
+    );
+
+    /// The one assertion this Issue exists for: for [number], the DAG node,
+    /// the rail destination and (when it is the selected question) the
+    /// Inspector badge all say [label] -- and none of them says anything
+    /// else about it.
+    void expectAllThreeSay(
+      WidgetTester tester, {
+      required String questionId,
+      required String number,
+      required String label,
+      bool selected = false,
+    }) {
+      expect(
+        tester
+            .widget<Text>(find.byKey(Key('dag-node-status-$questionId')))
+            .data,
+        label,
+        reason: 'DAGパネルの問$number',
+      );
+      // The rail is too narrow for a second line, so its copy of the word
+      // rides on the semantics label (and the same string as a tooltip).
+      expect(
+        find.bySemanticsLabel('問$number $label'),
+        findsOneWidget,
+        reason: '左レールの問$number',
+      );
+      if (selected) {
+        expect(
+          tester
+              .widget<Text>(
+                find.descendant(
+                  of: find.byKey(const Key('review-question-state')),
+                  matching: find.byType(Text),
+                ),
+              )
+              .data,
+          label,
+          reason: '右パネルの問$number',
+        );
+      }
+    }
+
+    /// 問1 is 承認済み to the pipeline while the 答案 as a whole is
+    /// `needs_review` -- the `pdf-review-blocked` screenshot, where the DAG
+    /// said 承認済み and the badge under the 問1 heading said ⚠要確認.
+    testWidgets('承認済みの設問に、答案の「要確認」が重ならない', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          submissionState: 'needs_review',
+          jobs: [
+            _jobFor('q-1'),
+            _jobFor('q-2', state: 'succeeded', usable: false),
+            _jobFor(
+              'q-3',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+            _jobFor('q-4'),
+          ],
+          reviews: [_review(action: 'approved')],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-1',
+        number: '1',
+        label: '承認済み',
+        selected: true,
+      );
+      // 要確認 is still on screen -- it is the *答案's* state, in the AppBar,
+      // and it names its own scope there.
+      expect(find.text('答案: 要確認'), findsOneWidget);
+      // ...and nowhere near the 問1 heading any more.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('review-inspector')),
+          matching: find.textContaining('要確認'),
+        ),
+        findsNothing,
+      );
+
+      semantics.dispose();
+    });
+
+    /// The `pdf-review-failed` screenshot: the DAG said レビュー待ち while
+    /// the badge under the same 問1 heading said ✓AI処理済み.
+    testWidgets('レビュー待ちの設問に、答案の「AI処理済み」が重ならない', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          submissionState: 'ai_processed',
+          jobs: [
+            _jobFor('q-1'),
+            _jobFor('q-2', state: 'failed', usable: false),
+            _jobFor(
+              'q-3',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+            _jobFor('q-4'),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-1',
+        number: '1',
+        label: 'レビュー待ち',
+        selected: true,
+      );
+      expect(find.text('答案: AI処理済み'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('review-inspector')),
+          matching: find.textContaining('AI処理済み'),
+        ),
+        findsNothing,
+      );
+
+      semantics.dispose();
+    });
+
+    testWidgets('未訪問の設問も、レールとDAGが同じ状態を出す', (tester) async {
+      final semantics = tester.ensureSemantics();
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          jobs: [
+            _jobFor('q-1'),
+            // 要確認: succeeded, but the queue judged its own result not
+            // usable, so nothing downstream moves until a person looks.
+            _jobFor('q-2', state: 'succeeded', usable: false),
+            _jobFor(
+              'q-3',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+            _jobFor('q-4', state: 'running', usable: null),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      // Only 問1 has ever been fetched by this screen; 問2〜問4 are drawn
+      // from `listJobs`, which covers the whole submission. Before Issue #84
+      // the rail had no access to any of this and drew all three as one
+      // hourglass.
+      expectAllThreeSay(tester, questionId: 'q-2', number: '2', label: '要確認');
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-3',
+        number: '3',
+        // A blocked question names its prerequisite in all three places.
+        label: '問1 待ち',
+      );
+      expectAllThreeSay(tester, questionId: 'q-4', number: '4', label: 'AI処理中');
+
+      semantics.dispose();
+    });
+
+    testWidgets('レールのアイコンが状態ごとに違う (色を外しても区別できる)', (tester) async {
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          jobs: [
+            _jobFor('q-1'),
+            _jobFor('q-2', state: 'succeeded', usable: false),
+            _jobFor(
+              'q-3',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+            _jobFor('q-4', state: 'running', usable: null),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      final rail = find.byKey(const Key('review-question-rail'));
+      final icons = tester
+          .widgetList<Icon>(
+            find.descendant(of: rail, matching: find.byType(Icon)),
+          )
+          .map((icon) => icon.icon)
+          .toList();
+      // Four questions in four different states must produce four different
+      // shapes: 要確認・前提待ち・レビュー待ち・AI処理中 all used to render
+      // as `hourglass_empty`.
+      expect(icons, hasLength(4));
+      expect(icons.toSet(), hasLength(4));
+    });
+
+    testWidgets('狭幅でも設問番号が消えない', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(700, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          jobs: [
+            _jobFor('q-1'),
+            _jobFor('q-2'),
+            _jobFor('q-3', usable: false),
+            _jobFor('q-4'),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(tester.takeException(), isNull);
+      final rail = find.byKey(const Key('review-question-rail'));
+      for (final number in const ['1', '2', '3', '4']) {
+        final label = find.descendant(
+          of: rail,
+          matching: find.text('問$number'),
+        );
+        expect(label, findsOneWidget, reason: '問$number');
+        expect(tester.getRect(label).width, greaterThan(0));
+      }
     });
   });
 
