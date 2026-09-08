@@ -4668,7 +4668,7 @@
     },
     "/tests/{test_id}/criteria/extract": {
       "post": {
-        "description": "Read the registered \u63a1\u70b9\u57fa\u6e96PDF with the configured model.\n\nEvery page is rendered and sent as an image. That is not a fallback\nfor a failed text extraction -- 6 of the 11 measured subjects have no\ntext layer at all, and they are the subjects whose answers are\nformulae, so the image path is the only one that covers them\n(``adapters.criteria_extraction.source``).\n\nThe result is a **proposal**. It is stored as a DRAFT and nothing\ndownstream reads it until a human confirms it.",
+        "description": "Read the registered \u63a1\u70b9\u57fa\u6e96PDF with the configured model.\n\nEvery page is rendered and sent as an image. That is not a fallback\nfor a failed text extraction -- 6 of the 11 measured subjects have no\ntext layer at all, and they are the subjects whose answers are\nformulae, so the image path is the only one that covers them\n(``adapters.criteria_extraction.source``).\n\nThe result is a **proposal**. It is stored as a DRAFT and nothing\ndownstream reads it until a human confirms it.\n\nDeliberately a **synchronous** handler, like ``/profile/analyze``:\nFastAPI runs those in its worker threadpool, so the per-test lock\nbelow and the minute-long provider call are held off the event loop.\nWritten as ``async def`` with ``await to_thread(...)`` inside, the\ntwo blocking calls would move off the loop but ``with\ntest_locks.for_test(...)`` would not -- a second extraction of the\nsame test would then block the whole sidecar for as long as the\nfirst one takes to answer (code review of this Issue).",
         "operationId": "extract_criteria_tests__test_id__criteria_extract_post",
         "parameters": [
           {

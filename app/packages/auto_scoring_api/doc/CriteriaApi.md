@@ -65,7 +65,7 @@ Name | Type | Description  | Notes
 
 Extract Criteria
 
-Read the registered 採点基準PDF with the configured model.  Every page is rendered and sent as an image. That is not a fallback for a failed text extraction -- 6 of the 11 measured subjects have no text layer at all, and they are the subjects whose answers are formulae, so the image path is the only one that covers them (``adapters.criteria_extraction.source``).  The result is a **proposal**. It is stored as a DRAFT and nothing downstream reads it until a human confirms it.
+Read the registered 採点基準PDF with the configured model.  Every page is rendered and sent as an image. That is not a fallback for a failed text extraction -- 6 of the 11 measured subjects have no text layer at all, and they are the subjects whose answers are formulae, so the image path is the only one that covers them (``adapters.criteria_extraction.source``).  The result is a **proposal**. It is stored as a DRAFT and nothing downstream reads it until a human confirms it.  Deliberately a **synchronous** handler, like ``/profile/analyze``: FastAPI runs those in its worker threadpool, so the per-test lock below and the minute-long provider call are held off the event loop. Written as ``async def`` with ``await to_thread(...)`` inside, the two blocking calls would move off the loop but ``with test_locks.for_test(...)`` would not -- a second extraction of the same test would then block the whole sidecar for as long as the first one takes to answer (code review of this Issue).
 
 ### Example
 ```dart
