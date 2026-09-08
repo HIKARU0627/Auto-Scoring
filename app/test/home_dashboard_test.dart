@@ -53,7 +53,7 @@ void main() {
   group('HomeWorkBucket', () {
     test('答案の7状態をホームが数える5つへ畳む', () {
       expect(HomeWorkBucket.of('needs_review'), HomeWorkBucket.needsReview);
-      expect(HomeWorkBucket.of('ai_processed'), HomeWorkBucket.awaitingReview);
+      expect(HomeWorkBucket.of('ai_processed'), HomeWorkBucket.intakeDone);
       expect(HomeWorkBucket.of('unprocessed'), HomeWorkBucket.processing);
       expect(HomeWorkBucket.of('ai_processing'), HomeWorkBucket.processing);
       expect(HomeWorkBucket.of('error'), HomeWorkBucket.failed);
@@ -209,7 +209,7 @@ void main() {
     });
 
     test('古いテストの要確認が、新しいテストの通常レビューより先', () {
-      // テストの新しさで先にタイブレークすると、新しい方の「レビュー待ち」が
+      // テストの新しさで先にタイブレークすると、新しい方の「取込済み」が
       // 勝ってしまう。優先順位は答案のbucketが先 (§2.1)。
       final older = buildTest(id: 'older', createdDay: 1);
       final newer = buildTest(id: 'newer', createdDay: 9);
@@ -257,7 +257,7 @@ void main() {
       final action = dashboard.nextAction;
       // 「要確認の答案が10件あります」だと、カードが示す 要確認 1件 と食い違う。
       expect(action.headline, '要確認の答案が1件あります');
-      expect(action.detail, contains('ほかに採点・レビュー待ちが9件'));
+      expect(action.detail, contains('ほかに取込済みが9件'));
     });
 
     test('要確認だけのときは説明文に但し書きを付けない', () {
@@ -271,7 +271,7 @@ void main() {
       expect(dashboard.nextAction.detail, isNot(contains('ほかに')));
     });
 
-    test('レビュー待ちの答案について、採点が始まったとも終わったとも断定しない', () {
+    test('取込済みの答案について、採点もレビューもどこまで進んだか断定しない', () {
       // `ai_processed` は取込時の画像前処理・回答欄抽出まで終わった状態で、
       // OCR/AI採点はその先から始まる (backend の submission_intake.py)。
       //
@@ -287,12 +287,16 @@ void main() {
 
       final detail = dashboard.nextAction.detail;
       expect(detail, contains('取込と回答欄の抽出は終わっています'));
-      expect(detail, contains('AI採点が始まっているかどうかはホームでは分かりません'));
+      expect(detail, contains('AI採点とレビューがどこまで進んだかはホームでは分かりません'));
       // 「開始済み」も「採点済み」も、ホームは知らない。
       expect(detail, isNot(contains('開始済み')));
       expect(detail, isNot(contains('採点済みです')));
       expect(detail, isNot(contains('採点中')));
       expect(dashboard.nextAction.headline, isNot(contains('採点済み')));
+      // 「待ち」とも言わない -- 承認済みの答案も `ai_processed` のまま
+      // ここに残る (review round 2, P3)。
+      expect(HomeWorkBucket.intakeDone.label, '取込済み');
+      expect(dashboard.nextAction.headline, isNot(contains('レビュー待ち')));
     });
 
     test('答案が1件も無いときも、採点が必ず始まるとは言わない', () {
@@ -305,14 +309,14 @@ void main() {
       expect(detail, isNot(contains('AI採点の開始まで自動で行われます')));
     });
 
-    test('要確認が無くレビュー待ちだけならそちらを開く', () {
+    test('要確認が無く取込済みだけならそちらを開く', () {
       final test = buildTest(id: 't1');
       final dashboard = build({
         test: [buildSubmission(id: 's1', testId: 't1', state: 'ai_processed')],
       });
 
       final action = dashboard.nextAction;
-      expect(action.headline, contains('レビュー待ち'));
+      expect(action.headline, contains('取込済み'));
       expect(
         action.route,
         AppRoutes.pdfReview(testId: 't1', submissionId: 's1'),
@@ -334,7 +338,7 @@ void main() {
       expect(action.route, AppRoutes.answerIntake);
     });
 
-    test('取込失敗があってもレビュー待ちが先', () {
+    test('取込失敗があっても取込済みが先', () {
       final test = buildTest(id: 't1');
       final dashboard = build({
         test: [
@@ -380,7 +384,7 @@ void main() {
     });
 
     test('載せきれなかったテストがあるとき、不在も件数も範囲を明示する', () {
-      // 直近8件が片付いていても、答案を取得していないテストにレビュー待ちが
+      // 直近8件が片付いていても、答案を取得していないテストに開くべき答案が
       // 残っているかどうかは分からない。「ありません」と言い切れない。
       final settled = buildTest(id: 't1');
       final dashboard = build({
@@ -388,7 +392,7 @@ void main() {
       }, hiddenTestCount: 4);
 
       final action = dashboard.nextAction;
-      expect(action.headline, '直近1件のテストに採点・レビュー待ちの答案はありません');
+      expect(action.headline, '直近1件のテストに、いま開く答案はありません');
       expect(action.detail, contains('ほかに4件'));
     });
 
@@ -437,7 +441,7 @@ void main() {
       expect(detail, contains('取込失敗'));
     });
 
-    test('レビュー待ちの順序を、テストをまたいだ最古と読ませない', () {
+    test('取込済みの答案の順序を、テストをまたいだ最古と読ませない', () {
       // 実際の選択は「テストを選んでから、その中で取込の古い順」。
       final test = buildTest(id: 't1');
       final dashboard = build({
