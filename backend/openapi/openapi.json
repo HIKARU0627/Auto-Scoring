@@ -1010,6 +1010,25 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IntakeCostModel": {
+        "description": "The per-call price the reviewer entered, or ``null`` for \"not set\".\n\n``null`` is not zero. Zero is a reviewer stating their usage is free; null\nis this app admitting it does not know the price and will say so on screen\nrather than showing an invented figure.",
+        "properties": {
+          "classification_unit_cost": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification Unit Cost"
+          }
+        },
+        "title": "IntakeCostModel",
+        "type": "object"
+      },
       "IntakePlanResponse": {
         "properties": {
           "estimate": {
@@ -2430,6 +2449,76 @@
           }
         },
         "summary": "Healthz"
+      }
+    },
+    "/intake-cost": {
+      "get": {
+        "operationId": "get_intake_cost_intake_cost_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeCostModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Intake Cost",
+        "tags": [
+          "intake"
+        ]
+      },
+      "put": {
+        "operationId": "save_intake_cost_intake_cost_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeCostModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeCostModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Intake Cost",
+        "tags": [
+          "intake"
+        ]
       }
     },
     "/intake-templates": {
