@@ -19,11 +19,19 @@ GitHub Issue #71。UI改良4件（#66 Riverpod/go_router、#67 デザイント�
 | -------- | -------------- | --------------------------- | --------- | ------------------------ |
 | Gemini   | `agy`          | `gemini-3.1-pro-high`       | Google    | 5 (2/2/1)                |
 | Codex    | `codex exec`   | 純正                        | OpenAI    | 9 (3/6/0)                |
-| Claude   | `claude -p`    | 純正                        | Anthropic | 16 (6/9/1)               |
+| Claude   | `claude -p`    | 純正                        | Anthropic | 16 (6/7/3)               |
 | Grok     | `cursor-agent` | `cursor-grok-4.6-high-fast` | xAI       | 10 (4/5/1)               |
 | Composer | `cursor-agent` | `composer-2.5`              | Anysphere | 12 (1/6/5)               |
 
 合計 **52件**。
+
+**この表と以下の一致数は、すべて
+[`evaluations.json`](./ui-ux-multi-agent-evaluation/evaluations.json) から数えたものである。**
+最初の版では Claude の内訳だけが `6/9/1` と誤っていた。Claude だけ完了が遅く、そこだけ
+集計スクリプトを使わず一覧を目で数えたためである（Issue #71 レビュー2回目）。
+**手で数えた箇所だけが間違っていた**ので、以降の一致数には**該当する finding の id を
+必ず併記する**。数えているのはその id の**評価者の異なり数**であり、読む側が JSON と
+突き合わせて検算できる。
 
 ### 1.1 open-weights 枠は埋まらなかった（`gpt-oss-120b-medium` は視覚を持たない）
 
@@ -111,7 +119,14 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 > 状態の食い違いは、このアプリが一番守るべき「人が見てから確定する」を壊す。
 
-左レールが状態を潰す問題（4/5 が言及）も同じ根なので、この Issue に含めた。
+**5/5**: `gemini` inconsistent-status-indicators (high) / `codex` conflicting-review-status
+(high) / `claude` status-vocabulary-contradiction (high) / `grok`
+review-q1-status-contradiction (high) / `composer` review-conflicting-state-labels (high)
+
+左レールが状態を潰す問題も同じ根なので、この Issue に含めた。
+**4/5**: `grok` review-rail-flattens-states (high) / `claude` rail-icons-indistinguishable
+(medium) / `codex` narrow-question-labels-missing (medium) / `composer`
+review-sidebar-icon-only-narrow (low)
 
 ### 4.2 多数一致（3〜4/5）→ 4本にまとめて起票した
 
@@ -120,10 +135,36 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 | 起票 | 内容                                                                     | 一致数                                                              |
 | ---- | ------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| #85  | 承認に必要な判断材料が画面外にあるまま、承認ボタンだけが常に見えている   | 判断材料の切れ 4/5、アクションバー見切れ 3/5、DAGパネルの縦占有 4/5 |
-| #86  | 失敗が要約件数から漏れ、下流の「待ち」が恒久停止を隠す                   | 3/5                                                                 |
+| #85  | 承認に必要な判断材料が画面外にあるまま、承認ボタンだけが常に見えている   | 判断材料の切れ 4/5、アクションバー見切れ 3/5、DAGパネルの縦占有 5/5 |
+| #86  | 失敗が要約件数から漏れ、下流の「待ち」が恒久停止を隠す                   | 要約から漏れる 3/5、待ちが恒久停止を隠す 1/5                        |
 | #87  | テスト設定の回答欄が生の正規化座標だけで、切り出しの正しさを確認できない | 4/5                                                                 |
 | #88  | 無効な操作に理由が無く、ホーム以外に戻る導線が無い                       | 無効ボタン 4/5、戻る導線 3/5                                        |
+
+内訳（`finding id (severity)`）:
+
+- **#85 判断材料の切れ 4/5** — `claude` score-panel-cut-off-by-action-bar (high) / `codex`
+  narrow-review-evidence-hidden (high) / `gemini` narrow-view-layout-break (high) / `grok`
+  review-narrow-hides-scoring (high)
+- **#85 アクションバー見切れ 3/5** — `codex` narrow-review-action-clipping (high) / `claude`
+  undo-button-clipped-narrow (high) / `composer` review-narrow-footer-cramped (medium)
+- **#85 DAGパネルの縦占有 5/5** — `claude` dag-panel-fixed-height-mostly-empty (high) /
+  `grok` review-narrow-hides-scoring (high) / `codex` graph-dominates-review (medium) /
+  `gemini` graph-vertical-space (medium) / `composer` review-flowchart-vertical-cost (medium)
+- **#86 失敗が要約から漏れる 3/5** — `claude` failure-absent-from-summary-counts (high) /
+  `codex` ambiguous-completion-count (medium) / `grok` progress-counts-omit-attention (medium)
+- **#86 待ちが恒久停止を隠す 1/5** — `claude` waiting-label-hides-permanent-block (medium)
+- **#87 生の正規化座標 4/5** — `claude` answer-region-shown-as-raw-coordinates (high) /
+  `codex` settings-technical-content-priority (medium) / `grok` settings-locked-coordinates
+  (medium) / `composer` test-settings-coordinate-noise (medium)
+- **#88 無効ボタンに理由がない 4/5** — `codex` disabled-actions-without-explanation (medium) /
+  `claude` disabled-primary-without-reason (medium) / `composer`
+  test-settings-disabled-without-reason (medium) / `grok` placeholder-as-only-label (low)
+- **#88 戻る導線がない 3/5** — `claude` no-visible-focus-and-no-back (medium) / `grok`
+  no-return-path (medium) / `composer` secondary-screens-no-nav (medium)
+
+`grok` の review-narrow-hides-scoring と `claude` の no-visible-focus-and-no-back は、
+1件で2つのことを観察しているので2か所に現れる。**同じ id を2つのテーマで数えている**
+ことを隠さずに書いておく。
 
 #85 は、別々に見えた3つの指摘（標準幅での切れ・狭幅での上下分離・アクションバーの
 見切れ・DAGパネルの縦占有）を1本にまとめたものである。**すべて「縦の配分」という
@@ -138,11 +179,11 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 **ダークテーマのコントラスト評価が割れた。**
 
-| 評価者            | 判断                                                                                                     |
-| ----------------- | -------------------------------------------------------------------------------------------------------- |
-| `composer`        | ダークでも主要テキストとアクション色のコントラストが保たれ、長時間の暗所作業でも負担が少なそう（好評価） |
-| `claude` (medium) | ダークの主要ボタンは明るい水色背景に白に近い文字で、二次ボタンの方が読みやすい                           |
-| `codex` (medium)  | 白いPDF面とほぼ黒の判断パネルが隣接し、明暗差が大きい（別の論点）                                        |
+| 評価者 (finding id)                                      | 判断                                                                                                     |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `composer`（`what_works_well` の記述。finding ではない） | ダークでも主要テキストとアクション色のコントラストが保たれ、長時間の暗所作業でも負担が少なそう（好評価） |
+| `claude` dark-primary-button-contrast (medium)           | ダークの主要ボタンは明るい水色背景に白に近い文字で、二次ボタンの方が読みやすい                           |
+| `codex` dark-review-brightness-imbalance (medium)        | 白いPDF面とほぼ黒の判断パネルが隣接し、明暗差が大きい（別の論点）                                        |
 
 **判断:** `claude` の指摘は具体的で検証可能（主要ボタンの文字コントラスト比を測れば決着する）。
 `composer` の好評価は全体印象で、ボタン単体には言及していない。したがって
@@ -152,8 +193,11 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 ### 4.4 材料の限界により採用しない → 起票しない
 
-**「フォーカスリングが見当たらない」（`claude` medium / `composer` medium）は、
-この材料からは判断できない。**
+**「フォーカス表示が見当たらない」は、この材料からは判断できない。**
+
+**3/5**: `claude` no-visible-focus-and-no-back (medium) / `composer`
+no-visible-focus-indicator (medium) / `grok` keyboard-absent-outside-review (medium)。
+最初の版はこれを2件と書いていたが、`grok` の1件を数え落としていた（レビュー2回目）。
 
 撮影時にフォーカスを持つ要素が無かっただけで、フォーカス表示が無いことの証拠にならない。
 実際 Issue #64 でフォーカスリングを追加し、`app/test/dependency_dag_panel_test.dart` が
@@ -169,7 +213,7 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 評価観点に「**キーボード操作**」「**フォーカスの位置**」「**動きの量**」を挙げながら、
 静止画ではその3つに答えられない材料を渡した。観点と材料が噛み合っていない。
 
-- 「フォーカスが見えない」という指摘が2件出たのは、評価者の誤りではなく**こちらの設計ミス**である
+- 「フォーカスが見えない」という指摘が3件出たのは、評価者の誤りではなく**こちらの設計ミス**である
 - この3観点は「**評価できなかった**」として扱う。良かったとも悪かったとも言えない
 - 必要なら、静止画ではなく**スクリーンキャスト**で別途評価する
 
@@ -184,8 +228,8 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 2/5 が指摘し、ともに low。
 
-- `composer`: `utilitarian-aesthetic`（実用一辺倒）
-- `claude`: `flat-affect-no-completion-feedback`（完了時の手応えが無い）
+**2/5**: `composer` utilitarian-aesthetic (low)（実用一辺倒）/ `claude`
+flat-affect-no-completion-feedback (low)（完了時の手応えが無い）
 
 **件数と severity は低いが、軽い問題ではない。** これは
 **プロジェクトオーナーが UI 改良を始めた動機そのもの**である
@@ -194,6 +238,28 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 UI改良4件を入れてなお、この軸が動いていない可能性がある。
 **指摘を Issue 化するのではなく、方針をオーナーと決めるところからやり直す。**
+
+### 4.6 起票しなかった残りの指摘（52件の行き先を全部書く）
+
+上の §4.1〜§4.5 に現れない11件。**採否の判断は変えていない**が、どこへ行ったかを
+書かずに落とすと、52件という数字だけが残って中身を追えなくなる。
+
+| 内容                                           | 一致 | finding id                                                                                      |
+| ---------------------------------------------- | ---- | ----------------------------------------------------------------------------------------------- |
+| 開いた直後の選択が問1で、要確認の設問ではない  | 2/5  | `grok` review-opens-wrong-question (high) / `gemini` auto-focus-on-error (medium)               |
+| テスト一覧が薄い（件数・進捗・更新日時が無い） | 2/5  | `claude` test-list-lacks-work-state (medium) / `grok` test-list-weaker-than-home (medium)       |
+| フォーム画面の空白が大きい                     | 2/5  | `claude` form-screens-waste-layout (low) / `composer` form-screens-wide-empty-space (low)       |
+| ホームの「レビューを続ける」が2か所にある      | 2/5  | `claude` duplicate-continue-cta-on-home (low) / `composer` home-duplicate-continue-review (low) |
+| レビュー画面に進捗（何枚中何枚目か）が無い     | 1/5  | `claude` no-progress-context-in-review (medium)                                                 |
+| 「確認済み」バッジが無効ボタンと見分けにくい   | 1/5  | `composer` confirmed-badge-low-salience (low)                                                   |
+| 確認済みなのに「再実行」がプライマリ強調のまま | 1/5  | `gemini` primary-button-after-confirmation (low)                                                |
+
+**「開いた直後の選択」だけは 2/5 で high を含む。** ホームの「要確認から開きます」を押して
+来たのに、開くのは問1である、という指摘である。#84 の状態表示と同じ画面の話なので、
+#84 を直すときに一緒に見ることになる。ここで別 Issue にしないのは、直し方が #84 の
+結論（設問の状態をどこがどう出すか）に依存するためで、**却下したわけではない**。
+
+残りは低い重みの単独指摘で、今回は起票していない。
 
 ## 5. 全員が独立に評価した点（維持すべきもの）
 
