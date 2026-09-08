@@ -139,6 +139,12 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   final Set<String> _narrowedTestIds = {};
 
   int _classifiedCount = 0;
+
+  /// Bumped whenever the candidate list changes, so a response from an
+  /// attribution run issued against the *previous* list can be recognized as
+  /// stale and dropped.
+  int _attributionGeneration = 0;
+
   bool _cancelClassification = false;
   bool _classifying = false;
 
@@ -176,10 +182,16 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       if (!mounted) return;
       setState(() {
         _templates = templates;
-        _templateId = templates.isEmpty ? null : templates.first.id;
+        // Keep the reviewer's own choice across a reload; only fall back to
+        // the first template when what they had picked is gone.
+        _templateId = templates.any((template) => template.id == _templateId)
+            ? _templateId
+            : (templates.isEmpty ? null : templates.first.id);
         _unitCost = cost;
         _existingTests = tests;
         _availability = availability;
+        // A plan already on screen was priced with the old figure.
+        _review = _review?.copyWith(unitCost: cost);
       });
     } on SidecarApiException catch (error) {
       if (!mounted) return;
@@ -247,13 +259,19 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   /// One request per file, a few at a time, filling rows as they resolve --
   /// so the reviewer sees progress rather than a frozen screen, and can stop
   /// part-way and keep whatever has already been answered.
-  Future<void> _runClassification() async {
+  Future<void> _runClassification({bool cachedOnly = false}) async {
     final review = _review;
     if (review == null) return;
     // Cached files are asked about too. They cost nothing and the sidecar
     // answers instantly -- skipping them is what made a re-selected folder
-    // throw away proposals it had already paid for.
-    final pending = review.classifiableFiles;
+    // throw away proposals it had already paid for. ``cachedOnly`` runs just
+    // those, which is what makes the free path usable on a host with no
+    // provider configured.
+    final pending = cachedOnly
+        ? review.classifiableFiles
+              .where((file) => file.cachedClassification)
+              .toList()
+        : review.classifiableFiles;
     if (pending.isEmpty) return;
 
     setState(() {
@@ -329,10 +347,17 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   /// answer is asked about individually so progress and cancellation work.
   Future<void> _attributeAnswers(IntakeGroupState group) async {
     final candidates = _attributionCandidates;
-    final unrouted = group.unroutedAnswers;
+    // Answers already asked about are not asked again, even when the reply was
+    // "could not tell" -- the same rule role classification follows.
+    final unrouted = group.unroutedAnswers
+        .where((answer) => !answer.attributionAttempted)
+        .toList();
     if (unrouted.isEmpty || candidates.isEmpty) return;
 
     if (candidates.length == 1) {
+      // Not a proposal: the reviewer narrowed the batch to one test, which is
+      // them stating the answer. Nothing was guessed, so there is nothing to
+      // confirm.
       setState(() {
         for (final answer in unrouted) {
           _review = _review?.withFile(
@@ -344,6 +369,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       return;
     }
 
+    final generation = ++_attributionGeneration;
     setState(() {
       _classifying = true;
       _cancelClassification = false;
@@ -360,23 +386,37 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           ],
         );
         if (!mounted) return;
+        // A candidate change while this was in flight makes the answer stale:
+        // the reviewer has since said this batch is not that test's, and a
+        // response that arrives afterwards must not quietly reinstate it. The
+        // dropdown hides an out-of-range value, so without this the screen
+        // would show "not routed" while the state said otherwise.
+        if (generation != _attributionGeneration) return;
         setState(() {
           _classifiedCount++;
+          // Recorded as a **proposal**, never as the routing itself.
+          // Attribution decides which criteria an answer is graded against, so
+          // it goes through the same confirmation the role does -- see
+          // `IntakeFileState.answerTestId`.
+          //
           // `null` means the classifier could not tell, which is a real and
-          // frequent answer -- the sheet often carries nothing identifying at
-          // all. The row simply stays unrouted for the reviewer to decide.
-          if (proposal.testId != null) {
-            _review = _review?.withFile(
-              answer.relativePath,
-              (current) => current.copyWith(answerTestId: proposal.testId),
-            );
-          }
+          // frequent answer: the sheet often carries nothing identifying at
+          // all. The row stays unrouted for the reviewer to decide, and is
+          // marked as asked so a second run does not re-buy the same reply.
+          _review = _review?.withFile(
+            answer.relativePath,
+            (current) => current.copyWith(
+              proposedAnswerTestId: proposal.testId,
+              attributionAttempted: true,
+            ),
+          );
         });
       } on SidecarApiException catch (error) {
-        if (!mounted) return;
+        if (!mounted || generation != _attributionGeneration) return;
         setState(() {
           _classifiedCount++;
           _error = error.message;
+          // Not marked as asked: a failed call produced no answer.
         });
       }
     }
@@ -605,27 +645,38 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     final testId = outcome.testId;
     if (testId == null || !outcome.createdTest) return;
 
-    var submissionCount = outcome.submissionCount;
+    // `null` means "could not read it", which is a different thing from a
+    // number. Falling back to this screen's own tally would show a count that
+    // understates whatever else has been added since -- a confident number
+    // nobody verified, in front of an irreversible action.
+    int? submissionCount;
+    int? materialCount;
     try {
       submissionCount = (await _dependencies.listSubmissions(testId)).length;
+      materialCount = (await _dependencies.listMaterials(testId)).length;
     } on SidecarApiException {
-      // Fall back to what this screen imported. A count that may understate
-      // is better than blocking the undo the reviewer asked for -- and the
-      // dialog says the count is what it knows.
+      // Left null; the dialog says so.
     }
 
     if (!mounted) return;
+    final counted = submissionCount != null && materialCount != null;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         key: const Key('intake-delete-confirm'),
         title: Text('「${outcome.name}」を削除しますか'),
         content: Text(
-          'このテストと、それに紐づくものをすべて削除します。\n\n'
-          '・答案 $submissionCount件\n'
-          '・その答案の採点結果・添削・レビュー履歴\n'
-          '・登録した資料 ${outcome.materialCount}件\n\n'
-          '元に戻せません。',
+          counted
+              ? 'このテストと、それに紐づくものをすべて削除します。\n\n'
+                    '・答案 $submissionCount件\n'
+                    '・その答案の採点結果・添削・レビュー履歴\n'
+                    '・登録した資料 $materialCount件\n\n'
+                    '元に戻せません。'
+              : 'このテストと、それに紐づくものをすべて削除します。\n\n'
+                    '**いま何件あるかを確認できませんでした。**'
+                    'この画面で取り込んだ以外の答案や資料が含まれている'
+                    '可能性があります。\n\n'
+                    '元に戻せません。',
         ),
         actions: [
           TextButton(
@@ -669,7 +720,15 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           IconButton(
             key: const Key('intake-open-settings'),
             tooltip: '設定',
-            onPressed: () => context.push(AppRoutes.settings),
+            // Re-read on the way back. The settings screen promises "次の取込
+            // から反映されます", and without this that promise is false: a
+            // newly added template would not be selectable, and a unit price
+            // changed from 0 would still show the old estimate right before
+            // the reviewer spends money against it.
+            onPressed: () async {
+              await context.push(AppRoutes.settings);
+              await _loadSettings();
+            },
             icon: const Icon(Icons.settings),
           ),
         ],
@@ -747,6 +806,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     final review = _review!;
     final billable = review.pendingClassification.length;
     final classifiable = review.classifiableFiles.length;
+    final cachedOnly = classifiable - billable;
     final unconfirmed = review.unconfirmedProposals.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -820,22 +880,31 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           ),
         Row(
           children: [
-            if (classifiable > 0 && _availability?.available == true)
+            // Cached answers are free and the sidecar serves them without
+            // touching a provider, so this stays available on a host that has
+            // no provider configured at all. Tying it to availability meant a
+            // reviewer whose credentials were missing had to redo forty
+            // classifications they had already paid for.
+            if (cachedOnly > 0)
+              Padding(
+                padding: const EdgeInsets.only(right: AppSpacing.md),
+                child: OutlinedButton.icon(
+                  key: const Key('intake-fetch-cached'),
+                  onPressed: _classifying || _busy
+                      ? null
+                      : () => _runClassification(cachedOnly: true),
+                  icon: const Icon(Icons.history),
+                  label: Text('前回の判定を取得する ($cachedOnly件・無料)'),
+                ),
+              ),
+            if (billable > 0 && _availability?.available == true)
               Padding(
                 padding: const EdgeInsets.only(right: AppSpacing.md),
                 child: FilledButton.tonalIcon(
                   key: const Key('intake-run-classification'),
                   onPressed: _classifying || _busy ? null : _runClassification,
                   icon: const Icon(Icons.auto_awesome),
-                  // The two counts are named separately so the button never
-                  // reads "0件" while it is about to do real work, and never
-                  // implies a charge for answers already paid for.
-                  label: Text(
-                    classifiable == billable
-                        ? 'AIで判定する ($billable件)'
-                        : 'AIで判定する (新規$billable件 / 取得済み'
-                              '${classifiable - billable}件)',
-                  ),
+                  label: Text('AIで判定する ($billable件)'),
                 ),
               ),
             FilledButton.icon(
@@ -929,6 +998,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     } else {
                       _narrowedTestIds.remove(test.id);
                     }
+                    // Any attribution run still in flight was issued against
+                    // the old candidate list; its answers are about a question
+                    // the reviewer has since changed.
+                    _attributionGeneration++;
                     // An answer already routed to a test the reviewer has just
                     // narrowed away has to lose that routing: the dropdown it
                     // is shown in no longer offers that value, and leaving it
@@ -951,10 +1024,16 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     if (review == null) return;
     for (final file in review.allFiles) {
       final routed = file.answerTestId;
-      if (routed != null && !allowed.contains(routed)) {
+      final proposed = file.proposedAnswerTestId;
+      if ((routed != null && !allowed.contains(routed)) ||
+          (proposed != null && !allowed.contains(proposed))) {
         review = review!.withFile(
           file.relativePath,
-          (current) => current.copyWith(clearAnswerTestId: true),
+          (current) => current.copyWith(
+            clearAnswerTestId: routed != null && !allowed.contains(routed),
+            clearProposedAnswerTestId:
+                proposed != null && !allowed.contains(proposed),
+          ),
         );
       }
     }
@@ -980,10 +1059,20 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     // so the control has to shrink its label rather than
                     // overflow the row.
                     isExpanded: true,
+                    // Same guard as the per-answer routing dropdown: the
+                    // registered-test list is re-read at the start of every
+                    // batch, so a group bound to a test that has since gone
+                    // would otherwise hold a value with no matching item and
+                    // trip `DropdownButton`'s assert.
                     initialValue: switch (group.targetKind) {
                       IntakeTargetKind.create => '__new__',
                       IntakeTargetKind.perAnswer => '__per_answer__',
-                      _ => group.targetTestId,
+                      _ =>
+                        _existingTests.any(
+                              (test) => test.id == group.targetTestId,
+                            )
+                            ? group.targetTestId
+                            : null,
                     },
                     decoration: const InputDecoration(
                       labelText: '取り込み先',
@@ -1077,7 +1166,9 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     onPressed:
                         _busy ||
                             _classifying ||
-                            group.unroutedAnswers.isEmpty ||
+                            group.unroutedAnswers
+                                .where((a) => !a.attributionAttempted)
+                                .isEmpty ||
                             _attributionCandidates.isEmpty
                         ? null
                         : () => _attributeAnswers(group),
@@ -1085,7 +1176,8 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     label: Text(
                       _attributionCandidates.length == 1
                           ? '絞り込んだテストに振り分ける (AI不要)'
-                          : 'AIで振り分ける (${group.unroutedAnswers.length}件)',
+                          : 'AIで振り分ける '
+                                '(${group.unroutedAnswers.where((a) => !a.attributionAttempted).length}件)',
                     ),
                   ),
                 ],
@@ -1168,6 +1260,32 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     }),
             ),
           ),
+          if (perAnswer &&
+              file.effectiveRole == MaterialRole.studentAnswer &&
+              file.answerTestId == null &&
+              file.proposedAnswerTestId != null) ...[
+            // An attribution proposal is shown as a proposal, with its own
+            // accept action -- it is not the routing until somebody says so.
+            Text(
+              'AI提案: '
+              '${_testName(file.proposedAnswerTestId!)}',
+              style: TextStyle(color: Theme.of(context).colorScheme.tertiary),
+            ),
+            TextButton(
+              key: Key('intake-confirm-target-${file.relativePath}'),
+              onPressed: _busy
+                  ? null
+                  : () => setState(() {
+                      _review = _review?.withFile(
+                        file.relativePath,
+                        (current) => current.copyWith(
+                          answerTestId: current.proposedAnswerTestId,
+                        ),
+                      );
+                    }),
+              child: const Text('この振り分けでよい'),
+            ),
+          ],
           if (perAnswer && file.effectiveRole == MaterialRole.studentAnswer)
             Expanded(
               flex: 2,
@@ -1220,6 +1338,19 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       ),
     );
   }
+
+  /// A registered test's name, for showing a proposal in the reviewer's own
+  /// words rather than as an opaque id.
+  String _testName(String testId) => _existingTests
+      .firstWhere(
+        (test) => test.id == testId,
+        orElse: () => TestSummary(
+          (builder) => builder
+            ..id = testId
+            ..name = testId,
+        ),
+      )
+      .name;
 
   Widget _buildOriginBadge(IntakeFileState file) {
     final (label, tone) = switch (file.origin) {

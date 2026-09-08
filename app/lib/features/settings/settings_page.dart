@@ -30,6 +30,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   List<IntakeTemplateModel> _templates = const [];
   int _selected = 0;
+
+  /// Bumped on every *structural* change to the rule list (add, remove,
+  /// reorder, template switch) and never on a keystroke -- see the row key in
+  /// `_buildRuleList`. Typing must not rebuild the field the reviewer is
+  /// typing into.
+  int _rulesRevision = 0;
   final _costController = TextEditingController();
   bool _loading = true;
   bool _saving = false;
@@ -56,6 +62,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       if (!mounted) return;
       setState(() {
         _templates = templates;
+        // Clamped, not trusted: `_selected` is a position, and a reload can
+        // return a shorter list than the one it was chosen against. An index
+        // past the end throws on `_templates[_selected]`, and a
+        // `DropdownButtonFormField` whose value has no matching item asserts
+        // -- the same shape as the two routing dropdowns on the intake screen.
+        _selected = _selected.clamp(
+          0,
+          templates.isEmpty ? 0 : templates.length - 1,
+        );
         _costController.text = cost?.toString() ?? '';
         _loading = false;
       });
@@ -110,7 +125,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     });
   }
 
-  void _updateRules(List<IntakeRuleModel> rules) {
+  void _updateRules(List<IntakeRuleModel> rules, {bool structural = false}) {
+    if (structural) _rulesRevision++;
     _updateTemplate(
       (template) => template.rebuild((builder) => builder.rules.replace(rules)),
     );
@@ -164,8 +180,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             child: Text(_templates[i].name),
                           ),
                       ],
-                      onChanged: (value) =>
-                          setState(() => _selected = value ?? _selected),
+                      onChanged: (value) => setState(() {
+                        _selected = value ?? _selected;
+                        // A different template's rules sit at the same
+                        // positions, so every row has to be rebuilt.
+                        _rulesRevision++;
+                      }),
                     ),
                   ),
                   const SizedBox(width: AppSpacing.md),
@@ -260,6 +280,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ),
       ];
       _selected = _templates.length - 1;
+      _rulesRevision++;
     });
   }
 
@@ -278,14 +299,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             final next = [...rules];
             final moved = next.removeAt(oldIndex);
             next.insert(newIndex > oldIndex ? newIndex - 1 : newIndex, moved);
-            _updateRules(next);
+            _updateRules(structural: true, next);
           },
           itemBuilder: (context, index) =>
-              _buildRuleRow(rules, index, key: ValueKey('rule-$index')),
+              // The key carries `_rulesRevision`, which changes whenever
+              // rules are added, removed, reordered, or a different template
+              // is selected -- and never on a keystroke.
+              // `TextFormField.initialValue` is only read when its element is
+              // first built, so a row keyed by position alone keeps the text of
+              // whatever rule used to sit there: after a delete or a reorder
+              // the reviewer sees one pattern and saves another. Changing the
+              // key discards the subtree and rebuilds it from the rule now at
+              // that position.
+              _buildRuleRow(
+                rules,
+                index,
+                key: ValueKey('rule-$_selected-$_rulesRevision-$index'),
+              ),
         ),
         OutlinedButton.icon(
           key: const Key('settings-add-rule'),
-          onPressed: () => _updateRules([
+          onPressed: () => _updateRules(structural: true, [
             ...rules,
             IntakeRuleModel(
               (builder) => builder
@@ -310,7 +344,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final rule = rules[index];
     void replace(IntakeRuleModel next) =>
         _updateRules([...rules]..[index] = next);
-
     return Padding(
       key: key,
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
@@ -392,7 +425,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           IconButton(
             key: Key('settings-remove-rule-$index'),
             tooltip: 'この規則を削除',
-            onPressed: () => _updateRules([...rules]..removeAt(index)),
+            onPressed: () =>
+                _updateRules(structural: true, [...rules]..removeAt(index)),
             icon: const Icon(Icons.delete_outline),
           ),
         ],

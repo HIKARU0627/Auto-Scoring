@@ -22,6 +22,8 @@ void main() {
     bool needsClassification = false,
     bool cached = false,
     String? answerTestId,
+    String? proposedAnswerTestId,
+    bool attributionAttempted = false,
   }) => IntakeFileState(
     relativePath: path,
     absolutePath: '/tmp/$path',
@@ -35,6 +37,8 @@ void main() {
     humanRole: humanRole,
     excluded: excluded,
     answerTestId: answerTestId,
+    proposedAnswerTestId: proposedAnswerTestId,
+    attributionAttempted: attributionAttempted,
   );
 
   IntakeGroupState buildGroup(
@@ -467,6 +471,81 @@ void main() {
 
       expect(review.groups.single.files.single.answerTestId, isNull);
       expect(review.canImport, isFalse);
+    });
+  });
+
+  group('コードレビュー2回目で見つかった穴', () {
+    test('AIが振り分けた答案も、確認するまでは取り込めない [P1]', () {
+      // Attribution decides which criteria an answer is graded against, so a
+      // wrong one is graded silently against another test's rubric. The role
+      // discipline has to hold here too -- more so, not less.
+      final review = state([
+        buildGroup([
+          file(
+            ruleRole: MaterialRole.studentAnswer,
+            proposedAnswerTestId: 'test-1',
+          ),
+        ], kind: IntakeTargetKind.perAnswer),
+      ]);
+
+      expect(review.groups.single.unconfirmedAttributions, hasLength(1));
+      expect(review.unconfirmedProposals, hasLength(1));
+      expect(review.canImport, isFalse);
+    });
+
+    test('振り分けの提案を確認すれば取り込める', () {
+      final review = state([
+        buildGroup([
+          file(
+            ruleRole: MaterialRole.studentAnswer,
+            proposedAnswerTestId: 'test-1',
+          ),
+        ], kind: IntakeTargetKind.perAnswer),
+      ]).confirmAllProposals();
+
+      expect(review.groups.single.files.single.answerTestId, 'test-1');
+      expect(review.canImport, isTrue);
+    });
+
+    test('振り分けの提案も一括確認の件数に入る', () {
+      final review = state([
+        buildGroup([
+          for (var i = 0; i < 40; i++)
+            file(
+              path: 'subject-a/01_answers-$i.pdf',
+              ruleRole: MaterialRole.studentAnswer,
+              proposedAnswerTestId: 'test-1',
+            ),
+        ], kind: IntakeTargetKind.perAnswer),
+      ]);
+
+      expect(review.confirmableProposals, hasLength(40));
+    });
+
+    test('提案の無い答案は、一括確認でも振り分けられない', () {
+      // "Could not tell" must not become "the reviewer said test-1".
+      final review = state([
+        buildGroup([
+          file(ruleRole: MaterialRole.studentAnswer),
+        ], kind: IntakeTargetKind.perAnswer),
+      ]).confirmAllProposals();
+
+      expect(review.groups.single.files.single.answerTestId, isNull);
+      expect(review.canImport, isFalse);
+    });
+
+    test('一度問い合わせた答案は、振り分けの見積もりに二度数えない', () {
+      final review = state([
+        buildGroup([
+          file(
+            ruleRole: MaterialRole.studentAnswer,
+            attributionAttempted: true,
+          ),
+        ], kind: IntakeTargetKind.perAnswer),
+      ]);
+
+      expect(review.groups.single.unroutedAnswers, hasLength(1));
+      expect(review.answersNeedingAttribution, isEmpty);
     });
   });
 }

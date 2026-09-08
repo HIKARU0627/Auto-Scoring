@@ -59,6 +59,8 @@ class IntakeFileState {
     this.humanRole,
     this.excluded = false,
     this.answerTestId,
+    this.proposedAnswerTestId,
+    this.attributionAttempted = false,
   });
 
   final String relativePath;
@@ -106,9 +108,28 @@ class IntakeFileState {
   final bool excluded;
 
   /// Which already-registered test this answer goes to, when its group routes
-  /// answers individually. `null` until decided -- by the reviewer, or by a
-  /// proposal the reviewer accepted.
+  /// answers individually.
+  ///
+  /// **A confirmed value, always.** A classifier's answer lands in
+  /// [proposedAnswerTestId] and only moves here when the reviewer accepts it,
+  /// exactly like [humanRole] versus [proposedRole].
+  ///
+  /// The split matters more here than it does for roles: attribution decides
+  /// **which criteria an answer is graded against**, so a wrong one is graded
+  /// silently against another test's rubric. A wrong role is visible in a
+  /// list; a wrong attribution is not.
   final String? answerTestId;
+
+  /// What the classifier proposed as this answer's test. `null` when nothing
+  /// was asked, or when it answered "could not tell".
+  final String? proposedAnswerTestId;
+
+  /// Whether the classifier has already been asked which test this answer
+  /// belongs to.
+  ///
+  /// Same reason as [classificationAttempted]: "could not tell" is a real
+  /// answer, and asking again buys the same reply at the same price.
+  final bool attributionAttempted;
 
   String get fileName => relativePath.split('/').last;
 
@@ -145,9 +166,12 @@ class IntakeFileState {
     MaterialRole? humanRole,
     bool? excluded,
     String? answerTestId,
+    String? proposedAnswerTestId,
+    bool? attributionAttempted,
     bool clearHumanRole = false,
     bool clearProposedRole = false,
     bool clearAnswerTestId = false,
+    bool clearProposedAnswerTestId = false,
   }) => IntakeFileState(
     relativePath: relativePath,
     absolutePath: absolutePath,
@@ -167,6 +191,10 @@ class IntakeFileState {
     answerTestId: clearAnswerTestId
         ? null
         : (answerTestId ?? this.answerTestId),
+    proposedAnswerTestId: clearProposedAnswerTestId
+        ? null
+        : (proposedAnswerTestId ?? this.proposedAnswerTestId),
+    attributionAttempted: attributionAttempted ?? this.attributionAttempted,
   );
 }
 
@@ -221,6 +249,18 @@ class IntakeGroupState {
               file.effectiveRole == MaterialRole.studentAnswer &&
               file.answerTestId == null,
         )
+        .toList();
+  }
+
+  /// Answers carrying an attribution proposal the reviewer has not accepted.
+  ///
+  /// These block the import exactly like an unconfirmed role proposal does.
+  /// They are a subset of [unroutedAnswers] -- an answer with a proposal is
+  /// still unrouted until somebody confirms it.
+  List<IntakeFileState> get unconfirmedAttributions {
+    if (targetKind != IntakeTargetKind.perAnswer) return const [];
+    return unroutedAnswers
+        .where((file) => file.proposedAnswerTestId != null)
         .toList();
   }
 
@@ -317,12 +357,14 @@ class IntakeReviewState {
       )
       .toList();
 
-  /// Proposals the reviewer has not looked at yet.
+  /// Proposals the reviewer has not looked at yet -- of either kind.
   ///
   /// While this is non-empty the batch cannot be imported. Not a warning: the
   /// import action is unavailable.
-  List<IntakeFileState> get unconfirmedProposals =>
-      allFiles.where((file) => file.blocksImport).toList();
+  List<IntakeFileState> get unconfirmedProposals => [
+    ...allFiles.where((file) => file.blocksImport),
+    for (final group in groups) ...group.unconfirmedAttributions,
+  ];
 
   /// Whether the batch can be imported at all.
   bool get canImport =>
@@ -341,10 +383,14 @@ class IntakeReviewState {
   ///
   /// Only groups routing answers individually contribute -- a group bound to
   /// one test has nothing to attribute.
+  /// Excludes answers already asked about: the classifier will not be asked
+  /// again, so counting them would overstate what the run costs.
   List<IntakeFileState> get answersNeedingAttribution => [
     for (final group in groups)
       if (group.targetKind == IntakeTargetKind.perAnswer)
-        ...group.unroutedAnswers,
+        ...group.unroutedAnswers.where(
+          (answer) => !answer.attributionAttempted,
+        ),
   ];
 
   /// Estimated cost of ``calls`` provider requests, or `null` when no unit
@@ -387,30 +433,45 @@ class IntakeReviewState {
   /// confirming it would turn "nobody knows what this is" into "the reviewer
   /// said it was fine", which is the one thing the confirmation step exists to
   /// prevent. Those stay blocking until a role is chosen.
+  ///
+  /// Covers **both** kinds of proposal: the role a file was given, and the
+  /// test an answer was attributed to. Leaving attribution out would mean the
+  /// discipline held for the cheaper mistake and not the more expensive one.
   IntakeReviewState confirmAllProposals() => copyWith(
     groups: [
       for (final group in groups)
         group.copyWith(
           files: [
             for (final file in group.files)
-              file.excluded || file.proposedRole == null
+              file.excluded
                   ? file
-                  : file.copyWith(proposalConfirmed: true),
+                  : file.copyWith(
+                      proposalConfirmed: file.proposedRole != null
+                          ? true
+                          : null,
+                      answerTestId:
+                          group.targetKind == IntakeTargetKind.perAnswer &&
+                              file.answerTestId == null
+                          ? file.proposedAnswerTestId
+                          : null,
+                    ),
           ],
         ),
     ],
   );
 
-  /// Files carrying a proposal the reviewer has not accepted yet.
-  List<IntakeFileState> get confirmableProposals => allFiles
-      .where(
-        (file) =>
-            !file.excluded &&
-            file.proposedRole != null &&
-            !file.proposalConfirmed &&
-            file.humanRole == null,
-      )
-      .toList();
+  /// Files carrying a proposal the reviewer has not accepted yet, of either
+  /// kind.
+  List<IntakeFileState> get confirmableProposals => [
+    ...allFiles.where(
+      (file) =>
+          !file.excluded &&
+          file.proposedRole != null &&
+          !file.proposalConfirmed &&
+          file.humanRole == null,
+    ),
+    for (final group in groups) ...group.unconfirmedAttributions,
+  ];
 
   IntakeReviewState withGroup(
     String key,

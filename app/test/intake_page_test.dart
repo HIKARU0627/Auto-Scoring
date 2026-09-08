@@ -625,6 +625,7 @@ void main() {
     })?
     createSubmission,
     Future<List<SubmissionResponse>> Function(String)? listSubmissions,
+    Future<List<TestMaterialResponse>> Function(String)? listMaterials,
     Future<void> Function(String)? deleteTest,
     Future<List<TestMaterialResponse>> Function(
       String, {
@@ -667,6 +668,7 @@ void main() {
                 ..createdAt = DateTime.utc(2026),
             ),
     listSubmissions: listSubmissions ?? (_) async => const [],
+    listMaterials: listMaterials ?? (_) async => const [],
     deleteTest: deleteTest ?? (_) async {},
   );
 
@@ -692,6 +694,17 @@ void main() {
                   ..createdAt = DateTime.utc(2026),
               ),
           ],
+          listMaterials: (_) async => [
+            TestMaterialResponse(
+              (builder) => builder
+                ..id = 'mat-1'
+                ..testId = 'test-1'
+                ..role = MaterialRole.gradingCriteria
+                ..sha256 = digest
+                ..sizeBytes = 1
+                ..createdAt = DateTime.utc(2026),
+            ),
+          ],
           deleteTest: (_) async => deleted++,
         ),
       );
@@ -705,6 +718,15 @@ void main() {
       expect(deleted, 0);
       expect(find.byKey(const Key('intake-delete-confirm')), findsOneWidget);
       expect(find.textContaining('答案 12件'), findsOneWidget);
+      // Inside the dialog specifically -- the outcome card behind it also
+      // mentions a material count.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('intake-delete-confirm')),
+          matching: find.textContaining('資料 1件'),
+        ),
+        findsOneWidget,
+      );
       expect(find.textContaining('元に戻せません'), findsOneWidget);
 
       // Backing out deletes nothing.
@@ -965,11 +987,13 @@ void main() {
         ),
       );
 
-      // The button offers the fetch, and says it costs nothing new.
-      expect(find.textContaining('取得済み1件'), findsOneWidget);
+      // A separate, free control -- and the paid one is not offered at all,
+      // because nothing here would cost anything.
+      expect(find.textContaining('前回の判定を取得する (1件・無料)'), findsOneWidget);
+      expect(find.byKey(const Key('intake-run-classification')), findsNothing);
       expect(find.textContaining('役割の判定 0件'), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('intake-run-classification')));
+      await tester.tap(find.byKey(const Key('intake-fetch-cached')));
       await tester.pumpAndSettle();
 
       expect(classifyCalls, 1);
@@ -1091,6 +1115,291 @@ void main() {
             .widget<FilledButton>(find.byKey(const Key('intake-import')))
             .onPressed,
         isNull,
+      );
+    });
+  });
+
+  group('コードレビュー2回目で見つかった穴', () {
+    /// A group of answers-only files bound to per-answer routing, with two
+    /// registered tests to choose between.
+    Future<void> openPerAnswer(
+      WidgetTester tester, {
+      required AppDependencies dependencies,
+    }) async {
+      final answersOnly = plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      );
+      await openReview(
+        tester,
+        withPlan: answersOnly,
+        paths: const ['subject-a/01_answers.pdf'],
+        dependencies: dependencies,
+      );
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+    }
+
+    AppDependencies perAnswerDeps({
+      String? attributesTo = 'test-a',
+      List<TestSummary>? tests,
+    }) {
+      final answersOnly = plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      );
+      return AppDependencies(
+        listIntakeTemplates: () async => [template()],
+        intakeCost: () async => null,
+        classificationAvailability: () async => available(),
+        listTests: () async =>
+            tests ??
+            [
+              TestSummary(
+                (builder) => builder
+                  ..id = 'test-a'
+                  ..name = '国語',
+              ),
+              TestSummary(
+                (builder) => builder
+                  ..id = 'test-b'
+                  ..name = '数学',
+              ),
+            ],
+        planIntake:
+            ({required templateId, required rootName, required files}) async =>
+                answersOnly,
+        attributeAnswer: ({required path, required candidates}) async =>
+            AttributionProposalResponse(
+              (builder) => builder
+                ..testId = attributesTo
+                ..confidence = 0.8,
+            ),
+      );
+    }
+
+    testWidgets('AIの振り分けは提案として出て、確認するまで取り込めない [P1]', (tester) async {
+      await openPerAnswer(tester, dependencies: perAnswerDeps());
+
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      // The proposal is shown as a proposal, and the batch is still blocked.
+      expect(find.textContaining('AI提案: 国語'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('intake-confirm-target-subject-a/01_answers.pdf')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('振り分けの提案も一括確認で確定できる', (tester) async {
+      await openPerAnswer(tester, dependencies: perAnswerDeps());
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('intake-confirm-all')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('「判定できなかった」振り分けは、一括確認でも確定しない', (tester) async {
+      await openPerAnswer(
+        tester,
+        dependencies: perAnswerDeps(attributesTo: null),
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      // Nothing was proposed, so there is nothing to bulk-confirm -- the
+      // control is not offered at all. "Could not tell" must never become
+      // "the reviewer approved it".
+      expect(find.byKey(const Key('intake-confirm-all')), findsNothing);
+      expect(find.textContaining('AI提案'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+    });
+
+    testWidgets('候補を1件に絞ったときは提案ではなく確定（AIを呼ばない）', (tester) async {
+      var attributeCalls = 0;
+      final answersOnly = plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      );
+      await openReview(
+        tester,
+        withPlan: answersOnly,
+        paths: const ['subject-a/01_answers.pdf'],
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          classificationAvailability: () async => available(),
+          listTests: () async => [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-b'
+                ..name = '数学',
+            ),
+          ],
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => answersOnly,
+          attributeAnswer: ({required path, required candidates}) async {
+            attributeCalls++;
+            throw StateError('must not ask with a single candidate');
+          },
+        ),
+      );
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('intake-narrow-test-a')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      // Narrowing to one test *is* the reviewer's answer -- nothing was
+      // guessed, so nothing needs confirming and nothing was spent.
+      expect(attributeCalls, 0);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('削除の件数を取れなかったときは、件数を断定しない', (tester) async {
+      await openReview(
+        tester,
+        withPlan: plan(ruleMatched),
+        paths: const ['subject-a/01_answers.pdf', 'subject-a/02_criteria.pdf'],
+        dependencies: importing(
+          withPlan: plan(ruleMatched),
+          listSubmissions: (_) async => throw SidecarApiException(
+            SidecarErrorKind.unavailable,
+            'sidecar is not connected',
+          ),
+        ),
+      );
+      await tester.tap(find.byKey(const Key('intake-import')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-delete-subject-a')));
+      await tester.pumpAndSettle();
+
+      // No number is asserted, and the reviewer is told why.
+      expect(find.textContaining('確認できませんでした'), findsOneWidget);
+      expect(find.textContaining('答案 0件'), findsNothing);
+    });
+
+    testWidgets('キャッシュ取得は provider が無くても押せる（無料なので）', (tester) async {
+      var classifyCalls = 0;
+      final cachedPlan = plan([
+        ...ruleMatched,
+        planned('subject-a/stray.pdf', need: ClassificationNeed.cached),
+      ]);
+      await openReview(
+        tester,
+        withPlan: cachedPlan,
+        paths: const [
+          'subject-a/01_answers.pdf',
+          'subject-a/02_criteria.pdf',
+          'subject-a/stray.pdf',
+        ],
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          listTests: () async => const [],
+          // No provider on this host at all.
+          classificationAvailability: () async => available(yes: false),
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => cachedPlan,
+          classifyMaterial: ({required path}) async {
+            classifyCalls++;
+            return RoleProposalResponse(
+              (builder) => builder
+                ..role = MaterialRole.annotationSample
+                ..confidence = 0.0
+                ..cached = true,
+            );
+          },
+        ),
+      );
+
+      // The paid button is gone; the free one is not.
+      expect(find.byKey(const Key('intake-run-classification')), findsNothing);
+      expect(find.byKey(const Key('intake-fetch-cached')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('intake-fetch-cached')));
+      await tester.pumpAndSettle();
+
+      expect(classifyCalls, 1);
+      await tester.tap(find.byKey(const Key('intake-confirm-all')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
       );
     });
   });
