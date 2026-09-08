@@ -111,6 +111,7 @@ from auto_scoring.domain.profile import (
 )
 from auto_scoring.domain.test_material import TestMaterial
 from auto_scoring.domain.test_registration import (
+    CrossPageRegionError,
     QuestionsInUseError,
     build_questions_and_rubrics,
     ensure_questions_can_be_rebuilt,
@@ -962,6 +963,25 @@ def build_test_registration_router(
                     default_scoring_method=test.default_scoring_method,
                     criteria=_confirmed_criteria(test_id),
                 )
+            except CrossPageRegionError as exc:
+                # Measured, not hypothetical: one of the 11 real subjects
+                # prints a single question's answer space across two pages
+                # ("その1"/"その2"). `Question` holds one page and one rect,
+                # so this app genuinely cannot represent that question yet
+                # (docs/answer-area-detection.md; its own Issue). Detection
+                # deliberately reports the areas on *both* pages rather than
+                # dropping half a student's answer -- which means the
+                # reviewer meets this error, and it has to say what is wrong
+                # and what to do, not just restate the invariant.
+                raise HTTPException(
+                    422,
+                    detail=(
+                        f"{exc} —— この設問の回答欄が複数ページにまたがっています。"
+                        "いまは1設問につき1ページ分しか扱えません。"
+                        "どちらか一方のページの回答欄だけを残してから確定してください。"
+                        "残したページの分だけが採点に送られます。"
+                    ),
+                ) from exc
             except DomainError as exc:
                 # `build_questions_and_rubrics` raises `TestRegistrationError`
                 # for a business-rule violation (duplicate number, bad
