@@ -14,10 +14,36 @@ Never renders a response body: a body can echo the request (the answer-image
 crop, the OCR text, the rubric) and, for an auth failure, part of the
 credential. Only the numeric status code and the exception type name cross
 into a raised message (AGENTS.md "Security").
+
+**What the adapters must hand to this function.** ``FallbackAIProvider``
+moves to the next provider on exactly the two exceptions the port declares,
+so an httpx failure that no ``except`` clause matches stops the whole chain.
+Listing the interesting subclasses by hand was not enough -- an adapter
+catching ``TransportError``/``HTTPStatusError``/``TimeoutException`` let
+``httpx.DecodingError`` (a corrupt gzip body, say) straight through, because
+it descends from ``RequestError`` and not from ``TransportError`` (code
+review finding). Every adapter therefore catches :data:`CONVERTIBLE_HTTP_ERRORS`
+rather than an enumeration:
+
+* ``httpx.HTTPError`` is httpx's own root for everything a request can
+  raise -- ``RequestError`` (and so ``TransportError``, ``TimeoutException``,
+  ``ProtocolError``, ``DecodingError``, ``TooManyRedirects``) plus
+  ``HTTPStatusError``. A future httpx release adding another subclass is
+  covered without another review round.
+* ``json.JSONDecodeError`` / ``UnicodeDecodeError`` come from
+  ``Response.json()``, not from the request, so they sit outside that tree.
+
+The three httpx exceptions deliberately left out -- ``InvalidURL``,
+``CookieConflict``, ``StreamError`` -- are not remote failures: they mean a
+malformed base URL, a misused cookie API, or a misused streaming API, i.e.
+this repository's own bug. Converting those into "this provider is
+unavailable, try the next one" would hide a configuration error behind a
+silent fallback.
 """
 
 from __future__ import annotations
 
+import json
 from typing import NoReturn
 
 import httpx
@@ -30,6 +56,11 @@ from auto_scoring.domain.ai_provider import (
 )
 
 _TOO_MANY_REQUESTS = 429
+
+#: The exception tuple every adapter's ``grade()`` catches around its HTTP
+#: call -- see the module docstring for why it is a root class and not a
+#: list of interesting subclasses.
+CONVERTIBLE_HTTP_ERRORS = (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError)
 
 
 def raise_classified_unavailable(exc: Exception, *, label: str) -> NoReturn:

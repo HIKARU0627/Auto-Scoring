@@ -272,3 +272,20 @@ def test_a_malformed_2xx_envelope_is_a_schema_violation(body: dict[str, object])
 
     with pytest.raises(SchemaViolation):
         provider.grade(_VALID_REQUEST)
+
+
+def test_a_corrupt_compressed_body_does_not_stop_the_chain() -> None:
+    """`httpx.DecodingError` descends from `RequestError`, not from
+    `TransportError`, so an adapter catching the interesting subclasses by
+    name let it straight through -- outside the port's exception contract,
+    which means `FallbackAIProvider` stopped instead of trying the next
+    provider (code review finding). Adapters catch `httpx.HTTPError` now,
+    which is httpx's own root for everything a request can raise."""
+
+    def _corrupt_gzip(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"this is not gzip at all", headers={"content-encoding": "gzip"}
+        )
+
+    with pytest.raises(ProviderUnavailable):
+        _make_provider(_corrupt_gzip).grade(_VALID_REQUEST)

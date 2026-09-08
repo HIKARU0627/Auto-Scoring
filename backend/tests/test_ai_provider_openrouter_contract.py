@@ -414,3 +414,23 @@ def test_a_malformed_2xx_envelope_is_a_schema_violation(body: dict[str, object])
 
     with pytest.raises(SchemaViolation):
         _make_provider(client).grade(_VALID_REQUEST)
+
+
+def test_a_corrupt_compressed_body_does_not_stop_the_chain() -> None:
+    """The shared Chat Completions path has the same coverage requirement
+    as the Vertex adapter: every httpx failure must arrive as one of the
+    two exceptions the port declares, or `FallbackAIProvider` stops instead
+    of falling through (code review finding -- `httpx.DecodingError` is not
+    a `TransportError`)."""
+
+    def _corrupt_gzip(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"this is not gzip at all", headers={"content-encoding": "gzip"}
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_corrupt_gzip), base_url="https://openrouter.test/api/v1"
+    )
+
+    with pytest.raises(ProviderUnavailable):
+        _make_provider(client).grade(_VALID_REQUEST)

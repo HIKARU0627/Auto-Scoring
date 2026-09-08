@@ -29,7 +29,6 @@ carry only HTTP status codes and exception type names, never field values.
 from __future__ import annotations
 
 import base64
-import json
 import time
 from typing import Any
 
@@ -37,7 +36,10 @@ import httpx
 from pydantic import ValidationError
 
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
-from auto_scoring.adapters.ai_grading._http import raise_classified_unavailable
+from auto_scoring.adapters.ai_grading._http import (
+    CONVERTIBLE_HTTP_ERRORS,
+    raise_classified_unavailable,
+)
 from auto_scoring.adapters.ai_grading._prompt import (
     GRADING_SYSTEM_INSTRUCTIONS,
     build_grading_user_content,
@@ -224,13 +226,7 @@ class VertexGeminiAIProvider:
             raise ProviderUnavailable(
                 f"{_LABEL} credentials are unavailable: {type(exc).__name__}"
             ) from None
-        except (
-            httpx.TransportError,
-            httpx.HTTPStatusError,
-            httpx.TimeoutException,
-            json.JSONDecodeError,
-            UnicodeDecodeError,
-        ) as exc:
+        except CONVERTIBLE_HTTP_ERRORS as exc:
             raise_classified_unavailable(exc, label=_LABEL)
         latency_seconds = time.monotonic() - started_at
 
