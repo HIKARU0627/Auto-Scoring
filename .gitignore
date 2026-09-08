@@ -9,9 +9,12 @@
 /coverage/
 /out/
 
-# Local env files — never commit real secrets
-.env
-.env*.local
+# Local env files — never commit real secrets.
+# Broad on purpose: `.env` + `.env*.local` alone let `.env.production`,
+# `.env.staging` and `.env.test` through, and this repository is public, so a
+# file nobody thought to add here is published the moment it is created.
+.env*
+!.env.example
 
 # Editor / OS
 .DS_Store

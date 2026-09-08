@@ -1002,11 +1002,11 @@ structured_output_mode）のまま保たれ、経路の違いは `provider` フ�
 
 #### 直接 vendor API（未実装）
 
-| 候補     | 必要な設定                                                        |
-| -------- | ----------------------------------------------------------------- |
-| `gemini` | `AUTO_SCORING_GEMINI_API_KEY` + `AUTO_SCORING_GEMINI_MODEL`       |
-| `claude` | `AUTO_SCORING_ANTHROPIC_API_KEY` + `AUTO_SCORING_ANTHROPIC_MODEL` |
-| `gpt`    | `AUTO_SCORING_OPENAI_API_KEY` + `AUTO_SCORING_OPENAI_MODEL`       |
+| 候補     | 必要な設定                                                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gemini` | ADC（`gcloud auth application-default login`）+ `AUTO_SCORING_VERTEX_PROJECT` + `AUTO_SCORING_VERTEX_LOCATION` + `AUTO_SCORING_GEMINI_MODEL`。**API キーは使えない**（オーナーの組織ポリシーが禁止）ため Vertex AI 経由 |
+| `claude` | `AUTO_SCORING_ANTHROPIC_API_KEY` + `AUTO_SCORING_ANTHROPIC_MODEL`                                                                                                                                                       |
+| `gpt`    | `AUTO_SCORING_OPENAI_API_KEY` + `AUTO_SCORING_OPENAI_MODEL`                                                                                                                                                             |
 
 #### OpenRouter
 
