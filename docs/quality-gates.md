@@ -111,6 +111,36 @@ Add integration / e2e / contract jobs directly to `.github/workflows/ci.yml` as
 separate jobs, and add matching `package.json` scripts. Keep hook-run checks
 fast; put anything slow or environment-heavy in CI only.
 
+## ローカル全 green は CI green を意味しない
+
+CI は `windows-latest` の**素のランナー**で走る。開発機に入っていて
+ランナーに入っていないものにテストが依存すると、ローカルだけ通る。実際に
+起きた例（Issue #35）: `create_ai_provider()` は `codex` 実行ファイルが無い
+ホストではその provider をチェーンから外す。この開発機には Codex レビュー用に
+`codex` が入っているためローカルは全 green、Windows ランナーには無いため
+3 件が落ちた。
+
+**ホストを見る判定はテストへ注入し、両方の分岐を通す。** skip で逃げると
+その経路が CI で一度も検証されなくなる。`create_ai_provider()` は
+`executable_available` と `token_source_factory` を引数で受け取り、テストは
+「この環境には codex がある／ADC がある」を**宣言する**（`os.environ` も
+`env=` で明示的に渡す）。
+
+外部依存を疑うときは、それらを外した環境で流して確かめられる:
+
+```bash
+# codex を除いた PATH・ADC 無し・1Password トークン無し・メタデータサーバ到達不可
+env -u GOOGLE_APPLICATION_CREDENTIALS -u OP_SERVICE_ACCOUNT_TOKEN \
+    HOME=/tmp/no-home CLOUDSDK_CONFIG=/tmp/no-home/gcloud \
+    GCE_METADATA_HOST=169.254.169.254.invalid NO_GCE_CHECK=true \
+    PATH=/usr/local/bin:/usr/bin:/bin \
+  bash -c 'cd backend && uv run pytest -q'
+```
+
+同種の依存として注意するもの: `gcloud`/ADC、`op`(1Password)、`codex`、
+ネットワーク到達性、ロケール、`HOME` 配下の設定。ネットワークを使うアダプタは
+`httpx.Client` を注入して `MockTransport` で閉じる（`tests/test_ai_provider_*`）。
+
 ## Where the gate list lives
 
 The gate list is defined in two places that must stay in step:

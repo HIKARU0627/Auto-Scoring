@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
@@ -56,6 +56,33 @@ class AIProviderConfigError(Exception):
     """The AI-grading transport configuration is missing or invalid."""
 
 
+#: How this module asks the host "could I run this?" and "is ADC set up?".
+#: Both are boundaries in AGENTS.md's sense (filesystem, network) and both
+#: are therefore injectable rather than reached for directly: whether the
+#: `codex` binary or a `gcloud` login exists differs between a developer
+#: machine and a CI runner, so a caller that cannot state which world it is
+#: in gets a test that passes in one and fails in the other -- which is
+#: exactly what happened (CI: "the 'codex' executable was not found on this
+#: host"; the same three tests were green locally only because this project's
+#: own review tooling installs `codex`).
+ExecutableAvailable = Callable[[str], bool]
+TokenSourceFactory = Callable[[str | None], AdcTokenSource]
+
+
+def _executable_available(name: str) -> bool:
+    """Whether ``name`` resolves to something runnable on this host.
+
+    ``shutil.which`` covers a bare command resolved through ``PATH``;
+    ``Path(name).is_file()`` covers an absolute or relative path given
+    directly in ``AUTO_SCORING_CODEX_EXECUTABLE``.
+    """
+    return shutil.which(name) is not None or Path(name).is_file()
+
+
+def _default_token_source(project_id: str | None) -> AdcTokenSource:
+    return AdcTokenSource(project_id=project_id)
+
+
 class _MissingCredentials(Exception):
     """One transport in a multi-transport chain has no credentials here.
 
@@ -65,7 +92,12 @@ class _MissingCredentials(Exception):
     """
 
 
-def create_ai_provider(env: Mapping[str, str] | None = None) -> AIProvider:
+def create_ai_provider(
+    env: Mapping[str, str] | None = None,
+    *,
+    executable_available: ExecutableAvailable = _executable_available,
+    token_source_factory: TokenSourceFactory = _default_token_source,
+) -> AIProvider:
     """Build the adapter (or fallback chain) selected by
     ``AUTO_SCORING_AI_GRADING_TRANSPORT``.
 
@@ -74,6 +106,13 @@ def create_ai_provider(env: Mapping[str, str] | None = None) -> AIProvider:
     credentials -- never falls back to a default vendor or a guessed value.
     A transport that cannot be built is only skipped while at least one
     other transport in the list still can be.
+
+    ``executable_available`` and ``token_source_factory`` are the two host
+    probes this function makes, injected so a caller can state which world
+    it is in rather than inheriting whatever the machine happens to have
+    (AGENTS.md "Architecture": inject boundaries from outside). Production
+    passes neither and gets the real ones; a test passes both and gets the
+    same answer on a developer machine and a CI runner.
     """
     values = env if env is not None else os.environ
     transports = _parse_transports(values)
@@ -91,7 +130,14 @@ def create_ai_provider(env: Mapping[str, str] | None = None) -> AIProvider:
     for transport in transports:
         try:
             providers.append(
-                _build(transport, values, prompt_version=prompt_version, temperature=temperature)
+                _build(
+                    transport,
+                    values,
+                    prompt_version=prompt_version,
+                    temperature=temperature,
+                    executable_available=executable_available,
+                    token_source_factory=token_source_factory,
+                )
             )
         except _MissingCredentials as exc:
             skipped.append(f"{transport} ({exc})")
@@ -134,9 +180,16 @@ def _build(
     *,
     prompt_version: str,
     temperature: float,
+    executable_available: ExecutableAvailable,
+    token_source_factory: TokenSourceFactory,
 ) -> AIProvider:
     if transport == "gemini":
-        return _build_vertex_gemini(values, prompt_version=prompt_version, temperature=temperature)
+        return _build_vertex_gemini(
+            values,
+            prompt_version=prompt_version,
+            temperature=temperature,
+            token_source_factory=token_source_factory,
+        )
     if transport == "openrouter":
         return OpenRouterAIProvider(
             api_key=_require_credential(values, "AUTO_SCORING_OPENROUTER_API_KEY"),
@@ -168,7 +221,7 @@ def _build(
     # (see codex_app_server_provider._UNCONFIGURABLE_TEMPERATURE -- code
     # review finding).
     executable = values.get("AUTO_SCORING_CODEX_EXECUTABLE", "").strip() or "codex"
-    if shutil.which(executable) is None and not Path(executable).is_file():
+    if not executable_available(executable):
         raise _MissingCredentials(f"the {executable!r} executable was not found on this host")
     return CodexAppServerProvider(
         model=values.get("AUTO_SCORING_CODEX_MODEL", "").strip() or None,
@@ -178,7 +231,11 @@ def _build(
 
 
 def _build_vertex_gemini(
-    values: Mapping[str, str], *, prompt_version: str, temperature: float
+    values: Mapping[str, str],
+    *,
+    prompt_version: str,
+    temperature: float,
+    token_source_factory: TokenSourceFactory,
 ) -> AIProvider:
     """Gemini through Vertex AI, authenticated with ADC.
 
@@ -190,9 +247,7 @@ def _build_vertex_gemini(
     """
     model = _require_credential(values, "AUTO_SCORING_GEMINI_MODEL")
     try:
-        tokens = AdcTokenSource(
-            project_id=values.get("AUTO_SCORING_VERTEX_PROJECT", "").strip() or None
-        )
+        tokens = token_source_factory(values.get("AUTO_SCORING_VERTEX_PROJECT", "").strip() or None)
     except AdcCredentialsError as exc:
         raise _MissingCredentials(str(exc)) from None
     return VertexGeminiAIProvider(
