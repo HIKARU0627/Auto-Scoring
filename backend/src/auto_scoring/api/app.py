@@ -203,12 +203,20 @@ def build_ai_provider(
     provider that state names raises on every `grade()` call so no question
     is ever silently recorded as "graded, 0点".
 
-    Both failure paths keep secrets out of the reason string, which is
-    published by that endpoint and shown in the app:
+    Both failure paths keep configuration values out of the reason string,
+    which is published by ``GET /grading/availability``, shown on screen, and
+    written to the sidecar log:
 
-    * `AIProviderConfigError`'s own message is already secret-free by
-      construction -- the factory builds it from variable *names* and the
-      `_google_adc` failure text, never from a value.
+    * `AIProviderConfigError` is required to name variables only, never
+      quote their values -- stated in `adapters.ai_grading.factory`'s module
+      docstring and enforced by the leak matrix in
+      ``tests/test_grading_availability.py``. It was *not* true when this
+      function was first written (review round 1, P2: an unparseable
+      ``AUTO_SCORING_AI_GRADING_TEMPERATURE`` was echoed back verbatim, so a
+      key pasted into the wrong variable was displayed and logged). Those
+      messages predate there being any published channel at all; adding one
+      is what made them a disclosure question, and the rule now lives with
+      the messages rather than as an assumption made here.
     * Anything else is an adapter constructing itself unexpectedly badly. Its
       message could be anything (an httpx proxy URL with credentials in it,
       say), so only the exception *type* survives -- the same discipline

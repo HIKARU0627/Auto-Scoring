@@ -140,11 +140,21 @@ Issue #80 で取込のあと採点ジョブが起票されるようになって�
 | 帯は消せない／`reason`をそのまま出す             | 閉じられる帯は「消したまま採点されない」状態を作れてしまう。`reason`は英語だが、設定変数名とホスト前提条件だけを含み（値は含まない）、実際に直せる人が読む唯一の手がかり                                                   |
 | 応答が無いときは帯を**出さない**                 | 「サイドカーが応えなかった」と「採点が使えない」は別の事実。前者を後者と断定すると、一度の通信失敗が設定不備の告知になる（`app/lib/core/widgets/grading_unavailable_banner.dart`）                                         |
 
-`reason`に資格情報の値を入れないことは2重に担保する: `create_ai_provider()`の
-`AIProviderConfigError`は変数**名**からしか組み立てられておらず（`factory.py`）、
-それ以外の想定外例外は**例外型名だけ**を残して本文を捨てる（`_google_adc`が
-google-auth のメッセージに対して既に採っている規律と同じ）。
-`backend/tests/test_grading_availability.py`がこの2経路を偽の資格情報で固定する。
+`reason`に**設定値**を入れないことは2重に担保する: `create_ai_provider()`の
+`AIProviderConfigError`は変数**名**しか含まない（規約は`factory.py`のモジュール
+docstring）、それ以外の想定外例外は**例外型名だけ**を残して本文を捨てる
+（`_google_adc`が google-auth のメッセージに対して既に採っている規律と同じ）。
+
+**この規約は後から必要になったものである（レビュー1回目 P2）。** `factory.py`の
+メッセージ群は「ログにしか出ない」前提で書かれており、
+`AUTO_SCORING_AI_GRADING_TEMPERATURE`の読めなかった値・未知の transport 名・
+`AUTO_SCORING_CODEX_EXECUTABLE`の設定値をそのまま含んでいた。本Issueが
+**公開経路を新設した**ことで、設定先を間違えて鍵を貼った操作者に、その鍵が画面と
+ログから読み返される状態になっていた。3か所とも値を落とし、規約を
+`factory.py`側（値を書く側）へ置いた。`backend/tests/test_grading_availability.py`
+は、`create_ai_provider()`が読む**全変数**に順に偽の鍵を入れ、`reason`にも
+HTTP応答本文にも出ないことを確認する（既知の悪いメッセージの一覧ではなく変数の
+一覧にしてあるのは、将来また値を書き始めたメッセージを捕まえるため）。
 
 実キーでの疎通・schema 検証は Issue #35 で 4 経路すべて実施済み
 （[`poc-2-ai-grading.md`](./poc-2-ai-grading.md) §7.4。合成フィクスチャのみを送信）。

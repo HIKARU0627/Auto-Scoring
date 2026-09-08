@@ -13,7 +13,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from functools import partial
 
+import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
@@ -32,6 +34,31 @@ _TOKEN = "test-token"
 #: Obviously fake, and the exact string every "no secret escaped" assertion
 #: below searches for. Never a real key shape anyone could mistake for one.
 _FAKE_KEY = "fake-api-key-DO-NOT-USE-90bd1f"
+
+#: Every variable `create_ai_provider` reads. The leak matrix below puts
+#: `_FAKE_KEY` into each one in turn: an operator who pastes an API key into
+#: the wrong variable must not have it read back to them from the screen, the
+#: HTTP response, or the sidecar log (review round 1, P2 -- an invalid
+#: ``AUTO_SCORING_AI_GRADING_TEMPERATURE`` was quoted back verbatim).
+#:
+#: Deliberately a *list of names*, not a list of known-bad messages: this
+#: catches a future error string that starts quoting a value, which is how
+#: the original leak got in -- the messages predate there being any published
+#: channel to worry about.
+_CONFIGURATION_VARIABLES = (
+    "AUTO_SCORING_AI_GRADING_TRANSPORT",
+    "AUTO_SCORING_AI_GRADING_PROMPT_VERSION",
+    "AUTO_SCORING_AI_GRADING_TEMPERATURE",
+    "AUTO_SCORING_GEMINI_MODEL",
+    "AUTO_SCORING_VERTEX_PROJECT",
+    "AUTO_SCORING_VERTEX_LOCATION",
+    "AUTO_SCORING_CODEX_EXECUTABLE",
+    "AUTO_SCORING_CODEX_MODEL",
+    "AUTO_SCORING_OPENROUTER_API_KEY",
+    "AUTO_SCORING_OPENROUTER_MODEL",
+    "AUTO_SCORING_OPENAI_API_KEY",
+    "AUTO_SCORING_OPENAI_MODEL",
+)
 
 _ALL_FOUR_TRANSPORTS = {
     "AUTO_SCORING_AI_GRADING_TRANSPORT": "gemini,codex_app_server,openrouter,openai",
@@ -82,10 +109,16 @@ def _client(ai_provider: AIProvider | None) -> TestClient:
     return TestClient(create_app(api_token=_TOKEN, ai_provider=ai_provider))
 
 
-def _availability(client: TestClient) -> dict[str, object]:
-    response = client.get("/grading/availability", headers={"Authorization": f"Bearer {_TOKEN}"})
+def _availability_response(client: TestClient) -> Response:
+    response: Response = client.get(
+        "/grading/availability", headers={"Authorization": f"Bearer {_TOKEN}"}
+    )
     assert response.status_code == 200
-    body: dict[str, object] = response.json()
+    return response
+
+
+def _availability(client: TestClient) -> dict[str, object]:
+    body: dict[str, object] = _availability_response(client).json()
     return body
 
 
@@ -186,3 +219,45 @@ def test_availability_requires_the_bearer_token() -> None:
     response = _client(_StubAIProvider()).get("/grading/availability")
 
     assert response.status_code == 401
+
+
+def test_an_unreadable_temperature_is_not_quoted_back() -> None:
+    """Review round 1, P2. ``_parse_temperature`` used to render the value it
+    could not parse, and Issue #97 turned that message into something the app
+    displays -- so a key pasted into the temperature variable was shown on
+    screen and written to the sidecar log.
+
+    The variable's name is the whole fix; nobody needs their own bad value
+    read back to them to correct it.
+    """
+    provider = build_ai_provider(
+        {
+            **_ALL_FOUR_TRANSPORTS,
+            "AUTO_SCORING_AI_GRADING_TEMPERATURE": _FAKE_KEY,
+        },
+        factory=_on_a_host_with_no_local_credentials,
+    )
+
+    assert isinstance(provider, UnconfiguredAIProvider)
+    assert "AUTO_SCORING_AI_GRADING_TEMPERATURE" in provider.reason
+    assert _FAKE_KEY not in provider.reason
+
+
+@pytest.mark.parametrize("variable", _CONFIGURATION_VARIABLES)
+def test_no_configuration_value_reaches_the_published_reason(variable: str) -> None:
+    """The leak matrix: whatever an operator put in ``variable``, it is not
+    in what this host tells the app.
+
+    Checked at both ends -- `UnconfiguredAIProvider.reason` (which the
+    sidecar also logs) and the HTTP body itself, since the endpoint is the
+    channel Issue #97 added and the one a future change is most likely to
+    widen.
+    """
+    provider = build_ai_provider(
+        {**_ALL_FOUR_TRANSPORTS, variable: _FAKE_KEY},
+        factory=_on_a_host_with_no_local_credentials,
+    )
+
+    if isinstance(provider, UnconfiguredAIProvider):
+        assert _FAKE_KEY not in provider.reason
+    assert _FAKE_KEY not in _availability_response(_client(provider)).text
