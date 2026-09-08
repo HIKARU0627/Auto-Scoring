@@ -172,6 +172,21 @@ CriteriaResponse _criteria({
   );
 }
 
+CriteriaEstimateResponse _estimate({
+  int pageCount = 3,
+  int maxPages = 30,
+  double? unitCost,
+  double? estimatedCost,
+}) {
+  return CriteriaEstimateResponse(
+    (b) => b
+      ..pageCount = pageCount
+      ..maxPages = maxPages
+      ..unitCost = unitCost
+      ..estimatedCost = estimatedCost,
+  );
+}
+
 SidecarApiException _notFound() => SidecarApiException(
   SidecarErrorKind.badResponse,
   'not found',
@@ -819,6 +834,131 @@ void main() {
 
       expect(saved, hasLength(1));
       expect(saved!.single.points, isNull);
+    });
+
+    testWidgets('抽出は、送信ページ数と費用を見せてからでないと実行されない', (tester) async {
+      // 押した瞬間に有料 provider へ全ページ送るのを止める。
+      var extracted = 0;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+        estimateCriteria: (testId) async => _estimate(pageCount: 8),
+        extractCriteria: (testId) async {
+          extracted += 1;
+          return _criteria();
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('extract-criteria-button')));
+      await tester.pumpAndSettle();
+
+      // まだ送っていない。
+      expect(extracted, 0);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('extract-page-count'))).data,
+        contains('8 ページ'),
+      );
+
+      await tester.tap(find.byKey(const Key('extract-confirm-button')));
+      await tester.pumpAndSettle();
+      expect(extracted, 1);
+    });
+
+    testWidgets('キャンセルすれば1ページも送らない', (tester) async {
+      var extracted = 0;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+        estimateCriteria: (testId) async => _estimate(),
+        extractCriteria: (testId) async {
+          extracted += 1;
+          return _criteria();
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('extract-criteria-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('extract-cancel-button')));
+      await tester.pumpAndSettle();
+
+      expect(extracted, 0);
+    });
+
+    testWidgets('単価が未設定なら 0 円ではなく「見積もれません」と出す', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+        estimateCriteria: (testId) async => _estimate(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('extract-criteria-button')));
+      await tester.pumpAndSettle();
+
+      final cost = tester
+          .widget<Text>(find.byKey(const Key('extract-cost')))
+          .data;
+      expect(cost, contains('見積もれません'));
+      expect(cost, isNot(contains('0')));
+    });
+
+    testWidgets('単価が設定されていれば概算を出す', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+        estimateCriteria: (testId) async =>
+            _estimate(pageCount: 4, unitCost: 0.25, estimatedCost: 1.0),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('extract-criteria-button')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('extract-cost'))).data,
+        contains('1.00'),
+      );
+    });
+
+    testWidgets('ページ数が上限を超えていれば、実行させずに理由を出す', (tester) async {
+      var extracted = 0;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+        estimateCriteria: (testId) async =>
+            _estimate(pageCount: 31, maxPages: 30),
+        extractCriteria: (testId) async {
+          extracted += 1;
+          return _criteria();
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('extract-criteria-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('extract-over-limit')), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('extract-confirm-button')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(extracted, 0);
     });
 
     testWidgets('抽出が 0 件だったことと、実行していないことを別の文言で示す', (tester) async {

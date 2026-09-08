@@ -536,6 +536,47 @@
         "title": "ConfirmRequest",
         "type": "object"
       },
+      "CriteriaEstimateResponse": {
+        "description": "What one extraction would send, and what it would cost -- answered\n*before* anything is sent (code review P2-2).\n\nPressing \u62bd\u51fa uploads every page of the criteria PDF to a paid provider,\nand pressing it again does it again. A reviewer is entitled to see the\nsize of that before it happens, the same way Issue #101's intake screen\nshows its own call count and estimate.",
+        "properties": {
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "max_pages": {
+            "title": "Max Pages",
+            "type": "integer"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "unit_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Cost"
+          }
+        },
+        "required": [
+          "page_count",
+          "max_pages"
+        ],
+        "title": "CriteriaEstimateResponse",
+        "type": "object"
+      },
       "CriteriaItemModel": {
         "description": "One marking criterion, over the wire.",
         "properties": {
@@ -4661,6 +4702,54 @@
           }
         ],
         "summary": "Confirm Criteria",
+        "tags": [
+          "criteria"
+        ]
+      }
+    },
+    "/tests/{test_id}/criteria/estimate": {
+      "get": {
+        "description": "How many pages an extraction would send, and what that would cost.\n\nReads only the page count -- no rendering, no provider call, no\ncharge. Takes the shared PDFium lock anyway: ``page_count`` opens the\ndocument, and this app serializes every PDF read for the reason\n`build_criteria_router` documents.",
+        "operationId": "estimate_criteria_tests__test_id__criteria_estimate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriteriaEstimateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Estimate Criteria",
         "tags": [
           "criteria"
         ]

@@ -10,6 +10,7 @@ All URIs are relative to *http://localhost*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**confirmCriteriaTestsTestIdCriteriaConfirmPost**](CriteriaApi.md#confirmcriteriateststestidcriteriaconfirmpost) | **POST** /tests/{test_id}/criteria/confirm | Confirm Criteria
+[**estimateCriteriaTestsTestIdCriteriaEstimateGet**](CriteriaApi.md#estimatecriteriateststestidcriteriaestimateget) | **GET** /tests/{test_id}/criteria/estimate | Estimate Criteria
 [**extractCriteriaTestsTestIdCriteriaExtractPost**](CriteriaApi.md#extractcriteriateststestidcriteriaextractpost) | **POST** /tests/{test_id}/criteria/extract | Extract Criteria
 [**getCriteriaTestsTestIdCriteriaGet**](CriteriaApi.md#getcriteriateststestidcriteriaget) | **GET** /tests/{test_id}/criteria | Get Criteria
 [**updateCriteriaTestsTestIdCriteriaPut**](CriteriaApi.md#updatecriteriateststestidcriteriaput) | **PUT** /tests/{test_id}/criteria | Update Criteria
@@ -56,6 +57,49 @@ Name | Type | Description  | Notes
 ### HTTP request headers
 
  - **Content-Type**: application/json
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **estimateCriteriaTestsTestIdCriteriaEstimateGet**
+> CriteriaEstimateResponse estimateCriteriaTestsTestIdCriteriaEstimateGet(testId)
+
+Estimate Criteria
+
+How many pages an extraction would send, and what that would cost.  Reads only the page count -- no rendering, no provider call, no charge. Takes the shared PDFium lock anyway: ``page_count`` opens the document, and this app serializes every PDF read for the reason `build_criteria_router` documents.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getCriteriaApi();
+final String testId = testId_example; // String | 
+
+try {
+    final response = api.estimateCriteriaTestsTestIdCriteriaEstimateGet(testId);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling CriteriaApi->estimateCriteriaTestsTestIdCriteriaEstimateGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+
+### Return type
+
+[**CriteriaEstimateResponse**](CriteriaEstimateResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
  - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)

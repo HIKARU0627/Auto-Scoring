@@ -67,6 +67,7 @@ All URIs are relative to *http://localhost*
 Class | Method | HTTP request | Description
 ------------ | ------------- | ------------- | -------------
 [*CriteriaApi*](doc/CriteriaApi.md) | [**confirmCriteriaTestsTestIdCriteriaConfirmPost**](doc/CriteriaApi.md#confirmcriteriateststestidcriteriaconfirmpost) | **POST** /tests/{test_id}/criteria/confirm | Confirm Criteria
+[*CriteriaApi*](doc/CriteriaApi.md) | [**estimateCriteriaTestsTestIdCriteriaEstimateGet**](doc/CriteriaApi.md#estimatecriteriateststestidcriteriaestimateget) | **GET** /tests/{test_id}/criteria/estimate | Estimate Criteria
 [*CriteriaApi*](doc/CriteriaApi.md) | [**extractCriteriaTestsTestIdCriteriaExtractPost**](doc/CriteriaApi.md#extractcriteriateststestidcriteriaextractpost) | **POST** /tests/{test_id}/criteria/extract | Extract Criteria
 [*CriteriaApi*](doc/CriteriaApi.md) | [**getCriteriaTestsTestIdCriteriaGet**](doc/CriteriaApi.md#getcriteriateststestidcriteriaget) | **GET** /tests/{test_id}/criteria | Get Criteria
 [*CriteriaApi*](doc/CriteriaApi.md) | [**updateCriteriaTestsTestIdCriteriaPut**](doc/CriteriaApi.md#updatecriteriateststestidcriteriaput) | **PUT** /tests/{test_id}/criteria | Update Criteria
@@ -138,6 +139,7 @@ Class | Method | HTTP request | Description
  - [ConfirmCriteriaRequest](doc/ConfirmCriteriaRequest.md)
  - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
+ - [CriteriaEstimateResponse](doc/CriteriaEstimateResponse.md)
  - [CriteriaItemModel](doc/CriteriaItemModel.md)
  - [CriteriaQuestionModel](doc/CriteriaQuestionModel.md)
  - [CriteriaResponse](doc/CriteriaResponse.md)

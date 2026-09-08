@@ -10,6 +10,7 @@ import 'package:dio/dio.dart';
 
 import 'package:auto_scoring_api/src/api_util.dart';
 import 'package:auto_scoring_api/src/model/confirm_criteria_request.dart';
+import 'package:auto_scoring_api/src/model/criteria_estimate_response.dart';
 import 'package:auto_scoring_api/src/model/criteria_response.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/update_criteria_request.dart';
@@ -118,6 +119,92 @@ class CriteriaApi {
     }
 
     return Response<CriteriaResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Estimate Criteria
+  /// How many pages an extraction would send, and what that would cost.  Reads only the page count -- no rendering, no provider call, no charge. Takes the shared PDFium lock anyway: &#x60;&#x60;page_count&#x60;&#x60; opens the document, and this app serializes every PDF read for the reason &#x60;build_criteria_router&#x60; documents.
+  ///
+  /// Parameters:
+  /// * [testId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [CriteriaEstimateResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<CriteriaEstimateResponse>>
+      estimateCriteriaTestsTestIdCriteriaEstimateGet({
+    required String testId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/tests/{test_id}/criteria/estimate'.replaceAll(
+        '{' r'test_id' '}',
+        encodeQueryParameter(_serializers, testId, const FullType(String))
+            .toString());
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    CriteriaEstimateResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(CriteriaEstimateResponse),
+            ) as CriteriaEstimateResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<CriteriaEstimateResponse>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

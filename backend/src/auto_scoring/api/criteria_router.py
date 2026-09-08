@@ -32,13 +32,16 @@ reviewable result and nothing else.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.criteria_extraction.source import (
+    MAX_CRITERIA_PAGES,
     build_extraction_request,
     criteria_pdf_path,
 )
@@ -66,6 +69,29 @@ from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.profile import Profile, ProfileStatus, Region
 from auto_scoring.domain.test_registration import build_questions_and_rubrics
 
+#: Every integer that crosses this module's wire boundary.
+#:
+#: Pydantic's default (lax) mode coerces on the way in: a body carrying
+#: ``"points": true`` becomes **1** and ``"points": "5"`` becomes 5, and both
+#: reach `to_domain()`, the file store and the confirm step as if a person
+#: had typed them. This feature already refuses a malformed *model* response
+#: (`domain.criteria_extraction` is ``strict=True``) and a malformed *file*
+#: (`CriteriaDraft.from_dict` rejects a bool where points belong) -- the
+#: human-editing path was the one door left open, and it is the wrong door
+#: to leave open: a wrong number here is a wrong maximum for every
+#: submission of that test (code review P2-1; AGENTS.md "Security":
+#: validate every input that crosses a trust boundary).
+#:
+#: Applied per field rather than as ``ConfigDict(strict=True)`` on the model.
+#: Model-level strict also governs the enum fields, and FastAPI validates a
+#: request from an already-parsed Python dict -- where a strict enum rejects
+#: the JSON string ``"add"`` because it is not a `CriterionKind` instance.
+#: (``model_validate_json`` does not have this problem, which is why the
+#: domain schema can be strict wholesale.) Narrowing to the integers keeps
+#: the enums working over the wire and still closes the coercion the review
+#: found.
+StrictInt = Annotated[int, Field(strict=True)]
+
 
 class CriteriaItemModel(BaseModel):
     """One marking criterion, over the wire."""
@@ -76,7 +102,7 @@ class CriteriaItemModel(BaseModel):
     #: the generated client's field nullable -- turning "the caller did not
     #: say" into "assume 加点", which inverts a deduction.
     kind: CriterionKind
-    points: int | None = None
+    points: StrictInt | None = None
 
     @classmethod
     def from_domain(cls, item: CriteriaItem) -> CriteriaItemModel:
@@ -95,14 +121,14 @@ class CriteriaQuestionModel(BaseModel):
     """
 
     number: str
-    points: int | None = None
+    points: StrictInt | None = None
     model_answer: str | None = None
     #: Required (possibly empty). "No criteria" is an empty list, never an
     #: absent field -- keeping it required is what makes the generated
     #: client's list non-nullable, so no caller has to decide what a missing
     #: list means.
     criteria: list[CriteriaItemModel]
-    source_pages: list[int]
+    source_pages: list[StrictInt]
     note: str | None = None
 
     @classmethod
@@ -138,10 +164,10 @@ class CriteriaTotalsModel(BaseModel):
     dependency graph's execution layers.
     """
 
-    known_points: int
-    unknown_count: int
-    declared_total_points: int | None = None
-    declared_difference: int | None = None
+    known_points: StrictInt
+    unknown_count: StrictInt
+    declared_total_points: StrictInt | None = None
+    declared_difference: StrictInt | None = None
     is_complete: bool
 
     @classmethod
@@ -163,18 +189,18 @@ class CriteriaResponse(BaseModel):
     #: Compare-and-set token for ``/criteria/confirm`` -- must match the
     #: revision the reviewer actually looked at. Same contract, and the same
     #: reason, as ``domain.profile.Profile.revision``.
-    revision: int
+    revision: StrictInt
     #: Whether anything was ever read from the PDF. Distinguishes "the
     #: extraction ran and found nothing" from "nobody has run it", which
     #: otherwise look identical (both are an empty list).
     extracted: bool
     questions: list[CriteriaQuestionModel]
-    declared_total_points: int | None = None
+    declared_total_points: StrictInt | None = None
     #: 1-based pages the model reported it could not read. Kept after review
     #: rather than cleared by an edit: it is a record of what the extraction
     #: could not see, and it stops being true only when a new extraction
     #: replaces it.
-    unreadable_pages: list[int]
+    unreadable_pages: list[StrictInt]
     note: str | None = None
     totals: CriteriaTotalsModel
 
@@ -193,6 +219,38 @@ class CriteriaResponse(BaseModel):
         )
 
 
+class CriteriaEstimateResponse(BaseModel):
+    """What one extraction would send, and what it would cost -- answered
+    *before* anything is sent (code review P2-2).
+
+    Pressing 抽出 uploads every page of the criteria PDF to a paid provider,
+    and pressing it again does it again. A reviewer is entitled to see the
+    size of that before it happens, the same way Issue #101's intake screen
+    shows its own call count and estimate.
+    """
+
+    #: How many page images the extraction would send.
+    page_count: StrictInt
+    #: The most this app will read in one call
+    #: (`adapters.criteria_extraction.source.MAX_CRITERIA_PAGES`), so the
+    #: screen can say "over the limit" before the reviewer waits for a 422.
+    max_pages: StrictInt
+    #: Price per page, if this install has been told one. **``null`` is not
+    #: zero** -- zero is a reviewer stating their usage is free, null is this
+    #: app admitting it does not know and saying so on screen instead of
+    #: showing an invented figure (the wording Issue #101 settled on for the
+    #: intake screen).
+    #:
+    #: Always ``null`` today: nothing in this app knows a per-page price.
+    #: Issue #101 stores a per-*file* classification price, which is a
+    #: different unit and must not be reused here as if it were the same
+    #: number. Wiring a real per-page price is a one-line change in
+    #: `estimate_criteria` once one exists.
+    unit_cost: float | None = None
+    #: ``page_count * unit_cost``, or ``null`` when :attr:`unit_cost` is.
+    estimated_cost: float | None = None
+
+
 class UpdateCriteriaRequest(BaseModel):
     """The reviewed question set to save.
 
@@ -202,13 +260,13 @@ class UpdateCriteriaRequest(BaseModel):
     """
 
     questions: list[CriteriaQuestionModel]
-    declared_total_points: int | None = None
+    declared_total_points: StrictInt | None = None
 
 
 class ConfirmCriteriaRequest(BaseModel):
     """The revision the reviewer is signing off on."""
 
-    revision: int
+    revision: StrictInt
 
 
 def build_criteria_router(
@@ -218,6 +276,7 @@ def build_criteria_router(
     extractor: CriteriaExtractor,
     *,
     locks: TestArtifactLocks | None = None,
+    pdfium_lock: threading.Lock | None = None,
 ) -> APIRouter:
     """Build the router. One `SqlAlchemyUnitOfWork` is opened per request.
 
@@ -226,10 +285,20 @@ def build_criteria_router(
     that module for the interleave a second, private registry would allow.
     A private one is created when omitted (schema export, unit tests that
     never confirm a profile and a criteria draft concurrently).
+
+    ``pdfium_lock`` must be the *same* lock `api.app.create_app` shares with
+    answer intake, PDF export and profile analysis. **pypdfium2 is not safe
+    to call from several threads of one process**, and this router renders
+    every page of a criteria PDF -- so without it, an extraction overlapping
+    an intake or an export reaches PDFium concurrently and can corrupt a
+    render or take the process down (code review P1). Every other PDF-
+    touching path in this app already takes it; this one was the only
+    hold-out.
     """
     criteria_store = CriteriaStore(store.root)
     profile_store = ProfileStore(store.root)
     test_locks = locks or TestArtifactLocks()
+    render_lock = pdfium_lock or threading.Lock()
     router = APIRouter(tags=["criteria"])
 
     def _uow() -> Iterator[SqlAlchemyUnitOfWork]:
@@ -305,6 +374,39 @@ def build_criteria_router(
             uow.rubrics.add(rubric)
         uow.commit()
 
+    @router.get("/tests/{test_id}/criteria/estimate", response_model=CriteriaEstimateResponse)
+    def estimate_criteria(
+        test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
+    ) -> CriteriaEstimateResponse:
+        """How many pages an extraction would send, and what that would cost.
+
+        Reads only the page count -- no rendering, no provider call, no
+        charge. Takes the shared PDFium lock anyway: ``page_count`` opens the
+        document, and this app serializes every PDF read for the reason
+        `build_criteria_router` documents.
+        """
+        _get_test_or_404(uow, test_id)
+        source = criteria_pdf_path(store, test_id)
+        try:
+            with render_lock:
+                page_count = pdf_engine.page_count(source)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=(
+                    f"test {test_id!r} の採点基準PDFが見つかりません。"
+                    "登録し直してから抽出してください。"
+                ),
+            ) from exc
+        except Exception as exc:
+            # A corrupt or unreadable PDF must not become a 500 on a screen
+            # whose whole job is to answer "is it safe to press 抽出?".
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"採点基準PDFのページ数を読み取れませんでした: {type(exc).__name__}",
+            ) from None
+        return CriteriaEstimateResponse(page_count=page_count, max_pages=MAX_CRITERIA_PAGES)
+
     @router.post("/tests/{test_id}/criteria/extract", response_model=CriteriaResponse)
     def extract_criteria(
         test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
@@ -342,7 +444,14 @@ def build_criteria_router(
                 )
             source = criteria_pdf_path(store, test_id)
             try:
-                request = build_extraction_request(pdf_engine, source)
+                # `render_lock` covers the PDFium work and **stops there**.
+                # Holding it across the provider call would serialize every
+                # other PDF operation in the app behind a 7-53 second
+                # network wait (measured over the real material) -- an
+                # extraction started mid-afternoon would freeze answer
+                # intake for the rest of it (code review P1).
+                with render_lock:
+                    request = build_extraction_request(pdf_engine, source)
             except FileNotFoundError as exc:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,

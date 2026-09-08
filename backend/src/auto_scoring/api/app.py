@@ -295,6 +295,7 @@ def create_app(
     data_root: Path | None = None,
     session_factory: sessionmaker[Session] | None = None,
     pdf_engine: PdfEngine | None = None,
+    pdfium_lock: threading.Lock | None = None,
     image_preprocessor: ImagePreprocessor | None = None,
     intake_limits: IntakeLimits | None = None,
     max_concurrent_uploads: int = 2,
@@ -492,7 +493,12 @@ def create_app(
     # serialized before this lock existed -- the event loop ran each one to
     # completion with nothing else interleaved -- so this isn't a throughput
     # regression, just the same serialization moved off the loop.
-    pdfium_lock = threading.Lock()
+    # Injectable so a test can observe *where* it is held: Issue #103's code
+    # review found the criteria router rendering PDF pages outside it, which
+    # no test could have caught while the lock was unreachable from outside
+    # `create_app` (AGENTS.md "Architecture": inject boundaries from outside
+    # the core). Production passes nothing and gets a fresh one, as before.
+    pdfium_lock = pdfium_lock or threading.Lock()
 
     default_recognition_processor = RecognitionJobProcessor(
         session_factory,
@@ -775,6 +781,7 @@ def create_app(
             engine,
             criteria_extractor or UnconfiguredCriteriaExtractor(_NO_EXTRACTOR_INJECTED),
             locks=test_artifact_locks,
+            pdfium_lock=pdfium_lock,
         )
     )
     protected.include_router(

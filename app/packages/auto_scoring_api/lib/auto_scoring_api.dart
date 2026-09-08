@@ -33,6 +33,7 @@ export 'package:auto_scoring_api/src/model/complete_registration_response.dart';
 export 'package:auto_scoring_api/src/model/confirm_criteria_request.dart';
 export 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 export 'package:auto_scoring_api/src/model/confirm_request.dart';
+export 'package:auto_scoring_api/src/model/criteria_estimate_response.dart';
 export 'package:auto_scoring_api/src/model/criteria_item_model.dart';
 export 'package:auto_scoring_api/src/model/criteria_question_model.dart';
 export 'package:auto_scoring_api/src/model/criteria_response.dart';

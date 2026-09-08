@@ -41,6 +41,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         BoundingBoxResponse,
         CompleteRegistrationResponse,
         ConfirmCriteriaRequest,
+        CriteriaEstimateResponse,
         CriteriaItemModel,
         CriteriaQuestionModel,
         CriteriaResponse,
@@ -857,6 +858,29 @@ class SidecarApiClient {
           .confirmProfileTestsTestIdProfileConfirmPost(
             testId: testId,
             confirmProfileRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// How many pages an extraction would send, and what that would cost —
+  /// answered **before** anything is sent (Issue #103 code review).
+  ///
+  /// Reads only the page count: no rendering, no provider call, no charge.
+  /// `unitCost`/`estimatedCost` are `null` when this install has not been
+  /// told a per-page price — **`null` is not zero**, and the screen says so
+  /// rather than showing an invented figure.
+  Future<CriteriaEstimateResponse> estimateCriteria(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _criteriaApi
+          .estimateCriteriaTestsTestIdCriteriaEstimateGet(
+            testId: testId,
             cancelToken: cancelToken,
           );
       return _requireBody(response);

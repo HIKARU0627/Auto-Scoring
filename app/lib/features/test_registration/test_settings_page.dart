@@ -204,7 +204,30 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     _showSnackBar('プロファイルを確定しました');
   });
 
-  Future<void> _extractCriteria() => _runGuarded(() async {
+  /// 抽出は**有料の provider に全ページを送る**。押した瞬間に送らず、
+  /// 何ページ送るのか・いくらかかるのかを見せてから選んでもらう
+  /// (Issue #103 コードレビュー P2-2)。再抽出でも同じだけかかる。
+  Future<void> _extractCriteria() async {
+    // 見積り取得 → 人に尋ねる → 抽出、の3段。**尋ねている間は `_busy` に
+    // しない。** `_runGuarded` は進捗バーを出すが、アプリは待たされている
+    // のではなく人の答えを待っているだけであり、進捗バーはそれを「処理中」
+    // と偽って見せる（テストでも `pumpAndSettle` が止まらなくなる）。
+    CriteriaEstimateResponse? estimate;
+    await _runGuarded(() async {
+      estimate = await _dependencies.estimateCriteria(widget.testId);
+    });
+    final confirmed = estimate;
+    // 失敗していれば `_runGuarded` が既に画面へ理由を出している。
+    if (confirmed == null || !mounted) return;
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ExtractConfirmDialog(estimate: confirmed),
+    );
+    if (proceed != true || !mounted) return;
+    await _runGuarded(_runExtraction);
+  }
+
+  Future<void> _runExtraction() async {
     final criteria = await _dependencies.extractCriteria(widget.testId);
     if (!mounted) return;
     setState(() {
@@ -216,7 +239,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     // found no questions must not look like an extraction that did not run
     // (Issue #103 acceptance criterion 5: 黙って 0 件にしない).
     _showSnackBar('採点基準から ${criteria.questions.length} 件の設問を読み取りました');
-  });
+  }
 
   Future<void> _saveCriteria() => _runGuarded(() async {
     final criteria = await _dependencies.updateCriteria(
@@ -1866,6 +1889,68 @@ class _DeclaredTotalDialogState extends State<_DeclaredTotalDialog> {
           key: const Key('declared-total-save-button'),
           onPressed: _save,
           child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 抽出を実行する前に、送信ページ数と概算費用を見せる。
+///
+/// **単価が未設定なら「見積もれません」と出す。0 円ではない。** 0 円は
+/// 「利用者が無料だと言った」という意味であり、未設定は「このアプリが
+/// 単価を知らない」という意味で、別のことである（#104 の取込画面が
+/// 同じ区別をしている）。
+class _ExtractConfirmDialog extends StatelessWidget {
+  const _ExtractConfirmDialog({required this.estimate});
+
+  final CriteriaEstimateResponse estimate;
+
+  @override
+  Widget build(BuildContext context) {
+    final overLimit = estimate.pageCount > estimate.maxPages;
+    final cost = estimate.estimatedCost;
+    return AlertDialog(
+      title: const Text('採点基準PDFから抽出'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${estimate.pageCount} ページを AI provider に送信します。',
+            key: const Key('extract-page-count'),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            cost == null
+                ? '概算費用: 1ページあたりの単価が未設定のため見積もれません'
+                : '概算費用: 約${cost.toStringAsFixed(2)}'
+                      '（1ページあたり${estimate.unitCost?.toStringAsFixed(2)}）',
+            key: const Key('extract-cost'),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text('再実行すると同じだけかかります。', style: context.texts.bodySmall),
+          if (overLimit) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              '一度に読めるのは ${estimate.maxPages} ページまでです。'
+              'このまま実行しても失敗します。ファイルを分割してください。',
+              key: const Key('extract-over-limit'),
+              style: TextStyle(color: AppStatusTone.attention.color(context)),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          key: const Key('extract-cancel-button'),
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton(
+          key: const Key('extract-confirm-button'),
+          onPressed: overLimit ? null : () => Navigator.of(context).pop(true),
+          child: const Text('実行'),
         ),
       ],
     );

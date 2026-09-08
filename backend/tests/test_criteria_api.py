@@ -13,6 +13,7 @@ Every fixture is synthetic (Issue #103 acceptance criterion 8).
 
 from __future__ import annotations
 
+import threading
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.criteria_extraction.source import MAX_CRITERIA_PAGES
+from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
@@ -224,6 +227,96 @@ def test_an_unavailable_provider_is_503_and_hand_entry_still_works(
     assert saved.json()["totals"]["known_points"] == 7
 
 
+def test_estimate_reports_the_pages_without_calling_the_provider(
+    client: TestClient, extractor: _FakeExtractor
+) -> None:
+    """Code review P2-2: pressing 抽出 uploads every page to a paid provider,
+    so the reviewer gets to see the size first."""
+    test_id = _register_test(client)
+    response = client.get(f"/tests/{test_id}/criteria/estimate", headers=_auth())
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["page_count"] == 2
+    assert body["max_pages"] == MAX_CRITERIA_PAGES
+    # Asking what it would cost must not cost anything.
+    assert extractor.requests == []
+
+
+def test_estimate_says_it_cannot_price_rather_than_quoting_zero(
+    client: TestClient,
+) -> None:
+    """``null`` is not zero. Zero would be a reviewer stating their usage is
+    free; null is this app admitting it does not know a per-page price -- the
+    same distinction Issue #101 settled on for the intake screen."""
+    test_id = _register_test(client)
+    body = client.get(f"/tests/{test_id}/criteria/estimate", headers=_auth()).json()
+    assert body["unit_cost"] is None
+    assert body["estimated_cost"] is None
+
+
+def test_estimate_is_404_for_an_unknown_test_and_409_without_the_pdf(
+    client: TestClient, data_root: Path
+) -> None:
+    assert client.get("/tests/missing/criteria/estimate", headers=_auth()).status_code == 404
+    test_id = _register_test(client)
+    (data_root / "tests" / test_id / "manual.pdf").unlink()
+    assert client.get(f"/tests/{test_id}/criteria/estimate", headers=_auth()).status_code == 409
+
+
+def test_rendering_holds_the_shared_pdfium_lock_and_the_provider_call_does_not(
+    data_root: Path, extractor: _FakeExtractor
+) -> None:
+    """Issue #103 code review P1.
+
+    pypdfium2 is not safe to call from several threads at once, so the render
+    has to happen under the lock `create_app` shares with answer intake, PDF
+    export and profile analysis. The provider call must **not**: it takes
+    7-53 seconds on the measured material, and holding a global PDF lock
+    across it would stop every other PDF operation in the app for that long.
+
+    Checked by observing the lock from inside each step rather than by
+    reading the code, so a future refactor that widens or drops the critical
+    section fails here.
+    """
+    pdfium_lock = threading.Lock()
+    held_during_render: list[bool] = []
+    held_during_extract: list[bool] = []
+
+    real_page_count = PdfiumPypdfEngine().page_count
+
+    class _ObservingEngine(PdfiumPypdfEngine):
+        def render_page_png(self, source: Path, page_index: int, *, scale: float) -> bytes:
+            # `acquire(blocking=False)` fails exactly when the lock is
+            # already held -- by this same thread, here.
+            held_during_render.append(not pdfium_lock.acquire(blocking=False))
+            if held_during_render[-1] is False:
+                pdfium_lock.release()
+            return super().render_page_png(source, page_index, scale=scale)
+
+    def observing_extract(request: CriteriaExtractionRequest) -> CriteriaExtractionOutput:
+        held_during_extract.append(not pdfium_lock.acquire(blocking=False))
+        if held_during_extract[-1] is False:
+            pdfium_lock.release()
+        return CriteriaExtractionOutput()
+
+    extractor.extract = observing_extract  # type: ignore[method-assign]
+    app = create_app(
+        api_token=_TOKEN,
+        data_root=data_root,
+        intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
+        criteria_extractor=extractor,
+        pdf_engine=_ObservingEngine(),
+        pdfium_lock=pdfium_lock,
+    )
+    client = TestClient(app)
+    test_id = _register_test(client)
+    assert client.post(f"/tests/{test_id}/criteria/extract", headers=_auth()).status_code == 200
+
+    assert real_page_count is not None
+    assert held_during_render and all(held_during_render), "render ran without the PDFium lock"
+    assert held_during_extract == [False], "the provider call held the PDFium lock"
+
+
 def test_repeated_question_numbers_do_not_make_the_request_fall_over(
     client: TestClient, extractor: _FakeExtractor
 ) -> None:
@@ -280,6 +373,119 @@ def _extract_and_complete(client: TestClient, test_id: str) -> dict[str, Any]:
     assert confirmed.status_code == 200, confirmed.text
     body: dict[str, Any] = confirmed.json()
     return body
+
+
+@pytest.mark.parametrize(
+    ("bad_points", "why"),
+    [
+        (True, "a JSON boolean would otherwise be stored as 1 point"),
+        ("5", "a JSON string would otherwise be coerced to 5"),
+        (5.0, "a JSON float would otherwise be truncated to 5"),
+    ],
+)
+def test_saving_refuses_a_points_value_that_is_not_an_integer(
+    client: TestClient, data_root: Path, bad_points: object, why: str
+) -> None:
+    """Code review P2-1: the human-editing path was the one place that
+    coerced.
+
+    The LLM boundary and the file boundary both reject these already. A
+    reviewer's PUT is no more trustworthy than either, and the consequence is
+    the same -- a maximum nobody typed, applied to every submission.
+    """
+    test_id = _register_test(client)
+    response = client.put(
+        f"/tests/{test_id}/criteria",
+        headers=_auth(),
+        json={
+            "questions": [
+                {
+                    "number": "問1",
+                    "points": bad_points,
+                    "model_answer": "模範解答",
+                    "criteria": [],
+                    "source_pages": [],
+                    "note": None,
+                }
+            ],
+            "declared_total_points": None,
+        },
+    )
+    assert response.status_code == 422, why
+    # Nothing was stored, so a retry starts from a clean state.
+    assert client.get(f"/tests/{test_id}/criteria", headers=_auth()).status_code == 404
+
+
+def test_saving_refuses_a_non_integer_criterion_score_or_declared_total(
+    client: TestClient,
+) -> None:
+    """The same rule on the other two numbers a reviewer can type."""
+    test_id = _register_test(client)
+    base: dict[str, Any] = {
+        "number": "問1",
+        "points": 5,
+        "model_answer": "模範解答",
+        "criteria": [],
+        "source_pages": [],
+        "note": None,
+    }
+    with_bad_criterion = dict(base)
+    with_bad_criterion["criteria"] = [{"description": "基準", "kind": "add", "points": True}]
+    assert (
+        client.put(
+            f"/tests/{test_id}/criteria",
+            headers=_auth(),
+            json={"questions": [with_bad_criterion], "declared_total_points": None},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.put(
+            f"/tests/{test_id}/criteria",
+            headers=_auth(),
+            json={"questions": [base], "declared_total_points": True},
+        ).status_code
+        == 422
+    )
+
+
+def test_saving_still_accepts_ordinary_integers_and_enum_strings(
+    client: TestClient,
+) -> None:
+    """The pair to the two tests above -- strictness was narrowed to the
+    integers precisely so an enum still arrives as the JSON string it has to
+    be."""
+    test_id = _register_test(client)
+    response = client.put(
+        f"/tests/{test_id}/criteria",
+        headers=_auth(),
+        json={
+            "questions": [
+                {
+                    "number": "問1",
+                    "points": 5,
+                    "model_answer": "模範解答",
+                    "criteria": [{"description": "減点条件", "kind": "deduct", "points": 2}],
+                    "source_pages": [1],
+                    "note": None,
+                }
+            ],
+            "declared_total_points": 5,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["questions"][0]["criteria"][0]["kind"] == "deduct"
+
+
+def test_confirm_refuses_a_non_integer_revision(client: TestClient) -> None:
+    test_id = _register_test(client)
+    client.post(f"/tests/{test_id}/criteria/extract", headers=_auth())
+    assert (
+        client.post(
+            f"/tests/{test_id}/criteria/confirm", headers=_auth(), json={"revision": True}
+        ).status_code
+        == 422
+    )
 
 
 def test_confirm_is_refused_while_any_points_are_unknown(

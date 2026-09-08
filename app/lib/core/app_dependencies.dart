@@ -109,6 +109,10 @@ Future<ProfileResponse> _unavailableUpdateProfile(
   List<RegionModel> regions,
 ) async => _unavailable();
 
+Future<CriteriaEstimateResponse> _unavailableEstimateCriteria(
+  String testId,
+) async => _unavailable();
+
 Future<CriteriaResponse> _unavailableExtractCriteria(String testId) async =>
     _unavailable();
 
@@ -366,6 +370,11 @@ typedef UpdateProfile =
 typedef ConfirmProfile =
     Future<ProfileResponse> Function(String testId, {required int revision});
 
+/// 抽出が送るページ数と概算費用を、送る前に答える。
+/// `unitCost` が `null` なら「見積もれません」であって 0 円ではない。
+typedef EstimateCriteria =
+    Future<CriteriaEstimateResponse> Function(String testId);
+
 /// Reads a test's 配点と採点基準 out of its registered 採点基準PDF (Issue
 /// #103). Always a proposal a human edits, never a value grading reads
 /// directly.
@@ -617,6 +626,7 @@ class AppDependencies {
     this.getProfile = _unavailableGetProfile,
     this.updateProfile = _unavailableUpdateProfile,
     this.confirmProfile = _unavailableConfirmProfile,
+    this.estimateCriteria = _unavailableEstimateCriteria,
     this.extractCriteria = _unavailableExtractCriteria,
     this.getCriteria = _unavailableGetCriteria,
     this.updateCriteria = _unavailableUpdateCriteria,
@@ -678,6 +688,7 @@ class AppDependencies {
       getProfile = client.getProfile,
       updateProfile = client.updateProfile,
       confirmProfile = client.confirmProfile,
+      estimateCriteria = client.estimateCriteria,
       extractCriteria = client.extractCriteria,
       getCriteria = client.getCriteria,
       updateCriteria = client.updateCriteria,
@@ -732,6 +743,7 @@ class AppDependencies {
   final GetProfile getProfile;
   final UpdateProfile updateProfile;
   final ConfirmProfile confirmProfile;
+  final EstimateCriteria estimateCriteria;
   final ExtractCriteria extractCriteria;
   final GetCriteria getCriteria;
   final UpdateCriteria updateCriteria;

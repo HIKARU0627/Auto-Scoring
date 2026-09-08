@@ -15,6 +15,7 @@ doc/ConfirmCriteriaRequest.md
 doc/ConfirmProfileRequest.md
 doc/ConfirmRequest.md
 doc/CriteriaApi.md
+doc/CriteriaEstimateResponse.md
 doc/CriteriaItemModel.md
 doc/CriteriaQuestionModel.md
 doc/CriteriaResponse.md
@@ -114,6 +115,7 @@ lib/src/model/complete_registration_response.dart
 lib/src/model/confirm_criteria_request.dart
 lib/src/model/confirm_profile_request.dart
 lib/src/model/confirm_request.dart
+lib/src/model/criteria_estimate_response.dart
 lib/src/model/criteria_item_model.dart
 lib/src/model/criteria_question_model.dart
 lib/src/model/criteria_response.dart
