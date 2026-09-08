@@ -27,6 +27,14 @@ at a time. That is deliberate: a single "commit the whole batch" endpoint
 would make a 27-of-30 failure indistinguishable from a total one, and Issue
 #101 requires the successful part to survive.
 
+**What each endpoint sends.** ``/intake/plan`` sends nothing anywhere -- it is
+rules over a listing. ``/intake/classify`` and ``/intake/attribute`` render the
+**first page** of one file and send that image to a provider. For attribution
+that page is a student's answer sheet including its header, which business
+rules section 2 (2) permits under "版面を見る" and which the app
+tells the reviewer about before running it. Narrowing the candidates to one
+test skips the call, and therefore the send, entirely.
+
 **Nothing here is logged.** A ``relative_path`` carries the school's course
 names, and a page image is its copyrighted material. Requests and responses
 alike stay out of log lines, exception messages and recorded datasets (the

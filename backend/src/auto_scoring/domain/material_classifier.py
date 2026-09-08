@@ -32,6 +32,27 @@ material on hand holds one answer per subject, so there is no second answer
 for the same test to measure against -- and until it has been, there is no
 basis for a setting that would skip the human.
 
+**What travels, and under which rule.** Both questions are answered from a
+page image, and for :meth:`MaterialClassifier.attribute_answer` that page is a
+student's answer sheet -- **header included**, because the course-name field
+this question reads *is* the header. Business rules section 2 (2) permits it
+under "版面を見る": deciding which test an answer belongs to,
+like detecting where the answer boxes are, cannot be done without seeing the
+page. It is **not** the grading payload, which carries the answer-region crop
+only and no header at all.
+
+That rule was widened to cover this on 2026-09-09. It previously allowed a
+whole page only for answer-box detection, justified by frequency -- once per
+format, versus once per answer for grading. Attribution runs once per *answer*
+while still sending a whole page, so it satisfied neither row. What makes it
+acceptable is stated there rather than assumed here: the reviewer can narrow
+the candidates to one test and skip the call entirely (which is the ordinary
+week), and there is no alternative, since the header is the thing being read.
+
+**Stripping the header before sending is deliberately not implemented.**
+Issue #99 considered it and rejected it: page layout differs per school, so a
+mask is not reliable. Do not add one and describe it as safe.
+
 **Nothing sent or received here may be logged.** Page images are the school's
 copyrighted material and student work; the same rule Issue #35 established
 for grading payloads applies unchanged (send is permitted by Issue #95
