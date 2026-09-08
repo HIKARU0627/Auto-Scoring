@@ -18,6 +18,20 @@ API）、[#11](https://github.com/HIKARU0627/Auto-Scoring/issues/11)（MVPデー
 draft/confirmedパターン）、[#26](https://github.com/HIKARU0627/Auto-Scoring/issues/26)
 （設問依存関係DAG、そのAPIをそのまま利用する）。
 
+> **Issue #103 による更新（配点・採点基準の入力口）**
+>
+> このドキュメントの以下の記述は、Issue #103 時点では**過去の姿**である。
+>
+> - 「模範解答PDF」は必須入力ではなくなった（#95 決定 1、Issue #101）
+> - **配点・採点基準・模範解答の入力口は、`SCORE`/`RUBRIC`/`MODEL_ANSWER` region から
+>   「配点と採点基準」節（`CriteriaDraft`）へ移った。** region 側の経路は
+>   Issue #103 以前に登録されたテストのための**後方互換 fallback として残っている**が、
+>   画面からは新しく作れない
+> - `build_questions_and_rubrics` は region と確定済み `CriteriaDraft` の**両方**を受け取る
+>
+> 現在の設計は [`criteria-extraction.md`](./criteria-extraction.md) を参照。
+> 以下の記述は、fallback 経路がなぜその形なのかの根拠として残している。
+
 ## 決定事項
 
 ### `Test` の登録ライフサイクル（`draft` → `ready`）
@@ -116,6 +130,12 @@ Issue #15時点で保存された `profile.json`（`text` キーが無い）も�
   （`max_points`=配点と同じ、`position=0`）として `Rubric` にする。複数の採点観点への
   自動分割は行わない（人間が編集画面で分割・追加できる設計だが、Issue #16の
   UIスコープでは1criterion固定 —— 下記「UI設計」の未決事項を参照）。
+
+**Issue #103 以降**: 上の 3 項目（`SCORE`/`MODEL_ANSWER`/`RUBRIC`）は、
+**確定済みの `CriteriaDraft` がそれを持たないときの fallback** になった。
+ドラフトがあればそちらが優先し、採点基準は 1 件固定ではなく
+**PDF から読んだ件数ぶんの `RubricCriterion`** になる。region 側は座標だけを担う。
+詳細は [`criteria-extraction.md`](./criteria-extraction.md) §6。
 
 ### Profile確認は一方向・一度きり
 
