@@ -52,10 +52,25 @@ GoRouter createAppRouter({String initialLocation = AppRoutes.home}) {
       ),
       GoRoute(
         path: AppRoutes.pdfReviewPattern,
-        builder: (context, state) => PdfReviewPage(
-          testId: state.pathParameters['testId']!,
-          submissionId: state.pathParameters['submissionId']!,
-        ),
+        builder: (context, state) {
+          final testId = state.pathParameters['testId']!;
+          final submissionId = state.pathParameters['submissionId']!;
+          // Keyed by the answer it shows. Without this, navigating from one
+          // submission's review straight to another's (same route pattern,
+          // different parameters) would let Flutter reuse the existing
+          // `State` -- `initState` would not run again, and the screen would
+          // keep the previous answer's PDF, questions, jobs and cached
+          // per-question results while claiming to show the new one. Every
+          // cache on that screen is scoped to one `submissionId`
+          // (`_PdfReviewPageState._jobsGeneration` enumerates them), so the
+          // cheapest correct answer is to make a different answer a
+          // different `State` by construction (review round 3).
+          return PdfReviewPage(
+            key: ValueKey('pdf-review/$testId/$submissionId'),
+            testId: testId,
+            submissionId: submissionId,
+          );
+        },
       ),
     ],
   );
