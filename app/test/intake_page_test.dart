@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -632,6 +634,11 @@ void main() {
       required List<({MaterialRole role, String path})> materials,
     })?
     addMaterials,
+    Future<AttributionProposalResponse> Function({
+      required String path,
+      required List<({String id, String label})> candidates,
+    })?
+    attributeAnswer,
   }) => AppDependencies(
     listIntakeTemplates: () async => [template()],
     intakeCost: () async => null,
@@ -670,6 +677,14 @@ void main() {
     listSubmissions: listSubmissions ?? (_) async => const [],
     listMaterials: listMaterials ?? (_) async => const [],
     deleteTest: deleteTest ?? (_) async {},
+    attributeAnswer:
+        attributeAnswer ??
+        ({required path, required candidates}) async =>
+            AttributionProposalResponse(
+              (builder) => builder
+                ..testId = null
+                ..confidence = 0.0,
+            ),
   );
 
   group('コードレビュー1回目で見つかった穴', () {
@@ -1510,6 +1525,249 @@ void main() {
 
       expect(find.byKey(const Key('intake-narrowing-benefit')), findsOneWidget);
       expect(find.textContaining('ページ全体も送りません'), findsOneWidget);
+    });
+  });
+
+  group('コードレビュー3回目で見つかった穴', () {
+    IntakePlanResponse answersOnlyPlan() => plan(
+      [
+        planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer),
+        planned('subject-a/01_answers-2.pdf', role: MaterialRole.studentAnswer),
+      ],
+      missing: const [MaterialRole.gradingCriteria],
+    );
+
+    Future<void> openPerAnswerWith(
+      WidgetTester tester, {
+      required AppDependencies dependencies,
+    }) async {
+      await openReview(
+        tester,
+        withPlan: answersOnlyPlan(),
+        paths: const ['subject-a/01_answers.pdf', 'subject-a/01_answers-2.pdf'],
+        dependencies: dependencies,
+      );
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('登録済みテストが1件でも、選ばないうちは振り分けない [P1-1]', (tester) async {
+      // "Only one test is registered" is what every first-time user has. It is
+      // not the reviewer saying the answers belong to it.
+      await openPerAnswerWith(
+        tester,
+        dependencies: importing(
+          withPlan: answersOnlyPlan(),
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+          ],
+        ),
+      );
+
+      // The control is offered but refuses, and says what to do instead.
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('intake-attribute-subject-a')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(find.text('振り分け先を選んでください'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+
+      // Choosing it explicitly is what unlocks the routing.
+      await tester.tap(find.byKey(const Key('intake-narrow-test-a')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('すべての答案を「国語」に振り分ける'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('判定中に候補を変えても、画面が固まらない [P1-2]', (tester) async {
+      // Discarding a stale response and leaving the screen "running" are two
+      // different things. The round-2 staleness fix conflated them and left
+      // every button disabled with no way back.
+      final gate = Completer<void>();
+      await openPerAnswerWith(
+        tester,
+        dependencies: importing(
+          withPlan: answersOnlyPlan(),
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-b'
+                ..name = '数学',
+            ),
+          ],
+          attributeAnswer: ({required path, required candidates}) async {
+            await gate.future;
+            return AttributionProposalResponse(
+              (builder) => builder
+                ..testId = 'test-a'
+                ..confidence = 0.8,
+            );
+          },
+        ),
+      );
+
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pump();
+
+      // Change the candidates while the request is in flight.
+      await tester.tap(find.byKey(const Key('intake-narrow-test-b')));
+      await tester.pump();
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      // The stale answer was dropped -- and the screen came back.
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('intake-attribute-subject-a')),
+            )
+            .onPressed,
+        isNotNull,
+        reason: '実行中フラグが下りていないと、以後どのボタンも押せない',
+      );
+    });
+
+    testWidgets('単価を空にして戻っても落ちない [P1-3]', (tester) async {
+      // `copyWith(unitCost: null)` used to mean "keep the old price", so the
+      // estimate held a figure the screen thought did not exist.
+      double? cost = 2.5;
+      final withStray = plan([
+        ...ruleMatched,
+        planned('subject-a/stray.pdf', need: ClassificationNeed.pending),
+      ], pending: 1);
+      await openReview(
+        tester,
+        withPlan: withStray,
+        paths: const [
+          'subject-a/01_answers.pdf',
+          'subject-a/02_criteria.pdf',
+          'subject-a/stray.pdf',
+        ],
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => cost,
+          listTests: () async => const [],
+          classificationAvailability: () async => available(),
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => withStray,
+        ),
+      );
+      expect(find.textContaining('概算費用: 約2.50'), findsOneWidget);
+
+      // The reviewer clears the price in settings and comes back.
+      cost = null;
+      await tester.tap(find.byKey(const Key('intake-open-settings')));
+      await tester.pumpAndSettle();
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      navigator.pop();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining('単価が未設定'), findsOneWidget);
+    });
+
+    testWidgets('AIが外したあとでも、1件に絞れば一括で振り分けられる [P2]', (tester) async {
+      // The re-charge guard must not block the reviewer's own decision. Forty
+      // answers the classifier could not place, then one narrowing click --
+      // not forty dropdown operations.
+      await openPerAnswerWith(
+        tester,
+        dependencies: importing(
+          withPlan: answersOnlyPlan(),
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-b'
+                ..name = '数学',
+            ),
+          ],
+          // The classifier cannot tell, for either answer.
+          attributeAnswer: ({required path, required candidates}) async =>
+              AttributionProposalResponse(
+                (builder) => builder
+                  ..testId = null
+                  ..confidence = 0.0,
+              ),
+        ),
+      );
+
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      // Both answers are still unrouted, and both are marked as asked.
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(const Key('intake-narrow-test-a')));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('intake-attribute-subject-a')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-attribute-subject-a')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+        reason: '再課金防止のフィルタが人の操作にまで効いていると、ここで止まる',
+      );
     });
   });
 }

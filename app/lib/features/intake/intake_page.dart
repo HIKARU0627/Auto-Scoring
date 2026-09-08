@@ -190,8 +190,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         _unitCost = cost;
         _existingTests = tests;
         _availability = availability;
-        // A plan already on screen was priced with the old figure.
-        _review = _review?.copyWith(unitCost: cost);
+        // A plan already on screen was priced with the old figure. `null` is
+        // a real new value here ("the reviewer cleared the price"), not an
+        // omission -- hence the explicit clear.
+        _review = _review?.copyWith(
+          unitCost: cost,
+          clearUnitCost: cost == null,
+        );
       });
     } on SidecarApiException catch (error) {
       if (!mounted) return;
@@ -322,10 +327,16 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       }
     }
 
-    await Future.wait([
-      for (var i = 0; i < _classifyConcurrency; i++) worker(),
-    ]);
-    if (mounted) setState(() => _classifying = false);
+    try {
+      await Future.wait([
+        for (var i = 0; i < _classifyConcurrency; i++) worker(),
+      ]);
+    } finally {
+      // Same reason as `_attributeAnswers`: a screen left in its running state
+      // has every button disabled and no way back, and "stop" cannot help
+      // because the work has already finished.
+      if (mounted) setState(() => _classifying = false);
+    }
   }
 
   /// The tests an answer could be routed to.
@@ -339,35 +350,56 @@ class _IntakePageState extends ConsumerState<IntakePage> {
             .where((test) => _narrowedTestIds.contains(test.id))
             .toList();
 
+  /// Whether the reviewer has explicitly narrowed the batch to one test.
+  ///
+  /// **Held as state, never inferred from the candidate count.** A count of
+  /// one can mean "the reviewer said so" or "only one test happens to be
+  /// registered" -- and the second is what every first-time user hits.
+  /// Treating them the same assigned every answer with nobody having chosen
+  /// anything. **A number does not carry an intention.**
+  bool get _reviewerChoseOneTest => _narrowedTestIds.length == 1;
+
   /// Route one group's answers.
   ///
-  /// With a single candidate nothing is sent: the reviewer already decided by
-  /// narrowing, and asking a provider to choose from a list of one would spend
-  /// money to confirm a foregone conclusion. Two or more, and each unrouted
-  /// answer is asked about individually so progress and cancellation work.
+  /// Two different acts, deliberately kept apart:
+  ///
+  /// * **the reviewer narrowed to one test.** Then routing is their decision,
+  ///   nothing is guessed, nothing is sent, and there is nothing to confirm.
+  /// * **two or more candidates.** Then a classifier is asked, one answer at a
+  ///   time, and every reply is a *proposal* the reviewer still confirms.
+  ///
+  /// A single candidate the reviewer did **not** choose is neither: the button
+  /// that leads here is disabled in that state (see `_buildGroupCard`), so
+  /// this cannot be reached with an unchosen single candidate.
   Future<void> _attributeAnswers(IntakeGroupState group) async {
     final candidates = _attributionCandidates;
-    // Answers already asked about are not asked again, even when the reply was
-    // "could not tell" -- the same rule role classification follows.
-    final unrouted = group.unroutedAnswers
-        .where((answer) => !answer.attributionAttempted)
-        .toList();
-    if (unrouted.isEmpty || candidates.isEmpty) return;
+    if (candidates.isEmpty) return;
 
-    if (candidates.length == 1) {
-      // Not a proposal: the reviewer narrowed the batch to one test, which is
-      // them stating the answer. Nothing was guessed, so there is nothing to
-      // confirm.
+    if (_reviewerChoseOneTest) {
+      // Every unrouted answer, **not** filtered by `attributionAttempted`.
+      // That filter exists to stop a second *purchase* of the same reply; it
+      // has nothing to say about applying a decision the reviewer just made.
+      // Applying it here left the recovery path after a failed AI run at forty
+      // dropdown operations (review round 3, P2).
+      final unrouted = group.unroutedAnswers;
+      if (unrouted.isEmpty) return;
       setState(() {
         for (final answer in unrouted) {
           _review = _review?.withFile(
             answer.relativePath,
-            (current) => current.copyWith(answerTestId: candidates.first.id),
+            (current) => current.copyWith(answerTestId: candidates.single.id),
           );
         }
       });
       return;
     }
+
+    // Answers already asked about are not asked again, even when the reply was
+    // "could not tell" -- the same rule role classification follows.
+    final unrouted = group.unroutedAnswers
+        .where((answer) => !answer.attributionAttempted)
+        .toList();
+    if (unrouted.isEmpty) return;
 
     final generation = ++_attributionGeneration;
     setState(() {
@@ -376,51 +408,61 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       _classifiedCount = 0;
       _error = null;
     });
-    for (final answer in unrouted) {
-      if (_cancelClassification) break;
-      try {
-        final proposal = await _dependencies.attributeAnswer(
-          path: answer.absolutePath,
-          candidates: [
-            for (final test in candidates) (id: test.id, label: test.name),
-          ],
-        );
-        if (!mounted) return;
-        // A candidate change while this was in flight makes the answer stale:
-        // the reviewer has since said this batch is not that test's, and a
-        // response that arrives afterwards must not quietly reinstate it. The
-        // dropdown hides an out-of-range value, so without this the screen
-        // would show "not routed" while the state said otherwise.
-        if (generation != _attributionGeneration) return;
-        setState(() {
-          _classifiedCount++;
-          // Recorded as a **proposal**, never as the routing itself.
-          // Attribution decides which criteria an answer is graded against, so
-          // it goes through the same confirmation the role does -- see
-          // `IntakeFileState.answerTestId`.
-          //
-          // `null` means the classifier could not tell, which is a real and
-          // frequent answer: the sheet often carries nothing identifying at
-          // all. The row stays unrouted for the reviewer to decide, and is
-          // marked as asked so a second run does not re-buy the same reply.
-          _review = _review?.withFile(
-            answer.relativePath,
-            (current) => current.copyWith(
-              proposedAnswerTestId: proposal.testId,
-              attributionAttempted: true,
-            ),
+    try {
+      for (final answer in unrouted) {
+        if (_cancelClassification) break;
+        try {
+          final proposal = await _dependencies.attributeAnswer(
+            path: answer.absolutePath,
+            candidates: [
+              for (final test in candidates) (id: test.id, label: test.name),
+            ],
           );
-        });
-      } on SidecarApiException catch (error) {
-        if (!mounted || generation != _attributionGeneration) return;
-        setState(() {
-          _classifiedCount++;
-          _error = error.message;
-          // Not marked as asked: a failed call produced no answer.
-        });
+          if (!mounted) return;
+          // A candidate change while this was in flight makes the answer
+          // stale: the reviewer has since said this batch is not that test's,
+          // and a response arriving afterwards must not quietly reinstate it.
+          // The dropdown hides an out-of-range value, so without this the
+          // screen would show "not routed" while the state said otherwise.
+          if (generation != _attributionGeneration) return;
+          setState(() {
+            _classifiedCount++;
+            // Recorded as a **proposal**, never as the routing itself.
+            // Attribution decides which criteria an answer is graded against,
+            // so it goes through the same confirmation the role does -- see
+            // `IntakeFileState.answerTestId`.
+            //
+            // `null` means the classifier could not tell, which is a real and
+            // frequent answer: the sheet often carries nothing identifying at
+            // all. The row stays unrouted for the reviewer to decide, and is
+            // marked as asked so a second run does not re-buy the same reply.
+            _review = _review?.withFile(
+              answer.relativePath,
+              (current) => current.copyWith(
+                proposedAnswerTestId: proposal.testId,
+                attributionAttempted: true,
+              ),
+            );
+          });
+        } on SidecarApiException catch (error) {
+          if (!mounted) return;
+          if (generation != _attributionGeneration) return;
+          setState(() {
+            _classifiedCount++;
+            _error = error.message;
+            // Not marked as asked: a failed call produced no answer.
+          });
+        }
       }
+    } finally {
+      // **Always.** Discarding a stale response and leaving the screen in its
+      // running state are two different things: an early `return` above used
+      // to skip this, and every button -- classify, attribute, import -- then
+      // stayed disabled with no way back, because "stop" only stops work that
+      // is still going (review round 3, P1-2; a regression introduced by the
+      // round-2 staleness fix).
+      if (mounted) setState(() => _classifying = false);
     }
-    if (mounted) setState(() => _classifying = false);
   }
 
   Future<void> _import() async {
@@ -432,18 +474,27 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     });
 
     final outcomes = <_ImportOutcome>[];
-    for (final group in review.groups) {
-      final included = group.includedFiles;
-      if (included.isEmpty) continue;
-      outcomes.add(await _importGroup(group, included));
-      if (mounted) setState(() => _outcomes = List.of(outcomes));
+    try {
+      for (final group in review.groups) {
+        final included = group.includedFiles;
+        if (included.isEmpty) continue;
+        outcomes.add(await _importGroup(group, included));
+        if (mounted) setState(() => _outcomes = List.of(outcomes));
+      }
+      if (!mounted) return;
+      setState(() {
+        _outcomes = outcomes;
+        _step = _Step.done;
+      });
+    } finally {
+      // `_importGroup` catches what it expects, but "what it expects" is not
+      // the same as "everything". An unexpected failure escaping here used to
+      // leave `_busy` set, which disables every control on the screen with no
+      // way back -- the same shape as the attribution bug found in review
+      // round 3 (P1-2). Found by sweeping the other busy-flag paths after
+      // fixing that one, not by hitting it.
+      if (mounted) setState(() => _busy = false);
     }
-    if (!mounted) return;
-    setState(() {
-      _outcomes = outcomes;
-      _busy = false;
-      _step = _Step.done;
-    });
   }
 
   /// Import one group.
@@ -974,10 +1025,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
             const SizedBox(height: AppSpacing.xs),
             Text(
               key: const Key('intake-cost-estimate'),
-              cost == null
+              // Both numbers come from `review`, never one from `review` and
+              // the other from this widget's own copy: the two can disagree,
+              // and reading the widget's copy with `!` is what crashed.
+              cost == null || review.unitCost == null
                   ? '概算費用: 1件あたりの単価が未設定です（設定画面で入力できます）'
                   : '概算費用: 約${cost.toStringAsFixed(2)}（1件あたり'
-                        '${_unitCost!.toStringAsFixed(2)}）',
+                        '${review.unitCost!.toStringAsFixed(2)}）',
             ),
           ],
         ),
@@ -1179,29 +1233,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
             ],
             if (group.targetKind == IntakeTargetKind.perAnswer) ...[
               const SizedBox(height: AppSpacing.sm),
-              Row(
-                children: [
-                  FilledButton.tonalIcon(
-                    key: Key('intake-attribute-${group.key}'),
-                    onPressed:
-                        _busy ||
-                            _classifying ||
-                            group.unroutedAnswers
-                                .where((a) => !a.attributionAttempted)
-                                .isEmpty ||
-                            _attributionCandidates.isEmpty
-                        ? null
-                        : () => _attributeAnswers(group),
-                    icon: const Icon(Icons.call_split),
-                    label: Text(
-                      _attributionCandidates.length == 1
-                          ? '絞り込んだテストに振り分ける (AI不要)'
-                          : 'AIで振り分ける '
-                                '(${group.unroutedAnswers.where((a) => !a.attributionAttempted).length}件)',
-                    ),
-                  ),
-                ],
-              ),
+              Row(children: [_buildAttributeButton(group)]),
               if (group.unroutableNonAnswers.isNotEmpty)
                 Text(
                   key: Key('intake-unroutable-${group.key}'),
@@ -1219,6 +1251,61 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           ],
         ),
       ),
+    );
+  }
+
+  /// The control that routes a group's answers.
+  ///
+  /// Three states, because there are three genuinely different situations and
+  /// collapsing any two of them was a bug:
+  ///
+  /// * **the reviewer chose one test** -- routing is their decision. Applies to
+  ///   every unrouted answer, including ones a classifier already failed on:
+  ///   that filter guards against paying twice, not against the reviewer
+  ///   deciding.
+  /// * **two or more candidates** -- a classifier is asked, and each reply is a
+  ///   proposal to confirm.
+  /// * **one candidate the reviewer did not choose** -- disabled. One
+  ///   registered test is what a first-time user has, and treating that as
+  ///   "they picked it" routed every answer with nobody having decided
+  ///   anything (review round 3, P1-1).
+  Widget _buildAttributeButton(IntakeGroupState group) {
+    final askable = group.unroutedAnswers
+        .where((answer) => !answer.attributionAttempted)
+        .length;
+    final unrouted = group.unroutedAnswers.length;
+
+    if (_reviewerChoseOneTest) {
+      final chosen = _attributionCandidates.single;
+      return FilledButton.tonalIcon(
+        key: Key('intake-attribute-${group.key}'),
+        onPressed: _busy || _classifying || unrouted == 0
+            ? null
+            : () => _attributeAnswers(group),
+        icon: const Icon(Icons.call_split),
+        label: Text('すべての答案を「${chosen.name}」に振り分ける ($unrouted件・AI不要)'),
+      );
+    }
+
+    if (_attributionCandidates.length < 2) {
+      return Tooltip(
+        message: '上の「このバッチはどのテストの答案ですか」で、振り分け先を選んでください。',
+        child: FilledButton.tonalIcon(
+          key: Key('intake-attribute-${group.key}'),
+          onPressed: null,
+          icon: const Icon(Icons.call_split),
+          label: const Text('振り分け先を選んでください'),
+        ),
+      );
+    }
+
+    return FilledButton.tonalIcon(
+      key: Key('intake-attribute-${group.key}'),
+      onPressed: _busy || _classifying || askable == 0
+          ? null
+          : () => _attributeAnswers(group),
+      icon: const Icon(Icons.call_split),
+      label: Text('AIで振り分ける ($askable件)'),
     );
   }
 

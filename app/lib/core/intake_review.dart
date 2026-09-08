@@ -399,12 +399,21 @@ class IntakeReviewState {
   double? estimatedCostForCalls(int calls) =>
       unitCost == null ? null : unitCost! * calls;
 
+  /// ``clearUnitCost`` exists because ``null`` cannot mean both "leave it
+  /// alone" and "there is no price".
+  ///
+  /// This screen has spent the whole Issue distinguishing "unset" from "zero"
+  /// -- a `copyWith` that folds an explicit null back into the previous value
+  /// quietly undoes that. Clearing the price in settings and returning left
+  /// the estimate holding the old figure while the screen thought there was
+  /// none, which then threw (review round 3, P1-3).
   IntakeReviewState copyWith({
     List<IntakeGroupState>? groups,
     double? unitCost,
+    bool clearUnitCost = false,
   }) => IntakeReviewState(
     groups: groups ?? this.groups,
-    unitCost: unitCost ?? this.unitCost,
+    unitCost: clearUnitCost ? null : (unitCost ?? this.unitCost),
   );
 
   IntakeReviewState withFile(
