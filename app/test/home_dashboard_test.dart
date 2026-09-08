@@ -126,7 +126,7 @@ void main() {
       );
 
       expect(progress.resumableSubmission, isNull);
-      expect(progress.order, 2);
+      expect(progress.order, 3);
     });
   });
 
@@ -206,6 +206,69 @@ void main() {
         action.route,
         AppRoutes.pdfReview(testId: 't1', submissionId: 'oldest'),
       );
+    });
+
+    test('古いテストの要確認が、新しいテストの通常レビューより先', () {
+      // テストの新しさで先にタイブレークすると、新しい方の「レビュー待ち」が
+      // 勝ってしまう。優先順位は答案のbucketが先 (§2.1)。
+      final older = buildTest(id: 'older', createdDay: 1);
+      final newer = buildTest(id: 'newer', createdDay: 9);
+      final dashboard = build({
+        newer: [
+          buildSubmission(
+            id: 'awaiting',
+            testId: 'newer',
+            state: 'ai_processed',
+          ),
+        ],
+        older: [
+          buildSubmission(
+            id: 'flagged',
+            testId: 'older',
+            state: 'needs_review',
+          ),
+        ],
+      });
+
+      final action = dashboard.nextAction;
+      expect(action.headline, contains('要確認'));
+      expect(
+        action.route,
+        AppRoutes.pdfReview(testId: 'older', submissionId: 'flagged'),
+      );
+      // カードの並びも同じ順序でないと、上のボタンと1枚目が食い違う。
+      expect(dashboard.tests.map((t) => t.test.id), ['older', 'newer']);
+    });
+
+    test('見出しは名指ししたbucketだけを数え、残りは説明文が引き取る', () {
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [
+          buildSubmission(id: 'flagged', testId: 't1', state: 'needs_review'),
+          for (var index = 0; index < 9; index++)
+            buildSubmission(
+              id: 'awaiting-$index',
+              testId: 't1',
+              state: 'ai_processed',
+            ),
+        ],
+      });
+
+      final action = dashboard.nextAction;
+      // 「要確認の答案が10件あります」だと、カードが示す 要確認 1件 と食い違う。
+      expect(action.headline, '要確認の答案が1件あります');
+      expect(action.detail, contains('ほかにレビュー待ちが9件'));
+    });
+
+    test('要確認だけのときは説明文に但し書きを付けない', () {
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [
+          buildSubmission(id: 'flagged', testId: 't1', state: 'needs_review'),
+        ],
+      });
+
+      expect(dashboard.nextAction.detail, isNot(contains('ほかに')));
     });
 
     test('要確認が無くレビュー待ちだけならそちらを開く', () {

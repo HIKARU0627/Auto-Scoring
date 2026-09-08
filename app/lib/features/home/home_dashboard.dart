@@ -112,13 +112,21 @@ class HomeTestProgress {
   /// 表示順。小さいほど上。[HomeDashboard.nextAction] の優先順位と同じ並びに
   /// してある -- 一番上のカードが「次の一手」の続きに見えるように。
   ///
-  /// 0: レビューが止まっているテスト（人間しか進められない）
-  /// 1: 登録が途中、または取込に失敗した答案があるテスト
-  /// 2: 待っていれば進む、あるいは片付いているテスト
+  /// 0: 要確認の答案があるテスト（AIが人間に投げ返した）
+  /// 1: レビュー待ちの答案があるテスト
+  /// 2: 登録が途中、または取込に失敗した答案があるテスト
+  /// 3: 待っていれば進む、あるいは片付いているテスト
+  ///
+  /// **0 と 1 を分けているのが要点。** ここをまとめて「レビューが止まって
+  /// いるテスト」1段にすると、同順のタイブレークがテストの新しさになるため、
+  /// 古いテストの要確認が新しいテストの通常レビューに負ける。要確認を先に
+  /// 開くという §2.1 の優先順位はテストをまたいでも成り立たなければならず、
+  /// [HomeDashboard._resumeTarget] はこの並びを信じて先頭から探す。
   int get order {
-    if (resumableSubmission != null) return 0;
-    if (isDraft || countOf(HomeWorkBucket.failed) > 0) return 1;
-    return 2;
+    if (countOf(HomeWorkBucket.needsReview) > 0) return 0;
+    if (countOf(HomeWorkBucket.awaitingReview) > 0) return 1;
+    if (isDraft || countOf(HomeWorkBucket.failed) > 0) return 2;
+    return 3;
   }
 
   static Map<HomeWorkBucket, int> _countByBucket(
@@ -248,9 +256,12 @@ class HomeDashboard {
   }
 
   /// 「レビューを続ける」で開く1件と、それが属するテスト。
+  ///
+  /// 先頭から探すだけでよいのは、[tests] が [HomeTestProgress.order] で
+  /// 並んでいて、その第一段が「要確認を含むか」だから -- テストの新しさより
+  /// 先に答案のbucketで比べたことになる。したがって、要確認の答案がどれか1つ
+  /// でもあれば、ここが返すのは必ずその要確認である。
   (HomeTestProgress, SubmissionResponse)? get _resumeTarget {
-    // [tests] は既に人間待ち優先で並んでいるので、先頭から見つかった
-    // ものがそのまま「続き」になる。
     for (final test in tests) {
       final submission = test.resumableSubmission;
       if (submission != null) return (test, submission);
@@ -272,17 +283,22 @@ class HomeDashboard {
     if (_resumeTarget case (final test, final submission)) {
       final bucket = HomeWorkBucket.of(submission.state);
       final isFlagged = bucket == HomeWorkBucket.needsReview;
-      final pending =
-          count(HomeWorkBucket.needsReview) +
-          count(HomeWorkBucket.awaitingReview);
+      final awaiting = count(HomeWorkBucket.awaitingReview);
+      // 見出しが名指ししたbucketだけを数える。2つを足すと、要確認1件と
+      // レビュー待ち9件で「要確認の答案が10件あります」と読ませてしまい、
+      // 下のカードが示す要確認1件と食い違う。残りは説明文が引き取る。
+      //
+      // [isFlagged] が false のとき要確認は必ず0件である ([_resumeTarget]
+      // は要確認があればそれを返す) ので、逆向きの但し書きは要らない。
       return HomeNextAction(
         icon: bucket.icon,
         tone: bucket.tone,
         headline: isFlagged
-            ? '要確認の答案が$pending件あります'
-            : 'レビュー待ちの答案が$pending件あります',
+            ? '要確認の答案が${count(HomeWorkBucket.needsReview)}件あります'
+            : 'レビュー待ちの答案が$awaiting件あります',
         detail: isFlagged
             ? 'AIが判断できなかった設問を含む答案から開きます'
+                  '${awaiting > 0 ? '（ほかにレビュー待ちが$awaiting件）' : ''}'
             : 'AIの採点は終わっています。古い順に確認していきます',
         actionLabel: 'レビューを続ける',
         route: AppRoutes.pdfReview(
