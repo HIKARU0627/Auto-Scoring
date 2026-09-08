@@ -359,27 +359,34 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the rest of it (Issue #85).
   final _inspectorScrollController = ScrollController();
 
-  /// Per question, the largest `maxScrollExtent` the Inspector has been
-  /// scrolled all the way through -- how far down 判断材料 has been *seen*.
+  /// Per question, the tallest the 判断材料 has been while its end was on
+  /// screen -- **how much material has been shown**, in pixels of content.
   ///
-  /// A plain "既読" flag would be wrong in both directions. Scrolling back up
-  /// to re-read something must not un-see it, which is why this is not simply
-  /// "is the Inspector at its end right now"; and content arriving after the
-  /// fact (a poll delivering the grade, an Undo restoring the AI's row) must
-  /// not stay silently covered by a mark earned against a shorter panel,
-  /// which is why it is the extent rather than a boolean. Scrolling changes
-  /// the position, not the extent, so only the second case clears it.
-  final Map<String, double> _materialSeenExtent = {};
+  /// The height of the material itself, deliberately, and not how far it had
+  /// to be scrolled. Those differ by the viewport, and mixing the viewport in
+  /// makes this answer questions it has no business answering: shrinking the
+  /// window, or typing a third line into 修正コメント, would both "un-see"
+  /// material that was displayed in full a moment earlier. What was displayed
+  /// stays displayed. Only the material getting *taller* -- a poll delivering
+  /// the grade, an Undo restoring the AI's row -- is new material that has
+  /// not been shown, and only that clears the mark.
+  ///
+  /// A plain "既読" flag would be wrong for the other direction too: scrolling
+  /// back up to re-read something must not un-see it, and it does not, since
+  /// scrolling moves the position and leaves the height alone.
+  final Map<String, double> _materialSeenHeight = {};
 
-  /// The Inspector's current `maxScrollExtent` -- how much of the 判断材料 is
-  /// below the fold right now, or 0 when all of it fits.
+  /// The 判断材料's current height, and whether any of it is below the fold
+  /// right now. [double.infinity] until this question's panel has laid out,
+  /// so "not measured yet" reads as "not seen yet" rather than as "fits".
   ///
   /// Held as state rather than read off [_inspectorScrollController] during
   /// build. A scroll controller only knows about the *last* layout, so
   /// deriving the notice and the 承認 gate from it directly would let both
   /// drift a frame behind the panel they describe -- and a stale "it all
   /// fits" is an enabled 承認 for material that has since grown.
-  double _materialExtent = 0;
+  double _materialHeight = double.infinity;
+  bool _materialOverflows = false;
 
   bool _loadingShell = true;
   String? _shellError;
@@ -1135,7 +1142,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (_inspectorScrollController.hasClients) {
       _inspectorScrollController.jumpTo(0);
     }
-    _materialExtent = 0;
+    _materialHeight = double.infinity;
+    _materialOverflows = false;
     // Only move the viewer when the target question is on a different page --
     // staying on the same page keeps whatever zoom/scroll the reviewer set
     // (Issue #21 acceptance: "Question/Submission移動、zoom/scrollを保った
@@ -1187,8 +1195,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   bool get _materialFullyRead {
     final question = _currentQuestion;
     if (question == null) return false;
-    final seen = _materialSeenExtent[question.id];
-    return seen != null && _materialExtent <= seen + _materialReadEpsilon;
+    final seen = _materialSeenHeight[question.id];
+    return seen != null && _materialHeight <= seen + _materialReadEpsilon;
   }
 
   /// Records how far the Inspector has been read, from its own scroll
@@ -1204,14 +1212,24 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (question == null || review == null || !review.hasLoaded) return;
     if (review.loading || review.error != null) return;
     if (!metrics.hasContentDimensions) return;
-    final seen = _materialSeenExtent[question.id];
-    final reachedEnd = metrics.extentAfter <= _materialReadEpsilon;
+    // The material's own height: what is scrolled past, plus what is on
+    // screen. `maxScrollExtent` alone is that height *minus the viewport*,
+    // which is a fact about the window rather than about the material.
+    final height = metrics.maxScrollExtent + metrics.viewportDimension;
+    final overflows = metrics.maxScrollExtent > _materialReadEpsilon;
+    final seen = _materialSeenHeight[question.id];
     final newlySeen =
-        reachedEnd && (seen == null || seen < metrics.maxScrollExtent);
-    if (!newlySeen && metrics.maxScrollExtent == _materialExtent) return;
+        metrics.extentAfter <= _materialReadEpsilon &&
+        (seen == null || seen < height);
+    if (!newlySeen &&
+        height == _materialHeight &&
+        overflows == _materialOverflows) {
+      return;
+    }
     _setStateIfMounted(() {
-      _materialExtent = metrics.maxScrollExtent;
-      if (newlySeen) _materialSeenExtent[question.id] = metrics.maxScrollExtent;
+      _materialHeight = height;
+      _materialOverflows = overflows;
+      if (newlySeen) _materialSeenHeight[question.id] = height;
     });
   }
 
@@ -1232,12 +1250,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     final review = _currentReview;
     if (!_canDecide) return false;
     if (review!.isConfirmed || review.latestAiGrade == null) return false;
-    // Only once the panel is known to have something below its fold. The
-    // notice is itself part of the material it introduces, so announcing it
-    // before the panel has been measured would be self-fulfilling: on a panel
-    // that fits by less than the notice's own height, adding it is what
-    // pushes the end off screen, and it would then never come off again.
-    return _materialExtent > _materialReadEpsilon && !_materialFullyRead;
+    // Only while something really is below the fold. What is measured is the
+    // material alone -- the notice floats over the panel rather than sitting
+    // in it (`_buildInspector`), so it can never be its own evidence.
+    return _materialOverflows && !_materialFullyRead;
   }
 
   /// Whether "承認して次へ" may act: [_canDecide], and either the question is
@@ -2079,60 +2095,79 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     return Column(
       children: [
         Expanded(
-          // Live updates while the reviewer is actually dragging; the
-          // post-frame check above covers everything that changes without a
-          // gesture behind it.
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (notification) {
-              _recordMaterialRead(notification.metrics);
-              return false;
-            },
-            child: SingleChildScrollView(
-              key: const Key('review-inspector'),
-              controller: _inspectorScrollController,
-              padding: AppSpacing.panel,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Heading and state on one line rather than stacked: this
-                  // panel is the only place the 判断材料 lives, and every row
-                  // it does not spend on a heading is a row of 根拠/コメント/
-                  // 基準ごとの判定 that gets to stay on screen with the 承認
-                  // button (Issue #85). The badge is still the *question's*
-                  // state, still reading `_questionStatus` like the rail and
-                  // the panel do, and still adjacent to the 問N it belongs to
-                  // (Issue #84) -- only the axis it is stacked on changed.
-                  Row(
+          // The notice floats over the panel instead of taking a row in it.
+          //
+          // Inside the scrolling column it was part of the very thing it
+          // described: at 700x720 the material overflows, the notice appears,
+          // and widening to 1280x720 -- where the material fits on its own --
+          // left the notice's own ~60px still hanging below the fold, so the
+          // panel read as unread because the unread notice was in it. The
+          // gate locked itself. Above the action bar it was the same loop
+          // through the viewport instead of through the content. A `Stack` is
+          // the only placement that costs neither: what gets measured is the
+          // 判断材料 and nothing else (Issue #85, レビュー1回目 P2).
+          child: Stack(
+            children: [
+              // Live updates while the reviewer is actually dragging; the
+              // post-frame check above covers everything that changes without
+              // a gesture behind it.
+              NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  _recordMaterialRead(notification.metrics);
+                  return false;
+                },
+                child: SingleChildScrollView(
+                  key: const Key('review-inspector'),
+                  controller: _inspectorScrollController,
+                  padding: AppSpacing.panel,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Expanded(
-                        child: Text(
-                          '問${question.number}',
-                          style: context.texts.titleLarge,
-                        ),
+                      // Heading and state on one line rather than stacked:
+                      // this panel is the only place the 判断材料 lives, and
+                      // every row it does not spend on a heading is a row of
+                      // 根拠/コメント/基準ごとの判定 that gets to stay on
+                      // screen with the 承認 button (Issue #85). The badge is
+                      // still the *question's* state, still reading
+                      // `_questionStatus` like the rail and the panel do, and
+                      // still adjacent to the 問N it belongs to (Issue #84) --
+                      // only the axis it is stacked on changed.
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '問${question.number}',
+                              style: context.texts.titleLarge,
+                            ),
+                          ),
+                          _buildQuestionStateChip(question),
+                        ],
                       ),
-                      _buildQuestionStateChip(question),
+                      const SizedBox(height: AppSpacing.lg),
+                      if (review == null || review.loading)
+                        const Center(
+                          key: Key('review-question-loading'),
+                          child: Padding(
+                            padding: AppSpacing.page,
+                            child: CircularProgressIndicator(),
+                          ),
+                        )
+                      else if (review.error != null)
+                        _buildQuestionError(review.error!)
+                      else
+                        _buildQuestionContent(question, review),
                     ],
                   ),
-                  const SizedBox(height: AppSpacing.lg),
-                  if (_blockedOnUnreadMaterial) ...[
-                    _buildUnreadMaterialNotice(),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-                  if (review == null || review.loading)
-                    const Center(
-                      key: Key('review-question-loading'),
-                      child: Padding(
-                        padding: AppSpacing.page,
-                        child: CircularProgressIndicator(),
-                      ),
-                    )
-                  else if (review.error != null)
-                    _buildQuestionError(review.error!)
-                  else
-                    _buildQuestionContent(question, review),
-                ],
+                ),
               ),
-            ),
+              if (_blockedOnUnreadMaterial)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _buildUnreadMaterialNotice(),
+                ),
+            ],
           ),
         ),
         if (showsContent) ...[
@@ -2464,41 +2499,49 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// so it reads as "there is more to look at", not as a permanent banner the
   /// eye learns to skip.
   ///
-  /// It is rendered *inside* the scrolling 判断材料, at its head, and not
-  /// above the action bar: a notice saying 「まだ続きがある」 must not be paid
-  /// for out of the height of the very panel it is talking about. Above the
-  /// action bar it shrank the Inspector by its own height, which could keep
-  /// the material from fitting and so keep the notice on screen -- a layout
-  /// that argues with itself. Here it costs the viewport nothing and scrolls
-  /// away as the reviewer reads past it.
+  /// Floated over the bottom edge of the panel by [_buildInspector] rather
+  /// than laid out inside it, so that it takes neither a row of the material
+  /// nor a slice of the viewport. It sits at the bottom because that is the
+  /// direction it is pointing, and the only thing it ever covers is material
+  /// the reviewer is about to scroll past anyway -- by the time they reach
+  /// the end, the gate is open and the notice is gone.
   Widget _buildUnreadMaterialNotice() {
-    return Row(
-      key: const Key('review-unread-material-notice'),
-      children: [
-        const Icon(Icons.arrow_downward, size: AppIconSize.inline),
-        const SizedBox(width: AppSpacing.xs),
-        Expanded(
-          child: Text(
-            'この下にまだ判断材料があります。末尾まで表示すると承認できます。',
-            style: context.texts.bodySmall,
-          ),
+    return Material(
+      // Opaque, and lifted: it is floating over the material, and text over
+      // text is unreadable.
+      elevation: AppElevation.raised,
+      child: Padding(
+        padding: AppSpacing.banner,
+        child: Row(
+          key: const Key('review-unread-material-notice'),
+          children: [
+            const Icon(Icons.arrow_downward, size: AppIconSize.inline),
+            const SizedBox(width: AppSpacing.xs),
+            Expanded(
+              child: Text(
+                'この下にまだ判断材料があります。末尾まで表示すると承認できます。',
+                style: context.texts.bodySmall,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            // Enter is bound page-wide to 承認して次へ, and a
+            // `CallbackShortcuts` above this button would swallow it before
+            // the button's own `ActivateIntent` ever ran -- so it is re-bound
+            // here, closer to the focus, the same way the 進捗パネル re-binds
+            // it for its nodes.
+            Shortcuts(
+              shortcuts: const <ShortcutActivator, Intent>{
+                SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+              },
+              child: TextButton(
+                key: const Key('review-reveal-material-button'),
+                onPressed: _revealRestOfMaterial,
+                child: const Text('続きを表示'),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: AppSpacing.sm),
-        // Enter is bound page-wide to 承認して次へ, and a `CallbackShortcuts`
-        // above this button would swallow it before the button's own
-        // `ActivateIntent` ever ran -- so it is re-bound here, closer to the
-        // focus, the same way the 進捗パネル re-binds it for its nodes.
-        Shortcuts(
-          shortcuts: const <ShortcutActivator, Intent>{
-            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-          },
-          child: TextButton(
-            key: const Key('review-reveal-material-button'),
-            onPressed: _revealRestOfMaterial,
-            child: const Text('続きを表示'),
-          ),
-        ),
-      ],
+      ),
     );
   }
 

@@ -4534,6 +4534,99 @@ void main() {
       );
     });
 
+    // ---------------------------------------------------------------- //
+    // レビュー1回目 P2: 初期表示だけを見ていると、ゲートが自分の出した
+    // 誘導行を「未読」の根拠にしてしまう循環を見逃す。状態が変わる経路を
+    // 通す。
+    // ---------------------------------------------------------------- //
+    testWidgets('狭幅で発動したゲートは、標準幅に広げて収まれば解ける', (tester) async {
+      // 700x720 では判断材料が下端外に残る。
+      await pumpAt(tester, desktopNarrow, reviewableQuestion());
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
+        reason: 'the premise: the gate is closed at this width',
+      );
+
+      // 1280x720 なら収まる幅である。誘導行そのものが場所を取っていると、
+      // 「収まらないから誘導行が出る／誘導行が出ているから収まらない」で
+      // 固まる。
+      await tester.binding.setSurfaceSize(desktopStandard);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+        reason: 'the notice was counting itself as unread material',
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('一度表示しきった判断材料は、ウィンドウを狭めても未読に戻らない', (tester) async {
+      await pumpAt(tester, const Size(1280, 1000), reviewableQuestion());
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+      );
+
+      // 材料は1pxも変わっていない。変わったのは窓の高さだけで、表示され
+      // きったという事実は取り消されない。ここを `maxScrollExtent` で見て
+      // いると、窓が縮んだだけで既読が消える。
+      await tester.binding.setSurfaceSize(const Size(1280, 560));
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('修正コメントを3行まで打っても、既読は取り消されない', (tester) async {
+      // ぎりぎり収まる 1280x720 で。余裕のある高さで試すと、メモ欄が伸びても
+      // 材料は収まったままになり、何も検査していないテストになる。
+      await pumpAt(tester, desktopStandard, reviewableQuestion());
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+        reason: 'the premise: the gate is open before anything is typed',
+      );
+
+      // メモ欄はスクロール領域の外に固定されているので、伸びるとInspectorの
+      // ビューポートが縮む。それは判断材料が増えたことではない。
+      await tester.enterText(
+        find.byKey(const Key('review-note-field')),
+        '1行目\n2行目\n3行目',
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
     testWidgets('末尾まで表示すれば承認できるようになる', (tester) async {
       await pumpAt(
         tester,
