@@ -1325,7 +1325,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           label: question.number,
           status: deriveDagNodeStatus(
             job: job,
-            reviewAction: _reviews[question.id]?.effectiveReview?.action,
+            review: _reviews[question.id]?.effectiveReview,
           ),
           blockedOnQuestionId: job?.blockedOnQuestionId,
         ),

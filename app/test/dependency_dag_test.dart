@@ -18,9 +18,11 @@ JobResponse _job({
   bool? usable,
   String? blockedOnQuestionId,
   String questionId = 'q1',
+  String? id,
+  int createdAtSeconds = 0,
 }) => JobResponse(
   (b) => b
-    ..id = 'job-$questionId'
+    ..id = id ?? 'job-$questionId'
     ..kind = 'grading'
     ..submissionId = 'sub-1'
     ..questionId = questionId
@@ -29,8 +31,36 @@ JobResponse _job({
     ..blockedOnQuestionId = blockedOnQuestionId
     ..attempts = 1
     ..maxAttempts = 3
-    ..createdAt = DateTime.utc(2026, 1, 1)
-    ..updatedAt = DateTime.utc(2026, 1, 1),
+    ..createdAt = DateTime.utc(
+      2026,
+      1,
+      1,
+    ).add(Duration(seconds: createdAtSeconds))
+    ..updatedAt = DateTime.utc(
+      2026,
+      1,
+      1,
+    ).add(Duration(seconds: createdAtSeconds)),
+);
+
+ReviewResponse _review({
+  String action = 'approved',
+  String? regradeJobId,
+  int createdAtSeconds = 0,
+}) => ReviewResponse(
+  (b) => b
+    ..id = 'review-1'
+    ..submissionId = 'sub-1'
+    ..questionId = 'q1'
+    ..action = action
+    ..version = 1
+    ..aiGradeResultId = 'grade-1'
+    ..regradeJobId = regradeJobId
+    ..createdAt = DateTime.utc(
+      2026,
+      1,
+      1,
+    ).add(Duration(seconds: createdAtSeconds)),
 );
 
 DagQuestion _question(
@@ -88,7 +118,7 @@ void main() {
   group('deriveDagNodeStatus', () {
     test('has no job and no review: 未処理', () {
       expect(
-        deriveDagNodeStatus(job: null, reviewAction: null),
+        deriveDagNodeStatus(job: null, review: null),
         DagNodeStatus.pending,
       );
     });
@@ -102,7 +132,7 @@ void main() {
         ('cancelled', DagNodeStatus.cancelled),
       ]) {
         expect(
-          deriveDagNodeStatus(job: _job(state: state), reviewAction: null),
+          deriveDagNodeStatus(job: _job(state: state), review: null),
           expected,
           reason: state,
         );
@@ -117,7 +147,7 @@ void main() {
       expect(
         deriveDagNodeStatus(
           job: _job(state: 'running'),
-          reviewAction: 'approved',
+          review: _review(),
         ),
         DagNodeStatus.running,
       );
@@ -130,7 +160,7 @@ void main() {
       expect(
         deriveDagNodeStatus(
           job: _job(state: 'succeeded', usable: false),
-          reviewAction: null,
+          review: null,
         ),
         DagNodeStatus.needsCheck,
       );
@@ -148,12 +178,60 @@ void main() {
         expect(
           deriveDagNodeStatus(
             job: _job(state: 'succeeded', usable: true),
-            reviewAction: action,
+            review: action == null ? null : _review(action: action),
           ),
           expected,
           reason: '$action',
         );
       }
+    });
+
+    test('再判定待ち ends when the job the request created succeeds', () {
+      // Nothing ever closes a `regrade_requested` row -- the replacement
+      // grade lands as a new GradeResult, not a new Review -- so treating
+      // the action as the state left the node stuck on 再判定待ち with a
+      // fresh grade on screen unmentioned (review round 1, P2).
+      final review = _review(
+        action: 'regrade_requested',
+        regradeJobId: 'job-regrade',
+      );
+      expect(
+        deriveDagNodeStatus(
+          job: _job(state: 'succeeded', usable: true, id: 'job-regrade'),
+          review: review,
+        ),
+        DagNodeStatus.graded,
+      );
+      // Still outstanding while only the *superseded* attempt is known.
+      expect(
+        deriveDagNodeStatus(
+          job: _job(state: 'succeeded', usable: true, id: 'job-original'),
+          review: review,
+        ),
+        DagNodeStatus.regradeRequested,
+      );
+    });
+
+    test('再判定待ち also ends for any job that ran after the request', () {
+      // The replacement job is normally named by the review, but a job
+      // created afterwards for another reason (a re-submission under a newer
+      // graph version) did not produce the result the reviewer rejected
+      // either.
+      final review = _review(action: 'regrade_requested', createdAtSeconds: 10);
+      expect(
+        deriveDagNodeStatus(
+          job: _job(state: 'succeeded', usable: true, createdAtSeconds: 20),
+          review: review,
+        ),
+        DagNodeStatus.graded,
+      );
+      expect(
+        deriveDagNodeStatus(
+          job: _job(state: 'succeeded', usable: true, createdAtSeconds: 5),
+          review: review,
+        ),
+        DagNodeStatus.regradeRequested,
+      );
     });
   });
 
@@ -196,13 +274,30 @@ void main() {
       expect(danger, {DagNodeStatus.failed});
     });
 
-    test('in-flight is exactly the states the queue can still change', () {
-      expect(DagNodeStatus.values.where((s) => s.isInFlight).toSet(), {
-        DagNodeStatus.blocked,
-        DagNodeStatus.queued,
-        DagNodeStatus.running,
-        DagNodeStatus.regradeRequested,
-      });
+    test('未処理 counts as 待機, never as 完了', () {
+      // A submission whose per-question jobs have not been enqueued yet has
+      // nothing finished; reporting every node as 完了 was the one lie a
+      // collapsed panel left standing (review round 1, P2).
+      expect(DagNodeStatus.pending.progress, DagNodeProgress.waiting);
+      expect(
+        DagNodeStatus.values
+            .where((s) => s.progress == DagNodeProgress.settled)
+            .toSet(),
+        {
+          DagNodeStatus.needsCheck,
+          DagNodeStatus.failed,
+          DagNodeStatus.cancelled,
+          DagNodeStatus.graded,
+          DagNodeStatus.rejected,
+          DagNodeStatus.approved,
+        },
+      );
+      expect(
+        DagNodeStatus.values
+            .where((s) => s.progress == DagNodeProgress.running)
+            .toSet(),
+        {DagNodeStatus.running},
+      );
     });
   });
 
@@ -213,6 +308,7 @@ void main() {
       columnGap: 20,
       rowGap: 10,
       padding: 5,
+      laneGap: 10,
     );
 
     test('lays layers out along +x and layer members down +y', () {
@@ -247,6 +343,61 @@ void main() {
         metrics: metrics,
       )!;
       expect(layout.nodes.map((n) => n.id), ['q9', 'q1']);
+    });
+
+    test('an edge that would run behind a node is routed into a free lane', () {
+      // `A -> B`, `B -> C` *and* `A -> C` is an ordinary graph, and the three
+      // land in the same row of three consecutive layers -- so A -> C runs
+      // straight through B's opaque card unless it is moved (review round 1,
+      // P2).
+      final layout = buildDependencyDagLayout(
+        questions: [_question('q1'), _question('q2'), _question('q3')],
+        edges: [_edge('q1', 'q2'), _edge('q2', 'q3'), _edge('q1', 'q3')],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+      )!;
+      DagEdgeLine lineFor(String from, String to) =>
+          layout.edges.firstWhere((e) => e.key == '$from>$to');
+
+      // Adjacent layers have nothing in between and stay direct.
+      expect(lineFor('q1', 'q2').detourY, isNull);
+      expect(lineFor('q2', 'q3').detourY, isNull);
+      // The skipping edge travels below every node row: rows bottom is
+      // padding(5) + 1 row(40) = 45, plus one laneGap(10).
+      expect(lineFor('q1', 'q3').detourY, 55);
+      // The canvas grows to hold the lane, so it is never simply clipped.
+      expect(layout.size.height, 60);
+    });
+
+    test('a skipping edge with a clear diagonal keeps its direct line', () {
+      // Only edges a node is actually standing in the way of pay for a lane;
+      // routing every skipping edge below the diagram would send a perfectly
+      // readable line on a detour and grow the panel for nothing.
+      //
+      // Layers here are {q1,q2} / {q3} / {q4,q5}. The skipping edge q2 -> q5
+      // runs along the *second* row, and the only node in between (q3) is
+      // alone in its layer and therefore in the first -- nothing is in the
+      // way.
+      final layout = buildDependencyDagLayout(
+        questions: [
+          _question('q1'),
+          _question('q2'),
+          _question('q3'),
+          _question('q4'),
+          _question('q5'),
+        ],
+        edges: [
+          _edge('q2', 'q3'),
+          _edge('q3', 'q4'),
+          _edge('q3', 'q5'),
+          _edge('q2', 'q5'),
+        ],
+        releasedQuestionIds: const {},
+        metrics: metrics,
+      )!;
+      expect(layout.nodes.firstWhere((n) => n.id == 'q3').rect.top, 5);
+      expect(layout.edges.firstWhere((e) => e.key == 'q2>q5').detourY, isNull);
+      expect(layout.size.height, 100);
     });
 
     test('an edge is satisfied only when its prerequisite released it', () {
@@ -345,8 +496,14 @@ void main() {
         metrics: metrics,
       )!;
       expect(layout.countWhere((s) => s == DagNodeStatus.running), 1);
-      expect(layout.countWhere((s) => s.isInFlight), 2);
-      expect(layout.countWhere((s) => !s.isInFlight), 1);
+      expect(
+        layout.countWhere((s) => s.progress == DagNodeProgress.waiting),
+        1,
+      );
+      expect(
+        layout.countWhere((s) => s.progress == DagNodeProgress.settled),
+        1,
+      );
       expect(layout.statusById, {
         'q1': DagNodeStatus.running,
         'q2': DagNodeStatus.blocked,

@@ -15,6 +15,8 @@
 /// `features` side only paints what this produces.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
@@ -144,16 +146,47 @@ enum DagNodeStatus {
 
   final AppStatusTone tone;
 
-  /// Whether the pipeline may still change this node on its own. The panel
-  /// uses it to decide whether anything is worth animating, and the running
-  /// indicator to decide whether to move at all.
-  bool get isInFlight => switch (this) {
+  /// Which of the three buckets the collapsed header counts this in.
+  DagNodeProgress get progress => switch (this) {
+    // 未処理 belongs here, not in [DagNodeProgress.settled]: a submission
+    // whose per-question jobs have not been enqueued yet has *nothing*
+    // finished, and reporting it as 完了 in the header was exactly the lie
+    // a collapsed panel left standing (review round 1, P2).
+    DagNodeStatus.pending ||
     DagNodeStatus.blocked ||
     DagNodeStatus.queued ||
-    DagNodeStatus.running ||
-    DagNodeStatus.regradeRequested => true,
-    _ => false,
+    DagNodeStatus.regradeRequested => DagNodeProgress.waiting,
+    DagNodeStatus.running => DagNodeProgress.running,
+    DagNodeStatus.needsCheck ||
+    DagNodeStatus.failed ||
+    DagNodeStatus.cancelled ||
+    DagNodeStatus.graded ||
+    DagNodeStatus.rejected ||
+    DagNodeStatus.approved => DagNodeProgress.settled,
   };
+}
+
+/// The three buckets the panel header summarises a submission into, so that
+/// collapsing the diagram still answers 「まだ動いているのか」.
+///
+/// Coarser than [DagNodeStatus] on purpose: the header is one line, and the
+/// node itself carries the precise state.
+enum DagNodeProgress {
+  /// Nothing has started, or something has to happen elsewhere first:
+  /// 未処理・前提待ち・実行待ち, and a 再判定 request no job has answered yet.
+  waiting('待機'),
+
+  /// An OCR/AI provider call is in flight.
+  running('実行中'),
+
+  /// The pipeline is done with this question, whatever the outcome --
+  /// including 失敗 and 要確認, which are finished results a human now has to
+  /// deal with rather than work still in progress.
+  settled('完了');
+
+  const DagNodeProgress(this.label);
+
+  final String label;
 }
 
 /// Collapses one question's `Job` and `Review` into the single state a node
@@ -168,20 +201,20 @@ enum DagNodeStatus {
 /// job that is running again would tell the reviewer the opposite of what is
 /// happening.
 ///
-/// [reviewAction] is the *effective* review action (post-Undo) or `null` when
-/// none exists -- or when this screen has simply not fetched this question's
+/// [review] is the *effective* `Review` (post-Undo) or `null` when none
+/// exists -- or when this screen has simply not fetched this question's
 /// reviews yet, which is the common case for a question the reviewer has not
 /// visited. Both read as "no human decision recorded", which is the right
 /// thing to draw: the node then shows how far the *pipeline* got, and gains
 /// the human half as soon as that question is opened.
 DagNodeStatus deriveDagNodeStatus({
   required JobResponse? job,
-  required String? reviewAction,
+  required ReviewResponse? review,
 }) {
   if (job == null) {
     // A review with no job at all is not something the backend produces, but
     // if it ever appears, the human decision is the only fact available.
-    return _reviewStatus(reviewAction) ?? DagNodeStatus.pending;
+    return _reviewStatus(review, job) ?? DagNodeStatus.pending;
   }
   return switch (job.state) {
     'blocked' => DagNodeStatus.blocked,
@@ -194,18 +227,43 @@ DagNodeStatus deriveDagNodeStatus({
     // downstream -- a stronger statement than "nobody has reviewed it yet",
     // so it outranks the review overlay.
     'succeeded' when job.usable == false => DagNodeStatus.needsCheck,
-    'succeeded' => _reviewStatus(reviewAction) ?? DagNodeStatus.graded,
+    'succeeded' => _reviewStatus(review, job) ?? DagNodeStatus.graded,
     // An unknown state from a newer backend: say nothing rather than guess.
     _ => DagNodeStatus.pending,
   };
 }
 
-DagNodeStatus? _reviewStatus(String? action) => switch (action) {
-  'approved' || 'modified' => DagNodeStatus.approved,
-  'rejected' => DagNodeStatus.rejected,
-  'regrade_requested' => DagNodeStatus.regradeRequested,
-  _ => null,
-};
+DagNodeStatus? _reviewStatus(ReviewResponse? review, JobResponse? job) =>
+    switch (review?.action) {
+      'approved' || 'modified' => DagNodeStatus.approved,
+      'rejected' => DagNodeStatus.rejected,
+      'regrade_requested' when !_regradeAnswered(review!, job) =>
+        DagNodeStatus.regradeRequested,
+      _ => null,
+    };
+
+/// Whether the 再判定 [review] asked for has already been carried out by
+/// [job].
+///
+/// Unlike 承認/却下, a `regrade_requested` row is a *request*, and nothing
+/// ever closes it: the replacement grade lands as a new `GradeResult`, not as
+/// a new `Review`. Treating the action as the node's state unconditionally
+/// therefore left a question stuck on 再判定待ち forever -- AI処理中 while
+/// the replacement job ran, then straight back to 再判定待ち once it
+/// succeeded, with a fresh grade sitting on screen unmentioned (review round
+/// 1, P2).
+///
+/// Either signal answers it. `Review.regrade_job_id` names the job the
+/// request created, which settles the normal case outright and does not
+/// depend on two clocks agreeing. The timestamp covers every other job that
+/// ran after the request was recorded -- a re-submission under a newer graph
+/// version, say -- whose result is likewise not the one the reviewer
+/// rejected.
+bool _regradeAnswered(ReviewResponse review, JobResponse? job) {
+  if (job == null) return false;
+  return job.id == review.regradeJobId ||
+      job.createdAt.isAfter(review.createdAt);
+}
 
 /// Whether [job] has released the questions that depend on it.
 ///
@@ -292,6 +350,7 @@ class DagEdgeLine {
     required this.start,
     required this.end,
     required this.satisfied,
+    this.detourY,
   });
 
   final String fromQuestionId;
@@ -307,6 +366,18 @@ class DagEdgeLine {
   /// ([releasesDependents]). The satisfied/unsatisfied distinction is what
   /// makes 「上流が完了して下流の blocked が解ける瞬間」 visible.
   final bool satisfied;
+
+  /// The y of the free lane below the diagram this edge has to travel along,
+  /// or `null` for an edge that can go straight from [start] to [end].
+  ///
+  /// A dependency may skip layers (`A -> B`, `B -> C` *and* `A -> C` is a
+  /// perfectly ordinary graph), and a skipping edge whose endpoints sit in
+  /// the same row would otherwise run straight through the opaque card of
+  /// every node in between -- taking the direct dependency, and whether it is
+  /// satisfied, off the screen entirely (review round 1, P2). Only edges that
+  /// would actually cross a node get a lane; a skipping edge with a clear
+  /// diagonal keeps it.
+  final double? detourY;
 
   /// Stable identity for diffing one frame's edges against the previous
   /// one's, so the panel can animate only the edges that *just* became
@@ -327,6 +398,7 @@ class DagMetrics {
     this.columnGap = AppSpacing.xxl,
     this.rowGap = AppSpacing.md,
     this.padding = AppSpacing.lg,
+    this.laneGap = AppSpacing.md,
   });
 
   final double nodeWidth;
@@ -342,6 +414,10 @@ class DagMetrics {
   /// panel's scroll viewport.
   final double padding;
 
+  /// Between the node rows and the first detour lane, and between lanes.
+  /// See [DagEdgeLine.detourY].
+  final double laneGap;
+
   Rect rectAt(int layer, int row) => Rect.fromLTWH(
     padding + layer * (nodeWidth + columnGap),
     padding + row * (nodeHeight + rowGap),
@@ -349,9 +425,21 @@ class DagMetrics {
     nodeHeight,
   );
 
-  Size canvasSize({required int layerCount, required int maxRows}) => Size(
+  /// The bottom of the last node row -- everything below this is free space a
+  /// detour lane can use.
+  double _rowsBottom(int maxRows) =>
+      padding + maxRows * nodeHeight + (maxRows - 1) * rowGap;
+
+  double laneY(int lane, {required int maxRows}) =>
+      _rowsBottom(maxRows) + laneGap * (lane + 1);
+
+  Size canvasSize({
+    required int layerCount,
+    required int maxRows,
+    int laneCount = 0,
+  }) => Size(
     padding * 2 + layerCount * nodeWidth + (layerCount - 1) * columnGap,
-    padding * 2 + maxRows * nodeHeight + (maxRows - 1) * rowGap,
+    _rowsBottom(maxRows) + laneGap * laneCount + padding,
   );
 }
 
@@ -448,20 +536,61 @@ DependencyDagLayout? buildDependencyDagLayout({
     }
   }
 
-  final lines = [
-    for (final edge in drawable)
+  // Straight first, then a lane for each edge that a node is standing in the
+  // way of. Assigned in `drawable` order so the same graph always draws the
+  // same way.
+  var laneCount = 0;
+  final lines = <DagEdgeLine>[];
+  for (final edge in drawable) {
+    final from = nodeById[edge.fromQuestionId]!;
+    final to = nodeById[edge.toQuestionId]!;
+    final start = from.rect.centerRight;
+    final end = to.rect.centerLeft;
+    final blocked = _crossesANode(from: from, to: to, nodes: nodes);
+    lines.add(
       DagEdgeLine(
         fromQuestionId: edge.fromQuestionId,
         toQuestionId: edge.toQuestionId,
-        start: nodeById[edge.fromQuestionId]!.rect.centerRight,
-        end: nodeById[edge.toQuestionId]!.rect.centerLeft,
+        start: start,
+        end: end,
         satisfied: releasedQuestionIds.contains(edge.fromQuestionId),
+        detourY: blocked ? metrics.laneY(laneCount++, maxRows: maxRows) : null,
       ),
-  ];
+    );
+  }
 
   return DependencyDagLayout(
     nodes: nodes,
     edges: lines,
-    size: metrics.canvasSize(layerCount: layers.length, maxRows: maxRows),
+    size: metrics.canvasSize(
+      layerCount: layers.length,
+      maxRows: maxRows,
+      laneCount: laneCount,
+    ),
+  );
+}
+
+/// Whether a straight edge from [from] to [to] would pass behind another
+/// node's card.
+///
+/// The curve the panel draws between two node edges is monotone in y, so its
+/// whole vertical extent is the band between the two endpoints -- which makes
+/// this an exact test rather than an approximation: a node can only be in the
+/// way if it sits in a layer strictly between the two *and* its card overlaps
+/// that band. Adjacent layers have nothing in between and never collide.
+bool _crossesANode({
+  required DagNode from,
+  required DagNode to,
+  required List<DagNode> nodes,
+}) {
+  if (to.layer - from.layer < 2) return false;
+  final top = math.min(from.rect.center.dy, to.rect.center.dy);
+  final bottom = math.max(from.rect.center.dy, to.rect.center.dy);
+  return nodes.any(
+    (node) =>
+        node.layer > from.layer &&
+        node.layer < to.layer &&
+        node.rect.top <= bottom &&
+        node.rect.bottom >= top,
   );
 }

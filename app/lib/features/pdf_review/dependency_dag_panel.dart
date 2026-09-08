@@ -170,11 +170,22 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
   /// answer to 「まだ動いているのか」.
   Widget _buildHeader(BuildContext context) {
     final layout = widget.layout;
-    final running = layout.countWhere((s) => s == DagNodeStatus.running);
-    final waiting = layout.countWhere(
-      (s) => s == DagNodeStatus.blocked || s == DagNodeStatus.queued,
-    );
-    final done = layout.countWhere((s) => !s.isInFlight);
+    // Straight off `DagNodeProgress`, so every state lands in exactly one
+    // bucket and the three always add up to the number of nodes -- 未処理
+    // used to fall through to 完了, and a collapsed panel then reported a
+    // submission whose jobs had not been enqueued at all as fully done.
+    final counts = {
+      for (final progress in DagNodeProgress.values)
+        progress: layout.countWhere((s) => s.progress == progress),
+    };
+    final summary = [
+      for (final progress in const [
+        DagNodeProgress.running,
+        DagNodeProgress.waiting,
+        DagNodeProgress.settled,
+      ])
+        '${progress.label} ${counts[progress]}',
+    ].join(' ・ ');
     return Padding(
       padding: AppSpacing.banner,
       child: Row(
@@ -186,7 +197,7 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
           Expanded(
             child: Text(
               key: const Key('dag-summary'),
-              '実行中 $running ・ 待機 $waiting ・ 完了 $done',
+              summary,
               style: context.texts.bodySmall,
               overflow: TextOverflow.ellipsis,
             ),
@@ -516,18 +527,45 @@ class DagEdgePainter extends CustomPainter {
   /// layers are rarely in the same row, and a cubic keeps the arrow leaving
   /// horizontally and arriving horizontally, which is what makes the
   /// left-to-right direction readable when several edges overlap.
+  ///
+  /// An edge that `core` gave a [DagEdgeLine.detourY] instead drops into that
+  /// lane, runs along it, and climbs back -- see that field for why. Both
+  /// shapes leave and arrive horizontally, so the arrowhead below is drawn
+  /// the same way for either.
   Path _edgePath(DagEdgeLine edge) {
+    final path = Path()..moveTo(edge.start.dx, edge.start.dy);
+    if (edge.detourY case final laneY?) {
+      // Small enough that the lane itself is always the longest part of the
+      // route, however close together the two nodes are.
+      final bend = math.min(AppSpacing.lg, (edge.end.dx - edge.start.dx) / 4);
+      return path
+        ..cubicTo(
+          edge.start.dx + bend,
+          edge.start.dy,
+          edge.start.dx + bend,
+          laneY,
+          edge.start.dx + 2 * bend,
+          laneY,
+        )
+        ..lineTo(edge.end.dx - 2 * bend, laneY)
+        ..cubicTo(
+          edge.end.dx - bend,
+          laneY,
+          edge.end.dx - bend,
+          edge.end.dy,
+          edge.end.dx,
+          edge.end.dy,
+        );
+    }
     final dx = (edge.end.dx - edge.start.dx) / 2;
-    return Path()
-      ..moveTo(edge.start.dx, edge.start.dy)
-      ..cubicTo(
-        edge.start.dx + dx,
-        edge.start.dy,
-        edge.end.dx - dx,
-        edge.end.dy,
-        edge.end.dx,
-        edge.end.dy,
-      );
+    return path..cubicTo(
+      edge.start.dx + dx,
+      edge.start.dy,
+      edge.end.dx - dx,
+      edge.end.dy,
+      edge.end.dx,
+      edge.end.dy,
+    );
   }
 
   /// An unsatisfied dependency is dashed and a satisfied one is solid, so

@@ -150,6 +150,24 @@ void main() {
     expect(find.text('実行中 1 ・ 待機 2 ・ 完了 0'), findsOneWidget);
   });
 
+  testWidgets('a submission whose jobs are not enqueued yet reads as 待機', (
+    tester,
+  ) async {
+    // 未処理 used to fall through to 完了, so collapsing the panel left the
+    // header claiming a submission nothing had started was fully done
+    // (review round 1, P2).
+    await _pumpPanel(
+      tester,
+      _layout(
+        q1: DagNodeStatus.pending,
+        q2: DagNodeStatus.pending,
+        q3: DagNodeStatus.pending,
+      ),
+    );
+
+    expect(find.text('実行中 0 ・ 待機 3 ・ 完了 0'), findsOneWidget);
+  });
+
   testWidgets('a click selects that question', (tester) async {
     final selected = <String>[];
     await _pumpPanel(tester, _layout(), onQuestionSelected: selected.add);
