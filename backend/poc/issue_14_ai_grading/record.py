@@ -109,7 +109,7 @@ class _Cell:
     request: GradingRequest
 
 
-def _load_image(images: Path, ref: str) -> bytes:
+def _load_image(images: Path, ref: str, *, locator: str) -> bytes:
     """Read the answer-region crop named by an ``input.answer_image_ref``.
 
     ``sha256:<hex>`` is the form that can be *verified*: the file is read
@@ -125,34 +125,49 @@ def _load_image(images: Path, ref: str) -> bytes:
     resolved: the dataset is untrusted input, and a reference is not allowed
     to reach outside the crop directory it was given (AGENTS.md
     "Security").
+
+    **The reference itself is never echoed in a raised message.** A
+    reference that failed validation is by definition not known to be a
+    content hash -- a malformed dataset could have answer text or a name
+    there by mistake, and ``main()`` prints these messages to stderr (code
+    review finding; mirrors ``report.py``'s ``_sanitize_validation_error``).
+    Only ``locator`` (the file and question index, both authored by us) and
+    a fixed reason are reported. A digest that *did* validate is safe to
+    show, and is, since finding a missing crop is otherwise guesswork.
     """
     if ref.startswith("sha256:"):
         digest = ref[len("sha256:") :].strip().lower()
         if len(digest) != 64 or not all(c in "0123456789abcdef" for c in digest):
-            raise _DatasetError(f"answer_image_ref {ref!r} is not a valid sha256 hex digest")
+            raise _DatasetError(
+                f"{locator}: answer_image_ref starts with 'sha256:' but the rest is not a "
+                "64-character hex digest. The value itself is not shown here."
+            )
         for extension in _IMAGE_EXTENSIONS:
             candidate = images / f"{digest}{extension}"
             if candidate.is_file():
                 data = candidate.read_bytes()
                 if hashlib.sha256(data).hexdigest() != digest:
                     raise _DatasetError(
-                        f"{candidate}: content hash does not match its answer_image_ref -- "
+                        f"{locator}: {candidate} does not hash to its answer_image_ref -- "
                         "the crop this sample was labelled against is not the crop on disk"
                     )
                 return data
         raise _DatasetError(
-            f"no crop for answer_image_ref {ref!r} under {images} "
+            f"{locator}: no crop for {digest} under {images} "
             f"(looked for {digest}<{'|'.join(_IMAGE_EXTENSIONS)}>)"
         )
 
     if "/" in ref or "\\" in ref or ref in {".", ".."}:
         raise _DatasetError(
-            f"answer_image_ref {ref!r} is neither a sha256: digest nor a plain file name; "
-            "a path is not accepted here"
+            f"{locator}: answer_image_ref is neither a 'sha256:' digest nor a plain file "
+            "name -- a path is not accepted here. The value itself is not shown here."
         )
     candidate = images / ref
     if not candidate.is_file():
-        raise _DatasetError(f"no crop named {ref!r} under {images}")
+        raise _DatasetError(
+            f"{locator}: answer_image_ref names no file under {images}. The value itself "
+            "is not shown here."
+        )
     return candidate.read_bytes()
 
 
@@ -221,7 +236,9 @@ def _plan(
                 # "Security"; report.py's `_sanitize_validation_error`).
                 raise _DatasetError(f"{path} question {index}: 'input' failed validation") from None
             question_id = _question_id(question, path=path, index=index)
-            image = _load_image(images, input_record.answer_image_ref)
+            image = _load_image(
+                images, input_record.answer_image_ref, locator=f"{path} question {index}"
+            )
             recorded = question.setdefault("recorded", {})
             if not isinstance(recorded, dict):
                 raise _DatasetError(f"{path} question {index}: 'recorded' must be an object")

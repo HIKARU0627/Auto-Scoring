@@ -296,7 +296,7 @@ def test_a_crop_whose_hash_does_not_match_its_reference_is_rejected(
     digest = document["questions"][0]["input"]["answer_image_ref"].removeprefix("sha256:")
     (images / f"{digest}.png").write_bytes(b"different bytes entirely")
 
-    with pytest.raises(record._DatasetError, match="content hash"):
+    with pytest.raises(record._DatasetError, match="does not hash to"):
         record._plan(
             dataset=dataset,
             images=images,
@@ -321,14 +321,32 @@ def test_a_missing_crop_aborts_before_any_call_is_made(dataset: Path, tmp_path: 
         )
 
 
-@pytest.mark.parametrize("ref", ["../secrets.png", "sub/dir.png", "sha256:not-a-digest"])
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "../secrets.png",
+        "sub/dir.png",
+        f"sha256:{_ANSWER_TEXT}",
+        f"{_ANSWER_TEXT}.png",
+    ],
+)
 def test_a_reference_that_is_a_path_or_a_malformed_digest_is_rejected(
     tmp_path: Path, ref: str
 ) -> None:
     """The dataset is untrusted input; a reference must not reach outside
-    the crop directory it was given (AGENTS.md "Security")."""
-    with pytest.raises(record._DatasetError):
-        record._load_image(tmp_path, ref)
+    the crop directory it was given (AGENTS.md "Security").
+
+    And the rejected reference must not appear in the message: `main()`
+    prints these to stderr, and a reference that failed validation is by
+    definition not known to be a content hash -- it could be answer text or
+    a name a malformed dataset put there by mistake (code review finding).
+    """
+    with pytest.raises(record._DatasetError) as raised:
+        record._load_image(tmp_path, ref, locator="sample-01.json question 0")
+
+    assert ref not in str(raised.value)
+    assert _ANSWER_TEXT not in str(raised.value)
+    assert "sample-01.json question 0" in str(raised.value)
 
 
 def test_a_verified_crop_is_returned_by_content_hash(tmp_path: Path) -> None:
@@ -336,7 +354,7 @@ def test_a_verified_crop_is_returned_by_content_hash(tmp_path: Path) -> None:
     digest = hashlib.sha256(data).hexdigest()
     (tmp_path / f"{digest}.png").write_bytes(data)
 
-    assert record._load_image(tmp_path, f"sha256:{digest}") == data
+    assert record._load_image(tmp_path, f"sha256:{digest}", locator="loc") == data
 
 
 def test_recording_into_the_committed_fixtures_is_refused() -> None:
