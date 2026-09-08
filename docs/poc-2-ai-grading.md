@@ -1159,9 +1159,11 @@ structured_output_mode）のまま保たれ、経路の違いは `provider` フ�
 
 **API キーの設定項目は存在しない。** 本プロジェクトの Google Cloud 組織ポリシーが
 Gemini の API キーを禁止しているため、認証は Application Default Credentials
-だけである。旧 `AUTO_SCORING_GEMINI_API_KEY` / `AUTO_SCORING_ANTHROPIC_API_KEY` /
-`AUTO_SCORING_ANTHROPIC_MODEL` は削除した（Anthropic Claude は §2 のとおり
-OpenRouter 経由の 1 モデルとして扱う）。
+だけである（`AUTO_SCORING_GEMINI_API_KEY` の削除と ADC への切り替えは
+Issue #89。本 Issue はその方式に沿ってアダプタを実装した）。あわせて
+`AUTO_SCORING_ANTHROPIC_API_KEY` / `AUTO_SCORING_ANTHROPIC_MODEL` も削除した:
+判断 B に直接の Claude 経路は無く、Anthropic Claude は §2 のとおり OpenRouter
+経由の 1 モデルとして扱うため、設定項目だけが残っていても対応するアダプタが無い。
 
 ```bash
 gcloud auth application-default login
