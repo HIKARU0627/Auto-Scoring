@@ -100,11 +100,13 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 
 ## 4. 集約結果
 
-### 4.1 全員一致（5/5・全員 high）→ 起票した
+### 4.1 全員一致（5/5）→ 起票した
 
 **同じ設問について、状態表示が2つの粒度で矛盾する。** → #84
 
-5体が独立に、同じ画面の同じ食い違いを指摘した唯一の項目である。
+**5/5 のテーマは2つある。** どちらもこの画面の状態表示の話で、どちらも #84 に入れてある。
+下の「状態の矛盾」と「左レールが状態を潰す」がそれで、**全員が high を付けたのは前者だけ**
+である。
 
 - `pdf-review-blocked`: DAGの問1は「承認済み」なのに、右パネルのバッジは「⚠ 要確認」
 - `pdf-review-failed`: DAGの問1は「レビュー待ち」なのに、右パネルのバッジは「✓ AI処理済み」
@@ -124,11 +126,18 @@ CLI の出力から JSON を取り出しただけで、内容には手を入れ�
 review-q1-status-contradiction (high) / `composer` review-conflicting-state-labels (high)
 
 左レールが状態を潰す問題も同じ根なので、この Issue に含めた。
-**4/5**: `grok` review-rail-flattens-states (high) / `claude` rail-icons-indistinguishable
-(medium) / `codex` narrow-question-labels-missing (medium) / `composer`
-review-sidebar-icon-only-narrow (low)
+**5/5**（severity は割れている: high 2・medium 2・low 1）: `grok`
+review-rail-flattens-states (high) / `gemini` inconsistent-status-indicators (high) /
+`claude` rail-icons-indistinguishable (medium) / `codex` narrow-question-labels-missing
+(medium) / `composer` review-sidebar-icon-only-narrow (low)
 
-### 4.2 多数一致（3〜4/5）→ 4本にまとめて起票した
+`gemini` の1件は上の「状態の矛盾」と同じ id である。observation が
+「上部のグラフ、**左サイドバー**、右パネルで…矛盾している」「左サイドバーでは問2が
+『砂時計』アイコンになっている（グラフではオレンジの？マーク）」と、両方を観察している。
+最初は 3/5、次に 4/5 と書いていた。**目で数えていた頃の数え落としが2段階で出てきたもの**で、
+プログラム導出に切り替えたあとに見つかった最後の1件である（Issue #71 レビュー3回目）。
+
+### 4.2 多数一致（3〜5/5）→ 4本にまとめて起票した
 
 **残り4本については、コードでの原因特定を行っていない。静止画からの観察である。**
 各 Issue にもそう明記した。
@@ -162,9 +171,12 @@ review-sidebar-icon-only-narrow (low)
 - **#88 戻る導線がない 3/5** — `claude` no-visible-focus-and-no-back (medium) / `grok`
   no-return-path (medium) / `composer` secondary-screens-no-nav (medium)
 
-`grok` の review-narrow-hides-scoring と `claude` の no-visible-focus-and-no-back は、
-1件で2つのことを観察しているので2か所に現れる。**同じ id を2つのテーマで数えている**
-ことを隠さずに書いておく。
+1件で2つのことを観察している finding は2か所に現れる。**同じ id を2つのテーマで
+数えている**ことを隠さずに書いておく。該当するのは3件:
+
+- `gemini` inconsistent-status-indicators — 状態の矛盾（§4.1）と左レール（§4.1）
+- `grok` review-narrow-hides-scoring — 判断材料の切れと DAGパネルの縦占有（どちらも #85）
+- `claude` no-visible-focus-and-no-back — 戻る導線（#88）とフォーカス表示（§4.4）
 
 #85 は、別々に見えた3つの指摘（標準幅での切れ・狭幅での上下分離・アクションバーの
 見切れ・DAGパネルの縦占有）を1本にまとめたものである。**すべて「縦の配分」という
