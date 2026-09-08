@@ -94,9 +94,23 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   AnswerLayoutResponse? _answerLayout;
 
   /// The stored answer sheet's bytes, for the overlay editor to draw on.
-  /// `null` when none is stored -- the editor then draws empty page outlines,
-  /// which is still enough to place boxes by number.
+  /// `null` when none is stored, or when fetching it failed -- the two are
+  /// told apart by [_answerLayoutPdfError].
   Uint8List? _answerLayoutPdf;
+
+  /// Why the stored answer sheet could not be fetched. Non-null only when a
+  /// sheet *is* recorded as stored, so "no sheet yet" and "the sheet is there
+  /// but I cannot show it" stay different states with different fixes.
+  String? _answerLayoutPdfError;
+
+  /// This test's confirmed question numbers.
+  ///
+  /// Read from the questions themselves, **not** from the profile response.
+  /// A test registered without a model-answer PDF has no profile until an
+  /// answer sheet is uploaded, so sourcing the candidates from the profile
+  /// made the very first action -- detecting, or drawing a box -- impossible
+  /// on exactly the tests this Issue exists for (review round 1, P1).
+  List<String> _questionNumbers = const [];
 
   bool _loading = true;
   bool _busy = false;
@@ -138,7 +152,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         if (error.statusCode != 404) rethrow;
       }
       final layout = await _dependencies.getAnswerLayout(widget.testId);
-      final layoutPdf = await _loadAnswerLayoutPdf(layout);
+      final questions = await _dependencies.listQuestions(widget.testId);
       if (!mounted) return;
       setState(() {
         _test = test;
@@ -151,8 +165,9 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         _dependencyGraph = graph;
         _editableEdges = graph?.edges.toList();
         _answerLayout = layout;
-        _answerLayoutPdf = layoutPdf;
+        _questionNumbers = [for (final q in questions) q.number];
       });
+      await _loadAnswerLayoutPdf(layout);
     } on SidecarApiException catch (error) {
       if (!mounted) return;
       setState(() => _errorMessage = error.message);
@@ -185,19 +200,48 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     });
   });
 
-  /// The stored answer sheet's bytes, or `null` when there is none.
+  /// Fetch the stored answer sheet into [_answerLayoutPdf], recording any
+  /// failure in [_answerLayoutPdfError] instead of discarding it.
   ///
-  /// A sheet that is recorded as present but cannot be fetched is not an
-  /// error worth failing the whole screen for: everything else here still
-  /// works, and the editor falls back to empty page outlines.
-  Future<Uint8List?> _loadAnswerLayoutPdf(AnswerLayoutResponse layout) async {
-    if (layout.pageCount == null) return null;
+  /// This used to swallow the exception and fall back to blank page outlines.
+  /// That produced the one outcome this whole screen exists to prevent: the
+  /// AI's rectangles drawn on nothing, confirmable by someone who never saw
+  /// the answer sheet (review round 1, P1 -- the same rule Issue #85 spent
+  /// five rounds establishing, 見ていないものを確定させない).
+  ///
+  /// The failure does not fail the whole screen -- the dependency-graph
+  /// section and everything else still work -- but it is shown, it is
+  /// retryable, and while it stands the confirm is refused.
+  Future<void> _loadAnswerLayoutPdf(AnswerLayoutResponse layout) async {
+    if (layout.pageCount == null) {
+      if (!mounted) return;
+      setState(() {
+        _answerLayoutPdf = null;
+        _answerLayoutPdfError = null;
+      });
+      return;
+    }
     try {
-      return await _dependencies.getAnswerLayoutPdf(widget.testId);
-    } on SidecarApiException {
-      return null;
+      final bytes = await _dependencies.getAnswerLayoutPdf(widget.testId);
+      if (!mounted) return;
+      setState(() {
+        _answerLayoutPdf = bytes;
+        _answerLayoutPdfError = null;
+      });
+    } on SidecarApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _answerLayoutPdf = null;
+        _answerLayoutPdfError = error.message;
+      });
     }
   }
+
+  Future<void> _retryAnswerLayoutPdf() => _runGuarded(() async {
+    final layout = _answerLayout;
+    if (layout == null) return;
+    await _loadAnswerLayoutPdf(layout);
+  });
 
   Future<void> _uploadAnswerLayout() => _runGuarded(() async {
     final picked = await _pickPdfFile();
@@ -206,16 +250,67 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       widget.testId,
       filePath: picked.path,
     );
-    final bytes = await _loadAnswerLayoutPdf(layout);
+    // The upload creates (or re-bases) the profile, so the working copy has
+    // to be reloaded from it -- that is what makes 領域を手動追加 possible on
+    // a test that never had a profile.
+    final profile = await _dependencies.getProfile(widget.testId);
     if (!mounted) return;
     setState(() {
       _answerLayout = layout;
-      _answerLayoutPdf = bytes;
+      _profile = profile;
+      _editableRegions = profile.regions.toList();
     });
-    _showSnackBar('答案を取り込みました。回答欄を検出できます');
+    await _loadAnswerLayoutPdf(layout);
+    if (!mounted) return;
+    final dropped = layout.droppedRegionCount;
+    _showSnackBar(
+      dropped == 0
+          ? '答案を取り込みました。この答案の上で回答欄を決めます'
+          : '答案を取り込みました。新しい答案に無いページの領域$dropped件は外しました',
+    );
   });
 
-  Future<void> _detectAnswerAreas() => _runGuarded(() async {
+  Future<void> _detectAnswerAreas() async {
+    // Detection replaces every answer area, including ones drawn by hand --
+    // the sidecar cannot tell them apart, and neither can this screen once
+    // they are saved. Discarding somebody's work without saying so is the
+    // same failure as merging two boxes nobody could attribute: the result
+    // looks fine and the original is gone. So the count is named first,
+    // exactly as Issue #101's delete flow names its blast radius.
+    final existing = (_editableRegions ?? const <RegionModel>[])
+        .where((region) => region.kind == RegionKind.answerArea)
+        .length;
+    if (existing > 0) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          key: const Key('redetect-confirm'),
+          title: const Text('回答欄を検出し直しますか'),
+          content: Text(
+            'いまある回答欄$existing件を、検出結果で置き換えます。'
+            '手で引いた回答欄も含めて置き換わり、元に戻せません。',
+          ),
+          actions: [
+            TextButton(
+              key: const Key('redetect-cancel'),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('やめる'),
+            ),
+            FilledButton(
+              key: const Key('redetect-confirmed'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('置き換える'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
+    if (!mounted) return;
+    return _runDetectAnswerAreas();
+  }
+
+  Future<void> _runDetectAnswerAreas() => _runGuarded(() async {
     final profile = await _dependencies.detectAnswerAreas(widget.testId);
     if (!mounted) return;
     setState(() {
@@ -224,7 +319,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     });
     // Says what happened, not how well it went: the number of areas found is
     // a fact, the accuracy of them is not something this app has measured.
-    final undetected = profile.undetectedQuestionNumbers.length;
+    // Counted from the regions just saved and this screen's own question
+    // list, not from the response's snapshot -- one source, so the snackbar
+    // and the panel below can never disagree.
+    final undetected = _undetectedFrom(profile.regions.toList()).length;
     _showSnackBar(
       undetected == 0
           ? '回答欄を検出しました。答案の上で確認して直してください'
@@ -266,10 +364,17 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       widget.testId,
       revision: saved.revision,
     );
+    // Confirming rebuilds the test's `Question` rows from the confirmed
+    // regions, so the question set this screen was reading can change as a
+    // *result* of this action. Re-read it rather than keep the list fetched
+    // at load time -- otherwise the 未検出 notice below would be counted
+    // against questions that no longer exist (review round 2).
+    final questions = await _dependencies.listQuestions(widget.testId);
     if (!mounted) return;
     setState(() {
       _profile = profile;
       _editableRegions = profile.regions.toList();
+      _questionNumbers = [for (final q in questions) q.number];
     });
     _showSnackBar('プロファイルを確定しました');
   });
@@ -645,21 +750,55 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     );
   }
 
+  /// Questions with no `ANSWER_AREA` in [regions].
+  ///
+  /// Computed from the working copy every time it is asked for, never taken
+  /// from the last server response. A stored answer goes stale the moment the
+  /// reviewer draws the missing box or reassigns one -- and that moment is
+  /// exactly when it is being read (review round 1, P2).
+  List<String> _undetectedFrom(List<RegionModel> regions) {
+    final covered = {
+      for (final region in regions)
+        if (region.kind == RegionKind.answerArea) region.label,
+    };
+    return [
+      for (final number in _questionNumbers)
+        if (!covered.contains(number)) number,
+    ];
+  }
+
+  /// Answer areas that name no confirmed question. These block the confirm --
+  /// `build_questions_and_rubrics` ignores them without a word.
+  List<RegionModel> _unassignedFrom(List<RegionModel> regions) {
+    final known = _questionNumbers.toSet();
+    return [
+      for (final region in regions)
+        if (region.kind == RegionKind.answerArea &&
+            !known.contains(region.label))
+          region,
+    ];
+  }
+
+  /// Whether the answer sheet the regions are drawn on is actually on screen.
+  ///
+  /// Confirming answer-area coordinates is attesting to where they sit on a
+  /// page. Doing that against blank outlines is confirming something nobody
+  /// looked at, so it is refused while any answer area exists and the sheet
+  /// is not displayed (review round 1, P1; Issue #85's rule).
+  bool _mustSeeAnswerSheetFirst(List<RegionModel> regions) =>
+      _answerLayoutPdf == null &&
+      regions.any((region) => region.kind == RegionKind.answerArea);
+
   Widget _buildProfileSection() {
     final regions = _editableRegions;
-    final profile = _profile;
-    // Derived from the working copy, not from the last server response: the
-    // reviewer assigns a question and the button must enable on that click,
-    // not only after the next 保存 round-trip.
-    final questionNumbers =
-        profile?.questionNumbers.toSet() ?? const <String>{};
-    final unassigned = (regions ?? const <RegionModel>[])
-        .where(
-          (region) =>
-              region.kind == RegionKind.answerArea &&
-              !questionNumbers.contains(region.label),
-        )
-        .toList();
+    final working = regions ?? const <RegionModel>[];
+    // All three are derived from the working copy, not from the last server
+    // response: the reviewer assigns a question, draws a box, or deletes one,
+    // and every one of these has to follow that click -- not the next 保存
+    // round-trip.
+    final unassigned = _unassignedFrom(working);
+    final undetected = _undetectedFrom(working);
+    final unseenSheet = _mustSeeAnswerSheetFirst(working);
     return Card(
       child: Padding(
         padding: AppSpacing.card,
@@ -691,11 +830,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
             else
               AnswerAreaEditor(
                 key: const Key('answer-area-editor'),
-                pages: profile?.pages.toList() ?? const <PageFormatModel>[],
+                pages: _profile?.pages.toList() ?? const <PageFormatModel>[],
                 regions: regions,
-                questionNumbers: profile?.questionNumbers.toList() ?? const [],
-                undetectedQuestionNumbers:
-                    profile?.undetectedQuestionNumbers.toList() ?? const [],
+                questionNumbers: _questionNumbers,
+                undetectedQuestionNumbers: undetected,
                 pdfBytes: _answerLayoutPdf,
                 readOnly: _busy || _profileConfirmed,
                 onRegionsChanged: (next) =>
@@ -703,19 +841,40 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 onEditNumerically: _editRegion,
               ),
             const SizedBox(height: AppSpacing.md),
+            // Everything that stands between the reviewer and a confirm is
+            // stated *here*, next to the button, not only up in the editor.
+            // A reason that is only visible after scrolling back is a reason
+            // nobody reads before pressing.
             if (unassigned.isNotEmpty)
-              Padding(
+              _buildConfirmBlocker(
                 key: const Key('unassigned-region-warning'),
+                message:
+                    '設問が割り当てられていない回答欄が${unassigned.length}件あります。'
+                    '設問を選ぶか削除するまで確定できません。',
+              ),
+            if (unseenSheet)
+              _buildConfirmBlocker(
+                key: const Key('unseen-answer-sheet-warning'),
+                message: _answerLayout?.pageCount == null
+                    ? '回答欄の位置は答案の上で確認します。'
+                          '答案を取り込むまで確定できません。'
+                    : '答案を表示できていません。'
+                          '実際の答案を見ないまま確定はできません。上の再試行を押してください。',
+              ),
+            // Not a blocker: a question with no回答欄 still grades -- against
+            // the whole page, marked 要確認, in front of a human. Shown at
+            // the point of confirming all the same, so nobody confirms a
+            // newly-created gap without being told (review round 1, P2).
+            if (undetected.isNotEmpty)
+              Padding(
+                key: const Key('undetected-question-notice'),
                 padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                 child: Text(
-                  // Stated next to the disabled button, not only inside the
-                  // editor: the reason a confirm is impossible has to be
-                  // readable from where the confirm is attempted.
-                  '設問が割り当てられていない回答欄が${unassigned.length}件あります。'
-                  '設問を選ぶか削除するまで確定できません。',
-                  style: context.texts.bodyMedium?.copyWith(
-                    color: AppStatusTone.attention.color(context),
-                  ),
+                  '回答欄が決まっていない設問が${undetected.length}件あります'
+                  '（${undetected.join("、")}）。'
+                  'このまま確定もできますが、その設問は答案のページ全体を採点に送り、'
+                  '要確認として人の目に回ります。',
+                  style: context.texts.bodyMedium,
                 ),
               ),
             Wrap(
@@ -736,6 +895,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                           regions == null ||
                           regions.isEmpty ||
                           unassigned.isNotEmpty ||
+                          unseenSheet ||
                           _profileConfirmed)
                       ? null
                       : _confirmProfile,
@@ -745,6 +905,21 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// One reason the confirm is refused, in the attention tone, rendered
+  /// immediately above the confirm button.
+  Widget _buildConfirmBlocker({required Key key, required String message}) {
+    return Padding(
+      key: key,
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: Text(
+        message,
+        style: context.texts.bodyMedium?.copyWith(
+          color: AppStatusTone.attention.color(context),
         ),
       ),
     );
@@ -761,7 +936,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     final layout = _answerLayout;
     final hasSheet = layout?.pageCount != null;
     final detectionAvailable = layout?.detectionAvailable ?? false;
-    final hasQuestions = (_profile?.questionNumbers.isNotEmpty ?? false);
+    // From the questions themselves, not from the profile: a test that has
+    // never had a profile still has confirmed questions, and this is the
+    // gate on the very first detection (review round 1, P1).
+    final hasQuestions = _questionNumbers.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -792,7 +970,13 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
             ),
             OutlinedButton.icon(
               key: const Key('add-region-button'),
-              onPressed: (_busy || _profileConfirmed) ? null : _addRegion,
+              // Disabled rather than silently doing nothing: without a
+              // profile there is no page format to place a region on, and
+              // `_addRegion` used to return without a word in that state.
+              onPressed:
+                  (_busy || _profileConfirmed || _editableRegions == null)
+                  ? null
+                  : _addRegion,
               icon: const Icon(Icons.add_box_outlined),
               label: const Text('領域を手動追加'),
             ),
@@ -818,7 +1002,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
             key: const Key('answer-layout-missing'),
             style: context.texts.bodySmall,
           )
-        else
+        else ...[
           Text(
             '${layout!.pageCount}ページの答案を取り込んでいます。'
             '自動検出はこの答案の全ページをAIに送ります（テストにつき1回）。'
@@ -827,6 +1011,45 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
             '手書きの氏名を確実に消す方法はありません。',
             key: const Key('answer-layout-present'),
             style: context.texts.bodySmall,
+          ),
+          // The count is exact; the money is not knowable here. Saying
+          // "0円" would be a number this app has no basis for, so it says
+          // it cannot estimate and why -- the same rule PR #104 and #107
+          // applied to their own cost lines.
+          Text(
+            '実行するとAIを1回呼び、${layout.pageCount}ページ分の画像を送ります。'
+            '費用の単価を設定していないため、金額は見積もれません。'
+            '押し直すたびに同じだけ呼び出します。',
+            key: const Key('answer-layout-cost'),
+            style: context.texts.bodySmall,
+          ),
+        ],
+        if (_answerLayoutPdfError != null)
+          Padding(
+            key: const Key('answer-layout-pdf-error'),
+            padding: const EdgeInsets.only(top: AppSpacing.sm),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    // Never silently: without the sheet on screen the
+                    // rectangles below are drawn on nothing, and confirming
+                    // them is confirming something nobody looked at.
+                    '答案を表示できませんでした（$_answerLayoutPdfError）。'
+                    '実際の答案を見るまで確定はできません。',
+                    style: context.texts.bodySmall?.copyWith(
+                      color: AppStatusTone.attention.color(context),
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  key: const Key('retry-answer-layout-pdf-button'),
+                  onPressed: _busy ? null : _retryAnswerLayoutPdf,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('再試行'),
+                ),
+              ],
+            ),
           ),
         if (hasSheet && !hasQuestions)
           Text(
@@ -1144,6 +1367,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   label: const Text('依存関係を分析（再実行）'),
                 ),
                 OutlinedButton.icon(
+                  key: const Key('add-edge-button'),
                   onPressed:
                       (_busy ||
                           _dependencyGraphConfirmed ||
@@ -1169,16 +1393,42 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
               if (graph.unresolved.isNotEmpty) ...[
                 const SizedBox(height: AppSpacing.sm),
                 Text('要確認（AIが依存を判断できなかった設問）', style: context.texts.titleSmall),
+                // Read against the *working* edge set, not the response these
+                // entries came in. A reviewer who answers one of these does
+                // so by adding an edge in the list above, and leaving the
+                // entry untouched says their edit never happened -- the same
+                // shape the `layers` note above already guards against
+                // (review round 2). Nothing is hidden: the entry stays, so a
+                // reviewer can still see what the analyzer could not decide.
                 for (final unresolved in graph.unresolved)
-                  ListTile(
-                    // AIが判断できなかった設問は、人間が決めるまで先へ進めない
-                    // -- この画面で強調色を使う唯一の箇所 (`AppStatusTone`)。
-                    leading: Icon(
-                      Icons.help_outline,
-                      color: AppStatusTone.attention.color(context),
-                    ),
-                    title: Text('設問 ${unresolved.questionId}'),
-                    subtitle: Text(unresolved.reason),
+                  Builder(
+                    builder: (context) {
+                      final answered = (edges ?? const <DependencyEdgeModel>[])
+                          .any(
+                            (edge) =>
+                                edge.toQuestionId == unresolved.questionId,
+                          );
+                      return ListTile(
+                        key: Key('unresolved-${unresolved.questionId}'),
+                        // AIが判断できなかった設問は、人間が決めるまで先へ進めない
+                        // -- この画面で強調色を使う唯一の箇所 (`AppStatusTone`)。
+                        leading: Icon(
+                          answered
+                              ? Icons.check_circle_outline
+                              : Icons.help_outline,
+                          color: answered
+                              ? AppStatusTone.success.color(context)
+                              : AppStatusTone.attention.color(context),
+                        ),
+                        title: Text('設問 ${unresolved.questionId}'),
+                        subtitle: Text(
+                          answered
+                              ? '${unresolved.reason}\n→ この設問への依存関係を追加済み'
+                              : unresolved.reason,
+                        ),
+                        isThreeLine: answered,
+                      );
+                    },
                   ),
               ],
               const SizedBox(height: AppSpacing.sm),

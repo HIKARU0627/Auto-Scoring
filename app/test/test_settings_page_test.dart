@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:built_collection/built_collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -42,6 +45,31 @@ RegionModel _region({
       ..bbox.y1 = 0.2,
   );
 }
+
+/// A real (synthetic) A4 page, so the 回答欄 editor actually renders the
+/// answer sheet rather than blank outlines -- which is what the confirm gate
+/// now requires (Issue #105 review round 1, P1). Shared with
+/// `pdf_review_page_test.dart`; nothing here comes from real material.
+Uint8List _answerSheetPdf() =>
+    File('test/fixtures/a4-portrait.pdf').readAsBytesSync();
+
+/// The confirmed questions テスト設定画面 reads on load (Issue #105).
+///
+/// Sourced from the questions, not from the profile: a test registered
+/// without a model-answer PDF has no profile until an answer sheet is
+/// uploaded, and its 回答欄 candidates still have to exist.
+List<QuestionResponse> _questions([List<String> numbers = const ['1']]) => [
+  for (final number in numbers)
+    QuestionResponse(
+      (b) => b
+        ..id = 'test-1:$number'
+        ..testId = 'test-1'
+        ..number = number
+        ..page = 1
+        ..points = 5
+        ..scoringMethod = 'additive',
+    ),
+];
 
 /// The answer-sheet state テスト設定画面 asks for on load (Issue #105).
 /// Every `AppDependencies` below supplies it: without one the screen's own
@@ -117,13 +145,38 @@ DependencyGraphResponse _dependencyGraph({
   );
 }
 
+/// A graph whose analyzer could not decide one question's dependencies --
+/// the state the 要確認 list exists for.
+DependencyGraphResponse _dependencyGraphWithUnresolved() =>
+    DependencyGraphResponse(
+      (b) => b
+        ..id = 'test-1:v1'
+        ..testId = 'test-1'
+        ..version = 1
+        ..status = 'draft'
+        ..questionIds.replace(['test-1:1', 'test-1:2'])
+        ..edges.replace(const <DependencyEdgeModel>[])
+        ..unresolved.replace([
+          UnresolvedQuestionModel(
+            (u) => u
+              ..questionId = 'test-1:2'
+              ..reason = '前提となる設問を判断できませんでした',
+          ),
+        ])
+        ..layers.replace([
+          BuiltList<String>(['test-1:1', 'test-1:2']),
+        ])
+        ..createdAt = DateTime.utc(2026, 1, 1),
+    );
+
 /// Opens テスト設定画面 for `test-1` with a tall viewport, so every section of
 /// the screen (profile regions + dependency graph edges) is actually built and
 /// findable, instead of sitting off-screen in the `ListView`'s lazy sliver.
 Future<void> _pumpSettings(
   WidgetTester tester,
-  AppDependencies dependencies,
-) async {
+  AppDependencies dependencies, {
+  bool pickedPdf = false,
+}) async {
   tester.view.physicalSize = const Size(1400, 3200);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.resetPhysicalSize);
@@ -132,6 +185,15 @@ Future<void> _pumpSettings(
     tester,
     AppRoutes.testSettings('test-1'),
     dependencies: dependencies,
+    // The native file dialog is reached through a provider precisely so a
+    // widget test can stand in for it (see `core/pdf_file_picker.dart`).
+    overrides: [
+      if (pickedPdf)
+        pickPdfFileProvider.overrideWithValue(
+          () async =>
+              const PickedPdfFile(path: '/tmp/answer.pdf', name: 'answer.pdf'),
+        ),
+    ],
   );
   await tester.pumpAndSettle();
 }
@@ -226,9 +288,10 @@ void main() {
   ) async {
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
@@ -247,9 +310,10 @@ void main() {
   ) async {
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) async {
         throw SidecarApiException(
           SidecarErrorKind.badResponse,
@@ -280,9 +344,10 @@ void main() {
   testWidgets('confirming the profile locks region editing', (tester) async {
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
       // confirmProfile now saves the working copy first (Issue #16 review).
@@ -315,9 +380,10 @@ void main() {
     List<RegionModel>? savedRegions;
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
       updateProfile: (testId, regions) async {
@@ -348,9 +414,10 @@ void main() {
   ) async {
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
@@ -380,9 +447,10 @@ void main() {
       List<QuestionTextOverride>? capturedOverrides;
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async {
           throw SidecarApiException(
@@ -423,9 +491,10 @@ void main() {
       );
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
         confirmDependencyGraph:
@@ -463,9 +532,10 @@ void main() {
       List<DependencyEdgeModel>? confirmedEdges;
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
         confirmDependencyGraph:
@@ -519,9 +589,10 @@ void main() {
     );
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(status: 'confirmed'),
       getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
     );
@@ -555,9 +626,10 @@ void main() {
       // able to re-run analysis (Issue #16 review round 3).
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -584,9 +656,10 @@ void main() {
       // freshly-computed answer, not the stale two-layer snapshot.
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(),
       );
@@ -603,9 +676,10 @@ void main() {
     (tester) async {
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -639,9 +713,10 @@ void main() {
     (tester) async {
       final dependencies = AppDependencies(
         getCriteria: (testId) async => throw _notFound(),
-
-        getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(), // still draft
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -680,9 +755,10 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
         final dependencies = AppDependencies(
           getCriteria: (testId) async => throw _notFound(),
-
-          getTest: (testId) async => _test(),
           getAnswerLayout: (testId) async => _answerLayout(),
+          listQuestions: (testId) async => _questions(),
+          getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+          getTest: (testId) async => _test(),
           getProfile: (testId) async => _profile(),
           getDependencyGraph: (testId) async => _dependencyGraph(),
         );
@@ -728,9 +804,10 @@ void main() {
     final profile = Completer<ProfileResponse>();
     final dependencies = AppDependencies(
       getCriteria: (testId) async => throw _notFound(),
-
-      getTest: (testId) async => _test(),
       getAnswerLayout: (testId) async => _answerLayout(),
+      listQuestions: (testId) async => _questions(),
+      getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+      getTest: (testId) async => _test(),
       getProfile: (testId) => profile.future,
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
@@ -1300,6 +1377,8 @@ void main() {
       // name -- the one thing this app must not claim it can do.
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -1318,6 +1397,8 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(pageCount: null),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -1342,9 +1423,12 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
-        getProfile: (testId) async =>
-            _profile(questionNumbers: const [], regions: const []),
+        // No confirmed questions yet -- the 配点 has not been confirmed, so
+        // there is nothing to attribute a detected box to.
+        listQuestions: (testId) async => const <QuestionResponse>[],
+        getProfile: (testId) async => _profile(regions: const []),
         getDependencyGraph: (testId) async => _dependencyGraph(),
       );
 
@@ -1367,6 +1451,8 @@ void main() {
           detectionAvailable: false,
           reason: 'AUTO_SCORING_AI_GRADING_TRANSPORT に画像を送れる provider がありません',
         ),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -1393,14 +1479,13 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(const ['1', '2']),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(regions: const []),
         getDependencyGraph: (testId) async => _dependencyGraph(),
-        detectAnswerAreas: (testId) async => _profile(
-          regions: [_region(kind: RegionKind.answerArea)],
-          questionNumbers: const ['1', '2'],
-          undetectedQuestionNumbers: const ['2'],
-        ),
+        detectAnswerAreas: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
       );
 
       await _pumpSettings(tester, dependencies);
@@ -1413,6 +1498,367 @@ void main() {
       expect(find.byKey(const Key('answer-area-undetected-2')), findsOneWidget);
     });
 
+    testWidgets('a test with no profile yet can still start: questions come '
+        'from the questions, not the profile', (tester) async {
+      // The state every real test is in after Issue #101's import: confirmed
+      // questions, no profile (there is no model-answer PDF to build one
+      // from). Sourcing the candidates from the profile made the first action
+      // impossible on exactly these tests (review round 1, P1).
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(const ['1', '2']),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async {
+          throw SidecarApiException(
+            SidecarErrorKind.badResponse,
+            'not found',
+            statusCode: 404,
+          );
+        },
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      final detect = tester.widget<FilledButton>(
+        find.byKey(const Key('detect-answer-areas-button')),
+      );
+      expect(detect.onPressed, isNotNull);
+    });
+
+    testWidgets('uploading the answer sheet makes 領域を手動追加 usable', (
+      tester,
+    ) async {
+      // With no profile there is no page format to place a region on, and
+      // the button used to be enabled and do nothing. The upload creates the
+      // profile, which is what turns the manual path on.
+      var uploaded = false;
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async =>
+            _answerLayout(pageCount: uploaded ? 1 : null),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async {
+          if (!uploaded) {
+            throw SidecarApiException(
+              SidecarErrorKind.badResponse,
+              'not found',
+              statusCode: 404,
+            );
+          }
+          return _profile(regions: const []);
+        },
+        uploadAnswerLayout: (testId, {required filePath}) async {
+          uploaded = true;
+          return _answerLayout();
+        },
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies, pickedPdf: true);
+      expect(
+        tester
+            .widget<OutlinedButton>(find.byKey(const Key('add-region-button')))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(const Key('upload-answer-layout-button')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<OutlinedButton>(find.byKey(const Key('add-region-button')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('a sheet that will not load is shown, retryable, and blocks '
+        'the confirm', (tester) async {
+      // The rule Issue #85 spent five rounds on: 見ていないものを確定させない.
+      // Swallowing this failure drew the AI's rectangles on blank outlines and
+      // let someone confirm them without ever seeing the answer sheet
+      // (review round 1, P1).
+      var attempts = 0;
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async {
+          attempts++;
+          if (attempts == 1) {
+            throw SidecarApiException(
+              SidecarErrorKind.unknown,
+              '答案を読み込めませんでした',
+            );
+          }
+          return _answerSheetPdf();
+        },
+        listQuestions: (testId) async => _questions(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.byKey(const Key('answer-layout-pdf-error')), findsOneWidget);
+      expect(find.textContaining('答案を読み込めませんでした'), findsOneWidget);
+      expect(
+        find.byKey(const Key('unseen-answer-sheet-warning')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('confirm-profile-button')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(const Key('retry-answer-layout-pdf-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('answer-layout-pdf-error')), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('confirm-profile-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('drawing the missing box clears the undetected notice without '
+        'a reload', (tester) async {
+      // The notice used to come from the last server response, so it kept
+      // saying a question was undetected after the reviewer drew its box --
+      // and, worse, kept saying everything was covered after they deleted one
+      // (review round 1, P2).
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(const ['1', '2']),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      expect(
+        find.byKey(const Key('undetected-question-notice')),
+        findsOneWidget,
+      );
+
+      // Assigning the one box to the other question moves the gap rather than
+      // closing it -- still one undetected, now a different question.
+      await tester.tap(find.byKey(const Key('answer-area-question-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('2').last);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('undetected-question-notice')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('answer-area-undetected-1')), findsOneWidget);
+    });
+
+    testWidgets('deleting the only box brings the undetected notice back', (
+      tester,
+    ) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      expect(find.byKey(const Key('undetected-question-notice')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('answer-area-delete-0')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('undetected-question-notice')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('says what a detection run costs, and refuses to invent a '
+        'number', (tester) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(pageCount: 3),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.byKey(const Key('answer-layout-cost')), findsOneWidget);
+      expect(find.textContaining('AIを1回呼び'), findsOneWidget);
+      expect(find.textContaining('3ページ分の画像'), findsOneWidget);
+      // Not 0円: this app does not know the provider's prices.
+      expect(find.textContaining('見積もれません'), findsOneWidget);
+      expect(find.textContaining('0円'), findsNothing);
+      expect(find.textContaining('押し直すたびに'), findsOneWidget);
+    });
+
+    testWidgets('re-detecting names what it will replace, and can be '
+        'cancelled', (tester) async {
+      // Detection replaces every answer area, hand-drawn ones included --
+      // the sidecar cannot tell them apart. Discarding somebody's work
+      // without saying so is the same failure as merging boxes nobody could
+      // attribute: the result looks fine and the original is gone.
+      var detected = 0;
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        detectAnswerAreas: (testId) async {
+          detected++;
+          return _profile(regions: [_region(kind: RegionKind.answerArea)]);
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      await tester.tap(find.byKey(const Key('detect-answer-areas-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('redetect-confirm')), findsOneWidget);
+      expect(find.textContaining('いまある回答欄1件'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('redetect-cancel')));
+      await tester.pumpAndSettle();
+      expect(detected, 0);
+
+      await tester.tap(find.byKey(const Key('detect-answer-areas-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('redetect-confirmed')));
+      await tester.pumpAndSettle();
+      expect(detected, 1);
+    });
+
+    testWidgets(
+      'the first detection asks nothing -- there is nothing to lose',
+      (tester) async {
+        var detected = 0;
+        final dependencies = AppDependencies(
+          getAnswerLayout: (testId) async => _answerLayout(),
+          getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+          listQuestions: (testId) async => _questions(),
+          getTest: (testId) async => _test(),
+          getProfile: (testId) async => _profile(regions: const []),
+          getDependencyGraph: (testId) async => _dependencyGraph(),
+          detectAnswerAreas: (testId) async {
+            detected++;
+            return _profile(regions: [_region(kind: RegionKind.answerArea)]);
+          },
+        );
+
+        await _pumpSettings(tester, dependencies);
+        await tester.tap(find.byKey(const Key('detect-answer-areas-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('redetect-confirm')), findsNothing);
+        expect(detected, 1);
+      },
+    );
+
+    testWidgets('confirming re-reads the question set it rebuilt', (
+      tester,
+    ) async {
+      // Confirming the profile rebuilds the test's Question rows, so the
+      // question set this screen reads can change *because of* this action.
+      // Keeping the list fetched at load time counts 未検出 against questions
+      // that no longer exist (review round 2).
+      var confirmed = false;
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async =>
+            confirmed ? _questions() : _questions(const ['1', '2']),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
+        updateProfile: (testId, regions) async => _profile(regions: regions),
+        confirmProfile: (testId, {required revision}) async {
+          confirmed = true;
+          return _profile(
+            status: 'confirmed',
+            regions: [_region(kind: RegionKind.answerArea, confirmed: true)],
+          );
+        },
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      // 問2 has no answer area, so the notice stands.
+      expect(
+        find.byKey(const Key('undetected-question-notice')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('confirm-profile-button')));
+      await tester.pumpAndSettle();
+
+      // 問2 is gone from the rebuilt question set, so there is no gap left to
+      // report -- and the screen must not keep counting against it.
+      expect(find.byKey(const Key('undetected-question-notice')), findsNothing);
+    });
+
+    testWidgets('answering an unresolved question in the edge list is '
+        'reflected beside it', (tester) async {
+      // The unresolved list came from the last server response while the
+      // edges beside it were being edited, so a reviewer who answered one
+      // saw no change at all -- the same shape the layers note above already
+      // guards against (review round 2).
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        listQuestions: (testId) async => _questions(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async => _dependencyGraphWithUnresolved(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      final tile = find.byKey(const Key('unresolved-test-1:2'));
+      expect(tile, findsOneWidget);
+      expect(
+        find.descendant(of: tile, matching: find.byIcon(Icons.help_outline)),
+        findsOneWidget,
+      );
+
+      // `_addEdge` adds an edge from questionIds[0] to questionIds[1], which
+      // is exactly the unresolved question.
+      await tester.tap(find.byKey(const Key('add-edge-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('この設問への依存関係を追加済み'), findsOneWidget);
+      expect(
+        find.descendant(of: tile, matching: find.byIcon(Icons.help_outline)),
+        findsNothing,
+      );
+    });
+
     testWidgets('a box with no question blocks the confirm, and says so', (
       tester,
     ) async {
@@ -1420,6 +1866,8 @@ void main() {
       // reviewer learns why before pressing it, not after.
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(
           regions: [
@@ -1447,6 +1895,8 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(
           regions: [
@@ -1476,12 +1926,11 @@ void main() {
       // page and marked 要確認 -- it fails loudly, in front of a human.
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        listQuestions: (testId) async => _questions(const ['1', '2']),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
-        getProfile: (testId) async => _profile(
-          regions: [_region(kind: RegionKind.answerArea)],
-          questionNumbers: const ['1', '2'],
-          undetectedQuestionNumbers: const ['2'],
-        ),
+        getProfile: (testId) async =>
+            _profile(regions: [_region(kind: RegionKind.answerArea)]),
         getDependencyGraph: (testId) async => _dependencyGraph(),
       );
 
