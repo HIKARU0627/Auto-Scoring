@@ -7,6 +7,7 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
@@ -20,6 +21,14 @@ import 'package:auto_scoring_app/core/widgets/app_file_picker_row.dart';
 /// (`ai_processed` / `needs_review` / `error`, see §25) is visible without
 /// leaving the screen.
 ///
+/// It is also where **AI採点が始まる**: a submission whose intake landed on
+/// `ai_processed` gets its per-question grading jobs created right here, in
+/// the same action (Issue #80 -- nothing in the app called
+/// `POST /submissions/{id}/jobs` before, so grading never started at all).
+/// See `docs/job-queue.md`「起票のタイミング」for why the app does this rather
+/// than the intake endpoint, and why `needs_review`/`error` submissions are
+/// deliberately left alone.
+///
 /// `features` may depend on `core` and `api` (see `AGENTS.md` "Architecture").
 class AnswerIntakePage extends ConsumerStatefulWidget {
   const AnswerIntakePage({super.key});
@@ -31,7 +40,7 @@ class AnswerIntakePage extends ConsumerStatefulWidget {
 /// Which operation an [_AnswerIntakePageState._errorMessage] came from, so
 /// the error banner's retry button can retry *that* operation instead of
 /// always retrying the upload.
-enum _ErrorKind { listLoad, filePick, submit }
+enum _ErrorKind { listLoad, filePick, submit, startGrading }
 
 class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
   /// The sidecar operations this screen was opened against, captured once in
@@ -71,6 +80,19 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
   String? _pickedFileName;
 
   bool _isSubmitting = false;
+
+  /// True while a `startGrading` call is in flight, so the banner's
+  /// 「AI採点を開始」 button is disabled rather than able to queue a second
+  /// request on top of the first.
+  bool _startingGrading = false;
+
+  /// The submission whose grading kickoff failed, i.e. what
+  /// [_ErrorKind.startGrading]'s retry would re-run. `null` when the failure
+  /// was a 404 -- the answer itself is gone, so re-sending the same request
+  /// cannot change the outcome and the banner offers no retry
+  /// (`core/grading_kickoff.dart`).
+  String? _retryableGradingSubmissionId;
+
   String? _errorMessage;
   _ErrorKind? _errorKind;
 
@@ -198,7 +220,9 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
         _pickedFileName = null;
         _studentLabelController.clear();
       });
-      _showSnackBar('取込完了: ${_stateLabel(result.state)}');
+      final outcome = await _startGradingForIntake(result);
+      if (!mounted) return;
+      _showSnackBar(outcome);
     } on DuplicateSubmissionException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -214,6 +238,69 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
       });
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  /// Kicks off AI採点 for a submission that has just been taken in, and
+  /// returns the line the 取込完了 snackbar should say (Issue #80).
+  ///
+  /// **Only `ai_processed` submissions are started automatically.** An
+  /// intake that landed on `needs_review` (pages missing or extra, a
+  /// question with no answer area) or `error` is deliberately left
+  /// un-queued: `docs/answer-intake-and-preprocessing.md` §3
+  /// 「前提設問を含むページが欠落した状態では AI 採点を開始しない」is enforced
+  /// here, at the one place that decides to queue. A human who has looked at
+  /// the 要確認 reason and still wants it graded starts it from the
+  /// 添削レビュー screen instead.
+  ///
+  /// The snackbar says what actually happened rather than a fixed 「取込完了」:
+  /// "the answer is in" and "grading started" are two different facts now,
+  /// and the second one can fail on its own.
+  Future<String> _startGradingForIntake(SubmissionResponse result) async {
+    final label = _stateLabel(result.state);
+    if (result.state != 'ai_processed') {
+      // 「自動では」と書く -- 添削レビュー画面から人間が明示的に開始する道は
+      // 残っている (docs/job-queue.md「起票のタイミング」)。
+      return '取込完了: $label。AI採点は自動では開始しません';
+    }
+    final started = await _startGrading(result.id);
+    // A failure has already put its own banner on screen (with the retry) --
+    // the snackbar must not claim grading started, and must not duplicate
+    // the explanation either.
+    return started ? '取込完了: $label。AI採点を開始しました' : '取込完了: $label';
+  }
+
+  /// `POST /submissions/{id}/jobs`. Returns whether it succeeded; on failure
+  /// it leaves the message and the retry target on screen itself.
+  ///
+  /// Idempotent server-side, so a retry (or a second press) never creates a
+  /// duplicate set of jobs -- see `docs/job-queue.md`「起票のタイミング」.
+  Future<bool> _startGrading(String submissionId) async {
+    setState(() {
+      _startingGrading = true;
+      // Only this operation's own stale message is cleared: a list-load or
+      // file-pick failure still standing is about something else and still
+      // needs the reader's attention.
+      if (_errorKind == _ErrorKind.startGrading) {
+        _errorMessage = null;
+        _errorKind = null;
+      }
+    });
+    try {
+      await _dependencies.startGrading(submissionId);
+      return true;
+    } on SidecarApiException catch (error) {
+      if (!mounted) return false;
+      setState(() {
+        _errorMessage = gradingKickoffErrorMessage(error);
+        _errorKind = _ErrorKind.startGrading;
+        _retryableGradingSubmissionId = gradingKickoffIsRetryable(error)
+            ? submissionId
+            : null;
+      });
+      return false;
+    } finally {
+      if (mounted) setState(() => _startingGrading = false);
     }
   }
 
@@ -334,13 +421,33 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
     // shared error banner used to always wire this button to _submit, so a
     // list failure with a file already picked would silently upload instead
     // of reloading the list it actually reported failing to load.
+    //
+    // A failed 起票 is the same shape one step further along: the answer is
+    // already on the sidecar, so re-uploading it would be a duplicate (409).
+    // Its retry re-runs `POST .../jobs` for that one submission and nothing
+    // else (Issue #80).
+    final retryGradingFor = _retryableGradingSubmissionId;
     final VoidCallback? retry = switch (_errorKind) {
       _ErrorKind.listLoad =>
         _loadingSubmissions ? null : () => _selectTest(_selectedTestId),
       _ErrorKind.filePick => _isSubmitting ? null : _pickFile,
+      _ErrorKind.startGrading =>
+        _startingGrading || retryGradingFor == null
+            ? null
+            : () => _startGrading(retryGradingFor),
       _ErrorKind.submit || null => _canSubmit ? _submit : null,
     };
-    return AppErrorBanner(message: _errorMessage!, onRetry: retry);
+    return AppErrorBanner(
+      message: _errorMessage!,
+      onRetry: retry,
+      // A 404 leaves nothing to re-run, so the button goes away rather than
+      // sitting there disabled forever (`core/grading_kickoff.dart`).
+      retryable:
+          _errorKind != _ErrorKind.startGrading || retryGradingFor != null,
+      retryLabel: _errorKind == _ErrorKind.startGrading
+          ? startGradingLabel
+          : '再試行',
+    );
   }
 
   Widget _buildSubmissionSliver() {
