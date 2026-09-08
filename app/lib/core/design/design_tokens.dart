@@ -123,7 +123,13 @@ abstract final class AppLayout {
   static const double narrowBreakpoint = 900;
 
   /// The 添削レビュー Inspector, when it sits beside the PDF.
-  static const double inspectorWidth = 360;
+  ///
+  /// Widened from 360 (Issue #85). The panel holds the whole of what 承認 is a
+  /// decision about -- 認識文字・点数・根拠・コメント・基準ごとの判定 -- and
+  /// every line those wrap onto is a line further down that the reviewer has
+  /// to scroll to reach. The viewer beside it loses width it was not using: a
+  /// single question's answer region does not need 800px.
+  static const double inspectorWidth = 440;
 
   /// A form's reading measure. Wider than this and the eye loses the start of
   /// the next line on a maximised desktop window.
@@ -168,6 +174,31 @@ abstract final class AppLayout {
   /// costs the PDF viewer more than this fixed band.
   static const double dagPanelHeight =
       AppSpacing.lg * 2 + dagNodeHeight * 3 + AppSpacing.md * 2;
+
+  /// The share of the pane it shares with the PDF viewer that the 進捗パネル
+  /// may actually take (Issue #85).
+  ///
+  /// [dagPanelHeight] on its own is a band of a *fixed* size, and a fixed
+  /// band is only affordable on a tall window: at 1280x720 it cost 45% of the
+  /// screen, and what it pushed below the fold was 根拠・コメント・基準ごとの
+  /// 判定 -- the things 承認 is a decision *about* -- while 承認して次へ stayed
+  /// visible the whole time. Progress is context; the decision material is the
+  /// work. So the band gets a share of the height there is rather than a
+  /// constant, and it is the part that yields when the window is short.
+  static const double dagPanelMaxHeightFraction = 0.3;
+
+  /// How many times its own width a gap between two DAG layers may grow to
+  /// when the diagram is handed more width than it needs (Issue #85).
+  ///
+  /// A three-layer graph is about 480px wide, so in a full-width band it sat
+  /// in the left three fifths with nothing to its right. Spending the slack on
+  /// the gaps between layers is spending it on the one thing the diagram
+  /// exists to show -- 上流が完了して下流が動き出す, which is drawn *in* those
+  /// gaps. Capped, because past this an arrow stops reading as a connection
+  /// and starts reading as two unrelated groups; the panel centres whatever
+  /// width is still left over. A multiple rather than a pixel ceiling, so it
+  /// still means the same thing if the gap itself is ever retuned.
+  static const double dagColumnGapSpreadLimit = 3;
 
   /// The hairline that says a node is actively running. Two pixels, because
   /// it is the only thing on this screen allowed to move continuously and it

@@ -327,6 +327,32 @@ class DagMetrics {
     padding * 2 + layerCount * nodeWidth + (layerCount - 1) * columnGap,
     _rowsBottom(maxRows) + laneGap * laneCount + padding,
   );
+
+  /// This grid, with the slack between its natural width and [width] spent on
+  /// [columnGap] -- up to [AppLayout.dagColumnGapMax] (Issue #85).
+  ///
+  /// Only the gaps grow. Growing the nodes instead would buy nothing: a node
+  /// holds 設問番号 and a state label, both of which are already fully legible
+  /// at [AppLayout.dagNodeWidth]. The gaps are where the arrows live, and an
+  /// arrow with room is the one thing on this diagram that gets easier to read
+  /// when it is longer.
+  DagMetrics spreadAcross(double width, {required int layerCount}) {
+    if (layerCount < 2 || !width.isFinite) return this;
+    final natural = canvasSize(layerCount: layerCount, maxRows: 1).width;
+    final slack = width - natural;
+    if (slack <= 0) return this;
+    return DagMetrics(
+      nodeWidth: nodeWidth,
+      nodeHeight: nodeHeight,
+      columnGap: math.min(
+        columnGap + slack / (layerCount - 1),
+        columnGap * AppLayout.dagColumnGapSpreadLimit,
+      ),
+      rowGap: rowGap,
+      padding: padding,
+      laneGap: laneGap,
+    );
+  }
 }
 
 /// Everything the 添削レビュー panel needs to paint one submission's progress.
@@ -370,6 +396,12 @@ class DependencyDagLayout {
 /// Navigation Rail beside it (page, then 設問番号) instead of alphabetically
 /// by an id the reviewer never sees.
 ///
+/// [availableWidth] is the width the panel has to draw in, and only widens
+/// the gaps between layers ([DagMetrics.spreadAcross]) -- the diagram never
+/// shrinks to fit, because a fitted diagram loses the label legibility that
+/// is its whole point. Leave it out (or pass [double.infinity]) to get the
+/// natural, unspread grid.
+///
 /// Returns `null` if [edges] contain a cycle -- there is no sensible layered
 /// drawing of one, and a confirmed graph can never have one.
 DependencyDagLayout? buildDependencyDagLayout({
@@ -377,6 +409,7 @@ DependencyDagLayout? buildDependencyDagLayout({
   required List<DependencyEdgeModel> edges,
   required Set<String> releasedQuestionIds,
   DagMetrics metrics = const DagMetrics(),
+  double availableWidth = double.infinity,
 }) {
   if (questions.isEmpty) return null;
   final byId = {for (final question in questions) question.id: question};
@@ -396,6 +429,10 @@ DependencyDagLayout? buildDependencyDagLayout({
     drawable,
   );
   if (layers == null) return null;
+  // Everything below lays out on the *spread* grid, not the natural one: the
+  // panel is handed a full band's width and the diagram used to hug its left
+  // edge (Issue #85).
+  final grid = metrics.spreadAcross(availableWidth, layerCount: layers.length);
 
   final displayOrder = {
     for (final (index, question) in questions.indexed) question.id: index,
@@ -411,7 +448,7 @@ DependencyDagLayout? buildDependencyDagLayout({
       final node = DagNode(
         question: byId[id]!,
         layer: layerIndex,
-        rect: metrics.rectAt(layerIndex, row),
+        rect: grid.rectAt(layerIndex, row),
         waitingForLabel: switch (byId[id]!.blockedOnQuestionId) {
           final blockedOn? => byId[blockedOn]?.label,
           null => null,
@@ -442,8 +479,8 @@ DependencyDagLayout? buildDependencyDagLayout({
         satisfied: releasedQuestionIds.contains(edge.fromQuestionId),
         detour: blocked
             ? DagEdgeDetour(
-                y: metrics.laneY(laneCount++, maxRows: maxRows),
-                shoulder: metrics.detourShoulder(end.dx - start.dx),
+                y: grid.laneY(laneCount++, maxRows: maxRows),
+                shoulder: grid.detourShoulder(end.dx - start.dx),
               )
             : null,
       ),
@@ -453,7 +490,7 @@ DependencyDagLayout? buildDependencyDagLayout({
   return DependencyDagLayout(
     nodes: nodes,
     edges: lines,
-    size: metrics.canvasSize(
+    size: grid.canvasSize(
       layerCount: layers.length,
       maxRows: maxRows,
       laneCount: laneCount,
