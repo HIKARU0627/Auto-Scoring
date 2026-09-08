@@ -214,7 +214,7 @@ void main() {
 
     // 画面はそのまま。数え直しただけ。
     expect(loads, 2);
-    expect(find.text('AIが1件の答案を処理しています'), findsOneWidget);
+    expect(find.text('処理中の答案が1件あります'), findsOneWidget);
   });
 
   testWidgets('載せきれなかったテストの件数を隠さない', (tester) async {

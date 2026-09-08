@@ -271,6 +271,18 @@ void main() {
       expect(dashboard.nextAction.detail, isNot(contains('ほかに')));
     });
 
+    test('レビュー待ちを「採点済み」と断定しない', () {
+      // `ai_processed` は取込時の画像前処理・回答欄抽出まで終わった状態で、
+      // OCR/AI採点はその先から始まる (backend の submission_intake.py)。
+      // 答案の `state` だけでは採点が終わったかどうかは分からない。
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [buildSubmission(id: 's1', testId: 't1', state: 'ai_processed')],
+      });
+
+      expect(dashboard.nextAction.detail, isNot(contains('採点')));
+    });
+
     test('要確認が無くレビュー待ちだけならそちらを開く', () {
       final test = buildTest(id: 't1');
       final dashboard = build({

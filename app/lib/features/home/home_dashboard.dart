@@ -5,10 +5,16 @@
 /// はこのアプリのUIで最も意見の入る部分なので、画面を立ち上げずに
 /// `home_dashboard_test.dart` から直接読める形にしてある。
 ///
-/// 入力は `listTestRegistrations` と `listSubmissions` の2つだけ。ジョブの
-/// 進捗も答案の `state` から読む (`ai_processing` は「そのジョブが動いて
-/// いる」ことそのもの) -- `listJobs` は答案1件ずつのAPIなので、ホームで
-/// 呼ぶと答案の数だけリクエストが出る。
+/// 入力は `listTestRegistrations` と `listSubmissions` の2つだけ。処理の
+/// 進み具合も答案の `state` から読む -- `listJobs` は答案1件ずつのAPIなので、
+/// ホームで呼ぶと答案の数だけリクエストが出る。
+///
+/// **`state` から読めないことは書かない。** §25 の状態機械で
+/// `UNPROCESSED -> AI_PROCESSING -> AI_PROCESSED` が表しているのは取込時の
+/// 画像前処理と回答欄抽出までで、OCR/AI採点は `AI_PROCESSED` の先から始まる
+/// (`backend/.../adapters/submission_intake.py`)。したがって答案の `state`
+/// だけを見て「採点が終わった」とは言えない。この画面の文言はそこを跨がない
+/// (`docs/home-dashboard.md` §3)。
 library;
 
 import 'package:flutter/material.dart';
@@ -28,14 +34,18 @@ import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 /// いる答案で、色を割く価値があるのはこちらだけである
 /// (docs/design-tokens.md §3.1)。
 enum HomeWorkBucket {
-  /// `needs_review` -- 低Confidence・AI失敗など、AIが人間に投げ返したもの。
+  /// `needs_review` -- 取込時に回答欄を確定できなかった、確認していない設問が
+  /// 残っているなど、**人が見ないと先へ進めない**もの。理由そのものは
+  /// `review_reason` にあり、答案取込画面が1行ずつ出す。
   needsReview(
     label: '要確認',
     icon: Icons.warning_amber,
     tone: AppStatusTone.attention,
   ),
 
-  /// `ai_processed` -- AIは通ったが、人間がまだ確認していないもの。
+  /// `ai_processed` -- 取込と回答欄の抽出まで終わり、人がまだ確認していない
+  /// もの。**「採点済み」ではない**（この先が採点で、そこは `state` からは
+  /// 読めない）。
   awaitingReview(
     label: 'レビュー待ち',
     icon: Icons.rate_review_outlined,
@@ -297,9 +307,9 @@ class HomeDashboard {
             ? '要確認の答案が${count(HomeWorkBucket.needsReview)}件あります'
             : 'レビュー待ちの答案が$awaiting件あります',
         detail: isFlagged
-            ? 'AIが判断できなかった設問を含む答案から開きます'
+            ? '人の確認が必要と判定された答案から開きます'
                   '${awaiting > 0 ? '（ほかにレビュー待ちが$awaiting件）' : ''}'
-            : 'AIの採点は終わっています。古い順に確認していきます',
+            : '取込と回答欄の抽出まで終わっています。古い順に開いていきます',
         actionLabel: 'レビューを続ける',
         route: AppRoutes.pdfReview(
           testId: test.test.id,
@@ -334,7 +344,7 @@ class HomeDashboard {
       return HomeNextAction(
         icon: HomeWorkBucket.processing.icon,
         tone: HomeWorkBucket.processing.tone,
-        headline: 'AIが${count(HomeWorkBucket.processing)}件の答案を処理しています',
+        headline: '処理中の答案が${count(HomeWorkBucket.processing)}件あります',
         detail: '終わった答案はここにレビュー待ちとして並びます',
         // 行き先が無い唯一の分岐。押せるものが「更新」しか無い状態を、
         // 押せないボタンではなく押せるボタンで表す。
@@ -346,7 +356,7 @@ class HomeDashboard {
         icon: Icons.upload_file,
         tone: AppStatusTone.success,
         headline: 'レビュー待ちの答案はありません',
-        detail: '次の答案を取り込むと、AIの採点が始まります',
+        detail: '次の答案を取り込むと、回答欄の抽出まで自動で進みます',
         actionLabel: '答案を取り込む',
         route: AppRoutes.answerIntake,
       );

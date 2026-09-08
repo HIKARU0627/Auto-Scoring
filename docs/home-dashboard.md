@@ -63,7 +63,7 @@ docstring 自身が `Confirms the app boots and can reach the (stubbed) backend`
 2. **レビュー待ちの答案**（`ai_processed`）→ 同上
 3. **取込に失敗した答案**（`error`）→ 答案取込画面へ
 4. **登録が途中のテスト**（`draft`）→ そのテスト設定画面へ
-5. **AI処理中**（`unprocessed` / `ai_processing`）→ 行き先なし。「更新」だけ
+5. **処理中**（`unprocessed` / `ai_processing`）→ 行き先なし。「更新」だけ
 6. テストはあるが片付いている → 答案取込画面へ
 7. テストが1件も無い → テスト登録画面へ
 
@@ -127,11 +127,35 @@ docstring 自身が `Confirms the app boots and can reach the (stubbed) backend`
 | `done`           | `reviewed`・`exported`         | 確認済み     | `success`   |
 
 - **`needs_review` と `ai_processed` を分けている。** どちらも人間の作業待ちだが、
-  `needs_review` はAIが「自分では決められなかった」と言っている答案で、
-  色を割く価値があるのはこちらだけである（[design-tokens.md](./design-tokens.md)
-  §3.1「彩度の高い色は人間が見ないと決められないためだけに取っておく」）。
+  `needs_review` は「人が見ないと先へ進めない」と判定済みの答案（取込時に回答欄を
+  確定できなかった、確認していない設問が残っている、など）で、色を割く価値がある
+  のはこちらだけである（[design-tokens.md](./design-tokens.md) §3.1
+  「彩度の高い色は人間が見ないと決められないためだけに取っておく」）。
 - **知らない状態は `processing` に倒す。** サイドカーが先に新しい状態を覚えた
   場合、それを `done` に数えると進捗バーが「終わった」と嘘をつく。
+
+### 3.1 `ai_processed` は「採点済み」ではない
+
+`SubmissionState` の `UNPROCESSED -> AI_PROCESSING -> AI_PROCESSED` が表しているのは
+**取込時の画像前処理と回答欄抽出まで**で、OCR/AI採点は `AI_PROCESSED` の先から始まる
+（`backend/src/auto_scoring/adapters/submission_intake.py` の状態遷移コメント）。
+取込エンドポイント `POST /tests/{test_id}/submissions` は採点ジョブを起票せずに返し、
+採点ジョブを作るのは `POST /submissions/{submission_id}/jobs` だけである。
+
+したがって **答案の `state` だけを見て「採点が終わった」とは言えない。** ホームの
+文言はこの線を跨がない。`awaitingReview` のラベルは「レビュー待ち」（人の作業待ち
+であることは `state` から言える）で、説明文は「取込と回答欄の抽出まで終わって
+います」までしか言わない。`app/test/home_dashboard_test.dart` の
+`レビュー待ちを「採点済み」と断定しない` がこれを固定する。
+
+**採点済みかどうかを本当に知るには `GET /submissions/{id}/jobs` が要るが、ホームでは
+引かない。** 理由は2つある。(1) あれは答案1件ずつのAPIなので、テスト8件ぶんの答案
+すべてに引くと §5 で抑えたはずのリクエスト数が答案の数まで膨らむ。(2) そこまで
+払っても今は何も分からない。アプリは採点ジョブを作る `POST /submissions/{id}/jobs`
+を一度も呼んでおらず（`sidecar_api_client.dart` にラッパが無い）、どの答案もジョブ
+0件が返るだけである。**採点の起動そのものは別Issue**で、この画面は「知らないことを
+断定しない」ところまでを引き受ける。
+
 - 答案取込画面・添削レビュー画面は7状態を1行ずつ見せるので、あちらのラベル表
   とは**共通化していない**。ホームは件数を数える画面で、単位が違う
   （[design-tokens.md](./design-tokens.md) §6 の方針どおり）。
@@ -143,11 +167,13 @@ Issue #68 の制約は「既存APIで賄うこと」。使っているのは2つ
 - `GET /test-registrations`（`listTestRegistrations`）— `draft` を含む全テスト
 - `GET /tests/{id}/submissions`（`listSubmissions`）— そのテストの答案と `state`
 
-**ジョブの進捗も答案の `state` から読んでいる。** `ai_processing` は「その答案の
-ジョブが動いている」ことそのものなので、`GET /submissions/{id}/jobs`
+**処理の進み具合も答案の `state` から読んでいる。** `GET /submissions/{id}/jobs`
 （`listJobs`）は呼ばない。あれは答案1件ずつのAPIで、ホームで使うと答案の数だけ
 リクエストが出る。ジョブ単位の失敗理由が要るのは添削レビュー画面であって、
 ホームではない。
+
+その代わり、**`state` から読めないことは書かない**という制約を受け入れている。
+どこまでが `state` で言えてどこからが言えないのかは §3.1。
 
 ## 5. 1 + N リクエストと、その上限
 
