@@ -20,6 +20,7 @@ void main() {
     MaterialRole? humanRole,
     bool excluded = false,
     bool needsClassification = false,
+    bool cached = false,
     String? answerTestId,
   }) => IntakeFileState(
     relativePath: path,
@@ -28,6 +29,7 @@ void main() {
     sizeBytes: 1,
     ruleRole: ruleRole,
     needsClassification: needsClassification,
+    cachedClassification: cached,
     proposedRole: proposedRole,
     proposalConfirmed: proposalConfirmed,
     humanRole: humanRole,
@@ -298,7 +300,7 @@ void main() {
       ]);
 
       expect(review.pendingClassification, hasLength(1));
-      expect(review.estimatedCost, isNull);
+      expect(review.estimatedCostForCalls(1), isNull);
     });
 
     test('単価があれば件数×単価で出す', () {
@@ -310,7 +312,7 @@ void main() {
         ]),
       ], unitCost: 1.5);
 
-      expect(review.estimatedCost, 3.0);
+      expect(review.estimatedCostForCalls(2), 3.0);
     });
   });
 
@@ -355,6 +357,116 @@ void main() {
 
       expect(review.groups.single.files.single.excluded, isTrue);
       expect(review.groups.single.includedFiles, isEmpty);
+    });
+  });
+
+  group('コードレビュー1回目で見つかった穴', () {
+    test('提案をまとめて確認できる（40件を40回押させない）', () {
+      final review = state([
+        buildGroup([
+          ...complete,
+          for (var i = 0; i < 40; i++)
+            file(
+              path: 'subject-a/stray-$i.pdf',
+              proposedRole: MaterialRole.studentAnswer,
+            ),
+        ]),
+      ]);
+      expect(review.confirmableProposals, hasLength(40));
+      expect(review.canImport, isFalse);
+
+      final confirmed = review.confirmAllProposals();
+
+      expect(confirmed.unconfirmedProposals, isEmpty);
+      expect(confirmed.canImport, isTrue);
+    });
+
+    test('提案が無いファイルは、まとめて確認しても確認済みにならない', () {
+      // "Nobody knows what this is" must not become "the reviewer said it was
+      // fine". That is the one thing the confirmation step exists to prevent.
+      final review = state([
+        buildGroup([...complete, file(path: 'subject-a/stray.pdf')]),
+      ]).confirmAllProposals();
+
+      expect(review.canImport, isFalse);
+      expect(review.unconfirmedProposals, hasLength(1));
+    });
+
+    test('キャッシュ済みのファイルも問い合わせ対象に含める', () {
+      // The sidecar already holds the answer; it is free but still has to be
+      // asked for. Treating cached as "nothing to do" left a re-selected
+      // folder with forty rows to decide by hand.
+      final review = state([
+        buildGroup([
+          ...complete,
+          file(path: 'subject-a/cached.pdf', cached: true),
+          file(path: 'subject-a/new.pdf', needsClassification: true),
+        ]),
+      ]);
+
+      expect(review.classifiableFiles, hasLength(2));
+      // ...but only the new one costs anything.
+      expect(review.pendingClassification, hasLength(1));
+    });
+
+    test('答案の振り分けも費用の見積もりに数える', () {
+      // Forty answers whose roles every rule matched cost nothing to classify
+      // and forty calls to attribute. Counting only the first would tell the
+      // reviewer the run is free right before charging them for it.
+      final review = state([
+        buildGroup([
+          for (var i = 0; i < 40; i++)
+            file(
+              path: 'subject-a/01_answers-$i.pdf',
+              ruleRole: MaterialRole.studentAnswer,
+            ),
+        ], kind: IntakeTargetKind.perAnswer),
+      ], unitCost: 2.0);
+
+      expect(review.pendingClassification, isEmpty);
+      expect(review.answersNeedingAttribution, hasLength(40));
+      expect(review.estimatedCostForCalls(40), 80.0);
+    });
+
+    test('振り分け済みの答案は、もう振り分けの費用に数えない', () {
+      final review = state([
+        buildGroup([
+          file(ruleRole: MaterialRole.studentAnswer, answerTestId: 'test-1'),
+        ], kind: IntakeTargetKind.perAnswer),
+      ]);
+
+      expect(review.answersNeedingAttribution, isEmpty);
+    });
+
+    test('1つのテストに紐づける group は振り分けを必要としない', () {
+      final review = state([
+        buildGroup(
+          [file(ruleRole: MaterialRole.studentAnswer)],
+          kind: IntakeTargetKind.existing,
+          testId: 'test-1',
+          missing: const [MaterialRole.gradingCriteria],
+        ),
+      ]);
+
+      expect(review.answersNeedingAttribution, isEmpty);
+    });
+
+    test('振り分け先を解除できる（候補から外れたとき）', () {
+      final review =
+          state([
+            buildGroup([
+              file(
+                ruleRole: MaterialRole.studentAnswer,
+                answerTestId: 'test-1',
+              ),
+            ], kind: IntakeTargetKind.perAnswer),
+          ]).withFile(
+            'subject-a/01_answers.pdf',
+            (current) => current.copyWith(clearAnswerTestId: true),
+          );
+
+      expect(review.groups.single.files.single.answerTestId, isNull);
+      expect(review.canImport, isFalse);
     });
   });
 }

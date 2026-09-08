@@ -52,6 +52,8 @@ class IntakeFileState {
     required this.sizeBytes,
     required this.ruleRole,
     required this.needsClassification,
+    this.cachedClassification = false,
+    this.classificationAttempted = false,
     this.proposedRole,
     this.proposalConfirmed = false,
     this.humanRole,
@@ -69,6 +71,23 @@ class IntakeFileState {
 
   /// Whether an LLM call would be spent on this file.
   final bool needsClassification;
+
+  /// Whether the sidecar already holds an answer for this content.
+  ///
+  /// Distinct from [needsClassification] because the two differ in *cost*,
+  /// not in whether the answer is wanted: a cached file still has to be asked
+  /// for, it is simply free. Treating "cached" as "nothing to do" is what made
+  /// re-selecting a folder drop every proposal it had already paid for and
+  /// leave forty rows to decide by hand.
+  final bool cachedClassification;
+
+  /// Whether the classifier has already been asked about this file.
+  ///
+  /// Set even when the answer was "could not tell" -- which is a real answer,
+  /// and asking again would spend the same money for the same reply. Without
+  /// it, pressing 「AIで判定する」 a second time re-charges for every file the
+  /// classifier declined to decide the first time.
+  final bool classificationAttempted;
 
   /// What the classifier proposed. `null` either because nothing was asked or
   /// because it answered "could not tell" -- [proposalConfirmed] distinguishes
@@ -121,12 +140,14 @@ class IntakeFileState {
 
   IntakeFileState copyWith({
     MaterialRole? proposedRole,
+    bool? classificationAttempted,
     bool? proposalConfirmed,
     MaterialRole? humanRole,
     bool? excluded,
     String? answerTestId,
     bool clearHumanRole = false,
     bool clearProposedRole = false,
+    bool clearAnswerTestId = false,
   }) => IntakeFileState(
     relativePath: relativePath,
     absolutePath: absolutePath,
@@ -134,13 +155,18 @@ class IntakeFileState {
     sizeBytes: sizeBytes,
     ruleRole: ruleRole,
     needsClassification: needsClassification,
+    cachedClassification: cachedClassification,
+    classificationAttempted:
+        classificationAttempted ?? this.classificationAttempted,
     proposedRole: clearProposedRole
         ? null
         : (proposedRole ?? this.proposedRole),
     proposalConfirmed: proposalConfirmed ?? this.proposalConfirmed,
     humanRole: clearHumanRole ? null : (humanRole ?? this.humanRole),
     excluded: excluded ?? this.excluded,
-    answerTestId: answerTestId ?? this.answerTestId,
+    answerTestId: clearAnswerTestId
+        ? null
+        : (answerTestId ?? this.answerTestId),
   );
 }
 
@@ -258,6 +284,22 @@ class IntakeReviewState {
     for (final group in groups) ...group.files,
   ];
 
+  /// Every file still worth asking the classifier about, cached or not.
+  ///
+  /// This is what the run actually iterates. [pendingClassification] is the
+  /// subset that costs money, and is what the estimate shows.
+  List<IntakeFileState> get classifiableFiles => allFiles
+      .where(
+        (file) =>
+            (file.needsClassification || file.cachedClassification) &&
+            !file.classificationAttempted &&
+            !file.excluded &&
+            file.humanRole == null &&
+            file.proposedRole == null &&
+            !file.proposalConfirmed,
+      )
+      .toList();
+
   /// Files a classification call would still be spent on.
   ///
   /// Excludes anything the reviewer already excluded or decided themselves --
@@ -267,6 +309,7 @@ class IntakeReviewState {
       .where(
         (file) =>
             file.needsClassification &&
+            !file.classificationAttempted &&
             !file.excluded &&
             file.humanRole == null &&
             file.proposedRole == null &&
@@ -287,11 +330,28 @@ class IntakeReviewState {
       groups.any((group) => group.includedFiles.isNotEmpty) &&
       groups.every((group) => group.includedFiles.isEmpty || group.isReady);
 
-  /// Estimated cost of [pendingClassification], or `null` when no unit price
-  /// has been entered -- in which case the screen says the price is unknown
-  /// rather than printing a zero that looks like "free".
-  double? get estimatedCost =>
-      unitCost == null ? null : unitCost! * pendingClassification.length;
+  /// Answers that would each cost an **attribution** call.
+  ///
+  /// Counted separately from [pendingClassification] because they are a
+  /// different question asked of the same provider, and because they are easy
+  /// to miss: a folder of forty answers whose roles every rule matched shows
+  /// zero role-classification calls while still being about to spend forty
+  /// attribution calls. Showing only the first number would tell the reviewer
+  /// their run is free right before charging them for it.
+  ///
+  /// Only groups routing answers individually contribute -- a group bound to
+  /// one test has nothing to attribute.
+  List<IntakeFileState> get answersNeedingAttribution => [
+    for (final group in groups)
+      if (group.targetKind == IntakeTargetKind.perAnswer)
+        ...group.unroutedAnswers,
+  ];
+
+  /// Estimated cost of ``calls`` provider requests, or `null` when no unit
+  /// price has been entered -- in which case the screen says the price is
+  /// unknown rather than printing a zero that looks like "free".
+  double? estimatedCostForCalls(int calls) =>
+      unitCost == null ? null : unitCost! * calls;
 
   IntakeReviewState copyWith({
     List<IntakeGroupState>? groups,
@@ -315,6 +375,42 @@ class IntakeReviewState {
         ),
     ],
   );
+
+  /// Mark every proposal the reviewer is looking at as confirmed.
+  ///
+  /// The explicit bulk approval a folder of forty answers needs: without it,
+  /// a batch whose names match no rule costs one tap per file, which is the
+  /// exact cost this Issue exists to remove.
+  ///
+  /// **Only files that actually carry a proposal.** A file the classifier
+  /// could not decide, or was never asked about, has nothing to approve --
+  /// confirming it would turn "nobody knows what this is" into "the reviewer
+  /// said it was fine", which is the one thing the confirmation step exists to
+  /// prevent. Those stay blocking until a role is chosen.
+  IntakeReviewState confirmAllProposals() => copyWith(
+    groups: [
+      for (final group in groups)
+        group.copyWith(
+          files: [
+            for (final file in group.files)
+              file.excluded || file.proposedRole == null
+                  ? file
+                  : file.copyWith(proposalConfirmed: true),
+          ],
+        ),
+    ],
+  );
+
+  /// Files carrying a proposal the reviewer has not accepted yet.
+  List<IntakeFileState> get confirmableProposals => allFiles
+      .where(
+        (file) =>
+            !file.excluded &&
+            file.proposedRole != null &&
+            !file.proposalConfirmed &&
+            file.humanRole == null,
+      )
+      .toList();
 
   IntakeReviewState withGroup(
     String key,
@@ -358,6 +454,8 @@ IntakeReviewState buildReviewState({
                 ruleRole: file.role,
                 needsClassification:
                     file.classification == ClassificationNeed.pending,
+                cachedClassification:
+                    file.classification == ClassificationNeed.cached,
                 // A file the rules resolved to "do not import" starts
                 // excluded rather than listed as something to decide -- the
                 // template already said so, and the reviewer can still

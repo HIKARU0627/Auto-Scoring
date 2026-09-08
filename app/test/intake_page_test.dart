@@ -185,7 +185,8 @@ void main() {
       unitCost: 2.5,
     );
 
-    expect(find.textContaining('AIに問い合わせる件数: 1件'), findsOneWidget);
+    expect(find.textContaining('AIに問い合わせる件数: 合計1件'), findsOneWidget);
+    expect(find.textContaining('役割の判定 1件'), findsOneWidget);
     expect(find.textContaining('概算費用: 約2.50'), findsOneWidget);
   });
 
@@ -408,11 +409,16 @@ void main() {
     expect(find.textContaining('採点できます'), findsNothing);
     expect(find.textContaining('採点を開始できます'), findsNothing);
     expect(find.textContaining('AI採点を開始しました'), findsNothing);
-    // And it is not a dead end: the next action, and the undo, are one tap.
+    // No link to テスト設定画面: that screen cannot enter points or criteria
+    // for a test registered this way, and sending the reviewer somewhere they
+    // cannot do the thing the notice just asked for is worse than saying the
+    // app cannot do it yet.
     expect(
       find.byKey(const Key('intake-open-settings-subject-a')),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.textContaining('画面はまだありません'), findsOneWidget);
+    // The undo for what this import created is still one tap away.
     expect(find.byKey(const Key('intake-delete-subject-a')), findsOneWidget);
   });
 
@@ -606,5 +612,486 @@ void main() {
     expect(find.textContaining('答案 1件を取り込みました'), findsOneWidget);
     expect(find.textContaining('AI採点を開始できませんでした'), findsOneWidget);
     expect(find.textContaining('AI採点を開始しました'), findsNothing);
+  });
+
+  /// Dependencies that import one group as a *new* test successfully.
+  AppDependencies importing({
+    required IntakePlanResponse withPlan,
+    List<TestSummary> existingTests = const [],
+    Future<SubmissionResponse> Function({
+      required String testId,
+      required String filePath,
+      String? studentLabel,
+    })?
+    createSubmission,
+    Future<List<SubmissionResponse>> Function(String)? listSubmissions,
+    Future<void> Function(String)? deleteTest,
+    Future<List<TestMaterialResponse>> Function(
+      String, {
+      required List<({MaterialRole role, String path})> materials,
+    })?
+    addMaterials,
+  }) => AppDependencies(
+    listIntakeTemplates: () async => [template()],
+    intakeCost: () async => null,
+    listTests: () async => existingTests,
+    classificationAvailability: () async => available(),
+    planIntake:
+        ({required templateId, required rootName, required files}) async =>
+            withPlan,
+    createTest:
+        ({
+          required name,
+          subject,
+          required criteriaPath,
+          materials = const [],
+        }) async => TestResponse(
+          (builder) => builder
+            ..id = 'test-1'
+            ..name = name
+            ..status = 'draft'
+            ..createdAt = DateTime.utc(2026),
+        ),
+    addMaterials:
+        addMaterials ??
+        (testId, {required materials}) async => const <TestMaterialResponse>[],
+    createSubmission:
+        createSubmission ??
+        ({required testId, required filePath, studentLabel}) async =>
+            SubmissionResponse(
+              (builder) => builder
+                ..id = 'sub-1'
+                ..testId = testId
+                ..state = 'needs_review'
+                ..pageCount = 1
+                ..createdAt = DateTime.utc(2026),
+            ),
+    listSubmissions: listSubmissions ?? (_) async => const [],
+    deleteTest: deleteTest ?? (_) async {},
+  );
+
+  group('コードレビュー1回目で見つかった穴', () {
+    testWidgets('削除は、何が消えるかを言って確認してから実行する [P1]', (tester) async {
+      // The button reads "undo what I just did". Without a confirmation naming
+      // the blast radius, one click could take a whole term's work.
+      var deleted = 0;
+      await openReview(
+        tester,
+        withPlan: plan(ruleMatched),
+        paths: const ['subject-a/01_answers.pdf', 'subject-a/02_criteria.pdf'],
+        dependencies: importing(
+          withPlan: plan(ruleMatched),
+          listSubmissions: (_) async => [
+            for (var i = 0; i < 12; i++)
+              SubmissionResponse(
+                (builder) => builder
+                  ..id = 'sub-$i'
+                  ..testId = 'test-1'
+                  ..state = 'needs_review'
+                  ..pageCount = 1
+                  ..createdAt = DateTime.utc(2026),
+              ),
+          ],
+          deleteTest: (_) async => deleted++,
+        ),
+      );
+      await tester.tap(find.byKey(const Key('intake-import')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('intake-delete-subject-a')));
+      await tester.pumpAndSettle();
+
+      // Nothing has been deleted yet, and the dialog says what would be.
+      expect(deleted, 0);
+      expect(find.byKey(const Key('intake-delete-confirm')), findsOneWidget);
+      expect(find.textContaining('答案 12件'), findsOneWidget);
+      expect(find.textContaining('元に戻せません'), findsOneWidget);
+
+      // Backing out deletes nothing.
+      await tester.tap(find.byKey(const Key('intake-delete-cancel')));
+      await tester.pumpAndSettle();
+      expect(deleted, 0);
+      expect(find.byKey(const Key('intake-delete-subject-a')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('intake-delete-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-delete-confirmed')));
+      await tester.pumpAndSettle();
+      expect(deleted, 1);
+    });
+
+    testWidgets('登録済みテストに足しただけのときは、削除を出さない [P1]', (tester) async {
+      // Deleting there would throw away every previous week's answers and
+      // grading -- from a button pressed meaning "undo this week's import".
+      await openReview(
+        tester,
+        withPlan: plan(
+          [
+            planned(
+              'subject-a/01_answers.pdf',
+              role: MaterialRole.studentAnswer,
+            ),
+          ],
+          missing: const [MaterialRole.gradingCriteria],
+        ),
+        paths: const ['subject-a/01_answers.pdf'],
+        dependencies: importing(
+          withPlan: plan(
+            [
+              planned(
+                'subject-a/01_answers.pdf',
+                role: MaterialRole.studentAnswer,
+              ),
+            ],
+            missing: const [MaterialRole.gradingCriteria],
+          ),
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'existing-1'
+                ..name = '国語 第1回',
+            ),
+          ],
+        ),
+      );
+
+      // Bind the group to the already-registered test.
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('登録済み: 国語 第1回').last);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('intake-import')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('intake-delete-subject-a')), findsNothing);
+    });
+
+    testWidgets('一部失敗でも、取り込めた分と失敗したファイル名を出す', (tester) async {
+      var created = 0;
+      final answers = [
+        for (var i = 0; i < 3; i++)
+          planned(
+            'subject-a/01_answers-$i.pdf',
+            role: MaterialRole.studentAnswer,
+          ),
+      ];
+      final withCriteria = plan([
+        ...answers,
+        planned(
+          'subject-a/02_criteria.pdf',
+          role: MaterialRole.gradingCriteria,
+        ),
+      ]);
+      await openReview(
+        tester,
+        withPlan: withCriteria,
+        paths: const [
+          'subject-a/01_answers-0.pdf',
+          'subject-a/01_answers-1.pdf',
+          'subject-a/01_answers-2.pdf',
+          'subject-a/02_criteria.pdf',
+        ],
+        dependencies: importing(
+          withPlan: withCriteria,
+          createSubmission:
+              ({required testId, required filePath, studentLabel}) async {
+                created++;
+                if (created == 3) {
+                  throw SidecarApiException(
+                    SidecarErrorKind.unknown,
+                    'simulated disk failure',
+                  );
+                }
+                return SubmissionResponse(
+                  (builder) => builder
+                    ..id = 'sub-$created'
+                    ..testId = testId
+                    ..state = 'needs_review'
+                    ..pageCount = 1
+                    ..createdAt = DateTime.utc(2026),
+                );
+              },
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('intake-import')));
+      await tester.pumpAndSettle();
+
+      // The two that landed are reported, not hidden behind the one that did
+      // not -- otherwise the reviewer re-imports all three.
+      expect(
+        find.byKey(const Key('intake-imported-subject-a')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('答案 2件を取り込みました'), findsOneWidget);
+      expect(find.textContaining('一部を取り込めませんでした'), findsOneWidget);
+      // Named, so the reviewer can find it.
+      expect(find.textContaining('失敗したファイル: 01_answers-2.pdf'), findsOneWidget);
+    });
+
+    testWidgets('バッチごとにテスト一覧を取り直す（さっき作ったテストが候補に出る）', (tester) async {
+      // The ordinary sequence is "import the criteria folder, then the answers
+      // folder". The test just created has to be offerable as a target.
+      var listCalls = 0;
+      await pumpAppAt(
+        tester,
+        AppRoutes.intake,
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          classificationAvailability: () async => available(),
+          listTests: () async {
+            listCalls++;
+            return listCalls == 1
+                ? const []
+                : [
+                    TestSummary(
+                      (builder) => builder
+                        ..id = 'test-1'
+                        ..name = 'さっき作ったテスト',
+                    ),
+                  ];
+          },
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => plan(ruleMatched),
+        ),
+        overrides: [
+          chooseFolderProvider.overrideWithValue(() async => '/tmp/batch'),
+          scanFolderProvider.overrideWithValue(
+            (_) async => folder(const [
+              'subject-a/01_answers.pdf',
+              'subject-a/02_criteria.pdf',
+            ]),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-choose-folder')));
+      await tester.pumpAndSettle();
+
+      expect(listCalls, greaterThan(1));
+      expect(find.byKey(const Key('intake-narrow-test-1')), findsOneWidget);
+    });
+
+    testWidgets('提案をまとめて確認する導線がある', (tester) async {
+      final withStray = plan([
+        ...ruleMatched,
+        planned('subject-a/stray.pdf', need: ClassificationNeed.pending),
+      ], pending: 1);
+      await openReview(
+        tester,
+        withPlan: withStray,
+        paths: const [
+          'subject-a/01_answers.pdf',
+          'subject-a/02_criteria.pdf',
+          'subject-a/stray.pdf',
+        ],
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          listTests: () async => const [],
+          classificationAvailability: () async => available(),
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => withStray,
+          classifyMaterial: ({required path}) async => RoleProposalResponse(
+            (builder) => builder
+              ..role = MaterialRole.reference
+              ..confidence = 0.9
+              ..cached = false,
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('intake-run-classification')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('intake-confirm-all')));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('キャッシュ済みの提案を取りに行く（40枚がまた手動に戻らない）', (tester) async {
+      // Re-selecting a folder returns `cached` for content the sidecar has
+      // already classified. Treating that as "nothing to do" left every row
+      // undecided and threw away answers already paid for.
+      var classifyCalls = 0;
+      final cachedPlan = plan([
+        ...ruleMatched,
+        planned('subject-a/stray.pdf', need: ClassificationNeed.cached),
+      ]);
+      await openReview(
+        tester,
+        withPlan: cachedPlan,
+        paths: const [
+          'subject-a/01_answers.pdf',
+          'subject-a/02_criteria.pdf',
+          'subject-a/stray.pdf',
+        ],
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          listTests: () async => const [],
+          classificationAvailability: () async => available(),
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => cachedPlan,
+          classifyMaterial: ({required path}) async {
+            classifyCalls++;
+            return RoleProposalResponse(
+              (builder) => builder
+                ..role = MaterialRole.annotationSample
+                ..confidence = 0.0
+                ..cached = true,
+            );
+          },
+        ),
+      );
+
+      // The button offers the fetch, and says it costs nothing new.
+      expect(find.textContaining('取得済み1件'), findsOneWidget);
+      expect(find.textContaining('役割の判定 0件'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('intake-run-classification')));
+      await tester.pumpAndSettle();
+
+      expect(classifyCalls, 1);
+      // The cached answer arrives as a proposal that still needs confirming.
+      expect(
+        find.byKey(const Key('intake-unconfirmed-notice')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('intake-confirm-all')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('「判定できなかった」に二度課金しない', (tester) async {
+      var classifyCalls = 0;
+      final withStray = plan([
+        ...ruleMatched,
+        planned('subject-a/stray.pdf', need: ClassificationNeed.pending),
+      ], pending: 1);
+      await openReview(
+        tester,
+        withPlan: withStray,
+        paths: const [
+          'subject-a/01_answers.pdf',
+          'subject-a/02_criteria.pdf',
+          'subject-a/stray.pdf',
+        ],
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          listTests: () async => const [],
+          classificationAvailability: () async => available(),
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => withStray,
+          classifyMaterial: ({required path}) async {
+            classifyCalls++;
+            return RoleProposalResponse(
+              (builder) => builder
+                ..role = null
+                ..confidence = 0.0
+                ..cached = false,
+            );
+          },
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('intake-run-classification')));
+      await tester.pumpAndSettle();
+      expect(classifyCalls, 1);
+
+      // The file is still undecided -- but asking again would buy the same
+      // reply at the same price, so the run is no longer offered for it.
+      expect(find.byKey(const Key('intake-run-classification')), findsNothing);
+      expect(classifyCalls, 1);
+    });
+
+    testWidgets('候補を絞り直しても、振り分け済みの答案で落ちない', (tester) async {
+      final answersOnly = plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      );
+      await openReview(
+        tester,
+        withPlan: answersOnly,
+        paths: const ['subject-a/01_answers.pdf'],
+        dependencies: importing(
+          withPlan: answersOnly,
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-b'
+                ..name = '数学',
+            ),
+          ],
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+
+      // The estimate now counts the attribution call this routing would need
+      // -- role classification is 0 here because a rule matched the name, and
+      // showing only that number would have said "free" right before spending.
+      expect(find.textContaining('答案の振り分け 1件'), findsOneWidget);
+      expect(find.textContaining('AIに問い合わせる件数: 合計1件'), findsOneWidget);
+
+      // Route the answer to 国語...
+      await tester.tap(
+        find.byKey(const Key('intake-answer-target-subject-a/01_answers.pdf')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語').last);
+      await tester.pumpAndSettle();
+
+      // ...then narrow the candidates to 数学 only. The routing to 国語 has to
+      // be dropped, not left pointing at a value the control no longer offers.
+      await tester.tap(find.byKey(const Key('intake-narrow-test-b')));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+    });
   });
 }

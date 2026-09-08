@@ -53,17 +53,28 @@ class _ImportOutcome {
     required this.groupKey,
     required this.name,
     this.testId,
+    this.createdTest = false,
     this.materialCount = 0,
     this.submissionCount = 0,
     this.duplicateCount = 0,
     this.gradingStartedCount = 0,
     this.gradingFailure,
     this.error,
+    this.failedFiles = const [],
   });
 
   final String groupKey;
   final String name;
   final String? testId;
+
+  /// Whether **this** import created the test, as opposed to adding to one
+  /// that already existed.
+  ///
+  /// Decides what the completion screen may offer. Deleting a test this import
+  /// created undoes this import; deleting a test it merely added to would
+  /// throw away every previous week's answers and grading along with it, which
+  /// is not what "undo" means to anyone.
+  final bool createdTest;
   final int materialCount;
   final int submissionCount;
 
@@ -85,7 +96,20 @@ class _ImportOutcome {
   /// tried or everything succeeded.
   final String? gradingFailure;
 
-  bool get succeeded => error == null;
+  /// The files that could not be imported, so the reviewer can find them.
+  ///
+  /// A count is not enough: "1件失敗" in a folder of forty leaves them
+  /// comparing lists by hand.
+  final List<String> failedFiles;
+
+  /// Whether anything at all landed.
+  ///
+  /// Deliberately not "did every file land": every write is its own request
+  /// precisely so a batch can partly succeed, and reporting the whole group as
+  /// a failure because one answer of forty failed would hide the thirty-nine
+  /// that are in -- and make the reviewer re-import them.
+  bool get importedAnything =>
+      materialCount > 0 || submissionCount > 0 || duplicateCount > 0;
 }
 
 class _IntakePageState extends ConsumerState<IntakePage> {
@@ -129,6 +153,20 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     _loadSettings();
   }
 
+  /// Re-read the registered tests, without failing the caller.
+  ///
+  /// A stale list only costs the reviewer a target they could have picked; a
+  /// thrown exception here would cost them the whole folder they just chose.
+  Future<void> _refreshExistingTests() async {
+    try {
+      final tests = await _dependencies.listTests();
+      if (!mounted) return;
+      setState(() => _existingTests = tests);
+    } on SidecarApiException {
+      // Keep whatever list we had.
+    }
+  }
+
   Future<void> _loadSettings() async {
     try {
       final templates = await _dependencies.listIntakeTemplates();
@@ -159,6 +197,12 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     try {
       final path = await _chooseFolder();
       if (path == null || !mounted) return;
+      // Re-read at the start of every batch, not once in initState. The
+      // ordinary sequence is "import the criteria folder, then import the
+      // answers folder" -- and the test just created has to be offerable as a
+      // target for the second one.
+      await _refreshExistingTests();
+      if (!mounted) return;
       final folder = await _scanFolder(path);
       if (folder.entries.isEmpty) {
         if (!mounted) return;
@@ -206,7 +250,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   Future<void> _runClassification() async {
     final review = _review;
     if (review == null) return;
-    final pending = review.pendingClassification;
+    // Cached files are asked about too. They cost nothing and the sidecar
+    // answers instantly -- skipping them is what made a re-selected folder
+    // throw away proposals it had already paid for.
+    final pending = review.classifiableFiles;
     if (pending.isEmpty) return;
 
     setState(() {
@@ -232,7 +279,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
             _classifiedCount++;
             _review = _review?.withFile(
               file.relativePath,
-              (current) => current.copyWith(proposedRole: proposal.role),
+              // Marked as asked even when the answer was "could not tell":
+              // that is a real answer, and asking again buys the same reply
+              // at the same price.
+              (current) => current.copyWith(
+                proposedRole: proposal.role,
+                classificationAttempted: true,
+              ),
             );
           });
         } on SidecarApiException catch (error) {
@@ -243,6 +296,9 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           setState(() {
             _classifiedCount++;
             _error = error.message;
+            // Not marked as asked: a call that failed produced no answer, so
+            // retrying is the reviewer buying something rather than
+            // re-buying it.
           });
         }
       }
@@ -404,12 +460,14 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         groupKey: group.key,
         name: group.name,
         testId: testId,
+        createdTest: group.targetKind == IntakeTargetKind.create,
         materialCount: materialCount,
         submissionCount: answersResult.imported,
         duplicateCount: answersResult.duplicates,
         gradingStartedCount: answersResult.gradingStarted,
         gradingFailure: answersResult.gradingFailure,
         error: answersResult.failure,
+        failedFiles: answersResult.failedFiles,
       );
     } on SidecarApiException catch (error) {
       return _ImportOutcome(
@@ -438,6 +496,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     var imported = 0;
     var duplicates = 0;
     var gradingStarted = 0;
+    final failedFiles = <String>[];
     String? gradingFailure;
     String? failure;
     for (final answer in answers) {
@@ -449,6 +508,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       gradingStarted += result.gradingStarted;
       gradingFailure ??= result.gradingFailure;
       failure ??= result.failure;
+      failedFiles.addAll(result.failedFiles);
     }
     return _ImportOutcome(
       groupKey: group.key,
@@ -458,6 +518,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       gradingStartedCount: gradingStarted,
       gradingFailure: gradingFailure,
       error: failure,
+      failedFiles: failedFiles,
     );
   }
 
@@ -482,12 +543,14 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       int gradingStarted,
       String? gradingFailure,
       String? failure,
+      List<String> failedFiles,
     })
   >
   _importAnswers(String testId, List<IntakeFileState> answers) async {
     var imported = 0;
     var duplicates = 0;
     var gradingStarted = 0;
+    final failedFiles = <String>[];
     String? gradingFailure;
     String? failure;
     for (final answer in answers) {
@@ -504,6 +567,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         duplicates++;
       } on SidecarApiException catch (error) {
         failure ??= error.message;
+        failedFiles.add(answer.fileName);
       }
       if (submission == null || submission.state != 'ai_processed') continue;
       try {
@@ -519,17 +583,73 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       gradingStarted: gradingStarted,
       gradingFailure: gradingFailure,
       failure: failure,
+      failedFiles: failedFiles,
     );
   }
 
-  Future<void> _deleteTest(String testId) async {
+  /// Delete a test this import created, after saying what goes with it.
+  ///
+  /// Only ever offered for a test **this** import created (see
+  /// `_ImportOutcome.createdTest`): the underlying operation removes the test
+  /// and everything under it, so calling it on a test that already existed
+  /// would throw away every previous week's answers and grading -- from a
+  /// button the reviewer pressed meaning "undo what I just did".
+  ///
+  /// The confirmation names the blast radius rather than asking "are you
+  /// sure?", and the counts are read back from the sidecar rather than taken
+  /// from this screen's own tally, so a submission imported by something else
+  /// is included in what the reviewer is warned about (`AGENTS.md`
+  /// "Security": confirm scope and blast radius before a destructive
+  /// operation).
+  Future<void> _deleteTest(_ImportOutcome outcome) async {
+    final testId = outcome.testId;
+    if (testId == null || !outcome.createdTest) return;
+
+    var submissionCount = outcome.submissionCount;
+    try {
+      submissionCount = (await _dependencies.listSubmissions(testId)).length;
+    } on SidecarApiException {
+      // Fall back to what this screen imported. A count that may understate
+      // is better than blocking the undo the reviewer asked for -- and the
+      // dialog says the count is what it knows.
+    }
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('intake-delete-confirm'),
+        title: Text('「${outcome.name}」を削除しますか'),
+        content: Text(
+          'このテストと、それに紐づくものをすべて削除します。\n\n'
+          '・答案 $submissionCount件\n'
+          '・その答案の採点結果・添削・レビュー履歴\n'
+          '・登録した資料 ${outcome.materialCount}件\n\n'
+          '元に戻せません。',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('intake-delete-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('やめる'),
+          ),
+          FilledButton(
+            key: const Key('intake-delete-confirmed'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('削除する'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
     setState(() => _busy = true);
     try {
       await _dependencies.deleteTest(testId);
       if (!mounted) return;
       setState(
         () => _outcomes = _outcomes
-            .where((outcome) => outcome.testId != testId)
+            .where((entry) => entry.testId != testId)
             .toList(),
       );
     } on SidecarApiException catch (error) {
@@ -625,12 +745,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
 
   Widget _buildReviewStep() {
     final review = _review!;
-    final pending = review.pendingClassification.length;
+    final billable = review.pendingClassification.length;
+    final classifiable = review.classifiableFiles.length;
     final unconfirmed = review.unconfirmedProposals.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _buildEstimate(review, pending),
+        _buildEstimate(review, billable),
         if (_existingTests.isNotEmpty) _buildNarrowing(),
         const SizedBox(height: AppSpacing.md),
         if (_classifying)
@@ -641,7 +762,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                 Expanded(
                   child: Text(
                     'AIが判定しています ($_classifiedCount / '
-                    '${_classifiedCount + pending}件)',
+                    '${_classifiedCount + classifiable}件)',
                     key: const Key('intake-classify-progress'),
                   ),
                 ),
@@ -668,22 +789,53 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         if (unconfirmed > 0)
           Padding(
             padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-            child: Text(
-              key: const Key('intake-unconfirmed-notice'),
-              'AIの提案を$unconfirmed件、まだ確認していません。'
-              '内容を確かめて「この役割でよい」を押すと取り込めます。',
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    key: const Key('intake-unconfirmed-notice'),
+                    'AIの提案を$unconfirmed件、まだ確認していません。'
+                    '内容を確かめてから取り込んでください。',
+                  ),
+                ),
+                if (review.confirmableProposals.isNotEmpty)
+                  TextButton(
+                    key: const Key('intake-confirm-all'),
+                    // Explicit bulk approval, not an auto-accept: the reviewer
+                    // still has to press it, and it only touches rows that
+                    // actually carry a proposal. A folder of forty answers no
+                    // rule matched would otherwise cost forty taps.
+                    onPressed: _busy || _classifying
+                        ? null
+                        : () => setState(
+                            () => _review = _review?.confirmAllProposals(),
+                          ),
+                    child: Text(
+                      'AIの提案 ${review.confirmableProposals.length}件を'
+                      'まとめて確認済みにする',
+                    ),
+                  ),
+              ],
             ),
           ),
         Row(
           children: [
-            if (pending > 0 && _availability?.available == true)
+            if (classifiable > 0 && _availability?.available == true)
               Padding(
                 padding: const EdgeInsets.only(right: AppSpacing.md),
                 child: FilledButton.tonalIcon(
                   key: const Key('intake-run-classification'),
                   onPressed: _classifying || _busy ? null : _runClassification,
                   icon: const Icon(Icons.auto_awesome),
-                  label: Text('AIで判定する ($pending件)'),
+                  // The two counts are named separately so the button never
+                  // reads "0件" while it is about to do real work, and never
+                  // implies a charge for answers already paid for.
+                  label: Text(
+                    classifiable == billable
+                        ? 'AIで判定する ($billable件)'
+                        : 'AIで判定する (新規$billable件 / 取得済み'
+                              '${classifiable - billable}件)',
+                  ),
                 ),
               ),
             FilledButton.icon(
@@ -702,11 +854,21 @@ class _IntakePageState extends ConsumerState<IntakePage> {
 
   /// The pre-flight numbers (acceptance criterion 7).
   ///
-  /// The call count is exact. The cost is only shown when the reviewer has
-  /// told the settings screen what their provider charges -- this app cannot
-  /// know that, and a figure nobody verified is worse than none.
-  Widget _buildEstimate(IntakeReviewState review, int pending) {
-    final cost = review.estimatedCost;
+  /// **Two kinds of call, counted separately.** Role classification and answer
+  /// attribution are both billed, and a batch can need many of one and none of
+  /// the other -- forty answers whose names every rule matched cost nothing to
+  /// classify and forty calls to attribute. One combined number would have hidden
+  /// that, and a role-only number would have read as "free".
+  ///
+  /// Attribution is only counted when there is more than one candidate: with
+  /// one, the reviewer has already decided and no call is made.
+  Widget _buildEstimate(IntakeReviewState review, int billableRoleCalls) {
+    final candidates = _attributionCandidates.length;
+    final attributionCalls = candidates >= 2
+        ? review.answersNeedingAttribution.length
+        : 0;
+    final totalCalls = billableRoleCalls + attributionCalls;
+    final cost = review.estimatedCostForCalls(totalCalls);
     return Card(
       child: Padding(
         padding: AppSpacing.card,
@@ -715,8 +877,15 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           children: [
             Text(
               key: const Key('intake-call-estimate'),
-              'AIに問い合わせる件数: $pending件',
+              'AIに問い合わせる件数: 合計$totalCalls件',
               style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              key: const Key('intake-call-breakdown'),
+              '内訳: 役割の判定 $billableRoleCalls件 / '
+              '答案の振り分け $attributionCalls件'
+              '${attributionCalls > 0 ? '（候補$candidates件）' : ''}',
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
@@ -760,6 +929,12 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     } else {
                       _narrowedTestIds.remove(test.id);
                     }
+                    // An answer already routed to a test the reviewer has just
+                    // narrowed away has to lose that routing: the dropdown it
+                    // is shown in no longer offers that value, and leaving it
+                    // set would both crash the control and keep a decision the
+                    // reviewer has implicitly withdrawn.
+                    _dropRoutingOutsideCandidates();
                   }),
                 ),
             ],
@@ -767,6 +942,23 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         ],
       ),
     );
+  }
+
+  /// Clear any answer routed to a test that is no longer a candidate.
+  void _dropRoutingOutsideCandidates() {
+    final allowed = _attributionCandidates.map((test) => test.id).toSet();
+    var review = _review;
+    if (review == null) return;
+    for (final file in review.allFiles) {
+      final routed = file.answerTestId;
+      if (routed != null && !allowed.contains(routed)) {
+        review = review!.withFile(
+          file.relativePath,
+          (current) => current.copyWith(clearAnswerTestId: true),
+        );
+      }
+    }
+    _review = review;
   }
 
   Widget _buildGroupCard(IntakeGroupState group) {
@@ -783,6 +975,11 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     key: Key('intake-target-${group.key}'),
+                    // A test name is whatever the reviewer typed, and a folder
+                    // name is whatever the school chose. Neither is bounded,
+                    // so the control has to shrink its label rather than
+                    // overflow the row.
+                    isExpanded: true,
                     initialValue: switch (group.targetKind) {
                       IntakeTargetKind.create => '__new__',
                       IntakeTargetKind.perAnswer => '__per_answer__',
@@ -795,17 +992,26 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     items: [
                       const DropdownMenuItem(
                         value: '__new__',
-                        child: Text('新しいテストとして登録する'),
+                        child: Text(
+                          '新しいテストとして登録する',
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                       if (_existingTests.isNotEmpty)
                         const DropdownMenuItem(
                           value: '__per_answer__',
-                          child: Text('答案ごとに登録済みのテストへ振り分ける'),
+                          child: Text(
+                            '答案ごとに登録済みのテストへ振り分ける',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       for (final test in _existingTests)
                         DropdownMenuItem(
                           value: test.id,
-                          child: Text('登録済み: ${test.name}'),
+                          child: Text(
+                            '登録済み: ${test.name}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: _busy
@@ -939,7 +1145,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                 for (final role in MaterialRole.values)
                   DropdownMenuItem(
                     value: role,
-                    child: Text(materialRoleLabel(role)),
+                    child: Text(
+                      materialRoleLabel(role),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
               ],
               onChanged: _busy
@@ -965,11 +1174,24 @@ class _IntakePageState extends ConsumerState<IntakePage> {
               child: DropdownButton<String>(
                 key: Key('intake-answer-target-${file.relativePath}'),
                 isExpanded: true,
-                value: file.answerTestId,
+                // Only ever a value the item list actually offers.
+                // `DropdownButton` asserts on a value with no matching item,
+                // and the candidate list is narrowed by the reviewer while
+                // routings already exist -- `_dropRoutingOutsideCandidates`
+                // clears those, and this makes the control safe regardless.
+                value:
+                    _attributionCandidates.any(
+                      (test) => test.id == file.answerTestId,
+                    )
+                    ? file.answerTestId
+                    : null,
                 hint: const Text('振り分け先'),
                 items: [
                   for (final test in _attributionCandidates)
-                    DropdownMenuItem(value: test.id, child: Text(test.name)),
+                    DropdownMenuItem(
+                      value: test.id,
+                      child: Text(test.name, overflow: TextOverflow.ellipsis),
+                    ),
                 ],
                 onChanged: _busy
                     ? null
@@ -1047,9 +1269,9 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                 const SizedBox(height: AppSpacing.sm),
                 const Text(
                   key: Key('intake-next-step-notice'),
-                  '採点にはこのあと配点と採点基準が必要です。'
-                  'いまのアプリは採点基準PDFからこれらを自動では取り出せないため、'
-                  'テスト設定画面で入力してください。',
+                  '採点にはこのあと配点と採点基準が必要ですが、'
+                  'それを入力する画面はまだありません（Issue #103 で作成中）。'
+                  'そのため、取り込んだ答案はまだ採点できません。',
                 ),
               ],
             ),
@@ -1069,53 +1291,74 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: AppSpacing.xs),
-                  if (outcome.succeeded) ...[
+                  // What landed is reported whether or not something also
+                  // failed. Every write is its own request so a batch can
+                  // partly succeed; showing only the failure would hide the
+                  // thirty-nine answers that are in and send the reviewer to
+                  // re-import them.
+                  if (outcome.importedAnything)
                     Text(
+                      key: Key('intake-imported-${outcome.groupKey}'),
                       '資料 ${outcome.materialCount}件 / '
                       '答案 ${outcome.submissionCount}件を取り込みました'
                       '${outcome.duplicateCount > 0 ? '（${outcome.duplicateCount}件は取込済み）' : ''}',
                     ),
-                    // Said separately, never folded into the line above:
-                    // "the answer is in" and "grading started" are two facts,
-                    // and the screen must not assert the second one when it
-                    // did not happen (Issue #80).
-                    if (outcome.gradingStartedCount > 0)
-                      Text('うち${outcome.gradingStartedCount}件のAI採点を開始しました'),
-                    if (outcome.gradingFailure != null)
-                      Text(
-                        outcome.gradingFailure!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
-                  ] else
+                  // Said separately, never folded into the line above:
+                  // "the answer is in" and "grading started" are two facts,
+                  // and the screen must not assert the second one when it
+                  // did not happen (Issue #80).
+                  if (outcome.gradingStartedCount > 0)
+                    Text('うち${outcome.gradingStartedCount}件のAI採点を開始しました'),
+                  if (outcome.gradingFailure != null)
                     Text(
-                      '取り込めませんでした: ${outcome.error}',
+                      outcome.gradingFailure!,
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.error,
                       ),
                     ),
+                  if (outcome.error != null) ...[
+                    Text(
+                      key: Key('intake-failed-${outcome.groupKey}'),
+                      outcome.importedAnything
+                          ? '一部を取り込めませんでした: ${outcome.error}'
+                          : '取り込めませんでした: ${outcome.error}',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                    // Named, not counted: "1件失敗" in a folder of forty
+                    // leaves the reviewer comparing lists by hand.
+                    if (outcome.failedFiles.isNotEmpty)
+                      Text(
+                        '失敗したファイル: ${outcome.failedFiles.join('、')}',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                  ],
                   const SizedBox(height: AppSpacing.sm),
                   Row(
                     children: [
                       if (outcome.testId != null) ...[
-                        FilledButton.icon(
-                          key: Key('intake-open-settings-${outcome.groupKey}'),
-                          onPressed: () => context.push(
-                            AppRoutes.testSettings(outcome.testId!),
+                        // No link to テスト設定画面. That screen's manual
+                        // region editor is disabled until a profile exists,
+                        // and generating one needs a model-answer-shaped
+                        // reference PDF -- which the standard input for this
+                        // flow (採点基準 PDF + 答案) does not include. Sending
+                        // the reviewer there would be sending them somewhere
+                        // they cannot do what the notice above asks. Saying
+                        // the app cannot do it yet is worse news and better
+                        // information.
+                        if (outcome.createdTest) ...[
+                          TextButton.icon(
+                            key: Key('intake-delete-${outcome.groupKey}'),
+                            onPressed: _busy
+                                ? null
+                                : () => _deleteTest(outcome),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('このテストを削除'),
                           ),
-                          icon: const Icon(Icons.tune),
-                          label: const Text('テスト設定を開く'),
-                        ),
-                        const SizedBox(width: AppSpacing.md),
-                        TextButton.icon(
-                          key: Key('intake-delete-${outcome.groupKey}'),
-                          onPressed: _busy
-                              ? null
-                              : () => _deleteTest(outcome.testId!),
-                          icon: const Icon(Icons.delete_outline),
-                          label: const Text('このテストを削除'),
-                        ),
+                        ],
                       ],
                     ],
                   ),
