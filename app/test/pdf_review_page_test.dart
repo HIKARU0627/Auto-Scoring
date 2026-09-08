@@ -358,6 +358,16 @@ Future<void> _settlePdf(WidgetTester tester) async {
   });
 }
 
+/// Pumps [times] frames without advancing the clock, to let a chain of
+/// already-resolved Futures land. `pumpAndSettle` cannot be used on this
+/// screen while any job is still in flight: the 3-second poll keeps
+/// scheduling frames, so nothing ever settles.
+Future<void> _pumpTimes(WidgetTester tester, int times) async {
+  for (var i = 0; i < times; i++) {
+    await tester.pump();
+  }
+}
+
 /// The pdfium shared library that `flutter test` builds but never wires up,
 /// or `null` when this platform does not need the detour.
 ///
@@ -3434,6 +3444,361 @@ void main() {
       expect(find.byKey(const Key('dag-unconfirmed-notice')), findsNothing);
       expect(find.byKey(const Key('review-shell-error')), findsNothing);
       expect(find.byKey(const Key('review-inspector')), findsOneWidget);
+    });
+  });
+
+  group('Issue #80: ジョブが無い答案からAI採点を開始する', () {
+    /// 問1 -> 問2 の確定グラフを持つテストの、ジョブが [jobs] の答案。
+    AppDependencies gradingDependencies({
+      required List<JobResponse> Function() jobs,
+      StartGrading? startGrading,
+      List<RecognitionResponse> Function()? recognitions,
+      List<GradeResultResponse> Function()? grades,
+    }) => AppDependencies(
+      getSubmission: (_) async => _submission(state: 'ai_processed'),
+      listQuestions: (_) async => [
+        _question(),
+        _question(id: 'q-2', number: '2'),
+      ],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      getDependencyGraph: (_) async => _dependencyGraph(),
+      listJobs: (_) async => jobs(),
+      startGrading:
+          startGrading ?? (submissionId) async => const <JobResponse>[],
+      // Read through a callback, like `jobs`, so a test can let results
+      // appear at the same moment the kickoff returns.
+      listRecognitions: (_, questionId) async =>
+          (recognitions?.call() ?? const [])
+              .where((r) => r.questionId == questionId)
+              .toList(),
+      listGrades: (_, questionId) async => (grades?.call() ?? const [])
+          .where((g) => g.questionId == questionId)
+          .toList(),
+      listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
+    );
+
+    testWidgets('ジョブが1件も無い答案には「AI採点を開始」が出て、押すとジョブができる', (tester) async {
+      // Issue #80 より前に取り込まれた答案、および自動起票が失敗した答案は、
+      // ここが唯一の復帰口である。
+      var jobs = <JobResponse>[];
+      final started = <String>[];
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => jobs,
+          startGrading: (submissionId) async {
+            started.add(submissionId);
+            jobs = [
+              _jobFor('q-1', state: 'queued', usable: null),
+              _jobFor(
+                'q-2',
+                state: 'blocked',
+                usable: null,
+                blockedOnQuestionId: 'q-1',
+              ),
+            ];
+            return jobs;
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(
+        find.byKey(const Key('review-grading-not-started')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      // `pumpAndSettle` は使えない -- 起票が通るとジョブが実行中になり、
+      // 3秒ごとのポーリングが動き続けるので settle しない (Issue #64 の
+      // テストと同じ理由)。
+      await _pumpTimes(tester, 5);
+      await tester.pump(AppMotion.emphasis);
+
+      expect(started, ['sub-1']);
+      // 起票のあとはジョブを取り直すだけで、図がそのまま動き出す。
+      expect(find.byKey(const Key('review-grading-not-started')), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-1'))).data,
+        '実行待ち',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
+        '問1 待ち',
+      );
+    });
+
+    testWidgets('起票が終わったジョブを返してきても、採点結果まで取り直す', (tester) async {
+      // 起票のPOSTが返った時点でキューが既に走り終えている場合 -- 短いDAG、
+      // 速いprovider、あるいは他の経路で先に起票されていた場合 --
+      // ジョブだけを取り直すと、起票前に取った**空の採点結果**が残る。
+      // しかも `_isAwaitingGrade` は「終端ジョブ + 採点結果なし」を
+      // 「待つものは無い」と読むのでポーリングも止まり、DAGが「レビュー待ち」
+      // と言っているのにインスペクタが空のまま、手動更新まで固まる
+      // (review round 2, P2)。
+      var jobs = <JobResponse>[];
+      var graded = false;
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => jobs,
+          recognitions: () => graded ? [_recognition()] : const [],
+          // ジョブより後に作られた採点結果。`_isAwaitingGrade` が「今回の
+          // 試行の結果だ」と判断できる並びにしてある。
+          grades: () =>
+              graded ? [_grade(createdAt: DateTime.utc(2026, 1, 2))] : const [],
+          startGrading: (submissionId) async {
+            graded = true;
+            jobs = [_jobFor('q-1'), _jobFor('q-2')];
+            return jobs;
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-question-empty')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      // ポーリングは止まる（終端ジョブ + 採点結果あり）ので settle できる。
+      // 止まったうえで結果が出ていることが、この修正が効いている証拠になる
+      // -- 取り直していなければ、空のまま settle してしまう。
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-1'))).data,
+        'レビュー待ち',
+      );
+      expect(
+        find.text('光合成によって酸素が発生する'),
+        findsOneWidget,
+        reason: '起票のあと、ジョブと一緒に採点結果も取り直していること',
+      );
+      expect(find.byKey(const Key('review-question-empty')), findsNothing);
+    });
+
+    testWidgets('起票の前に開いておいた別の設問も、あとで選び直せば結果が出る', (tester) async {
+      // 起票前に問2を開いて空の結果をキャッシュし、問1に戻って起票する。
+      // 取り直すのが「選択中の設問」だけだと、問2は空のキャッシュを抱えたまま
+      // で、`_isAwaitingGrade` が「終端ジョブ + 採点結果なし」を「待つものは
+      // 無い」と読むため再取得もポーリングも起きず、DAGが「レビュー待ち」と
+      // 言っているのに問2のインスペクタだけ空、が手動更新まで残る
+      // (review round 3, P2)。
+      var jobs = <JobResponse>[];
+      var graded = false;
+      List<GradeResultResponse> gradesFor(String questionId) => graded
+          ? [
+              _grade(
+                id: 'grade-$questionId',
+                questionId: questionId,
+                createdAt: DateTime.utc(2026, 1, 2),
+              ),
+            ]
+          : const [];
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => jobs,
+          recognitions: () => graded
+              ? [
+                  _recognition(id: 'rec-q-1', questionId: 'q-1', text: '問1の答え'),
+                  _recognition(id: 'rec-q-2', questionId: 'q-2', text: '問2の答え'),
+                ]
+              : const [],
+          grades: () => [...gradesFor('q-1'), ...gradesFor('q-2')],
+          startGrading: (submissionId) async {
+            graded = true;
+            jobs = [_jobFor('q-1'), _jobFor('q-2')];
+            return jobs;
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      // 起票前に問2を開く -- ここで空の結果がキャッシュされる。
+      await tester.tap(find.byKey(const Key('dag-node-q-2')));
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(find.byKey(const Key('review-question-empty')), findsOneWidget);
+
+      // 問1へ戻って起票する。取り直されるのは問1だけ。
+      await tester.tap(find.byKey(const Key('dag-node-q-1')));
+      await tester.pump();
+      await _settlePdf(tester);
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await tester.pumpAndSettle();
+      expect(find.text('問1の答え'), findsOneWidget);
+
+      // 問2を選び直す。ここが本題 -- 空のキャッシュが残っていると空のまま。
+      await tester.tap(find.byKey(const Key('dag-node-q-2')));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('問2の答え'),
+        findsOneWidget,
+        reason: '起票でジョブが変わった以上、未選択だった設問のキャッシュも無効になること',
+      );
+      expect(find.byKey(const Key('review-question-empty')), findsNothing);
+    });
+
+    testWidgets('ジョブが1件でもあれば「AI採点を開始」は出さない', (tester) async {
+      // 起票は済んでいる。ここにボタンを置くと「押せばもう一度採点される」と
+      // 読めるが、実際は idempotent で何も起きない。再実行は再判定と
+      // `POST /jobs/{id}/retry` の担当である。
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => [
+            _jobFor('q-1', state: 'running', usable: null),
+            _jobFor(
+              'q-2',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('review-grading-not-started')), findsNothing);
+    });
+
+    testWidgets('ジョブ一覧が取れていないときは「まだ開始されていません」と言わない', (tester) async {
+      // ジョブが空なのは「作られていない」からとは限らない -- 取得に失敗した
+      // ときも空である。区別できないものを断定しない。
+      await _pumpReview(
+        tester,
+        AppDependencies(
+          getSubmission: (_) async => _submission(state: 'ai_processed'),
+          listQuestions: (_) async => [_question()],
+          getSourcePdf: (_) async => _pocA4PortraitPdf(),
+          getDependencyGraph: (_) async => _dependencyGraph(),
+          listJobs: (_) async => throw SidecarApiException(
+            SidecarErrorKind.unavailable,
+            'sidecar is not reachable',
+          ),
+          listRecognitions: (_, _) async => const [],
+          listGrades: (_, _) async => const [],
+          listAnnotations: (_, _) async => const [],
+          listReviews: (_, _) async => const [],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-grading-not-started')), findsNothing);
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('起票の応答待ちのあいだに画面を離れても落ちない', (tester) async {
+      // #66（破棄後の `ref.read`）、#64（画面離脱中の pending request）に
+      // 続く3度目の同じ形。`_refreshJobs` の中の `mounted` チェックは
+      // **呼び出し元を止めない**ので、応答後にそのまま `_loadReview` まで
+      // 進み、破棄済み State へ `setState` して未処理例外になっていた
+      // (review round 4)。
+      final started = Completer<List<JobResponse>>();
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => const [],
+          startGrading: (submissionId) => started.future,
+        ),
+      );
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await tester.pump();
+
+      // 応答が返る前に画面を捨てる。
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      // ここで成功応答が返る。
+      started.complete([_jobFor('q-1'), _jobFor('q-2')]);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('404 のあとは「AI採点を開始」を出さない', (tester) async {
+      // 答案そのものが無いという答えは、同じ要求を投げ直しても変わらない。
+      // 取込画面は再試行ボタンを出さないのに、こちらは `finally` で
+      // ボタンが復活し、「答案が見つかりません」の真上から何度でも
+      // 押せていた (review round 1, P2-2)。
+      var attempts = 0;
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => const [],
+          startGrading: (submissionId) async {
+            attempts++;
+            throw SidecarApiException(
+              SidecarErrorKind.badResponse,
+              'submission not found',
+              statusCode: 404,
+            );
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await _pumpTimes(tester, 5);
+
+      expect(attempts, 1);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('review-start-grading-error')))
+            .data,
+        contains('見つかりません'),
+      );
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('確定DAGが無いときの409は理由を出すだけで、画面をエラーにしない', (tester) async {
+      // レビュアーは答案・認識文字・採点を読み続けられる。グラフが無いことを
+      // 画面のエラー状態にしないのと同じ扱い
+      // (docs/dependency-dag-progress-view.md §1.7, §1.11)。
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => const [],
+          startGrading: (submissionId) async => throw SidecarApiException(
+            SidecarErrorKind.conflict,
+            "test 'test-1' has no confirmed, up-to-date dependency graph",
+            statusCode: 409,
+          ),
+        ),
+      );
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await _pumpTimes(tester, 5);
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('review-start-grading-error')))
+            .data,
+        contains('設問依存関係が確定していない'),
+      );
+      expect(find.byKey(const Key('review-shell-error')), findsNothing);
+      // もう一度押せる。押し直すのがそのまま再試行である。
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('review-question-rail')), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 

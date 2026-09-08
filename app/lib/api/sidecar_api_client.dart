@@ -933,6 +933,35 @@ class SidecarApiClient {
     }
   }
 
+  /// Creates and queues this submission's per-question AI 採点 jobs from its
+  /// test's confirmed dependency graph, and returns every job the submission
+  /// now has (Issue #80 -- nothing in the app called this before, so grading
+  /// never started at all).
+  ///
+  /// Idempotent: called again for a submission that already has jobs under
+  /// the active graph version, it creates nothing and hands back the same
+  /// list. Throws [SidecarApiException] with [SidecarErrorKind.conflict]
+  /// (409) when the test has no confirmed, up-to-date dependency graph, and
+  /// also when two callers raced to create the same jobs; the two are not
+  /// distinguishable from the response and callers must not try (see
+  /// `docs/job-queue.md` 「起票のタイミング」). A 404 (`statusCode`) means the
+  /// submission itself is gone, which retrying cannot fix.
+  Future<List<JobResponse>> startGrading(
+    String submissionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _jobsApi
+          .createSubmissionJobsSubmissionsSubmissionIdJobsPost(
+            submissionId: submissionId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <JobResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
   /// Requests the annotated-PDF export for [submissionId] (Issue #23).
   /// Refuses with [SidecarErrorKind.conflict] (409) if any question is not
   /// yet confirmed. Otherwise either queues a fresh `Job` (kind EXPORT --

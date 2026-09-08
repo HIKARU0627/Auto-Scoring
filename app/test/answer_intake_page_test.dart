@@ -65,6 +65,7 @@ void main() {
         listSubmissionsCalls++;
         return const [];
       },
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async {
             expect(testId, 'test-1');
@@ -93,7 +94,7 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
     await tester.pumpAndSettle();
 
-    expect(find.text('取込完了: AI処理済み'), findsOneWidget);
+    expect(find.text('取込完了: AI処理済み。AI採点を開始しました'), findsOneWidget);
     expect(find.text('student-a'), findsOneWidget);
   });
 
@@ -104,6 +105,7 @@ void main() {
     final dependencies = AppDependencies(
       listTests: () async => [_test()],
       listSubmissions: (testId) async => const [],
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async {
             attempts++;
@@ -138,7 +140,7 @@ void main() {
 
     expect(attempts, 2);
     expect(find.text('file size 999 exceeds limit 500'), findsNothing);
-    expect(find.text('取込完了: AI処理済み'), findsOneWidget);
+    expect(find.text('取込完了: AI処理済み。AI採点を開始しました'), findsOneWidget);
   });
 
   testWidgets(
@@ -190,6 +192,7 @@ void main() {
     final dependencies = AppDependencies(
       listTests: () async => [_test()],
       listSubmissions: (testId) async => const [],
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async =>
               throw DuplicateSubmissionException('duplicate', 'sub-99'),
@@ -236,6 +239,7 @@ void main() {
       final dependencies = AppDependencies(
         listTests: () async => [_test()],
         listSubmissions: (testId) async => [_submission(state: 'error')],
+        startGrading: (submissionId) async => const [],
         createSubmission:
             ({required testId, required filePath, studentLabel}) async =>
                 _submission(state: 'ai_processed'),
@@ -270,6 +274,7 @@ void main() {
       final dependencies = AppDependencies(
         listTests: () async => [_test()],
         listSubmissions: (testId) => listCompleter.future,
+        startGrading: (submissionId) async => const [],
         createSubmission:
             ({required testId, required filePath, studentLabel}) async =>
                 _submission(state: 'ai_processed'),
@@ -325,6 +330,7 @@ void main() {
         }
         return const [];
       },
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async {
             createSubmissionCalls++;
@@ -430,6 +436,7 @@ void main() {
     final dependencies = AppDependencies(
       listTests: () async => [_test()],
       listSubmissions: (testId) async => const [],
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async {
             uploaded = true;
@@ -461,6 +468,7 @@ void main() {
     final dependencies = AppDependencies(
       listTests: () async => [_test()],
       listSubmissions: (testId) async => const [],
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async {
             uploaded = true;
@@ -510,6 +518,7 @@ void main() {
     final dependencies = AppDependencies(
       listTests: () async => [_test()],
       listSubmissions: (testId) async => const [],
+      startGrading: (submissionId) async => const [],
       createSubmission:
           ({required testId, required filePath, studentLabel}) async {
             uploadStarted.complete();
@@ -553,6 +562,7 @@ void main() {
       final dependencies = AppDependencies(
         listTests: () async => [_test()],
         listSubmissions: (testId) async => const [],
+        startGrading: (submissionId) async => const [],
         createSubmission:
             ({required testId, required filePath, studentLabel}) async {
               uploadStarted.complete();
@@ -646,6 +656,7 @@ void main() {
       final dependencies = AppDependencies(
         listTests: () async => [_test()],
         listSubmissions: (testId) => listCompleter.future,
+        startGrading: (submissionId) async => const [],
         createSubmission:
             ({required testId, required filePath, studentLabel}) async =>
                 _submission(id: 'sub-new'),
@@ -676,7 +687,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(ListTile), findsOneWidget);
-      expect(find.text('取込完了: AI処理済み'), findsOneWidget);
+      expect(find.text('取込完了: AI処理済み。AI採点を開始しました'), findsOneWidget);
     },
   );
 
@@ -720,6 +731,135 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  // ------------------------------------------------------------------ //
+  // Issue #80: 取込のあとAI採点が始まる。
+  // ------------------------------------------------------------------ //
+  group('Issue #80: 取込直後のAI採点起票', () {
+    /// Picks the test, picks the file and presses 取り込む.
+    Future<void> importOne(WidgetTester tester) async {
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('test-picker')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('国語 第1回').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ファイルを選択'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取り込む'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('取込に成功した答案は、その場でAI採点が起票される', (tester) async {
+      // これが Issue #80 そのもの: アプリは
+      // `POST /submissions/{id}/jobs` を一度も呼んでおらず、採点が始まらなかった。
+      final started = <String>[];
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+        startGrading: (submissionId) async {
+          started.add(submissionId);
+          return const [];
+        },
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(),
+      );
+
+      await _pumpIntake(tester, dependencies);
+      await importOne(tester);
+
+      expect(started, ['sub-1']);
+      expect(find.text('取込完了: AI処理済み。AI採点を開始しました'), findsOneWidget);
+    });
+
+    testWidgets('要確認になった答案は自動では起票しない', (tester) async {
+      // docs/answer-intake-and-preprocessing.md §3
+      // 「前提設問を含むページが欠落した状態では AI 採点を開始しない」。
+      // 人間が理由を見たうえで開始する入口は添削レビュー画面にある。
+      var startGradingCalls = 0;
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+        startGrading: (submissionId) async {
+          startGradingCalls++;
+          return const [];
+        },
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(
+                  state: 'needs_review',
+                  reviewReason: 'missing_pages:2',
+                ),
+      );
+
+      await _pumpIntake(tester, dependencies);
+      await importOne(tester);
+
+      expect(startGradingCalls, 0);
+      expect(find.text('取込完了: 要確認。AI採点は自動では開始しません'), findsOneWidget);
+    });
+
+    testWidgets('起票が409で失敗しても取込は成功のまま残り、「AI採点を開始」で再試行できる', (tester) async {
+      var attempts = 0;
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+        startGrading: (submissionId) async {
+          attempts++;
+          if (attempts == 1) {
+            throw SidecarApiException(
+              SidecarErrorKind.conflict,
+              "test 'test-1' has no confirmed, up-to-date dependency graph",
+              statusCode: 409,
+            );
+          }
+          return const [];
+        },
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(),
+      );
+
+      await _pumpIntake(tester, dependencies);
+      await importOne(tester);
+
+      // 取込そのものは成功している。答案は一覧に残り、スナックバーも
+      // 「採点を開始した」とは言わない。
+      expect(find.text('student-a'), findsOneWidget);
+      expect(find.text('取込完了: AI処理済み'), findsOneWidget);
+      expect(find.textContaining('設問依存関係が確定していない'), findsOneWidget);
+
+      // 再試行するのは起票だけ。アップロードはやり直さない。
+      await tester.tap(find.widgetWithText(TextButton, 'AI採点を開始'));
+      await tester.pumpAndSettle();
+
+      expect(attempts, 2);
+      expect(find.textContaining('設問依存関係が確定していない'), findsNothing);
+    });
+
+    testWidgets('起票の404には再試行ボタンを出さない', (tester) async {
+      // 答案そのものが無いということなので、同じ要求を投げ直しても変わらない。
+      final dependencies = AppDependencies(
+        listTests: () async => [_test()],
+        listSubmissions: (testId) async => const [],
+        startGrading: (submissionId) async => throw SidecarApiException(
+          SidecarErrorKind.badResponse,
+          'submission not found',
+          statusCode: 404,
+        ),
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async =>
+                _submission(),
+      );
+
+      await _pumpIntake(tester, dependencies);
+      await importOne(tester);
+
+      expect(find.textContaining('見つかりません'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'AI採点を開始'), findsNothing);
+      expect(find.widgetWithText(TextButton, '再試行'), findsNothing);
+    });
+  });
 
   // ------------------------------------------------------------------ //
   // Issue #25 acceptance: desktop standard / narrow width.

@@ -92,7 +92,7 @@ void main() {
     expect(find.text('要確認 1件'), findsOneWidget);
     expect(find.text('処理中 1件'), findsOneWidget);
     expect(find.text('取込失敗 1件'), findsOneWidget);
-    expect(find.text('レビュー待ち 0件'), findsNothing);
+    expect(find.text('取込済み 0件'), findsNothing);
     // 確認済みは進捗バーが担当していて、数字を二度書かない。
     expect(find.textContaining('確認済み 2件'), findsNothing);
   });

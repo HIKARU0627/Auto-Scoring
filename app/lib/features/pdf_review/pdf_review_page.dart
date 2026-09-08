@@ -12,6 +12,7 @@ import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
@@ -108,6 +109,16 @@ class QuestionReviewState {
   /// refresh racing the background poll) completing after a newer one could
   /// overwrite fresher data with stale data (P2 review).
   int fetchGeneration = 0;
+
+  /// Which job set this question's cached results were read under
+  /// (`_PdfReviewPageState._jobsGeneration` at the moment the fetch that
+  /// filled them started), or `-1` while nothing has been read yet.
+  ///
+  /// **This is what makes the cache expire.** Results are a function of the
+  /// jobs that produced them, so the moment the job set changes, every
+  /// question's cache is stale -- not only the one being looked at. See
+  /// `_PdfReviewPageState._jobsGeneration`.
+  int jobsGeneration = -1;
 
   bool get hasLoaded =>
       recognitions != null &&
@@ -350,6 +361,62 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   DependencyGraphResponse? _dependencyGraph;
   Timer? _pollTimer;
 
+  /// Bumped every time [_refreshJobs] observes a **different** job set.
+  ///
+  /// This is the one place that answers "what does a change in processing
+  /// invalidate?", and the answer is: every question's cached results, at
+  /// once. [QuestionReviewState.jobsGeneration] records which job set an
+  /// entry was read under, and [_loadReview] refuses to reuse an entry from
+  /// an older one.
+  ///
+  /// **Why it has to be all of them, not the selected one.** The first two
+  /// attempts at this fixed a narrower slice each time and left the next one
+  /// open: refreshing the jobs without the grades they produce (review round
+  /// 2), then refreshing the selected question's grades but not the other
+  /// questions' (review round 3 -- open 問2, go back and start grading, and
+  /// 問2 keeps the empty results it was opened with, because
+  /// [_isAwaitingGrade] reads "terminal job, no grade" as "nothing to wait
+  /// for" and lets the empty cache stand). Neither is a special case of
+  /// 「AI採点を開始」: *any* path that changes the jobs -- a poll tick, a
+  /// 再判定, a retry, a graph re-confirm -- has the same effect on every
+  /// question, so the invalidation belongs where the change is noticed
+  /// rather than at each caller.
+  ///
+  /// **The caches this screen owns, and why this is the only one that
+  /// needs expiring.** `_questions` and `_pdfBytes` are properties of the
+  /// test and the answer PDF, which processing never changes. `_submission`
+  /// is re-read by every poll and every refresh, and grading does not move
+  /// it anyway (`docs/home-dashboard.md` §3.1). `_dependencyGraph` is
+  /// re-read from inside [_refreshJobs] itself when the jobs say it is
+  /// superseded. `_jobs`/`_jobsLoaded`/`_gradingFailure` are written by the
+  /// very calls that would invalidate them. That leaves [_reviews], which
+  /// this stamp covers.
+  int _jobsGeneration = 0;
+
+  /// Whether [_refreshJobs] has ever come back successfully. `false` covers
+  /// both "not fetched yet" and "the fetch failed", which [_jobs] cannot tell
+  /// apart on its own -- it is an empty list in all three cases, including
+  /// the genuine "no job was ever created". 「AI採点はまだ開始されていません」
+  /// is a claim about the sidecar's state, so it must not be made off a list
+  /// this screen never managed to read (Issue #80).
+  bool _jobsLoaded = false;
+
+  /// True while 「AI採点を開始」 is in flight (Issue #80), so the button is
+  /// disabled rather than able to fire a second request on top of the first.
+  bool _startingGrading = false;
+
+  /// How the last 「AI採点を開始」 failed, or `null`. Carries both the text to
+  /// show and whether pressing again could change anything
+  /// ([GradingKickoffFailure]) -- keeping only the message is what let a 404
+  /// leave the button live above its own 「答案が見つかりません」 (review
+  /// round 1, P2-2).
+  ///
+  /// Deliberately *not* [_shellError]: the reviewer can still read the answer,
+  /// the recognized text and the grades while grading refuses to start,
+  /// exactly as a missing dependency graph does not become this screen's error
+  /// state either (`docs/dependency-dag-progress-view.md` §1.7, §1.11).
+  GradingKickoffFailure? _gradingFailure;
+
   @override
   void initState() {
     super.initState();
@@ -372,7 +439,36 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   void _handleNoteFocusChange() {
-    if (mounted) setState(() {});
+    _setStateIfMounted(() {});
+  }
+
+  /// `setState` that does nothing once this screen is gone. **Nothing in this
+  /// State calls `setState` directly** -- `pdf_review_page_lint_test.dart`
+  /// fails if a bare one comes back.
+  ///
+  /// **誰が中止の責任を持つか.** Two rules, and the second exists because the
+  /// first keeps being broken:
+  ///
+  /// 1. *The function doing the `await` stops itself.* After every `await`
+  ///    that a screen teardown could outlive, re-check [mounted] before
+  ///    doing anything further. **An inner helper's own [mounted] check does
+  ///    not stop its caller** -- `_refreshJobs` returning early because the
+  ///    screen went away still hands control back to `_refreshJobsAndQuestion`,
+  ///    which used to carry on into `_loadReview` and `setState` on a dead
+  ///    State. That asymmetry is what made this easy to miss.
+  /// 2. *And `setState` refuses anyway.* Rule 1 is a discipline, and this
+  ///    codebase has broken it three times -- Issue #66 (`ref.read` after
+  ///    dispose), Issue #64 ("leaving the screen mid-request"), and Issue #80
+  ///    (「AI採点を開始」's response landing after the reviewer left). A missed
+  ///    guard should cost a wasted fetch, not an unhandled exception, so the
+  ///    one call that would actually throw is made a no-op instead.
+  ///
+  /// Rule 2 is a backstop, not a licence to skip rule 1: work done after
+  /// teardown is still wasted work, and a `Timer` or a controller call is not
+  /// covered by it ([_updatePolling] guards itself for exactly that reason).
+  void _setStateIfMounted(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
   }
 
   /// `Job.state` values that will never change again on their own -- once a
@@ -499,6 +595,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// review). Whether *this* question's own job/grade has actually finished
   /// is the one signal that tracks its real progress.
   void _updatePolling() {
+    // A `Timer` is not covered by `_setStateIfMounted`: arming one here after
+    // teardown would keep firing against a disposed State until it happened
+    // to be cancelled (rule 1 in that method's doc).
+    if (!mounted) return;
     final review = _currentReview;
     final question = _currentQuestion;
     final shouldPoll =
@@ -546,12 +646,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
-      setState(() => _submission = submission);
-      await _refreshJobs();
-      _updatePolling();
+      _setStateIfMounted(() => _submission = submission);
       // Silent: a background poll should not flash the loading spinner or
       // an error banner over content the reviewer is already looking at.
-      await _ensureReviewLoaded(forceReload: true, silent: true);
+      await _refreshJobsAndQuestion(silent: true);
     } on SidecarApiException {
       // Transient poll failure -- retried on the next tick rather than
       // surfaced as an error banner.
@@ -593,13 +691,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
-      setState(() => _submission = submission);
+      _setStateIfMounted(() => _submission = submission);
     } on SidecarApiException {
       // Fall through to refreshing the question data regardless.
     }
-    await _refreshJobs();
-    _updatePolling();
-    await _loadReview(question, forceReload: true);
+    await _refreshJobsAndQuestion(question: question);
   }
 
   /// Best-effort refresh of every job for this submission. A failure here
@@ -612,12 +708,108 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final jobs = await _dependencies.listJobs(widget.submissionId);
       if (!mounted) return;
-      setState(() => _jobs = jobs);
+      final changed = _jobsFingerprint(jobs) != _jobsFingerprint(_jobs);
+      _setStateIfMounted(() {
+        _jobs = jobs;
+        _jobsLoaded = true;
+        // Only on a real change: an unchanged job set means every cached
+        // result is still the result of exactly those jobs, and expiring
+        // them anyway would re-fetch all four lists for every question the
+        // reviewer visits after any refresh at all.
+        if (changed) _jobsGeneration++;
+      });
     } on SidecarApiException {
       // Keep the last-known jobs list -- retried on the next tick/refresh.
       return;
     }
     await _refetchDependencyGraphIfSuperseded();
+  }
+
+  /// What a job set has to say about the results it may have produced.
+  ///
+  /// `id` covers a job appearing or being re-issued under a new graph
+  /// version, `state` covers it moving, and `usable` covers a `SUCCEEDED`
+  /// job the queue judged untrustworthy (which is a different result for a
+  /// reviewer than a usable one). Timestamps are deliberately left out: a
+  /// `RUNNING` job whose `updated_at` ticks has not produced anything new.
+  static String _jobsFingerprint(List<JobResponse> jobs) =>
+      (jobs.map((j) => '${j.id}:${j.state}:${j.usable}').toList()..sort()).join(
+        '|',
+      );
+
+  /// Re-reads this submission's jobs **and** everything that has to agree
+  /// with them, then re-evaluates polling.
+  ///
+  /// Exists as one method rather than three lines copied to each call site
+  /// because "refresh the jobs and forget what travels with them" is a
+  /// mistake this screen has now made twice. Issue #64 refreshed the jobs
+  /// without the dependency graph they run under, drawing one version's
+  /// execution on another version's structure; 「AI採点を開始」 refreshed the
+  /// jobs without the grades they produce, so a submission whose jobs came
+  /// back already `succeeded` showed レビュー待ち in the diagram over an
+  /// Inspector with nothing in it -- and, because
+  /// [_isAwaitingGrade] reads "terminal job, no grade" as "nothing to wait
+  /// for", polling stopped too, leaving it that way until a manual 更新
+  /// (review round 2, P2).
+  ///
+  /// The graph half already lives inside [_refreshJobs]. The question half is
+  /// here. **Anything else that must be re-read alongside a job belongs in
+  /// this method**, once, for every caller -- that is the whole point of it
+  /// existing.
+  ///
+  /// [question] defaults to whichever question is selected; [_refreshQuestion]
+  /// passes the one an in-flight action was actually for, which may no longer
+  /// be the selected one by the time it resolves. [silent] is for background
+  /// polling, which must not flash a spinner or an error banner over content
+  /// the reviewer is already reading.
+  Future<void> _refreshJobsAndQuestion({
+    QuestionResponse? question,
+    bool silent = false,
+  }) async {
+    await _refreshJobs();
+    // `_refreshJobs` stopping itself does not stop *this* function -- the
+    // asymmetry that made review round 4's crash possible.
+    if (!mounted) return;
+    _updatePolling();
+    final target = question ?? _currentQuestion;
+    if (target == null) return;
+    await _loadReview(target, forceReload: true, silent: silent);
+  }
+
+  /// 「AI採点を開始」 -- `POST /submissions/{id}/jobs` (Issue #80).
+  ///
+  /// Offered only while this submission has no jobs at all
+  /// ([_buildStartGradingSection]). On success there is nothing to render
+  /// specially: re-reading the jobs is enough, and the diagram, the rail and
+  /// the Inspector all start showing real states through the same
+  /// [_questionStatus] they already use.
+  ///
+  /// Idempotent server-side, so a double press cannot create a second set of
+  /// jobs (`docs/job-queue.md`「起票のタイミング」).
+  Future<void> _startGrading() async {
+    _setStateIfMounted(() {
+      _startingGrading = true;
+      _gradingFailure = null;
+    });
+    try {
+      await _dependencies.startGrading(widget.submissionId);
+      // The reviewer can leave (or open another answer) while this request is
+      // in flight; nothing below is worth doing for a screen that is gone
+      // (review round 4).
+      if (!mounted) return;
+      // Not just the jobs: a fast (or already-existing) grading run can have
+      // this submission's jobs back as `succeeded` by the time the POST
+      // returns, and the empty grades fetched before the kickoff would then
+      // sit there unrefreshed with polling switched off.
+      await _refreshJobsAndQuestion();
+    } on SidecarApiException catch (error) {
+      if (!mounted) return;
+      _setStateIfMounted(
+        () => _gradingFailure = GradingKickoffFailure.of(error),
+      );
+    } finally {
+      _setStateIfMounted(() => _startingGrading = false);
+    }
   }
 
   /// Re-reads the dependency graph whenever what is on screen is no longer
@@ -686,7 +878,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final graph = await _dependencies.getDependencyGraph(widget.testId);
       if (!mounted) return;
-      setState(() => _dependencyGraph = graph);
+      _setStateIfMounted(() => _dependencyGraph = graph);
     } on SidecarApiException {
       // No graph to draw; the panel stays hidden.
     }
@@ -704,7 +896,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   Future<void> _loadShell() async {
-    setState(() {
+    _setStateIfMounted(() {
       _loadingShell = true;
       _shellError = null;
     });
@@ -720,7 +912,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               : _compareQuestionNumbers(a.number, b.number);
         });
       if (!mounted) return;
-      setState(() {
+      _setStateIfMounted(() {
         _submission = submission;
         _questions = sorted;
         _pdfBytes = pdfBytes;
@@ -731,13 +923,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       // second time on startup.
       await _loadDependencyGraph();
       await _refreshJobs();
+      if (!mounted) return;
       _updatePolling();
       unawaited(_ensureReviewLoaded());
     } on SidecarApiException catch (error) {
       if (!mounted) return;
-      setState(() => _shellError = error.message);
+      _setStateIfMounted(() => _shellError = error.message);
     } finally {
-      if (mounted) setState(() => _loadingShell = false);
+      _setStateIfMounted(() => _loadingShell = false);
     }
   }
 
@@ -766,6 +959,9 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     bool forceReload = false,
     bool silent = false,
   }) async {
+    // Entered from several chains that each contain an `await` before this
+    // point; the caller may already be gone.
+    if (!mounted) return;
     final existing = _reviews[question.id];
     if (silent && existing != null && existing.loading) {
       // A visible fetch (initial load, manual refresh, or a question
@@ -788,9 +984,16 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     // revisited) (P1 review).
     final resultsStillMissing =
         existing != null && _isAwaitingGrade(existing, question.id);
+    // Read under an older job set, so it may be missing results those jobs
+    // have since produced -- including for a question the reviewer opened
+    // *before* grading was started and has not opened since
+    // (`_jobsGeneration`).
+    final readUnderOlderJobs =
+        existing != null && existing.jobsGeneration != _jobsGeneration;
     if (existing != null &&
         !forceReload &&
         !resultsStillMissing &&
+        !readUnderOlderJobs &&
         !existing.loading &&
         existing.error == null &&
         existing.hasLoaded) {
@@ -802,12 +1005,16 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     // a manual refresh racing the background poll (P2 review).
     final review = existing ?? QuestionReviewState();
     final generation = ++review.fetchGeneration;
+    // Captured before the fetch, not after: if the job set changes while
+    // these four lists are in flight, the result describes the *old* jobs
+    // and must stay expired.
+    final jobsGeneration = _jobsGeneration;
     if (silent) {
       _reviews[question.id] = review;
     } else {
       review.loading = true;
       review.error = null;
-      setState(() => _reviews[question.id] = review);
+      _setStateIfMounted(() => _reviews[question.id] = review);
     }
     try {
       final recognitions = await _dependencies.listRecognitions(
@@ -852,12 +1059,13 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               question.id,
             );
       if (!mounted || generation != review.fetchGeneration) return;
-      setState(() {
+      _setStateIfMounted(() {
         review.recognitions = consistentRecognitions;
         review.grades = grades;
         review.annotations = annotations;
         review.reviews = reviews;
         review.loading = false;
+        review.jobsGeneration = jobsGeneration;
         // A successful refresh -- silent or not -- means the Inspector no
         // longer needs to keep showing a fetch failure from before it (P2
         // review): the data it was retried for is here now.
@@ -865,7 +1073,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       });
     } on SidecarApiException catch (error) {
       if (!mounted || silent || generation != review.fetchGeneration) return;
-      setState(() {
+      _setStateIfMounted(() {
         review.error = error.message;
         review.loading = false;
       });
@@ -879,7 +1087,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       return;
     }
     final previousPage = _currentQuestion?.page;
-    setState(() => _questionIndex = index);
+    _setStateIfMounted(() => _questionIndex = index);
     final question = _currentQuestion!;
     _noteController.text = _reviews[question.id]?.note ?? '';
     // Only move the viewer when the target question is on a different page --
@@ -962,7 +1170,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     Future<void> Function() action,
   ) async {
     if (review.actionInFlight) return false;
-    setState(() => review.actionInFlight = true);
+    _setStateIfMounted(() => review.actionInFlight = true);
     var succeeded = false;
     try {
       await action();
@@ -976,8 +1184,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
-      await _refreshQuestion(question);
-      if (mounted) setState(() => review.actionInFlight = false);
+      if (mounted) await _refreshQuestion(question);
+      _setStateIfMounted(() => review.actionInFlight = false);
     }
     return succeeded;
   }
@@ -1380,6 +1588,93 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// The band above the rail: 「AI採点を開始」 when nothing has been queued
+  /// for this submission yet, then the 設問依存DAG 進捗 panel (Issue #64).
+  /// `null` when there is neither.
+  Widget? _buildDependencyDagSection() {
+    final start = _buildStartGradingSection();
+    final diagram = _buildDependencyDagDiagram();
+    if (start == null) return diagram;
+    if (diagram == null) return start;
+    return Column(mainAxisSize: MainAxisSize.min, children: [start, diagram]);
+  }
+
+  /// 「この答案のAI採点はまだ開始されていません」+「AI採点を開始」, or `null`
+  /// once any job exists (Issue #80, `docs/dependency-dag-progress-view.md`
+  /// §1.11).
+  ///
+  /// **Only at zero jobs.** One job is proof the submission was already
+  /// queued, and a button sitting there would read as "press to grade it
+  /// again" -- which it is not (the call is idempotent and would do nothing).
+  /// Re-running a question is 再判定 and `POST /jobs/{id}/retry`.
+  ///
+  /// Shown regardless of what the dependency graph looks like: the
+  /// unconfirmed-graph notice below says only that the *diagram* cannot be
+  /// drawn, never that grading has not started, and 409 is where the reviewer
+  /// finds out that the graph is what is in the way.
+  ///
+  /// Not shown at all until the job list has actually been read once
+  /// ([_jobsLoaded]) -- an empty [_jobs] because the fetch failed is not the
+  /// same fact as an empty [_jobs] because nothing was ever queued, and only
+  /// the second one may be said out loud.
+  Widget? _buildStartGradingSection() {
+    if (!_jobsLoaded || _jobs.isNotEmpty) return null;
+    final failure = _gradingFailure;
+    // A failure the sidecar already answered "there is no such submission" to
+    // takes the button away entirely. Leaving it live -- directly above its
+    // own 「答案が見つかりません」 -- invited the reviewer to re-send a request
+    // whose answer cannot change, which is exactly what the intake screen was
+    // already careful not to do (`core/grading_kickoff.dart`).
+    final canStart = failure?.retryable ?? true;
+    return Padding(
+      padding: AppSpacing.banner,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.play_circle_outline,
+                size: AppIconSize.inline,
+                color: AppStatusTone.neutral.color(context),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(
+                  'この答案のAI採点はまだ開始されていません',
+                  key: const Key('review-grading-not-started'),
+                  style: context.texts.bodyMedium,
+                ),
+              ),
+              if (canStart) ...[
+                const SizedBox(width: AppSpacing.sm),
+                FilledButton.icon(
+                  key: const Key('review-start-grading-button'),
+                  onPressed: _startingGrading ? null : () => _startGrading(),
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text(startGradingLabel),
+                ),
+              ],
+            ],
+          ),
+          if (failure != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            // `retryable: false` on the banner regardless: when a retry is
+            // worth offering, the 「AI採点を開始」 button right above *is* it,
+            // and a second one inside the banner would be two controls for one
+            // action; when it is not, there is nothing to offer at all.
+            AppErrorBanner(
+              message: failure.message,
+              messageKey: const Key('review-start-grading-error'),
+              retryable: false,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// The 設問依存DAG 進捗 panel (Issue #64), or `null` when there is nothing
   /// truthful to draw.
   ///
@@ -1390,7 +1685,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the latest version. Drawing it would show a dependency structure the
   /// running pipeline is not using. The notice says so rather than leaving
   /// the panel silently missing.
-  Widget? _buildDependencyDagSection() {
+  Widget? _buildDependencyDagDiagram() {
     final graph = _dependencyGraph;
     if (graph == null) return null;
     if (graph.status != 'confirmed') {
