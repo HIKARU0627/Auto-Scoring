@@ -6,9 +6,15 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.14,<2.0",
     "fastapi[standard]>=0.115,<1.0",
-    # OpenRouter AI-grading adapter (Issue #44); already an indirect
-    # dependency via fastapi[standard]/starlette's TestClient, declared
-    # directly because `adapters/ai_grading/openrouter_provider.py` imports it.
+    # Vertex AI AI-grading adapter (Issue #35): Gemini API keys are blocked
+    # by organization policy, so the only way in is Application Default
+    # Credentials. Only the credential/token half of the Google stack is
+    # needed -- the Vertex AI call itself is plain HTTP over the httpx below
+    # (`adapters/ai_grading/_google_adc.py`), so no vendor SDK is added.
+    "google-auth>=2.35,<3.0",
+    # OpenRouter/OpenAI/Vertex AI-grading adapters (Issues #44, #35); already
+    # an indirect dependency via fastapi[standard]/starlette's TestClient,
+    # declared directly because `adapters/ai_grading/` imports it.
     "httpx>=0.28,<1.0",
     "numpy>=2.0",
     "opencv-python-headless>=4.10,<5.0",
