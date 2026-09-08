@@ -593,3 +593,47 @@ def test_two_late_resolved_models_stay_in_two_buckets(dataset: Path, tmp_path: P
     # being dragged into the marker with the model.
     assert first["prompt_version"] == second["prompt_version"] == "v1"
     assert first["structured_output_mode"] == second["structured_output_mode"] == "json_schema"
+
+
+def test_a_max_score_disagreement_is_refused_before_any_call(dataset: Path) -> None:
+    """``report.py`` rejects a question whose ``input`` disagrees with its
+    label, so recording one spends a call whose result can never be scored.
+    Validating each block on its own passed it, which made ``--dry-run``
+    report success for a dataset the real run could not use (code review
+    finding). This script spends someone else's money."""
+    path = dataset / "sample-01.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["questions"][0]["input"]["max_score"] = 999
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with pytest.raises(record._DatasetError) as raised:
+        record._plan(
+            dataset=dataset,
+            images=_FIXTURES / "images",
+            variants=("ocr_clean",),
+            overwrite=False,
+            provider_id="stub",
+        )
+
+    assert "999" not in str(raised.value)
+    assert "sample-01.json question 0" in str(raised.value)
+
+
+def test_the_dry_run_refuses_the_same_dataset_the_real_run_would(dataset: Path) -> None:
+    """The point of the previous test: `--dry-run` has to predict whether
+    the paid run's output will be usable, or it is not worth much."""
+    path = dataset / "sample-01.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    document["questions"][0]["input"]["max_score"] = 999
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="max_score"):
+        record.main(
+            [
+                "--dataset",
+                str(dataset),
+                "--images",
+                str(_FIXTURES / "images"),
+                "--dry-run",
+            ]
+        )

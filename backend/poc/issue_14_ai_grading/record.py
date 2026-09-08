@@ -72,7 +72,11 @@ from pydantic import ValidationError
 
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
-from auto_scoring.domain.ai_grading_metrics import GradingGroundTruth, GradingInputRecord
+from auto_scoring.domain.ai_grading_metrics import (
+    GradingGroundTruth,
+    GradingInputRecord,
+    validate_input_matches_truth,
+)
 from auto_scoring.domain.ai_provider import (
     AIProvider,
     GradingRequest,
@@ -216,6 +220,35 @@ def _ground_truth(question: dict[str, Any], *, locator: str) -> GradingGroundTru
         raise _DatasetError(f"{locator}: 'ground_truth' failed validation") from None
 
 
+def _validate_against_truth(
+    input_record: GradingInputRecord, truth: GradingGroundTruth, *, locator: str
+) -> None:
+    """Reject a question whose ``input`` disagrees with its human label.
+
+    The same check ``report.py`` runs (``validate_input_matches_truth``) --
+    run here too, because the two scripts run at different times and only
+    one of them spends money. Validating each block on its own is not
+    enough: an ``input.max_score`` of 20 against a ``ground_truth.maxScore``
+    of 30 passes both, so ``--dry-run`` reported success, the real run paid
+    for every cell, and ``report.py`` then refused to score any of them
+    (code review finding). This script spends someone else's money; a dry
+    run that does not predict whether the real run's output is usable is
+    worth much less.
+
+    The underlying ``ValueError`` names the two scores and the question id;
+    only the locator and a fixed reason are surfaced, the same as every
+    other message here (the dataset is untrusted input).
+    """
+    try:
+        validate_input_matches_truth(input_record, truth)
+    except ValueError:
+        raise _DatasetError(
+            f"{locator}: input.max_score disagrees with ground_truth.maxScore -- report.py "
+            "would refuse to score this question, so recording it would spend a call for "
+            "nothing. The values themselves are not shown here."
+        ) from None
+
+
 def _ocr_text(input_record: GradingInputRecord, variant: str) -> str | None:
     return input_record.ocr_clean if variant == "ocr_clean" else input_record.ocr_noisy
 
@@ -265,6 +298,7 @@ def _plan(
                 # "Security"; report.py's `_sanitize_validation_error`).
                 raise _DatasetError(f"{locator}: 'input' failed validation") from None
             truth = _ground_truth(question, locator=locator)
+            _validate_against_truth(input_record, truth, locator=locator)
             image = _load_image(
                 images, input_record.answer_image_ref, locator=f"{path} question {index}"
             )

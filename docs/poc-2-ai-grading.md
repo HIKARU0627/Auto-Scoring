@@ -913,6 +913,13 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   **正常だった応答が schema 違反として集計されて違反率が水増しされる**という
   形で静かに歪む（`type: "comment"` の注釈に `comment: null` を書いていた不具合）。
   ここで落とせば、その種の間違いは静かな歪みではなく即座の失敗になる。
+- **有料の呼び出しを始める前に、`report.py` が拒否するデータを拒否する**。
+  `input.max_score` と `ground_truth.maxScore` の照合
+  （`validate_input_matches_truth`。§3.5）を `_plan()` でも行う。ブロック単位の
+  検証は両方通るため、これを見ないと `--dry-run` は成功し、本番実行は全セル分の
+  課金をしたうえで `report.py` が 1 件も集計できない、という結果になる。
+  **このスクリプトは他人のお金を使う**ので、`--dry-run` が「本番でも通る」を
+  意味しないなら dry-run の価値が下がる。
 - **`--images` と画像 identity**。- **有料の呼び出しを始める前に、`report.py` が拒否するデータを拒否する**。
   `input.max_score` と `ground_truth.maxScore` の照合
   （`validate_input_matches_truth`。§3.5）を `_plan()` でも行う。ブロック単位の
