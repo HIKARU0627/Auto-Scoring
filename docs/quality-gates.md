@@ -174,9 +174,25 @@ uvicorn のロガーも root のハンドラを通る）と `build_ai_provider`�
 
 **消すのをやめて、出さない。** `api/sidecar.py` の `_VERBOSE_LOGGERS` が INFO を
 許すのは `auto_scoring` / `uvicorn` / `alembic` だけで、root は WARNING。httpx も
-httpcore も、**まだ足していない将来の依存も**、既定で INFO を出せない。運用に必要な
-情報（どの provider が・成功したか・所要時間）は `GradeResult` の再現性3つ組と
-`Job.last_error` に構造化して残っており、そちらは再起動をまたいで残り URL を含まない。
+httpcore も、**まだ足していない将来の依存も**、既定で INFO を出せない。
+
+### 教訓 B-2: 出さないなら、必要な情報は「安全な部品から組み立てて」出し直す
+
+止めた直後の説明「必要な情報は `GradeResult` の再現性3つ組と `Job.last_error` に
+残っている」は**間違いだった（レビュー4回目）**。採点が成功したときにしか成り立たない。
+チェーンが 401/403/404 で全滅すると `GradeResult` は作られず、`Job.last_error` は
+`"call failed"` に畳まれるので、`gcloud auth application-default login` のやり直し(401)・
+API の有効化(403)・`AUTO_SCORING_GEMINI_MODEL` の綴り(404) が区別できない。
+**「繋げない端末はそう言う」ためのIssueで、「繋がらなかった」しか言えない状態だった。**
+
+直し方は「危ない文字列を濾す」ではなく **「安全な文字列を組み立てる」**:
+`domain/ai_provider.py` の `ProviderAttempt` は provider の**固定識別子**（アダプタの
+`name` リテラル。`describe().model` は設定なので使わない）・**例外クラス名**
+（`ErrorCategory` と1:1）・**HTTPステータスの数値**しか持てない。例外メッセージ・
+レスポンスボディ・URL・ヘッダは入れない。出口は2つ: `Job.last_error`（API と画面へ）と
+`FallbackAIProvider` の WARNING 1行（フォールスルーした段ごと。成功して落ちたときも残る）。
+
+**「全部のケースを診断できる」とは書けない。** 書けるのは「この3つを記録する」まで。
 
 マスクは残してあるが、それは**このプロジェクト自身が書く文字列**（値を補間して作るので
 変換が入らない）に対する網であって、ライブラリ出力に対する第一の防御ではない。

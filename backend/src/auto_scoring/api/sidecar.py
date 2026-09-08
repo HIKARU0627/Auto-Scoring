@@ -105,10 +105,19 @@ bursty (a whole class of answers in one afternoon, then nothing for a week).
 #: attempt. **A URL this app never needed in its log is not worth a game of
 #: catch-up: it is not logged at all.**
 #:
-#: Nothing is lost that anyone reads: which provider answered and with what
-#: model is recorded on `GradeResult` (Issue #20's reproducibility triple),
-#: and a failed call's category is on `Job.last_error`. Both survive a
-#: restart, unlike a log line, and neither carries a URL.
+#: What replaces it is *not* the URL rendered more carefully -- it is a
+#: diagnosis assembled from parts that cannot carry configuration
+#: (`domain.ai_provider.ProviderAttempt`: the adapter's literal id, the
+#: exception class, the HTTP status number). A successful grade is
+#: attributed by `GradeResult`'s reproducibility triple (Issue #20); a
+#: *failed* one has no `GradeResult` at all, which is why the same record
+#: also goes to `Job.last_error` and to a WARNING from
+#: `adapters.ai_grading.fallback_provider` for each link a chain fell
+#: through. Saying only "the triple covers it" was wrong, and review round 4
+#: caught it: on a fully-failed chain there is no triple to read.
+#:
+#: That covers those three parts, for the failures the port declares. It is
+#: not a claim that every failure is diagnosable.
 #:
 #: ``uvicorn`` stays because its access log is this app's *own* loopback
 #: routes (no configuration in the path, and the bearer token travels in a

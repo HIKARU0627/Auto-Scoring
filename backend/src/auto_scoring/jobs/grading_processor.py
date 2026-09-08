@@ -26,6 +26,8 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_provider import (
     AIProvider,
     GradingRequest,
+    ProviderAttempt,
+    ProviderFailure,
     ProviderRateLimitedError,
     ProviderServerError,
     ProviderTimeoutError,
@@ -247,16 +249,16 @@ class GradingJobProcessor:
         # `RecognitionJobProcessor.process`'s own rule for `AIProvider.grade`.
         try:
             response = await to_thread(self._ai_provider.grade, request)
-        except ProviderTimeoutError:
-            return self._failed(ErrorCategory.TIMEOUT, "timed out")
-        except ProviderRateLimitedError:
-            return self._failed(ErrorCategory.RATE_LIMITED, "rate limited")
-        except ProviderServerError:
-            return self._failed(ErrorCategory.SERVER_ERROR, "server error")
-        except SchemaViolation:
-            return self._failed(ErrorCategory.PERMANENT, "returned a malformed response")
-        except ProviderUnavailable:
-            return self._failed(ErrorCategory.PERMANENT, "call failed")
+        except ProviderTimeoutError as exc:
+            return self._failed(ErrorCategory.TIMEOUT, "timed out", exc)
+        except ProviderRateLimitedError as exc:
+            return self._failed(ErrorCategory.RATE_LIMITED, "rate limited", exc)
+        except ProviderServerError as exc:
+            return self._failed(ErrorCategory.SERVER_ERROR, "server error", exc)
+        except SchemaViolation as exc:
+            return self._failed(ErrorCategory.PERMANENT, "returned a malformed response", exc)
+        except ProviderUnavailable as exc:
+            return self._failed(ErrorCategory.PERMANENT, "call failed", exc)
 
         rubric_criterion_ids = {c.id for c in rubric.criteria}
         response_criterion_ids = {c.criterion_id for c in response.criteria}
@@ -340,16 +342,57 @@ class GradingJobProcessor:
             ),
         )
 
-    def _failed(self, category: ErrorCategory, reason: str) -> ProcessingResult:
+    def _failed(
+        self,
+        category: ErrorCategory,
+        reason: str,
+        failure: ProviderFailure | None = None,
+    ) -> ProcessingResult:
         # Never includes a provider exception's own message: it may be built
         # from the request/response body (which can contain OCR'd student
         # answer text), which must never reach `Job.last_error` (AGENTS.md
         # "Security").
+        #
+        # What it does include, since Issue #97 review round 4, is
+        # ``failure``'s `ProviderAttempt` records: provider *id*, exception
+        # class, HTTP status number -- assembled from literals and numbers
+        # rather than filtered out of free text. Without them the whole
+        # chain dying reads as "call failed", and a first launch that needs
+        # `gcloud auth application-default login` (401) is indistinguishable
+        # from one that needs the API enabled (403) or a corrected
+        # ``AUTO_SCORING_GEMINI_MODEL`` (404). This is the one place that
+        # survives to the API and the screen: on a total failure there is no
+        # `GradeResult` to carry the provider triple.
+        message = f"{self._ai_provider.name} AI provider {reason}"
+        diagnosis = _diagnosis(failure, provider_name=self._ai_provider.name)
+        if diagnosis:
+            message = f"{message} [{diagnosis}]"
         return ProcessingResult(
             outcome=ProcessingOutcome.FAILED,
             error_category=category,
-            error_message=f"{self._ai_provider.name} AI provider {reason}",
+            error_message=message,
         )
+
+
+def _diagnosis(failure: ProviderFailure | None, *, provider_name: str) -> str:
+    """The failed call(s) rendered for `Job.last_error`.
+
+    A chain reports every link it tried (`FallbackAIProvider` fills
+    ``attempts``) -- "the last one failed" alone cannot say that Vertex was
+    403 before OpenRouter was 401. A single adapter reports none, so the one
+    attempt is reconstructed here from what this processor already knows: the
+    provider it called, and the exception class it got back.
+    """
+    if failure is None:
+        return ""
+    attempts = failure.attempts or (
+        ProviderAttempt(
+            provider=provider_name,
+            error=type(failure).__name__,
+            status_code=failure.status_code,
+        ),
+    )
+    return "; ".join(str(attempt) for attempt in attempts)
 
 
 _SCORING_METHOD_LABEL = {

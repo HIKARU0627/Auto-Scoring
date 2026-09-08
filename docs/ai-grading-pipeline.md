@@ -91,7 +91,9 @@ Issue #97 で無くなっている（下記「アプリ本体への接続」）�
 `except`）に固定し、**任意のリモート応答を宣言済みの2例外へ変換する責任はアダプタ
 境界に置く**（各アダプタの contract test にある malformed envelope のテスト）。
 
-チェーンを全部使い切ったときは、**最後に観測した例外をそのまま送出する**。
+チェーンを全部使い切ったときは、**最後に観測した例外をそのまま送出する**
+（クラス・メッセージ・traceback ともそのまま。試した段の記録 `ProviderAttempt` だけを
+`attempts` に付けて渡す。後述「失敗の診断は、濾すのではなく組み立てる」）。
 `ProviderRateLimitedError` / `ProviderServerError` / `ProviderTimeoutError` は
 既存のマッピングどおりretry対象の`ErrorCategory`になるので、全provider不調のときは
 Jobがbackoffして再投入される（並列数の既定4に対するレート制限の受け皿は
@@ -177,9 +179,35 @@ HTTP応答本文にも出ないことを確認する（既知の悪いメッセ�
 ライブラリ側なので、照合を足し続ける勝負にはならない。**リクエストURLのログを消すのを
 やめ、出さないことにした**: `api/sidecar.py` の `_VERBOSE_LOGGERS` が INFO を許すのは
 `auto_scoring` / `uvicorn` / `alembic` だけで、root は WARNING。httpx も httpcore も、
-まだ足していない将来の依存も、既定で INFO を出せない。失うものは無い -- どの provider が
-どのモデルで採点したかは `GradeResult` の再現性3つ組に、失敗のカテゴリは
-`Job.last_error` に残り、どちらも再起動をまたいで残りURLを含まない。
+まだ足していない将来の依存も、既定で INFO を出せない。
+
+#### 失敗の診断は、濾すのではなく組み立てる（レビュー4回目）
+
+URL のログを止めた時点の説明「必要な情報は `GradeResult` と `Job.last_error` にある」は
+**採点が成功したときにしか成り立たなかった**。チェーンが 401/403/404 で全滅すると
+`GradeResult` は作られず、`GradingJobProcessor` は `ProviderUnavailable` を一律
+`"call failed"` に畳み、`FallbackAIProvider` は最後の例外だけを再送出していた。
+初回起動でこれを踏んだ操作者は、ADC のログインをやり直すのか(401)・プロジェクトで
+aiplatform を有効化するのか(403)・`AUTO_SCORING_GEMINI_MODEL` の綴りが違うのか(404) を
+区別できない。
+
+`domain/ai_provider.py` に `ProviderAttempt` を足した。持てるのは3つだけ:
+
+| 記録するもの      | 何を使うか                                                            |
+| ----------------- | --------------------------------------------------------------------- |
+| provider の識別子 | アダプタの `name` **リテラル**（`describe().model` は設定なので不可） |
+| 失敗の種類        | このポートの**例外クラス名**（`ErrorCategory` と1:1）                 |
+| HTTP ステータス   | **数値**。応答が無い場合（timeout/transport）は `None`                |
+
+例外メッセージ・レスポンスボディ・URL・ヘッダは入れない。**濾すのではなく組み立てる**
+ので、アダプタのメッセージが将来また設定値を含んでも `Job.last_error` へは出ない。
+
+出口は2つ。`Job.last_error`（jobs API が返し、画面へ出せる。答案1件・設問1件の粒度で
+再起動をまたいで残る）と、`FallbackAIProvider` の WARNING 1行（**フォールスルーした段
+ごと**に出す。全滅時の途中の段 — 「Vertex が 403 で OpenRouter が 401」 — は最後の例外
+だけでは表せず、成功して落ちたとき、つまり例外が誰にも渡らないときにも残る必要がある）。
+
+**「全部のケースを診断できる」とは主張しない。** 主張できるのはこの3つを記録することまで。
 
 詳細と教訓は `docs/quality-gates.md`
 「新しい公開経路を作ったら、そこへ流れ込むものを全部見直す」。

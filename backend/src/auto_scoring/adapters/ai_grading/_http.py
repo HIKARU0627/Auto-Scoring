@@ -87,9 +87,14 @@ def raise_classified_unavailable(exc: Exception, *, label: str) -> NoReturn:
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         detail = f"{label} request failed with status {status}"
+        # The number travels as data as well as in the text: it is what
+        # `ProviderAttempt` records and what tells an operator apart a
+        # revoked login (401), a project without the API enabled (403) and
+        # a misspelled model (404) once the chain has failed (Issue #97
+        # review round 4). A number cannot carry configuration.
         if status == _TOO_MANY_REQUESTS:
-            raise ProviderRateLimitedError(detail) from None
+            raise ProviderRateLimitedError(detail, status_code=status) from None
         if status >= 500:
-            raise ProviderServerError(detail) from None
-        raise ProviderUnavailable(detail) from None
+            raise ProviderServerError(detail, status_code=status) from None
+        raise ProviderUnavailable(detail, status_code=status) from None
     raise ProviderUnavailable(f"{label} request failed: {type(exc).__name__}") from None
