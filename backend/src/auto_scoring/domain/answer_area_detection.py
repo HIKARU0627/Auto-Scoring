@@ -309,16 +309,34 @@ def regions_from_detection(
     reviewer's hand-drawn 問題文 or 添削記号領域 must survive re-running
     detection, which is a normal thing to do after a provider failure.
     """
-    grouped: dict[tuple[str, int], list[DetectedAnswerAreaOutput]] = {}
-    for area in output.areas:
-        grouped.setdefault((area.question_number, area.page), []).append(area)
+    # Grouped by (question number, page) -- **except** for the unassigned
+    # ones, which each get a key of their own.
+    #
+    # `UNASSIGNED_QUESTION_LABEL` does not mean "the same question"; it means
+    # "the model could not say". Merging two of them assumes exactly the thing
+    # the model just said it could not establish, and a union across two
+    # different questions swallows whatever lies between them. Worse, it is
+    # irreversible: assigning that one merged rectangle to a question later
+    # cannot recover which part belonged to which. Fixing the old
+    # `answer_regions[0]` bug by replacing "drop the rest" with "blend the
+    # rest" would lose the same information (Issue #105 review round 1, P1).
+    #
+    # So each unassigned box stays a region of its own, to be confirmed or
+    # deleted one at a time -- which is also what makes the confirm gate
+    # (`ensure_answer_areas_confirmable`) a per-box decision rather than a
+    # single yes/no over a merged blob.
+    grouped: dict[tuple[str, int, int], list[DetectedAnswerAreaOutput]] = {}
+    for index, area in enumerate(output.areas):
+        distinct = index if area.question_number == UNASSIGNED_QUESTION_LABEL else -1
+        grouped.setdefault((area.question_number, area.page, distinct), []).append(area)
 
     regions = [region for region in existing_regions if region.kind is not RegionKind.ANSWER_AREA]
     # Sorted for a stable region order (and so stable region ids) regardless
     # of the order the model happened to list the boxes in: re-running
     # detection on the same response must not reshuffle the overlay.
-    for index, (number, page) in enumerate(sorted(grouped)):
-        areas = grouped[(number, page)]
+    for index, key in enumerate(sorted(grouped)):
+        number, page, _ = key
+        areas = grouped[key]
         notes = [area.note.strip() for area in areas if area.note and area.note.strip()]
         regions.append(
             Region(

@@ -10,6 +10,7 @@ repository (AGENTS.md "Security", Issue #105 acceptance 9).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -170,6 +171,44 @@ class TestRegionsFromDetection:
             _parse([_area(number=UNASSIGNED_QUESTION_LABEL, note="設問番号が読めない")])
         )
         assert regions[0].text == "設問番号が読めない"
+
+    def test_does_not_merge_two_boxes_the_model_could_not_attribute(self) -> None:
+        """`UNASSIGNED_QUESTION_LABEL` means "I could not say", not "the same
+        question". Merging two of them assumes the very thing the model just
+        said it could not establish, swallows whatever lies between two
+        different questions, and cannot be undone: assigning the merged
+        rectangle to a question later cannot recover which part was whose.
+
+        Fixing the old `answer_regions[0]` bug by replacing "drop the rest"
+        with "blend the rest" loses the same information.
+        """
+        regions = regions_from_detection(
+            _parse(
+                [
+                    _area(number=UNASSIGNED_QUESTION_LABEL, bbox=(0.1, 0.1, 0.2, 0.2)),
+                    _area(number=UNASSIGNED_QUESTION_LABEL, bbox=(0.5, 0.6, 0.7, 0.8)),
+                ]
+            )
+        )
+        assert len(regions) == 2
+        assert {(r.bbox.x0, r.bbox.y0) for r in regions} == {(0.1, 0.1), (0.5, 0.6)}
+        assert all(r.text is None for r in regions)
+
+    def test_each_unassigned_box_can_be_confirmed_or_deleted_on_its_own(self) -> None:
+        """The point of keeping them separate: the confirm gate is a per-box
+        decision, not one yes/no over a merged blob.
+        """
+        regions = regions_from_detection(
+            _parse(
+                [
+                    _area(number=UNASSIGNED_QUESTION_LABEL, bbox=(0.1, 0.1, 0.2, 0.2)),
+                    _area(number=UNASSIGNED_QUESTION_LABEL, bbox=(0.5, 0.6, 0.7, 0.8)),
+                ]
+            )
+        )
+        assert len(unassigned_answer_area_ids(regions)) == 2
+        resolved = (regions[0], replace(regions[1], label="Q2"))
+        assert len(unassigned_answer_area_ids(resolved)) == 1
 
     def test_does_not_merge_one_question_across_pages(self) -> None:
         """Measured: one subject prints a question's first half on one page and
