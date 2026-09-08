@@ -257,7 +257,7 @@ void main() {
       final action = dashboard.nextAction;
       // 「要確認の答案が10件あります」だと、カードが示す 要確認 1件 と食い違う。
       expect(action.headline, '要確認の答案が1件あります');
-      expect(action.detail, contains('ほかにレビュー待ちが9件'));
+      expect(action.detail, contains('ほかに採点・レビュー待ちが9件'));
     });
 
     test('要確認だけのときは説明文に但し書きを付けない', () {
@@ -274,13 +274,22 @@ void main() {
     test('レビュー待ちを「採点済み」と断定しない', () {
       // `ai_processed` は取込時の画像前処理・回答欄抽出まで終わった状態で、
       // OCR/AI採点はその先から始まる (backend の submission_intake.py)。
-      // 答案の `state` だけでは採点が終わったかどうかは分からない。
+      // Issue #80 で答案取込画面が取込直後に採点ジョブを起票するようになった
+      // ので「開始済み」までは言えるが、答案の `state` は採点の完了を追わない
+      // ため、終わったかどうかは依然として分からない
+      // (docs/home-dashboard.md §3.1)。
       final test = buildTest(id: 't1');
       final dashboard = build({
         test: [buildSubmission(id: 's1', testId: 't1', state: 'ai_processed')],
       });
 
-      expect(dashboard.nextAction.detail, isNot(contains('採点')));
+      final detail = dashboard.nextAction.detail;
+      expect(detail, contains('AI採点は開始済み'));
+      expect(detail, contains('採点が終わっているかはホームでは分かりません'));
+      // 「採点済み」「採点が終わりました」の類は言わない。
+      expect(detail, isNot(contains('採点済みです')));
+      expect(detail, isNot(contains('採点が終わっています')));
+      expect(dashboard.nextAction.headline, isNot(contains('採点済み')));
     });
 
     test('要確認が無くレビュー待ちだけならそちらを開く', () {
@@ -366,7 +375,7 @@ void main() {
       }, hiddenTestCount: 4);
 
       final action = dashboard.nextAction;
-      expect(action.headline, '直近1件のテストにレビュー待ちの答案はありません');
+      expect(action.headline, '直近1件のテストに採点・レビュー待ちの答案はありません');
       expect(action.detail, contains('ほかに4件'));
     });
 

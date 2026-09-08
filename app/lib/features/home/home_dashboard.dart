@@ -12,9 +12,12 @@
 /// **`state` から読めないことは書かない。** §25 の状態機械で
 /// `UNPROCESSED -> AI_PROCESSING -> AI_PROCESSED` が表しているのは取込時の
 /// 画像前処理と回答欄抽出までで、OCR/AI採点は `AI_PROCESSED` の先から始まる
-/// (`backend/.../adapters/submission_intake.py`)。したがって答案の `state`
-/// だけを見て「採点が終わった」とは言えない。この画面の文言はそこを跨がない
-/// (`docs/home-dashboard.md` §3)。
+/// (`backend/.../adapters/submission_intake.py`)。Issue #80 で答案取込画面が
+/// 取込直後に採点ジョブを起票するようになったので採点は**開始済み**だが、
+/// 答案の `state` はその先を追わない -- 採点が終わっても `ai_processed` の
+/// ままである。したがって「採点中」と「採点が終わってレビュー待ち」を
+/// この画面は区別できない。文言はそこを跨がない
+/// (`docs/home-dashboard.md` §3.1)。
 library;
 
 import 'package:flutter/material.dart';
@@ -43,11 +46,14 @@ enum HomeWorkBucket {
     tone: AppStatusTone.attention,
   ),
 
-  /// `ai_processed` -- 取込と回答欄の抽出まで終わり、人がまだ確認していない
-  /// もの。**「採点済み」ではない**（この先が採点で、そこは `state` からは
-  /// 読めない）。
+  /// `ai_processed` -- 取込と回答欄の抽出が終わり、AI採点が起票済みで、人が
+  /// まだ確認していないもの。**「レビュー待ち」と言い切れない**: 採点の実行
+  /// 待ち・AI採点中・採点が終わってレビュー待ち の3つがこの1状態に入って
+  /// いて、`state` だけでは区別できない (Issue #80、§3.1)。ラベルが
+  /// 「採点・レビュー待ち」なのはそのためで、「レビュー待ち」だけだと
+  /// 「AIは終わっている」という、この画面が知らないことの断定になる。
   awaitingReview(
-    label: 'レビュー待ち',
+    label: '採点・レビュー待ち',
     icon: Icons.rate_review_outlined,
     tone: AppStatusTone.neutral,
   ),
@@ -123,7 +129,7 @@ class HomeTestProgress {
   /// してある -- 一番上のカードが「次の一手」の続きに見えるように。
   ///
   /// 0: 要確認の答案があるテスト（AIが人間に投げ返した）
-  /// 1: レビュー待ちの答案があるテスト
+  /// 1: 採点・レビュー待ちの答案があるテスト
   /// 2: 登録が途中、または取込に失敗した答案があるテスト
   /// 3: 待っていれば進む、あるいは片付いているテスト
   ///
@@ -151,7 +157,7 @@ class HomeTestProgress {
   }
 
   /// 人間の作業待ちのbucket。[HomeWorkBucket] の宣言順がそのまま優先順位で、
-  /// 要確認 -> レビュー待ち の順に開く。
+  /// 要確認 -> 採点・レビュー待ち の順に開く。
   static const Set<HomeWorkBucket> _resumableBuckets = {
     HomeWorkBucket.needsReview,
     HomeWorkBucket.awaitingReview,
@@ -320,16 +326,20 @@ class HomeDashboard {
         tone: bucket.tone,
         headline: isFlagged
             ? '要確認の答案が${count(HomeWorkBucket.needsReview)}件あります'
-            : 'レビュー待ちの答案が$awaiting件あります',
+            : '採点・レビュー待ちの答案が$awaiting件あります',
         // 「古い順」はテストをまたがない。[_resumeTarget] はまずテストを選び
         // (要確認優先、同じ段ではテストの新しい順)、その中で取込の古い順に
         // 1件を採る。全テストを通した最古ではないので、そう読める書き方を
         // しない (`docs/home-dashboard.md` §2.1)。
         detail: isFlagged
             ? '人の確認が必要と判定された答案から開きます'
-                  '${awaiting > 0 ? '（ほかにレビュー待ちが$awaiting件）' : ''}'
+                  '${awaiting > 0 ? '（ほかに採点・レビュー待ちが$awaiting件）' : ''}'
                   '$_loadedScopeNote'
-            : '取込と回答欄の抽出まで終わっています。'
+            // 「AI採点は開始済み」までは言える -- 起票したのはこのアプリ自身
+            // だから。終わったかどうかは `state` に乗らないので言わない
+            // (§3.1)。開けば添削レビュー画面の「処理の進み方」が答える。
+            : '取込と回答欄の抽出が終わり、AI採点は開始済みです。'
+                  '採点が終わっているかはホームでは分かりません。'
                   'テストごとに、取込の古い順に開きます$_loadedScopeNote',
         actionLabel: 'レビューを続ける',
         route: AppRoutes.pdfReview(
@@ -383,7 +393,7 @@ class HomeDashboard {
         // 足りなければ `needs_review`、失敗すれば `error`)。「レビュー待ちに
         // なります」と1つに決めない。
         detail:
-            '終わるとレビュー待ち・要確認・取込失敗のいずれかになります'
+            '終わると採点・レビュー待ち・要確認・取込失敗のいずれかになります'
             '$_loadedScopeNote',
         // 行き先が無い唯一の分岐。押せるものが「更新」しか無い状態を、
         // 押せないボタンではなく押せるボタンで表す。
@@ -397,10 +407,10 @@ class HomeDashboard {
         // ここだけは見出しそのものが「無い」と言うので、範囲を見出しに書く。
         // 説明文の但し書きに逃がすと、読まれる前に「片付いた」と受け取られる。
         headline: hiddenTestCount == 0
-            ? 'レビュー待ちの答案はありません'
-            : '直近${tests.length}件のテストにレビュー待ちの答案はありません',
+            ? '採点・レビュー待ちの答案はありません'
+            : '直近${tests.length}件のテストに採点・レビュー待ちの答案はありません',
         detail: hiddenTestCount == 0
-            ? '次の答案を取り込むと、回答欄の抽出まで自動で行われます'
+            ? '次の答案を取り込むと、回答欄の抽出とAI採点の開始まで自動で行われます'
             : 'ほかに$hiddenTestCount件のテストがあり、そちらの答案は数えていません',
         actionLabel: '答案を取り込む',
         route: AppRoutes.answerIntake,
