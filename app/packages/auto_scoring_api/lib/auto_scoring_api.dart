@@ -23,6 +23,7 @@ export 'package:auto_scoring_api/src/api/test_registration_api.dart';
 export 'package:auto_scoring_api/src/model/analyze_request.dart';
 export 'package:auto_scoring_api/src/model/annotation_edit_request.dart';
 export 'package:auto_scoring_api/src/model/annotation_response.dart';
+export 'package:auto_scoring_api/src/model/answer_layout_response.dart';
 export 'package:auto_scoring_api/src/model/approve_review_request.dart';
 export 'package:auto_scoring_api/src/model/attribution_proposal_response.dart';
 export 'package:auto_scoring_api/src/model/bounding_box_response.dart';

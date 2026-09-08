@@ -166,6 +166,48 @@
         "title": "AnnotationResponse",
         "type": "object"
       },
+      "AnswerLayoutResponse": {
+        "description": "The reference answer sheet this test's answer areas are laid out\nagainst (Issue #105), and whether detection can run here at all.",
+        "properties": {
+          "detection_available": {
+            "title": "Detection Available",
+            "type": "boolean"
+          },
+          "detection_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detection Unavailable Reason"
+          },
+          "page_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Count"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "test_id",
+          "page_count",
+          "detection_available"
+        ],
+        "title": "AnswerLayoutResponse",
+        "type": "object"
+      },
       "ApproveReviewRequest": {
         "properties": {
           "expected_ai_grade_id": {
@@ -367,6 +409,20 @@
           "criteria"
         ],
         "title": "Body_create_test_tests_post",
+        "type": "object"
+      },
+      "Body_upload_answer_layout_tests__test_id__answer_layout_put": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_answer_layout_tests__test_id__answer_layout_put",
         "type": "object"
       },
       "BoundingBoxResponse": {
@@ -1714,6 +1770,13 @@
             "title": "Pages",
             "type": "array"
           },
+          "question_numbers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Question Numbers",
+            "type": "array"
+          },
           "regions": {
             "items": {
               "$ref": "#/components/schemas/RegionModel"
@@ -1732,6 +1795,20 @@
           "test_id": {
             "title": "Test Id",
             "type": "string"
+          },
+          "unassigned_region_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unassigned Region Ids",
+            "type": "array"
+          },
+          "undetected_question_numbers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Undetected Question Numbers",
+            "type": "array"
           }
         },
         "required": [
@@ -1739,7 +1816,10 @@
           "status",
           "pages",
           "regions",
-          "revision"
+          "revision",
+          "question_numbers",
+          "undetected_question_numbers",
+          "unassigned_region_ids"
         ],
         "title": "ProfileResponse",
         "type": "object"
@@ -4494,6 +4574,207 @@
           }
         ],
         "summary": "Get Test",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/answer-layout": {
+      "get": {
+        "description": "Whether a reference answer sheet is stored, and whether detection\ncan run on this host.\n\nThe screen asks this first so it can say *why* the \u81ea\u52d5\u691c\u51fa button is\ndisabled -- an unconfigured provider and a missing answer sheet are\ndifferent problems with different fixes, and the reviewer can draw\nthe boxes by hand in either case.",
+        "operationId": "get_answer_layout_tests__test_id__answer_layout_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerLayoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Answer Layout",
+        "tags": [
+          "test-registration"
+        ]
+      },
+      "put": {
+        "description": "Store one student's answer sheet as the layout reference for this\ntest (Issue #105).\n\n``PUT``, not ``POST``: there is exactly one per test and re-uploading\nreplaces it. Kept separate from ``/detect`` so a provider failure --\nthe common case, since detection is one long multimodal call -- can be\nretried without asking the reviewer for the file again.\n\nThis is not a submission. It gets no `Submission` row and is never\ngraded; it exists because the boxes have to be drawn on *something*,\nand a test cannot accept real submissions until they are drawn\n(`adapters.submission_intake.intake_submission` refuses a test that is\nnot ``ready``).\n\nFully validated -- including per-page render size -- *before* it\nreplaces whatever is already stored, in a scratch directory the same\nway `intake_submission` does it. A corrupt or absurdly-sized upload\nmust not destroy the sheet the current answer areas were drawn on,\nand must not be discovered later by an out-of-memory render inside\n`/detect`.",
+        "operationId": "upload_answer_layout_tests__test_id__answer_layout_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_answer_layout_tests__test_id__answer_layout_put"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerLayoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Answer Layout",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/answer-layout/detect": {
+      "post": {
+        "description": "Detect this test's answer areas on the stored answer sheet and save\nthem as DRAFT profile regions (Issue #105).\n\nSafe to call again -- like `analyze_profile`, it overwrites whatever\nDRAFT profile was there and bumps `revision` so a confirm pinned to\nthe previous one is rejected. Refused once the profile is confirmed.\n\n**Every page goes to the provider, once per test.** Grading sends one\ncropped answer per question per submission; this sends whole pages,\nand only here (simplified-design-specification.md \u00a726.1.1). Whatever\nis printed or handwritten on those pages goes with them.",
+        "operationId": "detect_answer_areas_tests__test_id__answer_layout_detect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Detect Answer Areas",
+        "tags": [
+          "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/answer-layout/pdf": {
+      "get": {
+        "description": "The stored answer sheet's bytes, for the overlay editor to draw on.\n\nReturned as a PDF rather than page images: the app already renders\nPDFs with `pdfrx` and places normalized overlays on them\n(`features/pdf_review`), so serving pictures would mean a second\nrendering path and a second set of coordinate bugs.",
+        "operationId": "get_answer_layout_pdf_tests__test_id__answer_layout_pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The reference answer sheet this test's answer areas are drawn on."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Answer Layout Pdf",
         "tags": [
           "test-registration"
         ]

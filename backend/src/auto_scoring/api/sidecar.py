@@ -43,8 +43,10 @@ from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvide
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
 from auto_scoring.api.app import build_ai_provider, build_criteria_extractor, create_app
+from auto_scoring.api.app import build_ai_provider, build_answer_area_detector, create_app
 from auto_scoring.api.auth import generate_token
 from auto_scoring.api.secret_redaction import configuration_secrets, redact
+from auto_scoring.domain.answer_area_detection import UnconfiguredAnswerAreaDetector
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
@@ -478,6 +480,13 @@ def run(argv: Sequence[str] | None = None) -> int:
     if isinstance(criteria_extractor, UnconfiguredCriteriaExtractor):
         logging.getLogger(__name__).warning(
             "採点基準の自動抽出 is unavailable on this host: %s", criteria_extractor.reason
+    # Same contract, same reason it is read here and not inside `create_app`
+    # (Issue #105). A host with no image-capable provider still gets a working
+    # テスト設定 screen; only the 自動検出 button is off, and it says why.
+    answer_area_detector = build_answer_area_detector(os.environ)
+    if isinstance(answer_area_detector, UnconfiguredAnswerAreaDetector):
+        logging.getLogger(__name__).warning(
+            "answer-area detection is unavailable on this host: %s", answer_area_detector.reason
         )
 
     try:
@@ -486,6 +495,7 @@ def run(argv: Sequence[str] | None = None) -> int:
             data_root=args.app_data_dir,
             ai_provider=ai_provider,
             criteria_extractor=criteria_extractor,
+            answer_area_detector=answer_area_detector,
         )
     except DataRootLockedError as error:
         # The one startup failure with a name the user understands, so it
