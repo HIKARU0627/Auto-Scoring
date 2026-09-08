@@ -36,7 +36,7 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
 from auto_scoring.adapters.ai_grading._http import raise_classified_unavailable
 from auto_scoring.adapters.ai_grading._prompt import (
     GRADING_SYSTEM_INSTRUCTIONS,
@@ -49,6 +49,7 @@ from auto_scoring.domain.ai_provider import (
     GradingRequest,
     GradingResponse,
     ProviderDescriptor,
+    ProviderUnavailable,
     SchemaViolation,
     grading_response_from_result,
 )
@@ -94,11 +95,22 @@ def _response_text(data: dict[str, Any]) -> str:
     """
     try:
         parts = data["candidates"][0]["content"]["parts"]
-        texts = [part["text"] for part in parts if isinstance(part.get("text"), str)]
     except (KeyError, IndexError, TypeError):
         raise SchemaViolation(
             f"{_LABEL} response did not contain a completed text candidate"
         ) from None
+    if not isinstance(parts, list):
+        raise SchemaViolation(f"{_LABEL} response candidate's 'parts' was not a list")
+    # Each element is type-checked before anything reads it: a 2xx body
+    # like ``{"parts": [null]}`` used to reach ``part.get()`` and raise an
+    # uncaught AttributeError, which is outside this port's exception
+    # contract -- so the fallback chain stopped on it instead of moving to
+    # the next provider (code review finding).
+    texts = [
+        part["text"]
+        for part in parts
+        if isinstance(part, dict) and isinstance(part.get("text"), str)
+    ]
     if not texts:
         raise SchemaViolation(f"{_LABEL} response candidate contained no text part")
     # Gemini may split one JSON document across several text parts; they are
@@ -200,6 +212,18 @@ class VertexGeminiAIProvider:
             http_response = self._client.post(self._endpoint, json=payload, headers=headers)
             http_response.raise_for_status()
             data = http_response.json()
+        except AdcCredentialsError as exc:
+            # An expired refresh token, or a token endpoint that is down,
+            # is a *this provider is not reachable right now* failure --
+            # not a reason for the whole fallback chain to stop before it
+            # has tried Codex/OpenRouter/OpenAI (code review finding: this
+            # was raised from inside the `try` above but matched by none of
+            # its handlers, so it escaped the port's exception contract).
+            # Only the exception type crosses over; `AdcCredentialsError`
+            # already carries no token material, and nothing more is added.
+            raise ProviderUnavailable(
+                f"{_LABEL} credentials are unavailable: {type(exc).__name__}"
+            ) from None
         except (
             httpx.TransportError,
             httpx.HTTPStatusError,

@@ -217,3 +217,58 @@ def test_no_project_id_is_a_credentials_error_not_a_silent_default() -> None:
     Cloud project."""
     with pytest.raises(AdcCredentialsError):
         AdcTokenSource(credentials=_FakeCredentials(), project_id="   ")
+
+
+# --- the port's exception contract: nothing else may escape grade() ---
+
+
+def test_an_adc_failure_is_a_provider_unavailable_not_a_chain_stopper() -> None:
+    """An expired refresh token, or a token endpoint that is down, must be
+    a `ProviderUnavailable` so `FallbackAIProvider` moves on to Codex /
+    OpenRouter / OpenAI (code review finding: `AdcCredentialsError` was
+    raised from inside `grade()`'s try block but matched by none of its
+    handlers, so it escaped the port's contract and stopped the chain).
+
+    The message carries the exception type only -- never token material.
+    """
+
+    class _ExpiredTokens(AdcTokenSource):
+        def bearer_token(self) -> str:
+            raise AdcCredentialsError("refresh failed")
+
+    provider = VertexGeminiAIProvider(
+        model="gemini-2.5-flash",
+        prompt_version="v1",
+        tokens=_ExpiredTokens(credentials=_FakeCredentials(), project_id=_PROJECT),
+        client=httpx.Client(transport=httpx.MockTransport(_fake_transport_handler)),
+    )
+
+    with pytest.raises(ProviderUnavailable) as raised:
+        provider.grade(_VALID_REQUEST)
+    assert "refresh failed" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"candidates": [{"content": {"parts": [None]}}]},
+        {"candidates": [{"content": {"parts": ["a bare string"]}}]},
+        {"candidates": [{"content": {"parts": {"text": "not a list"}}}]},
+        {"candidates": [{"content": {"parts": [{"text": 42}]}}]},
+        {"candidates": [{"content": {}}]},
+        {"candidates": []},
+        {"candidates": "not a list"},
+    ],
+)
+def test_a_malformed_2xx_envelope_is_a_schema_violation(body: dict[str, object]) -> None:
+    """Every shape here is a *response*, so it belongs on the needs-review
+    path -- and, just as importantly, it must arrive as one of the two
+    exceptions this port declares. `{"parts": [null]}` used to reach
+    `part.get()` and raise an uncaught AttributeError, which the fallback
+    chain does not catch, so a single malformed body from Gemini stopped
+    the whole chain instead of falling through to the next provider (code
+    review finding)."""
+    provider = _make_provider(lambda request: httpx.Response(200, json=body))
+
+    with pytest.raises(SchemaViolation):
+        provider.grade(_VALID_REQUEST)
