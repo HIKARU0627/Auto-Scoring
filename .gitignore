@@ -14,9 +14,18 @@
 # `.env.staging` and `.env.test` through, and this repository is public, so a
 # file nobody thought to add here is published the moment it is created.
 # `*.env` covers the other half of the habit (`production.env`, `local.env`).
-# Case variants like `.ENV` stay uncovered -- gitignore has no case-insensitive
-# match -- which is one more reason the real defence is that credentials live
-# in 1Password and ADC rather than in a file at all.
+#
+# Still uncovered, on purpose: case variants (`.ENV`) and mid-name copies
+# (`production.env.bak`). Both are matchable -- `[eE][nN][vV]`, `*.env.*` --
+# and both were tried and dropped. `*.env.*` silently swallows an ordinary
+# `docs/setup.env.md`, and a rule that hides files nobody asked it to hide is
+# the same class of trap as a hook that silently does not run (Issue #75).
+# Spelling every pattern three ways for the case variants makes the list
+# unreadable, and an unreadable rule is one nobody maintains.
+#
+# So this list is the second line of defence, not the first. The one that
+# actually holds is that credentials live in 1Password and in ADC, and never
+# in a file in this tree at all.
 .env*
 *.env
 !.env.example
