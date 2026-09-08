@@ -144,3 +144,45 @@ class IntakeTemplateStore:
             if template.id == template_id:
                 return template
         return None
+
+
+class IntakeCostStore:
+    """The per-call price the reviewer told us their provider charges.
+
+    Layout: ``app-data/settings/intake-cost.json``.
+
+    Exists because Issue #101 requires the pre-flight display to show a cost,
+    and **this app cannot know one**. The price depends on the provider, the
+    model and the day; hard-coding a number would put a figure on screen that
+    nobody verified, which is the exact failure this project has repeated. So
+    the number comes from the person paying the bill, and until they enter one
+    the screen says the price is unknown rather than guessing it.
+
+    ``None`` -- the default -- means "not set", and is distinct from ``0``,
+    which is a reviewer stating their usage is free (a covered quota, a local
+    model).
+    """
+
+    def __init__(self, root: Path | str) -> None:
+        self._files = LocalFileStore(root)
+
+    def path(self) -> Path:
+        return self._files.root / "settings" / "intake-cost.json"
+
+    def load(self) -> float | None:
+        try:
+            raw = json.loads(self._files.read_bytes(self.path()))
+        except (FileNotFoundError, ValueError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+        value = raw.get("classification_unit_cost")
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        return float(value) if value >= 0 else None
+
+    def save(self, unit_cost: float | None) -> None:
+        if unit_cost is not None and (unit_cost < 0 or unit_cost != unit_cost):
+            raise IntakeTemplateError("the unit cost must be zero or more")
+        data = json.dumps({"classification_unit_cost": unit_cost}).encode("utf-8")
+        self._files.write_atomic(self.path(), data)

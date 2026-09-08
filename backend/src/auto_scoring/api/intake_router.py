@@ -46,7 +46,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from auto_scoring.adapters.local.classification_cache import ClassificationCache
-from auto_scoring.adapters.local.intake_template_store import IntakeTemplateStore
+from auto_scoring.adapters.local.intake_template_store import (
+    IntakeCostStore,
+    IntakeTemplateStore,
+)
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.domain.ai_provider import ProviderFailure
 from auto_scoring.domain.intake_plan import (
@@ -154,6 +157,17 @@ class SaveTemplatesRequest(BaseModel):
     # Required, no default: replacing every template with an empty list must
     # be a deliberate act, not an accidentally-omitted field.
     templates: list[IntakeTemplateModel]
+
+
+class IntakeCostModel(BaseModel):
+    """The per-call price the reviewer entered, or ``null`` for "not set".
+
+    ``null`` is not zero. Zero is a reviewer stating their usage is free; null
+    is this app admitting it does not know the price and will say so on screen
+    rather than showing an invented figure.
+    """
+
+    classification_unit_cost: float | None = Field(default=None, ge=0)
 
 
 class ScannedFileModel(BaseModel):
@@ -322,6 +336,7 @@ def build_intake_router(
     lock = pdfium_lock or threading.Lock()
     templates = IntakeTemplateStore(store.root)
     cache = ClassificationCache(store.root)
+    costs = IntakeCostStore(store.root)
     router = APIRouter(tags=["intake"])
 
     def _render_first_page(data: bytes) -> bytes:
@@ -353,6 +368,18 @@ def build_intake_router(
         except IntakeTemplateError as exc:
             raise HTTPException(422, detail=str(exc)) from exc
         return [IntakeTemplateModel.from_domain(template) for template in saved]
+
+    @router.get("/intake-cost", response_model=IntakeCostModel)
+    def get_intake_cost() -> IntakeCostModel:
+        return IntakeCostModel(classification_unit_cost=costs.load())
+
+    @router.put("/intake-cost", response_model=IntakeCostModel)
+    def save_intake_cost(request: IntakeCostModel) -> IntakeCostModel:
+        try:
+            costs.save(request.classification_unit_cost)
+        except IntakeTemplateError as exc:
+            raise HTTPException(422, detail=str(exc)) from exc
+        return request
 
     @router.post("/intake/plan", response_model=IntakePlanResponse)
     def plan_intake(request: PlanRequest) -> IntakePlanResponse:

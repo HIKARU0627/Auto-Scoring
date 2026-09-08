@@ -549,3 +549,35 @@ def test_intake_routes_require_the_bearer_token(client: TestClient) -> None:
         ).status_code
         == 401
     )
+
+
+# --------------------------------------------------------------------------- #
+# Acceptance criterion 7: the cost shown is one somebody entered
+# --------------------------------------------------------------------------- #
+def test_the_unit_cost_starts_unset_rather_than_at_a_guessed_number(
+    client: TestClient,
+) -> None:
+    """This app cannot know what a provider charges -- it depends on the
+    provider, the model and the day. `null` is it saying so; the screen shows
+    "not set" instead of an invented figure.
+    """
+    assert client.get("/intake-cost", headers=_AUTH).json() == {"classification_unit_cost": None}
+
+
+def test_the_unit_cost_round_trips(client: TestClient) -> None:
+    saved = client.put("/intake-cost", headers=_AUTH, json={"classification_unit_cost": 0.42})
+    assert saved.status_code == 200, saved.text
+    assert client.get("/intake-cost", headers=_AUTH).json() == {"classification_unit_cost": 0.42}
+
+
+def test_zero_is_a_real_answer_and_not_the_same_as_unset(client: TestClient) -> None:
+    """Zero is a reviewer stating their usage is free (a covered quota, a local
+    model). Folding it into "unset" would make the screen ask them again.
+    """
+    client.put("/intake-cost", headers=_AUTH, json={"classification_unit_cost": 0})
+    assert client.get("/intake-cost", headers=_AUTH).json() == {"classification_unit_cost": 0.0}
+
+
+def test_a_negative_unit_cost_is_refused(client: TestClient) -> None:
+    response = client.put("/intake-cost", headers=_AUTH, json={"classification_unit_cost": -1})
+    assert response.status_code == 422
