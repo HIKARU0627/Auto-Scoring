@@ -110,6 +110,16 @@ class QuestionReviewState {
   /// overwrite fresher data with stale data (P2 review).
   int fetchGeneration = 0;
 
+  /// Which job set this question's cached results were read under
+  /// (`_PdfReviewPageState._jobsGeneration` at the moment the fetch that
+  /// filled them started), or `-1` while nothing has been read yet.
+  ///
+  /// **This is what makes the cache expire.** Results are a function of the
+  /// jobs that produced them, so the moment the job set changes, every
+  /// question's cache is stale -- not only the one being looked at. See
+  /// `_PdfReviewPageState._jobsGeneration`.
+  int jobsGeneration = -1;
+
   bool get hasLoaded =>
       recognitions != null &&
       grades != null &&
@@ -350,6 +360,38 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// re-read on every poll tick.
   DependencyGraphResponse? _dependencyGraph;
   Timer? _pollTimer;
+
+  /// Bumped every time [_refreshJobs] observes a **different** job set.
+  ///
+  /// This is the one place that answers "what does a change in processing
+  /// invalidate?", and the answer is: every question's cached results, at
+  /// once. [QuestionReviewState.jobsGeneration] records which job set an
+  /// entry was read under, and [_loadReview] refuses to reuse an entry from
+  /// an older one.
+  ///
+  /// **Why it has to be all of them, not the selected one.** The first two
+  /// attempts at this fixed a narrower slice each time and left the next one
+  /// open: refreshing the jobs without the grades they produce (review round
+  /// 2), then refreshing the selected question's grades but not the other
+  /// questions' (review round 3 -- open 問2, go back and start grading, and
+  /// 問2 keeps the empty results it was opened with, because
+  /// [_isAwaitingGrade] reads "terminal job, no grade" as "nothing to wait
+  /// for" and lets the empty cache stand). Neither is a special case of
+  /// 「AI採点を開始」: *any* path that changes the jobs -- a poll tick, a
+  /// 再判定, a retry, a graph re-confirm -- has the same effect on every
+  /// question, so the invalidation belongs where the change is noticed
+  /// rather than at each caller.
+  ///
+  /// **The caches this screen owns, and why this is the only one that
+  /// needs expiring.** `_questions` and `_pdfBytes` are properties of the
+  /// test and the answer PDF, which processing never changes. `_submission`
+  /// is re-read by every poll and every refresh, and grading does not move
+  /// it anyway (`docs/home-dashboard.md` §3.1). `_dependencyGraph` is
+  /// re-read from inside [_refreshJobs] itself when the jobs say it is
+  /// superseded. `_jobs`/`_jobsLoaded`/`_gradingFailure` are written by the
+  /// very calls that would invalidate them. That leaves [_reviews], which
+  /// this stamp covers.
+  int _jobsGeneration = 0;
 
   /// Whether [_refreshJobs] has ever come back successfully. `false` covers
   /// both "not fetched yet" and "the fetch failed", which [_jobs] cannot tell
@@ -633,9 +675,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final jobs = await _dependencies.listJobs(widget.submissionId);
       if (!mounted) return;
+      final changed = _jobsFingerprint(jobs) != _jobsFingerprint(_jobs);
       setState(() {
         _jobs = jobs;
         _jobsLoaded = true;
+        // Only on a real change: an unchanged job set means every cached
+        // result is still the result of exactly those jobs, and expiring
+        // them anyway would re-fetch all four lists for every question the
+        // reviewer visits after any refresh at all.
+        if (changed) _jobsGeneration++;
       });
     } on SidecarApiException {
       // Keep the last-known jobs list -- retried on the next tick/refresh.
@@ -643,6 +691,18 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     }
     await _refetchDependencyGraphIfSuperseded();
   }
+
+  /// What a job set has to say about the results it may have produced.
+  ///
+  /// `id` covers a job appearing or being re-issued under a new graph
+  /// version, `state` covers it moving, and `usable` covers a `SUCCEEDED`
+  /// job the queue judged untrustworthy (which is a different result for a
+  /// reviewer than a usable one). Timestamps are deliberately left out: a
+  /// `RUNNING` job whose `updated_at` ticks has not produced anything new.
+  static String _jobsFingerprint(List<JobResponse> jobs) =>
+      (jobs.map((j) => '${j.id}:${j.state}:${j.usable}').toList()..sort()).join(
+        '|',
+      );
 
   /// Re-reads this submission's jobs **and** everything that has to agree
   /// with them, then re-evaluates polling.
@@ -878,9 +938,16 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     // revisited) (P1 review).
     final resultsStillMissing =
         existing != null && _isAwaitingGrade(existing, question.id);
+    // Read under an older job set, so it may be missing results those jobs
+    // have since produced -- including for a question the reviewer opened
+    // *before* grading was started and has not opened since
+    // (`_jobsGeneration`).
+    final readUnderOlderJobs =
+        existing != null && existing.jobsGeneration != _jobsGeneration;
     if (existing != null &&
         !forceReload &&
         !resultsStillMissing &&
+        !readUnderOlderJobs &&
         !existing.loading &&
         existing.error == null &&
         existing.hasLoaded) {
@@ -892,6 +959,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     // a manual refresh racing the background poll (P2 review).
     final review = existing ?? QuestionReviewState();
     final generation = ++review.fetchGeneration;
+    // Captured before the fetch, not after: if the job set changes while
+    // these four lists are in flight, the result describes the *old* jobs
+    // and must stay expired.
+    final jobsGeneration = _jobsGeneration;
     if (silent) {
       _reviews[question.id] = review;
     } else {
@@ -948,6 +1019,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         review.annotations = annotations;
         review.reviews = reviews;
         review.loading = false;
+        review.jobsGeneration = jobsGeneration;
         // A successful refresh -- silent or not -- means the Inspector no
         // longer needs to keep showing a fetch failure from before it (P2
         // review): the data it was retried for is here now.

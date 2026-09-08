@@ -3576,6 +3576,71 @@ void main() {
       expect(find.byKey(const Key('review-question-empty')), findsNothing);
     });
 
+    testWidgets('起票の前に開いておいた別の設問も、あとで選び直せば結果が出る', (tester) async {
+      // 起票前に問2を開いて空の結果をキャッシュし、問1に戻って起票する。
+      // 取り直すのが「選択中の設問」だけだと、問2は空のキャッシュを抱えたまま
+      // で、`_isAwaitingGrade` が「終端ジョブ + 採点結果なし」を「待つものは
+      // 無い」と読むため再取得もポーリングも起きず、DAGが「レビュー待ち」と
+      // 言っているのに問2のインスペクタだけ空、が手動更新まで残る
+      // (review round 3, P2)。
+      var jobs = <JobResponse>[];
+      var graded = false;
+      List<GradeResultResponse> gradesFor(String questionId) => graded
+          ? [
+              _grade(
+                id: 'grade-$questionId',
+                questionId: questionId,
+                createdAt: DateTime.utc(2026, 1, 2),
+              ),
+            ]
+          : const [];
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => jobs,
+          recognitions: () => graded
+              ? [
+                  _recognition(id: 'rec-q-1', questionId: 'q-1', text: '問1の答え'),
+                  _recognition(id: 'rec-q-2', questionId: 'q-2', text: '問2の答え'),
+                ]
+              : const [],
+          grades: () => [...gradesFor('q-1'), ...gradesFor('q-2')],
+          startGrading: (submissionId) async {
+            graded = true;
+            jobs = [_jobFor('q-1'), _jobFor('q-2')];
+            return jobs;
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      // 起票前に問2を開く -- ここで空の結果がキャッシュされる。
+      await tester.tap(find.byKey(const Key('dag-node-q-2')));
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(find.byKey(const Key('review-question-empty')), findsOneWidget);
+
+      // 問1へ戻って起票する。取り直されるのは問1だけ。
+      await tester.tap(find.byKey(const Key('dag-node-q-1')));
+      await tester.pump();
+      await _settlePdf(tester);
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await tester.pumpAndSettle();
+      expect(find.text('問1の答え'), findsOneWidget);
+
+      // 問2を選び直す。ここが本題 -- 空のキャッシュが残っていると空のまま。
+      await tester.tap(find.byKey(const Key('dag-node-q-2')));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('問2の答え'),
+        findsOneWidget,
+        reason: '起票でジョブが変わった以上、未選択だった設問のキャッシュも無効になること',
+      );
+      expect(find.byKey(const Key('review-question-empty')), findsNothing);
+    });
+
     testWidgets('ジョブが1件でもあれば「AI採点を開始」は出さない', (tester) async {
       // 起票は済んでいる。ここにボタンを置くと「押せばもう一度採点される」と
       // 読めるが、実際は idempotent で何も起きない。再実行は再判定と
