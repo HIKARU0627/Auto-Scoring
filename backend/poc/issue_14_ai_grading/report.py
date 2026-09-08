@@ -219,7 +219,8 @@ id are rejected outright, rather than silently merged, since either
 resolution could hide a real inconsistency in the dataset. For any
 ``--dataset`` other than the bundled synthetic fixtures, the normalized id
 must also be one of the canonical candidate ids docs/poc-2-ai-grading.md
-section 2 defines (``gemini`` / ``claude`` / ``gpt``, case-sensitive):
+section 2 defines (``gemini`` / ``codex-app-server`` / ``openrouter`` /
+    ``openai``, case-sensitive):
 whitespace normalization alone does not catch a case difference, so
 ``"gemini"`` and ``"Gemini"`` would otherwise still count as two separate
 candidates for the same real service (code review finding). The bundled
@@ -309,10 +310,23 @@ _INPUT_VARIANTS = ("ocr_clean", "ocr_noisy")
 #: 利用可能な最低2候補を...比較する").
 _MINIMUM_PROVIDERS = 2
 
-#: The exact candidate ids docs/poc-2-ai-grading.md section 2 defines. Real
-#: (non-bundled-fixture) ``--dataset`` runs must use exactly these, case
-#: sensitively -- see :func:`_validate_canonical_provider_ids`.
-_CANONICAL_PROVIDER_IDS = frozenset({"gemini", "claude", "gpt"})
+#: The exact candidate ids docs/poc-2-ai-grading.md section 2 defines: the
+#: four links of the fallback chain the project owner adopted in Issue #81
+#: (business-rules-and-evaluation-data.md section 3 (B)), each spelled the
+#: way its adapter's ``AIProvider.name`` spells it -- ``gemini``
+#: (``adapters.ai_grading.vertex_gemini_provider``), ``codex-app-server``,
+#: ``openrouter``, ``openai``. Real (non-bundled-fixture) ``--dataset`` runs
+#: must use exactly these, case sensitively -- see
+#: :func:`_validate_canonical_provider_ids`.
+#:
+#: The earlier set (``gemini``/``claude``/``gpt``) named three *vendors*
+#: rather than three call paths, and two of those ids could never be
+#: produced by any adapter this repository has: a live recording made
+#: through ``record.py`` keys each cell by the descriptor of the adapter
+#: that answered, so a dataset recorded by the OpenRouter adapter would
+#: have been rejected outright while a hand-written ``claude`` cell (which
+#: nothing can reproduce) passed.
+_CANONICAL_PROVIDER_IDS = frozenset({"gemini", "codex-app-server", "openrouter", "openai"})
 
 
 class _InvalidGroundTruth(Exception):
@@ -600,8 +614,9 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
 
     has_response = "response" in cell
     is_unavailable = cell.get("unavailable") is True
+    is_schema_violation = cell.get("schema_violation") is True
 
-    if not has_response and not is_unavailable:
+    if not has_response and not is_unavailable and not is_schema_violation:
         cost_usd = _validated_measurement(
             cell.get("cost_usd"), field="cost_usd", provider=provider, path=path
         )
@@ -623,14 +638,19 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
     descriptor = _descriptor_from_cell(cell, provider=provider, path=path)
     config_key = descriptor_key(descriptor)
 
-    if is_unavailable:
+    if is_unavailable or is_schema_violation:
+        # Both leave ``response`` empty; only ``is_unavailable`` separates
+        # "the call never returned" from "it returned something that failed
+        # validation", which is exactly the distinction
+        # ``evaluate_sample`` keys ``schema_violation`` vs ``unavailable``
+        # on.
         return _CellResult(
             response=None,
             config_key=config_key,
             cost_usd=cost_usd,
             latency_seconds=latency_seconds,
             is_pending=False,
-            is_unavailable=True,
+            is_unavailable=is_unavailable,
         )
 
     try:
@@ -790,8 +810,8 @@ def _load_input_record(
     Raises :class:`_InvalidInput` if ``input`` is missing, fails strict
     validation, disagrees with ``ground_truth`` (e.g. a different
     ``max_score``), or if any provider has a recorded ``ocr_noisy`` attempt
-    (a ``response`` *or* an ``unavailable: true`` marker) while this
-    sample's ``input.ocr_noisy`` is ``null``: a same-data comparison
+    (any of the three outcome markers :func:`_recorded_outcomes` reads)
+    while this sample's ``input.ocr_noisy`` is ``null``: a same-data comparison
     requires the underlying question material -- including which OCR
     variants actually exist -- to match, not just the final score (code
     review finding). An ``unavailable`` noisy-variant attempt counts here
@@ -816,10 +836,11 @@ def _load_input_record(
     if input_record.ocr_noisy is None:
         for provider, variants in raw.get("recorded", {}).items():
             cell = variants.get("ocr_noisy")
-            if isinstance(cell, dict) and ("response" in cell or cell.get("unavailable") is True):
+            if isinstance(cell, dict) and _recorded_outcomes(cell):
                 raise _InvalidInput(
                     f"{path}: provider {provider!r} has a recorded 'ocr_noisy' attempt "
-                    "(response or unavailable), but this sample's input.ocr_noisy is null "
+                    "(response, schema_violation, or unavailable), but this sample's "
+                    "input.ocr_noisy is null "
                     "-- no noisy-OCR variant was authored for this sample, so a recorded "
                     "noisy-variant attempt cannot be a real same-data comparison"
                 )
@@ -830,8 +851,30 @@ def _load_input_record(
 #: ``"respnose"`` instead of ``"response"``) is rejected outright rather than
 #: silently misclassifying the cell -- see :func:`_validate_cell_shape`.
 _KNOWN_CELL_KEYS = frozenset(
-    {"response", "descriptor", "latency_seconds", "cost_usd", "unavailable"}
+    {"response", "descriptor", "latency_seconds", "cost_usd", "unavailable", "schema_violation"}
 )
+
+
+def _recorded_outcomes(cell: dict[str, Any]) -> list[str]:
+    """Which of the three mutually exclusive call outcomes this cell records.
+
+    A ``response`` key (whatever its value) means "the call returned
+    something to validate"; ``unavailable: true`` means "the call never
+    returned"; ``schema_violation: true`` means "the call returned, and what
+    it returned failed :func:`parse_ai_grading_result`, with the raw body
+    deliberately not retained" -- the shape ``record.py`` writes for a
+    :class:`~auto_scoring.domain.ai_provider.SchemaViolation`, since the
+    adapters never expose the offending body (it can hold OCR'd student
+    answer text; ``domain.ai_provider.SchemaViolation``). Without that third
+    marker, a live-recorded schema violation could only be represented by
+    inventing a response that happens to fail validation -- writing a
+    fabricated body into the dataset to record a real failure.
+    """
+    outcomes = ["response"] if "response" in cell else []
+    outcomes += [
+        marker for marker in ("schema_violation", "unavailable") if cell.get(marker) is True
+    ]
+    return sorted(outcomes)
 
 
 def _validate_cell_shape(cell: object, *, provider: str, variant: str, path: Path | str) -> None:
@@ -875,19 +918,21 @@ def _validate_cell_shape(cell: object, *, provider: str, variant: str, path: Pat
             "silently classified as pending). The unrecognized field name(s) are not "
             "shown here."
         )
-    if "unavailable" in cell and not isinstance(cell["unavailable"], bool):
+    for marker in ("unavailable", "schema_violation"):
+        if marker in cell and not isinstance(cell[marker], bool):
+            raise _InvalidRecordedCell(
+                f"{path}: provider {provider!r}'s {variant!r} cell has a non-boolean "
+                f"{marker!r} marker (got {type(cell[marker]).__name__}) -- expected "
+                'a strict true/false, not e.g. the string "true"'
+            )
+    recorded_outcomes = _recorded_outcomes(cell)
+    if len(recorded_outcomes) > 1:
         raise _InvalidRecordedCell(
-            f"{path}: provider {provider!r}'s {variant!r} cell has a non-boolean "
-            f"'unavailable' marker (got {type(cell['unavailable']).__name__}) -- expected "
-            'a strict true/false, not e.g. the string "true"'
+            f"{path}: provider {provider!r}'s {variant!r} cell records {recorded_outcomes} "
+            "at once -- one call attempt has exactly one outcome (it returned a parseable "
+            "response, or it returned an unparseable one, or it never returned at all)"
         )
-    if "response" in cell and cell.get("unavailable") is True:
-        raise _InvalidRecordedCell(
-            f"{path}: provider {provider!r} has both a 'response' and "
-            "'unavailable: true' recorded for the same cell -- a call attempt cannot "
-            "both have succeeded and failed"
-        )
-    if "response" not in cell and cell.get("unavailable") is not True:
+    if not recorded_outcomes:
         attempt_evidence = sorted({"descriptor", "latency_seconds", "cost_usd"} & set(cell))
         if attempt_evidence:
             raise _InvalidRecordedCell(

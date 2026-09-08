@@ -35,7 +35,7 @@
         "max_score": 20,
         "ocr_clean": "役職Aは中央から派遣され、役職Bは地元の有力者から任命された。役職Aには任期があり、役職Bはほぼ終身であった。",
         "ocr_noisy": "役職Aは中央がら派遣され、役職Bは地元の有力者がら任命された。役職Aには任期があり、役職Bはほぼ終身であった。",
-        "answer_image_ref": "sha256:synthetic-answer-image-poc2-synth-01"
+        "answer_image_ref": "sha256:ca7387653ffc4ae2235ebca58b5c2cd9bd2bd3eb5fe8a051e6c29e9208124755"
       },
       "recorded": {
         "synthetic-a": {

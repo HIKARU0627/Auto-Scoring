@@ -13,7 +13,14 @@ import pytest
 
 from auto_scoring.adapters.ai_grading._prompt import GRADING_SYSTEM_INSTRUCTIONS
 from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
-from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable, SchemaViolation
+from auto_scoring.domain.ai_provider import (
+    AIProvider,
+    ProviderRateLimitedError,
+    ProviderServerError,
+    ProviderTimeoutError,
+    ProviderUnavailable,
+    SchemaViolation,
+)
 
 from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
 
@@ -341,3 +348,89 @@ def test_describe_does_not_report_a_stale_route_after_a_later_failure() -> None:
         provider.grade(_VALID_REQUEST)
 
     assert provider.describe().version is None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (429, ProviderRateLimitedError),
+        (500, ProviderServerError),
+        (502, ProviderServerError),
+        (401, ProviderUnavailable),
+    ],
+)
+def test_http_failures_are_classified_for_the_fallback_chain(
+    status: int, expected: type[Exception]
+) -> None:
+    """Issue #35: the fallback chain and the queue's ``ErrorCategory`` both
+    key on the *specific* exception type (docs/ai-grading-pipeline.md
+    "どの失敗で次へ落とすか"). Raising a bare ``ProviderUnavailable`` for a
+    429 -- what this adapter did before ``_http`` existed -- forced
+    ``GradingJobProcessor`` into ``ErrorCategory.UNKNOWN`` for a failure it
+    could classify exactly. A plain 4xx stays bare: it is an auth/config
+    problem the queue must not treat as a retryable rate limit."""
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"error": "x"})),
+        base_url="https://openrouter.test/api/v1",
+    )
+
+    with pytest.raises(expected):
+        _make_provider(client).grade(_VALID_REQUEST)
+
+
+def test_timeout_is_classified_as_a_timeout() -> None:
+    def _timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_timeout), base_url="https://openrouter.test/api/v1"
+    )
+
+    with pytest.raises(ProviderTimeoutError):
+        _make_provider(client).grade(_VALID_REQUEST)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"choices": [None]},
+        {"choices": "not a list"},
+        {"choices": {"0": {"message": {"content": "{}"}}}},
+        {"choices": [{"message": None}]},
+        {"choices": [{"message": {"content": 42}}]},
+        {"choices": [{}]},
+    ],
+)
+def test_a_malformed_2xx_envelope_is_a_schema_violation(body: dict[str, object]) -> None:
+    """The shared Chat Completions path must turn any 2xx body into one of
+    the two exceptions the ``AIProvider`` port declares. `FallbackAIProvider`
+    falls through on exactly those, so an adapter leaking anything else
+    stops the whole chain (code review finding; the same check exists for
+    the Vertex AI adapter)."""
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+        base_url="https://openrouter.test/api/v1",
+    )
+
+    with pytest.raises(SchemaViolation):
+        _make_provider(client).grade(_VALID_REQUEST)
+
+
+def test_a_corrupt_compressed_body_does_not_stop_the_chain() -> None:
+    """The shared Chat Completions path has the same coverage requirement
+    as the Vertex adapter: every httpx failure must arrive as one of the
+    two exceptions the port declares, or `FallbackAIProvider` stops instead
+    of falling through (code review finding -- `httpx.DecodingError` is not
+    a `TransportError`)."""
+
+    def _corrupt_gzip(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"this is not gzip at all", headers={"content-encoding": "gzip"}
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_corrupt_gzip), base_url="https://openrouter.test/api/v1"
+    )
+
+    with pytest.raises(ProviderUnavailable):
+        _make_provider(client).grade(_VALID_REQUEST)

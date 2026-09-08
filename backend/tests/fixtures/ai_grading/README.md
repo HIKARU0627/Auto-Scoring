@@ -15,6 +15,17 @@ vendor identifiers. The real evaluation dataset (manually transcribed from
 licensed exam material) stays outside the repo
 (`docs/business-rules-and-evaluation-data.md` section 6.5).
 
+## `images/`
+
+One synthetic 8x8 PNG per sample, named `<sha256 of its own bytes>.png` --
+which is exactly what that sample's `input.answer_image_ref` says. They
+exist so the fixtures are internally consistent (an `answer_image_ref` that
+claims to be a content hash but is not one cannot be verified by anything),
+and so `poc/issue_14_ai_grading/record.py`'s `--images` resolution and hash
+check can be rehearsed without any real answer crop. Invented images of
+nothing: no student work, no scan, no real crop -- and a real answer-region
+crop must never be added here (`docs/poc-2-ai-grading.md` section 11).
+
 ## File shape
 
 Each `sample-*.json` is one *submission* (one real answer sheet --
@@ -207,7 +218,8 @@ review finding). Two different raw keys that normalize to the same id are
 rejected outright rather than silently merged. For any `--dataset` other
 than these bundled fixtures, the normalized id must also be one of the
 canonical candidate ids docs/poc-2-ai-grading.md section 2 defines
-(`gemini` / `claude` / `gpt`, case-sensitive) -- whitespace normalization
+(`gemini` / `codex-app-server` / `openrouter` / `openai`,
+case-sensitive) -- whitespace normalization
 alone does not catch a case difference, so `"gemini"` and `"Gemini"` would
 otherwise still count as two separate candidates for the same real service
 (code review finding). These fixtures are an explicit, documented exception
@@ -235,9 +247,35 @@ to, and aggregated under, the `(provider, config_key)` bucket that was
 attempted -- an earlier version discarded these measurements after only
 counting the attempt, letting a provider with frequent long-timeout
 failures look faster and cheaper than it really is in the results table
-(code review finding). A cell may not record both `response` and
-`unavailable: true` at once -- that combination makes the harness raise, as
-does any unrecognized field on the cell (see below).
+(code review finding).
+
+A third form records `{"schema_violation": true, "descriptor": {...},
+"latency_seconds": ...}` (no `response`): the provider answered, and what it
+answered failed `parse_ai_grading_result`. This is what the live-provider
+path (`poc/issue_14_ai_grading/record.py`, Issue #35) writes for a
+`SchemaViolation`, because the adapters deliberately do **not** put the
+offending response body on the exception -- it can hold OCR'd student answer
+text (`domain.ai_provider.SchemaViolation`). Without this marker, a real
+live-recorded schema violation could only be expressed by writing a
+*fabricated* body into the dataset that happens to fail validation. It is
+scored exactly like a `response` that fails validation (it counts toward
+`schema_violation_rate`, contributes no exact-match/criterion data), and is
+distinct from `unavailable`, where no response came back at all.
+
+`response` in these committed fixtures is a full, hand-invented
+`AIGradingResult` body, free text included -- everything here is made up, so
+there is nothing to protect. A cell written by `record.py` against a *real*
+provider looks different: it carries only values that run could verify --
+the question id and criterion ids it sent, numbers and enums -- with every
+other provider-controlled string replaced by a fixed marker, and the
+deployment metadata reduced to a `sha256` fingerprint (see that script's
+`_wire_response` / `_wire_descriptor`). Both shapes parse and score
+identically; the harness reads no free text either way.
+
+The three outcomes are mutually exclusive: a cell recording more than one
+of `response` / `schema_violation: true` / `unavailable: true` makes the
+harness raise, as does any unrecognized field on the cell (see below). One
+call attempt has exactly one outcome.
 
 Every provider's `recorded` entry may only use the two recognized
 input-variant keys (`ocr_clean` / `ocr_noisy`) -- an unrecognized key (a
@@ -250,9 +288,10 @@ finding). The unrecognized key itself is never echoed in the raised
 message (see below).
 
 Each individual cell's own shape is validated too: only `response` /
-`descriptor` / `latency_seconds` / `cost_usd` / `unavailable` are
-recognized fields, `unavailable` must be a strict boolean (not e.g. the
-string `"true"`), and the cell itself must be an object. A typo like
+`descriptor` / `latency_seconds` / `cost_usd` / `unavailable` /
+`schema_violation` are recognized fields, `unavailable` and
+`schema_violation` must be strict booleans (not e.g. the string `"true"`),
+and the cell itself must be an object. A typo like
 `"respnose"` instead of `"response"`, or a non-boolean `unavailable`
 marker, previously satisfied neither the "has a response" nor the "is
 unavailable" check, so a real recorded attempt was silently classified as
@@ -262,8 +301,7 @@ finding; AGENTS.md trust-boundary validation). A non-object cell value
 previously reached a `.get()` call directly and failed with an unhandled
 `TypeError` instead of a clear validation error. A cell that records
 `descriptor`/`latency_seconds`/`cost_usd` (evidence a call was attempted)
-while omitting both `response` and `unavailable: true` is rejected the same
-way: it is not a genuinely pending cell (one nobody has tried yet), but a
+while omitting all three outcome markers is rejected the same way: it is not a genuinely pending cell (one nobody has tried yet), but a
 contradictory one whose outcome was never recorded, and silently accepting
 it would drop that attempt's descriptor/latency entirely and exclude the
 call from every provider latency/cost/unavailability metric (code review
