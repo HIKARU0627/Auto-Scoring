@@ -186,6 +186,91 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
 追加し、`create_app`が`queue_service.enqueue`をそこへ渡す。既定は`None`（何も
 しない）なので、この引数を渡さない既存の呼び出し・テストの挙動は変わらない。
 
+### 起票のタイミング: アプリが取込直後に自動、失敗したものは明示操作で再試行（Issue #80）
+
+`POST /submissions/{submission_id}/jobs` は上記のとおり最初から存在するが、
+**Flutterアプリはこれを一度も呼んでいなかった**（`sidecar_api_client.dart` に
+ラッパが無く、`app/lib/` に呼び出し箇所ゼロ）。取込エンドポイントもジョブを
+起票しないので、**アプリ経由では採点が一度も始まらなかった**（Issue #80）。
+どこで起票するかは決まっていなかったので、ここに決めてから実装した。
+
+**候補と、採らなかった理由。**
+
+1. **取込エンドポイント側で自動起票する** — 採らない。
+   - `POST /tests/{test_id}/submissions` は画像前処理と回答欄抽出を同期で行う
+     長い要求で、`UNPROCESSED -> AI_PROCESSING -> AI_PROCESSED` はそこまでを
+     指す（`adapters/submission_intake.py`）。ここへ採点の起票を混ぜると、
+     確定DAGゲート（`can_start_submission_processing`）で弾かれたときに
+     「取込は成功したが採点は始まらなかった」を1つの応答で表せない。取込ごと
+     失敗させれば取り込めた答案を捨てることになり、握り潰せばクライアントは
+     起票されなかったことを知る手段が無い。
+   - 「Jobは明示的な `POST .../jobs` でしか作られない」は #18 で決めた不変条件で、
+     `app/lib/core/question_status.dart` の `pending`（「まだジョブが無い」）、
+     `pdf_review_page.dart` の `_latestJobFor`、`core/dependency_dag.dart` の
+     `waiting` がその前提で書かれている。暗黙起票にすると、この3箇所が同じ
+     語で別のことを言い始める。
+2. **明示操作だけにする** — 採らない。受入条件「人手でDBを触ることなく
+   QUEUEDになる」は満たすが、答案を取り込むたびに人間が押すボタンが増える。
+   取込に成功した答案の採点を、そこで始めない理由が無い。
+3. **両方（自動 + 明示的な再試行）** — **これを採る。**
+
+**決定。**
+
+- **答案取込画面**: `createSubmission` が成功した直後に、その答案IDで
+  `POST /submissions/{submission_id}/jobs` を呼ぶ。取込1件につき1回。
+  これが常用経路で、人間の操作は増えない。
+- **添削レビュー画面**: その答案のJobが0件のとき「AI採点を開始」を出す。
+  自動起票が失敗した答案と、**この変更より前に取り込まれた答案**の唯一の
+  復帰口である（後者はアプリからは二度と起票されないまま残る）。
+- 起票はidempotent（同じ確定グラフバージョンのJobがあれば何も作らない）
+  なので、二重に押しても、自動と手動が重なっても、Jobは増えない。
+- 起票は取込とは別の操作として扱う。**起票に失敗しても取込は成功のまま**
+  であり、答案を一覧から消したり取込エラーとして見せたりしない。答案は
+  サーバに存在する。
+
+**自動起票は `ai_processed` の答案だけに限る。** 取込の結果が `needs_review`
+（ページ数が合わない、回答欄が未定義の設問がある）や `error` になった答案は、
+自動では起票しない。`docs/answer-intake-and-preprocessing.md` §3 の
+「前提設問を含むページが欠落した状態では AI 採点を開始しない」を、起票側で
+守るのがここになったためである。一方、**添削レビュー画面の「AI採点を開始」は
+状態で塞がない** -- あれは答案と要確認の理由を見た人間が明示的に押すもので、
+business-rules §4.4 が認めている「人間が前提を承認して続行する」に当たる。
+回答欄が信頼できない設問については、パイプライン側が既に
+`AnswerImageStatus.NEEDS_REVIEW` の画像へproviderを呼ばず
+`SUCCEEDED(usable=False)` を返す（`docs/ocr-recognition-pipeline.md`）ので、
+起票しても誤った画像が外部へ出ることはない。
+
+**エラーの扱い。**
+
+- **409 はアプリ側で区別しない。** この応答には2種類ある
+  （確定DAGが無い/古い = `SubmissionNotReadyError`、同時起票の競合 =
+  `SubmissionJobCreationConflictError`）が、`detail` は英語の内部メッセージで、
+  文字列の中身で分岐するのは壊れやすいうえ、画面の出しかたも変わらない。
+  どちらも「答案は取り込めているが採点は始まっていない」「時間をおくか、
+  テスト設定で依存関係を確定し直せば通りうる」という同じ扱いで足りる。
+  画面は日本語で両方の可能性を書き、再試行ボタンを出す
+  （サイドカーの英語メッセージはそのまま出さない）。
+- **404**（答案が存在しない）は再試行しても変わらない。答案取込画面はこのとき
+  再試行ボタンを出さない（`AppErrorBanner(retryable: false)`）。取込直後にこれが
+  返るのは想定外の状態なので、握り潰さずそのまま見せる。
+- 通信不能・タイムアウトは 409 と同じく再試行可能として扱う。
+
+**確定DAGが無いときに何が起きるか。** 答案取込画面が出す答案は
+`GET /tests`（`TestStatus.READY` のテストだけ）から選ぶので、取込できた時点で
+確定グラフは一度は存在している。それでも 409 になるのは、テストが `ready` に
+なった後に設問が増減した、または新しいグラフバージョンをanalyzeしたまま
+confirmしていない場合である（`can_start_submission_processing` の3条件）。
+つまり **409 は「テスト設定でグラフを確定し直せ」という指示**であり、画面の
+文言もそう書く。添削レビュー画面では、最新グラフがdraftのときに出る
+「最新の依存関係グラフが未確定のため、処理の進み方は表示できません。」の
+注意書きと並ぶことがあるが、注意書きが出ない場合（グラフは確定済みだが設問が
+増減した場合）もあるので、**起票ボタンはグラフの状態で塞がない**。
+
+**バックエンドは変更していない。** 必要なエンドポイント・ゲート・
+idempotencyは #18 の時点で揃っており、欠けていたのは呼び出し側だけである。
+OpenAPIスキーマも生成クライアントも変わらない
+（`createSubmissionJobsSubmissionsSubmissionIdJobsPost` は生成済みだった）。
+
 ## API
 
 `auto_scoring.api.jobs_router`（`/submissions/{submission_id}/jobs` 以下）:
@@ -194,7 +279,9 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   Jobを作成し、依存のないQuestionをQUEUEDでキューへ投入する
   （`can_start_submission_processing`のゲートを通らない場合は409）。既に
   同じ確定グラフバージョンのJobが存在する場合は何もしない（idempotent、上記
-  複合UNIQUE制約による）。
+  複合UNIQUE制約による）。**呼ぶのはアプリ側で、タイミングは上記
+  「起票のタイミング」で確定した**（取込成功の直後に自動、失敗したものは
+  添削レビュー画面から明示的に再試行）。
 - `GET  /submissions/{submission_id}/jobs` -- 一覧・進捗（state、attempts、
   error_code、blocked_on_question_id等）。
 - `GET  /jobs/{job_id}` -- 単一Jobの詳細。
@@ -220,6 +307,15 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
   だけ完了させる）、A→BとCが独立なDAGでB がAより前に開始しないこと、分岐/
   合流DAGでの解放順。
 - `backend/tests/test_jobs_api.py`: 上記APIをTestClient経由で検証（実SQLite）。
+- 起票を呼ぶ側（Issue #80）は Flutter 側にある。`app/test/grading_kickoff_test.dart`
+  （409を2種類に分けず、404は再試行を勧めない文言）、
+  `app/test/answer_intake_page_test.dart` の `Issue #80: 取込直後のAI採点起票`
+  （`ai_processed` だけ自動起票する・要確認は起票しない・409のあと取込は成功の
+  まま残り「AI採点を開始」で再試行できる・404には再試行を出さない）、
+  `app/test/pdf_review_page_test.dart` の
+  `Issue #80: ジョブが無い答案からAI採点を開始する`（0件のときだけボタンを出す・
+  押すとジョブができて図が動く・409は画面のエラーにしない・ジョブ一覧を読めて
+  いないときは「まだ開始されていません」と言わない）。
 - 実外部API（実際のOCR/AIサービス）を使うテストはこのIssueには存在しない
   （`JobProcessor`の具象実装が無いため）。将来`JobProcessor`の実装Issueが
   実プロバイダ向けテストを追加する際は、AGENTS.md/`docs/quality-gates.md`の
