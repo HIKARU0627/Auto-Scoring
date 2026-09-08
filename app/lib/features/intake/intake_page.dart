@@ -956,6 +956,21 @@ class _IntakePageState extends ConsumerState<IntakePage> {
               '答案の振り分け $attributionCalls件'
               '${attributionCalls > 0 ? '（候補$candidates件）' : ''}',
             ),
+            // Said in the same place as the cost, and before anything is sent.
+            // Attribution reads the answer sheet's header -- which is where
+            // the course name is, and where the school name, teacher name and
+            // the (blank, in the material seen) student fields also sit. The
+            // reviewer is told what leaves the machine, not only what it
+            // costs (business rules §2 (2): 何を送るかを利用者に示す).
+            if (attributionCalls > 0)
+              Text(
+                key: const Key('intake-attribution-notice'),
+                '振り分けでは、答案のページ全体を1枚につき1回送ります'
+                '（氏名欄・塾名などのヘッダを含みます）。'
+                '上の「このバッチはどのテストの答案ですか」で候補を1件に絞ると、'
+                '送信は0件になります。',
+                style: TextStyle(color: Theme.of(context).colorScheme.tertiary),
+              ),
             const SizedBox(height: AppSpacing.xs),
             Text(
               key: const Key('intake-cost-estimate'),
@@ -982,7 +997,12 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('このバッチはどのテストの答案ですか（絞ると判定が正確になり、費用も下がります）'),
+          const Text('このバッチはどのテストの答案ですか'),
+          const Text(
+            key: Key('intake-narrowing-benefit'),
+            '1件だけ選ぶと、AIに問い合わせません。'
+            '費用が0件になり、答案のページ全体も送りません。',
+          ),
           const SizedBox(height: AppSpacing.xs),
           Wrap(
             spacing: AppSpacing.sm,

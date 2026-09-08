@@ -1403,4 +1403,113 @@ void main() {
       );
     });
   });
+
+  group('送信内容の明示（業務ルール §2 (2)）', () {
+    testWidgets('振り分けを実行する前に、ページ全体を送ることを言う', (tester) async {
+      // Attribution reads the answer sheet's header, so the whole page goes.
+      // The reviewer is told before it happens, in the same place as the cost.
+      final answersOnly = plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      );
+      await openReview(
+        tester,
+        withPlan: answersOnly,
+        paths: const ['subject-a/01_answers.pdf'],
+        dependencies: importing(
+          withPlan: answersOnly,
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-b'
+                ..name = '数学',
+            ),
+          ],
+        ),
+      );
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('intake-attribution-notice')),
+        findsOneWidget,
+      );
+      // Both the pre-flight notice and the narrowing hint mention it, which is
+      // the point: it is said where the cost is said, and again where the way
+      // to avoid it is offered.
+      expect(find.textContaining('ページ全体'), findsNWidgets(2));
+    });
+
+    testWidgets('候補を1件に絞ると、送信の予告も消える', (tester) async {
+      // Narrowing to one test is the escape hatch: nothing is asked, so
+      // nothing is sent. The screen must stop warning about a send that will
+      // not happen.
+      final answersOnly = plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      );
+      await openReview(
+        tester,
+        withPlan: answersOnly,
+        paths: const ['subject-a/01_answers.pdf'],
+        dependencies: importing(
+          withPlan: answersOnly,
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-b'
+                ..name = '数学',
+            ),
+          ],
+        ),
+      );
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('intake-attribution-notice')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('intake-narrow-test-a')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('intake-attribution-notice')), findsNothing);
+      expect(find.textContaining('AIに問い合わせる件数: 合計0件'), findsOneWidget);
+    });
+
+    testWidgets('絞り込みが送信を避ける手段であることを案内する', (tester) async {
+      await openReview(
+        tester,
+        withPlan: plan(ruleMatched),
+        paths: const ['subject-a/01_answers.pdf', 'subject-a/02_criteria.pdf'],
+        dependencies: importing(
+          withPlan: plan(ruleMatched),
+          existingTests: [
+            TestSummary(
+              (builder) => builder
+                ..id = 'test-a'
+                ..name = '国語',
+            ),
+          ],
+        ),
+      );
+
+      expect(find.byKey(const Key('intake-narrowing-benefit')), findsOneWidget);
+      expect(find.textContaining('ページ全体も送りません'), findsOneWidget);
+    });
+  });
 }
