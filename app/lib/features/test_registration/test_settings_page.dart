@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
+import 'package:auto_scoring_app/core/criteria_totals.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
@@ -15,11 +16,20 @@ import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 /// Lets a reviewer confirm/correct what candidate generation produced before
 /// a test can register:
 ///
-/// * the profile's regions (問題文/回答欄/○×等候補領域/配点/採点基準/模範解答, one
-///   list per page, editable as plain fields rather than a PDF overlay --
-///   see docs/test-registration.md for why the PDF-overlay editor is out of
-///   scope here) -- `Profile.status` moves `draft` -> `confirmed` only once
+/// * the profile's regions -- **座標だけ** (問題文/回答欄/添削記号領域, one list
+///   per page, editable as plain fields rather than a PDF overlay -- see
+///   docs/test-registration.md for why the PDF-overlay editor is out of
+///   scope here). `Profile.status` moves `draft` -> `confirmed` only once
 ///   every region has been reviewed (`confirmProfile`).
+/// * 配点と採点基準 (Issue #103): read out of the 採点基準PDF by an LLM, or
+///   typed in from scratch, then edited and confirmed here. **配点の入力口は
+///   この節ひとつだけ** -- Issue #103 acceptance criterion 7 ("手動入力と抽出
+///   結果の編集が同じ画面"). `SCORE`/`RUBRIC`/`MODEL_ANSWER` regions still
+///   exist and are still read by `build_questions_and_rubrics` as a
+///   fallback for tests registered before Issue #103, but they can no longer
+///   be created or switched to from the region editor: two places to type a
+///   配点 is two places for it to be wrong, and neither the reviewer nor the
+///   code could say which one won (`_selectableRegionKinds`).
 /// * the question-dependency graph (Issue #26): candidate edges, their
 ///   rationale, and any question the analyzer could not resolve, plus the
 ///   parallel-execution layers a confirmed graph implies. A reviewer can
@@ -47,11 +57,24 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
 
   TestResponse? _test;
   ProfileResponse? _profile;
+  CriteriaResponse? _criteria;
   DependencyGraphResponse? _dependencyGraph;
 
   /// Working copy of the profile's regions, edited locally before `保存`
   /// (`updateProfile`) persists it. `null` until the profile has loaded once.
   List<RegionModel>? _editableRegions;
+
+  /// Working copy of the 配点と採点基準, edited locally before `保存`
+  /// (`updateCriteria`). Unlike the two below it, this is **not** `null`
+  /// until something loads: a test with no draft at all is the normal
+  /// starting point for hand entry (Issue #95 decision 8), so the list
+  /// starts empty and editable.
+  List<CriteriaQuestionModel> _editableCriteria = <CriteriaQuestionModel>[];
+
+  /// The 総得点 the criteria PDF stated, editable because the model may have
+  /// misread it -- or invented one from a footer page number, which Issue
+  /// #95 decision 5 (案A) says to ignore.
+  int? _editableDeclaredTotal;
 
   /// Working copy of the dependency graph's edges, edited locally before
   /// `確定` (`confirmDependencyGraph`). `null` until a graph has loaded once.
@@ -81,6 +104,14 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       } on SidecarApiException catch (error) {
         if (error.statusCode != 404) rethrow;
       }
+      CriteriaResponse? criteria;
+      try {
+        criteria = await _dependencies.getCriteria(widget.testId);
+      } on SidecarApiException catch (error) {
+        // 404 is the ordinary state for a test nobody has extracted or
+        // hand-entered criteria for yet -- not an error to show.
+        if (error.statusCode != 404) rethrow;
+      }
       DependencyGraphResponse? graph;
       try {
         graph = await _dependencies.getDependencyGraph(widget.testId);
@@ -92,6 +123,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         _test = test;
         _profile = profile;
         _editableRegions = profile?.regions.toList();
+        _criteria = criteria;
+        _editableCriteria =
+            criteria?.questions.toList() ?? <CriteriaQuestionModel>[];
+        _editableDeclaredTotal = criteria?.declaredTotalPoints;
         _dependencyGraph = graph;
         _editableEdges = graph?.edges.toList();
       });
@@ -167,6 +202,65 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       _editableRegions = profile.regions.toList();
     });
     _showSnackBar('プロファイルを確定しました');
+  });
+
+  Future<void> _extractCriteria() => _runGuarded(() async {
+    final criteria = await _dependencies.extractCriteria(widget.testId);
+    if (!mounted) return;
+    setState(() {
+      _criteria = criteria;
+      _editableCriteria = criteria.questions.toList();
+      _editableDeclaredTotal = criteria.declaredTotalPoints;
+    });
+    // Says what came back even when that is nothing. An extraction that
+    // found no questions must not look like an extraction that did not run
+    // (Issue #103 acceptance criterion 5: 黙って 0 件にしない).
+    _showSnackBar('採点基準から ${criteria.questions.length} 件の設問を読み取りました');
+  });
+
+  Future<void> _saveCriteria() => _runGuarded(() async {
+    final criteria = await _dependencies.updateCriteria(
+      widget.testId,
+      _editableCriteria,
+      declaredTotalPoints: _editableDeclaredTotal,
+    );
+    if (!mounted) return;
+    setState(() {
+      _criteria = criteria;
+      _editableCriteria = criteria.questions.toList();
+      _editableDeclaredTotal = criteria.declaredTotalPoints;
+    });
+    _showSnackBar('配点と採点基準を保存しました');
+  });
+
+  Future<void> _confirmCriteria() => _runGuarded(() async {
+    // Saved first, then confirmed against the revision that save produced --
+    // the same two-step `_confirmProfile` uses, and for the same two
+    // reasons: an edit made after the last explicit 保存 would otherwise be
+    // discarded, and pinning the revision stops this confirm from approving
+    // point values another client wrote in between.
+    final saved = await _dependencies.updateCriteria(
+      widget.testId,
+      _editableCriteria,
+      declaredTotalPoints: _editableDeclaredTotal,
+    );
+    if (!mounted) return;
+    setState(() {
+      _criteria = saved;
+      _editableCriteria = saved.questions.toList();
+      _editableDeclaredTotal = saved.declaredTotalPoints;
+    });
+    final confirmed = await _dependencies.confirmCriteria(
+      widget.testId,
+      revision: saved.revision,
+    );
+    if (!mounted) return;
+    setState(() {
+      _criteria = confirmed;
+      _editableCriteria = confirmed.questions.toList();
+      _editableDeclaredTotal = confirmed.declaredTotalPoints;
+    });
+    _showSnackBar('配点と採点基準を確定し、設問に反映しました');
   });
 
   Future<void> _analyzeDependencyGraph() => _runGuarded(() async {
@@ -270,6 +364,61 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     setState(() => regions[index] = updated);
   }
 
+  bool get _criteriaConfirmed => _criteria?.status == CriteriaStatus.confirmed;
+
+  /// このテストが、確定済みの「配点と採点基準」**なしでも**配点を持てるか。
+  ///
+  /// Issue #103 以前に登録されたテストは `SCORE` 領域のテキストから配点を
+  /// 読む（`domain.test_registration` の後方互換 fallback）。そういうテストで
+  /// 「配点と採点基準が未確定です」を残作業として並べると、**実際には
+  /// 登録完了を止めていないもの**を止めているように見せることになる。
+  /// `complete-registration` の関門はプロファイルと依存グラフだけである。
+  bool get _hasFallbackScoreRegions =>
+      (_editableRegions ?? const <RegionModel>[]).any(
+        (region) => region.kind == RegionKind.score,
+      );
+
+  /// A new, entirely blank question. `points` is deliberately left `null`
+  /// (不明) rather than seeded with 0 or 1: a placeholder number is a number
+  /// somebody can confirm without ever having read the real one.
+  void _addCriteriaQuestion() {
+    setState(() {
+      _editableCriteria = [
+        ..._editableCriteria,
+        CriteriaQuestionModel(
+          (b) => b..number = '問${_editableCriteria.length + 1}',
+        ),
+      ];
+    });
+  }
+
+  void _removeCriteriaQuestion(int index) {
+    setState(() {
+      _editableCriteria = [..._editableCriteria]..removeAt(index);
+    });
+  }
+
+  Future<void> _editCriteriaQuestion(int index) async {
+    final updated = await showDialog<CriteriaQuestionModel>(
+      context: context,
+      builder: (_) =>
+          _CriteriaQuestionEditDialog(question: _editableCriteria[index]),
+    );
+    if (updated == null) return;
+    setState(() {
+      _editableCriteria = [..._editableCriteria]..[index] = updated;
+    });
+  }
+
+  Future<void> _editDeclaredTotal() async {
+    final updated = await showDialog<_DeclaredTotalResult>(
+      context: context,
+      builder: (_) => _DeclaredTotalDialog(value: _editableDeclaredTotal),
+    );
+    if (updated == null) return;
+    setState(() => _editableDeclaredTotal = updated.value);
+  }
+
   void _addEdge() {
     final questionIds = _dependencyGraph?.questionIds.toList() ?? const [];
     if (questionIds.length < 2) return;
@@ -325,6 +474,8 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   ],
                   const SizedBox(height: AppSpacing.lg),
                   _buildProfileSection(),
+                  const SizedBox(height: AppSpacing.xl),
+                  _buildCriteriaSection(),
                   const SizedBox(height: AppSpacing.xl),
                   _buildDependencyGraphSection(),
                   const SizedBox(height: AppSpacing.xl),
@@ -384,7 +535,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
               children: [
                 Expanded(
                   child: Text(
-                    'テストプロファイル（設問・回答欄・配点・採点基準・模範解答）',
+                    'テストプロファイル（設問・回答欄・添削記号領域の位置）',
                     style: context.texts.titleMedium,
                   ),
                 ),
@@ -482,6 +633,246 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   icon: const Icon(Icons.delete_outline),
                   tooltip: '削除',
                   onPressed: () => _removeRegion(index),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildCriteriaSection() {
+    // Recomputed from the *editable* list every build, never read from
+    // `_criteria!.totals`: the saved total describes the list as it was at
+    // the last save, and showing it beside unsaved edits would report a sum
+    // for rows that are no longer on screen. Same rule, same reason, as the
+    // dependency graph's execution layers below.
+    final totals = criteriaTotals(
+      _editableCriteria,
+      declaredTotalPoints: _editableDeclaredTotal,
+    );
+    final blockingReason = criteriaBlockingReason(_editableCriteria);
+    final criteria = _criteria;
+    return Card(
+      child: Padding(
+        padding: AppSpacing.card,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('配点と採点基準', style: context.texts.titleMedium),
+                ),
+                if (_criteriaConfirmed)
+                  const Chip(label: Text('確認済み'))
+                else
+                  const Chip(label: Text('未確認')),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: AppSpacing.sm,
+              children: [
+                FilledButton.icon(
+                  key: const Key('extract-criteria-button'),
+                  onPressed: (_busy || _criteriaConfirmed)
+                      ? null
+                      : _extractCriteria,
+                  icon: const Icon(Icons.auto_fix_high),
+                  label: const Text('採点基準PDFから抽出'),
+                ),
+                // Deliberately not gated on an extraction having run or
+                // succeeded: a subject whose criteria PDF the model cannot
+                // read at all must still be enterable by hand, which is
+                // exactly the case this button exists for (Issue #95
+                // 決定 8).
+                OutlinedButton.icon(
+                  key: const Key('add-criteria-question-button'),
+                  onPressed: (_busy || _criteriaConfirmed)
+                      ? null
+                      : _addCriteriaQuestion,
+                  icon: const Icon(Icons.playlist_add),
+                  label: const Text('設問を手で追加'),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _buildCriteriaSummary(totals),
+            if (criteria != null && criteria.unreadablePages.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.xs),
+              _buildCriteriaWarning(
+                key: const Key('criteria-unreadable-pages'),
+                message:
+                    '${criteria.unreadablePages.join('・')} ページは読み取れませんでした。'
+                    'そのページの設問は手で追加してください。',
+              ),
+            ],
+            if (criteria?.note != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              _buildCriteriaWarning(
+                key: const Key('criteria-note'),
+                message: criteria!.note!,
+              ),
+            ],
+            const SizedBox(height: AppSpacing.md),
+            if (_editableCriteria.isEmpty)
+              Text(
+                criteria?.extracted == true
+                    ? '抽出は実行しましたが、設問を1件も読み取れませんでした。'
+                          '「設問を手で追加」で入力してください。'
+                    : 'まだ抽出されていません。'
+                          '「採点基準PDFから抽出」を実行するか、手で追加してください。',
+                key: const Key('criteria-empty-message'),
+              )
+            else
+              ..._editableCriteria.asMap().entries.map(
+                (entry) => _buildCriteriaTile(entry.key, entry.value),
+              ),
+            const SizedBox(height: AppSpacing.md),
+            if (blockingReason != null && !_criteriaConfirmed)
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: Text(
+                  blockingReason,
+                  key: const Key('criteria-blocking-reason'),
+                  style: context.texts.bodySmall?.copyWith(
+                    color: AppStatusTone.attention.color(context),
+                  ),
+                ),
+              ),
+            Wrap(
+              spacing: AppSpacing.sm,
+              children: [
+                OutlinedButton.icon(
+                  key: const Key('edit-declared-total-button'),
+                  onPressed: (_busy || _criteriaConfirmed)
+                      ? null
+                      : _editDeclaredTotal,
+                  icon: const Icon(Icons.functions),
+                  label: const Text('総得点を修正'),
+                ),
+                OutlinedButton.icon(
+                  key: const Key('save-criteria-button'),
+                  onPressed: (_busy || _criteriaConfirmed)
+                      ? null
+                      : _saveCriteria,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('修正内容を保存'),
+                ),
+                FilledButton.icon(
+                  key: const Key('confirm-criteria-button'),
+                  onPressed:
+                      (_busy || _criteriaConfirmed || blockingReason != null)
+                      ? null
+                      : _confirmCriteria,
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('確定して設問に反映'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 合計と不明件数を**必ず並べて**出す。不明を含む一覧の横に合計だけを置くと、
+  /// それが満点だと読める (Issue #103 受入条件 4・5)。
+  Widget _buildCriteriaSummary(CriteriaTotals totals) {
+    final difference = totals.declaredDifference;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          totals.unknownCount == 0
+              ? '配点の合計 ${totals.knownPoints} 点'
+              : '配点の合計 ${totals.knownPoints} 点 ・ 配点不明 ${totals.unknownCount} 問',
+          key: const Key('criteria-totals-label'),
+          style: context.texts.titleSmall,
+        ),
+        if (totals.declaredTotalPoints != null)
+          Text(
+            '採点基準PDFの総得点: ${totals.declaredTotalPoints} 点',
+            key: const Key('criteria-declared-total-label'),
+            style: context.texts.bodySmall,
+          ),
+        if (difference != null) ...[
+          const SizedBox(height: AppSpacing.xs),
+          _buildCriteriaWarning(
+            key: const Key('criteria-total-mismatch'),
+            message:
+                '採点基準PDFの総得点 ${totals.declaredTotalPoints} 点と一致しません'
+                '（差 ${difference.abs()} 点）。抽出漏れの可能性があります。',
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCriteriaWarning({required Key key, required String message}) {
+    return Row(
+      key: key,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.warning_amber_outlined,
+          size: AppIconSize.dense,
+          color: AppStatusTone.attention.color(context),
+        ),
+        const SizedBox(width: AppSpacing.xs),
+        Expanded(
+          child: Text(
+            message,
+            style: context.texts.bodySmall?.copyWith(
+              color: AppStatusTone.attention.color(context),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCriteriaTile(int index, CriteriaQuestionModel question) {
+    final unknown = question.points == null;
+    final pages = question.sourcePages.isEmpty
+        ? null
+        : 'p.${question.sourcePages.join('・')}';
+    final details = [
+      '採点基準 ${question.criteria.length} 件',
+      if (question.modelAnswer?.trim().isNotEmpty ?? false) '模範解答あり',
+      ?pages,
+      if (question.note?.trim().isNotEmpty ?? false) question.note!.trim(),
+    ].join(' ・ ');
+    return ListTile(
+      key: Key('criteria-tile-$index'),
+      // 不明だけが強調色を使う。この画面で色が意味を持つ唯一の箇所で、
+      // 文言（「配点: 不明」）だけでも同じことが分かるようにしてある
+      // (AGENTS.md「非色依存」)。
+      leading: Icon(
+        unknown ? Icons.help_outline : Icons.grade_outlined,
+        color: unknown ? AppStatusTone.attention.color(context) : null,
+      ),
+      title: Text(
+        unknown
+            ? '設問${question.number} ・ 配点: 不明'
+            : '設問${question.number} ・ 配点 ${question.points} 点',
+      ),
+      subtitle: Text(details),
+      trailing: _criteriaConfirmed
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  key: Key('edit-criteria-$index'),
+                  icon: const Icon(Icons.edit_outlined),
+                  tooltip: '編集',
+                  onPressed: () => _editCriteriaQuestion(index),
+                ),
+                IconButton(
+                  key: Key('remove-criteria-$index'),
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: '削除',
+                  onPressed: () => _removeCriteriaQuestion(index),
                 ),
               ],
             ),
@@ -635,14 +1026,92 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   Widget _buildCompleteRegistrationButton() {
     final canComplete =
         !_busy && !_isReady && _profileConfirmed && _dependencyGraphConfirmed;
-    return FilledButton.icon(
-      key: const Key('complete-registration-button'),
-      onPressed: canComplete ? _completeRegistration : null,
-      icon: const Icon(Icons.task_alt),
-      label: Text(_isReady ? '登録完了済み' : '登録完了'),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton.icon(
+          key: const Key('complete-registration-button'),
+          onPressed: canComplete ? _completeRegistration : null,
+          icon: const Icon(Icons.task_alt),
+          label: Text(_isReady ? '登録完了済み' : '登録完了'),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        _buildRemainingWork(),
+      ],
+    );
+  }
+
+  /// なぜまだ採点が始まらないのかを、確定するたびに読める形で出す。
+  ///
+  /// 配点を確定しても、回答欄（テストプロファイル）と設問依存グラフが未確定
+  /// なら `complete-registration` は 409 で止まる。それを押してから初めて
+  /// 知るのでは遅い。#104 の取込完了画面と同じ規律で、**できないことを
+  /// できるように見せない**。
+  ///
+  /// 回答欄については「別 Issue で対応中」とだけ書き、Issue 番号は書かない。
+  /// この実装時点でその Issue はまだ起票されておらず、確かめていない番号を
+  /// 画面に出すことになるため。
+  Widget _buildRemainingWork() {
+    if (_isReady) {
+      return Text(
+        '登録が完了しています。答案を取り込むと採点が始まります。',
+        key: const Key('remaining-work-label'),
+        style: context.texts.bodySmall,
+      );
+    }
+    final remaining = <String>[
+      if (!_criteriaConfirmed && !_hasFallbackScoreRegions) '配点と採点基準が未確定です',
+      if (!_profileConfirmed) '回答欄（テストプロファイル）が未確定です',
+      if (!_dependencyGraphConfirmed) '設問依存関係グラフが未確定です',
+    ];
+    if (remaining.isEmpty) {
+      return Text(
+        '「登録完了」を押すと採点を開始できる状態になります。',
+        key: const Key('remaining-work-label'),
+        style: context.texts.bodySmall,
+      );
+    }
+    return Column(
+      key: const Key('remaining-work-label'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('採点を始めるには、まだ次が残っています:', style: context.texts.bodySmall),
+        for (final item in remaining)
+          Text('・$item', style: context.texts.bodySmall),
+        if (_criteriaConfirmed && !_profileConfirmed) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            '配点は確定しました。採点の開始には回答欄の設定が必要です。'
+            '答案から回答欄を自動検出する機能は未実装なので（#95 決定 2、別 Issue）、'
+            'いまは上の「領域を手動追加」で回答欄を引いて確定してください。',
+            key: const Key('criteria-confirmed-next-step'),
+            style: context.texts.bodySmall,
+          ),
+        ],
+      ],
     );
   }
 }
+
+/// 座標を引くための種類だけ。配点・採点基準・模範解答は「配点と採点基準」節で
+/// 入力する (Issue #103 受入条件 7)。
+const List<RegionKind> _coordinateRegionKinds = [
+  RegionKind.question,
+  RegionKind.answerArea,
+  RegionKind.annotationArea,
+];
+
+/// 領域編集ダイアログの種類ドロップダウンに出す選択肢。
+///
+/// `current` が旧来の `SCORE`/`RUBRIC`/`MODEL_ANSWER`（Issue #103 以前に自動
+/// 解析が作った領域）のときは、**その値だけ**を足す。取り除くと
+/// `DropdownButtonFormField` の `initialValue` が候補に無い状態になって
+/// アサーションで落ちるうえ、既存の領域を開けなくなる。新しく作ることは
+/// できない、が正しい落としどころ。
+List<RegionKind> _selectableRegionKinds(RegionKind current) =>
+    _coordinateRegionKinds.contains(current)
+    ? _coordinateRegionKinds
+    : [..._coordinateRegionKinds, current];
 
 IconData _regionIcon(RegionKind kind) => switch (kind) {
   RegionKind.question => Icons.help_outline,
@@ -786,7 +1255,7 @@ class _RegionEditDialogState extends State<_RegionEditDialog> {
               initialValue: _kind,
               decoration: const InputDecoration(labelText: '種類'),
               items: [
-                for (final kind in RegionKind.values)
+                for (final kind in _selectableRegionKinds(widget.region.kind))
                   DropdownMenuItem(
                     value: kind,
                     child: Text(_regionKindLabel(kind)),
@@ -1020,6 +1489,381 @@ class _EdgeEditDialogState extends State<_EdgeEditDialog> {
         ),
         FilledButton(
           key: const Key('edge-save-button'),
+          onPressed: _save,
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 1 設問の番号・配点・模範解答・採点基準を編集する。
+///
+/// **配点は空欄にできる。** 空欄 = 不明であって 0 ではない。抽出できなかった
+/// 設問を「とりあえず 0 点」で埋められるようにすると、確定の関門
+/// (`criteriaBlockingReason` / サーバの `ensure_confirmable`) がまるごと
+/// 意味を失う (Issue #103 受入条件 5)。
+class _CriteriaQuestionEditDialog extends StatefulWidget {
+  const _CriteriaQuestionEditDialog({required this.question});
+
+  final CriteriaQuestionModel question;
+
+  @override
+  State<_CriteriaQuestionEditDialog> createState() =>
+      _CriteriaQuestionEditDialogState();
+}
+
+class _CriteriaQuestionEditDialogState
+    extends State<_CriteriaQuestionEditDialog> {
+  late final TextEditingController _numberController;
+  late final TextEditingController _pointsController;
+  late final TextEditingController _modelAnswerController;
+  late List<_EditableCriterion> _criteria;
+  String? _validationError;
+
+  @override
+  void initState() {
+    super.initState();
+    final question = widget.question;
+    _numberController = TextEditingController(text: question.number);
+    _pointsController = TextEditingController(
+      text: question.points?.toString() ?? '',
+    );
+    _modelAnswerController = TextEditingController(
+      text: question.modelAnswer ?? '',
+    );
+    _criteria = [
+      for (final item in question.criteria) _EditableCriterion.from(item),
+    ];
+  }
+
+  @override
+  void dispose() {
+    _numberController.dispose();
+    _pointsController.dispose();
+    _modelAnswerController.dispose();
+    for (final item in _criteria) {
+      item.dispose();
+    }
+    super.dispose();
+  }
+
+  void _save() {
+    final number = _numberController.text.trim();
+    if (number.isEmpty) {
+      setState(() => _validationError = '設問番号を入力してください');
+      return;
+    }
+    final rawPoints = _pointsController.text.trim();
+    int? points;
+    if (rawPoints.isNotEmpty) {
+      points = int.tryParse(rawPoints);
+      if (points == null || points < 0) {
+        setState(() => _validationError = '配点は0以上の整数か、空欄（不明）で入力してください');
+        return;
+      }
+    }
+    final criteria = <CriteriaItemModel>[];
+    for (final item in _criteria) {
+      final description = item.descriptionController.text.trim();
+      if (description.isEmpty) {
+        setState(() => _validationError = '採点基準の文言が空の行があります。入力するか削除してください');
+        return;
+      }
+      final rawItemPoints = item.pointsController.text.trim();
+      int? itemPoints;
+      if (rawItemPoints.isNotEmpty) {
+        itemPoints = int.tryParse(rawItemPoints);
+        if (itemPoints == null || itemPoints < 0) {
+          setState(() => _validationError = '採点基準の点数は0以上の整数か、空欄で入力してください');
+          return;
+        }
+      }
+      criteria.add(
+        CriteriaItemModel(
+          (b) => b
+            ..description = description
+            ..kind = item.kind
+            ..points = itemPoints,
+        ),
+      );
+    }
+    final modelAnswer = _modelAnswerController.text.trim();
+    Navigator.of(context).pop(
+      widget.question.rebuild(
+        (b) => b
+          ..number = number
+          ..points = points
+          ..modelAnswer = modelAnswer.isEmpty ? null : modelAnswer
+          ..criteria.replace(criteria),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('設問を編集'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const Key('criteria-number-field'),
+              controller: _numberController,
+              decoration: const InputDecoration(labelText: '設問番号'),
+            ),
+            TextField(
+              key: const Key('criteria-points-field'),
+              controller: _pointsController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: const InputDecoration(
+                labelText: '配点',
+                helperText: '空欄のままにすると「不明」として扱われ、確定できません',
+              ),
+            ),
+            TextField(
+              key: const Key('criteria-model-answer-field'),
+              controller: _modelAnswerController,
+              maxLines: 4,
+              minLines: 2,
+              decoration: const InputDecoration(
+                labelText: '模範解答',
+                helperText: '空欄だと採点を開始できません（採点にはこの文が要ります）',
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Row(
+              children: [
+                Expanded(child: Text('採点基準', style: context.texts.titleSmall)),
+                TextButton.icon(
+                  key: const Key('add-criterion-button'),
+                  onPressed: () => setState(
+                    () =>
+                        _criteria = [..._criteria, _EditableCriterion.empty()],
+                  ),
+                  icon: const Icon(Icons.add),
+                  label: const Text('追加'),
+                ),
+              ],
+            ),
+            if (_criteria.isEmpty)
+              const Text('採点基準がありません。追加してください。')
+            else
+              for (final (index, item) in _criteria.indexed)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        key: Key('criterion-description-$index'),
+                        controller: item.descriptionController,
+                        maxLines: 3,
+                        minLines: 1,
+                        decoration: InputDecoration(
+                          labelText: '基準${index + 1}',
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<CriterionKind>(
+                              key: Key('criterion-kind-$index'),
+                              initialValue: item.kind,
+                              decoration: const InputDecoration(
+                                labelText: '方式',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: CriterionKind.add,
+                                  child: Text('加点'),
+                                ),
+                                DropdownMenuItem(
+                                  value: CriterionKind.deduct,
+                                  child: Text('減点'),
+                                ),
+                              ],
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() => item.kind = value);
+                                }
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: TextField(
+                              key: Key('criterion-points-$index'),
+                              controller: item.pointsController,
+                              keyboardType: TextInputType.number,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              decoration: const InputDecoration(
+                                labelText: '点数（空欄可）',
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            key: Key('remove-criterion-$index'),
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: '削除',
+                            onPressed: () => setState(() {
+                              final removed = _criteria[index];
+                              _criteria = [..._criteria]..removeAt(index);
+                              removed.dispose();
+                            }),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+            if (_validationError != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                _validationError!,
+                key: const Key('criteria-validation-error'),
+                style: TextStyle(color: AppStatusTone.attention.color(context)),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton(
+          key: const Key('criteria-save-button'),
+          onPressed: _save,
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+/// ダイアログが開いている間だけ生きる、1 行ぶんの編集状態。
+class _EditableCriterion {
+  _EditableCriterion({
+    required this.descriptionController,
+    required this.pointsController,
+    required this.kind,
+  });
+
+  factory _EditableCriterion.from(CriteriaItemModel item) => _EditableCriterion(
+    descriptionController: TextEditingController(text: item.description),
+    pointsController: TextEditingController(
+      text: item.points?.toString() ?? '',
+    ),
+    kind: item.kind,
+  );
+
+  factory _EditableCriterion.empty() => _EditableCriterion(
+    descriptionController: TextEditingController(),
+    pointsController: TextEditingController(),
+    kind: CriterionKind.add,
+  );
+
+  final TextEditingController descriptionController;
+  final TextEditingController pointsController;
+  CriterionKind kind;
+
+  void dispose() {
+    descriptionController.dispose();
+    pointsController.dispose();
+  }
+}
+
+/// 総得点の編集結果。`null` を「変更なし」と区別するために包んでいる
+/// — 総得点を**消す**（PDFの数字がページ番号だった、など）のは正当な操作で、
+/// ダイアログが `null` を返すキャンセルと同じにはできない。
+class _DeclaredTotalResult {
+  const _DeclaredTotalResult(this.value);
+
+  final int? value;
+}
+
+/// 採点基準PDFに書かれていた総得点を直す。
+class _DeclaredTotalDialog extends StatefulWidget {
+  const _DeclaredTotalDialog({required this.value});
+
+  final int? value;
+
+  @override
+  State<_DeclaredTotalDialog> createState() => _DeclaredTotalDialogState();
+}
+
+class _DeclaredTotalDialogState extends State<_DeclaredTotalDialog> {
+  late final TextEditingController _controller;
+  String? _validationError;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.value?.toString() ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final raw = _controller.text.trim();
+    if (raw.isEmpty) {
+      Navigator.of(context).pop(const _DeclaredTotalResult(null));
+      return;
+    }
+    final value = int.tryParse(raw);
+    if (value == null || value < 0) {
+      setState(() => _validationError = '総得点は0以上の整数か、空欄で入力してください');
+      return;
+    }
+    Navigator.of(context).pop(_DeclaredTotalResult(value));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('採点基準PDFの総得点'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const Key('declared-total-field'),
+            controller: _controller,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: const InputDecoration(
+              labelText: '総得点（満点）',
+              helperText: '空欄にすると照合しません。ページ番号を拾っていた場合は空欄に',
+            ),
+          ),
+          if (_validationError != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              _validationError!,
+              key: const Key('declared-total-validation-error'),
+              style: TextStyle(color: AppStatusTone.attention.color(context)),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton(
+          key: const Key('declared-total-save-button'),
           onPressed: _save,
           child: const Text('保存'),
         ),

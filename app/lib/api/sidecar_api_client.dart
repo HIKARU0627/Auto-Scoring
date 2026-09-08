@@ -40,6 +40,13 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         AnnotationResponse,
         BoundingBoxResponse,
         CompleteRegistrationResponse,
+        ConfirmCriteriaRequest,
+        CriteriaItemModel,
+        CriteriaQuestionModel,
+        CriteriaResponse,
+        CriteriaStatus,
+        CriteriaTotalsModel,
+        CriterionKind,
         CriterionOutcomeRequest,
         CriterionResultResponse,
         DependencyEdgeModel,
@@ -70,6 +77,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         TestResponse,
         TestSummary,
         UnresolvedQuestionModel,
+        UpdateCriteriaRequest,
         UpdateProfileRequest;
 export 'package:dio/dio.dart' show CancelToken;
 
@@ -186,6 +194,11 @@ class SidecarApiClient {
     // Classification uploads one PDF and waits on a provider round trip, so it
     // shares the upload client's headroom rather than the near-instant default.
     _uploadIntakeApi = uploadGenerated.getIntakeApi();
+    _criteriaApi = generated.getCriteriaApi();
+    // Extraction renders every page of the 採点基準PDF and then waits on one
+    // multimodal call over all of them -- minutes, not the near-instant
+    // default. Same reason `createTest` uses the upload client.
+    _uploadCriteriaApi = uploadGenerated.getCriteriaApi();
     _recognitionsApi = generated.getRecognitionsApi();
     _reviewApi = generated.getReviewApi();
     _jobsApi = generated.getJobsApi();
@@ -218,6 +231,8 @@ class SidecarApiClient {
   final Dio _dio;
   late final DefaultApi _api;
   late final TestRegistrationApi _testRegistrationApi;
+  late final CriteriaApi _criteriaApi;
+  late final CriteriaApi _uploadCriteriaApi;
   late final DependencyGraphApi _dependencyGraphApi;
   late final RecognitionsApi _recognitionsApi;
   late final ReviewApi _reviewApi;
@@ -842,6 +857,113 @@ class SidecarApiClient {
           .confirmProfileTestsTestIdProfileConfirmPost(
             testId: testId,
             confirmProfileRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Read [testId]'s 配点と採点基準 out of its registered 採点基準PDF
+  /// (テスト設定画面「採点基準PDFから抽出」, Issue #103).
+  ///
+  /// The result is a **proposal**: every value is editable and nothing
+  /// downstream reads it until [confirmCriteria]. A question whose 配点 the
+  /// model could not read comes back with `points == null` -- 不明, never 0.
+  ///
+  /// Uses the longer intake timeout: this renders every page of the PDF and
+  /// then waits on one multimodal call covering all of them.
+  ///
+  /// Throws [SidecarApiException] — 409 if the criteria are already
+  /// confirmed or the PDF is missing, 502 if the model answered in a shape
+  /// that failed schema validation (nothing was saved), 503 if no
+  /// image-capable AI provider is configured on this host. The last two are
+  /// recoverable by hand: [updateCriteria] accepts a set typed in from
+  /// scratch.
+  Future<CriteriaResponse> extractCriteria(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _uploadCriteriaApi
+          .extractCriteriaTestsTestIdCriteriaExtractPost(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The current (draft or confirmed) 配点と採点基準 for [testId].
+  /// Throws [SidecarApiException] (404) when neither [extractCriteria] nor
+  /// [updateCriteria] has ever run for this test.
+  Future<CriteriaResponse> getCriteria(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _criteriaApi.getCriteriaTestsTestIdCriteriaGet(
+        testId: testId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Save a reviewed — or entirely hand-entered — question set (still DRAFT;
+  /// this is not the confirm step).
+  ///
+  /// Creates the draft when none exists, which is what makes hand entry
+  /// possible on a test whose extraction failed or was never run.
+  Future<CriteriaResponse> updateCriteria(
+    String testId,
+    List<CriteriaQuestionModel> questions, {
+    int? declaredTotalPoints,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = UpdateCriteriaRequest(
+        (b) => b
+          ..questions.replace(questions)
+          ..declaredTotalPoints = declaredTotalPoints,
+      );
+      final response = await _criteriaApi.updateCriteriaTestsTestIdCriteriaPut(
+        testId: testId,
+        updateCriteriaRequest: request,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The human sign-off over [testId]'s 配点 (テスト設定画面「確定して設問に
+  /// 反映」). Writes the test's real Question/Rubric rows.
+  ///
+  /// [revision] must match the draft currently on disk — the same
+  /// compare-and-set contract [confirmProfile] uses, and for a sharper
+  /// reason: what is being attested to here is the maximum score every
+  /// grade for every question is computed against.
+  ///
+  /// Throws [SidecarApiException] — 409 on a stale [revision] or an
+  /// already-confirmed set, 422 while any 配点 is still 不明.
+  Future<CriteriaResponse> confirmCriteria(
+    String testId, {
+    required int revision,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request = ConfirmCriteriaRequest((b) => b.revision = revision);
+      final response = await _criteriaApi
+          .confirmCriteriaTestsTestIdCriteriaConfirmPost(
+            testId: testId,
+            confirmCriteriaRequest: request,
             cancelToken: cancelToken,
           );
       return _requireBody(response);

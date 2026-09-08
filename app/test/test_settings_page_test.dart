@@ -109,11 +109,82 @@ Future<void> _pumpSettings(
   await tester.pumpAndSettle();
 }
 
+CriteriaQuestionModel _criteriaQuestion({
+  String number = '問1',
+  int? points = 5,
+  String? modelAnswer = '模範解答',
+  List<CriteriaItemModel> criteria = const [],
+  List<int> sourcePages = const [1],
+  String? note,
+}) {
+  return CriteriaQuestionModel(
+    (b) => b
+      ..number = number
+      ..points = points
+      ..modelAnswer = modelAnswer
+      ..criteria.replace(criteria)
+      ..sourcePages.replace(sourcePages)
+      ..note = note,
+  );
+}
+
+CriteriaResponse _criteria({
+  String status = 'draft',
+  int revision = 1,
+  bool extracted = true,
+  List<CriteriaQuestionModel>? questions,
+  int? declaredTotalPoints,
+  List<int> unreadablePages = const [],
+  String? note,
+}) {
+  final rows =
+      questions ??
+      [
+        _criteriaQuestion(),
+        _criteriaQuestion(number: '問2', points: null, note: '配点の記載が読み取れませんでした'),
+      ];
+  var known = 0;
+  var unknown = 0;
+  for (final row in rows) {
+    if (row.points == null) {
+      unknown += 1;
+    } else {
+      known += row.points!;
+    }
+  }
+  return CriteriaResponse(
+    (b) => b
+      ..testId = 'test-1'
+      ..status = status == 'confirmed'
+          ? CriteriaStatus.confirmed
+          : CriteriaStatus.draft
+      ..revision = revision
+      ..extracted = extracted
+      ..questions.replace(rows)
+      ..declaredTotalPoints = declaredTotalPoints
+      ..unreadablePages.replace(unreadablePages)
+      ..note = note
+      ..totals.knownPoints = known
+      ..totals.unknownCount = unknown
+      ..totals.declaredTotalPoints = declaredTotalPoints
+      ..totals.declaredDifference = null
+      ..totals.isComplete = unknown == 0,
+  );
+}
+
+SidecarApiException _notFound() => SidecarApiException(
+  SidecarErrorKind.badResponse,
+  'not found',
+  statusCode: 404,
+);
+
 void main() {
   testWidgets('loads and shows the profile and dependency graph state', (
     tester,
   ) async {
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -131,6 +202,8 @@ void main() {
     tester,
   ) async {
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) async {
         throw SidecarApiException(
@@ -161,6 +234,8 @@ void main() {
 
   testWidgets('confirming the profile locks region editing', (tester) async {
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -193,6 +268,8 @@ void main() {
   ) async {
     List<RegionModel>? savedRegions;
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -228,6 +305,8 @@ void main() {
     tester,
   ) async {
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -262,6 +341,8 @@ void main() {
     (tester) async {
       List<QuestionTextOverride>? capturedOverrides;
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async {
@@ -302,6 +383,8 @@ void main() {
           ..provides.replace([DependencyProvision.recognizedText]),
       );
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
@@ -339,6 +422,8 @@ void main() {
       );
       List<DependencyEdgeModel>? confirmedEdges;
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
@@ -392,6 +477,8 @@ void main() {
         ..provides.replace([DependencyProvision.recognizedText]),
     );
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) async => _profile(status: 'confirmed'),
       getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
@@ -425,6 +512,8 @@ void main() {
       // -- a reviewer who spots a bad edge after confirming must still be
       // able to re-run analysis (Issue #16 review round 3).
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
@@ -451,6 +540,8 @@ void main() {
       // belong in the same layer; the settings screen must show that
       // freshly-computed answer, not the stale two-layer snapshot.
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -467,6 +558,8 @@ void main() {
     'completing registration is only enabled once both are confirmed',
     (tester) async {
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
@@ -500,6 +593,8 @@ void main() {
     'completing registration stays disabled until the profile is confirmed',
     (tester) async {
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
+
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(), // still draft
         getDependencyGraph: (testId) async =>
@@ -538,6 +633,8 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         final dependencies = AppDependencies(
+          getCriteria: (testId) async => throw _notFound(),
+
           getTest: (testId) async => _test(),
           getProfile: (testId) async => _profile(),
           getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -583,6 +680,8 @@ void main() {
   ) async {
     final profile = Completer<ProfileResponse>();
     final dependencies = AppDependencies(
+      getCriteria: (testId) async => throw _notFound(),
+
       getTest: (testId) async => _test(),
       getProfile: (testId) => profile.future,
       getDependencyGraph: (testId) async => _dependencyGraph(),
@@ -602,5 +701,332 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
+  });
+
+  // ------------------------------------------------------------------ //
+  // 配点と採点基準 (Issue #103)
+  // ------------------------------------------------------------------ //
+
+  group('配点と採点基準', () {
+    testWidgets('抽出できなかった配点は「不明」として一覧に出る', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async =>
+            _criteria(declaredTotalPoints: 20, unreadablePages: [2]),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      // 黙って落とさない: 不明の設問も一覧に並ぶ。
+      expect(find.textContaining('設問問1 ・ 配点 5 点'), findsOneWidget);
+      expect(find.textContaining('設問問2 ・ 配点: 不明'), findsOneWidget);
+      // 読めなかったページも隠さない。
+      expect(
+        find.byKey(const Key('criteria-unreadable-pages')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('合計と不明件数を必ず並べて出す', (tester) async {
+      // 不明を含む一覧の横に合計だけを置くと、それが満点だと読める。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => _criteria(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      final label = tester.widget<Text>(
+        find.byKey(const Key('criteria-totals-label')),
+      );
+      expect(label.data, contains('合計 5 点'));
+      expect(label.data, contains('配点不明 1 問'));
+    });
+
+    testWidgets('総得点と合計が食い違えば差を示す', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => _criteria(
+          questions: [_criteriaQuestion(points: 5)],
+          declaredTotalPoints: 20,
+        ),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.byKey(const Key('criteria-total-mismatch')), findsOneWidget);
+      expect(find.textContaining('差 15 点'), findsOneWidget);
+    });
+
+    testWidgets('配点が不明なままでは確定できず、理由が画面に出る', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => _criteria(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      final confirm = tester.widget<FilledButton>(
+        find.byKey(const Key('confirm-criteria-button')),
+      );
+      expect(confirm.onPressed, isNull);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('criteria-blocking-reason')))
+            .data,
+        contains('1 件'),
+      );
+    });
+
+    testWidgets('抽出を一度も実行していなくても手で追加して保存できる', (tester) async {
+      // Issue #95 決定 8 の退避手段。抽出が無い状態が出発点。
+      List<CriteriaQuestionModel>? saved;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+        updateCriteria: (testId, questions, {declaredTotalPoints}) async {
+          saved = questions;
+          return _criteria(questions: questions, extracted: false);
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('criteria-empty-message')))
+            .data,
+        contains('まだ抽出されていません'),
+      );
+
+      await tester.tap(find.byKey(const Key('add-criteria-question-button')));
+      await tester.pumpAndSettle();
+      // 新しい設問は配点 null（不明）で生まれる。仮の 0 や 1 を置かない。
+      expect(find.textContaining('配点: 不明'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('save-criteria-button')));
+      await tester.pumpAndSettle();
+
+      expect(saved, hasLength(1));
+      expect(saved!.single.points, isNull);
+    });
+
+    testWidgets('抽出が 0 件だったことと、実行していないことを別の文言で示す', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async =>
+            _criteria(questions: const [], extracted: true),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('criteria-empty-message')))
+            .data,
+        contains('抽出は実行しましたが'),
+      );
+    });
+
+    testWidgets('抽出結果を編集すると、保存前でも合計が追随する', (tester) async {
+      // サーバの totals をそのまま出していると、ここで合計が古いままになる。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => _criteria(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('criteria-totals-label')))
+            .data,
+        contains('配点不明 1 問'),
+      );
+
+      await tester.tap(find.byKey(const Key('edit-criteria-1')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('criteria-points-field')),
+        '15',
+      );
+      await tester.tap(find.byKey(const Key('criteria-save-button')));
+      await tester.pumpAndSettle();
+
+      final label = tester.widget<Text>(
+        find.byKey(const Key('criteria-totals-label')),
+      );
+      expect(label.data, contains('合計 20 点'));
+      expect(label.data, isNot(contains('不明')));
+      // 埋まったので確定できる。
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('confirm-criteria-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('確定は保存してから、その revision を指定して行う', (tester) async {
+      var savedRevision = 0;
+      int? confirmedWith;
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async =>
+            _criteria(questions: [_criteriaQuestion()], revision: 1),
+        updateCriteria: (testId, questions, {declaredTotalPoints}) async {
+          savedRevision = 7;
+          return _criteria(questions: questions, revision: savedRevision);
+        },
+        confirmCriteria: (testId, {required revision}) async {
+          confirmedWith = revision;
+          return _criteria(
+            questions: [_criteriaQuestion()],
+            revision: revision,
+            status: 'confirmed',
+          );
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('confirm-criteria-button')));
+      await tester.pumpAndSettle();
+
+      expect(confirmedWith, savedRevision);
+      expect(find.text('配点と採点基準を確定し、設問に反映しました'), findsOneWidget);
+      // 確定後は編集できない。
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('extract-criteria-button')),
+            )
+            .onPressed,
+        isNull,
+      );
+    });
+
+    testWidgets('配点を確定しても、なぜまだ採点が始まらないかを画面に出す', (tester) async {
+      // #104 の取込完了画面と同じ規律: できないことをできるように見せない。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async =>
+            _criteria(questions: [_criteriaQuestion()], status: 'confirmed'),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.textContaining('配点と採点基準が未確定です'), findsNothing);
+      expect(find.textContaining('回答欄（テストプロファイル）が未確定です'), findsOneWidget);
+      expect(
+        find.byKey(const Key('criteria-confirmed-next-step')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('配点は確定しました。採点の開始には回答欄の設定が必要です'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('旧来の配点領域を持つテストでは、配点未確定を残作業に挙げない', (tester) async {
+      // `complete-registration` の関門はプロファイルと依存グラフだけ。
+      // Issue #103 以前のテストは `SCORE` 領域から配点を読めるので、
+      // そこで「配点が未確定です」と出すのは、止めていないものを
+      // 止めているように見せることになる。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.textContaining('配点と採点基準が未確定です'), findsNothing);
+      expect(find.textContaining('設問依存関係グラフが未確定です'), findsOneWidget);
+    });
+
+    testWidgets('配点領域が無ければ、配点未確定を残作業に挙げる', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(
+          status: 'confirmed',
+          regions: [_region(kind: RegionKind.question, text: '問1')],
+        ),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.textContaining('配点と採点基準が未確定です'), findsOneWidget);
+    });
+
+    testWidgets('領域の手動追加からは配点・採点基準・模範解答を選べない', (tester) async {
+      // A案: 配点の入力口を「配点と採点基準」節ひとつに絞る。
+      // fallback の経路はコードに残るが、画面からは作れない。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(
+          regions: [_region(kind: RegionKind.question, text: '問1')],
+        ),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      await tester.tap(find.byKey(const Key('region-tile-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.edit_outlined).first);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('region-kind-field')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('回答欄').hitTestable(), findsWidgets);
+      expect(find.text('配点'), findsNothing);
+      expect(find.text('採点基準'), findsNothing);
+      expect(find.text('模範解答'), findsNothing);
+    });
+
+    testWidgets('自動解析が作った旧来の配点領域は、開いても種類を保てる', (tester) async {
+      // 選択肢から外しただけだと `DropdownButtonFormField` が
+      // `initialValue` を候補に見つけられず、既存の領域を開けなくなる。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(
+          regions: [_region(kind: RegionKind.score, text: '5点')],
+        ),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async => throw _notFound(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      await tester.tap(find.byIcon(Icons.edit_outlined).first);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('region-kind-field')), findsOneWidget);
+    });
   });
 }
