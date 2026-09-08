@@ -336,6 +336,14 @@ int _compareQuestionNumbers(String a, String b) {
   return tokensA.length.compareTo(tokensB.length);
 }
 
+/// How close to the bottom of the Inspector counts as having reached it.
+///
+/// A hair rather than zero: scroll extents are doubles that a device pixel
+/// ratio and a fractional viewport height leave a rounding error in, and a
+/// reviewer who has visibly scrolled to the end must not be told they have
+/// not (Issue #85).
+const double _materialReadEpsilon = 1;
+
 class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// The sidecar operations this screen was opened against, captured once in
   /// [initState] -- never re-resolved from the provider mid-request. See
@@ -345,6 +353,33 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   late final PdfViewerController _pdfController;
   final _noteController = TextEditingController();
   final _noteFocusNode = FocusNode(debugLabel: '修正コメント');
+
+  /// The Inspector's own scroll position, so this screen can tell whether the
+  /// 判断材料 has actually reached the reviewer's eyes and can take them to
+  /// the rest of it (Issue #85).
+  final _inspectorScrollController = ScrollController();
+
+  /// Per question, the largest `maxScrollExtent` the Inspector has been
+  /// scrolled all the way through -- how far down 判断材料 has been *seen*.
+  ///
+  /// A plain "既読" flag would be wrong in both directions. Scrolling back up
+  /// to re-read something must not un-see it, which is why this is not simply
+  /// "is the Inspector at its end right now"; and content arriving after the
+  /// fact (a poll delivering the grade, an Undo restoring the AI's row) must
+  /// not stay silently covered by a mark earned against a shorter panel,
+  /// which is why it is the extent rather than a boolean. Scrolling changes
+  /// the position, not the extent, so only the second case clears it.
+  final Map<String, double> _materialSeenExtent = {};
+
+  /// The Inspector's current `maxScrollExtent` -- how much of the 判断材料 is
+  /// below the fold right now, or 0 when all of it fits.
+  ///
+  /// Held as state rather than read off [_inspectorScrollController] during
+  /// build. A scroll controller only knows about the *last* layout, so
+  /// deriving the notice and the 承認 gate from it directly would let both
+  /// drift a frame behind the panel they describe -- and a stale "it all
+  /// fits" is an enabled 承認 for material that has since grown.
+  double _materialExtent = 0;
 
   bool _loadingShell = true;
   String? _shellError;
@@ -436,6 +471,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     _noteFocusNode.removeListener(_handleNoteFocusChange);
     _noteController.dispose();
     _noteFocusNode.dispose();
+    _inspectorScrollController.dispose();
     super.dispose();
   }
 
@@ -1091,6 +1127,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     _setStateIfMounted(() => _questionIndex = index);
     final question = _currentQuestion!;
     _noteController.text = _reviews[question.id]?.note ?? '';
+    // Back to the top of the Inspector: the next question's 判断材料 starts at
+    // its own beginning, not wherever the previous one was left scrolled to.
+    // Its extent is unknown until that panel has laid out, and unknown has to
+    // read as "not seen yet" rather than as "fits" (`_materialFullyRead`
+    // needs a recorded extent, which this question may not have).
+    if (_inspectorScrollController.hasClients) {
+      _inspectorScrollController.jumpTo(0);
+    }
+    _materialExtent = 0;
     // Only move the viewer when the target question is on a different page --
     // staying on the same page keeps whatever zoom/scroll the reviewer set
     // (Issue #21 acceptance: "Question/Submission移動、zoom/scrollを保った
@@ -1131,14 +1176,89 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         review.hasLoaded;
   }
 
+  /// Whether the current question's 判断材料 has been on screen all the way
+  /// to its end at least once ([_materialSeenExtent]).
+  ///
+  /// True as soon as the panel does not scroll at all, which is the ordinary
+  /// case at 1280x720 now that the 進捗パネル is charged to the PDF viewer
+  /// rather than to the whole screen -- this gate is what makes that hold for
+  /// a long 根拠 or a twelve-criterion rubric too, not only for the
+  /// comfortable case.
+  bool get _materialFullyRead {
+    final question = _currentQuestion;
+    if (question == null) return false;
+    final seen = _materialSeenExtent[question.id];
+    return seen != null && _materialExtent <= seen + _materialReadEpsilon;
+  }
+
+  /// Records how far the Inspector has been read, from its own scroll
+  /// metrics. Called both while the reviewer drags and from the post-frame
+  /// check in [_buildInspector], because "it all fits, so all of it has been
+  /// seen" never produces a scroll notification at all.
+  void _recordMaterialRead(ScrollMetrics metrics) {
+    final question = _currentQuestion;
+    final review = _currentReview;
+    // Not while the panel is showing a spinner or an error: an empty panel
+    // trivially "fits", and marking it read there would hand the reviewer an
+    // enabled 承認 for material they have not been shown yet.
+    if (question == null || review == null || !review.hasLoaded) return;
+    if (review.loading || review.error != null) return;
+    if (!metrics.hasContentDimensions) return;
+    final seen = _materialSeenExtent[question.id];
+    final reachedEnd = metrics.extentAfter <= _materialReadEpsilon;
+    final newlySeen =
+        reachedEnd && (seen == null || seen < metrics.maxScrollExtent);
+    if (!newlySeen && metrics.maxScrollExtent == _materialExtent) return;
+    _setStateIfMounted(() {
+      _materialExtent = metrics.maxScrollExtent;
+      if (newlySeen) _materialSeenExtent[question.id] = metrics.maxScrollExtent;
+    });
+  }
+
+  /// Takes the reviewer to the part of the 判断材料 that is still off screen.
+  void _revealRestOfMaterial() {
+    if (!_inspectorScrollController.hasClients) return;
+    _inspectorScrollController.animateTo(
+      _inspectorScrollController.position.maxScrollExtent,
+      duration: AppMotion.emphasis,
+      curve: AppMotion.standard,
+    );
+  }
+
+  /// Whether 承認 is being held back purely because the 判断材料 has not been
+  /// shown to the end yet -- the one case that gets an explanation and a way
+  /// out rather than a silently dead button.
+  bool get _blockedOnUnreadMaterial {
+    final review = _currentReview;
+    if (!_canDecide) return false;
+    if (review!.isConfirmed || review.latestAiGrade == null) return false;
+    // Only once the panel is known to have something below its fold. The
+    // notice is itself part of the material it introduces, so announcing it
+    // before the panel has been measured would be self-fulfilling: on a panel
+    // that fits by less than the notice's own height, adding it is what
+    // pushes the end off screen, and it would then never come off again.
+    return _materialExtent > _materialReadEpsilon && !_materialFullyRead;
+  }
+
   /// Whether "承認して次へ" may act: [_canDecide], and either the question is
   /// already confirmed (pure navigation -- an `edit` already confirmed it in
   /// the same step) or an AI grade exists to confirm (domain: `Review`
-  /// requires `ai_grade_result_id` for `APPROVED`, P1 review).
+  /// requires `ai_grade_result_id` for `APPROVED`, P1 review) *and* the
+  /// 判断材料 behind it has actually been on screen ([_materialFullyRead]).
+  ///
+  /// That last condition is the whole point of Issue #85. This app's premise
+  /// is that AI grades and a person confirms; while 承認して次へ was reachable
+  /// with 根拠 and 基準ごとの判定 below the fold, the fastest way through a
+  /// stack of submissions was to press Enter without ever looking, and over
+  /// dozens of them that is what a person will actually do. Refusing to
+  /// confirm material the screen never showed is the only one of the three
+  /// options in the Issue that removes that shortcut rather than labelling
+  /// it; see `docs/pdf-review-overlay.md` §2.15.
   bool get _canApprove {
     final review = _currentReview;
     if (!_canDecide) return false;
-    return review!.isConfirmed || review.latestAiGrade != null;
+    if (review!.isConfirmed) return true;
+    return review.latestAiGrade != null && _materialFullyRead;
   }
 
   /// Whether Ctrl+Z has something to revert.
@@ -1192,6 +1312,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   Future<void> _approveAndNext() async {
+    // Pressing Enter and having nothing happen is not an explanation. When
+    // the only thing in the way is unread material, Enter means "show me the
+    // rest" -- which is also the one way a keyboard-only reviewer can reach
+    // it, since ↑/↓ are 設問移動 on this screen (Issue #85).
+    if (_blockedOnUnreadMaterial) {
+      _revealRestOfMaterial();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('判断材料が画面外に残っていました。表示したうえで、もう一度 Enter で承認できます。'),
+        ),
+      );
+      return;
+    }
     if (!_canApprove) return;
     final review = _currentReview!;
     final question = _currentQuestion!;
@@ -1932,48 +2065,73 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     }
     final showsContent =
         review != null && !review.loading && review.error == null;
+    // The panel's own metrics, once it has actually laid out. The common case
+    // -- "it all fits, so all of it has been seen" -- produces no scroll
+    // notification of any kind, so waiting for one would leave 承認 disabled
+    // on a panel with nothing below the fold and nothing to say about it.
+    // Cheap and self-terminating: `_recordMaterialRead` calls `setState` only
+    // when something really changed, so the rebuild it causes settles rather
+    // than scheduling another round.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_inspectorScrollController.hasClients) return;
+      _recordMaterialRead(_inspectorScrollController.position);
+    });
     return Column(
       children: [
         Expanded(
-          child: SingleChildScrollView(
-            key: const Key('review-inspector'),
-            padding: AppSpacing.panel,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Heading and state on one line rather than stacked: this
-                // panel is the only place the 判断材料 lives, and every row it
-                // does not spend on a heading is a row of 根拠/コメント/
-                // 基準ごとの判定 that gets to stay on screen with the 承認
-                // button (Issue #85). The badge is still the *question's*
-                // state, still reading `_questionStatus` like the rail and
-                // the panel do, and still adjacent to the 問N it belongs to
-                // (Issue #84) -- only the axis it is stacked on changed.
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '問${question.number}',
-                        style: context.texts.titleLarge,
+          // Live updates while the reviewer is actually dragging; the
+          // post-frame check above covers everything that changes without a
+          // gesture behind it.
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              _recordMaterialRead(notification.metrics);
+              return false;
+            },
+            child: SingleChildScrollView(
+              key: const Key('review-inspector'),
+              controller: _inspectorScrollController,
+              padding: AppSpacing.panel,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Heading and state on one line rather than stacked: this
+                  // panel is the only place the 判断材料 lives, and every row
+                  // it does not spend on a heading is a row of 根拠/コメント/
+                  // 基準ごとの判定 that gets to stay on screen with the 承認
+                  // button (Issue #85). The badge is still the *question's*
+                  // state, still reading `_questionStatus` like the rail and
+                  // the panel do, and still adjacent to the 問N it belongs to
+                  // (Issue #84) -- only the axis it is stacked on changed.
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '問${question.number}',
+                          style: context.texts.titleLarge,
+                        ),
                       ),
-                    ),
-                    _buildQuestionStateChip(question),
+                      _buildQuestionStateChip(question),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  if (_blockedOnUnreadMaterial) ...[
+                    _buildUnreadMaterialNotice(),
+                    const SizedBox(height: AppSpacing.md),
                   ],
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                if (review == null || review.loading)
-                  const Center(
-                    key: Key('review-question-loading'),
-                    child: Padding(
-                      padding: AppSpacing.page,
-                      child: CircularProgressIndicator(),
-                    ),
-                  )
-                else if (review.error != null)
-                  _buildQuestionError(review.error!)
-                else
-                  _buildQuestionContent(question, review),
-              ],
+                  if (review == null || review.loading)
+                    const Center(
+                      key: Key('review-question-loading'),
+                      child: Padding(
+                        padding: AppSpacing.page,
+                        child: CircularProgressIndicator(),
+                      ),
+                    )
+                  else if (review.error != null)
+                    _buildQuestionError(review.error!)
+                  else
+                    _buildQuestionContent(question, review),
+                ],
+              ),
             ),
           ),
         ),
@@ -2299,6 +2457,51 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// Why 承認 is refused, and the way out of it (Issue #85).
+  ///
+  /// Icon plus a sentence plus a named action -- never a colour on its own
+  /// (Issue #25) -- and it is present only while the gate is actually closed,
+  /// so it reads as "there is more to look at", not as a permanent banner the
+  /// eye learns to skip.
+  ///
+  /// It is rendered *inside* the scrolling 判断材料, at its head, and not
+  /// above the action bar: a notice saying 「まだ続きがある」 must not be paid
+  /// for out of the height of the very panel it is talking about. Above the
+  /// action bar it shrank the Inspector by its own height, which could keep
+  /// the material from fitting and so keep the notice on screen -- a layout
+  /// that argues with itself. Here it costs the viewport nothing and scrolls
+  /// away as the reviewer reads past it.
+  Widget _buildUnreadMaterialNotice() {
+    return Row(
+      key: const Key('review-unread-material-notice'),
+      children: [
+        const Icon(Icons.arrow_downward, size: AppIconSize.inline),
+        const SizedBox(width: AppSpacing.xs),
+        Expanded(
+          child: Text(
+            'この下にまだ判断材料があります。末尾まで表示すると承認できます。',
+            style: context.texts.bodySmall,
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        // Enter is bound page-wide to 承認して次へ, and a `CallbackShortcuts`
+        // above this button would swallow it before the button's own
+        // `ActivateIntent` ever ran -- so it is re-bound here, closer to the
+        // focus, the same way the 進捗パネル re-binds it for its nodes.
+        Shortcuts(
+          shortcuts: const <ShortcutActivator, Intent>{
+            SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          },
+          child: TextButton(
+            key: const Key('review-reveal-material-button'),
+            onPressed: _revealRestOfMaterial,
+            child: const Text('続きを表示'),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildActionButtons() {
     return
     // Wraps onto a second line instead of scrolling horizontally at a
@@ -2345,11 +2548,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           icon: const Icon(Icons.close),
           label: const Text('却下 (X)'),
         ),
-        FilledButton.icon(
-          key: const Key('review-approve-button'),
-          onPressed: _canApprove ? _approveAndNext : null,
-          icon: const Icon(Icons.check),
-          label: const Text('承認して次へ (Enter)'),
+        // A disabled button has to say why it is disabled, even when the
+        // reason is also written above the material it guards -- the reviewer
+        // may well be scrolled past the notice by then.
+        Tooltip(
+          message: _blockedOnUnreadMaterial
+              ? '判断材料を末尾まで表示すると承認できます'
+              : '承認して次の設問へ',
+          child: FilledButton.icon(
+            key: const Key('review-approve-button'),
+            onPressed: _canApprove ? _approveAndNext : null,
+            icon: const Icon(Icons.check),
+            label: const Text('承認して次へ (Enter)'),
+          ),
         ),
       ],
     );

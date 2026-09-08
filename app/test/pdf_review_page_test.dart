@@ -353,6 +353,34 @@ ReviewActionResponse _reviewAction(
     ..submissionState = submissionState,
 );
 
+/// Brings the whole of the current question's 判断材料 on screen, which is
+/// what 承認 has been gated on since Issue #85: a test that means to exercise
+/// 承認 has to have looked at the material first, exactly as a reviewer does.
+/// A no-op when the panel already fits.
+Future<void> _revealMaterial(WidgetTester tester) async {
+  // Deliberately a no-op unless the gate is actually closed. If it silently
+  // scrolled every time, a regression that made the gate fire on a panel with
+  // nothing below the fold would slip through every test that calls this.
+  if (find
+      .byKey(const Key('review-unread-material-notice'))
+      .evaluate()
+      .isEmpty) {
+    return;
+  }
+  final inspector = find.byKey(const Key('review-inspector'));
+  if (inspector.evaluate().isEmpty) return;
+  final scrollable = tester.state<ScrollableState>(
+    find.descendant(of: inspector, matching: find.byType(Scrollable)),
+  );
+  // Driven through the scroll position rather than by tapping 「続きを表示」:
+  // in a viewport this short the button itself can be partly below the fold,
+  // and a test that means to say "the reviewer read to the end" should not
+  // depend on where that button happens to land. The button's own path is
+  // covered by the Issue #85 group.
+  scrollable.position.jumpTo(scrollable.position.maxScrollExtent);
+  await tester.pumpAndSettle();
+}
+
 /// Opens 添削レビュー画面 for `test-1` / `sub-1` with [dependencies] in place
 /// of a live sidecar.
 Future<void> _pumpReview(WidgetTester tester, AppDependencies dependencies) =>
@@ -736,6 +764,7 @@ void main() {
       await _settlePdf(tester);
       expect(find.text('設問1の答案'), findsOneWidget);
 
+      await _revealMaterial(tester);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await _settlePdf(tester);
@@ -3098,7 +3127,9 @@ void main() {
       expect(find.text(q2Answer), findsNothing);
 
       // The 承認 this test's name promises: Enter must actually reach the
-      // sidecar for the selected question, and advance to the next one.
+      // sidecar for the selected question, and advance to the next one --
+      // once that question's 判断材料 has been shown (Issue #85).
+      await _revealMaterial(tester);
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await _settlePdf(tester);
@@ -4186,6 +4217,7 @@ void main() {
       String rationale = '（デモ）採点根拠の文がここに入ります。',
       String comment = '（デモ）総評コメントがここに入ります。',
       int criterionCount = 2,
+      ApproveReview? approveReview,
     }) {
       final rubric = [
         for (var i = 1; i <= criterionCount; i++)
@@ -4217,6 +4249,7 @@ void main() {
           ),
         ],
         graph: fiveQuestionGraph(),
+        approveReview: approveReview,
       );
     }
 
@@ -4262,6 +4295,32 @@ void main() {
       ]) {
         expectWithin(tester, desktopStandard, key);
       }
+      // Nothing was left below the fold, so the 承認 gate never closes and
+      // the reviewer is not asked to scroll for material already in front of
+      // them. Asserted on the scroll metrics as well as on the notice, so a
+      // failure says *how much* did not fit rather than only that something
+      // did not: this content is deliberately longer than the demo seed's
+      // (`scripts/seed-demo-app-data.py` writes no 総評コメント and shorter
+      // 採点基準), and it fits 1280x720 with little to spare.
+      final inspector = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const Key('review-inspector')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(inspector.position.maxScrollExtent, 0);
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
     });
 
     testWidgets('1280x720 で進捗パネルはInspectorの高さを奪わない', (tester) async {
@@ -4358,6 +4417,159 @@ void main() {
         rect.left >= 0 && rect.right <= desktopNarrow.width,
         isTrue,
         reason: '「元に戻す」 is clipped by the viewport: $rect',
+      );
+    });
+
+    testWidgets('収まっているときはゲートが最初から解けていて、スクロールを求めない', (tester) async {
+      final approved = <String>[];
+      final dependencies = reviewableQuestion(
+        approveReview:
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              expectedAiGradeId,
+              note,
+            }) async {
+              approved.add(questionId);
+              return _reviewAction(
+                _review(questionId: questionId, action: 'approved'),
+              );
+            },
+      );
+      // Deliberately taller than 720 as well as wide: this test is about the
+      // gate, not about whether this particular content happens to fit, and a
+      // panel with nothing below its fold must never ask for a scroll.
+      await pumpAt(tester, const Size(1280, 1000), dependencies);
+
+      final inspector = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const Key('review-inspector')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(
+        inspector.position.maxScrollExtent,
+        0,
+        reason: 'the premise of this test: there is nothing to scroll to',
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('review-reveal-material-button')),
+        findsNothing,
+      );
+
+      // Enter approves on the first press, with no scrolling of any kind in
+      // between. Anything else is the gate taxing the ordinary case.
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await _settlePdf(tester);
+      expect(approved, ['q-1']);
+    });
+
+    testWidgets('判断材料が画面外に残っているあいだは承認もEnterも通らない', (tester) async {
+      // A rubric long enough that no window height would show all of it --
+      // the case the layout alone cannot fix, and the reason the gate
+      // exists at all.
+      await pumpAt(
+        tester,
+        desktopStandard,
+        reviewableQuestion(criterionCount: 24),
+      );
+
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      // The keyboard shortcut is exactly as inert as the button: pressing
+      // Enter must not confirm a grade whose 基準ごとの判定 is off screen.
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await _settlePdf(tester);
+      final railIcons = tester
+          .widgetList<Icon>(
+            find.descendant(
+              of: find.byKey(const Key('review-question-rail')),
+              matching: find.byType(Icon),
+            ),
+          )
+          .toList();
+      expect(railIcons.first.icon, isNot(Icons.check_circle));
+
+      // 却下 stays available throughout: refusing the AI's answer is not a
+      // decision that can go wrong for want of having read it.
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('review-reject-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+      // ...and that Enter press was not silence: it said why, and brought the
+      // rest of the material up, which is also the only route a keyboard-only
+      // reviewer has to it (↑/↓ are 設問移動 here).
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('判断材料が画面外に残っていました'), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('末尾まで表示すれば承認できるようになる', (tester) async {
+      await pumpAt(
+        tester,
+        desktopStandard,
+        reviewableQuestion(criterionCount: 24),
+      );
+
+      await tester.tap(find.byKey(const Key('review-reveal-material-button')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+
+      // ...and scrolling back up to re-read something does not un-see it.
+      await tester.drag(
+        find.byKey(const Key('review-inspector')),
+        const Offset(0, 400),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
       );
     });
   });
