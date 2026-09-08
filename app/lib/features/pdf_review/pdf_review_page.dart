@@ -576,31 +576,61 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     await _refetchDependencyGraphIfSuperseded();
   }
 
-  /// Re-reads the dependency graph once the jobs start naming a *newer*
-  /// confirmed version than the one currently drawn.
+  /// Re-reads the dependency graph whenever what is on screen is no longer
+  /// the structure this submission's jobs are running under.
   ///
-  /// The graph is fetched with the shell because a confirmed graph is
+  /// The graph is fetched once with the shell because a confirmed graph is
   /// immutable -- but the *test's* graph is not. Confirming a new version
   /// elsewhere (テスト設定画面) cancels this submission's incomplete jobs and
   /// re-issues them against the new version (`POST /dependency-graph/confirm`,
   /// Issue #26), so polling would keep showing the new jobs' states over the
   /// old version's edges and layers. With a dependency reversed, the arrows
   /// and the 「問n 待ち」 labels then contradict each other -- one version's
-  /// execution shown on another version's structure (review round 2, P2).
+  /// execution drawn on another version's structure (review round 2, P2).
   ///
-  /// Deliberately keyed on a *higher* version, not merely a different one:
-  /// the re-issue leaves the superseded jobs behind as CANCELLED rows, so
-  /// "any job disagrees with the graph" would stay true forever afterwards
-  /// and refetch on every single poll tick.
+  /// The jobs are the authority on which version is in force: a `Job` only
+  /// ever exists against a *confirmed* graph, so the newest
+  /// `dependency_graph_version` any of them names is the version this screen
+  /// ought to be drawing. Nothing to compare against (no job carries one)
+  /// means there is nothing to go and fetch either.
   Future<void> _refetchDependencyGraphIfSuperseded() async {
-    final graph = _dependencyGraph;
-    if (graph == null) return;
     final newest = _jobs
         .map((job) => job.dependencyGraphVersion)
         .nonNulls
         .fold<int?>(null, (a, b) => a == null || b > a ? b : a);
-    if (newest == null || newest <= graph.version) return;
+    if (newest == null || !_dependencyGraphIsBehind(newest)) return;
     await _loadDependencyGraph();
+  }
+
+  /// Whether the cached graph is worth re-reading, given that the jobs are
+  /// running under confirmed version [newestJobVersion].
+  ///
+  /// Asking "is this the current structure?" rather than the narrower "is
+  /// there a newer version?" is what closes the two gaps review round 3
+  /// found -- both were in this guard rather than in the comparison itself.
+  bool _dependencyGraphIsBehind(int newestJobVersion) {
+    final graph = _dependencyGraph;
+    // Nothing cached: either the test had no graph, or the one fetch this
+    // screen makes happened to fail. A job naming a version proves a
+    // confirmed graph does exist, so this is worth another try -- otherwise
+    // one transient error left the panel missing until the screen was
+    // reopened, with polling and 更新 both unable to bring it back.
+    if (graph == null) return true;
+    // A confirmed graph at least as new as every job is the structure those
+    // jobs ran under. Older means a newer version was confirmed elsewhere.
+    // Not `!=`: the re-issue leaves the superseded jobs behind as CANCELLED
+    // rows naming the old version, so "any job disagrees" would stay true
+    // forever afterwards and refetch on every poll tick.
+    if (graph.status == 'confirmed') return graph.version < newestJobVersion;
+    // A draft is not a structure this screen draws at all -- the panel is
+    // showing its notice instead. `confirm` does not bump the version
+    // (`domain.dependency_graph.DependencyGraph.confirm`), so a job turning
+    // up on the draft's *own* version is precisely the signal that this
+    // draft has since been confirmed; requiring a strictly newer one missed
+    // it and left the notice standing forever. A draft still ahead of every
+    // job is the ordinary re-analyzed-after-registration case, where
+    // re-reading would only return the same draft again.
+    return graph.version <= newestJobVersion;
   }
 
   /// Best-effort fetch of the test's dependency graph, for the 進捗 panel
@@ -652,8 +682,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         _pdfBytes = pdfBytes;
         _questionIndex = 0;
       });
-      await _refreshJobs();
+      // Before the jobs, so that `_refreshJobs`' own staleness check has
+      // something to compare against and does not fetch the same graph a
+      // second time on startup.
       await _loadDependencyGraph();
+      await _refreshJobs();
       _updatePolling();
       unawaited(_ensureReviewLoaded());
     } on SidecarApiException catch (error) {

@@ -3278,6 +3278,95 @@ void main() {
       );
     });
 
+    testWidgets('confirming the draft the panel is refusing to draw brings '
+        'the diagram back', (tester) async {
+      // `DependencyGraph.confirm` does not bump the version, so a draft that
+      // gets confirmed keeps its number. Waiting for a strictly newer version
+      // therefore never fired, and the panel stayed on its 未確定 notice for
+      // the rest of the session -- polling and 更新 alike (review round 3,
+      // P2).
+      var confirmed = false;
+      // 問2 stays BLOCKED throughout, which is what keeps this submission
+      // being polled at all.
+      List<JobResponse> jobsAt(int version) => [
+        _jobFor('q-1', graphVersion: version),
+        _jobFor(
+          'q-2',
+          state: 'blocked',
+          usable: null,
+          blockedOnQuestionId: 'q-1',
+          graphVersion: version,
+        ),
+      ];
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          graph: () => confirmed
+              ? _dependencyGraph(version: 2)
+              : _dependencyGraph(status: 'draft', version: 2),
+          // Before the confirm the jobs still belong to v1, which must *not*
+          // provoke a refetch: a draft ahead of every job is the ordinary
+          // re-analyzed-after-registration case.
+          jobs: () => jobsAt(confirmed ? 2 : 1),
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('dag-unconfirmed-notice')), findsOneWidget);
+      expect(find.byKey(const Key('dag-node-q-1')), findsNothing);
+
+      confirmed = true;
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      await tester.pump(AppMotion.emphasis);
+
+      expect(find.byKey(const Key('dag-unconfirmed-notice')), findsNothing);
+      expect(find.byKey(const Key('dag-node-q-1')), findsOneWidget);
+    });
+
+    testWidgets('a graph fetch that fails on open is retried, not abandoned', (
+      tester,
+    ) async {
+      // The graph is fetched once with the shell. A transient failure there
+      // used to be permanent for the life of the screen: the "nothing cached"
+      // guard suppressed every later attempt, so the panel stayed missing
+      // even though the jobs were naming a confirmed version all along
+      // (review round 3, P2).
+      var failing = true;
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          graph: () => failing
+              ? throw SidecarApiException(
+                  SidecarErrorKind.unavailable,
+                  'サイドカーに接続できません',
+                )
+              : _dependencyGraph(),
+          jobs: () => [
+            _jobFor('q-1'),
+            _jobFor(
+              'q-2',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('dag-node-q-1')), findsNothing);
+      // ...and the failure never became the screen's error state.
+      expect(find.byKey(const Key('review-shell-error')), findsNothing);
+
+      failing = false;
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      await tester.pump(AppMotion.emphasis);
+
+      expect(find.byKey(const Key('dag-node-q-1')), findsOneWidget);
+    });
+
     testWidgets('a node selects its question, and follows the selection back', (
       tester,
     ) async {
