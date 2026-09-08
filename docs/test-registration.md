@@ -53,6 +53,12 @@ Issue #11時点の `Test` エンティティには状態が無かった。Issue 
 初めて `Test.mark_ready()` を呼ぶ（compare-and-set: `TestRepository.mark_ready` は
 `WHERE status = 'draft'` の条件付き `UPDATE` で、二重登録レースを避ける）。
 
+**条件 1 を実際に満たせるようにしたのが Issue #105 である。** 実資料には模範解答 PDF が
+無い（#95 決定 1）ため、下記のテキスト由来の候補生成では現実のテストのプロファイルを
+作れず、**どのテストも `ready` になれなかった**。生徒の答案そのものから回答欄を検出して
+確定する経路は [answer-area-detection.md](./answer-area-detection.md) にある。
+門の条件は緩めていない —— 満たせるようにした。
+
 ### 候補生成: 実PDFテキストのヒューリスティック抽出（PoC 4のタグ付き注釈を置き換え）
 
 PoC 4（Issue #15）の `adapters.pdf.annotation_markers` は、PDFのSquare注釈（開発者が
@@ -439,3 +445,8 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
   束ねる、regionに複数ページのbboxを持たせ、`Question`/`NormalizedRect`側も
   ページ単位に拡張する等）は未設計のまま——今のところ、ページをまたぐ設問は
   QUESTION regionと同じページ内に収まるよう手動で調整してもらう必要がある。
+  **Issue #105 で、これが仮定ではなく実在することが確認された**: 計測した実資料
+  11教科のうち1教科が、1設問の解答欄を「（その1）」「（その2）」として2ページに
+  分けて印字している。回答欄の検出はその両方を返し、確定時に
+  `CrossPageRegionError` がそう言う（黙って片方を捨てない）。表現方法そのものは
+  引き続き未設計で、別Issueとして扱う。
