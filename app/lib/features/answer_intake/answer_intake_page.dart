@@ -5,10 +5,10 @@ import 'package:go_router/go_router.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
-import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
+import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/core/widgets/app_file_picker_row.dart';
 
@@ -367,17 +367,17 @@ class _AnswerIntakePageState extends ConsumerState<AnswerIntakePage> {
       separatorBuilder: (_, _) => const Divider(height: AppLayout.hairline),
       itemBuilder: (context, index) {
         final submission = _submissions[index];
-        final (icon, label, tone) = _stateVisual(submission.state);
+        final visual = SubmissionStatusVisual.of(submission.state);
         return ListTile(
           key: Key('submission-tile-$index'),
           // 要確認/エラーだけが色で目を引く。それ以外は状態が進んでも色は
           // 変わらない -- アイコンとラベルが状態を伝える (Issue #25)。
-          leading: Icon(icon, color: tone.color(context)),
+          leading: Icon(visual.icon, color: visual.tone.color(context)),
           title: Text(submission.studentLabel ?? submission.id),
           subtitle: Text(
             submission.reviewReason != null
-                ? '$label ・ ${submission.reviewReason}'
-                : label,
+                ? '${visual.label} ・ ${submission.reviewReason}'
+                : visual.label,
           ),
           // 添削レビュー画面 (Issue #21) への入口 -- テストが選ばれている限り、
           // どの取込状態の答案でも開ける(要確認/エラーの答案ほどレビューが必要)。
@@ -439,20 +439,4 @@ List<SubmissionResponse> _mergeFetchedSubmissions({
 String _describeError(Object? error) =>
     error is SidecarApiException ? error.message : '$error';
 
-String _stateLabel(String state) => _stateVisual(state).$2;
-
-/// アイコン・日本語ラベル・強調度の3点セット。答案の取込状態は色だけでは
-/// 表さない (Issue #25) ので、この3つは常に一緒に決める。
-///
-/// 「処理中」に色を付けないのが要点: 取込直後の一覧はほぼ全部が処理中で、
-/// そこへ色を割くと本当に人間を呼んでいる 要確認/エラー が埋もれる。
-(IconData, String, AppStatusTone) _stateVisual(String state) => switch (state) {
-  'unprocessed' => (Icons.hourglass_empty, '未処理', AppStatusTone.neutral),
-  'ai_processing' => (Icons.autorenew, '処理中', AppStatusTone.neutral),
-  'ai_processed' => (Icons.check_circle_outline, '処理済み', AppStatusTone.success),
-  'needs_review' => (Icons.warning_amber, '要確認', AppStatusTone.attention),
-  'reviewed' => (Icons.verified_outlined, '確認済み', AppStatusTone.success),
-  'exported' => (Icons.file_download_done, '出力済み', AppStatusTone.success),
-  'error' => (Icons.error_outline, 'エラー', AppStatusTone.danger),
-  _ => (Icons.help_outline, state, AppStatusTone.neutral),
-};
+String _stateLabel(String state) => SubmissionStatusVisual.of(state).label;

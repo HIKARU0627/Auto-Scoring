@@ -93,7 +93,7 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
     await tester.pumpAndSettle();
 
-    expect(find.text('取込完了: 処理済み'), findsOneWidget);
+    expect(find.text('取込完了: AI処理済み'), findsOneWidget);
     expect(find.text('student-a'), findsOneWidget);
   });
 
@@ -138,7 +138,7 @@ void main() {
 
     expect(attempts, 2);
     expect(find.text('file size 999 exceeds limit 500'), findsNothing);
-    expect(find.text('取込完了: 処理済み'), findsOneWidget);
+    expect(find.text('取込完了: AI処理済み'), findsOneWidget);
   });
 
   testWidgets(
@@ -676,7 +676,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(ListTile), findsOneWidget);
-      expect(find.text('取込完了: 処理済み'), findsOneWidget);
+      expect(find.text('取込完了: AI処理済み'), findsOneWidget);
     },
   );
 

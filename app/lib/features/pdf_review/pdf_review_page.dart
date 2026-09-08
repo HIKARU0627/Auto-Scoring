@@ -14,6 +14,7 @@ import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
+import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
@@ -1573,12 +1574,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   Widget _buildSubmissionStateChip() {
-    final state = _submission?.state ?? 'unprocessed';
-    final (icon, label, tone) = _submissionStateVisual(state);
+    final visual = SubmissionStatusVisual.of(_submission?.state);
     return Chip(
       key: const Key('review-submission-state'),
-      avatar: Icon(icon, size: AppIconSize.dense, color: tone.color(context)),
-      label: Text(label),
+      avatar: Icon(
+        visual.icon,
+        size: AppIconSize.dense,
+        color: visual.tone.color(context),
+      ),
+      label: Text(visual.label),
     );
   }
 
@@ -1854,25 +1858,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 }
-
-/// アイコン・日本語ラベル・強調度。色だけで状態を表さない (Issue #25) ため、
-/// この3つは常に一緒に決める。AI処理中に色を割かないのが要点 -- 進行中は
-/// 一番よくある状態で、そこを塗ると 要確認 が埋もれる。
-(IconData, String, AppStatusTone) _submissionStateVisual(String state) =>
-    switch (state) {
-      'unprocessed' => (Icons.hourglass_empty, '未処理', AppStatusTone.neutral),
-      'ai_processing' => (Icons.autorenew, 'AI処理中', AppStatusTone.neutral),
-      'ai_processed' => (
-        Icons.check_circle_outline,
-        'AI処理済み',
-        AppStatusTone.success,
-      ),
-      'needs_review' => (Icons.warning_amber, '要確認', AppStatusTone.attention),
-      'reviewed' => (Icons.verified_outlined, '確認済み', AppStatusTone.success),
-      'exported' => (Icons.file_download_done, '出力済み', AppStatusTone.success),
-      'error' => (Icons.error_outline, 'エラー', AppStatusTone.danger),
-      _ => (Icons.help_outline, state, AppStatusTone.neutral),
-    };
 
 /// The outcome a grade recorded for [criterionId], or `null` if [grade] is
 /// `null` or never judged that criterion (e.g. grading hasn't reached this
