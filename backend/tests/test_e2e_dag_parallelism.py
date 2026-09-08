@@ -28,10 +28,24 @@ failed deterministically on Linux and not at all on Windows.
 
 `max_concurrency=2` throughout is deliberately *not* `QueueSettings`' own
 default (4 since Issue #81, business-rules-and-evaluation-data.md section
-3 (E)). The DAG below has exactly two runnable roots, so 2 is the largest cap
-these scenarios can actually saturate -- and a latch that only opens at a cap
-the queue can reach is what makes "and still in parallel" a real assertion.
-These tests assert the queue honours whatever value it is given.
+3 (E)). One submission of this DAG starts with exactly two runnable questions
+(q1, q2), and the latch blocks the very jobs whose completion would unblock
+q3/q4 -- so at `release_at_concurrency=4` the jobs could never open it
+themselves. Nothing hangs: `FakeJobProcessor` gives up on an unopened latch
+after `latch_timeout_seconds` and records `latch_timed_out` (tests/fakes.py --
+deliberately a failing test rather than a hung one), and `_wait_until` gives
+up on its own 5s bound first, so the run fails there. Verified by temporarily
+setting this constant to 4: the first test below fails in ~5s. At 2 the latch
+is reachable, which is what makes "and still in parallel" a real assertion
+rather than one a fully serial queue would also satisfy.
+
+**Saturation at the shipped default of 4 is therefore not covered here.**
+These tests prove the queue honours whatever cap it is given and that it
+really overlaps work up to 2; they say nothing about four workers in flight.
+Covering that needs a scenario with four simultaneously-runnable jobs -- the
+two-submission test below is the one that already has them (two roots each),
+and it does open a 4-latch -- so it is a separate change, not a constant to
+bump here.
 """
 
 from __future__ import annotations

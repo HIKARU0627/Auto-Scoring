@@ -93,10 +93,12 @@ _TOKEN = "e2e-acceptance-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 #: Deliberately *not* `QueueSettings`' own default (4 since Issue #81,
-#: business-rules-and-evaluation-data.md section 3 (E)). Everything below
-#: asserts the app honours whatever value it is configured with, so a cap the
-#: scenarios can actually saturate -- two held provider calls -- proves more
-#: than one they would never reach.
+#: business-rules-and-evaluation-data.md section 3 (E)): everything below
+#: asserts the app honours whatever value it is *configured* with, never that
+#: this particular number is the right one. **So nothing here exercises the
+#: shipped default's saturation** -- with the cap at 2, the held calls prove
+#: two-way overlap and no more (see tests/test_e2e_dag_parallelism.py's module
+#: docstring for the same gap on the DAG side).
 _MAX_CONCURRENCY = 2
 
 #: The section 3 (C) default, injected rather than branched on: the scenarios

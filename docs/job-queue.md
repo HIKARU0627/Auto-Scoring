@@ -139,7 +139,11 @@ technology-stack.md §3 は「設定管理: pydantic-settings」と書いてい�
 （technology-stack.md §3.4、business-rules-and-evaluation-data.md §3 (E)。
 Issue #18 時点の暫定値2から、[Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81)
 でオーナーが確定した4へ変更した。設定値であることは変わらず、採用providerの
-レート制限は未実測なので、下記のbackoff・キュー再投入は引き続き必須）、
+レート制限は未実測なので、下記のbackoff・キュー再投入は引き続き必須。
+**既定4での飽和動作は未検証**である -- `test_e2e_dag_parallelism` /
+`test_e2e_acceptance` は明示的に2を渡しており、同時実行可能なジョブが4つある
+シナリオを持たない。上限を超えないことと2並列で実際に重なることは検証済みだが、
+worker 4本が同時に飛ぶ状態は誰も通していない。必要なら別Issueで足す）、
 `max_attempts=3`（既存の
 `Job.max_attempts`既定と一致）、指数backoff
 （`initial_backoff_seconds=1.0`、`backoff_multiplier=2.0`、
