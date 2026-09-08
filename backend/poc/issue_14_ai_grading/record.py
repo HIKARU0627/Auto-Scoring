@@ -63,7 +63,7 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -519,49 +519,6 @@ def _assert_still_parses(body: dict[str, Any]) -> None:
         ) from None
 
 
-@dataclass(frozen=True, kw_only=True)
-class _DescriptorAllowlist:
-    """The descriptor strings this run configured, **field by field**.
-
-    Deliberately not a set of whole ``(model, prompt_version,
-    structured_output_mode)`` triples. A triple only matches when every
-    field was known before the first call, and one adapter's model is not:
-    ``CodexAppServerProvider.describe()`` reports ``"default"`` until Codex
-    resolves the model, then reports the resolved name. Matching triples
-    therefore failed on *every* Codex response, collapsing all three fields
-    onto one marker -- so two runs against different Codex models, or
-    different prompts, landed in the same ``descriptor_key`` bucket and
-    their metrics were pooled (code review finding).
-
-    Per-field matching plus a fingerprint for the unmatched (below) keeps
-    both properties at once: nothing unverified is written, and two
-    different configurations stay two different buckets. It is the same
-    reasoning that keeps an unverified ``questionId`` distinguishable from
-    the label's id rather than equal to it.
-    """
-
-    models: frozenset[str]
-    prompt_versions: frozenset[str]
-    structured_output_modes: frozenset[str]
-
-
-def _configured_descriptors(provider: AIProvider) -> _DescriptorAllowlist:
-    """What every link this run could grade through declares up front.
-
-    ``providers`` is how :class:`FallbackAIProvider` exposes its chain; a
-    single adapter has no such attribute and is its own only link.
-    """
-    children: Sequence[AIProvider] = getattr(provider, "providers", None) or (provider,)
-    descriptors = [child.describe() for child in children]
-    return _DescriptorAllowlist(
-        models=frozenset(descriptor.model for descriptor in descriptors),
-        prompt_versions=frozenset(descriptor.prompt_version for descriptor in descriptors),
-        structured_output_modes=frozenset(
-            descriptor.structured_output_mode for descriptor in descriptors
-        ),
-    )
-
-
 def _fingerprint(value: str) -> str:
     """A content-free stand-in that still tells two different values apart.
 
@@ -572,56 +529,54 @@ def _fingerprint(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
-def _verified_or_fingerprint(value: str, allowed: frozenset[str]) -> str:
-    """``value`` if this run configured it, otherwise a fingerprint of it.
-
-    A fingerprint rather than a fixed marker, because "we could not verify
-    this" is not a reason to make two different values indistinguishable:
-    that would pool two configurations' results into one bucket, which is a
-    measurement error rather than a privacy one. Safe and measurable are
-    not in tension here.
-    """
-    return value if value in allowed else _fingerprint(value)
-
-
-def _wire_descriptor(
-    descriptor: ProviderDescriptor, *, configured: _DescriptorAllowlist
-) -> dict[str, Any]:
+def _wire_descriptor(descriptor: ProviderDescriptor) -> dict[str, Any]:
     """The ``descriptor`` block ``report.py`` requires on every recorded cell.
 
-    ``model`` / ``prompt_version`` / ``structured_output_mode`` are written
-    verbatim when this run configured them, and as a fingerprint when it did
-    not -- which happens legitimately for an adapter that only learns its
-    model from the service (Codex app-server), and would also happen if an
-    adapter ever started echoing a response value into its own descriptor.
-    Either way nothing unverified is written and two different values stay
-    distinguishable.
+    **A pure function of the descriptor.** ``report.py`` derives its
+    aggregation identity (``descriptor_key``) from these fields, so the same
+    response must produce the same identity every time -- whatever this run
+    happened to be configured with. An earlier version wrote a value
+    verbatim when it appeared in the run's own provider configuration and a
+    fingerprint when it did not, which made one real configuration take two
+    different shapes: Codex's default model resolved to ``gpt-5-codex`` and
+    was hashed on one run, while naming that same model in
+    ``AUTO_SCORING_CODEX_MODEL`` recorded it verbatim on the next -- and
+    merely adding an *unused* fallback link that named it was enough to flip
+    the representation. ``report.py`` then split one model's samples into
+    two buckets and the comparison across a resumed run fell apart (code
+    review finding). The rule now depends on the *field*, never on the run:
 
-    ``version`` is response-derived by definition (Gemini's ``modelVersion``,
-    OpenRouter's routed model + upstream, Codex's CLI user agent), validated
-    by nothing but "non-blank", and written even for a cell whose body was a
-    schema violation -- so it is always fingerprinted (code review finding).
-    Hashing keeps what the field is for: two calls that ran against
-    different deployments stay in different ``descriptor_key`` buckets
-    (docs/poc-2-ai-grading.md section 3.3). What is given up is the
-    human-readable deployment name, which for a given run is in the
-    operator's own console and logs -- not something that has to live in a
-    file that also holds student work.
+    * ``model`` and ``version`` are **always** fingerprinted. Both can carry
+      a value the service chose -- ``version`` by definition (Gemini's
+      ``modelVersion``, OpenRouter's routed model + upstream, Codex's CLI
+      user agent), and ``model`` whenever the adapter learns it from the
+      service rather than from configuration (``CodexAppServerProvider``
+      reports ``"default"`` until Codex resolves it). Hashing unconditionally
+      is what makes the identity independent of the run, and it also means
+      no adapter can leak an unverified string through either field, now or
+      later.
+    * ``prompt_version``, ``temperature`` and ``structured_output_mode`` are
+      written verbatim. No adapter derives them from a response: the first
+      two are constructor arguments this repository's own configuration
+      supplies, the third is a constant in each adapter module. Recording
+      them as-is keeps the results table's ``config`` column readable where
+      it can be.
+
+    Which model a fingerprint stands for is printed once at the end of a run
+    (see :func:`main`) and can be recomputed at any time -- see
+    ``docs/poc-2-ai-grading.md`` section 4.3. It is deliberately not written
+    into the dataset file, which sits next to student work.
 
     ``provider`` is deliberately *not* part of this block: ``report.py``
     takes the provider id from the cell's key in ``recorded`` and would
     reject an extra field here (``_DescriptorInput``, ``extra="forbid"``).
     """
     return {
-        "model": _verified_or_fingerprint(descriptor.model, configured.models),
+        "model": _fingerprint(descriptor.model),
         "version": None if descriptor.version is None else _fingerprint(descriptor.version),
-        "prompt_version": _verified_or_fingerprint(
-            descriptor.prompt_version, configured.prompt_versions
-        ),
+        "prompt_version": descriptor.prompt_version,
         "temperature": descriptor.temperature,
-        "structured_output_mode": _verified_or_fingerprint(
-            descriptor.structured_output_mode, configured.structured_output_modes
-        ),
+        "structured_output_mode": descriptor.structured_output_mode,
     }
 
 
@@ -629,21 +584,22 @@ def _call_with_backoff(
     provider: AIProvider,
     cell: _Cell,
     *,
-    configured: _DescriptorAllowlist,
     sleep: Callable[[float], None],
-) -> tuple[str, dict[str, Any], float]:
+) -> tuple[ProviderDescriptor, dict[str, Any], float]:
     """One cell's outcome, retrying transient failures per section 7.2.
 
-    Returns ``(provider id, cell body, wall-clock seconds)``. The wall-clock
+    Returns ``(descriptor, cell body, wall-clock seconds)``. The wall-clock
     figure is for the progress line only -- it includes any backoff waits,
     which the cell's own ``latency_seconds`` deliberately does not.
 
-    The provider id is the ``recorded`` key this outcome belongs under: for
-    a success, the descriptor of whichever adapter answered (with a
-    fallback chain, not necessarily the first link); for a failure, which
-    has no response to read it from, the provider's own ``describe()``,
-    which for a chain follows the last attempted child
-    (``FallbackAIProvider.describe``).
+    The descriptor's ``provider`` is the ``recorded`` key this outcome
+    belongs under: for a success, the descriptor of whichever adapter
+    answered (with a fallback chain, not necessarily the first link); for a
+    failure, which has no response to read it from, the provider's own
+    ``describe()``, which for a chain follows the last attempted child
+    (``FallbackAIProvider.describe``). The whole descriptor comes back, not
+    just that id, so the caller can print the fingerprint legend without
+    re-deriving anything.
 
     Exponential backoff (1s initial, 32s cap, 5 attempts) applies to
     :class:`ProviderUnavailable` only. A :class:`SchemaViolation` is *not*
@@ -664,10 +620,10 @@ def _call_with_backoff(
         except SchemaViolation:
             descriptor = provider.describe()
             return (
-                descriptor.provider,
+                descriptor,
                 {
                     "schema_violation": True,
-                    "descriptor": _wire_descriptor(descriptor, configured=configured),
+                    "descriptor": _wire_descriptor(descriptor),
                     "latency_seconds": time.monotonic() - attempt_started_at,
                 },
                 time.monotonic() - started_at,
@@ -676,10 +632,10 @@ def _call_with_backoff(
             if attempt == _MAX_ATTEMPTS:
                 descriptor = provider.describe()
                 return (
-                    descriptor.provider,
+                    descriptor,
                     {
                         "unavailable": True,
-                        "descriptor": _wire_descriptor(descriptor, configured=configured),
+                        "descriptor": _wire_descriptor(descriptor),
                         "latency_seconds": time.monotonic() - attempt_started_at,
                     },
                     time.monotonic() - started_at,
@@ -688,14 +644,14 @@ def _call_with_backoff(
             backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
             continue
         return (
-            response.descriptor.provider,
+            response.descriptor,
             {
                 "response": _wire_response(
                     response,
                     expected_question_id=cell.request.question_id,
                     allowed_criterion_ids=cell.allowed_criterion_ids,
                 ),
-                "descriptor": _wire_descriptor(response.descriptor, configured=configured),
+                "descriptor": _wire_descriptor(response.descriptor),
                 # `GradingResponse` carries the successful call's own
                 # measurement, taken inside the adapter around the HTTP
                 # call itself.
@@ -802,16 +758,18 @@ def main(argv: list[str] | None = None) -> int:
         print("dry run: no provider call was made" if args.dry_run else "nothing to do")
         return 0
 
-    # Captured once, before any call: what this run configured is the
-    # allowlist every recorded descriptor string is checked against
-    # (`_configured_descriptors`).
-    configured = _configured_descriptors(provider)
     outcomes = {"response": 0, "schema_violation": 0, "unavailable": 0}
     touched: dict[Path, dict[str, Any]] = {}
+    #: What each recorded ``model``/``version`` fingerprint stands for.
+    #: Printed once at the end and never written to a file: the dataset sits
+    #: next to student work, this terminal does not.
+    legend: dict[str, str] = {}
     for number, cell in enumerate(cells, start=1):
-        provider_id, body, elapsed = _call_with_backoff(
-            provider, cell, configured=configured, sleep=time.sleep
-        )
+        descriptor, body, elapsed = _call_with_backoff(provider, cell, sleep=time.sleep)
+        provider_id = descriptor.provider
+        legend[_fingerprint(descriptor.model)] = descriptor.model
+        if descriptor.version is not None:
+            legend[_fingerprint(descriptor.version)] = descriptor.version
         question = cell.document["questions"][cell.question_index]
         question["recorded"].setdefault(provider_id, {})[cell.variant] = body
         touched[cell.path] = cell.document
@@ -833,7 +791,15 @@ def main(argv: list[str] | None = None) -> int:
         f"{outcomes['unavailable']} unavailable "
         f"across {len(touched)} file(s)"
     )
-    print("run report.py --dataset <the same directory> to aggregate")
+    if legend:
+        # The one place a fingerprint is resolved back to what it stands
+        # for. Recomputable later from the model/deployment name itself
+        # (docs/poc-2-ai-grading.md section 4.3), so nothing is lost by
+        # keeping it out of the dataset.
+        print("\nfingerprints recorded in this run:")
+        for fingerprint, value in sorted(legend.items(), key=lambda item: item[1]):
+            print(f"  {fingerprint}  {value}")
+    print("\nrun report.py --dataset <the same directory> to aggregate")
     return 0
 
 

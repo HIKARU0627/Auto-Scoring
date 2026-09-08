@@ -53,11 +53,13 @@ crops the dataset's `input.answer_image_ref` values name, and a
 **It records nothing it cannot verify.** The rule is an allowlist, not a
 list of fields known to hold prose: a provider-supplied value is written
 only when it is a value this run sent and matched back (`questionId`,
-`criteria[].id`, the descriptor's configured strings), or constrained by
-type and range (numbers, enums). Everything else becomes a fixed marker,
-and the one response-derived piece of metadata (`descriptor.version`)
-becomes a content-free `sha256` fingerprint that still keeps two
-deployments in two buckets. Schema validation is not anonymization -- it
+`criteria[].id`), or constrained by type and range (numbers, enums).
+Everything else becomes a fixed marker, and the two descriptor fields a
+service can choose (`model`, `version`) become content-free `sha256`
+fingerprints -- always, never depending on how this particular run was
+configured, so `report.py` puts the same real model in one bucket however
+it was reached. Which model a fingerprint stands for is printed once at the
+end of a run. Schema validation is not anonymization -- it
 checks a value's *shape* and says nothing about its content, so "this field
 is an id" is not a safety argument -- and Issue #35's acceptance condition
 is that answer text stays out of the *output*, not just out of the

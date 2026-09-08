@@ -23,8 +23,10 @@ from typing import Any
 
 import pytest
 
+from auto_scoring.adapters.ai_grading.fallback_provider import FallbackAIProvider
 from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
+    AIProvider,
     GradingAnnotationCandidate,
     GradingCriterionOutcome,
     GradingRequest,
@@ -151,7 +153,7 @@ def _cell(dataset: Path, provider: str, variant: str) -> dict[str, Any]:
     return cell
 
 
-def _run(dataset: Path, provider: _StubProvider, **kwargs: Any) -> None:
+def _run(dataset: Path, provider: AIProvider, **kwargs: Any) -> None:
     cells = record._plan(
         dataset=dataset,
         images=_FIXTURES / "images",
@@ -159,14 +161,13 @@ def _run(dataset: Path, provider: _StubProvider, **kwargs: Any) -> None:
         overwrite=bool(kwargs.get("overwrite")),
         provider_id=provider.describe().provider,
     )
-    configured = record._configured_descriptors(provider)
     for cell in cells:
-        provider_id, body, _elapsed = record._call_with_backoff(
-            provider, cell, configured=configured, sleep=lambda _seconds: None
+        descriptor, body, _elapsed = record._call_with_backoff(
+            provider, cell, sleep=lambda _seconds: None
         )
-        cell.document["questions"][cell.question_index]["recorded"].setdefault(provider_id, {})[
-            cell.variant
-        ] = body
+        cell.document["questions"][cell.question_index]["recorded"].setdefault(
+            descriptor.provider, {}
+        )[cell.variant] = body
         record._write_atomically(cell.path, cell.document)
 
 
@@ -258,10 +259,12 @@ def test_a_successful_call_is_recorded_in_the_shape_report_py_reads(dataset: Pat
 
     cell = _cell(dataset, "stub", "ocr_clean")
     assert cell["descriptor"] == {
-        "model": "stub-model",
-        # Response-derived, so recorded as a content-free fingerprint
-        # rather than verbatim -- see the deployment-metadata test below.
+        # `model` and `version` can both carry a value the service chose,
+        # so both are always fingerprinted -- see the run-independence
+        # tests below for why "always" and not "when unrecognized".
+        "model": "sha256:" + hashlib.sha256(b"stub-model").hexdigest()[:16],
         "version": "sha256:" + hashlib.sha256(b"stub-version").hexdigest()[:16],
+        # No adapter derives these from a response, so they stay readable.
         "prompt_version": "v1",
         "temperature": 0.0,
         "structured_output_mode": "json_schema",
@@ -301,7 +304,7 @@ def test_a_schema_violation_is_recorded_as_such_not_as_a_guessed_grade(dataset: 
     cell = _cell(dataset, "stub", "ocr_clean")
     assert cell["schema_violation"] is True
     assert "response" not in cell
-    assert cell["descriptor"]["model"] == "stub-model"
+    assert cell["descriptor"]["model"] == "sha256:" + hashlib.sha256(b"stub-model").hexdigest()[:16]
 
 
 def test_a_schema_violation_is_never_retried(dataset: Path) -> None:
@@ -560,37 +563,100 @@ class _LateResolvingProvider(_StubProvider):
         )
 
 
-def test_two_late_resolved_models_stay_in_two_buckets(dataset: Path, tmp_path: Path) -> None:
-    """A model this run could not know up front must still be *distinguished*.
+class _PreconfiguredProvider(_StubProvider):
+    """Knows its model before the first call -- the same model the
+    :class:`_LateResolvingProvider` only learns from the service."""
 
-    Matching the descriptor as one ``(model, prompt_version,
-    structured_output_mode)`` triple failed on every Codex response -- the
-    model differs before and after the call -- and collapsed all three
-    fields onto a single marker, so two runs against different Codex models
-    landed in the same ``descriptor_key`` bucket and had their metrics
-    pooled (code review finding). Safe and measurable are not in tension:
-    a fingerprint gives both.
-    """
-    other = tmp_path / "other"
-    other.mkdir()
-    (other / "sample-01.json").write_text(
+    def __init__(self, model: str) -> None:
+        super().__init__()
+        self._model = model
+        self.name = "codex-app-server"
+
+    def describe(self) -> ProviderDescriptor:
+        return ProviderDescriptor(
+            provider=self.name,
+            model=self._model,
+            version="codex-cli/1.2.3",
+            prompt_version="v1",
+            temperature=0.0,
+            structured_output_mode="json_schema",
+        )
+
+
+def _descriptor_of(dataset: Path, provider_id: str) -> dict[str, Any]:
+    descriptor = _cell(dataset, provider_id, "ocr_clean")["descriptor"]
+    assert isinstance(descriptor, dict)
+    return descriptor
+
+
+def _fresh_copy(dataset: Path, tmp_path: Path, name: str) -> Path:
+    target = tmp_path / name
+    target.mkdir()
+    (target / "sample-01.json").write_text(
         (dataset / "sample-01.json").read_text(encoding="utf-8"), encoding="utf-8"
     )
+    return target
+
+
+def test_the_same_model_lands_in_one_bucket_however_the_run_was_configured(
+    dataset: Path, tmp_path: Path
+) -> None:
+    """``report.py`` derives ``descriptor_key`` from what is recorded, so the
+    same real model must record identically whether this run knew its name
+    up front or learned it from the service.
+
+    Keying the representation on the run's own provider configuration broke
+    that: Codex's default model resolved to ``gpt-5-codex`` and was hashed,
+    while naming that same model in ``AUTO_SCORING_CODEX_MODEL`` recorded it
+    verbatim -- one model, two buckets, and a comparison across a resumed
+    run split in half (code review finding).
+    """
+    explicit = _fresh_copy(dataset, tmp_path, "explicit")
+
+    _run(dataset, _LateResolvingProvider("gpt-5-codex"))
+    _run(explicit, _PreconfiguredProvider("gpt-5-codex"))
+
+    assert _descriptor_of(dataset, "codex-app-server") == _descriptor_of(
+        explicit, "codex-app-server"
+    )
+
+
+def test_an_unused_fallback_link_does_not_change_what_is_recorded(
+    dataset: Path, tmp_path: Path
+) -> None:
+    """The same dependency from the other direction: adding a link the run
+    never reaches must not alter the identity of what the first link
+    recorded (code review finding -- an allowlist built from the whole
+    chain did exactly that)."""
+    with_spare = _fresh_copy(dataset, tmp_path, "with-spare")
+
+    _run(dataset, _LateResolvingProvider("gpt-5-codex"))
+    _run(
+        with_spare,
+        FallbackAIProvider(
+            [_LateResolvingProvider("gpt-5-codex"), _PreconfiguredProvider("gpt-5-codex")]
+        ),
+    )
+
+    assert _descriptor_of(dataset, "codex-app-server") == _descriptor_of(
+        with_spare, "codex-app-server"
+    )
+
+
+def test_two_different_models_stay_in_two_buckets(dataset: Path, tmp_path: Path) -> None:
+    """Run-independence must not be bought by making everything identical:
+    a different model is a different configuration and has to stay one."""
+    other = _fresh_copy(dataset, tmp_path, "other")
 
     _run(dataset, _LateResolvingProvider("gpt-5-codex"))
     _run(other, _LateResolvingProvider("gpt-5-codex-mini"))
 
-    first = _cell(dataset, "codex-app-server", "ocr_clean")["descriptor"]
-    second = json.loads((other / "sample-01.json").read_text(encoding="utf-8"))["questions"][0][
-        "recorded"
-    ]["codex-app-server"]["ocr_clean"]["descriptor"]
+    first = _descriptor_of(dataset, "codex-app-server")
+    second = _descriptor_of(other, "codex-app-server")
 
-    # Neither model name reaches the file...
     assert "gpt-5-codex" not in json.dumps([first, second])
-    # ...and the two configurations are still two configurations.
     assert first["model"] != second["model"]
-    # The fields this run *did* configure keep their real values, instead of
-    # being dragged into the marker with the model.
+    # Fields no adapter derives from a response stay readable.
     assert first["prompt_version"] == second["prompt_version"] == "v1"
     assert first["structured_output_mode"] == second["structured_output_mode"] == "json_schema"
 

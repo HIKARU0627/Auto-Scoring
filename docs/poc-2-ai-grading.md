@@ -875,10 +875,10 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
 
   記録するのは次のどちらかを満たす値だけ。
 
-  | 条件                             | 対象                                                                                                                                                                                                                                                  |
-  | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | **こちらが送った値と照合できる** | `questionId`（リクエストの ID と一致した場合のみ）、`criteria[].id`（人間ラベルが挙げる rubric criterion の ID のみ）、descriptor の `model`/`prompt_version`/`structured_output_mode`（この run が構成した値と**フィールドごとに**一致する場合のみ） |
-  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数）                                                                                                      |
+  | 条件                             | 対象                                                                                                                                                                                                               |
+  | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | **こちらが送った値と照合できる** | `questionId`（リクエストの ID と一致した場合のみ）、`criteria[].id`（人間ラベルが挙げる rubric criterion の ID のみ）、descriptor の `prompt_version`/`structured_output_mode`（応答から導出されない構成値・定数） |
+  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数）                                                                   |
 
   それ以外はすべて固定の marker に置き換える。自由文（`recognition.text`・
   `comment`・`rationale`・`criteria[].rationale`・`annotations[].target`/
@@ -888,26 +888,33 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   はこのセルを従来どおり `mismatched`（criterion なら不一致）として数える —
   **食い違いという情報は失わずに、食い違いの中身だけを落とす**。
 
-- **照合できなかった descriptor フィールドは marker ではなく fingerprint に
-  する**。「安全にする」と「測れる」は両立させる。descriptor を
-  `(model, prompt_version, structured_output_mode)` の**組**として照合すると、
-  呼び出し前に model が分からないアダプタで必ず失敗する
-  （`CodexAppServerProvider.describe()` は `AUTO_SCORING_CODEX_MODEL` 未設定なら
-  解決前は `"default"`、解決後は実際のモデル名を返す）。組で照合していたときは
-  正常応答でも 3 フィールドすべてが同じ marker に潰れ、**異なる Codex モデルや
-  異なるプロンプトの記録が同じ `descriptor_key` に集約されて比較指標が混ざって
-  いた**。フィールドごとに照合し、照合できなかったものは fingerprint にすれば、
-  値は出さないまま別の設定は別の bucket に残る（`questionId` の marker を
-  正解ラベルの ID と一致させなかったのと同じ理由）。
-- **応答由来の deployment metadata は fingerprint にする**。
-  `descriptor.version`（Gemini の `modelVersion`、OpenRouter の routed model +
-  upstream）は provider が中身を決める文字列で、「非空」以外の検証が無い。
-  しかも**本文が schema 違反だったセルにも descriptor は記録される**ので、
-  成功応答の伏字化だけでは塞げない。`sha256` の先頭 16 桁（64 bit）に置き換える。
-  この列の役割である「別の deployment は別の `descriptor_key` bucket に入る」は
-  そのまま保たれ、失うのは人間が読めるデプロイ名だけである。それはその run の
-  コンソール・ログにあるもので、答案を含むファイルに残す必要はない。
-- **記録した形が schema を満たすことを毎回確認する**。射影の結果を
+- **集計用の identity は応答だけから決まる純粋関数にする**。`report.py` は
+  記録された descriptor から `descriptor_key`（§3.3）を作るので、**同じ応答は
+  実行のたびに同じ形で記録されなければならない**。「この run が構成した値なら
+  生の名前、そうでなければ fingerprint」という規則にしていたときは、同じ 1 つの
+  モデルが実行によって 2 つの顔を持った: Codex の既定モデルが `gpt-5-codex` に
+  解決された実行では hash、同じモデルを `AUTO_SCORING_CODEX_MODEL` で明示した
+  実行では生の名前。**一度も呼ばれないフォールバック先を足すだけでも**表現が
+  切り替わり、`report.py` が同じモデルの標本を 2 つの bucket に分割していた。
+  規則は**フィールドで決まり、run では決まらない**:
+  - `model` と `version` は**常に** fingerprint。どちらもサービス側が値を
+    決めうる（`version` は定義上そうであり、`model` はアダプタが構成ではなく
+    サービスから学ぶ場合にそうなる。`CodexAppServerProvider` は解決前
+    `"default"` を返す）。無条件にすることで identity が run から独立し、
+    同時にこの 2 フィールドから未検証の文字列が漏れる経路も塞がる。
+  - `prompt_version` / `temperature` / `structured_output_mode` はそのまま記録
+    する。応答から導出するアダプタは無く（前 2 つはこちらが渡す構成値、最後は
+    各アダプタ内の定数）、結果表の `config` 列を読める範囲で読めるままにする。
+- **fingerprint がどのモデルを指すかを人が知る手段**。`record.py` は実行の
+  最後に、その実行で記録した `model`/`version` の fingerprint と実際の値の
+  対応を**標準出力へ 1 度だけ**出す（データセットには書かない。データセットは
+  答案の隣に置かれるが、この端末はそうではない）。後からでも計算できる:
+
+  ```bash
+  python3 -c "import hashlib,sys;print('sha256:'+hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])" 'gemini-2.5-flash'
+  ```
+
+- **記録した形が schema を満たすことを毎回確認する**。- **記録した形が schema を満たすことを毎回確認する**。射影の結果を
   `parse_ai_grading_result` に通してから書き出す。`report.py` は記録済みセルを
   読み戻すときに再検証するため、射影がスキーマから外れてもクラッシュはせず、
   **正常だった応答が schema 違反として集計されて違反率が水増しされる**という
