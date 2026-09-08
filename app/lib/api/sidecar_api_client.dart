@@ -30,6 +30,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         ExportRequestResponse,
         ExportResponse,
         GradeResultResponse,
+        GradingAvailabilityResponse,
         JobResponse,
         NormalizedBBoxModel,
         NormalizedRectResponse,
@@ -221,6 +222,33 @@ class SidecarApiClient {
       return response.data?['status'] == 'ok';
     } on DioException {
       return false;
+    }
+  }
+
+  /// Whether this installation can AI-grade at all, and if not, why
+  /// (Issue #97).
+  ///
+  /// Answers a question no other call can: every grading job on a host with
+  /// no credentials fails the same way an unreadable answer does, so without
+  /// this the reviewer cannot tell "this machine cannot grade" from "the AI
+  /// could not read this one". `reason` names configuration variables and
+  /// host prerequisites only -- the sidecar keeps credential *values* out of
+  /// it by construction (`api/app.py` の `build_ai_provider`).
+  ///
+  /// Throws [SidecarApiException] on any failure, like every other call here:
+  /// "the sidecar did not answer" is not the same fact as "grading is
+  /// unavailable", and a caller that conflated them would announce a
+  /// configuration problem every time a request timed out.
+  Future<GradingAvailabilityResponse> gradingAvailability({
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _api.gradingAvailabilityGradingAvailabilityGet(
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
     }
   }
 

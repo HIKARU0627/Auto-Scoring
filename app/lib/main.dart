@@ -19,6 +19,7 @@ import 'package:auto_scoring_app/core/app_theme.dart';
 import 'package:auto_scoring_app/core/sidecar_paths.dart';
 import 'package:auto_scoring_app/core/sidecar_platform_io.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
+import 'package:auto_scoring_app/core/widgets/grading_unavailable_banner.dart';
 import 'package:auto_scoring_app/features/startup/startup_gate.dart';
 
 void main() {
@@ -130,6 +131,25 @@ class _AutoScoringAppState extends State<AutoScoringApp>
   SidecarApiClient? _client;
   AppDependencies? _dependencies;
 
+  /// What the sidecar said about AI 採点 on this host, or `null` while that
+  /// is not known -- not asked yet, or asked and not answered (Issue #97).
+  ///
+  /// `null` is deliberately its own state rather than "assume it works":
+  /// [GradingUnavailableBanner] shows nothing for it, so a single failed
+  /// request never turns into an announcement that the machine is
+  /// misconfigured.
+  GradingAvailabilityResponse? _gradingAvailability;
+
+  /// Bumped every time the app's dependencies change (a connection, a
+  /// reconnection, a disconnection). [_loadGradingAvailability] captures it
+  /// and drops its answer if it changed while the request was in flight --
+  /// otherwise a slow reply from the sidecar that has since died would
+  /// install itself over the new connection's state.
+  int _connection = 0;
+
+  AppDependencies get _activeDependencies =>
+      _dependencies ?? widget.dependencies ?? const AppDependencies();
+
   @override
   void initState() {
     super.initState();
@@ -141,7 +161,13 @@ class _AutoScoringAppState extends State<AutoScoringApp>
     _router = createAppRouter(
       initialLocation: supervisor == null ? _landingRoute : AppRoutes.starting,
     );
-    if (supervisor == null) return;
+    if (supervisor == null) {
+      // No sidecar to wait for, so the dependencies this app will run with
+      // are already the ones it was handed. Ask them now -- the same
+      // question the supervisor path asks on connect.
+      unawaited(_loadGradingAvailability());
+      return;
+    }
     WidgetsBinding.instance.addObserver(this);
     supervisor.state.addListener(_onSidecarStateChanged);
     // Not awaited: `start()` completes only once the sidecar is ready or has
@@ -174,6 +200,9 @@ class _AutoScoringAppState extends State<AutoScoringApp>
       final client = SidecarApiClient(state.connection);
       _client = client;
       _dependencies = AppDependencies.fromClient(client);
+      _connection++;
+      _gradingAvailability = null;
+      unawaited(_loadGradingAvailability());
       _router.go(_landingRoute);
     } else {
       // Drop every route the reviewer pushed *before* closing the client:
@@ -192,8 +221,34 @@ class _AutoScoringAppState extends State<AutoScoringApp>
       _client?.close();
       _client = null;
       _dependencies = null;
+      _connection++;
+      // The next connection asks again: a restarted sidecar can have been
+      // given credentials in the meantime, and (more importantly) a stale
+      // "unavailable" outliving the process that reported it would be a
+      // claim about a host nobody has checked.
+      _gradingAvailability = null;
     }
     if (mounted) setState(() {});
+  }
+
+  /// Asks the sidecar whether it can grade, once per connection.
+  ///
+  /// Failures are swallowed on purpose. Every screen already reports its own
+  /// request failures, and this one has no user-facing question of its own:
+  /// "we could not ask" leaves [_gradingAvailability] `null`, which shows no
+  /// banner at all.
+  Future<void> _loadGradingAvailability() async {
+    final generation = _connection;
+    final dependencies = _activeDependencies;
+    try {
+      final availability = await dependencies.gradingAvailability();
+      if (!mounted || generation != _connection) return;
+      setState(() {
+        _gradingAvailability = availability;
+      });
+    } on SidecarApiException {
+      // Not connected, timed out, or an older sidecar without the endpoint.
+    }
   }
 
   @override
@@ -201,9 +256,7 @@ class _AutoScoringAppState extends State<AutoScoringApp>
     final supervisor = widget.supervisor;
     return ProviderScope(
       overrides: [
-        appDependenciesProvider.overrideWithValue(
-          _dependencies ?? widget.dependencies ?? const AppDependencies(),
-        ),
+        appDependenciesProvider.overrideWithValue(_activeDependencies),
       ],
       child: MaterialApp.router(
         title: 'Auto-Scoring',
@@ -215,14 +268,25 @@ class _AutoScoringAppState extends State<AutoScoringApp>
         themeMode: _requestedThemeMode ?? ThemeMode.system,
         routerConfig: _router,
         // Above the Router, not inside it, so the error screen and its restart
-        // button are visible over whatever the reviewer had pushed.
-        builder: supervisor == null
-            ? null
-            : (context, child) => SidecarStartupOverlay(
-                state: supervisor.state.value,
-                onRestart: () => unawaited(supervisor.start()),
-                child: child,
-              ),
+        // button are visible over whatever the reviewer had pushed -- and so
+        // the 採点不可 banner sits above every screen instead of being
+        // re-implemented in each of them (Issue #97).
+        //
+        // The startup overlay wraps *outside* the banner: while the sidecar
+        // is starting or has died, the app has nothing to say about grading
+        // configuration, and the overlay covers the lot anyway.
+        builder: (context, child) {
+          final content = GradingUnavailableBanner(
+            availability: _gradingAvailability,
+            child: child,
+          );
+          if (supervisor == null) return content;
+          return SidecarStartupOverlay(
+            state: supervisor.state.value,
+            onRestart: () => unawaited(supervisor.start()),
+            child: content,
+          );
+        },
       ),
     );
   }
