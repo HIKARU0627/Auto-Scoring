@@ -9,7 +9,9 @@ import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/features/test_registration/answer_area_editor.dart';
 
 /// テスト設定画面 (simplified-design-specification.md §16.3, Issue #16).
 ///
@@ -55,6 +57,12 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// [appDependenciesProvider] for why that rule exists.
   late final AppDependencies _dependencies;
 
+  /// The native "choose a PDF" dialog, for picking the reference answer
+  /// sheet (Issue #105). Captured in [initState] for the same reason as
+  /// [_dependencies], and reached through a provider for the same reason
+  /// `TestRegistrationPage` does: this screen is built from a route path.
+  late final Future<PickedPdfFile?> Function() _pickPdfFile;
+
   TestResponse? _test;
   ProfileResponse? _profile;
   CriteriaResponse? _criteria;
@@ -80,6 +88,16 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// `確定` (`confirmDependencyGraph`). `null` until a graph has loaded once.
   List<DependencyEdgeModel>? _editableEdges;
 
+  /// Whether a reference answer sheet is stored for this test and whether
+  /// answer-area detection can run on this machine (Issue #105). `null` while
+  /// the screen is still loading.
+  AnswerLayoutResponse? _answerLayout;
+
+  /// The stored answer sheet's bytes, for the overlay editor to draw on.
+  /// `null` when none is stored -- the editor then draws empty page outlines,
+  /// which is still enough to place boxes by number.
+  Uint8List? _answerLayoutPdf;
+
   bool _loading = true;
   bool _busy = false;
   String? _errorMessage;
@@ -88,6 +106,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   void initState() {
     super.initState();
     _dependencies = ref.read(appDependenciesProvider);
+    _pickPdfFile = ref.read(pickPdfFileProvider);
     _loadAll();
   }
 
@@ -118,6 +137,8 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       } on SidecarApiException catch (error) {
         if (error.statusCode != 404) rethrow;
       }
+      final layout = await _dependencies.getAnswerLayout(widget.testId);
+      final layoutPdf = await _loadAnswerLayoutPdf(layout);
       if (!mounted) return;
       setState(() {
         _test = test;
@@ -129,6 +150,8 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         _editableDeclaredTotal = criteria?.declaredTotalPoints;
         _dependencyGraph = graph;
         _editableEdges = graph?.edges.toList();
+        _answerLayout = layout;
+        _answerLayoutPdf = layoutPdf;
       });
     } on SidecarApiException catch (error) {
       if (!mounted) return;
@@ -160,6 +183,53 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       _profile = profile;
       _editableRegions = profile.regions.toList();
     });
+  });
+
+  /// The stored answer sheet's bytes, or `null` when there is none.
+  ///
+  /// A sheet that is recorded as present but cannot be fetched is not an
+  /// error worth failing the whole screen for: everything else here still
+  /// works, and the editor falls back to empty page outlines.
+  Future<Uint8List?> _loadAnswerLayoutPdf(AnswerLayoutResponse layout) async {
+    if (layout.pageCount == null) return null;
+    try {
+      return await _dependencies.getAnswerLayoutPdf(widget.testId);
+    } on SidecarApiException {
+      return null;
+    }
+  }
+
+  Future<void> _uploadAnswerLayout() => _runGuarded(() async {
+    final picked = await _pickPdfFile();
+    if (picked == null) return;
+    final layout = await _dependencies.uploadAnswerLayout(
+      widget.testId,
+      filePath: picked.path,
+    );
+    final bytes = await _loadAnswerLayoutPdf(layout);
+    if (!mounted) return;
+    setState(() {
+      _answerLayout = layout;
+      _answerLayoutPdf = bytes;
+    });
+    _showSnackBar('答案を取り込みました。回答欄を検出できます');
+  });
+
+  Future<void> _detectAnswerAreas() => _runGuarded(() async {
+    final profile = await _dependencies.detectAnswerAreas(widget.testId);
+    if (!mounted) return;
+    setState(() {
+      _profile = profile;
+      _editableRegions = profile.regions.toList();
+    });
+    // Says what happened, not how well it went: the number of areas found is
+    // a fact, the accuracy of them is not something this app has measured.
+    final undetected = profile.undetectedQuestionNumbers.length;
+    _showSnackBar(
+      undetected == 0
+          ? '回答欄を検出しました。答案の上で確認して直してください'
+          : '回答欄を検出しました。見つからなかった設問が$undetected件あります',
+    );
   });
 
   Future<void> _saveProfile() => _runGuarded(() async {
@@ -405,10 +475,6 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     });
   }
 
-  void _removeRegion(int index) {
-    setState(() => _editableRegions?.removeAt(index));
-  }
-
   Future<void> _editRegion(int index) async {
     final regions = _editableRegions;
     if (regions == null) return;
@@ -581,6 +647,19 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
 
   Widget _buildProfileSection() {
     final regions = _editableRegions;
+    final profile = _profile;
+    // Derived from the working copy, not from the last server response: the
+    // reviewer assigns a question and the button must enable on that click,
+    // not only after the next 保存 round-trip.
+    final questionNumbers =
+        profile?.questionNumbers.toSet() ?? const <String>{};
+    final unassigned = (regions ?? const <RegionModel>[])
+        .where(
+          (region) =>
+              region.kind == RegionKind.answerArea &&
+              !questionNumbers.contains(region.label),
+        )
+        .toList();
     return Card(
       child: Padding(
         padding: AppSpacing.card,
@@ -602,36 +681,43 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
               ],
             ),
             const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: AppSpacing.sm,
-              children: [
-                FilledButton.icon(
-                  key: const Key('analyze-profile-button'),
-                  onPressed: (_busy || _profileConfirmed)
-                      ? null
-                      : _analyzeProfile,
-                  icon: const Icon(Icons.auto_fix_high),
-                  label: const Text('自動解析（再実行）'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: (_busy || regions == null || _profileConfirmed)
-                      ? null
-                      : _addRegion,
-                  icon: const Icon(Icons.add_box_outlined),
-                  label: const Text('領域を手動追加'),
-                ),
-              ],
-            ),
+            _buildAnswerLayoutControls(),
             const SizedBox(height: AppSpacing.md),
             if (regions == null)
-              const Text('まだ解析されていません。「自動解析」を実行してください。')
-            else if (regions.isEmpty)
-              const Text('領域がありません。手動で追加してください。')
+              const Text(
+                'まだ回答欄がありません。答案を取り込んで「回答欄を自動検出」するか、'
+                '「領域を手動追加」で引いてください。',
+              )
             else
-              ...regions.asMap().entries.map(
-                (entry) => _buildRegionTile(entry.key, entry.value),
+              AnswerAreaEditor(
+                key: const Key('answer-area-editor'),
+                pages: profile?.pages.toList() ?? const <PageFormatModel>[],
+                regions: regions,
+                questionNumbers: profile?.questionNumbers.toList() ?? const [],
+                undetectedQuestionNumbers:
+                    profile?.undetectedQuestionNumbers.toList() ?? const [],
+                pdfBytes: _answerLayoutPdf,
+                readOnly: _busy || _profileConfirmed,
+                onRegionsChanged: (next) =>
+                    setState(() => _editableRegions = next),
+                onEditNumerically: _editRegion,
               ),
             const SizedBox(height: AppSpacing.md),
+            if (unassigned.isNotEmpty)
+              Padding(
+                key: const Key('unassigned-region-warning'),
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: Text(
+                  // Stated next to the disabled button, not only inside the
+                  // editor: the reason a confirm is impossible has to be
+                  // readable from where the confirm is attempted.
+                  '設問が割り当てられていない回答欄が${unassigned.length}件あります。'
+                  '設問を選ぶか削除するまで確定できません。',
+                  style: context.texts.bodyMedium?.copyWith(
+                    color: AppStatusTone.attention.color(context),
+                  ),
+                ),
+              ),
             Wrap(
               spacing: AppSpacing.sm,
               children: [
@@ -649,6 +735,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                       (_busy ||
                           regions == null ||
                           regions.isEmpty ||
+                          unassigned.isNotEmpty ||
                           _profileConfirmed)
                       ? null
                       : _confirmProfile,
@@ -663,35 +750,99 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     );
   }
 
-  Widget _buildRegionTile(int index, RegionModel region) {
-    return ListTile(
-      key: Key('region-tile-$index'),
-      leading: Icon(_regionIcon(region.kind)),
-      title: Text('${_regionKindLabel(region.kind)} ・ 設問${region.label}'),
-      subtitle: Text(
-        'ページ${region.pageIndex + 1} ・ '
-        '(${region.bbox.x0.toStringAsFixed(2)}, ${region.bbox.y0.toStringAsFixed(2)}) - '
-        '(${region.bbox.x1.toStringAsFixed(2)}, ${region.bbox.y1.toStringAsFixed(2)})'
-        '${region.text != null && region.text!.isNotEmpty ? '\n${region.text}' : ''}',
-      ),
-      isThreeLine: region.text != null && region.text!.isNotEmpty,
-      trailing: _profileConfirmed
-          ? null
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: '編集',
-                  onPressed: () => _editRegion(index),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: '削除',
-                  onPressed: () => _removeRegion(index),
-                ),
-              ],
+  /// The 答案 / 自動検出 controls above the overlay.
+  ///
+  /// Every state here is spelled out rather than reduced to a disabled
+  /// button: "no answer sheet uploaded" and "no image-capable provider on
+  /// this machine" are different problems with different fixes, and in both
+  /// cases the reviewer can still draw the boxes by hand -- which the copy
+  /// has to say, or a blocked screen reads as a broken one.
+  Widget _buildAnswerLayoutControls() {
+    final layout = _answerLayout;
+    final hasSheet = layout?.pageCount != null;
+    final detectionAvailable = layout?.detectionAvailable ?? false;
+    final hasQuestions = (_profile?.questionNumbers.isNotEmpty ?? false);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: AppSpacing.sm,
+          runSpacing: AppSpacing.sm,
+          children: [
+            OutlinedButton.icon(
+              key: const Key('upload-answer-layout-button'),
+              onPressed: (_busy || _profileConfirmed)
+                  ? null
+                  : _uploadAnswerLayout,
+              icon: const Icon(Icons.upload_file_outlined),
+              label: Text(hasSheet ? '別の答案に差し替える' : '回答欄を決める答案を選ぶ'),
             ),
+            FilledButton.icon(
+              key: const Key('detect-answer-areas-button'),
+              onPressed:
+                  (_busy ||
+                      _profileConfirmed ||
+                      !hasSheet ||
+                      !detectionAvailable ||
+                      !hasQuestions)
+                  ? null
+                  : _detectAnswerAreas,
+              icon: const Icon(Icons.auto_fix_high),
+              label: const Text('回答欄を自動検出'),
+            ),
+            OutlinedButton.icon(
+              key: const Key('add-region-button'),
+              onPressed: (_busy || _profileConfirmed) ? null : _addRegion,
+              icon: const Icon(Icons.add_box_outlined),
+              label: const Text('領域を手動追加'),
+            ),
+            // The pre-Issue-#105 path: derive regions from a registered
+            // model-answer PDF's text. Kept for tests registered that way,
+            // and deliberately not the primary action -- real material has no
+            // model-answer PDF (Issue #95 decision 1), so for a test
+            // registered from a 採点基準 alone this answers 409.
+            TextButton.icon(
+              key: const Key('analyze-profile-button'),
+              onPressed: (_busy || _profileConfirmed) ? null : _analyzeProfile,
+              icon: const Icon(Icons.description_outlined),
+              label: const Text('模範解答PDFから解析（旧方式）'),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        if (!hasSheet)
+          Text(
+            '回答欄は答案そのものの上で決めます。'
+            'この様式の答案を1枚選んでください。'
+            '確定した回答欄は、同じ様式の答案すべてに使われます。',
+            key: const Key('answer-layout-missing'),
+            style: context.texts.bodySmall,
+          )
+        else
+          Text(
+            '${layout!.pageCount}ページの答案を取り込んでいます。'
+            '自動検出はこの答案の全ページをAIに送ります（テストにつき1回）。'
+            '採点のときに送るのは、切り出した回答欄の画像だけです。'
+            'ページに印字・手書きされているものはそのまま送られます。'
+            '手書きの氏名を確実に消す方法はありません。',
+            key: const Key('answer-layout-present'),
+            style: context.texts.bodySmall,
+          ),
+        if (hasSheet && !hasQuestions)
+          Text(
+            '自動検出には設問一覧が必要です。先に配点と採点基準を確定してください。'
+            'それまでは「領域を手動追加」で引けます。',
+            key: const Key('answer-layout-needs-questions'),
+            style: context.texts.bodySmall,
+          ),
+        if (!detectionAvailable && layout != null)
+          Text(
+            layout.detectionUnavailableReason ??
+                '回答欄の自動検出は、このパソコンでは使えません。手動で引いてください。',
+            key: const Key('answer-layout-detection-unavailable'),
+            style: context.texts.bodySmall,
+          ),
+      ],
     );
   }
 
@@ -1172,16 +1323,6 @@ List<RegionKind> _selectableRegionKinds(RegionKind current) =>
     _coordinateRegionKinds.contains(current)
     ? _coordinateRegionKinds
     : [..._coordinateRegionKinds, current];
-
-IconData _regionIcon(RegionKind kind) => switch (kind) {
-  RegionKind.question => Icons.help_outline,
-  RegionKind.answerArea => Icons.edit_note,
-  RegionKind.annotationArea => Icons.rate_review_outlined,
-  RegionKind.score => Icons.grade_outlined,
-  RegionKind.rubric => Icons.rule_outlined,
-  RegionKind.modelAnswer => Icons.fact_check_outlined,
-  _ => Icons.crop_square,
-};
 
 String _regionKindLabel(RegionKind kind) => switch (kind) {
   RegionKind.question => '問題文',

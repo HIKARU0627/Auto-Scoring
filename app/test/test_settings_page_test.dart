@@ -27,7 +27,10 @@ RegionModel _region({
 }) {
   return RegionModel(
     (b) => b
-      ..regionId = 'q-$label'
+      // Distinct per kind: a profile's region ids are unique (the sidecar
+      // rejects a repeat since Issue #105), and a fixture that shares one
+      // would be testing a shape the server cannot produce.
+      ..regionId = '${kind.name}-$label'
       ..kind = kind
       ..pageIndex = 0
       ..label = label
@@ -40,16 +43,40 @@ RegionModel _region({
   );
 }
 
+/// The answer-sheet state テスト設定画面 asks for on load (Issue #105).
+/// Every `AppDependencies` below supplies it: without one the screen's own
+/// load fails and every other assertion in this file would be testing the
+/// error banner.
+AnswerLayoutResponse _answerLayout({
+  int? pageCount = 1,
+  bool detectionAvailable = true,
+  String? reason,
+}) {
+  return AnswerLayoutResponse(
+    (b) => b
+      ..testId = 'test-1'
+      ..pageCount = pageCount
+      ..detectionAvailable = detectionAvailable
+      ..detectionUnavailableReason = reason,
+  );
+}
+
 ProfileResponse _profile({
   String status = 'draft',
   List<RegionModel>? regions,
   int revision = 1,
+  List<String> questionNumbers = const ['1'],
+  List<String> undetectedQuestionNumbers = const [],
+  List<String> unassignedRegionIds = const [],
 }) {
   return ProfileResponse(
     (b) => b
       ..testId = 'test-1'
       ..status = status
       ..revision = revision
+      ..questionNumbers.replace(questionNumbers)
+      ..undetectedQuestionNumbers.replace(undetectedQuestionNumbers)
+      ..unassignedRegionIds.replace(unassignedRegionIds)
       ..pages.add(
         PageFormatModel(
           (p) => p
@@ -201,6 +228,7 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
@@ -208,9 +236,10 @@ void main() {
     await _pumpSettings(tester, dependencies);
 
     expect(find.text('テスト状態: 下書き'), findsOneWidget);
-    expect(find.textContaining('問題文 ・ 設問1'), findsOneWidget);
-    expect(find.textContaining('回答欄 ・ 設問1'), findsOneWidget);
-    expect(find.textContaining('配点 ・ 設問1'), findsOneWidget);
+    expect(find.byKey(const Key('answer-area-editor')), findsOneWidget);
+    expect(find.textContaining('問題文・1ページ'), findsOneWidget);
+    expect(find.textContaining('回答欄・1ページ'), findsOneWidget);
+    expect(find.textContaining('配点・1ページ'), findsOneWidget);
   });
 
   testWidgets('analyzing profile candidates shows freshly generated regions', (
@@ -220,6 +249,7 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) async {
         throw SidecarApiException(
           SidecarErrorKind.badResponse,
@@ -239,12 +269,12 @@ void main() {
 
     await _pumpSettings(tester, dependencies);
 
-    expect(find.text('まだ解析されていません。「自動解析」を実行してください。'), findsOneWidget);
+    expect(find.textContaining('まだ回答欄がありません。'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('analyze-profile-button')));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('問題文 ・ 設問1'), findsOneWidget);
+    expect(find.textContaining('問題文・1ページ'), findsOneWidget);
   });
 
   testWidgets('confirming the profile locks region editing', (tester) async {
@@ -252,6 +282,7 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
       // confirmProfile now saves the working copy first (Issue #16 review).
@@ -272,7 +303,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('プロファイルを確定しました'), findsOneWidget);
-    final analyzeButton = tester.widget<FilledButton>(
+    final analyzeButton = tester.widget<TextButton>(
       find.byKey(const Key('analyze-profile-button')),
     );
     expect(analyzeButton.onPressed, isNull);
@@ -286,6 +317,7 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
       updateProfile: (testId, regions) async {
@@ -296,12 +328,7 @@ void main() {
 
     await _pumpSettings(tester, dependencies);
 
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const Key('region-tile-0')),
-        matching: find.byIcon(Icons.edit_outlined),
-      ),
-    );
+    await tester.tap(find.byKey(const Key('answer-area-edit-0')));
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byKey(const Key('region-label-field')), '9');
@@ -323,18 +350,14 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) async => _profile(),
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
 
     await _pumpSettings(tester, dependencies);
 
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const Key('region-tile-0')),
-        matching: find.byIcon(Icons.edit_outlined),
-      ),
-    );
+    await tester.tap(find.byKey(const Key('answer-area-edit-0')));
     await tester.pumpAndSettle();
 
     // `double.tryParse('NaN')` returns the non-null value `double.nan`, not
@@ -359,6 +382,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async {
           throw SidecarApiException(
@@ -401,6 +425,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
         confirmDependencyGraph:
@@ -440,6 +465,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
         confirmDependencyGraph:
@@ -495,6 +521,7 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) async => _profile(status: 'confirmed'),
       getDependencyGraph: (testId) async => _dependencyGraph(edges: [edge]),
     );
@@ -530,6 +557,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -558,6 +586,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(),
       );
@@ -576,6 +605,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -611,6 +641,7 @@ void main() {
         getCriteria: (testId) async => throw _notFound(),
 
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(), // still draft
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -651,6 +682,7 @@ void main() {
           getCriteria: (testId) async => throw _notFound(),
 
           getTest: (testId) async => _test(),
+          getAnswerLayout: (testId) async => _answerLayout(),
           getProfile: (testId) async => _profile(),
           getDependencyGraph: (testId) async => _dependencyGraph(),
         );
@@ -671,7 +703,7 @@ void main() {
         // edge raises nothing (round 1 review).
         for (final finder in [
           find.text('テスト状態: 下書き'),
-          find.textContaining('回答欄 ・ 設問1'),
+          find.textContaining('回答欄・1ページ'),
         ]) {
           expect(finder, findsOneWidget);
           final rect = tester.getRect(finder);
@@ -698,6 +730,7 @@ void main() {
       getCriteria: (testId) async => throw _notFound(),
 
       getTest: (testId) async => _test(),
+      getAnswerLayout: (testId) async => _answerLayout(),
       getProfile: (testId) => profile.future,
       getDependencyGraph: (testId) async => _dependencyGraph(),
     );
@@ -726,6 +759,7 @@ void main() {
     testWidgets('抽出できなかった配点は「不明」として一覧に出る', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async =>
@@ -748,6 +782,7 @@ void main() {
       // 不明を含む一覧の横に合計だけを置くと、それが満点だと読める。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => _criteria(),
@@ -765,6 +800,7 @@ void main() {
     testWidgets('総得点と合計が食い違えば差を示す', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => _criteria(
@@ -782,6 +818,7 @@ void main() {
     testWidgets('配点が不明なままでは確定できず、理由が画面に出る', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => _criteria(),
@@ -806,6 +843,7 @@ void main() {
       List<CriteriaQuestionModel>? saved;
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -841,6 +879,7 @@ void main() {
       var extracted = 0;
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -871,6 +910,7 @@ void main() {
       var extracted = 0;
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -893,6 +933,7 @@ void main() {
     testWidgets('単価が未設定なら 0 円ではなく「未設定」と出す', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -915,6 +956,7 @@ void main() {
     testWidgets('単価が設定されていれば概算を出す', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -936,6 +978,7 @@ void main() {
       var extracted = 0;
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -966,6 +1009,7 @@ void main() {
     testWidgets('抽出が 0 件だったことと、実行していないことを別の文言で示す', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async =>
@@ -986,6 +1030,7 @@ void main() {
       // サーバの totals をそのまま出していると、ここで合計が古いままになる。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => _criteria(),
@@ -1029,6 +1074,7 @@ void main() {
       int? confirmedWith;
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async =>
@@ -1068,6 +1114,7 @@ void main() {
       // #104 の取込完了画面と同じ規律: できないことをできるように見せない。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async =>
@@ -1095,6 +1142,7 @@ void main() {
       // 止めているように見せることになる。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async => _dependencyGraph(),
         getCriteria: (testId) async => throw _notFound(),
@@ -1109,6 +1157,7 @@ void main() {
     testWidgets('配点領域が無ければ、配点未確定を残作業に挙げる', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(
           status: 'confirmed',
           regions: [_region(kind: RegionKind.question, text: '問1')],
@@ -1129,6 +1178,7 @@ void main() {
       // 画面だけが「残っていることはありません」と言う。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         // グラフが知っているのは test-1:1 と test-1:2 の2件
         getDependencyGraph: (testId) async =>
@@ -1164,6 +1214,7 @@ void main() {
     testWidgets('設問集合が一致していれば、確定済みグラフはそのまま済み扱い', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
         getDependencyGraph: (testId) async =>
             _dependencyGraph(status: 'confirmed'),
@@ -1194,6 +1245,7 @@ void main() {
       // fallback の経路はコードに残るが、画面からは作れない。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(
           regions: [_region(kind: RegionKind.question, text: '問1')],
         ),
@@ -1222,6 +1274,7 @@ void main() {
       // `initialValue` を候補に見つけられず、既存の領域を開けなくなる。
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
+        getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(
           regions: [_region(kind: RegionKind.score, text: '5点')],
         ),
@@ -1236,6 +1289,209 @@ void main() {
 
       expect(tester.takeException(), isNull);
       expect(find.byKey(const Key('region-kind-field')), findsOneWidget);
+    });
+  });
+  group('回答欄 (Issue #105)', () {
+    testWidgets('says what happens to the answer sheet before sending it', (
+      tester,
+    ) async {
+      // Detection sends whole pages; grading sends only the crop. The screen
+      // states both, and states plainly that it cannot remove a handwritten
+      // name -- the one thing this app must not claim it can do.
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.byKey(const Key('answer-layout-present')), findsOneWidget);
+      expect(find.textContaining('全ページをAIに送ります'), findsOneWidget);
+      expect(find.textContaining('切り出した回答欄の画像だけ'), findsOneWidget);
+      expect(find.textContaining('手書きの氏名を確実に消す方法はありません'), findsOneWidget);
+    });
+
+    testWidgets('cannot detect before an answer sheet is chosen', (
+      tester,
+    ) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(pageCount: null),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.byKey(const Key('answer-layout-missing')), findsOneWidget);
+      final detect = tester.widget<FilledButton>(
+        find.byKey(const Key('detect-answer-areas-button')),
+      );
+      expect(detect.onPressed, isNull);
+      // The manual path is not blocked by any of this.
+      final add = tester.widget<OutlinedButton>(
+        find.byKey(const Key('add-region-button')),
+      );
+      expect(add.onPressed, isNotNull);
+    });
+
+    testWidgets('cannot detect before the 配点 gives it questions to choose', (
+      tester,
+    ) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(questionNumbers: const [], regions: const []),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(
+        find.byKey(const Key('answer-layout-needs-questions')),
+        findsOneWidget,
+      );
+      final detect = tester.widget<FilledButton>(
+        find.byKey(const Key('detect-answer-areas-button')),
+      );
+      expect(detect.onPressed, isNull);
+    });
+
+    testWidgets('says why detection is off on this machine, and offers the '
+        'manual path instead', (tester) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(
+          detectionAvailable: false,
+          reason: 'AUTO_SCORING_AI_GRADING_TRANSPORT に画像を送れる provider がありません',
+        ),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(
+        find.textContaining('AUTO_SCORING_AI_GRADING_TRANSPORT'),
+        findsOneWidget,
+      );
+      final detect = tester.widget<FilledButton>(
+        find.byKey(const Key('detect-answer-areas-button')),
+      );
+      expect(detect.onPressed, isNull);
+      final add = tester.widget<OutlinedButton>(
+        find.byKey(const Key('add-region-button')),
+      );
+      expect(add.onPressed, isNotNull);
+    });
+
+    testWidgets('detecting shows the boxes and names what was not found', (
+      tester,
+    ) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(regions: const []),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        detectAnswerAreas: (testId) async => _profile(
+          regions: [_region(kind: RegionKind.answerArea)],
+          questionNumbers: const ['1', '2'],
+          undetectedQuestionNumbers: const ['2'],
+        ),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('detect-answer-areas-button')));
+      await tester.pumpAndSettle();
+
+      // Twice on purpose: the snackbar reports what the run did, and the
+      // editor keeps saying it until the box exists.
+      expect(find.textContaining('見つからなかった設問が1件あります'), findsWidgets);
+      expect(find.byKey(const Key('answer-area-undetected-2')), findsOneWidget);
+    });
+
+    testWidgets('a box with no question blocks the confirm, and says so', (
+      tester,
+    ) async {
+      // The sidecar refuses this too (422). The button is disabled here so the
+      // reviewer learns why before pressing it, not after.
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(
+          regions: [
+            _region(kind: RegionKind.answerArea, label: '__unassigned__'),
+          ],
+          unassignedRegionIds: const ['answerArea-__unassigned__'],
+        ),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(
+        find.byKey(const Key('unassigned-region-warning')),
+        findsOneWidget,
+      );
+      final confirm = tester.widget<FilledButton>(
+        find.byKey(const Key('confirm-profile-button')),
+      );
+      expect(confirm.onPressed, isNull);
+    });
+
+    testWidgets('assigning that box unblocks the confirm without a reload', (
+      tester,
+    ) async {
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(
+          regions: [
+            _region(kind: RegionKind.answerArea, label: '__unassigned__'),
+          ],
+        ),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+      await tester.tap(find.byKey(const Key('answer-area-question-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('1').last);
+      await tester.pumpAndSettle();
+
+      final confirm = tester.widget<FilledButton>(
+        find.byKey(const Key('confirm-profile-button')),
+      );
+      expect(confirm.onPressed, isNotNull);
+    });
+
+    testWidgets('an undetected question does not block the confirm', (
+      tester,
+    ) async {
+      // Deliberately unlike Issue #103's unknown 配点: that is confirmed into
+      // a silently wrong score, while this is sent to grading as the whole
+      // page and marked 要確認 -- it fails loudly, in front of a human.
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(
+          regions: [_region(kind: RegionKind.answerArea)],
+          questionNumbers: const ['1', '2'],
+          undetectedQuestionNumbers: const ['2'],
+        ),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.byKey(const Key('answer-area-undetected')), findsOneWidget);
+      final confirm = tester.widget<FilledButton>(
+        find.byKey(const Key('confirm-profile-button')),
+      );
+      expect(confirm.onPressed, isNotNull);
     });
   });
 }
