@@ -207,6 +207,32 @@ def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:
     return NormalizedRect(x=bbox.x0, y=bbox.y0, width=bbox.x1 - bbox.x0, height=bbox.y1 - bbox.y0)
 
 
+def _union_bbox(regions: Sequence[Region]) -> NormalizedRect:
+    """The smallest rect covering every region in ``regions`` (never empty).
+
+    Only `ANSWER_AREA` regions are unioned, and only because
+    ``Question.answer_area`` is a single rect while a real question's answer
+    space is sometimes several separate boxes -- one measured subject gives
+    one question five small squares, one per sub-item (Issue #105). Taking
+    the first region and ignoring the rest, which is what this did before,
+    cropped four fifths of that answer away and said nothing; the student's
+    writing simply never reached the grader.
+
+    Deliberately *not* applied to `SCORE` / `ANNOTATION_AREA` below. Those
+    are placement points -- where a mark gets drawn on the exported PDF
+    (`domain.pdf_export`) -- not crop regions, and the union of two
+    placements is a third position where nothing belongs. Those keep
+    first-wins.
+    """
+    return NormalizedRect(
+        x=min(region.bbox.x0 for region in regions),
+        y=min(region.bbox.y0 for region in regions),
+        width=max(region.bbox.x1 for region in regions) - min(region.bbox.x0 for region in regions),
+        height=max(region.bbox.y1 for region in regions)
+        - min(region.bbox.y0 for region in regions),
+    )
+
+
 def _combined_text(regions: Sequence[Region]) -> str | None:
     texts = [region.text.strip() for region in regions if region.text and region.text.strip()]
     return "\n".join(texts) if texts else None
@@ -498,9 +524,14 @@ def build_questions_and_rubrics(
                 number=number,
                 page=(anchor_region.page_index + 1) if anchor_region is not None else 1,
                 points=points,
+                # Issue #103 supplies the scoring method and model answer
+                # (the confirmed 採点基準 draft); Issue #105 supplies the
+                # coordinates. Each field comes from whichever artefact
+                # actually knows it.
                 scoring_method=scoring_method,
                 model_answer=model_answer,
-                answer_area=_bbox_to_rect(answer_regions[0].bbox) if answer_regions else None,
+                answer_area=_union_bbox(answer_regions) if answer_regions else None,
+                # First-wins, unlike `answer_area` above -- see `_union_bbox`.
                 score_area=_bbox_to_rect(score_regions[0].bbox) if score_regions else None,
                 comment_area=(
                     _bbox_to_rect(annotation_regions[0].bbox) if annotation_regions else None
