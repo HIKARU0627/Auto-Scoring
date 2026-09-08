@@ -23,7 +23,7 @@
         "max_score": 10,
         "ocr_clean": "1234年",
         "ocr_noisy": "l234年",
-        "answer_image_ref": "sha256:synthetic-answer-image-poc2-synth-03"
+        "answer_image_ref": "sha256:6342e82298b8c2a6bf56e83cb53a10d56c6319bef326c147ddf34d90d1772fe5"
       },
       "recorded": {
         "synthetic-a": {

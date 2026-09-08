@@ -15,6 +15,17 @@ vendor identifiers. The real evaluation dataset (manually transcribed from
 licensed exam material) stays outside the repo
 (`docs/business-rules-and-evaluation-data.md` section 6.5).
 
+## `images/`
+
+One synthetic 8x8 PNG per sample, named `<sha256 of its own bytes>.png` --
+which is exactly what that sample's `input.answer_image_ref` says. They
+exist so the fixtures are internally consistent (an `answer_image_ref` that
+claims to be a content hash but is not one cannot be verified by anything),
+and so `poc/issue_14_ai_grading/record.py`'s `--images` resolution and hash
+check can be rehearsed without any real answer crop. Invented images of
+nothing: no student work, no scan, no real crop -- and a real answer-region
+crop must never be added here (`docs/poc-2-ai-grading.md` section 11).
+
 ## File shape
 
 Each `sample-*.json` is one *submission* (one real answer sheet --

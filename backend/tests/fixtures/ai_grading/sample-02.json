@@ -27,7 +27,7 @@
         "max_score": 30,
         "ocr_clean": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美術の制作が始まった。",
         "ocr_noisy": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美祢の制作が始まった。",
-        "answer_image_ref": "sha256:synthetic-answer-image-poc2-synth-02"
+        "answer_image_ref": "sha256:fd1fe6da279d590ac0d779be883fdda36aaa01f05b4dc4245ca4cfa0be4924cd"
       },
       "recorded": {
         "synthetic-a": {
