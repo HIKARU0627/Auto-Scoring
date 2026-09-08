@@ -358,6 +358,16 @@ Future<void> _settlePdf(WidgetTester tester) async {
   });
 }
 
+/// Pumps [times] frames without advancing the clock, to let a chain of
+/// already-resolved Futures land. `pumpAndSettle` cannot be used on this
+/// screen while any job is still in flight: the 3-second poll keeps
+/// scheduling frames, so nothing ever settles.
+Future<void> _pumpTimes(WidgetTester tester, int times) async {
+  for (var i = 0; i < times; i++) {
+    await tester.pump();
+  }
+}
+
 /// The pdfium shared library that `flutter test` builds but never wires up,
 /// or `null` when this platform does not need the detour.
 ///
@@ -3434,6 +3444,171 @@ void main() {
       expect(find.byKey(const Key('dag-unconfirmed-notice')), findsNothing);
       expect(find.byKey(const Key('review-shell-error')), findsNothing);
       expect(find.byKey(const Key('review-inspector')), findsOneWidget);
+    });
+  });
+
+  group('Issue #80: ジョブが無い答案からAI採点を開始する', () {
+    /// 問1 -> 問2 の確定グラフを持つテストの、ジョブが [jobs] の答案。
+    AppDependencies gradingDependencies({
+      required List<JobResponse> Function() jobs,
+      StartGrading? startGrading,
+    }) => AppDependencies(
+      getSubmission: (_) async => _submission(state: 'ai_processed'),
+      listQuestions: (_) async => [
+        _question(),
+        _question(id: 'q-2', number: '2'),
+      ],
+      getSourcePdf: (_) async => _pocA4PortraitPdf(),
+      getDependencyGraph: (_) async => _dependencyGraph(),
+      listJobs: (_) async => jobs(),
+      startGrading:
+          startGrading ?? (submissionId) async => const <JobResponse>[],
+      listRecognitions: (_, _) async => const [],
+      listGrades: (_, _) async => const [],
+      listAnnotations: (_, _) async => const [],
+      listReviews: (_, _) async => const [],
+    );
+
+    testWidgets('ジョブが1件も無い答案には「AI採点を開始」が出て、押すとジョブができる', (tester) async {
+      // Issue #80 より前に取り込まれた答案、および自動起票が失敗した答案は、
+      // ここが唯一の復帰口である。
+      var jobs = <JobResponse>[];
+      final started = <String>[];
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => jobs,
+          startGrading: (submissionId) async {
+            started.add(submissionId);
+            jobs = [
+              _jobFor('q-1', state: 'queued', usable: null),
+              _jobFor(
+                'q-2',
+                state: 'blocked',
+                usable: null,
+                blockedOnQuestionId: 'q-1',
+              ),
+            ];
+            return jobs;
+          },
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(
+        find.byKey(const Key('review-grading-not-started')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      // `pumpAndSettle` は使えない -- 起票が通るとジョブが実行中になり、
+      // 3秒ごとのポーリングが動き続けるので settle しない (Issue #64 の
+      // テストと同じ理由)。
+      await _pumpTimes(tester, 5);
+      await tester.pump(AppMotion.emphasis);
+
+      expect(started, ['sub-1']);
+      // 起票のあとはジョブを取り直すだけで、図がそのまま動き出す。
+      expect(find.byKey(const Key('review-grading-not-started')), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-1'))).data,
+        '実行待ち',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
+        '問1 待ち',
+      );
+    });
+
+    testWidgets('ジョブが1件でもあれば「AI採点を開始」は出さない', (tester) async {
+      // 起票は済んでいる。ここにボタンを置くと「押せばもう一度採点される」と
+      // 読めるが、実際は idempotent で何も起きない。再実行は再判定と
+      // `POST /jobs/{id}/retry` の担当である。
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => [
+            _jobFor('q-1', state: 'running', usable: null),
+            _jobFor(
+              'q-2',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('review-grading-not-started')), findsNothing);
+    });
+
+    testWidgets('ジョブ一覧が取れていないときは「まだ開始されていません」と言わない', (tester) async {
+      // ジョブが空なのは「作られていない」からとは限らない -- 取得に失敗した
+      // ときも空である。区別できないものを断定しない。
+      await _pumpReview(
+        tester,
+        AppDependencies(
+          getSubmission: (_) async => _submission(state: 'ai_processed'),
+          listQuestions: (_) async => [_question()],
+          getSourcePdf: (_) async => _pocA4PortraitPdf(),
+          getDependencyGraph: (_) async => _dependencyGraph(),
+          listJobs: (_) async => throw SidecarApiException(
+            SidecarErrorKind.unavailable,
+            'sidecar is not reachable',
+          ),
+          listRecognitions: (_, _) async => const [],
+          listGrades: (_, _) async => const [],
+          listAnnotations: (_, _) async => const [],
+          listReviews: (_, _) async => const [],
+        ),
+      );
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-grading-not-started')), findsNothing);
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('確定DAGが無いときの409は理由を出すだけで、画面をエラーにしない', (tester) async {
+      // レビュアーは答案・認識文字・採点を読み続けられる。グラフが無いことを
+      // 画面のエラー状態にしないのと同じ扱い
+      // (docs/dependency-dag-progress-view.md §1.7, §1.11)。
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => const [],
+          startGrading: (submissionId) async => throw SidecarApiException(
+            SidecarErrorKind.conflict,
+            "test 'test-1' has no confirmed, up-to-date dependency graph",
+            statusCode: 409,
+          ),
+        ),
+      );
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await _pumpTimes(tester, 5);
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('review-start-grading-error')))
+            .data,
+        contains('設問依存関係が確定していない'),
+      );
+      expect(find.byKey(const Key('review-shell-error')), findsNothing);
+      // もう一度押せる。押し直すのがそのまま再試行である。
+      expect(
+        find.byKey(const Key('review-start-grading-button')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('review-question-rail')), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 

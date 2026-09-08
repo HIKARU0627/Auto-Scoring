@@ -12,6 +12,7 @@ import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
@@ -350,6 +351,25 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   DependencyGraphResponse? _dependencyGraph;
   Timer? _pollTimer;
 
+  /// Whether [_refreshJobs] has ever come back successfully. `false` covers
+  /// both "not fetched yet" and "the fetch failed", which [_jobs] cannot tell
+  /// apart on its own -- it is an empty list in all three cases, including
+  /// the genuine "no job was ever created". 「AI採点はまだ開始されていません」
+  /// is a claim about the sidecar's state, so it must not be made off a list
+  /// this screen never managed to read (Issue #80).
+  bool _jobsLoaded = false;
+
+  /// True while 「AI採点を開始」 is in flight (Issue #80), so the button is
+  /// disabled rather than able to fire a second request on top of the first.
+  bool _startingGrading = false;
+
+  /// Why the last 「AI採点を開始」 failed, or `null`. Deliberately *not*
+  /// [_shellError]: the reviewer can still read the answer, the recognized
+  /// text and the grades while grading refuses to start, exactly as a missing
+  /// dependency graph does not become this screen's error state either
+  /// (`docs/dependency-dag-progress-view.md` §1.7, §1.11).
+  String? _gradingError;
+
   @override
   void initState() {
     super.initState();
@@ -612,12 +632,42 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final jobs = await _dependencies.listJobs(widget.submissionId);
       if (!mounted) return;
-      setState(() => _jobs = jobs);
+      setState(() {
+        _jobs = jobs;
+        _jobsLoaded = true;
+      });
     } on SidecarApiException {
       // Keep the last-known jobs list -- retried on the next tick/refresh.
       return;
     }
     await _refetchDependencyGraphIfSuperseded();
+  }
+
+  /// 「AI採点を開始」 -- `POST /submissions/{id}/jobs` (Issue #80).
+  ///
+  /// Offered only while this submission has no jobs at all
+  /// ([_buildStartGradingSection]). On success there is nothing to render
+  /// specially: re-reading the jobs is enough, and the diagram, the rail and
+  /// the Inspector all start showing real states through the same
+  /// [_questionStatus] they already use.
+  ///
+  /// Idempotent server-side, so a double press cannot create a second set of
+  /// jobs (`docs/job-queue.md`「起票のタイミング」).
+  Future<void> _startGrading() async {
+    setState(() {
+      _startingGrading = true;
+      _gradingError = null;
+    });
+    try {
+      await _dependencies.startGrading(widget.submissionId);
+      await _refreshJobs();
+      _updatePolling();
+    } on SidecarApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _gradingError = gradingKickoffErrorMessage(error));
+    } finally {
+      if (mounted) setState(() => _startingGrading = false);
+    }
   }
 
   /// Re-reads the dependency graph whenever what is on screen is no longer
@@ -1380,6 +1430,84 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// The band above the rail: 「AI採点を開始」 when nothing has been queued
+  /// for this submission yet, then the 設問依存DAG 進捗 panel (Issue #64).
+  /// `null` when there is neither.
+  Widget? _buildDependencyDagSection() {
+    final start = _buildStartGradingSection();
+    final diagram = _buildDependencyDagDiagram();
+    if (start == null) return diagram;
+    if (diagram == null) return start;
+    return Column(mainAxisSize: MainAxisSize.min, children: [start, diagram]);
+  }
+
+  /// 「この答案のAI採点はまだ開始されていません」+「AI採点を開始」, or `null`
+  /// once any job exists (Issue #80, `docs/dependency-dag-progress-view.md`
+  /// §1.11).
+  ///
+  /// **Only at zero jobs.** One job is proof the submission was already
+  /// queued, and a button sitting there would read as "press to grade it
+  /// again" -- which it is not (the call is idempotent and would do nothing).
+  /// Re-running a question is 再判定 and `POST /jobs/{id}/retry`.
+  ///
+  /// Shown regardless of what the dependency graph looks like: the
+  /// unconfirmed-graph notice below says only that the *diagram* cannot be
+  /// drawn, never that grading has not started, and 409 is where the reviewer
+  /// finds out that the graph is what is in the way.
+  ///
+  /// Not shown at all until the job list has actually been read once
+  /// ([_jobsLoaded]) -- an empty [_jobs] because the fetch failed is not the
+  /// same fact as an empty [_jobs] because nothing was ever queued, and only
+  /// the second one may be said out loud.
+  Widget? _buildStartGradingSection() {
+    if (!_jobsLoaded || _jobs.isNotEmpty) return null;
+    final error = _gradingError;
+    return Padding(
+      padding: AppSpacing.banner,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.play_circle_outline,
+                size: AppIconSize.inline,
+                color: AppStatusTone.neutral.color(context),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(
+                  'この答案のAI採点はまだ開始されていません',
+                  key: const Key('review-grading-not-started'),
+                  style: context.texts.bodyMedium,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              FilledButton.icon(
+                key: const Key('review-start-grading-button'),
+                onPressed: _startingGrading ? null : () => _startGrading(),
+                icon: const Icon(Icons.play_arrow),
+                label: const Text(startGradingLabel),
+              ),
+            ],
+          ),
+          if (error != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            // `retryable: false`: the 「AI採点を開始」 button right above *is*
+            // the retry, and a second one inside the banner would be two
+            // controls for one action.
+            AppErrorBanner(
+              message: error,
+              messageKey: const Key('review-start-grading-error'),
+              retryable: false,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// The 設問依存DAG 進捗 panel (Issue #64), or `null` when there is nothing
   /// truthful to draw.
   ///
@@ -1390,7 +1518,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the latest version. Drawing it would show a dependency structure the
   /// running pipeline is not using. The notice says so rather than leaving
   /// the panel silently missing.
-  Widget? _buildDependencyDagSection() {
+  Widget? _buildDependencyDagDiagram() {
     final graph = _dependencyGraph;
     if (graph == null) return null;
     if (graph.status != 'confirmed') {
