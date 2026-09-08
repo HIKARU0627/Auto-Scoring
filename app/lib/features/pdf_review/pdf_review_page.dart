@@ -2112,13 +2112,26 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     }
     final showsContent =
         review != null && !review.loading && review.error == null;
-    // The panel's own metrics, once it has actually laid out. The common case
-    // -- "it all fits, so all of it has been seen" -- produces no scroll
-    // notification of any kind, so waiting for one would leave 承認 disabled
-    // on a panel with nothing below the fold and nothing to say about it.
-    // Cheap and self-terminating: `_recordMaterialRead` calls `setState` only
-    // when something really changed, so the rebuild it causes settles rather
-    // than scheduling another round.
+    // 「いま末尾が画面に出ているか」を測り直す契機は3つあり、**3つとも要る。**
+    // 「材料が変わったか」は材料の識別子だけで答えられるが、こちらは現在の
+    // レイアウトについての問いなので、レイアウトが変わり得るたびに測り直す
+    // ほかない。分けたぶん、片方だけ更新されない状態が作れてしまう。
+    //
+    // 1. 指が動かしたとき — `ScrollNotification`（下）。
+    // 2. この画面が build されたとき — 直下の post-frame。最初のレイアウト、
+    //    設問の切り替え、データの到着がここに入る。内容が収まってしまう
+    //    ふつうのケースはスクロール通知を1度も出さないので、通知だけに
+    //    頼ると「下端外に何も無い画面で承認が出せない」形で固まる。
+    // 3. build を伴わずレイアウトだけ変わったとき —
+    //    `ScrollMetricsNotification`（下）。進捗パネルを畳むのはそのパネル
+    //    自身の `setState` なので、この画面は build されない。指も触れて
+    //    いないので 1 も 2 も鳴らないまま、Inspector のビューポートだけが
+    //    広がる。`maxScrollExtent` が 79.4 から 0 になっても未読のままで、
+    //    ポーリングの止まった設問ではそのまま直らなかった
+    //    （レビュー3回目 P2）。
+    //
+    // 2 と 3 が重なって鳴るのは無害である。`_recordMaterialRead` は本当に
+    // 変わったときしか `setState` しないので、余分な測り直しはそこで止まる。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_inspectorScrollController.hasClients) return;
       _recordMaterialRead(_inspectorScrollController.position);
@@ -2139,55 +2152,63 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           // 判断材料 and nothing else (Issue #85, レビュー1回目 P2).
           child: Stack(
             children: [
-              // Live updates while the reviewer is actually dragging; the
-              // post-frame check above covers everything that changes without
-              // a gesture behind it.
-              NotificationListener<ScrollNotification>(
+              // Trigger 3: the metrics changed with neither a gesture nor a
+              // build of this screen behind it. Dispatched from a microtask
+              // rather than during layout, so reacting with `setState` is
+              // safe here.
+              NotificationListener<ScrollMetricsNotification>(
                 onNotification: (notification) {
                   _recordMaterialRead(notification.metrics);
                   return false;
                 },
-                child: SingleChildScrollView(
-                  key: const Key('review-inspector'),
-                  controller: _inspectorScrollController,
-                  padding: AppSpacing.panel,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Heading and state on one line rather than stacked:
-                      // this panel is the only place the 判断材料 lives, and
-                      // every row it does not spend on a heading is a row of
-                      // 根拠/コメント/基準ごとの判定 that gets to stay on
-                      // screen with the 承認 button (Issue #85). The badge is
-                      // still the *question's* state, still reading
-                      // `_questionStatus` like the rail and the panel do, and
-                      // still adjacent to the 問N it belongs to (Issue #84) --
-                      // only the axis it is stacked on changed.
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '問${question.number}',
-                              style: context.texts.titleLarge,
+                // Trigger 1: the reviewer dragging, live.
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    _recordMaterialRead(notification.metrics);
+                    return false;
+                  },
+                  child: SingleChildScrollView(
+                    key: const Key('review-inspector'),
+                    controller: _inspectorScrollController,
+                    padding: AppSpacing.panel,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Heading and state on one line rather than stacked:
+                        // this panel is the only place the 判断材料 lives, and
+                        // every row it does not spend on a heading is a row of
+                        // 根拠/コメント/基準ごとの判定 that gets to stay on
+                        // screen with the 承認 button (Issue #85). The badge is
+                        // still the *question's* state, still reading
+                        // `_questionStatus` like the rail and the panel do, and
+                        // still adjacent to the 問N it belongs to (Issue #84) --
+                        // only the axis it is stacked on changed.
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '問${question.number}',
+                                style: context.texts.titleLarge,
+                              ),
                             ),
-                          ),
-                          _buildQuestionStateChip(question),
-                        ],
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      if (review == null || review.loading)
-                        const Center(
-                          key: Key('review-question-loading'),
-                          child: Padding(
-                            padding: AppSpacing.page,
-                            child: CircularProgressIndicator(),
-                          ),
-                        )
-                      else if (review.error != null)
-                        _buildQuestionError(review.error!)
-                      else
-                        _buildQuestionContent(question, review),
-                    ],
+                            _buildQuestionStateChip(question),
+                          ],
+                        ),
+                        const SizedBox(height: AppSpacing.lg),
+                        if (review == null || review.loading)
+                          const Center(
+                            key: Key('review-question-loading'),
+                            child: Padding(
+                              padding: AppSpacing.page,
+                              child: CircularProgressIndicator(),
+                            ),
+                          )
+                        else if (review.error != null)
+                          _buildQuestionError(review.error!)
+                        else
+                          _buildQuestionContent(question, review),
+                      ],
+                    ),
                   ),
                 ),
               ),

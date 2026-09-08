@@ -4217,6 +4217,8 @@ void main() {
       String rationale = '（デモ）採点根拠の文がここに入ります。',
       String comment = '（デモ）総評コメントがここに入ります。',
       int criterionCount = 2,
+      List<JobResponse> jobs = const [],
+      DateTime? gradeCreatedAt,
       ApproveReview? approveReview,
     }) {
       final rubric = [
@@ -4237,6 +4239,7 @@ void main() {
           _grade(
             rationale: rationale,
             comment: comment,
+            createdAt: gradeCreatedAt,
             criteria: [
               for (final criterion in rubric)
                 CriterionResultResponse(
@@ -4249,6 +4252,7 @@ void main() {
           ),
         ],
         graph: fiveQuestionGraph(),
+        jobs: jobs,
         approveReview: approveReview,
       );
     }
@@ -4650,6 +4654,63 @@ void main() {
         const Offset(0, 600),
       );
       await expectStillRead('scrolling back to the top');
+    });
+
+    testWidgets('build を伴わないレイアウト変更でも、末尾判定は測り直される', (tester) async {
+      // 進捗パネルを畳むのは、そのパネル自身の `setState` である。この画面の
+      // `build` は走らないので post-frame 判定の契機にならず、指が触れて
+      // いないので `ScrollNotification` も飛ばない。それでも Inspector の
+      // ビューポートは広がり、`maxScrollExtent` は変わる。**測り直す契機を
+      // 持たない変化**がここにあった（レビュー3回目 P2）。
+      await pumpAt(
+        tester,
+        const Size(700, 1200),
+        reviewableQuestion(
+          criterionCount: 0,
+          rationale: '',
+          comment: '',
+          // A finished job whose grade is newer than it, so this question is
+          // *settled*: polling stops. That matters -- a running poll rebuilds
+          // this screen every three seconds and would paper over a missing
+          // trigger by re-measuring on its own.
+          jobs: [_jobFor('q-1')],
+          gradeCreatedAt: DateTime.utc(2026, 1, 2),
+        ),
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
+        reason: 'the premise: the material does not fit while the band is open',
+      );
+
+      await tester.tap(find.byKey(const Key('dag-toggle-button')));
+      await tester.pumpAndSettle();
+
+      final inspector = tester.state<ScrollableState>(
+        find.descendant(
+          of: find.byKey(const Key('review-inspector')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(
+        inspector.position.maxScrollExtent,
+        0,
+        reason: 'the premise: folding the band away makes it all fit',
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsNothing,
+        reason: 'nothing is below the fold any more',
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+        reason: 'the whole of it is on screen, so it has been shown',
+      );
     });
 
     testWidgets('材料そのものが増えたときは未読に戻る', (tester) async {
