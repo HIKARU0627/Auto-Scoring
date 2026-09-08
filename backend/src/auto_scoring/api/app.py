@@ -42,6 +42,7 @@ from auto_scoring.api.export_router import build_export_router
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
+from auto_scoring.api.secret_redaction import configuration_secrets, redact
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
@@ -225,11 +226,17 @@ def build_ai_provider(
     try:
         return factory(env)
     except AIProviderConfigError as error:
-        return UnconfiguredAIProvider(str(error))
+        reason = str(error)
     except Exception as error:
-        return UnconfiguredAIProvider(
+        reason = (
             f"building the AI grading provider failed ({type(error).__name__}); see the sidecar log"
         )
+    # Scrubbed even though neither message above is supposed to contain a
+    # value: this is the other half of `api.secret_redaction`'s gate (the log
+    # filter is the first), and the point of a gate is that it does not
+    # depend on every message upstream of it being written correctly. Round
+    # 1's leak was precisely an upstream message that was not.
+    return UnconfiguredAIProvider(redact(reason, configuration_secrets(env)))
 
 
 def create_app(

@@ -141,6 +141,35 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u OP_SERVICE_ACCOUNT_TOKEN \
 ネットワーク到達性、ロケール、`HOME` 配下の設定。ネットワークを使うアダプタは
 `httpx.Client` を注入して `MockTransport` で閉じる（`tests/test_ai_provider_*`）。
 
+## 新しい公開経路を作ったら、そこへ流れ込むものを全部見直す
+
+Issue #97 は「なぜ採点が使えないかを画面で伝える」ために、`GET /grading/availability`
+という**新しい公開経路**を作った。そこで既存の文字列が2回続けて漏れた:
+
+1. `create_ai_provider()` の設定エラー本文（読めなかった温度の値・未知 transport 名・
+   `AUTO_SCORING_CODEX_EXECUTABLE` の設定値）。「ログにしか出ない」前提で書かれていた。
+2. Vertex アダプタが `AUTO_SCORING_VERTEX_PROJECT` / `AUTO_SCORING_GEMINI_MODEL` から
+   組み立てる**リクエスト URL**。httpx が INFO で出し、サイドカーは root を INFO にして
+   回転ファイルログへ書くため、404 応答だけで永続ログに残った。
+
+どちらも「操作者が API キーを別の変数へ貼った」という同じ事故で、どちらも
+**誰かが意図して作った経路ではない**。
+
+**経路を数え上げるのではなく、外へ出る場所にゲートを置く。** 経路の列挙は必ず
+取りこぼす（次はヘッダ、リトライの診断、例外の `__cause__` 連鎖）。
+`backend/src/auto_scoring/api/secret_redaction.py` が「設定値とは何か」を1か所で定義し、
+テキストがこのプロセスを出る2か所 -- `install_log_redaction`（ログ設定はここだけ。
+uvicorn は `log_config=None` で起動するので uvicorn のロガーも root のハンドラを通る）と
+`build_ai_provider`（reason を作るのはここだけ）-- が同じ規則を適用する。
+
+ゲートはあくまで網であって免罪符ではない。値を本文に書くメッセージは今も不具合であり
+（`adapters/ai_grading/factory.py` のモジュール docstring）、網はこのプロセスが
+**設定として渡された値しか知らない**。
+
+**テストは「認証情報が無い状態」だけを見ない。** 2 は「ADC があって実際に通信する」
+経路にしか無く、未設定だけを流していた漏洩テストでは踏めなかった
+（`tests/test_sidecar.py` の URL 漏洩テストは `MockTransport` の 404 で実際に通る）。
+
 ## Where the gate list lives
 
 The gate list is defined in two places that must stay in step:

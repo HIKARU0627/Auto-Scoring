@@ -19,7 +19,7 @@ from httpx import Response
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
-from auto_scoring.adapters.ai_grading.factory import create_ai_provider
+from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
 from auto_scoring.adapters.ai_grading.fallback_provider import FallbackAIProvider
 from auto_scoring.api.app import build_ai_provider, create_app
 from auto_scoring.domain.ai_provider import (
@@ -240,6 +240,31 @@ def test_an_unreadable_temperature_is_not_quoted_back() -> None:
 
     assert isinstance(provider, UnconfiguredAIProvider)
     assert "AUTO_SCORING_AI_GRADING_TEMPERATURE" in provider.reason
+    assert _FAKE_KEY not in provider.reason
+
+
+def test_a_reason_that_quotes_a_configuration_value_is_scrubbed_anyway() -> None:
+    """The gate, not the discipline (review round 2).
+
+    `factory.py` is forbidden from quoting configuration values, and the
+    matrix below holds it to that. This asserts the *other* half: if a future
+    message starts quoting one anyway -- which is exactly what round 1 found
+    -- `build_ai_provider` still does not publish it, because it redacts
+    against this host's own configuration on the way out
+    (`api.secret_redaction`).
+    """
+
+    def _quotes_the_value(env: Mapping[str, str]) -> AIProvider:
+        value = env["AUTO_SCORING_OPENROUTER_API_KEY"]
+        raise AIProviderConfigError(f"AUTO_SCORING_OPENROUTER_API_KEY is not usable: {value}")
+
+    provider = build_ai_provider(
+        {**_ALL_FOUR_TRANSPORTS, "AUTO_SCORING_OPENROUTER_API_KEY": _FAKE_KEY},
+        factory=_quotes_the_value,
+    )
+
+    assert isinstance(provider, UnconfiguredAIProvider)
+    assert "AUTO_SCORING_OPENROUTER_API_KEY" in provider.reason
     assert _FAKE_KEY not in provider.reason
 
 

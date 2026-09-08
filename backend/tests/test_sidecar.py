@@ -9,12 +9,16 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import uvicorn
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ai_grading.vertex_gemini_provider import VertexGeminiAIProvider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.api import sidecar
+from auto_scoring.api.secret_redaction import configuration_secrets
 from auto_scoring.api.sidecar import (
     ALREADY_RUNNING_EXIT_CODE,
     LOOPBACK,
@@ -25,6 +29,10 @@ from auto_scoring.api.sidecar import (
 )
 from auto_scoring.db.engine import sqlite_url
 from auto_scoring.db.migrator import upgrade
+from auto_scoring.domain.ai_provider import ProviderUnavailable
+
+from .test_ai_provider_contract import _VALID_REQUEST
+from .test_ai_provider_vertex_gemini_contract import _FakeCredentials
 
 
 @pytest.fixture(autouse=True)
@@ -175,6 +183,63 @@ def test_startup_migrations_do_not_dismantle_the_log_configuration(
     assert "s3cr3t-token" not in written, "redaction filter was lost during migrations"
 
 
+def test_a_configuration_value_in_a_request_url_never_reaches_the_file_log(
+    tmp_path: Path,
+) -> None:
+    """Review round 2, the leak this gate exists for.
+
+    The Vertex adapter builds ``AUTO_SCORING_VERTEX_PROJECT`` and
+    ``AUTO_SCORING_GEMINI_MODEL`` into the request URL, httpx logs that URL
+    at INFO, and the sidecar runs the root logger at INFO with a rotating
+    file handler -- so a key pasted into either variable was written to a
+    log that outlives the session, by a code path that never goes through
+    one of this project's own log calls. A 4xx is enough to see it; no
+    successful grading is needed.
+
+    Deliberately end to end (real adapter, real httpx client over
+    `MockTransport`, real handlers) rather than a filter unit test: what
+    round 2 showed is that reasoning about *which* strings reach the log is
+    exactly what goes wrong, so this asserts on the bytes on disk.
+    """
+    project = "sk-pasted-into-vertex-project-DO-NOT-USE"
+    environment = {
+        "AUTO_SCORING_VERTEX_PROJECT": project,
+        "AUTO_SCORING_GEMINI_MODEL": "gemini-2.5-flash",
+    }
+    log_directory = tmp_path / "logs"
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    try:
+        install_log_redaction(
+            "session-token",
+            log_directory,
+            secrets=configuration_secrets(environment),
+        )
+        provider = VertexGeminiAIProvider(
+            model=environment["AUTO_SCORING_GEMINI_MODEL"],
+            prompt_version="v1",
+            tokens=AdcTokenSource(credentials=_FakeCredentials(), project_id=project),
+            client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(404, json={"error": "no such model"})
+                )
+            ),
+        )
+        with pytest.raises(ProviderUnavailable):
+            provider.grade(_VALID_REQUEST)
+    finally:
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
+
+    written = (log_directory / sidecar.LOG_FILENAME).read_text(encoding="utf-8")
+    # The record really was emitted -- otherwise this test would pass just as
+    # well against a build that logs nothing at all.
+    assert "HTTP Request" in written
+    assert project not in written
+    assert "***" in written
+
+
 def test_emit_handshake_writes_one_json_line(tmp_path: Path) -> None:
     target = tmp_path / "handshake.json"
     sidecar._emit_handshake(Handshake(host=LOOPBACK, port=51234, token="abc"), target)
@@ -188,7 +253,7 @@ def test_run_binds_loopback_and_hands_off_matching_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
-    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args: None)
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
 
     captured: dict[str, Any] = {}
 
@@ -252,7 +317,7 @@ def test_run_starts_and_serves_on_a_host_with_no_ai_credentials(
     to have configured.
     """
     monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
-    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args: None)
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
 
     seen: dict[str, Mapping[str, str]] = {}
     provider = UnconfiguredAIProvider("no transport configured on this host")

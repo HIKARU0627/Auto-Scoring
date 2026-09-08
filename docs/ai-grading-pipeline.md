@@ -156,6 +156,22 @@ docstring）、それ以外の想定外例外は**例外型名だけ**を残し�
 HTTP応答本文にも出ないことを確認する（既知の悪いメッセージの一覧ではなく変数の
 一覧にしてあるのは、将来また値を書き始めたメッセージを捕まえるため）。
 
+**同じ事故がもう1つの経路でも起きた（レビュー2回目 P2）。** Vertex アダプタは
+`AUTO_SCORING_VERTEX_PROJECT` / `AUTO_SCORING_GEMINI_MODEL` をリクエスト URL へ
+組み込み、httpx がそれを INFO でログに出す。サイドカーは root を INFO にして回転
+ファイルログへ書くので、404 応答だけで設定値が永続ログに残っていた。**この経路は
+本Issueが作った**（実providerに繋いだからこそ URL が組み立てられる）。
+
+経路を数え上げるのをやめ、**外へ出る場所にゲートを置いた**:
+`api/secret_redaction.py` が「設定値とは何か」を1か所で定義し
+（`AUTO_SCORING_` 名前空間の、12文字以上の値と資格情報系の変数。`v1`・`0.0`・
+`global` のような短い構造的な値は伏せない -- 伏せるとログが読めなくなる）、
+テキストがプロセスを出る2か所がこれを適用する: `install_log_redaction`
+（このプロセスがログを設定する唯一の場所。uvicorn は `log_config=None` で起動する
+ので uvicorn のロガーも root のハンドラを通る）と `build_ai_provider`
+（reason を作る唯一の場所）。詳細と教訓は `docs/quality-gates.md`
+「新しい公開経路を作ったら、そこへ流れ込むものを全部見直す」。
+
 実キーでの疎通・schema 検証は Issue #35 で 4 経路すべて実施済み
 （[`poc-2-ai-grading.md`](./poc-2-ai-grading.md) §7.4。合成フィクスチャのみを送信）。
 

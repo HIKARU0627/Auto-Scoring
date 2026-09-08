@@ -13,7 +13,10 @@ Design decisions live in ``docs/technology-stack.md`` §1.1-§1.2 and
   second instance (or an unrelated process holding the port) does not block
   startup.
 * The token is written only to the handshake channel. A logging filter redacts
-  it from anything that reaches the application log.
+  it -- and this host's configuration values (`api.secret_redaction`) -- from
+  anything that reaches the application log, including records this project
+  never wrote itself (httpx logs every request URL at INFO, and the Vertex
+  adapter builds that URL out of configuration).
 * The handshake is written *after* ``create_app`` succeeds, so a handshake file
   never advertises a ``host:port`` this process will not go on to serve
   (``docs/windows-distribution.md`` §4).
@@ -39,6 +42,7 @@ from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvide
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
 from auto_scoring.api.app import build_ai_provider, create_app
 from auto_scoring.api.auth import generate_token
+from auto_scoring.api.secret_redaction import configuration_secrets, redact
 
 LOOPBACK = "127.0.0.1"
 """The only interface the sidecar ever binds. Keeps the API off the LAN."""
@@ -129,16 +133,23 @@ def _bind_socket(requested: int, host: str = LOOPBACK) -> socket.socket:
 
 
 class _RedactingFilter(logging.Filter):
-    """Replaces the bearer token with ``***`` in every log record."""
+    """Replaces every known secret with ``***`` in every log record.
 
-    def __init__(self, secret: str) -> None:
+    The log half of `api.secret_redaction`'s gate: the session token plus
+    this host's configuration values (review round 2 -- a value reaches the
+    log through code that never calls a logger of ours, such as httpx's
+    INFO-level request URL).
+    """
+
+    def __init__(self, secrets: Sequence[str]) -> None:
         super().__init__()
-        self._secret = secret
+        self._secrets = tuple(secret for secret in secrets if secret)
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        if self._secret in message:
-            record.msg = message.replace(self._secret, "***")
+        scrubbed = redact(message, self._secrets)
+        if scrubbed != message:
+            record.msg = scrubbed
             record.args = ()
 
         # The formatted message is not the only thing a handler writes. Since
@@ -156,13 +167,22 @@ class _RedactingFilter(logging.Filter):
         if record.exc_info is not None:
             if record.exc_text is None:
                 record.exc_text = logging.Formatter().formatException(record.exc_info)
-            if self._secret in record.exc_text:
-                record.exc_text = record.exc_text.replace(self._secret, "***")
+            record.exc_text = redact(record.exc_text, self._secrets)
         return True
 
 
-def install_log_redaction(token: str, log_directory: Path | None = None) -> None:
-    """Route logging through handlers that all scrub ``token``.
+def install_log_redaction(
+    token: str,
+    log_directory: Path | None = None,
+    *,
+    secrets: Sequence[str] = (),
+) -> None:
+    """Route logging through handlers that all scrub ``token`` and ``secrets``.
+
+    ``secrets`` is this host's configuration values (`configuration_secrets`)
+    -- the single gate described there. Empty by default so a caller that
+    only wants the session token scrubbed, and every test that installs
+    logging, says nothing about the machine's environment.
 
     Always to stderr; additionally to a rotating file under ``log_directory``
     when one is given. The file is what makes the log useful in a
@@ -201,11 +221,12 @@ def install_log_redaction(token: str, log_directory: Path | None = None) -> None
         except OSError as error:
             file_log_error = error
 
+    scrubbed = (token, *secrets)
     for handler in handlers:
         handler.setFormatter(formatter)
         # A filter instance per handler, not one shared -- logging holds
         # filters per handler and this keeps each handler independent.
-        handler.addFilter(_RedactingFilter(token))
+        handler.addFilter(_RedactingFilter(scrubbed))
 
     root = logging.getLogger()
     root.handlers = handlers
@@ -365,7 +386,18 @@ def run(argv: Sequence[str] | None = None) -> int:
     # the same file as the live instance. Harmless at one line, and the
     # alternative (logging to a file only once the lock is held) would drop
     # exactly the records worth keeping.
-    install_log_redaction(token, args.app_data_dir / LOG_DIRECTORY_NAME)
+    # `configuration_secrets(os.environ)`, not just the session token: the
+    # Vertex adapter builds AUTO_SCORING_VERTEX_PROJECT and
+    # AUTO_SCORING_GEMINI_MODEL into every request URL, and httpx logs that
+    # URL at INFO -- so a key pasted into the wrong variable reached this
+    # file log through a path that has nothing to do with our own log calls
+    # (review round 2). Gating the log itself covers that path and the ones
+    # nobody has found yet.
+    install_log_redaction(
+        token,
+        args.app_data_dir / LOG_DIRECTORY_NAME,
+        secrets=configuration_secrets(os.environ),
+    )
 
     # data_root only, no session_factory: create_app() builds the database
     # itself (migrations, engine, the startup repair sweep) rather than this
