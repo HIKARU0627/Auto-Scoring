@@ -94,3 +94,35 @@ String? criteriaBlockingReason(List<CriteriaQuestionModel> questions) {
   }
   return null;
 }
+
+/// 確定済みの依存グラフが、**いまの設問集合**を説明しているか。
+///
+/// サーバ側 `domain.dependency_graph.can_start_submission_processing` と同じ
+/// 規則: 確定済みグラフは不変だが、**テストの設問はそうではない。**
+/// 確定後に設問が増減すると、グラフの `question_ids` はもうそのテストを
+/// 説明していないのに `status` は `confirmed` のままになる。サーバは
+/// その食い違いを「未確定」と同じに扱って `complete-registration` を 409 で
+/// 断る。
+///
+/// **画面が `status` だけを見ると、サーバが断る状態を「残っていることは
+/// ありません」と表示してしまう。** 配点を確定すると設問行は作り直されるので、
+/// この経路は Issue #103 で新しく踏めるようになった。
+///
+/// 期待する id は `build_questions_and_rubrics` と同じ合併規則
+/// —— 確定済み採点基準の設問番号 ∪ `QUESTION` 領域のラベル —— を
+/// `"{testId}:{番号}"` に写したもの。ここが本体ではなく**サーバが本体**で、
+/// これは「押す前に気づける」ようにするためのもの。ずれても出るのは警告で、
+/// 誤った「全部済み」ではない。
+bool dependencyGraphDescribesQuestions({
+  required String testId,
+  required Iterable<String> graphQuestionIds,
+  required Iterable<String> criteriaNumbers,
+  required Iterable<String> questionRegionLabels,
+}) {
+  final expected = <String>{
+    for (final number in criteriaNumbers) '$testId:$number',
+    for (final label in questionRegionLabels) '$testId:$label',
+  };
+  final actual = graphQuestionIds.toSet();
+  return expected.length == actual.length && expected.containsAll(actual);
+}

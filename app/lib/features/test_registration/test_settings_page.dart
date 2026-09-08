@@ -348,8 +348,41 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   }
 
   bool get _profileConfirmed => _profile?.status == 'confirmed';
-  bool get _dependencyGraphConfirmed => _dependencyGraph?.status == 'confirmed';
   bool get _isReady => _test?.status == 'ready';
+
+  bool get _dependencyGraphConfirmed => _dependencyGraph?.status == 'confirmed';
+
+  /// 確定済みグラフが、もういまの設問集合を説明していないか。
+  ///
+  /// 確定済みグラフは不変だが**テストの設問はそうではない。** サーバは
+  /// その食い違いを「未確定」と同じに扱って `complete-registration` を
+  /// 409 で断る（`domain.dependency_graph.can_start_submission_processing`）。
+  /// 画面は `status` だけを見ていたので、**サーバが断る状態で「残っている
+  /// ことはありません」と出していた。** 配点を確定すると設問行が作り直される
+  /// ため、この経路は Issue #103 で新しく踏めるようになった。
+  ///
+  /// **警告するだけで、ボタンは塞がない。** 期待する設問集合は画面が持つ
+  /// 情報から組み立てた**推定**であり、外したときに正当な操作を止めてしまう
+  /// のは、誤った「全部済み」より悪い。関門はサーバのままにして、こちらは
+  /// 「押す前に気づける」ことだけを担う。
+  bool get _dependencyGraphIsStale {
+    final graph = _dependencyGraph;
+    if (graph == null || graph.status != 'confirmed') return false;
+    return !dependencyGraphDescribesQuestions(
+      testId: widget.testId,
+      graphQuestionIds: graph.questionIds,
+      // 未確定のドラフトは設問行になっていないので数に入れない
+      // （サーバの `_confirmed_criteria` と同じ判断）。
+      criteriaNumbers: _criteriaConfirmed
+          ? _editableCriteria.map((question) => question.number)
+          : const <String>[],
+      questionRegionLabels: _profileConfirmed
+          ? (_editableRegions ?? const <RegionModel>[])
+                .where((region) => region.kind == RegionKind.question)
+                .map((region) => region.label)
+          : const <String>[],
+    );
+  }
 
   void _addRegion() {
     final regions = _editableRegions;
@@ -1085,7 +1118,11 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     final remaining = <String>[
       if (!_criteriaConfirmed && !_hasFallbackScoreRegions) '配点と採点基準が未確定です',
       if (!_profileConfirmed) '回答欄（テストプロファイル）が未確定です',
-      if (!_dependencyGraphConfirmed) '設問依存関係グラフが未確定です',
+      if (!_dependencyGraphConfirmed)
+        '設問依存関係グラフが未確定です'
+      else if (_dependencyGraphIsStale)
+        '設問が変わったため、設問依存関係グラフを分析し直して確定してください'
+            '（このまま「登録完了」を押すと断られます）',
     ];
     if (remaining.isEmpty) {
       return Text(

@@ -1120,6 +1120,73 @@ void main() {
       expect(find.textContaining('配点と採点基準が未確定です'), findsOneWidget);
     });
 
+    testWidgets('設問が変わったら、確定済みグラフでも「済み」と言わない', (tester) async {
+      // 一度計算した値を、状態が変わったあとも使い続ける形の欠陥。
+      // 確定済みグラフは不変だが設問はそうではなく、サーバは食い違いを
+      // 「未確定」と同じに扱って 409 で断る。`status` だけを見ていると
+      // 画面だけが「残っていることはありません」と言う。
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        // グラフが知っているのは test-1:1 と test-1:2 の2件
+        getDependencyGraph: (testId) async =>
+            _dependencyGraph(status: 'confirmed'),
+        // 確定済みの採点基準は3件目を持つ = グラフはもう説明できていない
+        getCriteria: (testId) async => _criteria(
+          status: 'confirmed',
+          questions: [
+            _criteriaQuestion(number: '1'),
+            _criteriaQuestion(number: '2'),
+            _criteriaQuestion(number: '3'),
+          ],
+        ),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.textContaining('設問が変わったため'), findsOneWidget);
+      expect(find.textContaining('押すと断られます'), findsOneWidget);
+      // **ボタンは塞がない。** 期待する設問集合は画面側の推定であり、
+      // 外したときに正当な操作を止めるのは誤った「全部済み」より悪い。
+      // 関門はサーバのまま。
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('complete-registration-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('設問集合が一致していれば、確定済みグラフはそのまま済み扱い', (tester) async {
+      final dependencies = AppDependencies(
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async => _profile(status: 'confirmed'),
+        getDependencyGraph: (testId) async =>
+            _dependencyGraph(status: 'confirmed'),
+        getCriteria: (testId) async => _criteria(
+          status: 'confirmed',
+          questions: [
+            _criteriaQuestion(number: '1'),
+            _criteriaQuestion(number: '2'),
+          ],
+        ),
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      expect(find.textContaining('設問が変わったため'), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('complete-registration-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
     testWidgets('領域の手動追加からは配点・採点基準・模範解答を選べない', (tester) async {
       // A案: 配点の入力口を「配点と採点基準」節ひとつに絞る。
       // fallback の経路はコードに残るが、画面からは作れない。

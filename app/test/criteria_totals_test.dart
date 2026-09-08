@@ -106,4 +106,69 @@ void main() {
       );
     });
   });
+
+  group('dependencyGraphDescribesQuestions', () {
+    test('設問集合が一致していれば true', () {
+      expect(
+        dependencyGraphDescribesQuestions(
+          testId: 't1',
+          graphQuestionIds: const ['t1:問1', 't1:問2'],
+          criteriaNumbers: const ['問1', '問2'],
+          questionRegionLabels: const [],
+        ),
+        isTrue,
+      );
+    });
+
+    test('確定後に設問が増えていれば false（サーバは409で断る状態）', () {
+      // `status == 'confirmed'` だけを見ていると、ここで「残っていることは
+      // ありません」と出してしまう。
+      expect(
+        dependencyGraphDescribesQuestions(
+          testId: 't1',
+          graphQuestionIds: const ['t1:問1'],
+          criteriaNumbers: const ['問1', '問2'],
+          questionRegionLabels: const [],
+        ),
+        isFalse,
+      );
+    });
+
+    test('設問が減っていても false', () {
+      expect(
+        dependencyGraphDescribesQuestions(
+          testId: 't1',
+          graphQuestionIds: const ['t1:問1', 't1:問2'],
+          criteriaNumbers: const ['問1'],
+          questionRegionLabels: const [],
+        ),
+        isFalse,
+      );
+    });
+
+    test('領域だけの設問も合併して数える', () {
+      // `build_questions_and_rubrics` の合併規則と同じ。
+      expect(
+        dependencyGraphDescribesQuestions(
+          testId: 't1',
+          graphQuestionIds: const ['t1:問1', 't1:問2'],
+          criteriaNumbers: const ['問1'],
+          questionRegionLabels: const ['問2'],
+        ),
+        isTrue,
+      );
+    });
+
+    test('両方に出てくる設問を二重に数えない', () {
+      expect(
+        dependencyGraphDescribesQuestions(
+          testId: 't1',
+          graphQuestionIds: const ['t1:問1'],
+          criteriaNumbers: const ['問1'],
+          questionRegionLabels: const ['問1'],
+        ),
+        isTrue,
+      );
+    });
+  });
 }
