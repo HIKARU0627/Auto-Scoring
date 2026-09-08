@@ -137,13 +137,28 @@ def _validate_uploads(
     uploads: Sequence[MaterialUpload],
     limits: IntakeLimits,
 ) -> list[_ValidatedMaterial]:
-    """Validate every upload before any of them is written.
+    """Validate every upload before any of them is written, de-duplicated by
+    (role, content).
 
     All-or-nothing on purpose: a batch that would fail on its third file must
     not leave the first two attached, because the reviewer's retry would then
     have to reason about which half landed.
+
+    **The de-duplication lives here, not in the callers.** Two files with
+    different names but identical bytes are one material under
+    ``uq_test_materials_test_role_hash``, so inserting both fails the
+    constraint and takes every other material in the same request down with
+    it -- and real material makes that reachable, since a subject folder can
+    ship the same document twice under two names. Both `register_test` and
+    `attach_materials` write materials, and putting the rule in the one
+    function they share is what stops it from being fixed on one path and left
+    broken on the other (which is exactly what happened: review round 1 fixed
+    `attach_materials`, round 2 found `register_test` still broken).
+
+    The first upload of a duplicate pair wins, so the reviewer's own ordering
+    decides which file name is remembered.
     """
-    validated: list[_ValidatedMaterial] = []
+    validated: dict[tuple[MaterialRole, str], _ValidatedMaterial] = {}
     with tempfile.TemporaryDirectory(prefix="auto-scoring-test-intake-") as scratch_dir:
         for index, upload in enumerate(uploads):
             extension = validate_material_upload(
@@ -162,16 +177,15 @@ def _validate_uploads(
                 scratch = Path(scratch_dir) / f"material-{index}.pdf"
                 scratch.write_bytes(upload.data)
                 _validate_one_pdf(pdf_engine, scratch, limits)
-            validated.append(
-                _ValidatedMaterial(
-                    role=upload.role,
-                    filename=upload.filename,
-                    extension=extension,
-                    data=upload.data,
-                    sha256=hashlib.sha256(upload.data).hexdigest(),
-                )
+            item = _ValidatedMaterial(
+                role=upload.role,
+                filename=upload.filename,
+                extension=extension,
+                data=upload.data,
+                sha256=hashlib.sha256(upload.data).hexdigest(),
             )
-    return validated
+            validated.setdefault((item.role, item.sha256), item)
+    return list(validated.values())
 
 
 def register_test(
@@ -200,6 +214,8 @@ def register_test(
     limits = limits or IntakeLimits()
     validated = _validate_uploads(pdf_engine, materials, limits)
 
+    # Counted after de-duplication (`_validate_uploads`), so sending the same
+    # criteria file twice is one criteria file rather than a rejection.
     criteria_count = sum(1 for item in validated if item.role is MaterialRole.GRADING_CRITERIA)
     if criteria_count != 1:
         raise ValueError(
@@ -294,21 +310,10 @@ def attach_materials(
     limits = limits or IntakeLimits()
     validated = _validate_uploads(pdf_engine, materials, limits)
 
-    # De-duplicated by (role, content) before anything is looked up or written.
-    # Two files with different names but identical bytes are one material under
-    # `uq_test_materials_test_role_hash`, and without collapsing them here both
-    # would be inserted and the *whole* attach would fail on the constraint --
-    # taking the other, unrelated materials in the same request with it. Real
-    # material makes this reachable: a subject folder can ship the same
-    # document twice under two names.
-    unique: dict[tuple[MaterialRole, str], _ValidatedMaterial] = {}
-    for item in validated:
-        unique.setdefault((item.role, item.sha256), item)
-
     fresh: list[_ValidatedMaterial] = []
     repairs: list[tuple[TestMaterial, _ValidatedMaterial]] = []
     attached: list[TestMaterial] = []
-    for item in unique.values():
+    for item in validated:
         existing = uow.test_materials.find_by_content(test_id, role=item.role, sha256=item.sha256)
         if existing is None:
             fresh.append(item)

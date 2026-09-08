@@ -677,3 +677,76 @@ def test_a_material_row_whose_file_is_missing_is_repaired_not_reported_done(
     assert store.resolve_stored_path(repaired.stored_path).is_file()
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert len(uow.test_materials.list_for_test(test.id)) == 2
+
+
+def test_new_registration_also_collapses_identical_files(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """The sibling of `test_two_identical_files_in_one_request_become_one_material`.
+
+    Round 1 fixed `attach_materials` and left `register_test` inserting both
+    copies, so registering a criteria file plus two identically-contented
+    reference files failed the unique constraint and took the whole
+    registration with it. The rule now lives in `_validate_uploads`, which both
+    paths go through -- this test is what stops it from drifting back to one
+    of them.
+    """
+    same = _pdf_bytes(pages=2)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, materials = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="重複つき登録",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                ),
+                MaterialUpload(role=MaterialRole.REFERENCE, filename="ref-a.pdf", data=same),
+                MaterialUpload(role=MaterialRole.REFERENCE, filename="ref-b.pdf", data=same),
+            ],
+            now=at(),
+        )
+
+    assert len(materials) == 2
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.test_materials.list_for_test(test.id)) == 2
+    for material in materials:
+        assert store.resolve_stored_path(material.stored_path).is_file()
+
+
+def test_sending_the_criteria_twice_is_one_criteria_not_a_rejection(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """The "exactly one criteria" check runs on de-duplicated uploads.
+
+    Otherwise a retry that resent the same file would be rejected for having
+    two of something it has one of.
+    """
+    criteria = _pdf_bytes()
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        _, materials = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="基準を二度送る",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=criteria,
+                ),
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria (1).pdf",
+                    data=criteria,
+                ),
+            ],
+            now=at(),
+        )
+
+    assert [m.role for m in materials] == [MaterialRole.GRADING_CRITERIA]
