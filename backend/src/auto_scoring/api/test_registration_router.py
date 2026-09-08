@@ -54,12 +54,15 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.atomic import FinalizationError
+from auto_scoring.adapters.local.criteria_store import CriteriaStore
 from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.profile_candidate_generation import generate_profile_candidates
 from auto_scoring.adapters.purge import purge_test
 from auto_scoring.adapters.test_intake import MaterialUpload, attach_materials, register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.api.test_artifact_lock import TestArtifactLocks
+from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaStatus
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.material_intake import MaterialIntakeError, MaterialTooLargeError
@@ -321,6 +324,7 @@ def build_test_registration_router(
     *,
     intake_limits: IntakeLimits | None = None,
     pdfium_lock: threading.Lock | None = None,
+    locks: TestArtifactLocks | None = None,
 ) -> APIRouter:
     """Build the router. One `SqlAlchemyUnitOfWork` is opened per request.
 
@@ -337,9 +341,17 @@ def build_test_registration_router(
     tests that never call `analyze`/`create_test` concurrently with intake),
     a private lock is created -- still correct on its own, just not shared
     with the rest of the app.
+
+    ``locks`` must likewise be the same :class:`TestArtifactLocks`
+    `api.criteria_router.build_criteria_router` is given: since Issue #103
+    that router's ``/criteria/confirm`` rebuilds the very same
+    `Question`/`Rubric` rows `confirm_profile` below does, from the very same
+    pair of artefacts (`api.test_artifact_lock` spells out the interleave a
+    second registry would allow).
     """
     limits = intake_limits or IntakeLimits()
     profile_store = ProfileStore(store.root)
+    criteria_store = CriteriaStore(store.root)
     lock = pdfium_lock or threading.Lock()
     router = APIRouter(tags=["test-registration"])
 
@@ -351,19 +363,13 @@ def build_test_registration_router(
     # Questions/Rubrics and saved the confirmed profile file -- would
     # overwrite that confirmed file with its own stale DRAFT result, with
     # nothing left on disk to say the test was ever confirmed (Issue #16
-    # review round 3). Grown lazily per test id and never removed: the
-    # number of distinct tests ever registered in a process's lifetime is
-    # small enough that this is not worth the complexity of eviction.
-    profile_locks: dict[str, threading.Lock] = {}
-    profile_locks_guard = threading.Lock()
+    # review round 3). Since Issue #103 the same registry also covers
+    # `/criteria/*`, which rebuilds the same rows -- hence a shared object
+    # rather than a dict local to this builder.
+    test_locks = locks or TestArtifactLocks()
 
     def _profile_lock(test_id: str) -> threading.Lock:
-        with profile_locks_guard:
-            test_lock = profile_locks.get(test_id)
-            if test_lock is None:
-                test_lock = threading.Lock()
-                profile_locks[test_id] = test_lock
-            return test_lock
+        return test_locks.for_test(test_id)
 
     def _uow() -> Iterator[SqlAlchemyUnitOfWork]:
         with SqlAlchemyUnitOfWork(session_factory) as uow:
@@ -376,6 +382,25 @@ def build_test_registration_router(
         if test is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"test {test_id!r} not found")
         return test
+
+    def _confirmed_criteria(test_id: str) -> CriteriaDraft | None:
+        """This test's 採点基準, but only once a human has confirmed it
+        (Issue #103).
+
+        `confirm_profile` rebuilds the whole `Question`/`Rubric` set, so
+        without this a profile confirmed *after* the criteria would drop
+        every point value a reviewer had already signed off on -- the test
+        would go back to having no usable score and nothing on screen would
+        say why. An unconfirmed draft is deliberately ignored: it is a
+        proposal nobody has checked, and folding it in here would be a
+        second way to reach the database that bypasses the 不明 gate
+        (`domain.criteria_extraction.ensure_confirmable`).
+        """
+        try:
+            draft = criteria_store.load(test_id)
+        except FileNotFoundError:
+            return None
+        return draft if draft.status is CriteriaStatus.CONFIRMED else None
 
     def _load_profile_or_404(test_id: str) -> Profile:
         try:
@@ -811,7 +836,10 @@ def build_test_registration_router(
 
             try:
                 questions, rubrics = build_questions_and_rubrics(
-                    test_id, confirmed.regions, default_scoring_method=test.default_scoring_method
+                    test_id,
+                    confirmed.regions,
+                    default_scoring_method=test.default_scoring_method,
+                    criteria=_confirmed_criteria(test_id),
                 )
             except DomainError as exc:
                 # `build_questions_and_rubrics` raises `TestRegistrationError`

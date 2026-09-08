@@ -20,6 +20,11 @@ from auto_scoring import __version__
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_classification.factory import create_material_classifier
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
+from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
+from auto_scoring.adapters.criteria_extraction.factory import (
+    CriteriaExtractorConfigError,
+    create_criteria_extractor,
+)
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
@@ -38,6 +43,7 @@ from auto_scoring.adapters.test_intake import repair_incomplete_test_registratio
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
+from auto_scoring.api.criteria_router import build_criteria_router
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
 from auto_scoring.api.export_router import build_export_router
 from auto_scoring.api.intake_router import ClassifierFactory, build_intake_router
@@ -46,10 +52,12 @@ from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
 from auto_scoring.api.secret_redaction import configuration_secrets, redact
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
+from auto_scoring.api.test_artifact_lock import TestArtifactLocks
 from auto_scoring.api.test_registration_router import build_test_registration_router
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.ai_provider import AIProvider
+from auto_scoring.domain.criteria_extraction import CriteriaExtractor
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
 from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, JobKind, Submission, TestStatus
@@ -169,6 +177,12 @@ AIProviderFactory = Callable[[Mapping[str, str]], AIProvider]
 #: something about this host's credentials.
 _NO_PROVIDER_INJECTED = "no AI grading provider was supplied to create_app()"
 
+#: The `UnconfiguredCriteriaExtractor.reason` `create_app` falls back to when
+#: no ``criteria_extractor`` was injected. Same role, and the same wording
+#: discipline, as `_NO_PROVIDER_INJECTED` above: it says what was not supplied
+#: rather than claiming anything about this host.
+_NO_EXTRACTOR_INJECTED = "no criteria extractor was supplied to create_app()"
+
 
 class GradingAvailabilityResponse(BaseModel):
     """Whether this sidecar can AI-grade at all, and if not, why (Issue #97).
@@ -241,6 +255,40 @@ def build_ai_provider(
     return UnconfiguredAIProvider(redact(reason, configuration_secrets(env)))
 
 
+def build_criteria_extractor(
+    env: Mapping[str, str],
+    *,
+    factory: Callable[[Mapping[str, str]], CriteriaExtractor] = create_criteria_extractor,
+) -> CriteriaExtractor:
+    """Build the configured criteria extractor, degrading to
+    `UnconfiguredCriteriaExtractor` instead of refusing to start (Issue #103).
+
+    Exactly the shape of `build_ai_provider` above, for exactly its reason: a
+    host with no image-capable transport can still import material, review a
+    hand-entered 配点, and export -- and losing all of that because one
+    optional call cannot be made would be a worse failure than not extracting.
+    The extractor this returns raises on every `extract()`, so an unconfigured
+    host gets a message it can act on instead of an empty result that looks
+    like a document the model read and found nothing in.
+
+    The reason string is published (the extract endpoint returns it and the
+    app shows it), so the same two rules hold: `CriteriaExtractorConfigError`
+    is required to name variables and never quote values, and any other
+    exception contributes only its type name -- an adapter constructing itself
+    badly could otherwise carry anything in its message. `redact` is the gate
+    behind both, for the reason `build_ai_provider` states.
+    """
+    try:
+        return factory(env)
+    except CriteriaExtractorConfigError as error:
+        reason = str(error)
+    except Exception as error:
+        reason = (
+            f"building the criteria extractor failed ({type(error).__name__}); see the sidecar log"
+        )
+    return UnconfiguredCriteriaExtractor(redact(reason, configuration_secrets(env)))
+
+
 def create_app(
     *,
     api_token: str | None = None,
@@ -256,6 +304,7 @@ def create_app(
     ocr_provider: OCRProvider | None = None,
     recognition_settings: RecognitionSettings | None = None,
     ai_provider: AIProvider | None = None,
+    criteria_extractor: CriteriaExtractor | None = None,
     grading_settings: GradingSettings | None = None,
     export_processor: JobProcessor | None = None,
     material_classifier_factory: ClassifierFactory | None = None,
@@ -704,6 +753,11 @@ def create_app(
         )
     )
     protected.include_router(build_jobs_router(queue_service))
+    # One lock namespace for both routers below: `/profile/confirm` and
+    # `/criteria/confirm` rebuild the *same* Question/Rubric rows from the
+    # same two artefacts, and a private registry per router would let them
+    # interleave into a set missing one of the two (api.test_artifact_lock).
+    test_artifact_locks = TestArtifactLocks()
     protected.include_router(
         build_test_registration_router(
             session_factory,
@@ -711,6 +765,16 @@ def create_app(
             engine,
             intake_limits=limits,
             pdfium_lock=pdfium_lock,
+            locks=test_artifact_locks,
+        )
+    )
+    protected.include_router(
+        build_criteria_router(
+            session_factory,
+            store,
+            engine,
+            criteria_extractor or UnconfiguredCriteriaExtractor(_NO_EXTRACTOR_INJECTED),
+            locks=test_artifact_locks,
         )
     )
     protected.include_router(

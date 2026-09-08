@@ -40,8 +40,9 @@ from typing import TypedDict
 import uvicorn
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
-from auto_scoring.api.app import build_ai_provider, create_app
+from auto_scoring.api.app import build_ai_provider, build_criteria_extractor, create_app
 from auto_scoring.api.auth import generate_token
 from auto_scoring.api.secret_redaction import configuration_secrets, redact
 
@@ -468,8 +469,24 @@ def run(argv: Sequence[str] | None = None) -> int:
             "AI grading is unavailable on this host: %s", ai_provider.reason
         )
 
+    # Built here for the same reason as the grading provider above: one real
+    # environment, read once, in the composition root. It never raises
+    # either -- a host with no image-capable transport still gets the 配点と
+    # 採点基準 screen, where every value can be typed in by hand (Issue #95
+    # decision 8).
+    criteria_extractor = build_criteria_extractor(os.environ)
+    if isinstance(criteria_extractor, UnconfiguredCriteriaExtractor):
+        logging.getLogger(__name__).warning(
+            "採点基準の自動抽出 is unavailable on this host: %s", criteria_extractor.reason
+        )
+
     try:
-        app = create_app(api_token=token, data_root=args.app_data_dir, ai_provider=ai_provider)
+        app = create_app(
+            api_token=token,
+            data_root=args.app_data_dir,
+            ai_provider=ai_provider,
+            criteria_extractor=criteria_extractor,
+        )
     except DataRootLockedError as error:
         # The one startup failure with a name the user understands, so it
         # gets an exit code of its own rather than an anonymous traceback.

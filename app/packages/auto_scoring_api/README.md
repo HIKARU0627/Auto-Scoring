@@ -47,16 +47,15 @@ Please follow the [installation procedure](#installation--usage) and then run th
 import 'package:auto_scoring_api/auto_scoring_api.dart';
 
 
-final api = AutoScoringApi().getDefaultApi();
+final api = AutoScoringApi().getCriteriaApi();
 final String testId = testId_example; // String | 
-final MultipartFile file = BINARY_DATA_HERE; // MultipartFile | 
-final String studentLabel = studentLabel_example; // String | 
+final ConfirmCriteriaRequest confirmCriteriaRequest = ; // ConfirmCriteriaRequest | 
 
 try {
-    final response = await api.createSubmissionTestsTestIdSubmissionsPost(testId, file, studentLabel);
+    final response = await api.confirmCriteriaTestsTestIdCriteriaConfirmPost(testId, confirmCriteriaRequest);
     print(response);
 } on DioException catch (e) {
-    print("Exception when calling DefaultApi->createSubmissionTestsTestIdSubmissionsPost: $e\n");
+    print("Exception when calling CriteriaApi->confirmCriteriaTestsTestIdCriteriaConfirmPost: $e\n");
 }
 
 ```
@@ -67,6 +66,10 @@ All URIs are relative to *http://localhost*
 
 Class | Method | HTTP request | Description
 ------------ | ------------- | ------------- | -------------
+[*CriteriaApi*](doc/CriteriaApi.md) | [**confirmCriteriaTestsTestIdCriteriaConfirmPost**](doc/CriteriaApi.md#confirmcriteriateststestidcriteriaconfirmpost) | **POST** /tests/{test_id}/criteria/confirm | Confirm Criteria
+[*CriteriaApi*](doc/CriteriaApi.md) | [**extractCriteriaTestsTestIdCriteriaExtractPost**](doc/CriteriaApi.md#extractcriteriateststestidcriteriaextractpost) | **POST** /tests/{test_id}/criteria/extract | Extract Criteria
+[*CriteriaApi*](doc/CriteriaApi.md) | [**getCriteriaTestsTestIdCriteriaGet**](doc/CriteriaApi.md#getcriteriateststestidcriteriaget) | **GET** /tests/{test_id}/criteria | Get Criteria
+[*CriteriaApi*](doc/CriteriaApi.md) | [**updateCriteriaTestsTestIdCriteriaPut**](doc/CriteriaApi.md#updatecriteriateststestidcriteriaput) | **PUT** /tests/{test_id}/criteria | Update Criteria
 [*DefaultApi*](doc/DefaultApi.md) | [**createSubmissionTestsTestIdSubmissionsPost**](doc/DefaultApi.md#createsubmissionteststestidsubmissionspost) | **POST** /tests/{test_id}/submissions | Create Submission
 [*DefaultApi*](doc/DefaultApi.md) | [**getSubmissionSubmissionsSubmissionIdGet**](doc/DefaultApi.md#getsubmissionsubmissionssubmissionidget) | **GET** /submissions/{submission_id} | Get Submission
 [*DefaultApi*](doc/DefaultApi.md) | [**gradingAvailabilityGradingAvailabilityGet**](doc/DefaultApi.md#gradingavailabilitygradingavailabilityget) | **GET** /grading/availability | Grading Availability
@@ -132,8 +135,15 @@ Class | Method | HTTP request | Description
  - [ClassificationEstimateModel](doc/ClassificationEstimateModel.md)
  - [ClassificationNeed](doc/ClassificationNeed.md)
  - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
+ - [ConfirmCriteriaRequest](doc/ConfirmCriteriaRequest.md)
  - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
+ - [CriteriaItemModel](doc/CriteriaItemModel.md)
+ - [CriteriaQuestionModel](doc/CriteriaQuestionModel.md)
+ - [CriteriaResponse](doc/CriteriaResponse.md)
+ - [CriteriaStatus](doc/CriteriaStatus.md)
+ - [CriteriaTotalsModel](doc/CriteriaTotalsModel.md)
+ - [CriterionKind](doc/CriterionKind.md)
  - [CriterionOutcomeRequest](doc/CriterionOutcomeRequest.md)
  - [CriterionResultResponse](doc/CriterionResultResponse.md)
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
@@ -185,6 +195,7 @@ Class | Method | HTTP request | Description
  - [TestSummary](doc/TestSummary.md)
  - [UndoReviewRequest](doc/UndoReviewRequest.md)
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
+ - [UpdateCriteriaRequest](doc/UpdateCriteriaRequest.md)
  - [UpdateProfileRequest](doc/UpdateProfileRequest.md)
  - [ValidationError](doc/ValidationError.md)
 
