@@ -22,10 +22,20 @@ interesting case on screen at once: a test still being registered next to a
 registered one, an answer whose dependency chain is stuck behind a
 low-confidence result, an answer with a failed question, and a finished one.
 
-Safety: it refuses an ``app-data/`` root that holds anything it did not write
-itself, so pointing it at a real one deletes nothing. Run it with the sidecar
-stopped -- the app holds an exclusive lock on this directory while it runs
-(docs/linux-desktop-development.md §5.1).
+Safety: this script **resets** the root it seeds by deleting every test in it,
+which cascades to every answer, grade, annotation and review underneath. So
+before it writes anything it reads every table that cascade reaches and refuses
+the whole run if it finds a single row whose id it would not have written --
+every id it writes starts with ``demo-``.
+
+That check is a prefix on ids, not a proof of ownership. A row someone else
+wrote with a ``demo-`` id would pass it, and a root that passes is reset in
+full. It is deliberately blunt in the safe direction: a root the app has since
+written to (a review made by hand, a job the queue created) is refused rather
+than merged, and the answer is then to seed a fresh directory.
+
+Run it with the sidecar stopped -- the app holds an exclusive lock on this
+directory while it runs (docs/linux-desktop-development.md §5.1).
 """
 
 # The seeded strings are Japanese UI text, where the full-width parenthesis is
@@ -41,6 +51,10 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
 from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
@@ -48,6 +62,21 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.sidecar import default_app_data_dir
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
+from auto_scoring.db.orm import (
+    AnnotationRow,
+    AnswerImageRow,
+    DependencyGraphRow,
+    ExportRow,
+    GradeResultRow,
+    JobRow,
+    QuestionRow,
+    RecognitionResultRow,
+    ReviewRow,
+    RubricCriterionRow,
+    RubricRow,
+    SubmissionRow,
+    TestRow,
+)
 from auto_scoring.domain.dependency_graph import (
     DependencyEdge,
     DependencyGraph,
@@ -83,10 +112,36 @@ from auto_scoring.domain.profile import (
     RegionKind,
 )
 
-#: Prefix every id gets, and the whole of the safety check: a root whose tests
-#: or submissions are not all named this way was not written by this script,
-#: so it is not this script's to wipe.
+#: Prefix every id this script writes starts with, and the whole of the safety
+#: check: a row named any other way was not written here, so the root holding it
+#: is not this script's to reset.
 ID_PREFIX = "demo-"
+
+#: Every table `TestRepository.delete()` reaches through `ON DELETE CASCADE`
+#: (`db/orm.py`), with the id column each one carries. The guard reads all of
+#: them rather than only `tests`, because deleting a test destroys everything
+#: underneath it: a demo test that someone took a real answer into still has a
+#: `demo-` id, and checking only that id would wave the deletion through.
+#:
+#: `dependency_edges` is absent because it has no id of its own -- its key is a
+#: graph plus two questions, all three of which are checked here. `operation_log`
+#: is absent because no foreign key reaches it from `tests`, so the reset cannot
+#: touch it.
+CASCADED_ID_COLUMNS = (
+    ("tests", TestRow.id),
+    ("questions", QuestionRow.id),
+    ("rubrics", RubricRow.id),
+    ("rubric_criteria", RubricCriterionRow.id),
+    ("submissions", SubmissionRow.id),
+    ("answer_images", AnswerImageRow.id),
+    ("recognition_results", RecognitionResultRow.id),
+    ("grade_results", GradeResultRow.id),
+    ("annotations", AnnotationRow.id),
+    ("reviews", ReviewRow.id),
+    ("jobs", JobRow.id),
+    ("exports", ExportRow.id),
+    ("dependency_graphs", DependencyGraphRow.id),
+)
 
 #: A4 at 72dpi, matching the fixture PDF the submissions point at.
 A4_PORTRAIT = PageFormat(width_pt=595.0, height_pt=842.0)
@@ -122,20 +177,45 @@ def main(argv: list[str] | None = None) -> int:
 
     root: Path = args.app_data_dir
     files = LocalFileStore(root)
+    database_url = sqlite_url(files.database_path())
 
-    engine = create_sqlite_engine(sqlite_url(files.database_path()))
-    upgrade(sqlite_url(files.database_path()))
+    # A root with no database yet holds nothing to protect, so it is created
+    # outright. An existing one is *read before it is migrated*: `upgrade()`
+    # writes to the database, and nothing may write to a root that is about to
+    # turn out to hold real data.
+    empty_root = not files.database_path().exists()
+    if empty_root:
+        upgrade(database_url)
+
+    engine = create_sqlite_engine(database_url)
     unit_of_work = SqlAlchemyUnitOfWork(build_session_factory(engine))
 
     with unit_of_work as uow:
-        foreign = [test.id for test in uow.tests.list_all() if not test.id.startswith(ID_PREFIX)]
-        if foreign:
+        try:
+            foreign = foreign_row_counts(uow.session)
+        except SQLAlchemyError:
+            # A database this script cannot read is one it cannot vouch for
+            # either -- an older schema, or something else entirely.
             print(
-                f"{root} holds tests this script did not write ({', '.join(foreign)}); "
-                "refusing to touch it. Point --app-data-dir somewhere else.",
+                f"{root} has a database this script cannot read; refusing to touch it.",
                 file=sys.stderr,
             )
             return 1
+        if foreign:
+            print(
+                f"{root} holds rows this script did not write "
+                f"({', '.join(f'{table}: {count}' for table, count in foreign.items())}); "
+                "refusing to touch it, because seeding first deletes every test in the "
+                "root and everything that cascades from it. Point --app-data-dir at a "
+                "directory of its own.",
+                file=sys.stderr,
+            )
+            return 1
+
+    if not empty_root:
+        upgrade(database_url)
+
+    with unit_of_work as uow:
         # Every table hangs off `tests` with ON DELETE CASCADE, so this is the
         # whole reset: re-running must not double the rows on screen.
         for test in uow.tests.list_all():
@@ -147,6 +227,23 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"seeded {root}")
     return 0
+
+
+def foreign_row_counts(session: Session) -> dict[str, int]:
+    """How many rows each cascaded table holds that this script did not write.
+
+    Empty when the root is this script's to reset. Ids are counted, never
+    printed: an id from a real ``app-data/`` is real data, and this script's
+    output ends up in terminals and CI logs (AGENTS.md "Security").
+    """
+    counts: dict[str, int] = {}
+    for table, column in CASCADED_ID_COLUMNS:
+        foreign = sum(
+            1 for row_id in session.scalars(select(column)) if not row_id.startswith(ID_PREFIX)
+        )
+        if foreign:
+            counts[table] = foreign
+    return counts
 
 
 def _seed(uow: SqlAlchemyUnitOfWork, files: LocalFileStore, *, source_pdf: Path) -> None:
