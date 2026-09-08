@@ -564,3 +564,116 @@ def test_reattaching_the_same_file_returns_the_existing_material(
     assert [material.id for material in first] == [material.id for material in second]
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert len(uow.test_materials.list_for_test(test.id)) == 2
+
+
+def test_two_identical_files_in_one_request_become_one_material(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """Same bytes, same role, two names -- one material.
+
+    Without collapsing them the unique constraint rejects the second insert and
+    the *whole* attach fails, taking unrelated materials in the same request
+    with it. A subject folder shipping the same document twice under two names
+    is ordinary, not exotic.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, _ = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="重複",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                )
+            ],
+            now=at(),
+        )
+
+    same = _pdf_bytes(pages=2)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        attached = attach_materials(
+            uow,
+            store,
+            _ENGINE,
+            test_id=test.id,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.ANNOTATION_SAMPLE,
+                    filename="04_1_sample.pdf",
+                    data=same,
+                ),
+                MaterialUpload(
+                    role=MaterialRole.ANNOTATION_SAMPLE,
+                    filename="04_2_sample.pdf",
+                    data=same,
+                ),
+                MaterialUpload(
+                    role=MaterialRole.REFERENCE,
+                    filename="reference.pdf",
+                    data=_pdf_bytes(),
+                ),
+            ],
+            now=at(),
+        )
+
+    assert len(attached) == 2
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        roles = [m.role for m in uow.test_materials.list_for_test(test.id)]
+    assert sorted(role.value for role in roles) == [
+        "annotation_sample",
+        "grading_criteria",
+        "reference",
+    ]
+
+
+def test_a_material_row_whose_file_is_missing_is_repaired_not_reported_done(
+    store: LocalFileStore, session_factory: sessionmaker[Session]
+) -> None:
+    """`transactional_operation` commits the DB before writing files, so a
+    crash between the two leaves a row with no file.
+
+    Answering the retry with "already attached" would report success for a
+    material that can never be opened -- permanently, because every later
+    attempt gets the same answer. The retry must re-stage the bytes instead.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        test, _ = register_test(
+            uow,
+            store,
+            _ENGINE,
+            name="欠損",
+            subject=None,
+            materials=[
+                MaterialUpload(
+                    role=MaterialRole.GRADING_CRITERIA,
+                    filename="02_criteria.pdf",
+                    data=_pdf_bytes(),
+                )
+            ],
+            now=at(),
+        )
+
+    sample = MaterialUpload(
+        role=MaterialRole.ANNOTATION_SAMPLE, filename="04_1_sample.pdf", data=_pdf_bytes()
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        [attached] = attach_materials(
+            uow, store, _ENGINE, test_id=test.id, materials=[sample], now=at()
+        )
+
+    # Simulate the interrupted write: the row survived, the file did not.
+    store.resolve_stored_path(attached.stored_path).unlink()
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        [repaired] = attach_materials(
+            uow, store, _ENGINE, test_id=test.id, materials=[sample], now=at()
+        )
+
+    assert repaired.id == attached.id
+    assert store.resolve_stored_path(repaired.stored_path).is_file()
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.test_materials.list_for_test(test.id)) == 2

@@ -274,26 +274,63 @@ def attach_materials(
     already-registered test arrive as submissions, and a 添削資料 that turns up
     later can still be attached without re-registering the test (Issue #101).
 
-    Re-attaching a file that is already there under the same role is a no-op
-    that returns the existing material, rather than a second copy: the intake
-    screen retries only the rows that failed, and a row can fail *after* its
-    write committed.
+    Re-attaching a file that is already there under the same role returns the
+    existing material rather than a second copy: the intake screen retries only
+    the rows that failed, and a row can fail *after* its write committed.
+
+    Two further cases this has to get right, both reachable from one ordinary
+    retry:
+
+    * **the same content twice in one request.** Collapsed before any write --
+      otherwise the unique constraint rejects the second insert and takes every
+      other material in the request down with it.
+    * **a row whose file is missing.** Re-staged rather than reported as
+      already-attached, so an interrupted earlier attempt heals instead of
+      leaving a material that can never be opened.
+
+    Returns one material per distinct (role, content), so the result can be
+    shorter than ``materials``.
     """
     limits = limits or IntakeLimits()
     validated = _validate_uploads(pdf_engine, materials, limits)
 
-    fresh: list[_ValidatedMaterial] = []
-    attached: list[TestMaterial] = []
+    # De-duplicated by (role, content) before anything is looked up or written.
+    # Two files with different names but identical bytes are one material under
+    # `uq_test_materials_test_role_hash`, and without collapsing them here both
+    # would be inserted and the *whole* attach would fail on the constraint --
+    # taking the other, unrelated materials in the same request with it. Real
+    # material makes this reachable: a subject folder can ship the same
+    # document twice under two names.
+    unique: dict[tuple[MaterialRole, str], _ValidatedMaterial] = {}
     for item in validated:
+        unique.setdefault((item.role, item.sha256), item)
+
+    fresh: list[_ValidatedMaterial] = []
+    repairs: list[tuple[TestMaterial, _ValidatedMaterial]] = []
+    attached: list[TestMaterial] = []
+    for item in unique.values():
         existing = uow.test_materials.find_by_content(test_id, role=item.role, sha256=item.sha256)
-        if existing is not None:
+        if existing is None:
+            fresh.append(item)
+        elif store.resolve_stored_path(existing.stored_path).is_file():
             attached.append(existing)
         else:
-            fresh.append(item)
-    if not fresh:
+            # The row is there but its file is not. `transactional_operation`
+            # commits the DB *before* writing, so a crash or a full disk
+            # between the two leaves exactly this -- and the plain
+            # "already attached, nothing to do" answer would report success
+            # for a material that cannot be opened, permanently. Re-stage the
+            # bytes to the path the row already names, which is the one repair
+            # that leaves the row and the file agreeing.
+            repairs.append((existing, item))
+
+    if not fresh and not repairs:
         return attached
 
     with transactional_operation(uow, store) as staged:
+        for existing, item in repairs:
+            staged.add(store.resolve_stored_path(existing.stored_path), item.data)
+            attached.append(existing)
         for item in fresh:
             material_id = id_factory()
             path = store.test_material_path(test_id, material_id, item.extension)
