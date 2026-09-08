@@ -6,6 +6,18 @@
 # script only checks for.
 #
 #   ./scripts/screenshot-linux-app.sh [-o OUTPUT.png] [-s SETTLE_SECONDS]
+#                                     [-r ROUTE] [-t light|dark] [-w WIDTHxHEIGHT]
+#
+#   -r  screen to land on, as a route path (app/lib/core/app_routes.dart).
+#       Defaults to ホーム画面. This is how anything but the landing screen gets
+#       photographed: the script has no way to click.
+#   -t  theme to pin. Defaults to whatever the desktop's colour scheme says,
+#       which is the operator's setting and not this script's to change.
+#   -w  window size. Defaults to 1280x720, the desktop width the docs use;
+#       700x720 is the narrow width they pair it with.
+#
+# One launch, one screen: an evaluation set is this script in a loop
+# (docs/linux-desktop-development.md §4.4).
 #
 # It fails rather than hand back a frame it cannot show to be current: a window
 # the compositor has stopped presenting still photographs, as the same old frame
@@ -28,16 +40,35 @@ readonly WINDOW_NAME=auto_scoring_app
 readonly BUNDLE="$REPO_ROOT/app/build/linux/x64/debug/bundle/auto_scoring_app"
 
 output="$REPO_ROOT/app/build/linux-screenshot.png"
-# Time between the home screen being seen to arrive and the shutter. Dismissing
-# the startup overlay is one setState, so this only has to cover a frame or two.
+# Time between the requested screen being seen to arrive and the shutter.
+# Dismissing the startup overlay is one setState, so this only has to cover a
+# frame or two; a screen that loads a PDF wants more.
 settle_seconds=2
 
-while getopts ':o:s:h' option; do
+readonly USAGE="usage: $0 [-o OUTPUT.png] [-s SETTLE_SECONDS] [-r ROUTE] \
+[-t light|dark] [-w WIDTHxHEIGHT]"
+
+while getopts ':o:s:r:t:w:h' option; do
   case "$option" in
     o) output="$OPTARG" ;;
     s) settle_seconds="$OPTARG" ;;
+    # Passed to the app through the environment, which is where both sides read
+    # them: the route and theme in app/lib/main.dart (debug builds only), the
+    # size in app/linux/runner/my_application.cc. Checked here rather than
+    # there, because a typo that silently falls back to ホーム画面 in the light
+    # theme produces a plausible PNG under the wrong file name -- which is worse
+    # than no PNG at all.
+    r) [[ $OPTARG == /* ]] ||
+         { echo "-r takes a route path starting with / (app_routes.dart)" >&2; exit 2; }
+       export AUTO_SCORING_INITIAL_ROUTE="$OPTARG" ;;
+    t) [[ $OPTARG == light || $OPTARG == dark ]] ||
+         { echo "-t takes light or dark" >&2; exit 2; }
+       export AUTO_SCORING_THEME="$OPTARG" ;;
+    w) [[ $OPTARG =~ ^[0-9]+x[0-9]+$ ]] ||
+         { echo "-w takes WIDTHxHEIGHT, e.g. 1280x720" >&2; exit 2; }
+       export AUTO_SCORING_WINDOW_SIZE="$OPTARG" ;;
     h) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//;$d'; exit 0 ;;
-    *) echo "usage: $0 [-o OUTPUT.png] [-s SETTLE_SECONDS]" >&2; exit 2 ;;
+    *) echo "$USAGE" >&2; exit 2 ;;
   esac
 done
 
@@ -170,10 +201,11 @@ wait_for() {
 }
 
 # `/healthz` answering is the same signal SidecarSupervisor waits for before
-# it leaves SidecarStarting and the startup overlay uncovers the home screen,
-# so this waits for the screen actually worth photographing. The port has to
-# be discovered rather than asked for: the sidecar is started with `--port 0`
-# and reports what it got through a handshake file the app deletes on sight.
+# it leaves SidecarStarting and the startup overlay uncovers the screen the run
+# asked for, so this waits for the screen actually worth photographing. The
+# port has to be discovered rather than asked for: the sidecar is started with
+# `--port 0` and reports what it got through a handshake file the app deletes
+# on sight.
 #
 # Waiting on the listening socket alone is not enough -- uvicorn binds it
 # before running the startup work, so an early shutter catches the splash.
@@ -210,7 +242,7 @@ now_ms() { date +%s%3N; }
 
 not_repainting_bail() {
   cat >&2 <<'HINT'
-the window stopped redrawing before the home screen could appear, so `import`
+the window stopped redrawing before the requested screen could appear, so `import`
 can only return the frame the compositor kept from before it stopped. mutter
 stops presenting a window that is not on screen: unlock the session and wake the
 display, and make sure the window is neither minimised nor on another workspace.
@@ -232,10 +264,10 @@ wait_for "the app window" 60 window_is_viewable
 # settle times, produced byte-identical PNGs of the splash screen (Issue #73).
 #
 # What tells a current frame from a kept one is the startup overlay giving way to
-# the home screen. The app only does that once the sidecar answers, so a screen
-# that has moved no earlier than the sidecar came up is a screen still being
-# drawn. This loop therefore polls `/healthz` and watches the window at the same
-# time, and remembers when each of the two happened.
+# the screen underneath. The app only does that once the sidecar answers, so a
+# screen that has moved no earlier than the sidecar came up is a screen still
+# being drawn. This loop therefore polls `/healthz` and watches the window at
+# the same time, and remembers when each of the two happened.
 #
 # Two things it deliberately does not do:
 #
@@ -244,8 +276,8 @@ wait_for "the app window" 60 window_is_viewable
 #     times and every one of those changes was real -- what it cannot do is
 #     change once more after the backend is up.
 #   * It does not insist on seeing movement either. If the sidecar is already
-#     answering when the first sample is taken, the home screen is up and static
-#     and a healthy run has nothing left to show, so a screen that last moved no
+#     answering when the first sample is taken, the screen is up and static and
+#     a healthy run has nothing left to show, so a screen that last moved no
 #     earlier than the sidecar counts whether or not we watched it move.
 readonly POLL_SECONDS=0.04
 readonly FRAME_INTERVAL_MS=120
@@ -257,9 +289,9 @@ readonly ON_SCREEN_INTERVAL_MS=500
 # change again. That lag -- not the app's poll interval -- is all this has to
 # cover, which is why /healthz is polled far more often than frames are sampled.
 readonly SERVING_LAG_MS=120
-# Once the backend is up the home screen is one setState away, so this is
-# generous. It only decides how long a window that will never redraw is waited on.
-readonly HOME_SCREEN_TIMEOUT_MS=15000
+# Once the backend is up the screen is one setState away, so this is generous.
+# It only decides how long a window that will never redraw is waited on.
+readonly SCREEN_TIMEOUT_MS=15000
 # A screen that never stops changing is still a current screen, so this only
 # gives up on waiting for stillness -- it does not give up on the screenshot.
 readonly SETTLE_CAP_MS=30000
@@ -296,7 +328,7 @@ while :; do
     last_on_screen_ms=$clock_ms
     on_screen_or_bail
   fi
-  if [[ -n $serving_ms ]] && ((clock_ms - serving_ms > HOME_SCREEN_TIMEOUT_MS)); then
+  if [[ -n $serving_ms ]] && ((clock_ms - serving_ms > SCREEN_TIMEOUT_MS)); then
     not_repainting_bail
   fi
   ((SECONDS < sidecar_deadline)) || {
@@ -309,9 +341,10 @@ while :; do
   sleep "$POLL_SECONDS"
 done
 
-# The home screen has arrived but may not have finished arriving: it asks the
-# backend how it is doing, so it reads "backend: checking..." for a moment. Wait
-# for the picture to hold still rather than sleeping a fixed amount and hoping.
+# The screen has arrived but may not have finished arriving: every one of them
+# loads from the backend after it is first painted, and 添削レビュー画面 decodes a
+# PDF as well. Wait for the picture to hold still rather than sleeping a fixed
+# amount and hoping.
 settle_ms=$(awk "BEGIN { printf \"%d\", $settle_seconds * 1000 }")
 settle_deadline_ms=$((clock_ms + SETTLE_CAP_MS))
 while (($(now_ms) - last_change_ms < settle_ms)); do
@@ -331,10 +364,10 @@ while (($(now_ms) - last_change_ms < settle_ms)); do
   sleep "$POLL_SECONDS"
 done
 
-# The loops above proved the window was live while the home screen arrived and
+# The loops above proved the window was live while the screen arrived and
 # settled. Nothing watches it between that moment and the shutter, though, and a
 # window that goes away in that gap freezes on whatever it had drawn by then --
-# which is how a screenshot of a half-loaded home screen gets taken and believed.
+# which is how a screenshot of a half-loaded screen gets taken and believed.
 # Asking on both sides of the shutter closes that gap.
 on_screen_or_bail
 import -silent -window "$WINDOW_NAME" "$sample"

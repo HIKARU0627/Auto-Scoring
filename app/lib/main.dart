@@ -5,6 +5,8 @@ import 'dart:io';
 // dart:ui, and neither material nor widgets re-exports it.
 import 'dart:ui' show AppExitResponse;
 
+// `kDebugMode` is declared in foundation, which material does not re-export.
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -25,6 +27,45 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(AutoScoringApp(supervisor: buildSidecarSupervisor()));
 }
+
+/// Where the app lands: ホーム画面, unless a screenshot run named another
+/// screen.
+///
+/// `scripts/screenshot-linux-app.sh` photographs one screen per launch: it
+/// starts the app, waits until it can prove the window is being drawn, and
+/// shoots (`docs/linux-desktop-development.md` §4). It has no way to click, so
+/// without this every screen but ホーム画面 was out of its reach.
+///
+/// Read from the environment rather than from the command line because the
+/// same launch already carries the window size that way
+/// (`app/linux/runner/my_application.cc`), and one mechanism is easier to
+/// explain than two.
+String get _landingRoute =>
+    _screenshotEnvironment('AUTO_SCORING_INITIAL_ROUTE') ?? AppRoutes.home;
+
+/// The theme a screenshot run asked for, or `null` to follow the desktop.
+///
+/// Needed for the same reason as [_landingRoute]: the alternative is
+/// flipping the operator's own GNOME colour scheme around the shutter, which
+/// changes their whole desktop and stays changed if the run dies partway.
+ThemeMode? get _requestedThemeMode =>
+    switch (_screenshotEnvironment('AUTO_SCORING_THEME')) {
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => null,
+    };
+
+/// [name] from the environment **in debug builds only**.
+///
+/// Where the app lands and which theme it wears are not decisions a shipped
+/// build may take from its environment. The screenshot script builds
+/// `--debug` (`docs/linux-desktop-development.md` §2), so this is on exactly
+/// where it is needed, and a release build takes the `null` branch --
+/// `kDebugMode` is a compile-time constant. That the branch is then *removed*
+/// from a Windows release build has not been measured; what is guaranteed here
+/// is only that it is never taken (§4.4).
+String? _screenshotEnvironment(String name) =>
+    kDebugMode ? Platform.environment[name] : null;
 
 /// The one supervisor the app runs with, resolved against the real filesystem.
 ///
@@ -51,8 +92,8 @@ SidecarSupervisor buildSidecarSupervisor() {
 ///
 /// With a [supervisor] it owns the sidecar's lifetime -- starting it, turning
 /// the connection it establishes into the app's [AppDependencies], and killing
-/// it on the way out. Without one it goes straight to [AppRoutes.home], which
-/// is how `widget_test.dart` runs.
+/// it on the way out. Without one it goes straight to the landing screen,
+/// which is how `widget_test.dart` runs.
 ///
 /// It is also where [appDependenciesProvider] is overridden: every screen
 /// resolves its collaborators through that provider, so this is the only place
@@ -94,11 +135,11 @@ class _AutoScoringAppState extends State<AutoScoringApp>
     super.initState();
     final supervisor = widget.supervisor;
     // Without a supervisor there is nothing to wait for, so the app starts at
-    // ホーム画面; with one it starts on the placeholder the startup overlay
-    // covers, and [_onSidecarStateChanged] moves it to ホーム画面 on the first
-    // successful connection.
+    // the landing screen; with one it starts on the placeholder the startup
+    // overlay covers, and [_onSidecarStateChanged] moves it to the landing
+    // screen on the first successful connection.
     _router = createAppRouter(
-      initialLocation: supervisor == null ? AppRoutes.home : AppRoutes.starting,
+      initialLocation: supervisor == null ? _landingRoute : AppRoutes.starting,
     );
     if (supervisor == null) return;
     WidgetsBinding.instance.addObserver(this);
@@ -133,7 +174,7 @@ class _AutoScoringAppState extends State<AutoScoringApp>
       final client = SidecarApiClient(state.connection);
       _client = client;
       _dependencies = AppDependencies.fromClient(client);
-      _router.go(AppRoutes.home);
+      _router.go(_landingRoute);
     } else {
       // Drop every route the reviewer pushed *before* closing the client:
       // each screen resolves `appDependenciesProvider`, which is about to go
@@ -168,6 +209,10 @@ class _AutoScoringAppState extends State<AutoScoringApp>
         title: 'Auto-Scoring',
         theme: AppTheme.light(),
         darkTheme: AppTheme.dark(),
+        // `ThemeMode.system` is the product behaviour; a screenshot run pins
+        // one of the two so both can be photographed without touching the
+        // desktop's own colour scheme.
+        themeMode: _requestedThemeMode ?? ThemeMode.system,
         routerConfig: _router,
         // Above the Router, not inside it, so the error screen and its restart
         // button are visible over whatever the reviewer had pushed.

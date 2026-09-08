@@ -5,6 +5,8 @@
 #include <gdk/gdkx.h>
 #endif
 
+#include <cstdio>
+
 #include "flutter/generated_plugin_registrant.h"
 
 struct _MyApplication {
@@ -17,6 +19,38 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+// The window size a screenshot run asked for, as
+// AUTO_SCORING_WINDOW_SIZE=WIDTHxHEIGHT, falling back to the default the
+// Flutter template ships with.
+//
+// docs/linux-desktop-development.md §4 has to photograph the same screen at
+// desktop width and at a narrow width, and resizing a window from outside
+// needs xdotool or wmctrl -- neither is among the prerequisites in §1, and
+// neither can be installed without root on the machine that runs this. Reading
+// the size here needs nothing.
+//
+// It lives in this file, not in Dart, because the size is the GTK window's to
+// decide and because app/linux/ is development scaffolding that ships nowhere
+// (§0). The Windows build has no equivalent knob and should not grow one.
+//
+// A malformed value falls back to the default rather than failing: this is a
+// knob for the screenshot script, not an input crossing a trust boundary.
+static void requested_window_size(int* width, int* height) {
+  *width = 1280;
+  *height = 720;
+  const gchar* requested = g_getenv("AUTO_SCORING_WINDOW_SIZE");
+  if (requested == nullptr) {
+    return;
+  }
+  int requested_width = 0;
+  int requested_height = 0;
+  if (sscanf(requested, "%dx%d", &requested_width, &requested_height) == 2 &&
+      requested_width > 0 && requested_height > 0) {
+    *width = requested_width;
+    *height = requested_height;
+  }
 }
 
 // Implements GApplication::activate.
@@ -52,7 +86,10 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "auto_scoring_app");
   }
 
-  gtk_window_set_default_size(window, 1280, 720);
+  int window_width = 0;
+  int window_height = 0;
+  requested_window_size(&window_width, &window_height);
+  gtk_window_set_default_size(window, window_width, window_height);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
