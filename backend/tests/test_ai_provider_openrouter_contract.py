@@ -13,7 +13,14 @@ import pytest
 
 from auto_scoring.adapters.ai_grading._prompt import GRADING_SYSTEM_INSTRUCTIONS
 from auto_scoring.adapters.ai_grading.openrouter_provider import OpenRouterAIProvider
-from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable, SchemaViolation
+from auto_scoring.domain.ai_provider import (
+    AIProvider,
+    ProviderRateLimitedError,
+    ProviderServerError,
+    ProviderTimeoutError,
+    ProviderUnavailable,
+    SchemaViolation,
+)
 
 from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
 
@@ -341,3 +348,43 @@ def test_describe_does_not_report_a_stale_route_after_a_later_failure() -> None:
         provider.grade(_VALID_REQUEST)
 
     assert provider.describe().version is None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (429, ProviderRateLimitedError),
+        (500, ProviderServerError),
+        (502, ProviderServerError),
+        (401, ProviderUnavailable),
+    ],
+)
+def test_http_failures_are_classified_for_the_fallback_chain(
+    status: int, expected: type[Exception]
+) -> None:
+    """Issue #35: the fallback chain and the queue's ``ErrorCategory`` both
+    key on the *specific* exception type (docs/ai-grading-pipeline.md
+    "どの失敗で次へ落とすか"). Raising a bare ``ProviderUnavailable`` for a
+    429 -- what this adapter did before ``_http`` existed -- forced
+    ``GradingJobProcessor`` into ``ErrorCategory.UNKNOWN`` for a failure it
+    could classify exactly. A plain 4xx stays bare: it is an auth/config
+    problem the queue must not treat as a retryable rate limit."""
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json={"error": "x"})),
+        base_url="https://openrouter.test/api/v1",
+    )
+
+    with pytest.raises(expected):
+        _make_provider(client).grade(_VALID_REQUEST)
+
+
+def test_timeout_is_classified_as_a_timeout() -> None:
+    def _timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(_timeout), base_url="https://openrouter.test/api/v1"
+    )
+
+    with pytest.raises(ProviderTimeoutError):
+        _make_provider(client).grade(_VALID_REQUEST)
