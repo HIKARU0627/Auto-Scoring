@@ -4570,50 +4570,126 @@ void main() {
       );
     });
 
-    testWidgets('一度表示しきった判断材料は、ウィンドウを狭めても未読に戻らない', (tester) async {
-      await pumpAt(tester, const Size(1280, 1000), reviewableQuestion());
+    testWidgets('レイアウトを変えるだけでは既読は消えない', (tester) async {
+      // A long 根拠 on purpose. At 700x720 the Inspector is stacked under the
+      // viewer and spans the window; at 1280x720 it is a 440px column beside
+      // it. The *same* sentences therefore wrap onto more lines at the wider
+      // window, and the material gets taller as the window grows -- which is
+      // exactly the case a height-based record reads as "new material".
+      await pumpAt(
+        tester,
+        desktopNarrow,
+        reviewableQuestion(
+          rationale:
+              '（デモ）採点根拠の文がここに入ります。設問の要求に照らして、答案のどの記述が'
+              '加点対象になり、どの記述が不足しているのかを、採点基準の項目ごとに'
+              '具体的に述べた、折り返しの起きる長さの文章です。',
+        ),
+      );
+      await _revealMaterial(tester);
       expect(
         find.byKey(const Key('review-unread-material-notice')),
         findsNothing,
+        reason: 'the premise: it has been read to the end',
       );
 
-      // 材料は1pxも変わっていない。変わったのは窓の高さだけで、表示され
-      // きったという事実は取り消されない。ここを `maxScrollExtent` で見て
-      // いると、窓が縮んだだけで既読が消える。
-      await tester.binding.setSurfaceSize(const Size(1280, 560));
-      await tester.pump();
-      await _settlePdf(tester);
+      // One test rather than one per axis. Three false positives were found
+      // one axis at a time -- widening, shortening, typing -- and a fourth
+      // (widening *after* reading at a narrow width, where the same sentences
+      // rewrap onto fewer lines) came from the axis none of those covered.
+      // Adding axes one at a time was always going to trail the next one, so
+      // this asserts the general property instead: **判断材料が変わっていない
+      // 限り、どう並べ直しても既読は消えない。**
+      Future<void> expectStillRead(String change) async {
+        await tester.pump();
+        await _settlePdf(tester);
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('review-approve-button')),
+              )
+              .onPressed,
+          isNotNull,
+          reason: '$change un-saw material that has not changed',
+        );
+        expect(
+          find.byKey(const Key('review-unread-material-notice')),
+          findsNothing,
+          reason: '$change brought the notice back',
+        );
+      }
 
-      expect(
-        tester
-            .widget<FilledButton>(
-              find.byKey(const Key('review-approve-button')),
-            )
-            .onPressed,
-        isNotNull,
-      );
-      expect(
-        find.byKey(const Key('review-unread-material-notice')),
-        findsNothing,
-      );
-    });
+      for (final (change, size) in const [
+        (
+          'widening the window (the Inspector becomes a 440px column, so the '
+              'same text rewraps onto more lines)',
+          Size(1280, 720),
+        ),
+        ('shortening the window', Size(1280, 560)),
+        (
+          'narrowing back (the Inspector spans the window again)',
+          Size(700, 720),
+        ),
+        ('widening and growing', Size(1600, 900)),
+      ]) {
+        await tester.binding.setSurfaceSize(size);
+        await expectStillRead(change);
+      }
 
-    testWidgets('修正コメントを3行まで打っても、既読は取り消されない', (tester) async {
-      // ぎりぎり収まる 1280x720 で。余裕のある高さで試すと、メモ欄が伸びても
-      // 材料は収まったままになり、何も検査していないテストになる。
-      await pumpAt(tester, desktopStandard, reviewableQuestion());
-      expect(
-        find.byKey(const Key('review-unread-material-notice')),
-        findsNothing,
-        reason: 'the premise: the gate is open before anything is typed',
-      );
-
-      // メモ欄はスクロール領域の外に固定されているので、伸びるとInspectorの
-      // ビューポートが縮む。それは判断材料が増えたことではない。
+      // Not a window change, but the same class of thing: the pinned
+      // 修正コメント field growing shrinks the Inspector's viewport.
       await tester.enterText(
         find.byKey(const Key('review-note-field')),
         '1行目\n2行目\n3行目',
       );
+      await expectStillRead('typing three lines into 修正コメント');
+
+      // ...and scrolling back up to re-read something is not un-reading it.
+      await tester.drag(
+        find.byKey(const Key('review-inspector')),
+        const Offset(0, 600),
+      );
+      await expectStillRead('scrolling back to the top');
+    });
+
+    testWidgets('材料そのものが増えたときは未読に戻る', (tester) async {
+      // The other half of the property above: a gate that never re-closes
+      // would pass every "layout did not un-see it" assertion while being
+      // useless. Here the *rows* change -- a newer OCR reading lands -- and
+      // that is material nobody has been shown.
+      var corrected = false;
+      final dependencies = AppDependencies(
+        getSubmission: (_) async => _submission(),
+        listQuestions: (_) async => [_question()],
+        getSourcePdf: (_) async => _pocA4PortraitPdf(),
+        listRecognitions: (_, _) async => [
+          _recognition(text: '（デモ）読み取った文字列がここに入ります。'),
+          if (corrected)
+            _recognition(
+              id: 'rec-corrected',
+              text: '（デモ）あとから届いた、より長い認識結果がここに入ります。' * 3,
+              createdAt: DateTime.utc(2026, 1, 2),
+            ),
+        ],
+        listGrades: (_, _) async => [_grade()],
+        listAnnotations: (_, _) async => const [],
+        listReviews: (_, _) async => const [],
+      );
+
+      await pumpAt(tester, desktopNarrow, dependencies);
+      await _revealMaterial(tester);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('review-approve-button')),
+            )
+            .onPressed,
+        isNotNull,
+        reason: 'the premise: read to the end before anything changed',
+      );
+
+      corrected = true;
+      await tester.tap(find.byKey(const Key('review-refresh-button')));
       await tester.pump();
       await _settlePdf(tester);
 
@@ -4623,7 +4699,12 @@ void main() {
               find.byKey(const Key('review-approve-button')),
             )
             .onPressed,
-        isNotNull,
+        isNull,
+        reason: 'a row the reviewer has never seen is now on the panel',
+      );
+      expect(
+        find.byKey(const Key('review-unread-material-notice')),
+        findsOneWidget,
       );
     });
 

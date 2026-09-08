@@ -359,33 +359,39 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// the rest of it (Issue #85).
   final _inspectorScrollController = ScrollController();
 
-  /// Per question, the tallest the 判断材料 has been while its end was on
-  /// screen -- **how much material has been shown**, in pixels of content.
+  /// Every [_materialIdentity] whose end has been on screen. **What has been
+  /// shown**, named by the material itself rather than by any measurement of
+  /// how it happened to be drawn.
   ///
-  /// The height of the material itself, deliberately, and not how far it had
-  /// to be scrolled. Those differ by the viewport, and mixing the viewport in
-  /// makes this answer questions it has no business answering: shrinking the
-  /// window, or typing a third line into 修正コメント, would both "un-see"
-  /// material that was displayed in full a moment earlier. What was displayed
-  /// stays displayed. Only the material getting *taller* -- a poll delivering
-  /// the grade, an Undo restoring the AI's row -- is new material that has
-  /// not been shown, and only that clears the mark.
+  /// Two earlier versions of this recorded a *rendered* quantity, and both
+  /// mistook a change of layout for a change of material. `maxScrollExtent`
+  /// is the material's height minus the viewport, so shrinking the window --
+  /// or typing a third line into 修正コメント -- un-saw material that had just
+  /// been displayed in full. Replacing it with the material's own height was
+  /// only half a fix: text rewraps, so widening the window changes that
+  /// height too, and reading a long 根拠 at 700px and then widening to 1280px
+  /// un-saw it as well (レビュー2回目 P2).
   ///
-  /// A plain "既読" flag would be wrong for the other direction too: scrolling
-  /// back up to re-read something must not un-see it, and it does not, since
-  /// scrolling moves the position and leaves the height alone.
-  final Map<String, double> _materialSeenHeight = {};
+  /// **Anything drawn is a fact about the drawing, not about the material.**
+  /// So this keys on the rows the Inspector is showing. A layout change is
+  /// invisible to it; a poll delivering the grade, an edit, or an Undo
+  /// restoring the AI's row all change it, because they change which rows
+  /// are on screen.
+  ///
+  /// A [Set] rather than "the last key per question": an Undo that puts the
+  /// material back the way it was is material that *has* been read, and
+  /// asking for it to be read again would be make-work. It holds one short
+  /// string per distinct state a reviewer has actually read through in this
+  /// session.
+  final Set<String> _seenMaterialKeys = {};
 
-  /// The 判断材料's current height, and whether any of it is below the fold
-  /// right now. [double.infinity] until this question's panel has laid out,
-  /// so "not measured yet" reads as "not seen yet" rather than as "fits".
+  /// Whether any 判断材料 is below the fold right now -- the one thing here
+  /// that *is* a fact about the current layout, and used only to decide
+  /// whether to show the notice, never to record what has been read.
   ///
   /// Held as state rather than read off [_inspectorScrollController] during
-  /// build. A scroll controller only knows about the *last* layout, so
-  /// deriving the notice and the 承認 gate from it directly would let both
-  /// drift a frame behind the panel they describe -- and a stale "it all
-  /// fits" is an enabled 承認 for material that has since grown.
-  double _materialHeight = double.infinity;
+  /// build: a scroll controller only knows about the *last* layout, so the
+  /// notice would otherwise drift a frame behind the panel it describes.
   bool _materialOverflows = false;
 
   bool _loadingShell = true;
@@ -1136,13 +1142,15 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     _noteController.text = _reviews[question.id]?.note ?? '';
     // Back to the top of the Inspector: the next question's 判断材料 starts at
     // its own beginning, not wherever the previous one was left scrolled to.
-    // Its extent is unknown until that panel has laid out, and unknown has to
-    // read as "not seen yet" rather than as "fits" (`_materialFullyRead`
-    // needs a recorded extent, which this question may not have).
+    // Whether it overflows is unknown until that panel has laid out, and the
+    // notice must not be inherited from the question just left.
+    //
+    // Nothing about what has been *read* is reset here: [_seenMaterialKeys]
+    // is keyed by the material itself, so coming back to a question already
+    // read through does not ask the reviewer to read it again.
     if (_inspectorScrollController.hasClients) {
       _inspectorScrollController.jumpTo(0);
     }
-    _materialHeight = double.infinity;
     _materialOverflows = false;
     // Only move the viewer when the target question is on a different page --
     // staying on the same page keeps whatever zoom/scroll the reviewer set
@@ -1185,7 +1193,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   /// Whether the current question's 判断材料 has been on screen all the way
-  /// to its end at least once ([_materialSeenExtent]).
+  /// to its end at least once ([_seenMaterialKeys]).
   ///
   /// True as soon as the panel does not scroll at all, which is the ordinary
   /// case at 1280x720 now that the 進捗パネル is charged to the PDF viewer
@@ -1194,15 +1202,44 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// comfortable case.
   bool get _materialFullyRead {
     final question = _currentQuestion;
-    if (question == null) return false;
-    final seen = _materialSeenHeight[question.id];
-    return seen != null && _materialHeight <= seen + _materialReadEpsilon;
+    final review = _currentReview;
+    if (question == null || review == null || !review.hasLoaded) return false;
+    return _seenMaterialKeys.contains(_materialIdentity(question, review));
   }
 
-  /// Records how far the Inspector has been read, from its own scroll
-  /// metrics. Called both while the reviewer drags and from the post-frame
-  /// check in [_buildInspector], because "it all fits, so all of it has been
-  /// seen" never produces a scroll notification at all.
+  /// Which rows the Inspector is showing for [question] right now.
+  ///
+  /// Ids are enough because the history is append-only: a `Recognition`, a
+  /// `GradeResult` and an `Annotation` are written once and never edited, so
+  /// a human correction, a re-grade and an Undo each arrive as *different
+  /// rows* (`docs/review-edit-history.md`). Two panels showing the same ids
+  /// are therefore showing the same words, whatever width they were laid out
+  /// at -- which is the whole point of keying on this rather than on any
+  /// measurement of the result.
+  ///
+  /// 採点基準 rides along on `question.id`: the rubric belongs to the
+  /// question and this screen fetches the question list once, so it cannot
+  /// change under a stable id here. The 判定 beside each criterion comes from
+  /// `displayGrade`, which is in the key on its own account.
+  String _materialIdentity(
+    QuestionResponse question,
+    QuestionReviewState review,
+  ) => [
+    question.id,
+    review.latestOcrRecognition?.id,
+    review.latestGradingRecognition?.id,
+    review.effectiveHumanRecognition?.id,
+    review.latestAiGrade?.id,
+    review.displayGrade?.id,
+    for (final annotation in _fallbackAnnotationsFor(question, review))
+      annotation.id,
+  ].map((id) => id ?? '-').join(' ');
+
+  /// Records that the 判断材料 currently on screen has been shown to its end.
+  ///
+  /// Called both while the reviewer drags and from the post-frame check in
+  /// [_buildInspector], because "it all fits, so all of it has been seen"
+  /// never produces a scroll notification at all.
   void _recordMaterialRead(ScrollMetrics metrics) {
     final question = _currentQuestion;
     final review = _currentReview;
@@ -1212,24 +1249,18 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (question == null || review == null || !review.hasLoaded) return;
     if (review.loading || review.error != null) return;
     if (!metrics.hasContentDimensions) return;
-    // The material's own height: what is scrolled past, plus what is on
-    // screen. `maxScrollExtent` alone is that height *minus the viewport*,
-    // which is a fact about the window rather than about the material.
-    final height = metrics.maxScrollExtent + metrics.viewportDimension;
+    // The metrics answer exactly one question -- "is the end of it on screen
+    // *now*" -- and that answer is spent here rather than kept. What is kept
+    // is the material's identity, which no relayout can change.
     final overflows = metrics.maxScrollExtent > _materialReadEpsilon;
-    final seen = _materialSeenHeight[question.id];
+    final key = _materialIdentity(question, review);
     final newlySeen =
         metrics.extentAfter <= _materialReadEpsilon &&
-        (seen == null || seen < height);
-    if (!newlySeen &&
-        height == _materialHeight &&
-        overflows == _materialOverflows) {
-      return;
-    }
+        !_seenMaterialKeys.contains(key);
+    if (!newlySeen && overflows == _materialOverflows) return;
     _setStateIfMounted(() {
-      _materialHeight = height;
       _materialOverflows = overflows;
-      if (newlySeen) _materialSeenHeight[question.id] = height;
+      if (newlySeen) _seenMaterialKeys.add(key);
     });
   }
 
