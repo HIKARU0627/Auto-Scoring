@@ -33,7 +33,7 @@ def test_create_ai_provider_selects_openrouter() -> None:
     assert isinstance(provider, OpenRouterAIProvider)
 
 
-def test_create_ai_provider_selects_codex_app_server() -> None:
+def test_create_ai_provider_selects_codex_app_server(_codex_installed: None) -> None:
     provider = create_ai_provider(
         {
             "AUTO_SCORING_AI_GRADING_TRANSPORT": "codex_app_server",
@@ -107,7 +107,9 @@ def test_create_ai_provider_accepts_an_openrouter_temperature_of_exactly_two() -
     assert isinstance(provider, OpenRouterAIProvider)
 
 
-def test_create_ai_provider_ignores_temperature_for_codex_app_server() -> None:
+def test_create_ai_provider_ignores_temperature_for_codex_app_server(
+    _codex_installed: None,
+) -> None:
     """Codex app-server has no temperature knob (code review finding), so an
     invalid value in this shared env var must not block selecting it."""
     provider = create_ai_provider(
@@ -138,6 +140,21 @@ class _FakeAdcTokenSource:
 
 
 @pytest.fixture
+def _codex_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend the ``codex`` executable is on PATH.
+
+    Whether it actually is differs between a developer machine and a CI
+    runner, and ``create_ai_provider`` now (correctly) leaves the Codex link
+    out of the chain when it is missing. Any test about *transport
+    selection* therefore has to state which of the two worlds it is in, or
+    it passes locally and fails in CI -- which is exactly what happened
+    (CI: "the 'codex' executable was not found on this host"). Tests about
+    the detection itself patch this for themselves, below.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/local/bin/{name}")
+
+
+@pytest.fixture
 def _adc_available(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(factory, "AdcTokenSource", _FakeAdcTokenSource)
 
@@ -150,7 +167,9 @@ def _adc_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(factory, "AdcTokenSource", _raise)
 
 
-def test_a_transport_list_builds_the_priority_chain(_adc_available: None) -> None:
+def test_a_transport_list_builds_the_priority_chain(
+    _adc_available: None, _codex_installed: None
+) -> None:
     """business-rules-and-evaluation-data.md section 3 (B): the adopted
     configuration is the order itself, not a single vendor."""
     provider = create_ai_provider(
@@ -261,14 +280,10 @@ def test_codex_is_skipped_when_its_executable_is_not_installed(
     assert isinstance(provider, OpenRouterAIProvider)
 
 
-def test_codex_is_included_when_its_executable_is_installed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_codex_is_included_when_its_executable_is_installed(_codex_installed: None) -> None:
     """Being installed is necessary, not sufficient: a host with `codex`
     but no login still fails at call time, and the chain falls through
     then. That is a runtime failure, not a construction-time one."""
-    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/local/bin/{name}")
-
     provider = create_ai_provider(
         {
             "AUTO_SCORING_AI_GRADING_TRANSPORT": "codex_app_server,openrouter",
