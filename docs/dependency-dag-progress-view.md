@@ -275,6 +275,11 @@ tooltip と semantics label に載せる。
 
 ![添削レビュー画面の依存DAGパネル（標準幅）](./dependency-dag-progress-view/desktop.png)
 
+**同じ設問について、3箇所が同じ語とアイコンを出す**（Issue #84）。問1 は DAGノード・
+左レール・右パネルのバッジのすべてが「承認済み」であり、AppBar の「答案: 要確認」は
+**答案**の状態だと位置と語で名指している。左レールは設問ごとに違うアイコンを出す
+（問2 は要確認、問3・問5 は前提待ち、問4 はレビュー待ち）。
+
 読み方: 問1 と 問2 と 問4 は同じ層＝並列に走りうる。問1 は人間が承認済み、問2 は
 `SUCCEEDED` だが `usable = false`（低Confidence）なので**下流を解放していない**。
 その結果 問3 は「問2 待ち」、問3 に依存する 問5 は「問3 待ち」で止まっている。
@@ -289,8 +294,9 @@ tooltip と semantics label に載せる。
 
 ![添削レビュー画面の依存DAGパネル（狭幅）](./dependency-dag-progress-view/narrow.png)
 
-NavigationRail はアイコンのみ、Inspector は PDF の下（Issue #21 の既存挙動）。
-パネルはノードを縮めず、入り切らない分をスクロールに回す。
+Inspector は PDF の下（Issue #21 の既存挙動）。パネルはノードを縮めず、入り切らない
+分をスクロールに回す。**NavigationRail は狭幅でも設問番号を出す**（Issue #84。
+以前はアイコンのみで、同じ絵が5個縦に並ぶだけだった）。
 
 なお **`AI処理中` のノードとそのハイライト、および依存が解ける瞬間の告知は
 静止画には写らない**ので、`app/test/dependency_dag_panel_test.dart` の
