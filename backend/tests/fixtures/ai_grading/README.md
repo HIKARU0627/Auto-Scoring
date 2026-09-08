@@ -265,10 +265,12 @@ distinct from `unavailable`, where no response came back at all.
 `response` in these committed fixtures is a full, hand-invented
 `AIGradingResult` body, free text included -- everything here is made up, so
 there is nothing to protect. A cell written by `record.py` against a *real*
-provider looks different: the free-text fields carry a fixed redaction
-marker instead, because a real provider fills them with the student's own
-words (see that script's `_wire_response`). Both shapes parse and score
-identically -- the harness reads no free text either way.
+provider looks different: it carries only values that run could verify --
+the question id and criterion ids it sent, numbers and enums -- with every
+other provider-controlled string replaced by a fixed marker, and the
+deployment metadata reduced to a `sha256` fingerprint (see that script's
+`_wire_response` / `_wire_descriptor`). Both shapes parse and score
+identically; the harness reads no free text either way.
 
 The three outcomes are mutually exclusive: a cell recording more than one
 of `response` / `schema_violation: true` / `unavailable: true` makes the

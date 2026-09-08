@@ -50,15 +50,18 @@ the provider that actually answered. `--images` holds the answer-region
 crops the dataset's `input.answer_image_ref` values name, and a
 `sha256:<hex>` reference is verified against the bytes read.
 
-**It records no free text.** Only the fields
-`domain.ai_grading_metrics.evaluate_sample` actually reads are written --
-question id, score/maxScore, criterion ids and outcomes, the two
-confidences -- and every free-text field (the recognized reading, comment,
-rationale, criterion rationale, annotation target) is replaced with a fixed
-redaction marker. Schema validation is not anonymization: a schema-valid
-`recognition.text` is the student's answer verbatim, and Issue #35's
-acceptance condition is that answer text stays out of the *output*, not
-just out of the repository.
+**It records nothing it cannot verify.** The rule is an allowlist, not a
+list of fields known to hold prose: a provider-supplied value is written
+only when it is a value this run sent and matched back (`questionId`,
+`criteria[].id`, the descriptor's configured strings), or constrained by
+type and range (numbers, enums). Everything else becomes a fixed marker,
+and the one response-derived piece of metadata (`descriptor.version`)
+becomes a content-free `sha256` fingerprint that still keeps two
+deployments in two buckets. Schema validation is not anonymization -- it
+checks a value's *shape* and says nothing about its content, so "this field
+is an id" is not a safety argument -- and Issue #35's acceptance condition
+is that answer text stays out of the *output*, not just out of the
+repository.
 
 It also refuses to record into any dataset inside this repository (a real
 provider's response body must never reach a commit), never puts an

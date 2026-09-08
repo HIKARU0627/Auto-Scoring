@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from auto_scoring.domain.ai_grading import parse_ai_grading_result
 from auto_scoring.domain.ai_provider import (
     GradingAnnotationCandidate,
     GradingCriterionOutcome,
@@ -33,10 +34,13 @@ from auto_scoring.domain.ai_provider import (
 )
 from auto_scoring.domain.models import AnnotationKind, CriterionOutcome
 
-#: Stands in for a student's transcribed answer. A provider returns it in
-#: every free-text field (recognized reading, comment, rationale, criterion
-#: rationale, annotation target/comment) -- exactly the fields a real
-#: provider fills with the student's own words.
+#: Stands in for content only the provider could have put there -- a
+#: student's transcribed answer, a name, a secret. The stub below returns it
+#: in every string it controls, and the guard test asserts it never reaches
+#: the file. Deliberately not split per field: the rule being pinned is
+#: "nothing this run did not send is written", not "these particular fields
+#: are redacted", so one marker checked against the whole file catches a
+#: field that is added later and forgotten (code review finding).
 _ANSWER_TEXT = "生徒答案の本文サンプル"
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "ai_grading"
@@ -62,16 +66,28 @@ class _StubProvider:
 
     name = "stub"
 
-    def __init__(self, failure: Exception | None = None, *, failures: int = 10_000) -> None:
+    def __init__(
+        self,
+        failure: Exception | None = None,
+        *,
+        failures: int = 10_000,
+        hostile: bool = False,
+    ) -> None:
         self._failure = failure
         self._remaining_failures = failures
+        #: A schema-valid provider that returns content in every string it
+        #: controls -- the ids and the deployment metadata included, not
+        #: just the fields that obviously hold prose.
+        self._hostile = hostile
+        #: Overridden by the COMMENT-annotation regression test below.
+        self.annotation_kind = AnnotationKind.UNDERLINE
         self.calls = 0
 
     def describe(self) -> ProviderDescriptor:
         return ProviderDescriptor(
             provider=self.name,
             model="stub-model",
-            version="stub-version",
+            version=_ANSWER_TEXT if self._hostile else "stub-version",
             prompt_version="v1",
             temperature=0.0,
             structured_output_mode="json_schema",
@@ -83,7 +99,7 @@ class _StubProvider:
             self._remaining_failures -= 1
             raise self._failure
         return GradingResponse(
-            question_id=request.question_id,
+            question_id=_ANSWER_TEXT if self._hostile else request.question_id,
             recognition_text=_ANSWER_TEXT,
             recognition_confidence=0.9,
             score=4,
@@ -97,7 +113,7 @@ class _StubProvider:
             # as a schema violation.
             criteria=(
                 GradingCriterionOutcome(
-                    criterion_id="c1",
+                    criterion_id=_ANSWER_TEXT if self._hostile else "c1",
                     outcome=CriterionOutcome.PASS,
                     confidence=0.9,
                     rationale=f"{_ANSWER_TEXT}が条件を満たす。",
@@ -105,7 +121,7 @@ class _StubProvider:
             ),
             annotations=(
                 GradingAnnotationCandidate(
-                    target=_ANSWER_TEXT, type=AnnotationKind.UNDERLINE, comment=_ANSWER_TEXT
+                    target=_ANSWER_TEXT, type=self.annotation_kind, comment=_ANSWER_TEXT
                 ),
             ),
             descriptor=self.describe(),
@@ -142,9 +158,10 @@ def _run(dataset: Path, provider: _StubProvider, **kwargs: Any) -> None:
         overwrite=bool(kwargs.get("overwrite")),
         provider_id=provider.describe().provider,
     )
+    configured = record._configured_descriptors(provider)
     for cell in cells:
         provider_id, body, _elapsed = record._call_with_backoff(
-            provider, cell.request, sleep=lambda _seconds: None
+            provider, cell, configured=configured, sleep=lambda _seconds: None
         )
         cell.document["questions"][cell.question_index]["recorded"].setdefault(provider_id, {})[
             cell.variant
@@ -152,32 +169,69 @@ def _run(dataset: Path, provider: _StubProvider, **kwargs: Any) -> None:
         record._write_atomically(cell.path, cell.document)
 
 
-def test_no_answer_text_reaches_the_recorded_file(dataset: Path) -> None:
+@pytest.mark.parametrize("failure", [None, SchemaViolation("bad"), ProviderRateLimitedError("429")])
+def test_no_provider_controlled_text_reaches_the_recorded_file(
+    dataset: Path, failure: Exception | None
+) -> None:
     """Issue #35 acceptance: "secret・答案本文・生徒識別情報がログ・出力・
     リポジトリに残らない".
 
-    The provider here fills every free-text field with the student's answer,
-    which is what a real one does: ``recognition.text`` *is* the answer
-    verbatim, ``comment``/``rationale`` quote it, and an annotation target
-    is a span copied out of it. Schema validation is not anonymization, and
-    writing the file outside the repository does not make an answer-text
-    copy acceptable -- the condition is about the *output* (code review
-    finding). Asserted against the raw bytes on disk, not against the dict
-    the recorder built, so no serialization path can smuggle it through.
+    The provider here is schema-valid but hostile: it puts content in every
+    string it controls -- the recognized reading, comment, rationale,
+    criterion rationale, annotation target, **and** the ``questionId``, the
+    ``criteria[].id`` and the deployment metadata. Those last three were
+    waved through by the first fix on the grounds that "the metrics read
+    them, so they are safe"; schema validation checks the *shape* of a
+    value and says nothing about its content, so that reasoning does not
+    hold (code review finding).
+
+    Asserted against the whole file, not against the fields known to be
+    redacted, so a field added later and forgotten is caught by this same
+    test. Run for all three outcomes because a failed call still records a
+    descriptor, and the deployment metadata leaked through that path even
+    when the response itself was rejected.
     """
-    _run(dataset, _StubProvider())
+    _run(dataset, _StubProvider(failure, hostile=True))
 
     written = (dataset / "sample-01.json").read_text(encoding="utf-8")
-    recorded = json.loads(written)["questions"][0]["recorded"]["stub"]["ocr_clean"]
+    recorded = json.loads(written)["questions"][0]["recorded"]
 
     assert _ANSWER_TEXT not in json.dumps(recorded, ensure_ascii=False)
-    response = recorded["response"]
-    assert response["recognition"]["text"] == record._REDACTED
-    assert response["comment"] == record._REDACTED
-    assert response["rationale"] == record._REDACTED
-    assert response["criteria"][0]["rationale"] == record._REDACTED
-    assert response["annotations"][0]["target"] == record._REDACTED
-    assert response["annotations"][0]["comment"] is None
+
+
+def test_an_unverifiable_id_is_recorded_as_a_marker_that_still_reads_as_a_mismatch(
+    dataset: Path,
+) -> None:
+    """Replacing an unverifiable id must not also erase the disagreement it
+    represents: ``evaluate_sample`` counts a response whose ``questionId``
+    differs from the label's as ``mismatched``, and a marker that happened
+    to equal the label's id would drive that column to zero by
+    construction."""
+    _run(dataset, _StubProvider(hostile=True))
+
+    response = _cell(dataset, "stub", "ocr_clean")["response"]
+
+    assert response["questionId"] == record._UNVERIFIED_QUESTION_ID
+    assert response["questionId"] != "poc2-synth-01"
+    assert response["criteria"][0]["id"].startswith(record._UNVERIFIED_CRITERION_ID_PREFIX)
+
+
+def test_deployment_metadata_is_recorded_as_a_content_free_fingerprint(
+    dataset: Path,
+) -> None:
+    """``descriptor.version`` is whatever the provider reported it ran --
+    validated by nothing but "non-blank" (code review finding). Hashing
+    keeps what the field is for (two different deployments stay in two
+    different ``descriptor_key`` buckets) without persisting a string this
+    run cannot check."""
+    _run(dataset, _StubProvider(hostile=True))
+    hostile_version = _cell(dataset, "stub", "ocr_clean")["descriptor"]["version"]
+
+    assert hostile_version == "sha256:" + hashlib.sha256(_ANSWER_TEXT.encode()).hexdigest()[:16]
+
+    # Distinctness is the whole point: a different deployment must not fall
+    # into the same bucket as this one.
+    assert hostile_version != "sha256:" + hashlib.sha256(b"another-deployment").hexdigest()[:16]
 
 
 def test_the_metric_bearing_fields_survive_redaction(dataset: Path) -> None:
@@ -204,7 +258,9 @@ def test_a_successful_call_is_recorded_in_the_shape_report_py_reads(dataset: Pat
     cell = _cell(dataset, "stub", "ocr_clean")
     assert cell["descriptor"] == {
         "model": "stub-model",
-        "version": "stub-version",
+        # Response-derived, so recorded as a content-free fingerprint
+        # rather than verbatim -- see the deployment-metadata test below.
+        "version": "sha256:" + hashlib.sha256(b"stub-version").hexdigest()[:16],
         "prompt_version": "v1",
         "temperature": 0.0,
         "structured_output_mode": "json_schema",
@@ -214,6 +270,25 @@ def test_a_successful_call_is_recorded_in_the_shape_report_py_reads(dataset: Pat
     assert "provider" not in cell["descriptor"]
     assert cell["response"]["questionId"] == "poc2-synth-01"
     assert cell["latency_seconds"] == 1.25
+
+
+def test_a_comment_annotation_stays_schema_valid_after_recording(dataset: Path) -> None:
+    """`AnnotationCandidate` requires non-blank comment text on a
+    COMMENT-kind annotation. Writing `null` there turned a perfectly good
+    response into one `report.py` then counted as a schema violation,
+    inflating that provider's violation rate -- a distortion of the
+    adoption metrics, not a cosmetic issue (code review finding)."""
+    provider = _StubProvider()
+    provider.annotation_kind = AnnotationKind.COMMENT
+
+    _run(dataset, provider)
+
+    recorded = _cell(dataset, "stub", "ocr_clean")["response"]
+    assert recorded["annotations"][0]["type"] == "comment"
+    assert recorded["annotations"][0]["comment"] == record._REDACTED
+    # The real check: what was written still parses, which is what
+    # `report.py` does before scoring it.
+    parse_ai_grading_result(json.dumps(recorded, ensure_ascii=False))
 
 
 def test_a_schema_violation_is_recorded_as_such_not_as_a_guessed_grade(dataset: Path) -> None:

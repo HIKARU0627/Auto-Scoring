@@ -42,6 +42,16 @@ docs/poc-2-ai-grading.md section 11):
   validation is recorded as ``schema_violation: true`` and a call that
   exhausts its retries as ``unavailable: true`` -- never as a guessed grade,
   and never left indistinguishable from a cell nobody has tried yet.
+* **It records nothing it cannot verify.** Every string a provider controls
+  is a leak path -- an id and a piece of metadata just as much as a
+  free-text field, because schema validation checks the *shape* of a value
+  and says nothing about its content. So the rule is an allowlist, not a
+  list of fields known to hold answer text: a provider-supplied value is
+  written only when it is (a) a value this run sent, matched back
+  (``questionId``, ``criteria[].id``, the descriptor's configured strings),
+  or (b) constrained by type and range (a number, an enum, a bool).
+  Everything else is replaced with a fixed marker or a content-free
+  fingerprint (:func:`_wire_response`, :func:`_wire_descriptor`).
 """
 
 from __future__ import annotations
@@ -53,7 +63,7 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,7 +71,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
-from auto_scoring.domain.ai_grading_metrics import GradingInputRecord
+from auto_scoring.domain.ai_grading import parse_ai_grading_result
+from auto_scoring.domain.ai_grading_metrics import GradingGroundTruth, GradingInputRecord
 from auto_scoring.domain.ai_provider import (
     AIProvider,
     GradingRequest,
@@ -70,6 +81,7 @@ from auto_scoring.domain.ai_provider import (
     ProviderUnavailable,
     SchemaViolation,
 )
+from auto_scoring.domain.models import AnnotationKind
 
 #: The repository this script lives in. Nothing under it may be recorded
 #: into: a real provider's response body must never reach a commit
@@ -114,6 +126,10 @@ class _Cell:
     question_index: int
     variant: str
     request: GradingRequest
+    #: The rubric criteria the human label lists. A ``criteria[].id`` the
+    #: provider returns is written only if it is one of these; anything
+    #: else is a provider-controlled string (see :func:`_wire_response`).
+    allowed_criterion_ids: frozenset[str]
 
 
 def _load_image(images: Path, ref: str, *, locator: str) -> bytes:
@@ -178,21 +194,26 @@ def _load_image(images: Path, ref: str, *, locator: str) -> bytes:
     return candidate.read_bytes()
 
 
-def _question_id(question: dict[str, Any], *, path: Path, index: int) -> str:
-    """The opaque question id this cell's response must echo back.
+def _ground_truth(question: dict[str, Any], *, locator: str) -> GradingGroundTruth:
+    """The human label for this question, strictly validated.
 
-    Read from ``ground_truth`` (the human label), not invented here: the
-    request's ``questionId`` is what ``report.py`` later cross-checks the
-    response against to reject an answer to a different question
-    (``evaluate_sample``'s ``mismatched``).
+    Validated here rather than only later by ``report.py``: the label
+    supplies both allowlists this recorder checks provider output against
+    (the question id a response must echo back, and the criterion ids it may
+    name), so a malformed label has to stop the run *before* any paid call,
+    not after.
+
+    The ``ValidationError``'s own message is never shown: pydantic keeps the
+    offending value under ``input_value``, and a human label file holds
+    real, hand-transcribed grading data (AGENTS.md "Security"; mirrors
+    ``report.py``'s ``_sanitize_validation_error``).
     """
-    truth = question.get("ground_truth")
-    question_id = truth.get("questionId") if isinstance(truth, dict) else None
-    if not isinstance(question_id, str) or not question_id.strip():
-        raise _DatasetError(
-            f"{path} question {index}: ground_truth.questionId is missing or not a non-blank string"
-        )
-    return question_id
+    try:
+        return GradingGroundTruth.from_mapping(question["ground_truth"])
+    except KeyError:
+        raise _DatasetError(f"{locator}: has no 'ground_truth' block") from None
+    except ValidationError:
+        raise _DatasetError(f"{locator}: 'ground_truth' failed validation") from None
 
 
 def _ocr_text(input_record: GradingInputRecord, variant: str) -> str | None:
@@ -242,7 +263,7 @@ def _plan(
                 # which here is transcribed student answer text (AGENTS.md
                 # "Security"; report.py's `_sanitize_validation_error`).
                 raise _DatasetError(f"{path} question {index}: 'input' failed validation") from None
-            question_id = _question_id(question, path=path, index=index)
+            truth = _ground_truth(question, locator=f"{path} question {index}")
             image = _load_image(
                 images, input_record.answer_image_ref, locator=f"{path} question {index}"
             )
@@ -263,7 +284,7 @@ def _plan(
                         question_index=index,
                         variant=variant,
                         request=GradingRequest(
-                            question_id=question_id,
+                            question_id=truth.question_id,
                             prompt_text=input_record.prompt_text,
                             answer_image=image,
                             ocr_text=ocr_text,
@@ -271,6 +292,7 @@ def _plan(
                             rubric_text=input_record.rubric_text,
                             max_score=input_record.max_score,
                         ),
+                        allowed_criterion_ids=frozenset(c.id for c in truth.criteria),
                     )
                 )
     return cells
@@ -314,49 +336,82 @@ def _already_recorded(recorded: dict[str, Any], variant: str, provider_id: str |
 #: which the wire schema length-limits.
 _REDACTED = "[redacted: PoC 2 records no free text]"
 
+#: Written in place of a ``questionId`` that is not the one this run sent.
+#: Deliberately *not* the expected id: ``evaluate_sample`` classifies a
+#: response whose ``question_id`` differs from the label's as ``mismatched``,
+#: and normalizing the disagreement away would drive the 対応不一致率 column
+#: to zero by construction. No real (opaque) question id can collide with
+#: it, so a genuine match is never reported as a mismatch.
+_UNVERIFIED_QUESTION_ID = "[unverified: provider returned a different questionId]"
 
-def _wire_response(response: GradingResponse) -> dict[str, Any]:
-    """The metric-bearing fields of a validated response, and nothing else.
+#: Prefix for a ``criteria[].id`` that is not one of the rubric criteria the
+#: human label lists. Suffixed with the criterion's position -- an integer,
+#: so it carries no content -- because collapsing several unrecognized ids
+#: onto one string would put duplicate ids in the array.
+_UNVERIFIED_CRITERION_ID_PREFIX = "[unverified-criterion-"
 
-    **No free text from the provider is ever written to disk.** Issue #35's
-    acceptance condition is "secret・答案本文・生徒識別情報がログ・出力・
-    リポジトリに残らない", and *出力* includes this file -- being outside
-    the repository does not make an answer-text copy acceptable. Schema
-    validation is not anonymization: a schema-valid ``recognition.text`` is
-    the student's answer verbatim, ``comment``/``rationale`` routinely quote
-    it, and an ``annotations[].target`` is by definition a span copied out
-    of it (code review finding).
+#: Written in place of a descriptor string that does not match any provider
+#: this run configured. Should never appear: every such string comes from
+#: local configuration, not from a response. If it ever does appear, an
+#: adapter has started echoing a response value into its descriptor, and
+#: that is exactly what must not reach the file unnoticed.
+_UNVERIFIED_DESCRIPTOR = "[unverified: not a configured value]"
 
-    So every field is filtered against one question: **does
-    ``ai_grading_metrics.evaluate_sample`` read it?**
 
-    * ``questionId`` and ``grading.maxScore`` -- the correspondence check
-      that rejects an answer to a different question;
-    * ``grading.score`` -- exact match and within-tolerance;
-    * ``criteria[].id`` / ``criteria[].result`` -- criterion agreement;
-    * ``recognition.confidence`` / ``grading.confidence`` -- the two
-      confidence columns and the calibration gate (section 8.1).
+def _wire_response(
+    response: GradingResponse,
+    *,
+    expected_question_id: str,
+    allowed_criterion_ids: frozenset[str],
+) -> dict[str, Any]:
+    """The verifiable, metric-bearing part of a response -- and nothing else.
 
-    Two more are kept although no metric reads them yet, because both are
-    numbers or enums that cannot carry content: ``criteria[].confidence``,
-    and ``annotations[].type`` (which preserves "the model proposed two
-    annotations, of these kinds" without preserving what they pointed at).
+    **No provider-controlled string reaches disk.** Issue #35's acceptance
+    condition is "secret・答案本文・生徒識別情報がログ・出力・リポジトリに
+    残らない", and *出力* includes this file -- being outside the repository
+    does not make an answer-text copy acceptable. Schema validation is not
+    anonymization: it checks the *shape* of a value and says nothing about
+    its content, so "this field is an id" or "this field is metadata" is not
+    a safety argument. A provider can put the student's answer in
+    ``questionId`` and pass validation (code review finding: the first
+    version of this function redacted the fields known to hold prose and let
+    the ids through on exactly that reasoning).
 
-    Everything else is replaced with :data:`_REDACTED`, not omitted, because
-    the wire schema requires those fields: a cell has to stay readable by
-    ``parse_ai_grading_result`` for ``report.py`` to score it at all (Issue
-    #14 acceptance: a recorded cell is validated on the way back in, never
-    trusted). Redacting rather than dropping keeps one file format for
-    hand-authored fixtures and live recordings, and keeps the redaction
-    visible in the data instead of implicit in its absence.
+    So each value is written only if one of two things is true:
+
+    * **it is a value this run sent, matched back** -- ``questionId``
+      against the request's own id, ``criteria[].id`` against the rubric
+      criteria the human label lists;
+    * **its type and range constrain it** -- ``score``/``maxScore``
+      (integers), the three ``confidence`` values (floats in 0..1),
+      ``criteria[].result`` and ``annotations[].type`` (enums).
+
+    Every other field carries :data:`_REDACTED`. They are replaced rather
+    than dropped because the wire schema requires them: a cell has to stay
+    readable by ``parse_ai_grading_result`` for ``report.py`` to score it at
+    all (Issue #14 acceptance: a recorded cell is validated on the way back
+    in, never trusted). Redacting rather than dropping also keeps one file
+    format for hand-authored fixtures and live recordings, and keeps the
+    redaction visible in the data instead of implicit in its absence.
+
+    A mismatched ``questionId`` or an unrecognized ``criteria[].id`` is
+    recorded as a *fixed* unverified marker, never as the provider's raw
+    string. The disagreement itself still survives: ``evaluate_sample``
+    reads the marker, sees it is not the label's id, and counts the cell as
+    ``mismatched`` (or, for a criterion, as not agreeing) exactly as it
+    would have with the raw value.
 
     Built from the already-parsed :class:`GradingResponse`, never from the
     provider's raw body, so what is recorded is exactly what passed
     ``parse_ai_grading_result`` -- and no un-validated bytes from a remote
     service reach the disk.
     """
-    return {
-        "questionId": response.question_id,
+    body = {
+        "questionId": (
+            expected_question_id
+            if response.question_id == expected_question_id
+            else _UNVERIFIED_QUESTION_ID
+        ),
         "recognition": {
             "text": _REDACTED,
             "confidence": response.recognition_confidence,
@@ -368,40 +423,151 @@ def _wire_response(response: GradingResponse) -> dict[str, Any]:
         },
         "criteria": [
             {
-                "id": criterion.criterion_id,
+                "id": (
+                    criterion.criterion_id
+                    if criterion.criterion_id in allowed_criterion_ids
+                    else f"{_UNVERIFIED_CRITERION_ID_PREFIX}{position}]"
+                ),
                 "result": criterion.outcome.value,
                 "confidence": criterion.confidence,
                 "rationale": _REDACTED,
             }
-            for criterion in response.criteria
+            for position, criterion in enumerate(response.criteria)
         ],
         "comment": _REDACTED,
         "rationale": _REDACTED,
         "annotations": [
-            {"target": _REDACTED, "type": annotation.type.value, "comment": None}
+            {
+                "target": _REDACTED,
+                "type": annotation.type.value,
+                # A COMMENT-kind annotation must carry non-blank comment
+                # text (`AnnotationCandidate._comment_type_requires_comment_
+                # text`). Writing `null` there turned a perfectly good
+                # response into one `report.py` then counted as a schema
+                # violation, quietly inflating that provider's violation
+                # rate (code review finding). Keyed on the kind, not on
+                # whether the original had a comment, so the recorded cell
+                # is valid by construction rather than by the provider
+                # having happened to fill it in.
+                "comment": (
+                    _REDACTED
+                    if annotation.type is AnnotationKind.COMMENT or annotation.comment is not None
+                    else None
+                ),
+            }
             for annotation in response.annotations
         ],
     }
+    _assert_still_parses(body)
+    return body
 
 
-def _wire_descriptor(descriptor: ProviderDescriptor) -> dict[str, Any]:
+def _assert_still_parses(body: dict[str, Any]) -> None:
+    """Fail loudly if the projection above no longer satisfies the wire schema.
+
+    ``report.py`` re-validates every recorded cell, so a projection that
+    drifts out of the schema does not crash anything -- it silently
+    reclassifies healthy responses as schema violations and inflates that
+    provider's ``schema_violation_rate`` (code review finding: writing
+    ``comment: null`` under a COMMENT-kind annotation did exactly that).
+    Checking here turns that class of mistake into an immediate, local
+    failure instead of a quiet distortion of the adoption metrics.
+
+    The offending value is never included in the message: it is this
+    function's own output, which should hold no provider content, and a bug
+    that put some there must not then print it (mirrors ``report.py``'s
+    ``_sanitize_validation_error``).
+    """
+    try:
+        parse_ai_grading_result(json.dumps(body, ensure_ascii=False))
+    except ValidationError as exc:
+        locations = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['type']}"
+            for error in exc.errors()
+        )
+        raise AssertionError(
+            f"the recorded projection no longer satisfies AIGradingResult ({locations}) -- "
+            "report.py would count these cells as schema violations"
+        ) from None
+
+
+def _configured_descriptors(provider: AIProvider) -> frozenset[tuple[str, str, str]]:
+    """``(model, prompt_version, structured_output_mode)`` for every link
+    this run could grade through.
+
+    These three are set from local configuration when an adapter is built
+    and are never assigned from a response -- but "never" is a property of
+    today's adapters, not of the format, and the field next to them
+    (``version``) *is* response-derived. Matching against what this run
+    actually configured turns "these strings happen to be safe" into
+    something checked on every write, so an adapter that later starts
+    echoing a routed model name into its own descriptor cannot quietly put
+    provider text into a recorded file.
+
+    ``providers`` is how :class:`FallbackAIProvider` exposes its chain; a
+    single adapter has no such attribute and is its own only link.
+    """
+    children: Sequence[AIProvider] = getattr(provider, "providers", None) or (provider,)
+    return frozenset(
+        (descriptor.model, descriptor.prompt_version, descriptor.structured_output_mode)
+        for descriptor in (child.describe() for child in children)
+    )
+
+
+def _version_fingerprint(version: str | None) -> str | None:
+    """A content-free stand-in for the deployment identifier a provider
+    reported (``modelVersion``, or OpenRouter's routed model + upstream).
+
+    That string is chosen by the provider and validated by nothing but
+    "non-blank", so an anomalous response can carry free text into it --
+    and it is written even when the response body itself was a schema
+    violation, since a failed cell still records the descriptor of the
+    configuration that was attempted (code review finding). Redacting the
+    successful path alone does not close it.
+
+    Hashing keeps the one thing the field is for: two calls that ran
+    against *different* deployments still land in different
+    ``descriptor_key`` buckets, and two against the same one still share a
+    bucket (docs/poc-2-ai-grading.md section 3.3). What is given up is the
+    human-readable deployment name, which for a given run is in the
+    operator's own console and logs -- not something that has to live in a
+    file that also holds student work. 16 hex characters is 64 bits, far
+    more than enough to keep a handful of deployments apart, and short
+    enough to stay readable in the results table's ``config`` column.
+    """
+    if version is None:
+        return None
+    return "sha256:" + hashlib.sha256(version.encode("utf-8")).hexdigest()[:16]
+
+
+def _wire_descriptor(
+    descriptor: ProviderDescriptor, *, configured: frozenset[tuple[str, str, str]]
+) -> dict[str, Any]:
     """The ``descriptor`` block ``report.py`` requires on every recorded cell.
 
     ``provider`` is deliberately *not* part of it: ``report.py`` takes the
     provider id from the cell's key in ``recorded`` and would reject an
     extra field here (``_DescriptorInput``, ``extra="forbid"``).
     """
+    identity = (descriptor.model, descriptor.prompt_version, descriptor.structured_output_mode)
+    model, prompt_version, structured_output_mode = (
+        identity if identity in configured else (_UNVERIFIED_DESCRIPTOR,) * 3
+    )
     return {
-        "model": descriptor.model,
-        "version": descriptor.version,
-        "prompt_version": descriptor.prompt_version,
+        "model": model,
+        "version": _version_fingerprint(descriptor.version),
+        "prompt_version": prompt_version,
         "temperature": descriptor.temperature,
-        "structured_output_mode": descriptor.structured_output_mode,
+        "structured_output_mode": structured_output_mode,
     }
 
 
 def _call_with_backoff(
-    provider: AIProvider, request: GradingRequest, *, sleep: Callable[[float], None]
+    provider: AIProvider,
+    cell: _Cell,
+    *,
+    configured: frozenset[tuple[str, str, str]],
+    sleep: Callable[[float], None],
 ) -> tuple[str, dict[str, Any], float]:
     """One cell's outcome, retrying transient failures per section 7.2.
 
@@ -431,14 +597,14 @@ def _call_with_backoff(
         # numbers section 8.1 gates adoption on.
         attempt_started_at = time.monotonic()
         try:
-            response = provider.grade(request)
+            response = provider.grade(cell.request)
         except SchemaViolation:
             descriptor = provider.describe()
             return (
                 descriptor.provider,
                 {
                     "schema_violation": True,
-                    "descriptor": _wire_descriptor(descriptor),
+                    "descriptor": _wire_descriptor(descriptor, configured=configured),
                     "latency_seconds": time.monotonic() - attempt_started_at,
                 },
                 time.monotonic() - started_at,
@@ -450,7 +616,7 @@ def _call_with_backoff(
                     descriptor.provider,
                     {
                         "unavailable": True,
-                        "descriptor": _wire_descriptor(descriptor),
+                        "descriptor": _wire_descriptor(descriptor, configured=configured),
                         "latency_seconds": time.monotonic() - attempt_started_at,
                     },
                     time.monotonic() - started_at,
@@ -461,8 +627,12 @@ def _call_with_backoff(
         return (
             response.descriptor.provider,
             {
-                "response": _wire_response(response),
-                "descriptor": _wire_descriptor(response.descriptor),
+                "response": _wire_response(
+                    response,
+                    expected_question_id=cell.request.question_id,
+                    allowed_criterion_ids=cell.allowed_criterion_ids,
+                ),
+                "descriptor": _wire_descriptor(response.descriptor, configured=configured),
                 # `GradingResponse` carries the successful call's own
                 # measurement, taken inside the adapter around the HTTP
                 # call itself.
@@ -569,10 +739,16 @@ def main(argv: list[str] | None = None) -> int:
         print("dry run: no provider call was made" if args.dry_run else "nothing to do")
         return 0
 
+    # Captured once, before any call: what this run configured is the
+    # allowlist every recorded descriptor string is checked against
+    # (`_configured_descriptors`).
+    configured = _configured_descriptors(provider)
     outcomes = {"response": 0, "schema_violation": 0, "unavailable": 0}
     touched: dict[Path, dict[str, Any]] = {}
     for number, cell in enumerate(cells, start=1):
-        provider_id, body, elapsed = _call_with_backoff(provider, cell.request, sleep=time.sleep)
+        provider_id, body, elapsed = _call_with_backoff(
+            provider, cell, configured=configured, sleep=time.sleep
+        )
         question = cell.document["questions"][cell.question_index]
         question["recorded"].setdefault(provider_id, {})[cell.variant] = body
         touched[cell.path] = cell.document

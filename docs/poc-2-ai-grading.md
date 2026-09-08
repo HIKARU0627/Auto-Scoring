@@ -865,31 +865,44 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   アダプタ名で `recorded[<provider>][<variant>]` に書く。単一アダプタならそのアダプタ、
   フォールバックチェーンなら**実際に応答したリンク**になる（決定書 §3 (B)
   「どの provider で採点したかを結果に残す」）。
-- **答案本文を記録しない（受入条件）**。Issue #35 の受入条件は
+- **検証できない値を記録しない（受入条件）**。Issue #35 の受入条件は
   「secret・答案本文・生徒識別情報がログ・**出力**・リポジトリに残らない」で
-  あり、リポジトリ外に書くから安全、ではない。**schema 検証は匿名化ではない**:
-  schema 上正しい `recognition.text` は生徒の答案そのもので、`comment` /
-  `rationale` は日常的にそれを引用し、`annotations[].target` は定義上答案から
-  切り出した文字列である。そこで記録するのは
-  `ai_grading_metrics.evaluate_sample` が実際に読む項目だけにした。
+  あり、リポジトリ外に書くから安全、ではない。方針は**「本文が入ると分かって
+  いるフィールドを伏せる」ではなく「検証できないものは保存しない」**である。
+  **schema 検証は形しか見ない**ので、「ここは ID だから安全」「ここは
+  メタデータだから安全」は成り立たない — provider は `questionId` に答案本文を
+  返しても検証を通せる。
 
-  | 記録する                                        | 用途                                |
-  | ----------------------------------------------- | ----------------------------------- |
-  | `questionId` / `grading.maxScore`               | 別設問への応答を弾く対応チェック    |
-  | `grading.score`                                 | 完全一致率・許容点差内率            |
-  | `criteria[].id` / `criteria[].result`           | criterion 別一致率                  |
-  | `recognition.confidence` / `grading.confidence` | Confidence 2 列と較正ゲート（§8.1） |
-  | `criteria[].confidence` / `annotations[].type`  | 数値と enum のみ。内容を持たない    |
+  記録するのは次のどちらかを満たす値だけ。
 
-  それ以外の自由文（`recognition.text`・`comment`・`rationale`・
-  `criteria[].rationale`・`annotations[].target`/`comment`）は固定文字列
-  `[redacted: PoC 2 records no free text]` に置き換える。**削除ではなく置換**
-  なのは、ワイヤスキーマがこれらを必須にしているためで、セルは `report.py` が
-  読み戻すときに `parse_ai_grading_result` を通る必要がある（Issue #14 受入条件:
-  記録済みセルも信頼せず検証する）。置換にすることで、手書きフィクスチャと
-  live 記録のファイル形式が 1 つに保たれ、伏せたことがデータ上に見える。
+  | 条件                             | 対象                                                                                                                                                                                                                              |
+  | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | **こちらが送った値と照合できる** | `questionId`（リクエストの ID と一致した場合のみ）、`criteria[].id`（人間ラベルが挙げる rubric criterion の ID のみ）、descriptor の `model`/`prompt_version`/`structured_output_mode`（この run が構成した組と一致する場合のみ） |
+  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数）                                                                                  |
 
-- **`--images` と画像 identity**。`input.answer_image_ref` が `sha256:<hex>` 形式なら、
+  それ以外はすべて固定の marker に置き換える。自由文（`recognition.text`・
+  `comment`・`rationale`・`criteria[].rationale`・`annotations[].target`/
+  `comment`）は `[redacted: PoC 2 records no free text]`。照合できなかった
+  `questionId`・`criteria[].id` は**生文字列ではなく固定の unverified marker**
+  にする。marker は正解ラベルの ID と決して一致しないので、`evaluate_sample`
+  はこのセルを従来どおり `mismatched`（criterion なら不一致）として数える —
+  **食い違いという情報は失わずに、食い違いの中身だけを落とす**。
+
+- **応答由来の deployment metadata は fingerprint にする**。
+  `descriptor.version`（Gemini の `modelVersion`、OpenRouter の routed model +
+  upstream）は provider が中身を決める文字列で、「非空」以外の検証が無い。
+  しかも**本文が schema 違反だったセルにも descriptor は記録される**ので、
+  成功応答の伏字化だけでは塞げない。`sha256` の先頭 16 桁（64 bit）に置き換える。
+  この列の役割である「別の deployment は別の `descriptor_key` bucket に入る」は
+  そのまま保たれ、失うのは人間が読めるデプロイ名だけである。それはその run の
+  コンソール・ログにあるもので、答案を含むファイルに残す必要はない。
+- **記録した形が schema を満たすことを毎回確認する**。射影の結果を
+  `parse_ai_grading_result` に通してから書き出す。`report.py` は記録済みセルを
+  読み戻すときに再検証するため、射影がスキーマから外れてもクラッシュはせず、
+  **正常だった応答が schema 違反として集計されて違反率が水増しされる**という
+  形で静かに歪む（`type: "comment"` の注釈に `comment: null` を書いていた不具合）。
+  ここで落とせば、その種の間違いは静かな歪みではなく即座の失敗になる。
+- **`--images` と画像 identity**。- **`--images` と画像 identity**。`input.answer_image_ref` が `sha256:<hex>` 形式なら、
   `<images>/<hex>.png`（`.jpg`/`.jpeg` も探す）を読んで**内容ハッシュを照合**する。
   差し替わった・作り直された切り出し画像で採点したものが「同一データでの比較」に
   見えてしまうのを防ぐ（§3.12）。`sha256:` 以外の参照はディレクトリ内の単純な
