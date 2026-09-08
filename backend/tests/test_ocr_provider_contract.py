@@ -100,8 +100,9 @@ class TestStubOCRProviderContract(OCRProviderContract):
 
 class TestNullOCRProviderContract(OCRProviderContract):
     """`NullOCRProvider` (Issue #19) is the real, shipped placeholder
-    adapter until business-rules-and-evaluation-data.md section 3 (A) is
-    decided -- it must satisfy the same contract as any real candidate."""
+    adapter until the OCR service decided in business-rules-and-evaluation-
+    data.md section 3 (A) (Google Document AI, Issue #81) has an adapter --
+    it must satisfy the same contract as that one will."""
 
     @pytest.fixture
     def provider(self) -> NullOCRProvider:

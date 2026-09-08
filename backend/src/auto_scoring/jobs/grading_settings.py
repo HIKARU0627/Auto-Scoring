@@ -21,10 +21,12 @@ class GradingSettings:
     always ``source=ai`` (a proposal, simplified-design-specification.md
     section 19), regardless of this value.
 
-    The value is **not yet decided** by the project owner -- pending PoC 2's
-    confidence distributions (business-rules-and-evaluation-data.md section
-    3 (C)). ``0.80`` is only the placeholder that document itself names as
-    its own provisional default; it is not a product decision.
+    The project owner decided (Issue #81, business-rules-and-evaluation-data.md
+    section 3 (C)) *not* to fix a single value: the threshold stays a setting,
+    ``0.80`` stays its default, and the number is adjusted while operating.
+    Same reasoning as `auto_scoring.jobs.recognition_settings.
+    RecognitionSettings` -- a default to run with, never a licence to skip
+    human review.
     """
 
     confidence_threshold: float = 0.80

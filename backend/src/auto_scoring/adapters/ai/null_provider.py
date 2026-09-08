@@ -1,12 +1,11 @@
-"""Placeholder ``AIProvider`` used until a real vendor is chosen.
+"""Placeholder ``AIProvider`` used until the chosen provider chain is wired up.
 
-business-rules-and-evaluation-data.md section 3 (B): the AI model to use is
-**not yet decided** by the project owner -- PoC 2 (Issue #14) built the
-`AIProvider` contract, the structured-output schema, and the metrics
-pipeline, but never adopted a specific vendor (no candidate's credentials
-were available; see docs/poc-2-ai-grading.md section 0.1). Section 3.1's
-block condition for B is explicit: until it is decided, ship "`AIProvider`の
-抽象と PoC の記録のみ" -- no vendor-specific request/response handling.
+business-rules-and-evaluation-data.md section 3 (B): the project owner chose
+an **ordered fallback chain** (Gemini API -> Codex App Server -> OpenRouter ->
+OpenAI API; Issue #81), not a single vendor. Two of the four have adapters
+(Issue #44, `adapters/ai_grading/`), the composite that tries them in order
+does not exist yet, and no chain is wired into `create_app` (docs/ai-grading-
+pipeline.md "AIモデル: 優先度つきフォールバック"; live probe in Issue #54).
 
 Mirrors `auto_scoring.adapters.ocr.null_provider.NullOCRProvider`: rather
 than raising (which `GradingJobProcessor` would have to guess a retry

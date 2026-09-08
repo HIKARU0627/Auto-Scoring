@@ -191,7 +191,8 @@ class TestReplayAIProviderContract(AIProviderContract):
 
 def test_null_ai_provider_declares_a_name_and_reproducibility_metadata() -> None:
     """`NullAIProvider` (Issue #20) is the real, shipped placeholder adapter
-    until business-rules-and-evaluation-data.md section 3 (B) is decided.
+    until the provider chain decided in business-rules-and-evaluation-data.md
+    section 3 (B) (Issue #81) is implemented.
 
     Not tested via the full `AIProviderContract` mixin: that mixin's
     ``test_schema_violation_never_falls_back_to_free_text_parsing`` relies on

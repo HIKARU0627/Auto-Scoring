@@ -3,11 +3,11 @@
 /// scan quickly.
 ///
 /// The thresholds below are a UI categorization only -- they do not gate
-/// anything (no auto-confirm, no blocking). The actual "low Confidence"
-/// business threshold is an open decision
-/// (`docs/data-model-and-local-storage.md` §9, `docs/business-rules-and-
-/// evaluation-data.md` §3 (C)); see `docs/pdf-review-overlay.md` for why this
-/// screen picks a provisional display split instead of waiting on it.
+/// anything (no auto-confirm, no blocking). The business "low Confidence"
+/// threshold is a backend setting that is tuned while operating rather than
+/// fixed once (`docs/business-rules-and-evaluation-data.md` §3 (C),
+/// `docs/data-model-and-local-storage.md` §9), so this screen deliberately
+/// does not track it; see `docs/pdf-review-overlay.md` §2.3.
 enum ConfidenceLevel {
   high,
   medium,
