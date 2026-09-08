@@ -29,6 +29,12 @@ GitHub Issue [#15](https://github.com/HIKARU0627/Auto-Scoring/issues/15)（親
   `ProfileStore`（Issue #11 の `app-data/tests/<test-id>/profile.json` 規約）で
   DRAFT保存 → 再読込 → 人間確認 → CONFIRMED保存 → （答案ごとに）再読込 → 再適用、
   という経路を全fixtureで通した。同一プロセス内のオブジェクト再利用ではない。
+
+> **⚠ Issue #95 で入力の前提が変わった。** 模範解答PDFは必須入力から外れた
+> （[簡易設計書](./simplified-design-specification.md) §4.2）。本PoCの検証結果のうち
+> `Profile` のdraft/confirmedパターンと座標往復は引き続き有効だが、**入力の組み合わせに
+> 関する記述は現行仕様ではない。**
+
 - **模範解答PDFと採点マニュアルPDFを別入力として候補生成できる。** 前者から
   question / answer_area / annotation_area / model_answer、後者から score / rubric の
   markerを読み、統合した候補を5形式で検証した。

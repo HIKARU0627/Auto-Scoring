@@ -8,32 +8,34 @@ the former is updated in the same PR.
 
 ## 仕様・設計
 
-| 文書                                                                             | 内容                                                              |
-| -------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| [simplified-design-specification.md](./simplified-design-specification.md)       | 簡易設計書。要件・画面・データ・MVP範囲の正本                     |
-| [technology-stack.md](./technology-stack.md)                                     | 技術スタックの決定と却下した代替案、リポジトリ構成、依存方向      |
-| [business-rules-and-evaluation-data.md](./business-rules-and-evaluation-data.md) | 採点業務ルールと評価用データ、未決定事項（OCRサービス・AIモデル） |
-| [data-model-and-local-storage.md](./data-model-and-local-storage.md)             | エンティティ・SQLite スキーマ・`app-data/` の配置と不変条件       |
-| [sidecar-api.md](./sidecar-api.md)                                               | サイドカーのハンドシェイク・認証・OpenAPI → Dart クライアント生成 |
+| 文書                                                                             | 内容                                                                             |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [simplified-design-specification.md](./simplified-design-specification.md)       | 簡易設計書。要件・画面・データ・MVP範囲の正本                                    |
+| [technology-stack.md](./technology-stack.md)                                     | 技術スタックの決定と却下した代替案、リポジトリ構成、依存方向                     |
+| [business-rules-and-evaluation-data.md](./business-rules-and-evaluation-data.md) | 採点業務ルールと評価用データ、未決定事項（OCRサービス・AIモデル）                |
+| [grading-material-structure.md](./grading-material-structure.md)                 | 実際の採点資料を調べた構造の記録（内容は載せない）。設計が耐えるべき既知のケース |
+| [data-model-and-local-storage.md](./data-model-and-local-storage.md)             | エンティティ・SQLite スキーマ・`app-data/` の配置と不変条件                      |
+| [sidecar-api.md](./sidecar-api.md)                                               | サイドカーのハンドシェイク・認証・OpenAPI → Dart クライアント生成                |
 
 ## 機能ごとの実装決定
 
-| 文書                                                                       | 内容                                                            |
-| -------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [test-registration.md](./test-registration.md)                             | テスト登録とテストプロファイルの生成・人間による確定            |
-| [answer-intake-and-preprocessing.md](./answer-intake-and-preprocessing.md) | 生徒答案の取り込み、レンダリング、OpenCV 前処理、回答欄 crop    |
-| [ocr-recognition-pipeline.md](./ocr-recognition-pipeline.md)               | 文字認識パイプラインと低 Confidence の扱い                      |
-| [ai-grading-pipeline.md](./ai-grading-pipeline.md)                         | AI 採点パイプラインと構造化出力                                 |
-| [dependency-graph.md](./dependency-graph.md)                               | 設問間の依存グラフと解放条件                                    |
-| [job-queue.md](./job-queue.md)                                             | 非同期ジョブキュー、並列度、リトライ分類                        |
-| [pdf-review-overlay.md](./pdf-review-overlay.md)                           | PDF 表示と Annotation Overlay、座標の正規化                     |
-| [review-edit-history.md](./review-edit-history.md)                         | レビューの修正・承認・Undo と追記のみの履歴                     |
-| [pdf-export.md](./pdf-export.md)                                           | 確定 Annotation を描画した添削済み PDF 出力                     |
-| [mvp-acceptance.md](./mvp-acceptance.md)                                   | 簡易設計書 §31 の全実装項目と、それを検証しているテストの対応表 |
-| [design-tokens.md](./design-tokens.md)                                     | 画面のデザイントークン（フォント選定・配色・余白・モーション）  |
-| [home-dashboard.md](./home-dashboard.md)                                   | ホーム画面が出す「次の一手」と進捗の決め方、状態の取得元        |
-| [dependency-dag-progress-view.md](./dependency-dag-progress-view.md)       | 添削レビュー画面で AI 処理の進捗を依存 DAG として見せる         |
-| [ui-ux-multi-agent-evaluation.md](./ui-ux-multi-agent-evaluation.md)       | UI/UX を複数AIエージェントに独立評価させた記録と採否            |
+| 文書                                                                       | 内容                                                             |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| [test-registration.md](./test-registration.md)                             | テスト登録とテストプロファイルの生成・人間による確定             |
+| `intake-and-settings.md`（Issue #101 で追加予定）                          | 登録と答案取込の統合画面、ディレクトリ取込、命名規則（型）の設定 |
+| [answer-intake-and-preprocessing.md](./answer-intake-and-preprocessing.md) | 生徒答案の取り込み、レンダリング、OpenCV 前処理、回答欄 crop     |
+| [ocr-recognition-pipeline.md](./ocr-recognition-pipeline.md)               | 文字認識パイプラインと低 Confidence の扱い                       |
+| [ai-grading-pipeline.md](./ai-grading-pipeline.md)                         | AI 採点パイプラインと構造化出力                                  |
+| [dependency-graph.md](./dependency-graph.md)                               | 設問間の依存グラフと解放条件                                     |
+| [job-queue.md](./job-queue.md)                                             | 非同期ジョブキュー、並列度、リトライ分類                         |
+| [pdf-review-overlay.md](./pdf-review-overlay.md)                           | PDF 表示と Annotation Overlay、座標の正規化                      |
+| [review-edit-history.md](./review-edit-history.md)                         | レビューの修正・承認・Undo と追記のみの履歴                      |
+| [pdf-export.md](./pdf-export.md)                                           | 確定 Annotation を描画した添削済み PDF 出力                      |
+| [mvp-acceptance.md](./mvp-acceptance.md)                                   | 簡易設計書 §31 の全実装項目と、それを検証しているテストの対応表  |
+| [design-tokens.md](./design-tokens.md)                                     | 画面のデザイントークン（フォント選定・配色・余白・モーション）   |
+| [home-dashboard.md](./home-dashboard.md)                                   | ホーム画面が出す「次の一手」と進捗の決め方、状態の取得元         |
+| [dependency-dag-progress-view.md](./dependency-dag-progress-view.md)       | 添削レビュー画面で AI 処理の進捗を依存 DAG として見せる          |
+| [ui-ux-multi-agent-evaluation.md](./ui-ux-multi-agent-evaluation.md)       | UI/UX を複数AIエージェントに独立評価させた記録と採否             |
 
 ## PoC 記録
 

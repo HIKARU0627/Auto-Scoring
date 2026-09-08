@@ -6,6 +6,12 @@ GitHub Issue [#16](https://github.com/HIKARU0627/Auto-Scoring/issues/16)（親
 模範解答）を人間が確認・修正し、設問依存関係グラフ（Issue #26）と合わせて確認済みにして
 初めてテスト登録が完了する一連のフローを実装する。
 
+> **⚠ 入力の前提は Issue #95 で変更された。** 本書が記録している「模範解答PDF・採点マニュアル
+> PDFを登録する」という入力モデルは、実際の採点者が持っている資料と対応していなかった。
+> 現在の仕様は [`simplified-design-specification.md`](./simplified-design-specification.md)
+> §4（必須は採点基準PDFと生徒答案PDF）・§6.2（回答欄は答案から解析する）が正である。
+> **本書は実装当時の記録として残してあり、実装の作り直しが必要な箇所を示す。**
+
 依存: [#10](https://github.com/HIKARU0627/Auto-Scoring/issues/10)（認証付きサイドカー
 API）、[#11](https://github.com/HIKARU0627/Auto-Scoring/issues/11)（MVPデータモデル）、
 [#15 PoC 4](https://github.com/HIKARU0627/Auto-Scoring/issues/15)（`Profile` の

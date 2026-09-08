@@ -13,6 +13,16 @@ GitHub Issue [#19](https://github.com/HIKARU0627/Auto-Scoring/issues/19)（親
 
 対象外: 採点判断（`AIProvider`）と最終Annotation生成は後続Issueで扱う。
 
+> **⚠ OCRの位置づけはIssue #95 決定10で変わった。** 決定10で数式・英作文・図グラフが
+> 採点対象になり、**OCRは採点の前提ではなくなった**
+> （採点の入力は**回答欄を切り出した画像**。**ページ全体ではない** — 簡易設計書 §26.1.1）。
+> OCRに残る役割は、**採点AIとは独立した比較材料**を与えること（**OCR結果は「採点AIが
+> 何を読んだか」ではない**。別々のモデルが別々に読むため、OCR結果を確認しても採点AIの
+> 読み違いは検出できない）と、**文字に紐づくAnnotationのBounding Boxを供給する**ことの2つである。
+> 現在の仕様は [`simplified-design-specification.md`](./simplified-design-specification.md)
+> §8.1 が正。**本書のうち「OCR失敗＝採点不可」を前提にした箇所は見直しが要る**
+> （§24: OCRが失敗しても採点は止めない）。本書は実装当時の記録として残してある。
+
 ## 決定事項
 
 ### OCRサービス: Google Document AI（業務ルール §3 (A)、Issue #81 で確定）— 既定は依然 `NullOCRProvider`
