@@ -360,11 +360,15 @@ void main() {
           layout.edges.firstWhere((e) => e.key == '$from>$to');
 
       // Adjacent layers have nothing in between and stay direct.
-      expect(lineFor('q1', 'q2').detourY, isNull);
-      expect(lineFor('q2', 'q3').detourY, isNull);
+      expect(lineFor('q1', 'q2').detour, isNull);
+      expect(lineFor('q2', 'q3').detour, isNull);
       // The skipping edge travels below every node row: rows bottom is
       // padding(5) + 1 row(40) = 45, plus one laneGap(10).
-      expect(lineFor('q1', 'q3').detourY, 55);
+      expect(lineFor('q1', 'q3').detour?.y, 55);
+      // The drop and the climb are each at most half a column gap, so the two
+      // of them together never reach out of the empty column they start in
+      // and into the next layer's cards.
+      expect(lineFor('q1', 'q3').detour!.shoulder, metrics.columnGap / 2);
       // The canvas grows to hold the lane, so it is never simply clipped.
       expect(layout.size.height, 60);
     });
@@ -396,8 +400,21 @@ void main() {
         metrics: metrics,
       )!;
       expect(layout.nodes.firstWhere((n) => n.id == 'q3').rect.top, 5);
-      expect(layout.edges.firstWhere((e) => e.key == 'q2>q5').detourY, isNull);
+      expect(layout.edges.firstWhere((e) => e.key == 'q2>q5').detour, isNull);
       expect(layout.size.height, 100);
+    });
+
+    test('a detour never drops further out than the column it starts in', () {
+      // The lane is what clears the cards; the drop and the climb have to be
+      // kept away from them separately, because that part of the route is not
+      // down in the lane yet. Half a column gap each is what guarantees it,
+      // whatever the node size -- with the panel's own metrics the two
+      // together are exactly one empty column wide.
+      const wide = DagMetrics(columnGap: 8);
+      expect(wide.detourShoulder(1000), 4);
+      // ...and never so long that the lane stops being the longest part of
+      // the route.
+      expect(wide.detourShoulder(8), 2);
     });
 
     test('an edge is satisfied only when its prerequisite released it', () {

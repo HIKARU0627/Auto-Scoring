@@ -127,43 +127,49 @@ JobResponse _jobFor(
   String state = 'succeeded',
   bool? usable = true,
   String? blockedOnQuestionId,
+  int graphVersion = 1,
 }) => JobResponse(
   (b) => b
-    ..id = 'job-$questionId'
+    ..id = 'job-$questionId-v$graphVersion'
     ..kind = 'grading'
     ..submissionId = 'sub-1'
     ..questionId = questionId
     ..state = state
     ..usable = usable
     ..blockedOnQuestionId = blockedOnQuestionId
+    ..dependencyGraphVersion = graphVersion
     ..attempts = 1
     ..maxAttempts = 3
-    ..createdAt = DateTime.utc(2026, 1, 1)
-    ..updatedAt = DateTime.utc(2026, 1, 1),
+    ..createdAt = DateTime.utc(2026, 1, 1, graphVersion)
+    ..updatedAt = DateTime.utc(2026, 1, 1, graphVersion),
 );
 
-/// A one-edge graph: 問1 must finish before 問2 may start.
-DependencyGraphResponse _dependencyGraph({String status = 'confirmed'}) =>
-    DependencyGraphResponse(
-      (b) => b
-        ..id = 'graph-1'
-        ..testId = 'test-1'
-        ..version = 1
-        ..status = status
-        ..questionIds.replace(const ['q-1', 'q-2'])
-        ..edges.replace([
-          DependencyEdgeModel(
-            (e) => e
-              ..fromQuestionId = 'q-1'
-              ..toQuestionId = 'q-2'
-              ..rationale = '問1の結論を使う'
-              ..provides.replace(const <DependencyProvision>[]),
-          ),
-        ])
-        ..unresolved.replace(const <UnresolvedQuestionModel>[])
-        ..createdAt = DateTime.utc(2026, 1, 1)
-        ..confirmedAt = status == 'confirmed' ? DateTime.utc(2026, 1, 1) : null,
-    );
+/// A one-edge graph: by default 問1 must finish before 問2 may start.
+DependencyGraphResponse _dependencyGraph({
+  String status = 'confirmed',
+  int version = 1,
+  String from = 'q-1',
+  String to = 'q-2',
+}) => DependencyGraphResponse(
+  (b) => b
+    ..id = 'graph-$version'
+    ..testId = 'test-1'
+    ..version = version
+    ..status = status
+    ..questionIds.replace(const ['q-1', 'q-2'])
+    ..edges.replace([
+      DependencyEdgeModel(
+        (e) => e
+          ..fromQuestionId = from
+          ..toQuestionId = to
+          ..rationale = '前の設問の結論を使う'
+          ..provides.replace(const <DependencyProvision>[]),
+      ),
+    ])
+    ..unresolved.replace(const <UnresolvedQuestionModel>[])
+    ..createdAt = DateTime.utc(2026, 1, 1)
+    ..confirmedAt = status == 'confirmed' ? DateTime.utc(2026, 1, 1) : null,
+);
 
 NormalizedRectResponse _rect(double x, double y, double w, double h) =>
     NormalizedRectResponse(
@@ -3106,6 +3112,7 @@ void main() {
       required List<JobResponse> Function() jobs,
       String graphStatus = 'confirmed',
       bool graphAvailable = true,
+      DependencyGraphResponse Function()? graph,
     }) => AppDependencies(
       getSubmission: (_) async => _submission(state: 'ai_processing'),
       listQuestions: (_) async => [
@@ -3114,7 +3121,7 @@ void main() {
       ],
       getSourcePdf: (_) async => _pocA4PortraitPdf(),
       getDependencyGraph: (_) async => graphAvailable
-          ? _dependencyGraph(status: graphStatus)
+          ? (graph?.call() ?? _dependencyGraph(status: graphStatus))
           : throw SidecarApiException(
               SidecarErrorKind.unknown,
               'まだ分析されていません',
@@ -3195,6 +3202,79 @@ void main() {
       expect(
         tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
         '実行待ち',
+      );
+    });
+
+    testWidgets('re-confirming the graph elsewhere replaces the structure, '
+        'not just the job states', (tester) async {
+      // Confirming a new version in テスト設定画面 cancels this submission's
+      // incomplete jobs and re-issues them against it. Polling picked the new
+      // jobs up, but the graph was only ever fetched once -- so the new
+      // version's execution was drawn on the old version's edges, and with a
+      // dependency reversed the arrows and the 「問n 待ち」 labels contradicted
+      // each other (review round 2, P2).
+      var version = 1;
+      await _pumpReview(
+        tester,
+        graphDependencies(
+          graph: () => version == 1
+              ? _dependencyGraph()
+              : _dependencyGraph(version: 2, from: 'q-2', to: 'q-1'),
+          jobs: () => version == 1
+              ? [
+                  _jobFor('q-1'),
+                  _jobFor(
+                    'q-2',
+                    state: 'blocked',
+                    usable: null,
+                    blockedOnQuestionId: 'q-1',
+                  ),
+                ]
+              : [
+                  // The superseded jobs stay behind as CANCELLED rows, which
+                  // is why the refetch keys on a *higher* version rather than
+                  // on any disagreement at all.
+                  _jobFor('q-1', state: 'cancelled', usable: null),
+                  _jobFor('q-2', state: 'cancelled', usable: null),
+                  _jobFor('q-2', graphVersion: 2),
+                  _jobFor(
+                    'q-1',
+                    state: 'blocked',
+                    usable: null,
+                    blockedOnQuestionId: 'q-2',
+                    graphVersion: 2,
+                  ),
+                ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      double xOf(String questionId) =>
+          tester.getTopLeft(find.byKey(Key('dag-node-$questionId'))).dx;
+
+      // Layers advance along +x, so which node is to the left of which *is*
+      // the drawn dependency direction.
+      expect(xOf('q-1'), lessThan(xOf('q-2')));
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
+        '問1 待ち',
+      );
+
+      version = 2;
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
+      await tester.pump(AppMotion.emphasis);
+
+      // The job states alone would flip the labels while leaving 問1 drawn
+      // upstream of 問2 -- the arrow and the label then say opposite things.
+      expect(xOf('q-2'), lessThan(xOf('q-1')));
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-1'))).data,
+        '問2 待ち',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-node-status-q-2'))).data,
+        'レビュー待ち',
       );
     });
 

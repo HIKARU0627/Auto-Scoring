@@ -178,6 +178,44 @@ void main() {
     expect(selected, ['q3']);
   });
 
+  testWidgets('the focused node shows where the keyboard is', (tester) async {
+    // `InkWell`'s own focus highlight is painted on the ancestor `Material`,
+    // under the card's opaque background -- so without a ring of its own,
+    // moving through the diagram by keyboard was invisible until Enter
+    // (review round 2, P2).
+    await _pumpPanel(tester, _layout());
+    BoxDecoration decorationOf(String id) =>
+        tester
+                .widget<AnimatedContainer>(
+                  find.descendant(
+                    of: find.byKey(Key('dag-node-$id')),
+                    matching: find.byType(AnimatedContainer),
+                  ),
+                )
+                .decoration!
+            as BoxDecoration;
+
+    expect(decorationOf('q1').boxShadow, isNull);
+
+    for (var i = 0; i < 5 && _focusedNodeId() == null; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+    }
+    expect(_focusedNodeId(), 'q1');
+    await tester.pump(AppMotion.stateChange);
+
+    expect(decorationOf('q1').boxShadow, isNotEmpty);
+    expect(decorationOf('q2').boxShadow, isNull);
+
+    // And it moves with the focus rather than sticking to the first node.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump(AppMotion.stateChange);
+
+    expect(_focusedNodeId(), 'q2');
+    expect(decorationOf('q1').boxShadow, isNull);
+    expect(decorationOf('q2').boxShadow, isNotEmpty);
+  });
+
   testWidgets('is operable with the keyboard alone', (tester) async {
     final selected = <String>[];
     await _pumpPanel(tester, _layout(), onQuestionSelected: selected.add);

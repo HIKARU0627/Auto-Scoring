@@ -305,7 +305,7 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
 /// can be focused, tapped, and read out -- the diagram has to be operable by
 /// keyboard alone (Issue #64 acceptance), and a `CustomPaint` is a single
 /// opaque node to both the focus system and a screen reader.
-class _DagNodeCard extends StatelessWidget {
+class _DagNodeCard extends StatefulWidget {
   const _DagNodeCard({
     required this.node,
     required this.selected,
@@ -323,7 +323,24 @@ class _DagNodeCard extends StatelessWidget {
   final VoidCallback onSelected;
 
   @override
+  State<_DagNodeCard> createState() => _DagNodeCardState();
+}
+
+class _DagNodeCardState extends State<_DagNodeCard> {
+  /// Tracked here, rather than left to `InkWell`'s own focus highlight,
+  /// because that highlight is painted onto the nearest ancestor `Material`
+  /// and the card's own opaque background sits on top of it: keyboard focus
+  /// was invisible, so a reviewer moving through the diagram with Tab or the
+  /// arrow keys could not tell where they were until they pressed Enter
+  /// (review round 2, P2). Drawn as a ring on the card's own decoration
+  /// instead, where nothing can cover it.
+  bool _focused = false;
+
+  @override
   Widget build(BuildContext context) {
+    final node = widget.node;
+    final selected = widget.selected;
+    final releasedHighlight = widget.releasedHighlight;
     final tone = node.status.tone;
     final toneColor = tone.color(context);
     final border = selected
@@ -345,7 +362,8 @@ class _DagNodeCard extends StatelessWidget {
           excludeFromSemantics: true,
           child: InkWell(
             key: Key('dag-node-${node.id}'),
-            onTap: onSelected,
+            onTap: widget.onSelected,
+            onFocusChange: (focused) => setState(() => _focused = focused),
             borderRadius: AppRadius.mdAll,
             child: AnimatedContainer(
               duration: AppMotion.stateChange,
@@ -365,6 +383,18 @@ class _DagNodeCard extends StatelessWidget {
                       ? AppLayout.hairline * 2
                       : AppLayout.hairline,
                 ),
+                // A hard ring *outside* the card, so where the keyboard is
+                // stays legible whatever the border is already saying about
+                // selection or a just-released dependency -- and readable as
+                // a position rather than as a colour.
+                boxShadow: _focused
+                    ? [
+                        BoxShadow(
+                          color: context.colors.primary,
+                          spreadRadius: AppLayout.hairline * 2,
+                        ),
+                      ]
+                    : null,
               ),
               padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.sm,
@@ -528,16 +558,16 @@ class DagEdgePainter extends CustomPainter {
   /// horizontally and arriving horizontally, which is what makes the
   /// left-to-right direction readable when several edges overlap.
   ///
-  /// An edge that `core` gave a [DagEdgeLine.detourY] instead drops into that
-  /// lane, runs along it, and climbs back -- see that field for why. Both
-  /// shapes leave and arrive horizontally, so the arrowhead below is drawn
-  /// the same way for either.
+  /// An edge that `core` gave a [DagEdgeLine.detour] instead drops into that
+  /// lane, runs along it, and climbs back -- see [DagEdgeDetour] for why, and
+  /// for why the drop and the climb cannot reach a card either. Both shapes
+  /// leave and arrive horizontally, so the arrowhead below is drawn the same
+  /// way for either.
   Path _edgePath(DagEdgeLine edge) {
     final path = Path()..moveTo(edge.start.dx, edge.start.dy);
-    if (edge.detourY case final laneY?) {
-      // Small enough that the lane itself is always the longest part of the
-      // route, however close together the two nodes are.
-      final bend = math.min(AppSpacing.lg, (edge.end.dx - edge.start.dx) / 4);
+    if (edge.detour case final detour?) {
+      final laneY = detour.y;
+      final bend = detour.shoulder;
       return path
         ..cubicTo(
           edge.start.dx + bend,

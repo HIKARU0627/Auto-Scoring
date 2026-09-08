@@ -350,7 +350,7 @@ class DagEdgeLine {
     required this.start,
     required this.end,
     required this.satisfied,
-    this.detourY,
+    this.detour,
   });
 
   final String fromQuestionId;
@@ -367,22 +367,42 @@ class DagEdgeLine {
   /// makes 「上流が完了して下流の blocked が解ける瞬間」 visible.
   final bool satisfied;
 
-  /// The y of the free lane below the diagram this edge has to travel along,
-  /// or `null` for an edge that can go straight from [start] to [end].
-  ///
-  /// A dependency may skip layers (`A -> B`, `B -> C` *and* `A -> C` is a
-  /// perfectly ordinary graph), and a skipping edge whose endpoints sit in
-  /// the same row would otherwise run straight through the opaque card of
-  /// every node in between -- taking the direct dependency, and whether it is
-  /// satisfied, off the screen entirely (review round 1, P2). Only edges that
-  /// would actually cross a node get a lane; a skipping edge with a clear
-  /// diagonal keeps it.
-  final double? detourY;
+  /// The free lane this edge has to be routed through, or `null` for an edge
+  /// that can go straight from [start] to [end]. See [DagEdgeDetour].
+  final DagEdgeDetour? detour;
 
   /// Stable identity for diffing one frame's edges against the previous
   /// one's, so the panel can animate only the edges that *just* became
   /// satisfied.
   String get key => '$fromQuestionId>$toQuestionId';
+}
+
+/// The route around the cards that stand between an edge's two endpoints.
+///
+/// A dependency may skip layers (`A -> B`, `B -> C` *and* `A -> C` is a
+/// perfectly ordinary graph), and a skipping edge whose endpoints sit in the
+/// same row would otherwise run straight through the opaque card of every
+/// node in between -- taking the direct dependency, and whether it is
+/// satisfied, off the screen entirely (review round 1, P2).
+///
+/// The way around is a lane below every node row: the edge drops into it,
+/// runs along it, and climbs back out. Only edges a card is actually standing
+/// in the way of get one; a skipping edge with a clear line keeps it.
+@immutable
+class DagEdgeDetour {
+  const DagEdgeDetour({required this.y, required this.shoulder});
+
+  /// The y the lane runs along -- below the bottom of the last node row, so
+  /// the flat middle of the route cannot cross a card whatever it passes.
+  final double y;
+
+  /// How far the drop and the climb extend horizontally at each end.
+  ///
+  /// Never more than half a column gap ([DagMetrics.detourShoulder]), so both
+  /// of them finish inside the empty column between two layers: the *lane* is
+  /// what clears the cards, and this is what keeps the parts of the route
+  /// that are not yet down in the lane away from them too.
+  final double shoulder;
 }
 
 /// The pixel grid the diagram is drawn on.
@@ -432,6 +452,13 @@ class DagMetrics {
 
   double laneY(int lane, {required int maxRows}) =>
       _rowsBottom(maxRows) + laneGap * (lane + 1);
+
+  /// How far a detour's drop and climb may extend horizontally for an edge
+  /// spanning [span] pixels. Capped at half a [columnGap] so the two of them
+  /// together never reach past the empty column they start in, and at a
+  /// quarter of the span so the lane itself is always the longest part of the
+  /// route. See [DagEdgeDetour.shoulder].
+  double detourShoulder(double span) => math.min(columnGap / 2, span / 4);
 
   Size canvasSize({
     required int layerCount,
@@ -554,7 +581,12 @@ DependencyDagLayout? buildDependencyDagLayout({
         start: start,
         end: end,
         satisfied: releasedQuestionIds.contains(edge.fromQuestionId),
-        detourY: blocked ? metrics.laneY(laneCount++, maxRows: maxRows) : null,
+        detour: blocked
+            ? DagEdgeDetour(
+                y: metrics.laneY(laneCount++, maxRows: maxRows),
+                shoulder: metrics.detourShoulder(end.dx - start.dx),
+              )
+            : null,
       ),
     );
   }
@@ -570,14 +602,21 @@ DependencyDagLayout? buildDependencyDagLayout({
   );
 }
 
-/// Whether a straight edge from [from] to [to] would pass behind another
+/// Whether a straight edge from [from] to [to] might pass behind another
 /// node's card.
 ///
-/// The curve the panel draws between two node edges is monotone in y, so its
-/// whole vertical extent is the band between the two endpoints -- which makes
-/// this an exact test rather than an approximation: a node can only be in the
-/// way if it sits in a layer strictly between the two *and* its card overlaps
-/// that band. Adjacent layers have nothing in between and never collide.
+/// Conservative, not exact, and deliberately so. The curve the panel draws
+/// between two node edges is monotone in y, so its whole vertical extent is
+/// the band between the two endpoints -- which means a node overlapping
+/// neither that band nor the layers in between can never be crossed, and this
+/// test therefore **misses nothing**. It does report the other way round: a
+/// card can overlap the band vertically while the curve has not reached that
+/// y by the time it passes the card's x, and the edge is then sent on a
+/// detour it did not need.
+///
+/// That asymmetry is the one worth having. A needless detour costs a slightly
+/// longer line and a slightly taller panel; a missed one takes a dependency,
+/// and whether it is satisfied, off the screen.
 bool _crossesANode({
   required DagNode from,
   required DagNode to,

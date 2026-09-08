@@ -571,7 +571,36 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       setState(() => _jobs = jobs);
     } on SidecarApiException {
       // Keep the last-known jobs list -- retried on the next tick/refresh.
+      return;
     }
+    await _refetchDependencyGraphIfSuperseded();
+  }
+
+  /// Re-reads the dependency graph once the jobs start naming a *newer*
+  /// confirmed version than the one currently drawn.
+  ///
+  /// The graph is fetched with the shell because a confirmed graph is
+  /// immutable -- but the *test's* graph is not. Confirming a new version
+  /// elsewhere (テスト設定画面) cancels this submission's incomplete jobs and
+  /// re-issues them against the new version (`POST /dependency-graph/confirm`,
+  /// Issue #26), so polling would keep showing the new jobs' states over the
+  /// old version's edges and layers. With a dependency reversed, the arrows
+  /// and the 「問n 待ち」 labels then contradict each other -- one version's
+  /// execution shown on another version's structure (review round 2, P2).
+  ///
+  /// Deliberately keyed on a *higher* version, not merely a different one:
+  /// the re-issue leaves the superseded jobs behind as CANCELLED rows, so
+  /// "any job disagrees with the graph" would stay true forever afterwards
+  /// and refetch on every single poll tick.
+  Future<void> _refetchDependencyGraphIfSuperseded() async {
+    final graph = _dependencyGraph;
+    if (graph == null) return;
+    final newest = _jobs
+        .map((job) => job.dependencyGraphVersion)
+        .nonNulls
+        .fold<int?>(null, (a, b) => a == null || b > a ? b : a);
+    if (newest == null || newest <= graph.version) return;
+    await _loadDependencyGraph();
   }
 
   /// Best-effort fetch of the test's dependency graph, for the 進捗 panel
