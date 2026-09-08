@@ -283,6 +283,54 @@ DRAFT がジョブより**先**にいる場合（登録後に再分析した通�
 | `_submission`                               | しない       | ポーリングと更新で毎回読み直す。採点は答案の `state` を動かさない（[home-dashboard.md](./home-dashboard.md) §3.1） |
 | `_questions` / `_pdfBytes`                  | しない       | テストと答案PDFの性質で、処理では変わらない                                                                        |
 
+### 1.13 `await` のあとに誰が中止するか（Issue #80、3度目の再発）
+
+添削レビュー画面は非同期処理だらけで、レビュアーはいつでも画面を離れられる。
+**「`await` のあとに `mounted` を見る」という規律が、このリポジトリで3回破られた。**
+
+| Issue | 症状                                                                      |
+| ----- | ------------------------------------------------------------------------- |
+| #66   | Riverpod 移行時、`await` 後に破棄済み widget で `ref.read` → `StateError` |
+| #64   | 画面離脱中の pending request（テスト名 `leaving the screen mid-request`） |
+| #80   | 「AI採点を開始」の応答が、レビュアーが画面を離れたあとに返る              |
+
+3回とも**未処理例外**になった。#80 の形が要点を一番よく表している:
+
+```
+_startGrading()            await startGrading(...)      ← ここで離脱
+  └ _refreshJobsAndQuestion()
+      └ _refreshJobs()     内部で mounted を見て早期return  ← 正しく振る舞う
+      └ _loadReview()      呼び出し元は止まっていないので実行される → setState → 例外
+```
+
+**内側の関数が `mounted` を見ていても、呼び出し元は止まらない。** この非対称が
+見落としの温床である。`_refreshJobs` 自体は何も間違っていなかった。
+
+**決定（誰が中止の責任を持つか）。** 2段構えにする。
+
+1. **`await` した関数が自分で止まる。** 画面の破棄を跨ぎうる `await` の直後は
+   `mounted` を見てから先へ進む。呼び出し先が止まったかどうかに依存しない。
+2. **そのうえで `setState` 自身が拒否する。** 1 は規律で、3回破られている。
+   `_PdfReviewPageState` は素の `setState` を呼ばず `_setStateIfMounted` を通す。
+   守り漏れの代償を「無駄な取得」に留め、**未処理例外にはしない**。
+
+2 は 1 の代わりではない。破棄後の処理は依然として無駄だし、`Timer` や
+コントローラ呼び出しはこの wrapper では守れない（だから `_updatePolling` は
+自分で `mounted` を見る。破棄後に `Timer` を張ると、誰かが cancel するまで
+死んだ State に向けて発火し続ける）。
+
+**約束を検査する。** `app/test/mounted_after_await_lint_test.dart` が、この
+ファイルに素の `setState(` が戻ってきたら落ちる。`architecture_test.dart` /
+`design_tokens_lint_test.dart` と同じで、規約は何かが検査して初めて実在する。
+離脱中に応答が返る再現テストは `Issue #80` グループの
+`起票の応答待ちのあいだに画面を離れても落ちない`（`Completer` で応答を保留し、
+画面を捨ててから成功させる）。
+
+**Issue #80 で洗った `await` の一覧**（未防御だったものだけ）:
+`_startGrading`（起票の応答後）、`_refreshJobsAndQuestion`（`_refreshJobs` の後）、
+`_loadReview`（入口。複数の経路から `await` 越しに入る）、`_updatePolling`、
+`_loadShell`（グラフとジョブの取得後）、`_performReviewAction` の `finally`。
+
 ## 2. 配置と操作
 
 - **添削レビュー画面の最上部に全幅のバンド**として置く。図が答案全体の話であり、

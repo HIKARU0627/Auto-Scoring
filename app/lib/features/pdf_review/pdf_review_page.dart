@@ -439,7 +439,36 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   void _handleNoteFocusChange() {
-    if (mounted) setState(() {});
+    _setStateIfMounted(() {});
+  }
+
+  /// `setState` that does nothing once this screen is gone. **Nothing in this
+  /// State calls `setState` directly** -- `pdf_review_page_lint_test.dart`
+  /// fails if a bare one comes back.
+  ///
+  /// **誰が中止の責任を持つか.** Two rules, and the second exists because the
+  /// first keeps being broken:
+  ///
+  /// 1. *The function doing the `await` stops itself.* After every `await`
+  ///    that a screen teardown could outlive, re-check [mounted] before
+  ///    doing anything further. **An inner helper's own [mounted] check does
+  ///    not stop its caller** -- `_refreshJobs` returning early because the
+  ///    screen went away still hands control back to `_refreshJobsAndQuestion`,
+  ///    which used to carry on into `_loadReview` and `setState` on a dead
+  ///    State. That asymmetry is what made this easy to miss.
+  /// 2. *And `setState` refuses anyway.* Rule 1 is a discipline, and this
+  ///    codebase has broken it three times -- Issue #66 (`ref.read` after
+  ///    dispose), Issue #64 ("leaving the screen mid-request"), and Issue #80
+  ///    (「AI採点を開始」's response landing after the reviewer left). A missed
+  ///    guard should cost a wasted fetch, not an unhandled exception, so the
+  ///    one call that would actually throw is made a no-op instead.
+  ///
+  /// Rule 2 is a backstop, not a licence to skip rule 1: work done after
+  /// teardown is still wasted work, and a `Timer` or a controller call is not
+  /// covered by it ([_updatePolling] guards itself for exactly that reason).
+  void _setStateIfMounted(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
   }
 
   /// `Job.state` values that will never change again on their own -- once a
@@ -566,6 +595,10 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// review). Whether *this* question's own job/grade has actually finished
   /// is the one signal that tracks its real progress.
   void _updatePolling() {
+    // A `Timer` is not covered by `_setStateIfMounted`: arming one here after
+    // teardown would keep firing against a disposed State until it happened
+    // to be cancelled (rule 1 in that method's doc).
+    if (!mounted) return;
     final review = _currentReview;
     final question = _currentQuestion;
     final shouldPoll =
@@ -613,7 +646,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
-      setState(() => _submission = submission);
+      _setStateIfMounted(() => _submission = submission);
       // Silent: a background poll should not flash the loading spinner or
       // an error banner over content the reviewer is already looking at.
       await _refreshJobsAndQuestion(silent: true);
@@ -658,7 +691,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final submission = await _dependencies.getSubmission(widget.submissionId);
       if (!mounted) return;
-      setState(() => _submission = submission);
+      _setStateIfMounted(() => _submission = submission);
     } on SidecarApiException {
       // Fall through to refreshing the question data regardless.
     }
@@ -676,7 +709,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       final jobs = await _dependencies.listJobs(widget.submissionId);
       if (!mounted) return;
       final changed = _jobsFingerprint(jobs) != _jobsFingerprint(_jobs);
-      setState(() {
+      _setStateIfMounted(() {
         _jobs = jobs;
         _jobsLoaded = true;
         // Only on a real change: an unchanged job set means every cached
@@ -734,6 +767,9 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     bool silent = false,
   }) async {
     await _refreshJobs();
+    // `_refreshJobs` stopping itself does not stop *this* function -- the
+    // asymmetry that made review round 4's crash possible.
+    if (!mounted) return;
     _updatePolling();
     final target = question ?? _currentQuestion;
     if (target == null) return;
@@ -751,12 +787,16 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// Idempotent server-side, so a double press cannot create a second set of
   /// jobs (`docs/job-queue.md`「起票のタイミング」).
   Future<void> _startGrading() async {
-    setState(() {
+    _setStateIfMounted(() {
       _startingGrading = true;
       _gradingFailure = null;
     });
     try {
       await _dependencies.startGrading(widget.submissionId);
+      // The reviewer can leave (or open another answer) while this request is
+      // in flight; nothing below is worth doing for a screen that is gone
+      // (review round 4).
+      if (!mounted) return;
       // Not just the jobs: a fast (or already-existing) grading run can have
       // this submission's jobs back as `succeeded` by the time the POST
       // returns, and the empty grades fetched before the kickoff would then
@@ -764,9 +804,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       await _refreshJobsAndQuestion();
     } on SidecarApiException catch (error) {
       if (!mounted) return;
-      setState(() => _gradingFailure = GradingKickoffFailure.of(error));
+      _setStateIfMounted(
+        () => _gradingFailure = GradingKickoffFailure.of(error),
+      );
     } finally {
-      if (mounted) setState(() => _startingGrading = false);
+      _setStateIfMounted(() => _startingGrading = false);
     }
   }
 
@@ -836,7 +878,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     try {
       final graph = await _dependencies.getDependencyGraph(widget.testId);
       if (!mounted) return;
-      setState(() => _dependencyGraph = graph);
+      _setStateIfMounted(() => _dependencyGraph = graph);
     } on SidecarApiException {
       // No graph to draw; the panel stays hidden.
     }
@@ -854,7 +896,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   }
 
   Future<void> _loadShell() async {
-    setState(() {
+    _setStateIfMounted(() {
       _loadingShell = true;
       _shellError = null;
     });
@@ -870,7 +912,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               : _compareQuestionNumbers(a.number, b.number);
         });
       if (!mounted) return;
-      setState(() {
+      _setStateIfMounted(() {
         _submission = submission;
         _questions = sorted;
         _pdfBytes = pdfBytes;
@@ -881,13 +923,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       // second time on startup.
       await _loadDependencyGraph();
       await _refreshJobs();
+      if (!mounted) return;
       _updatePolling();
       unawaited(_ensureReviewLoaded());
     } on SidecarApiException catch (error) {
       if (!mounted) return;
-      setState(() => _shellError = error.message);
+      _setStateIfMounted(() => _shellError = error.message);
     } finally {
-      if (mounted) setState(() => _loadingShell = false);
+      _setStateIfMounted(() => _loadingShell = false);
     }
   }
 
@@ -916,6 +959,9 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     bool forceReload = false,
     bool silent = false,
   }) async {
+    // Entered from several chains that each contain an `await` before this
+    // point; the caller may already be gone.
+    if (!mounted) return;
     final existing = _reviews[question.id];
     if (silent && existing != null && existing.loading) {
       // A visible fetch (initial load, manual refresh, or a question
@@ -968,7 +1014,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     } else {
       review.loading = true;
       review.error = null;
-      setState(() => _reviews[question.id] = review);
+      _setStateIfMounted(() => _reviews[question.id] = review);
     }
     try {
       final recognitions = await _dependencies.listRecognitions(
@@ -1013,7 +1059,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               question.id,
             );
       if (!mounted || generation != review.fetchGeneration) return;
-      setState(() {
+      _setStateIfMounted(() {
         review.recognitions = consistentRecognitions;
         review.grades = grades;
         review.annotations = annotations;
@@ -1027,7 +1073,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       });
     } on SidecarApiException catch (error) {
       if (!mounted || silent || generation != review.fetchGeneration) return;
-      setState(() {
+      _setStateIfMounted(() {
         review.error = error.message;
         review.loading = false;
       });
@@ -1041,7 +1087,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       return;
     }
     final previousPage = _currentQuestion?.page;
-    setState(() => _questionIndex = index);
+    _setStateIfMounted(() => _questionIndex = index);
     final question = _currentQuestion!;
     _noteController.text = _reviews[question.id]?.note ?? '';
     // Only move the viewer when the target question is on a different page --
@@ -1124,7 +1170,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     Future<void> Function() action,
   ) async {
     if (review.actionInFlight) return false;
-    setState(() => review.actionInFlight = true);
+    _setStateIfMounted(() => review.actionInFlight = true);
     var succeeded = false;
     try {
       await action();
@@ -1138,8 +1184,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
-      await _refreshQuestion(question);
-      if (mounted) setState(() => review.actionInFlight = false);
+      if (mounted) await _refreshQuestion(question);
+      _setStateIfMounted(() => review.actionInFlight = false);
     }
     return succeeded;
   }

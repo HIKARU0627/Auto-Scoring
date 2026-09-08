@@ -3697,6 +3697,36 @@ void main() {
       );
     });
 
+    testWidgets('起票の応答待ちのあいだに画面を離れても落ちない', (tester) async {
+      // #66（破棄後の `ref.read`）、#64（画面離脱中の pending request）に
+      // 続く3度目の同じ形。`_refreshJobs` の中の `mounted` チェックは
+      // **呼び出し元を止めない**ので、応答後にそのまま `_loadReview` まで
+      // 進み、破棄済み State へ `setState` して未処理例外になっていた
+      // (review round 4)。
+      final started = Completer<List<JobResponse>>();
+      await _pumpReview(
+        tester,
+        gradingDependencies(
+          jobs: () => const [],
+          startGrading: (submissionId) => started.future,
+        ),
+      );
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-start-grading-button')));
+      await tester.pump();
+
+      // 応答が返る前に画面を捨てる。
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      // ここで成功応答が返る。
+      started.complete([_jobFor('q-1'), _jobFor('q-2')]);
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('404 のあとは「AI採点を開始」を出さない', (tester) async {
       // 答案そのものが無いという答えは、同じ要求を投げ直しても変わらない。
       // 取込画面は再試行ボタンを出さないのに、こちらは `finally` で
