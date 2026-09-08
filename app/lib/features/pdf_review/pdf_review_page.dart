@@ -13,6 +13,7 @@ import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
+import 'package:auto_scoring_app/core/question_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
@@ -1385,7 +1386,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         DagQuestion(
           id: question.id,
           label: question.number,
-          status: deriveDagNodeStatus(
+          status: deriveQuestionStatus(
             job: job,
             review: _reviews[question.id]?.effectiveReview,
           ),
