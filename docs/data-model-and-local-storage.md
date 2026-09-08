@@ -258,6 +258,7 @@ with SqlAlchemyUnitOfWork(session_factory) as uow:
 
 - 起動時の `sweep_temp()` 呼び出しタイミングと、DB 破損時の自動バックアップ運用は
   UI/起動シーケンスを扱う後続 Issue で決定する（§6 参照）。
-- 低 Confidence 閾値によるゲーティングは本 Issue の対象外（PoC 後に確定、
-  business-rules §3 (C)）。`GradeResult.confidence` / `RecognitionResult.confidence`
-  を保持するところまでを実装し、閾値判定ロジックは持たない。
+- 低 Confidence 閾値によるゲーティングは本 Issue の対象外（閾値は business-rules
+  §3 (C)。Issue #81 で「固定値は決めず設定値のまま、既定 0.80」に確定し、閾値判定は
+  `JobProcessor` 側の設定が持つ）。`GradeResult.confidence` /
+  `RecognitionResult.confidence` を保持するところまでを実装し、閾値判定ロジックは持たない。

@@ -18,8 +18,12 @@ class QueueSettings:
     #: Upper bound on concurrently-RUNNING jobs, shared across every
     #: submission and every question (Issue #18 acceptance: "設定した並列数
     #: を超えず"). technology-stack.md §3.4 / business-rules-and-evaluation-
-    #: data.md §3 (E): default 2, final value pending PoC 2's load test.
-    max_concurrency: int = 2
+    #: data.md §3 (E): the project owner decided 4 (Issue #81), raising the
+    #: provisional 2 this shipped with. It stays a *setting*, not a constant
+    #: -- the adopted providers' own rate limits are still unmeasured
+    #: (§3.1 E), so 4 is a default to operate from, not a proven ceiling;
+    #: backoff and requeue remain required regardless.
+    max_concurrency: int = 4
     #: Default `auto_scoring.domain.models.Job.max_attempts` for jobs this
     #: package creates.
     max_attempts: int = 3

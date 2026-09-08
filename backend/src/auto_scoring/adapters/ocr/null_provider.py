@@ -1,13 +1,12 @@
-"""Placeholder `OCRProvider` used until a real cloud/local adapter is chosen.
+"""Placeholder `OCRProvider` used until the chosen service has a real adapter.
 
-business-rules-and-evaluation-data.md section 3 (A): the OCR service to use is
-**not yet decided** by the project owner -- PoC 1 (Issue #13) built the
-`OCRProvider` contract and the metrics/aggregation pipeline, but never adopted
-a specific SDK (no candidate's credentials/eval dataset were available; see
-docs/poc-1-japanese-handwriting-ocr.md section 0.1/section 6). Section 3.1's
-block condition for A is explicit: until it is decided, ship "the
-`OCRProvider` interface and a dummy implementation only" -- no SDK-specific
-request/response handling.
+business-rules-and-evaluation-data.md section 3 (A): the project owner chose
+**Google Document AI** (Issue #81), but no adapter for it exists yet -- PoC 1
+(Issue #13) built only the `OCRProvider` contract and the metrics/aggregation
+pipeline, and never called a real service (no credentials/eval dataset were
+available; see docs/poc-1-japanese-handwriting-ocr.md section 0.1/section 6,
+live probe in Issue #54). Section 3.1 (A) still requires SDK-specific
+request/response handling to stay inside the `OCRProvider` implementation.
 
 Mirrors `auto_scoring.jobs.null_processor.NullJobProcessor`: rather than
 raising (which `RecognitionJobProcessor` would have to guess a retry category

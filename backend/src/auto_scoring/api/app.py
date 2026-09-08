@@ -222,14 +222,15 @@ def create_app(
     ``ocr_provider``/``recognition_settings`` and ``ai_provider``/
     ``grading_settings`` configure that default processor's two halves.
     ``ocr_provider`` defaults to `auto_scoring.adapters.ocr.null_provider.
-    NullOCRProvider` -- the OCR service to use is not yet decided
-    (business-rules-and-evaluation-data.md section 3 (A)). ``ai_provider``
-    defaults to `auto_scoring.adapters.ai.null_provider.NullAIProvider` for
-    the same reason -- the AI model to use is not yet decided (section 3
-    (B); docs/poc-2-ai-grading.md section 0.1). Both null adapters are
-    honest about not being configured yet (confidence 0.0, never a fabricated
-    reading/grade) rather than raising, so every question routes to needs-
-    review until a real adapter is injected. All four are ignored when
+    NullOCRProvider` -- the chosen OCR service (Google Document AI,
+    business-rules-and-evaluation-data.md section 3 (A), Issue #81) has no
+    adapter yet. ``ai_provider`` defaults to `auto_scoring.adapters.ai.
+    null_provider.NullAIProvider` for the same reason -- section 3 (B)'s
+    fallback chain is not implemented yet (docs/ai-grading-pipeline.md).
+    Both null adapters are honest about not being configured yet (confidence
+    0.0, never a fabricated reading/grade) rather than raising, so every
+    question routes to needs-review until a real adapter is injected. All
+    four are ignored when
     ``job_processor`` is supplied directly.
 
     ``export_processor`` (Issue #23) defaults to `auto_scoring.jobs.

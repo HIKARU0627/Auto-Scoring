@@ -16,32 +16,92 @@ DAG。`auto_scoring.domain.dependency_graph`）、[#16](https://github.com/HIKAR
 
 ## 決定事項
 
-### AIモデル選定（業務ルール §3 (B)）は未確定のまま — `NullAIProvider`をdefaultにする
+### AIモデル: 優先度つきフォールバック（業務ルール §3 (B)、Issue #81 で確定）
 
-PoC 2（`docs/poc-2-ai-grading.md`）は`AIProvider`契約・構造化出力スキーマ
-（`domain/ai_grading.py`）・メトリクス集計基盤（`domain/ai_grading_metrics.py`）を
-実装したが、credentials が揃わず実ベンダー（Gemini/Claude/GPT）の採用・実測は
-行われなかった（同docs §0.1参照。§9相当の「採用AI」欄は依然未確定）。業務ルール
-決定書 §3.1「B（AIモデル）確定まで」は実装を`AIProvider`の抽象とPoCの記録のみに
-限定するとしている。
+Issue #20 の実装時点では §3 (B) は未確定で、既定の`AIProvider`を
+`auto_scoring.adapters.ai.null_provider.NullAIProvider`に置いた（下記）。
+[Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81)で
+プロジェクトオーナーが確定した内容は**単一モデルの選択ではない**:
 
-本Issueはこの制約の中で本番**パイプライン**（境界・schema検証・永続化・分類・
-Confidence運用・前提設問contextの受け渡し）を実装する。`create_app()`の
-`job_processor`既定値を`RecognitionJobProcessor`（Issue #19）から
-`GradingJobProcessor`（後述、`RecognitionJobProcessor`を内部で合成する）へ
-置き換えるが、その`GradingJobProcessor`自体が呼ぶ`AIProvider`の既定実装は
-`auto_scoring.adapters.ai.null_provider.NullAIProvider`とする。
+| 優先度 | provider                             | 現状のアダプタ                                            |
+| ------ | ------------------------------------ | --------------------------------------------------------- |
+| 1      | Gemini API                           | 未実装                                                    |
+| 2      | Codex App Server                     | `adapters/ai_grading/codex_app_server_provider.py`（#44） |
+| 3      | OpenRouter（オープンウェイトモデル） | `adapters/ai_grading/openrouter_provider.py`（#44）       |
+| 4      | OpenAI API                           | 未実装                                                    |
+
+上から順に試し、失敗したら次へ落とす。**本Issue（#81）はこの層をどこに置くかの設計を
+記録するところまでで、フォールバック自体の実装は別Issue**である。
+
+#### 層の置き場所: `AIProvider`ポートの内側の合成アダプタ
+
+フォールバックは**`AIProvider`を実装する合成アダプタ**（順序つきの子アダプタ列を持ち、
+`grade()`で順に試す）として`adapters/ai_grading/`に置く。`GradingJobProcessor`にも
+`domain/ai_provider.py`のポート定義にも、キューにも手を入れない。理由:
+
+- `GradingJobProcessor`側に置くと、「1回のprovider呼び出し」という前提で書かれている
+  手順6〜8（`asyncio.to_thread`、DBトランザクションを保持しない、応答検証）に
+  provider選択のループが混ざり、processorが採点手順とprovider運用の両方を持つことになる。
+- キューのretry層に置くと、フォールバックのたびにJobの`attempt`を消費し、
+  「同じproviderへのbackoff付きretry」と「別providerへの切り替え」が区別できなくなる。
+  この2つは意味が違う（前者はレート制限の回復待ち、後者は回復を待たない切り替え）。
+- 合成アダプタなら`AIProviderContract`（`backend/tests/test_ai_provider_contract.py`）を
+  そのまま満たす1つのサブクラスとしてテストでき、`create_app(ai_provider=...)`の
+  注入経路も既存のまま使える。
+
+`create_ai_provider()`（`adapters/ai_grading/factory.py`、#44）は現在
+`AUTO_SCORING_AI_GRADING_TRANSPORT`を**1つ**だけ受け取る。フォールバック実装Issueでは
+これを優先度順のリスト（例: カンマ区切り）へ広げ、**認証情報が揃っているものだけを
+チェーンに組む**（揃っていないproviderで失敗を1段消費しない）。認証情報の持ち方は
+既存方針どおり`.env.example` / `backend/.env.local`で、実キーはコミットしない。
+
+#### どの失敗で次へ落とすか
+
+`GradingJobProcessor`が既に分類している例外（後述「エラー分類」）を、そのまま
+フォールバックの判断にも使う。新しい例外型は追加しない。
+
+| 失敗                                              | 次のproviderへ落とす | 理由                                                                                   |
+| ------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------- |
+| `ProviderRateLimitedError`（429）                 | 落とす               | そのproviderの枠が空くのを待つより、別providerで進む方が速い                           |
+| `ProviderServerError`（5xx）                      | 落とす               | provider側の障害。同じ相手へのretryは同じ結果になりやすい                              |
+| `ProviderTimeoutError`                            | 落とす               | 同上。ただし1 provider内でのretryは行わず、1回で次へ落とす                             |
+| `SchemaViolation`（構造化出力に従わない）         | 落とす               | モデル固有の能力差。同じモデルへ再送しても直らないが、別モデルなら通りうる             |
+| 認証情報不足・設定不正（`AIProviderConfigError`） | チェーン構築時に除外 | 実行時ではなく組み立て時に落とす（上記）                                               |
+| 応答の対応不一致（手順7、criterion id不一致）     | 落とさない           | ポートの外（processor）で判定するため合成アダプタからは見えない。現状どおり`PERMANENT` |
+
+チェーンを全部使い切ったときは、**最後に観測した例外をそのまま送出する**。
+`ProviderRateLimitedError` / `ProviderServerError` / `ProviderTimeoutError` は
+既存のマッピングどおりretry対象の`ErrorCategory`になるので、全provider不調のときは
+Jobがbackoffして再投入される（並列数の既定4に対するレート制限の受け皿は
+business-rules-and-evaluation-data.md §3.1 E のとおり引き続き必要）。全providerが
+`SchemaViolation`なら`PERMANENT`となり、人手に回る。
+
+#### どのproviderで採点したかを残す
+
+`GradeResult.provider` / `model` / `prompt_version`（Issue #20で追加済み、
+`domain/models.py`）が既にこの記録である。合成アダプタは**成功した子アダプタの
+`ProviderDescriptor`をそのまま返す**（合成アダプタ自身の名前で上書きしない） --
+再現性と、後からの一致率比較（provider別集計、`domain/ai_grading_metrics.py`）が
+provider単位で成立するのはこの1点にかかっている。スキーマ変更は不要。
+
+#### 既定は依然 `NullAIProvider`
+
+Issue #20 は本番**パイプライン**（境界・schema検証・永続化・分類・Confidence運用・
+前提設問contextの受け渡し）を実装し、`create_app()`の`job_processor`既定値を
+`RecognitionJobProcessor`（Issue #19）から`GradingJobProcessor`（後述、
+`RecognitionJobProcessor`を内部で合成する）へ置き換えた。上記アダプタとチェーンが
+揃うまで、その`GradingJobProcessor`が呼ぶ`ai_provider`の既定値は
+`auto_scoring.adapters.ai.null_provider.NullAIProvider`のままにする。
 `NullOCRProvider`（Issue #19）と同じ理由（正直に「未設定」を報告する）で、
 `NullAIProvider`は常にConfidence 0.0・score 0・空の認識文字列を返し、
 ネットワークに一切アクセスしない。結果として、実アダプタが
 `create_app(ai_provider=...)`で注入されるまで、すべての設問が自動的に
-needs_review（`Job.usable=False`）に倒れる。
-
-実AIアダプタ（Gemini/Claude/GPT）の追加は、プロジェクトオーナーが業務ルール
-§3 (B)を確定した後の別Issueで行う。`AIProvider`のcontract test
+needs_review（`Job.usable=False`）に倒れる。`AIProvider`のcontract test
 （`backend/tests/test_ai_provider_contract.py`の`AIProviderContract`）へ
 新しいサブクラスを追加するだけで済むよう、`domain/ai_provider.py`のポート定義は
 変更していない（例外の分類粒度を上げた点を除く。後述）。
+
+実キーでの疎通・schema・cleanup 検証は #54（実APIキー未提供のため未着手）。
 
 ### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
 
@@ -166,8 +226,11 @@ Recognition Confidenceが低くても採点そのものは試みる -- 2つ目�
 Grading Confidenceを混同しない（簡易設計書 §10）という方針に合わせ、
 `RecognitionSettings.confidence_threshold`とは別の設定値として独立させた
 （同じ値を共有する保証はない -- 将来どちらかだけ調整できるようにするため）。
-`0.80`は業務ルール決定書 §3 (C)自身が名指す暫定値であり、本Issueが確定させた
-値ではない。
+`0.80`は業務ルール決定書 §3 (C)の**既定値**である。Issue #81 で「固定値は決めず、
+設定値のまま運用しながら都度調整する」ことが確定し、既定 0.80 は据え置かれた。
+閾値がいくつであれ**閾値に基づく自動確定（人間レビューのスキップ）は実装しない**
+（§3.1 C）-- `Job.usable`が制御するのは「この設問を人間が見なくてよいか」ではなく
+「後続の依存設問へ進んでよいか」である。
 
 ### AI graderが訂正した認識結果を保持する
 

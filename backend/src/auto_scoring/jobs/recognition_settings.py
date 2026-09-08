@@ -13,16 +13,17 @@ from dataclasses import dataclass
 class RecognitionSettings:
     """``confidence_threshold`` gates `Job.usable`, never whether a human
     review step happens at all (business-rules-and-evaluation-data.md
-    section 3 (C) / section 3.1 "C確定まで"): a `RecognitionResult` is always
+    section 3 (C) / section 3.1 (C)): a `RecognitionResult` is always
     persisted and always ``source=ai`` (a proposal, simplified-design-
     specification.md section 19), regardless of this value.
 
-    The value is **not yet decided** by the project owner -- pending PoC 1 and
-    PoC 2's confidence distributions (business-rules-and-evaluation-data.md
-    section 3 (C)). ``0.80`` is only the placeholder that document itself
-    names as its own provisional default; it is not a product decision, and
-    callers must not treat it as final (section 3.1: "既定値は「未確定」と明記
-    したプレースホルダにする").
+    The project owner decided (Issue #81, business-rules-and-evaluation-data.md
+    section 3 (C)) *not* to fix a single value: the threshold stays a setting,
+    ``0.80`` stays its default, and the number is adjusted while operating.
+    So this is a real default to run with -- not the "未確定" placeholder it
+    used to be -- but it is equally not a final number, and section 3.1's
+    remaining constraint is unchanged: no caller may skip human review on the
+    strength of it.
     """
 
     confidence_threshold: float = 0.80

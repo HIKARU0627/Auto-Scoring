@@ -2,8 +2,9 @@
 
 Framework-free (see ``AGENTS.md`` "Architecture" -- the domain must not import
 FastAPI, SQLAlchemy, HTTP clients, or any external-service SDK). The concrete
-provider (Gemini / Claude / GPT) is chosen by PoC 2 (GitHub Issue #14,
-business-rules-and-evaluation-data.md section 3 (B)); until then this module
+providers are business-rules-and-evaluation-data.md section 3 (B)'s ordered
+fallback chain (Gemini API -> Codex App Server -> OpenRouter -> OpenAI API;
+Issue #81), and the chain itself is just another `AIProvider`; this module
 only pins the contract every provider must honour:
 
 * a request never carries student-identifying data, and holds only one

@@ -92,16 +92,19 @@ from tests.support import make_job
 _TOKEN = "e2e-acceptance-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
-#: Provisional (business-rules-and-evaluation-data.md section 3 (E)): the
-#: real value is the project owner's decision, pending Issue #35's
-#: measurements. Everything below asserts the app honours whatever value it
-#: is configured with -- never that this particular value is the right one.
+#: Deliberately *not* `QueueSettings`' own default (4 since Issue #81,
+#: business-rules-and-evaluation-data.md section 3 (E)): everything below
+#: asserts the app honours whatever value it is *configured* with, never that
+#: this particular number is the right one. **So nothing here exercises the
+#: shipped default's saturation** -- with the cap at 2, the held calls prove
+#: two-way overlap and no more (see tests/test_e2e_dag_parallelism.py's module
+#: docstring for the same gap on the DAG side).
 _MAX_CONCURRENCY = 2
 
-#: Provisional (section 3 (C)), injected rather than branched on: the
-#: scenarios pick confidences *relative to this constant*, so they keep
-#: meaning whatever the project owner eventually decides. Section 3.1's
-#: "C確定まで" forbids hard-coding a threshold into a decision.
+#: The section 3 (C) default, injected rather than branched on: the scenarios
+#: pick confidences *relative to this constant*, so they keep meaning as the
+#: threshold is adjusted in operation (Issue #81 decided it stays a tunable
+#: setting). Section 3.1 (C) forbids hard-coding a threshold into a decision.
 _CONFIDENCE_THRESHOLD = 0.80
 _ABOVE_THRESHOLD = 0.95
 _BELOW_THRESHOLD = 0.40
@@ -791,7 +794,7 @@ def test_register_take_in_three_answers_and_process_them_while_reviewing(
 
     # And never above the configured cap, measured on the provider calls
     # themselves -- the point at which a real external API's own limit
-    # applies (section 3 (E): the value is provisional, the bound is not).
+    # applies (section 3 (E): the value is a setting, the bound is not).
     assert ocr_provider.max_concurrency_seen <= _MAX_CONCURRENCY
     assert ai_provider.max_concurrency_seen <= _MAX_CONCURRENCY
 
@@ -856,7 +859,7 @@ def test_a_low_confidence_reading_is_held_for_a_human_and_never_auto_confirmed(
     must stay ``source=ai``, and must not produce a `Review` of its own.
     Nothing here compares against a literal 0.80: the fixture threshold is
     injected and the scripted confidence is chosen relative to it
-    (section 3.1's "C確定まで").
+    (section 3.1 (C)).
     """
     test_id, submission_id, crops = _one_answer(client, data_root)
     low, high = _question_ids(test_id)

@@ -15,13 +15,18 @@ GitHub Issue [#19](https://github.com/HIKARU0627/Auto-Scoring/issues/19)（親
 
 ## 決定事項
 
-### OCRサービス選定（業務ルール §3 (A)）は未確定のまま — `NullOCRProvider`をdefaultにする
+### OCRサービス: Google Document AI（業務ルール §3 (A)、Issue #81 で確定）— 既定は依然 `NullOCRProvider`
 
 PoC 1（`docs/poc-1-japanese-handwriting-ocr.md`）は`OCRProvider`契約と
 メトリクス集計基盤を実装したが、credentials・評価データセットが揃わず、実 OCR
-アダプタの採用・実測は行われなかった（同docs §0.1・§6・§9.3参照。§9.3の
-「採用OCR」欄は依然未確定）。業務ルール決定書 §3.1「A（OCR）確定まで」は
-「`OCRProvider`インターフェースとダミー実装まで」に実装を限定するとしている。
+アダプタの実測は行われなかった（同docs §0.1・§6・§9.3参照）。Issue #20 の実装時点で
+§3 (A) は未確定であり、業務ルール決定書 §3.1 は実装を
+「`OCRProvider`インターフェースとダミー実装まで」に限定していた。
+
+その後、[Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81)で
+オーナーが **Google Document AI** に確定した（PoC 1 の第一候補だった Cloud Vision
+からの変更）。ただし実アダプタは未実装で、実 API キーも未提供のため、本パイプラインの
+既定は下記のとおり`NullOCRProvider`のままである。
 
 本Issueはこの制約の中で本番**パイプライン**（境界・正規化・永続化・分類・
 Confidence運用）を実装する。`create_app()`の`job_processor`既定値を
@@ -35,8 +40,9 @@ NullOCRProvider`とする。`NullJobProcessor`と同じ理由（正直に「未�
 倒れる — 「OCR精度を前提にした自動確定フローを組まない」（§3.1 A）を構造的に
 満たす。
 
-実OCRアダプタ（Google Cloud Vision等）の追加は、プロジェクトオーナーが業務ルール
-§3 (A)を確定した後の別Issueで行う。`OCRProvider`のcontract test
+実OCRアダプタ（Google Document AI）の追加は別Issueで行う（実 API キーでの疎通検証は
+#54）。Document AI のレスポンス形式・Bounding Box 座標系への依存は`OCRProvider`実装の
+内側に閉じ、座標変換・後処理へ漏らさない（§3.1 A）。`OCRProvider`のcontract test
 （`backend/tests/test_ocr_provider_contract.py`の`OCRProviderContract`）へ
 新しいサブクラスを追加するだけで済むよう、`domain/ocr.py`のポート定義は変更
 していない。
@@ -98,15 +104,15 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
 既存の catch-all（`_run_claimed`が`ErrorCategory.PERMANENT`として処理する）
 に委ねる。二重に同じフォールバックを実装しない。
 
-### Confidence閾値: 設定値、既定は「未確定」のプレースホルダ
+### Confidence閾値: 設定値のまま、既定 0.80 を運用しながら調整する
 
-業務ルール決定書 §3 (C)は低Confidenceの基準値を「未確定」（暫定0.80）とし、
-§3.1「C確定まで」は「閾値ハードコードで判定を分岐させない、閾値は設定ファイル
-の単一箇所から読む」ことを求める。`auto_scoring.jobs.recognition_settings.
-RecognitionSettings`（`QueueSettings`と同じ素の`dataclass`、新しい設定
-フレームワークは追加しない）が`confidence_threshold: float = 0.80`を持つ。
-`create_app(recognition_settings=...)`で差し替え可能。`0.80`は業務ルール文書
-自身が名指す暫定値であり、本Issueが確定させた値ではない。
+業務ルール決定書 §3 (C)は Issue #81 で「**固定値を決めず、設定値のまま運用しながら
+都度調整する**」ことに確定し、既定 0.80 は据え置かれた。§3.1 C の
+「閾値ハードコードで判定を分岐させない、閾値は設定の単一箇所から読む」と
+「閾値に基づく自動確定（人間レビューのスキップ）は実装しない」は確定後も残る制約である。
+`auto_scoring.jobs.recognition_settings.RecognitionSettings`（`QueueSettings`と同じ素の
+`dataclass`、新しい設定フレームワークは追加しない）が`confidence_threshold: float = 0.80`
+を持ち、`create_app(recognition_settings=...)`で差し替えられる。
 
 ### Bounding Box: providerの正規化座標をdomainの`NormalizedRect`へ変換する
 

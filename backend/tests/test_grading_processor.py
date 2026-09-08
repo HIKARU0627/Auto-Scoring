@@ -1,8 +1,8 @@
 """Tests for `auto_scoring.jobs.grading_processor.GradingJobProcessor`
 (Issue #20), against a real on-disk SQLite database and `LocalFileStore`,
 with scriptable fake `OCRProvider`/`AIProvider` -- no real provider is
-called (decisions A/B, business-rules-and-evaluation-data.md sections 3
-(A)/(B), are still pending).
+called (the services decisions A/B name in business-rules-and-evaluation-
+data.md sections 3 (A)/(B) have no adapters wired up yet).
 """
 
 from __future__ import annotations

@@ -16,16 +16,17 @@ GitHub Issue #14（親 Issue #3）の PoC。簡易設計書 §9.2 / §10 の `AI
 
 ### 0.1 現在のステータス
 
-| 項目                                          | 状態                                                                    |
-| --------------------------------------------- | ----------------------------------------------------------------------- |
-| Pydantic 構造化出力スキーマ                   | **実装済み**（`backend/src/auto_scoring/domain/ai_grading.py`）         |
-| `AIProvider` ポート + contract test           | **実装済み**（`backend/tests/test_ai_provider_contract.py`）            |
-| メトリクス計算・集計パイプライン              | **実装済み**（`backend/src/auto_scoring/domain/ai_grading_metrics.py`） |
-| 合成フィクスチャでの集計再現                  | **実装済み**（`uv run python poc/issue_14_ai_grading/report.py`）       |
-| 実データ（2教科×問1）の書き起こし・接地       | **実施済み（予備調査、§6 参照）**。5 件・のべ 5 設問                    |
-| 直接 vendor API アダプタ（Gemini/Claude/GPT） | **未実装**（credentials 待ち。§7・§9）                                  |
-| OpenRouter / Codex app-server アダプタ        | **実装済み**（Issue #44。§7.0・§7.3。`adapters/ai_grading/`）           |
-| 実データでの AI 呼び出し・実測値・採用判断    | **未実施**（§7.4 の live probe が未記入。#35 のスコープ）               |
+| 項目                                          | 状態                                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------------------- |
+| Pydantic 構造化出力スキーマ                   | **実装済み**（`backend/src/auto_scoring/domain/ai_grading.py`）                 |
+| `AIProvider` ポート + contract test           | **実装済み**（`backend/tests/test_ai_provider_contract.py`）                    |
+| メトリクス計算・集計パイプライン              | **実装済み**（`backend/src/auto_scoring/domain/ai_grading_metrics.py`）         |
+| 合成フィクスチャでの集計再現                  | **実装済み**（`uv run python poc/issue_14_ai_grading/report.py`）               |
+| 実データ（2教科×問1）の書き起こし・接地       | **実施済み（予備調査、§6 参照）**。5 件・のべ 5 設問                            |
+| 直接 vendor API アダプタ（Gemini/Claude/GPT） | **未実装**（credentials 待ち。§7・§9）                                          |
+| OpenRouter / Codex app-server アダプタ        | **実装済み**（Issue #44。§7.0・§7.3。`adapters/ai_grading/`）                   |
+| 実データでの AI 呼び出し・実測値              | **未実施**（§7.4 の live probe が未記入。#35 のスコープ）                       |
+| 採用 provider                                 | **確定: 優先度つきフォールバック**（実測ではなくオーナー判断。Issue #81。§9.3） |
 
 ---
 
@@ -1606,14 +1607,14 @@ _本 PoC クローズ時、実 AI 応答と人間正解ラベルの不一致（c
 - 「どのくらいの割合が手動確認に回るか」を §8 の schema violation 率＋低
   Grading Confidence 率から見積もり、MVP のリリースノートに記載する。
 
-### 9.3 採用 provider/model・fallback・再試行条件・cost 上限の決定（本 PoC クローズ時に確定）
+### 9.3 採用 provider/model・fallback・再試行条件・cost 上限の決定
 
-| 決定項目                        | 記入欄                                                           |
-| ------------------------------- | ---------------------------------------------------------------- |
-| 採用 provider/model（第一候補） | _本 PoC クローズ時に確定（実測が §8.1 を満たした候補から選定）_  |
-| fallback                        | _未確定（候補: 第一候補が利用不能時に第二候補へ切替）_           |
-| 再試行条件                      | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）    |
-| cost 上限                       | _未確定（§8.1 の 3 USD/1,000 設問を暫定上限とし、実測後に確定）_ |
+| 決定項目            | 記入欄                                                                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 採用 provider/model | **優先度つきフォールバック**（Issue #81。本 PoC の実測を待たずオーナーが確定）: ① Gemini API → ② Codex App Server → ③ OpenRouter（オープンウェイトモデル）→ ④ OpenAI API     |
+| fallback            | 上記の順序そのものが fallback である。どの失敗で次へ落とすかは [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)「AI モデル: 優先度つきフォールバック」（実装は別 Issue） |
+| 再試行条件          | §7.2 を確定値として採用（バックオフ + 失敗記録 + 要確認落ち）                                                                                                                |
+| cost 上限           | _未確定（§8.1 の 3 USD/1,000 設問を暫定上限とし、実測後に確定）_                                                                                                             |
 
 ---
 

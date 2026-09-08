@@ -1,7 +1,8 @@
 """Tests for `auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`
 (Issue #19), against a real on-disk SQLite database and `LocalFileStore`, with
-a scriptable fake `OCRProvider` -- no real OCR service is called (decision A,
-business-rules-and-evaluation-data.md section 3 (A), is still pending).
+a scriptable fake `OCRProvider` -- no real OCR service is called (the service
+decision A names in business-rules-and-evaluation-data.md section 3 (A),
+Google Document AI, has no adapter yet).
 """
 
 from __future__ import annotations
