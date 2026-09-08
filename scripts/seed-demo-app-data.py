@@ -24,15 +24,21 @@ low-confidence result, an answer with a failed question, and a finished one.
 
 Safety: this script **resets** the root it seeds by deleting every test in it,
 which cascades to every answer, grade, annotation and review underneath. So
-before it writes anything it reads every table that cascade reaches and refuses
-the whole run if it finds a single row whose id it would not have written --
-every id it writes starts with ``demo-``.
+before it writes anything it walks the schema's ``ON DELETE CASCADE`` edges,
+reads every table that cascade reaches, and refuses the whole run unless every
+string column of every row's primary key starts with ``demo-`` -- the prefix on
+every id this script writes.
 
-That check is a prefix on ids, not a proof of ownership. A row someone else
-wrote with a ``demo-`` id would pass it, and a root that passes is reset in
-full. It is deliberately blunt in the safe direction: a root the app has since
-written to (a review made by hand, a job the queue created) is refused rather
-than merged, and the answer is then to seed a fresh directory.
+The table set is derived from the mapped schema, not listed here. Two versions
+of this guard were written by hand and both had holes (Issue #71 review rounds
+1 and 2): a hand-kept list goes stale the moment the schema moves, and nothing
+fails when it does.
+
+What the check still is, is a prefix on ids rather than a proof of ownership. A
+row someone else wrote with a ``demo-`` id would pass it, and a root that passes
+is reset in full. It is deliberately blunt in the safe direction: a root the app
+has since written to (a review made by hand, a job the queue created) is refused
+rather than merged, and the answer is then to seed a fresh directory.
 
 Run it with the sidecar stopped -- the app holds an exclusive lock on this
 directory while it runs (docs/linux-desktop-development.md §5.1).
@@ -51,7 +57,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import String, Table, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -62,21 +68,7 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.sidecar import default_app_data_dir
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
-from auto_scoring.db.orm import (
-    AnnotationRow,
-    AnswerImageRow,
-    DependencyGraphRow,
-    ExportRow,
-    GradeResultRow,
-    JobRow,
-    QuestionRow,
-    RecognitionResultRow,
-    ReviewRow,
-    RubricCriterionRow,
-    RubricRow,
-    SubmissionRow,
-    TestRow,
-)
+from auto_scoring.db.orm import Base, TestRow
 from auto_scoring.domain.dependency_graph import (
     DependencyEdge,
     DependencyGraph,
@@ -117,31 +109,9 @@ from auto_scoring.domain.profile import (
 #: is not this script's to reset.
 ID_PREFIX = "demo-"
 
-#: Every table `TestRepository.delete()` reaches through `ON DELETE CASCADE`
-#: (`db/orm.py`), with the id column each one carries. The guard reads all of
-#: them rather than only `tests`, because deleting a test destroys everything
-#: underneath it: a demo test that someone took a real answer into still has a
-#: `demo-` id, and checking only that id would wave the deletion through.
-#:
-#: `dependency_edges` is absent because it has no id of its own -- its key is a
-#: graph plus two questions, all three of which are checked here. `operation_log`
-#: is absent because no foreign key reaches it from `tests`, so the reset cannot
-#: touch it.
-CASCADED_ID_COLUMNS = (
-    ("tests", TestRow.id),
-    ("questions", QuestionRow.id),
-    ("rubrics", RubricRow.id),
-    ("rubric_criteria", RubricCriterionRow.id),
-    ("submissions", SubmissionRow.id),
-    ("answer_images", AnswerImageRow.id),
-    ("recognition_results", RecognitionResultRow.id),
-    ("grade_results", GradeResultRow.id),
-    ("annotations", AnnotationRow.id),
-    ("reviews", ReviewRow.id),
-    ("jobs", JobRow.id),
-    ("exports", ExportRow.id),
-    ("dependency_graphs", DependencyGraphRow.id),
-)
+#: The table the reset deletes from. Everything the guard looks at is derived
+#: from it (`cascade_reachable_tables`), so nothing here is a hand-kept list.
+RESET_ROOT_TABLE = TestRow.__table__
 
 #: A4 at 72dpi, matching the fixture PDF the submissions point at.
 A4_PORTRAIT = PageFormat(width_pt=595.0, height_pt=842.0)
@@ -229,20 +199,68 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def cascade_reachable_tables(root: Table = RESET_ROOT_TABLE) -> list[Table]:
+    """Every table a deleted row of [root] takes with it, [root] included.
+
+    Read out of the mapped schema rather than listed by hand. The list form was
+    wrong twice: first it named only `tests`, then it named twelve tables and
+    argued `dependency_edges` away on a foreign key that does not exist
+    (Issue #71 review rounds 1 and 2). A list has to be re-derived by a human
+    every time the schema moves, and nothing fails when they forget; this walks
+    the same `ON DELETE CASCADE` edges SQLite will walk.
+    """
+    reached = {root}
+    frontier = [root]
+    while frontier:
+        target = frontier.pop()
+        for table in Base.metadata.tables.values():
+            if table in reached:
+                continue
+            if any(
+                constraint.referred_table is target and constraint.ondelete == "CASCADE"
+                for constraint in table.foreign_key_constraints
+            ):
+                reached.add(table)
+                frontier.append(table)
+    return sorted(reached, key=lambda table: table.name)
+
+
 def foreign_row_counts(session: Session) -> dict[str, int]:
     """How many rows each cascaded table holds that this script did not write.
 
-    Empty when the root is this script's to reset. Ids are counted, never
-    printed: an id from a real ``app-data/`` is real data, and this script's
-    output ends up in terminals and CI logs (AGENTS.md "Security").
+    Empty when the root is this script's to reset.
+
+    A row counts as this script's when **every string column of its primary
+    key** starts with [ID_PREFIX]. The primary key is the right thing to read
+    because it is what identifies the row -- for a link table like
+    `dependency_edges` that means the graph *and both endpoints*, which is
+    exactly where the second hole was: those endpoints are plain strings, not
+    foreign keys into `questions`, so checking `questions` never covered them.
+
+    A table whose key carries no string at all cannot be judged this way, so
+    every row in it counts as foreign: an unknown is refused, not waved through.
+
+    Ids are counted, never printed. An id from a real ``app-data/`` is real
+    data, and this output ends up in terminals and CI logs (AGENTS.md
+    "Security").
     """
     counts: dict[str, int] = {}
-    for table, column in CASCADED_ID_COLUMNS:
+    for table in cascade_reachable_tables():
+        columns = [
+            column for column in table.primary_key.columns if isinstance(column.type, String)
+        ]
+        if not columns:
+            total = len(session.execute(select(table)).all())
+            if total:
+                counts[table.name] = total
+            continue
         foreign = sum(
-            1 for row_id in session.scalars(select(column)) if not row_id.startswith(ID_PREFIX)
+            1
+            for key in session.execute(select(*columns))
+            if any(not str(value).startswith(ID_PREFIX) for value in key)
         )
         if foreign:
-            counts[table] = foreign
+            counts[table.name] = foreign
     return counts
 
 

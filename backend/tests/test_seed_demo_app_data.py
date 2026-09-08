@@ -26,9 +26,11 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from sqlalchemy import String
 
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
+from auto_scoring.domain import dependency_graph as dag
 
 # Module-qualified: importing `Test` by name would have pytest try to collect
 # the domain entity as a test class.
@@ -36,9 +38,31 @@ from auto_scoring.domain import models
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "seed-demo-app-data.py"
 
-#: An id shaped the way the sidecar's own intake writes them -- no `demo-`
-#: prefix. Stands in for a real answer taken into a seeded test.
+#: Ids shaped the way the sidecar's own writes them -- no `demo-` prefix. They
+#: stand in for real data that ended up under a seeded test.
 REAL_SUBMISSION_ID = "5f1c0b7a-3e2d-4a11-9c8e-6d0b2f4a7c31"
+REAL_QUESTION_ID = "9b3d5c60-1f42-4d8e-8a77-2c5e91f0ab34"
+
+#: Every table a deleted `tests` row takes with it. Pinned so that a schema
+#: change which adds a cascade path fails here instead of silently widening
+#: what the seeder is allowed to delete. `operation_log` is deliberately absent:
+#: nothing cascades to it, so the reset cannot reach it.
+CASCADE_REACHABLE_TABLES = {
+    "annotations",
+    "answer_images",
+    "dependency_edges",
+    "dependency_graphs",
+    "exports",
+    "grade_results",
+    "jobs",
+    "questions",
+    "recognition_results",
+    "reviews",
+    "rubric_criteria",
+    "rubrics",
+    "submissions",
+    "tests",
+}
 
 
 @pytest.fixture(scope="module")
@@ -107,8 +131,7 @@ def test_refuses_a_root_holding_an_answer_it_did_not_write(
     root = tmp_path / "app-data"
     assert seeder.main(["--app-data-dir", str(root)]) == 0
     seeded = _submission_ids(root)
-    demo_test_id = next(test.id for test in _tests(root) if test.status is models.TestStatus.READY)
-    _add_real_answer(root, test_id=demo_test_id)
+    _add_real_answer(root, test_id=_demo_test_id(root))
 
     assert seeder.main(["--app-data-dir", str(root)]) != 0
 
@@ -125,3 +148,83 @@ def test_refuses_a_root_holding_an_answer_it_did_not_write(
 def _tests(root: Path) -> list[models.Test]:
     with _unit_of_work(root) as uow:
         return list(uow.tests.list_all())
+
+
+def _demo_test_id(root: Path) -> str:
+    return next(test.id for test in _tests(root) if test.status is models.TestStatus.READY)
+
+
+def _add_edge_to_a_question_it_did_not_write(root: Path, *, test_id: str) -> str:
+    """Save a graph version whose edge points at a question from outside.
+
+    Every id involved starts with `demo-` except the endpoint itself, which is
+    a plain string column rather than a foreign key into `questions` -- so a
+    guard that reads `questions` never sees it (Issue #71 review round 2).
+    """
+    with _unit_of_work(root) as uow:
+        questions = uow.questions.list_for_test(test_id)
+        graph = dag.DependencyGraph(
+            id=f"{test_id}:v2",
+            test_id=test_id,
+            version=2,
+            question_ids=frozenset({question.id for question in questions} | {REAL_QUESTION_ID}),
+            edges=(
+                dag.DependencyEdge(
+                    from_question_id=questions[0].id,
+                    to_question_id=REAL_QUESTION_ID,
+                    provides=(dag.DependencyProvision.RECOGNIZED_TEXT,),
+                    rationale="a dependency recorded outside this script",
+                ),
+            ),
+            unresolved=(),
+            status=dag.DependencyGraphStatus.CONFIRMED,
+            created_at=datetime(2026, 9, 2, 11, 0),
+            confirmed_at=datetime(2026, 9, 2, 11, 1),
+        )
+        uow.dependency_graphs.save(graph)
+        uow.commit()
+        return graph.id
+
+
+def test_refuses_a_root_holding_a_dependency_edge_it_did_not_write(
+    seeder: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The second P1: an edge endpoint is a plain string, not a foreign key.
+
+    The guard's first version excluded `dependency_edges` on the grounds that
+    its key was covered by `dependency_graphs` and `questions`. Only `graph_id`
+    is a foreign key; the two endpoints are strings that need not name any row
+    in `questions` at all.
+    """
+    root = tmp_path / "app-data"
+    assert seeder.main(["--app-data-dir", str(root)]) == 0
+    graph_id = _add_edge_to_a_question_it_did_not_write(root, test_id=_demo_test_id(root))
+
+    assert seeder.main(["--app-data-dir", str(root)]) != 0
+
+    with _unit_of_work(root) as uow:
+        surviving = uow.dependency_graphs.get(graph_id)
+    assert surviving is not None, "the seeder deleted a graph it did not write"
+    assert [edge.to_question_id for edge in surviving.edges] == [REAL_QUESTION_ID]
+    message = capsys.readouterr().err
+    assert "dependency_edges: 1" in message
+    assert REAL_QUESTION_ID not in message
+
+
+def test_the_guard_reads_every_table_the_reset_can_delete(seeder: ModuleType) -> None:
+    """What the guard reads is derived from the schema, so pin the derivation.
+
+    A cascade path added to the schema widens what `tests.delete()` destroys.
+    This fails when that happens, which is the moment to check that the new
+    table's key can still say who wrote a row.
+    """
+    reachable = seeder.cascade_reachable_tables()
+
+    assert {table.name for table in reachable} == CASCADE_REACHABLE_TABLES
+    # Without a string in the key there is nothing to read a `demo-` prefix
+    # from, and the guard refuses every row of such a table -- which would
+    # leave the seeder unable to seed anything at all.
+    for table in reachable:
+        assert any(isinstance(column.type, String) for column in table.primary_key.columns), (
+            f"{table.name} has no string in its primary key"
+        )
