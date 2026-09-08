@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from auto_scoring.domain.ai_provider import (
+    GradingAnnotationCandidate,
     GradingCriterionOutcome,
     GradingRequest,
     GradingResponse,
@@ -30,7 +31,13 @@ from auto_scoring.domain.ai_provider import (
     ProviderRateLimitedError,
     SchemaViolation,
 )
-from auto_scoring.domain.models import CriterionOutcome
+from auto_scoring.domain.models import AnnotationKind, CriterionOutcome
+
+#: Stands in for a student's transcribed answer. A provider returns it in
+#: every free-text field (recognized reading, comment, rationale, criterion
+#: rationale, annotation target/comment) -- exactly the fields a real
+#: provider fills with the student's own words.
+_ANSWER_TEXT = "生徒答案の本文サンプル"
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "ai_grading"
 _RECORD_PY = Path(__file__).resolve().parents[1] / "poc" / "issue_14_ai_grading" / "record.py"
@@ -77,13 +84,13 @@ class _StubProvider:
             raise self._failure
         return GradingResponse(
             question_id=request.question_id,
-            recognition_text=request.ocr_text,
+            recognition_text=_ANSWER_TEXT,
             recognition_confidence=0.9,
             score=4,
             max_score=request.max_score,
             grading_confidence=0.8,
-            rationale="根拠",
-            comment="コメント",
+            rationale=f"{_ANSWER_TEXT}と模範解答を比較した。",
+            comment=f"{_ANSWER_TEXT}の部分が惜しい。",
             # A criterion is required on the wire (`AIGradingResult`), and
             # what is recorded has to be re-readable by `report.py` -- a
             # stub returning none would write a cell that silently counts
@@ -93,10 +100,14 @@ class _StubProvider:
                     criterion_id="c1",
                     outcome=CriterionOutcome.PASS,
                     confidence=0.9,
-                    rationale="根拠",
+                    rationale=f"{_ANSWER_TEXT}が条件を満たす。",
                 ),
             ),
-            annotations=(),
+            annotations=(
+                GradingAnnotationCandidate(
+                    target=_ANSWER_TEXT, type=AnnotationKind.UNDERLINE, comment=_ANSWER_TEXT
+                ),
+            ),
             descriptor=self.describe(),
             latency_seconds=1.25,
         )
@@ -139,6 +150,52 @@ def _run(dataset: Path, provider: _StubProvider, **kwargs: Any) -> None:
             cell.variant
         ] = body
         record._write_atomically(cell.path, cell.document)
+
+
+def test_no_answer_text_reaches_the_recorded_file(dataset: Path) -> None:
+    """Issue #35 acceptance: "secret・答案本文・生徒識別情報がログ・出力・
+    リポジトリに残らない".
+
+    The provider here fills every free-text field with the student's answer,
+    which is what a real one does: ``recognition.text`` *is* the answer
+    verbatim, ``comment``/``rationale`` quote it, and an annotation target
+    is a span copied out of it. Schema validation is not anonymization, and
+    writing the file outside the repository does not make an answer-text
+    copy acceptable -- the condition is about the *output* (code review
+    finding). Asserted against the raw bytes on disk, not against the dict
+    the recorder built, so no serialization path can smuggle it through.
+    """
+    _run(dataset, _StubProvider())
+
+    written = (dataset / "sample-01.json").read_text(encoding="utf-8")
+    recorded = json.loads(written)["questions"][0]["recorded"]["stub"]["ocr_clean"]
+
+    assert _ANSWER_TEXT not in json.dumps(recorded, ensure_ascii=False)
+    response = recorded["response"]
+    assert response["recognition"]["text"] == record._REDACTED
+    assert response["comment"] == record._REDACTED
+    assert response["rationale"] == record._REDACTED
+    assert response["criteria"][0]["rationale"] == record._REDACTED
+    assert response["annotations"][0]["target"] == record._REDACTED
+    assert response["annotations"][0]["comment"] is None
+
+
+def test_the_metric_bearing_fields_survive_redaction(dataset: Path) -> None:
+    """Redaction must not cost the harness anything it actually scores:
+    ``evaluate_sample`` reads the question id, the score/maxScore, the
+    criterion ids and outcomes, and the two confidences."""
+    _run(dataset, _StubProvider())
+
+    response = _cell(dataset, "stub", "ocr_clean")["response"]
+
+    assert response["questionId"] == "poc2-synth-01"
+    assert response["grading"] == {"score": 4, "maxScore": 20, "confidence": 0.8}
+    assert response["recognition"]["confidence"] == 0.9
+    assert response["criteria"][0]["id"] == "c1"
+    assert response["criteria"][0]["result"] == "pass"
+    # An annotation's kind carries no content, so "the model proposed one
+    # underline" survives even though what it pointed at does not.
+    assert response["annotations"][0]["type"] == "underline"
 
 
 def test_a_successful_call_is_recorded_in_the_shape_report_py_reads(dataset: Path) -> None:

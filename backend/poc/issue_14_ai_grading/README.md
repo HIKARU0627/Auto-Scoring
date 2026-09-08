@@ -48,10 +48,23 @@ comma-separated priority list -- the Issue #81 fallback chain), via
 `adapters.ai_grading.factory.create_ai_provider()`; each cell is filed under
 the provider that actually answered. `--images` holds the answer-region
 crops the dataset's `input.answer_image_ref` values name, and a
-`sha256:<hex>` reference is verified against the bytes read. It refuses to
-write into the committed fixtures (a real provider's response body must
-never reach a commit), records a schema violation or an exhausted retry
-explicitly rather than fabricating a grade, and prints no student content.
+`sha256:<hex>` reference is verified against the bytes read.
+
+**It records no free text.** Only the fields
+`domain.ai_grading_metrics.evaluate_sample` actually reads are written --
+question id, score/maxScore, criterion ids and outcomes, the two
+confidences -- and every free-text field (the recognized reading, comment,
+rationale, criterion rationale, annotation target) is replaced with a fixed
+redaction marker. Schema validation is not anonymization: a schema-valid
+`recognition.text` is the student's answer verbatim, and Issue #35's
+acceptance condition is that answer text stays out of the *output*, not
+just out of the repository.
+
+It also refuses to record into any dataset inside this repository (a real
+provider's response body must never reach a commit), never puts an
+unvalidated `answer_image_ref` into an error message, records a schema
+violation or an exhausted retry explicitly rather than fabricating a grade,
+and prints no student content.
 
 `--dry-run` validates a dataset and its crops with no credentials and no
 calls. `docs/poc-2-ai-grading.md` section 4.3 documents the design, section

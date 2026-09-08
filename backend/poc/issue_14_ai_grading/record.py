@@ -134,8 +134,7 @@ def _load_image(images: Path, ref: str) -> bytes:
             candidate = images / f"{digest}{extension}"
             if candidate.is_file():
                 data = candidate.read_bytes()
-                actual = hashlib.sha256(data).hexdigest()
-                if actual != digest:
+                if hashlib.sha256(data).hexdigest() != digest:
                     raise _DatasetError(
                         f"{candidate}: content hash does not match its answer_image_ref -- "
                         "the crop this sample was labelled against is not the crop on disk"
@@ -284,19 +283,58 @@ def _already_recorded(recorded: dict[str, Any], variant: str, provider_id: str |
     return False
 
 
-def _wire_response(response: GradingResponse) -> dict[str, Any]:
-    """The validated response, back in its camelCase wire shape.
+#: Written in place of every free-text field a provider returns. Short,
+#: fixed, and obviously not model output, so nobody reading a dataset can
+#: mistake it for something a provider actually said. Must stay within
+#: ``domain.models.MAX_COMMENT_CHARS`` -- it is written into ``comment``,
+#: which the wire schema length-limits.
+_REDACTED = "[redacted: PoC 2 records no free text]"
 
-    Round-tripped from the already-parsed :class:`GradingResponse` rather
-    than from the provider's raw body: what is recorded is then exactly what
-    passed ``parse_ai_grading_result``, so ``report.py`` re-reading the file
-    cannot disagree with what this run scored (and no un-validated bytes
-    from a remote service are written to disk).
+
+def _wire_response(response: GradingResponse) -> dict[str, Any]:
+    """The metric-bearing fields of a validated response, and nothing else.
+
+    **No free text from the provider is ever written to disk.** Issue #35's
+    acceptance condition is "secret・答案本文・生徒識別情報がログ・出力・
+    リポジトリに残らない", and *出力* includes this file -- being outside
+    the repository does not make an answer-text copy acceptable. Schema
+    validation is not anonymization: a schema-valid ``recognition.text`` is
+    the student's answer verbatim, ``comment``/``rationale`` routinely quote
+    it, and an ``annotations[].target`` is by definition a span copied out
+    of it (code review finding).
+
+    So every field is filtered against one question: **does
+    ``ai_grading_metrics.evaluate_sample`` read it?**
+
+    * ``questionId`` and ``grading.maxScore`` -- the correspondence check
+      that rejects an answer to a different question;
+    * ``grading.score`` -- exact match and within-tolerance;
+    * ``criteria[].id`` / ``criteria[].result`` -- criterion agreement;
+    * ``recognition.confidence`` / ``grading.confidence`` -- the two
+      confidence columns and the calibration gate (section 8.1).
+
+    Two more are kept although no metric reads them yet, because both are
+    numbers or enums that cannot carry content: ``criteria[].confidence``,
+    and ``annotations[].type`` (which preserves "the model proposed two
+    annotations, of these kinds" without preserving what they pointed at).
+
+    Everything else is replaced with :data:`_REDACTED`, not omitted, because
+    the wire schema requires those fields: a cell has to stay readable by
+    ``parse_ai_grading_result`` for ``report.py`` to score it at all (Issue
+    #14 acceptance: a recorded cell is validated on the way back in, never
+    trusted). Redacting rather than dropping keeps one file format for
+    hand-authored fixtures and live recordings, and keeps the redaction
+    visible in the data instead of implicit in its absence.
+
+    Built from the already-parsed :class:`GradingResponse`, never from the
+    provider's raw body, so what is recorded is exactly what passed
+    ``parse_ai_grading_result`` -- and no un-validated bytes from a remote
+    service reach the disk.
     """
     return {
         "questionId": response.question_id,
         "recognition": {
-            "text": response.recognition_text,
+            "text": _REDACTED,
             "confidence": response.recognition_confidence,
         },
         "grading": {
@@ -309,15 +347,15 @@ def _wire_response(response: GradingResponse) -> dict[str, Any]:
                 "id": criterion.criterion_id,
                 "result": criterion.outcome.value,
                 "confidence": criterion.confidence,
-                "rationale": criterion.rationale,
+                "rationale": _REDACTED,
             }
             for criterion in response.criteria
         ],
-        "comment": response.comment,
-        "rationale": response.rationale,
+        "comment": _REDACTED,
+        "rationale": _REDACTED,
         "annotations": [
-            {"target": a.target, "type": a.type.value, "comment": a.comment}
-            for a in response.annotations
+            {"target": _REDACTED, "type": annotation.type.value, "comment": None}
+            for annotation in response.annotations
         ],
     }
 

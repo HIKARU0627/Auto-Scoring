@@ -262,6 +262,14 @@ scored exactly like a `response` that fails validation (it counts toward
 `schema_violation_rate`, contributes no exact-match/criterion data), and is
 distinct from `unavailable`, where no response came back at all.
 
+`response` in these committed fixtures is a full, hand-invented
+`AIGradingResult` body, free text included -- everything here is made up, so
+there is nothing to protect. A cell written by `record.py` against a *real*
+provider looks different: the free-text fields carry a fixed redaction
+marker instead, because a real provider fills them with the student's own
+words (see that script's `_wire_response`). Both shapes parse and score
+identically -- the harness reads no free text either way.
+
 The three outcomes are mutually exclusive: a cell recording more than one
 of `response` / `schema_violation: true` / `unavailable: true` makes the
 harness raise, as does any unrecognized field on the cell (see below). One
