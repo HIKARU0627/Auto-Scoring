@@ -456,7 +456,7 @@ class _BucketCounts extends StatelessWidget {
 ///
 /// 「答案を取り込む」はここに置かない。入口行と同じ行き先が並ぶだけで、しかも
 /// `AppRoutes.answerIntake` はテストを指定できないので、隣に書いてあるテスト名
-/// と関係があるように見えて実際には無い (`docs/home-dashboard.md` §8)。
+/// と関係があるように見えて実際には無い (`docs/home-dashboard.md` §9)。
 Widget? _resumeAction(HomeTestProgress progress, ValueChanged<String> onOpen) {
   final test = progress.test;
   if (progress.isDraft) {

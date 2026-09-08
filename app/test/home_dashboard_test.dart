@@ -357,6 +357,84 @@ void main() {
       expect(dashboard.nextAction.route, AppRoutes.answerIntake);
     });
 
+    test('載せきれなかったテストがあるとき、不在も件数も範囲を明示する', () {
+      // 直近8件が片付いていても、答案を取得していないテストにレビュー待ちが
+      // 残っているかどうかは分からない。「ありません」と言い切れない。
+      final settled = buildTest(id: 't1');
+      final dashboard = build({
+        settled: [buildSubmission(id: 's1', testId: 't1', state: 'exported')],
+      }, hiddenTestCount: 4);
+
+      final action = dashboard.nextAction;
+      expect(action.headline, '直近1件のテストにレビュー待ちの答案はありません');
+      expect(action.detail, contains('ほかに4件'));
+    });
+
+    test('載せきれなかったテストがあるとき、件数にも範囲の但し書きが付く', () {
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [buildSubmission(id: 's1', testId: 't1', state: 'needs_review')],
+      }, hiddenTestCount: 2);
+
+      expect(dashboard.nextAction.detail, contains('ほかに2件'));
+    });
+
+    test('全テストを載せているときは範囲の但し書きを付けない', () {
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [buildSubmission(id: 's1', testId: 't1', state: 'needs_review')],
+      });
+
+      expect(dashboard.nextAction.detail, isNot(contains('ほかに1件')));
+      expect(dashboard.nextAction.detail, isNot(contains('数えたのは')));
+    });
+
+    test('取込失敗からの復旧を保証しない', () {
+      // 再取込が受け付けられるのは下流データ (認識・採点・レビュー・ジョブ) が
+      // 無い答案だけで、あるものは409で拒否される。ホームは下流の有無を
+      // 取得していないので「取り込み直せば直る」とは言えない。
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [buildSubmission(id: 's1', testId: 't1', state: 'error')],
+      });
+
+      final action = dashboard.nextAction;
+      expect(action.detail, isNot(contains('やり直せます')));
+      expect(action.detail, isNot(contains('取り込み直す')));
+    });
+
+    test('処理中の行き先を1つに決めつけない', () {
+      // 取込の結果は ai_processed / needs_review / error の3通りある。
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [buildSubmission(id: 's1', testId: 't1', state: 'ai_processing')],
+      });
+
+      final detail = dashboard.nextAction.detail;
+      expect(detail, contains('要確認'));
+      expect(detail, contains('取込失敗'));
+    });
+
+    test('レビュー待ちの順序を、テストをまたいだ最古と読ませない', () {
+      // 実際の選択は「テストを選んでから、その中で取込の古い順」。
+      final test = buildTest(id: 't1');
+      final dashboard = build({
+        test: [buildSubmission(id: 's1', testId: 't1', state: 'ai_processed')],
+      });
+
+      expect(dashboard.nextAction.detail, contains('テストごとに'));
+    });
+
+    test('下書きのどの確認手順が残っているかは断定しない', () {
+      // `ready` にはプロファイルと依存関係グラフ両方の確定が要るが、どちらが
+      // 済んでいるかはホームが取得していない。
+      final draft = buildTest(id: 't1', name: '理科 第1回', status: 'draft');
+      final dashboard = build({draft: const []});
+
+      expect(dashboard.nextAction.detail, contains('登録がまだ完了していません'));
+      expect(dashboard.nextAction.detail, isNot(contains('終わっていません')));
+    });
+
     test('テストが1件も無ければテスト登録へ', () {
       final dashboard = build(const {});
 

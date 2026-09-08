@@ -287,8 +287,23 @@ class HomeDashboard {
     return null;
   }
 
+  /// 集計の範囲を明示する但し書き。載せきれなかったテストが無ければ空。
+  ///
+  /// [tests] はホームが答案まで読んだテストで、[hiddenTestCount] 件ぶんは
+  /// `listSubmissions` を呼んでいない (§5)。したがって件数も「ありません」も
+  /// **この範囲の話でしかない**。範囲を書かずに数だけ出すと全体の数として
+  /// 読まれるし、「レビュー待ちはありません」に至っては、読んでいないテストの
+  /// 不在まで断定することになる。
+  String get _loadedScopeNote => hiddenTestCount == 0
+      ? ''
+      : '（数えたのは直近${tests.length}件のテストで、ほかに$hiddenTestCount件あります）';
+
   /// 次の一手。上から順に「人間にしかできないこと」「待っていれば進むこと」
   /// 「まだ何も無いなら始めること」。
+  ///
+  /// 文言は**この画面が答案の `state` から実際に知っていることしか言わない**。
+  /// 採点の進み具合 (§3.1)、再取込が通るかどうか、`draft` のどの確認手順が
+  /// 残っているかは、いずれもホームが取得していないので断定しない。
   HomeNextAction get nextAction {
     if (_resumeTarget case (final test, final submission)) {
       final bucket = HomeWorkBucket.of(submission.state);
@@ -306,10 +321,16 @@ class HomeDashboard {
         headline: isFlagged
             ? '要確認の答案が${count(HomeWorkBucket.needsReview)}件あります'
             : 'レビュー待ちの答案が$awaiting件あります',
+        // 「古い順」はテストをまたがない。[_resumeTarget] はまずテストを選び
+        // (要確認優先、同じ段ではテストの新しい順)、その中で取込の古い順に
+        // 1件を採る。全テストを通した最古ではないので、そう読める書き方を
+        // しない (`docs/home-dashboard.md` §2.1)。
         detail: isFlagged
             ? '人の確認が必要と判定された答案から開きます'
                   '${awaiting > 0 ? '（ほかにレビュー待ちが$awaiting件）' : ''}'
-            : '取込と回答欄の抽出まで終わっています。古い順に開いていきます',
+                  '$_loadedScopeNote'
+            : '取込と回答欄の抽出まで終わっています。'
+                  'テストごとに、取込の古い順に開きます$_loadedScopeNote',
         actionLabel: 'レビューを続ける',
         route: AppRoutes.pdfReview(
           testId: test.test.id,
@@ -325,7 +346,14 @@ class HomeDashboard {
         icon: HomeWorkBucket.failed.icon,
         tone: HomeWorkBucket.failed.tone,
         headline: '取込に失敗した答案が${count(HomeWorkBucket.failed)}件あります',
-        detail: '同じPDFを取り込み直すと、その答案をやり直せます（${failed.test.name}）',
+        // 「取り込み直せば直る」とは言わない。再取込が受け付けられるのは
+        // その答案に下流のデータ (認識・採点・レビュー・ジョブ) が無いときだけ
+        // で、あるものは 409 で拒否される
+        // (`backend/.../domain/submission_intake.py` の `decide_reintake`)。
+        // ホームは下流の有無を取得していないので、どちらになるか分からない。
+        detail:
+            '答案取込画面で対象のテストを選ぶと、失敗した答案が一覧に出ます'
+            '（${failed.test.name}）$_loadedScopeNote',
         actionLabel: '答案取込を開く',
         route: AppRoutes.answerIntake,
       );
@@ -335,7 +363,13 @@ class HomeDashboard {
         icon: Icons.pending_actions,
         tone: AppStatusTone.neutral,
         headline: '登録が途中のテストがあります',
-        detail: '${draft.test.name} は回答欄と設問依存関係の確認が終わっていません',
+        // どの確認手順が残っているかは言わない。`draft` から `ready` へ進むには
+        // プロファイルと設問依存関係グラフの両方の確定が要る
+        // (`complete-registration`) が、どちらが済んでいるかはプロファイルと
+        // グラフを取得しないと分からず、ホームは取得していない。
+        detail:
+            '${draft.test.name} の登録がまだ完了していません'
+            '（回答欄と設問依存関係の確認が要ります）',
         actionLabel: '登録を続ける',
         route: AppRoutes.testSettings(draft.test.id),
       );
@@ -345,27 +379,45 @@ class HomeDashboard {
         icon: HomeWorkBucket.processing.icon,
         tone: HomeWorkBucket.processing.tone,
         headline: '処理中の答案が${count(HomeWorkBucket.processing)}件あります',
-        detail: '終わった答案はここにレビュー待ちとして並びます',
+        // 取込の結果は3通りある (回答欄が揃えば `ai_processed`、ページや回答欄が
+        // 足りなければ `needs_review`、失敗すれば `error`)。「レビュー待ちに
+        // なります」と1つに決めない。
+        detail:
+            '終わるとレビュー待ち・要確認・取込失敗のいずれかになります'
+            '$_loadedScopeNote',
         // 行き先が無い唯一の分岐。押せるものが「更新」しか無い状態を、
         // 押せないボタンではなく押せるボタンで表す。
         actionLabel: '最新の状況に更新',
       );
     }
     if (tests.isNotEmpty) {
-      return const HomeNextAction(
+      return HomeNextAction(
         icon: Icons.upload_file,
         tone: AppStatusTone.success,
-        headline: 'レビュー待ちの答案はありません',
-        detail: '次の答案を取り込むと、回答欄の抽出まで自動で進みます',
+        // ここだけは見出しそのものが「無い」と言うので、範囲を見出しに書く。
+        // 説明文の但し書きに逃がすと、読まれる前に「片付いた」と受け取られる。
+        headline: hiddenTestCount == 0
+            ? 'レビュー待ちの答案はありません'
+            : '直近${tests.length}件のテストにレビュー待ちの答案はありません',
+        detail: hiddenTestCount == 0
+            ? '次の答案を取り込むと、回答欄の抽出まで自動で行われます'
+            : 'ほかに$hiddenTestCount件のテストがあり、そちらの答案は数えていません',
         actionLabel: '答案を取り込む',
         route: AppRoutes.answerIntake,
       );
     }
+    // ここは [tests] が空の分岐なので、[hiddenTestCount] も必ず 0 である
+    // (載せる上限は先頭から取るため、テストが1件でもあれば [tests] に入る)。
+    // つまり「1件も無い」と言い切ってよい唯一の不在の主張。
     return const HomeNextAction(
       icon: Icons.add_task,
       tone: AppStatusTone.neutral,
       headline: 'まだテストが登録されていません',
-      detail: '模範解答と採点マニュアルのPDFを登録すると、答案を取り込めるようになります',
+      // 登録は「PDFを2つ出せば終わり」ではない。`ready` になるにはプロファイルと
+      // 設問依存関係グラフの確定まで要る (`complete-registration`)。
+      detail:
+          '模範解答と採点マニュアルのPDFを登録し、回答欄と設問依存関係を確認すると、'
+          '答案を取り込めるようになります',
       actionLabel: 'テストを登録する',
       route: AppRoutes.testRegistration,
     );
