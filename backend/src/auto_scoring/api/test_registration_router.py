@@ -7,15 +7,23 @@ translates the result to a Pydantic response.
 
 Registration flow (simplified-design-specification.md §6, docs/test-registration.md):
 
-* ``POST /tests`` -- register a new test's model-answer + marking-manual
-  PDFs. Creates a ``DRAFT`` `Test`; no profile exists yet.
+* ``POST /tests`` -- register a new test from its **採点基準PDF** plus any
+  optional role-tagged materials (Issue #101). Creates a ``DRAFT`` `Test`;
+  no profile exists yet. There is no model-answer parameter any more -- that
+  document does not exist in real grading material (Issue #95 decision 1).
+* ``GET`` / ``POST /tests/{test_id}/materials`` -- list what was registered
+  and under which role, and attach more later.
+* ``DELETE /tests/{test_id}`` -- delete a test and everything under it, for
+  when a batch was imported into the wrong one.
 * ``POST /tests/{test_id}/profile/analyze`` -- generate DRAFT profile
-  candidates from the two PDFs (`adapters.pdf.profile_candidate_generation`).
-  Safe to call again (e.g. after a failed detection) -- it always overwrites
-  whatever DRAFT profile was there, exactly like
+  candidates (`adapters.pdf.profile_candidate_generation`). Safe to call
+  again (e.g. after a failed detection) -- it always overwrites whatever
+  DRAFT profile was there, exactly like
   `adapters.local.profile_store.ProfileStore.save`. Rejected once the
   profile has been confirmed (a confirmed profile is immutable, matching
   `domain.profile.Profile`'s own one-way DRAFT -> CONFIRMED lifecycle).
+  **Needs a model-answer-shaped reference PDF and says so when there is
+  none** -- see the handler.
 * ``GET /tests/{test_id}/profile`` -- the current (draft or confirmed) profile.
 * ``PUT /tests/{test_id}/profile`` -- replace the profile's regions with a
   human-reviewed set (still DRAFT -- this is *not* the confirm step). Lets
@@ -37,11 +45,11 @@ from __future__ import annotations
 
 import threading
 from asyncio import to_thread
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -49,9 +57,12 @@ from auto_scoring.adapters.atomic import FinalizationError
 from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.profile_candidate_generation import generate_profile_candidates
-from auto_scoring.adapters.test_intake import register_test
+from auto_scoring.adapters.purge import purge_test
+from auto_scoring.adapters.test_intake import MaterialUpload, attach_materials, register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
+from auto_scoring.domain.intake_template import MaterialRole
+from auto_scoring.domain.material_intake import MaterialIntakeError, MaterialTooLargeError
 from auto_scoring.domain.models import (
     MAX_ORIGINAL_FILENAME_LENGTH,
     MAX_TEST_NAME_LENGTH,
@@ -75,11 +86,17 @@ from auto_scoring.domain.profile import (
     Region,
     RegionKind,
 )
+from auto_scoring.domain.test_material import TestMaterial
 from auto_scoring.domain.test_registration import build_questions_and_rubrics
 
-_PDF_INTAKE_ERROR_STATUS: dict[type[PdfIntakeError], int] = {
+#: Intake failures that are a size problem, not a content problem, and so
+#: deserve 413 rather than 400. Covers both validation families: PDFs go
+#: through `domain.pdf_intake`, and the Word/Excel materials Issue #101 added
+#: go through `domain.material_intake`, which has no PDF concepts to reuse.
+_INTAKE_ERROR_STATUS: dict[type[Exception], int] = {
     PdfTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
     StagedOutputTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
+    MaterialTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
 }
 
 #: Read chunk size for `_read_upload_within_limit`, matching `api.app`'s own
@@ -106,6 +123,35 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _first_material(materials: Sequence[TestMaterial], role: MaterialRole) -> TestMaterial | None:
+    """The oldest material of ``role``, or ``None``.
+
+    Oldest rather than newest so the choice is stable: a test may hold four
+    materials of the same role (one real subject folder ships four 添削
+    サンプル), and an analysis that silently switched documents when a fifth
+    was attached would invalidate regions a reviewer had already positioned.
+    """
+    for material in materials:
+        if material.role is role:
+            return material
+    return None
+
+
+def _layout_source_material(materials: Sequence[TestMaterial]) -> TestMaterial | None:
+    """The PDF whose page geometry the profile is bound to, if there is one.
+
+    A `REFERENCE` material -- which is where a model answer goes when a
+    reviewer happens to have one, and where migration 0015 puts the
+    model-answer PDF of every test registered before Issue #101. Restricted
+    to PDFs because `generate_profile_candidates` opens it with pdfium, and
+    `REFERENCE` also accepts Word/Excel.
+    """
+    for material in materials:
+        if material.role is MaterialRole.REFERENCE and material.stored_path.endswith(".pdf"):
+            return material
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Request / response schemas
 # --------------------------------------------------------------------------- #
@@ -124,6 +170,36 @@ class TestResponse(BaseModel):
             subject=test.subject,
             status=test.status.value,
             created_at=test.created_at.replace(tzinfo=UTC),
+        )
+
+
+class TestMaterialResponse(BaseModel):
+    """One registered file, and the role it was registered under.
+
+    ``original_filename`` is the name the reviewer chose the file by. It is
+    carried purely so "which of my files became the 採点基準?" stays
+    answerable after import; nothing matches on it, because names in real
+    material are not reliable evidence (`domain.intake_template`).
+    """
+
+    id: str
+    test_id: str
+    role: MaterialRole
+    sha256: str
+    size_bytes: int
+    original_filename: str | None = None
+    created_at: datetime
+
+    @classmethod
+    def from_domain(cls, material: TestMaterial) -> TestMaterialResponse:
+        return cls(
+            id=material.id,
+            test_id=material.test_id,
+            role=material.role,
+            sha256=material.sha256,
+            size_bytes=material.size_bytes,
+            original_filename=material.original_filename,
+            created_at=material.created_at.replace(tzinfo=UTC),
         )
 
 
@@ -229,9 +305,13 @@ class CompleteRegistrationResponse(BaseModel):
     dependency_graph_confirmed: bool
 
 
-def _pdf_intake_http_exception(exc: PdfIntakeError) -> HTTPException:
-    status_code = _PDF_INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
+def _intake_http_exception(exc: PdfIntakeError | MaterialIntakeError) -> HTTPException:
+    status_code = _INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
     return HTTPException(status_code, detail=str(exc))
+
+
+def _pdf_intake_http_exception(exc: PdfIntakeError) -> HTTPException:
+    return _intake_http_exception(exc)
 
 
 def build_test_registration_router(
@@ -311,14 +391,9 @@ def build_test_registration_router(
         *,
         name: str,
         subject: str | None,
-        model_answer_filename: str,
-        model_answer_mime: str | None,
-        model_answer_data: bytes,
-        manual_filename: str,
-        manual_mime: str | None,
-        manual_data: bytes,
+        materials: list[MaterialUpload],
         now: datetime,
-    ) -> Test:
+    ) -> tuple[Test, list[TestMaterial]]:
         # Holds `pdfium_lock` for the PDF-validation calls inside
         # register_test (page_count/is_encrypted) -- see
         # build_test_registration_router's docstring for why this must be
@@ -330,32 +405,96 @@ def build_test_registration_router(
                 pdf_engine,
                 name=name,
                 subject=subject,
-                model_answer_filename=model_answer_filename,
-                model_answer_mime=model_answer_mime,
-                model_answer_data=model_answer_data,
-                manual_filename=manual_filename,
-                manual_mime=manual_mime,
-                manual_data=manual_data,
+                materials=materials,
                 limits=limits,
                 now=now,
             )
+
+    def _attach_materials_locked(
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        test_id: str,
+        materials: list[MaterialUpload],
+        now: datetime,
+    ) -> list[TestMaterial]:
+        with lock:
+            return attach_materials(
+                uow,
+                store,
+                pdf_engine,
+                test_id=test_id,
+                materials=materials,
+                limits=limits,
+                now=now,
+            )
+
+    async def _read_materials(uploads: list[UploadFile], roles: list[str]) -> list[MaterialUpload]:
+        """Pair each uploaded file with its role, reading it within the limit.
+
+        The two lists are positional: `materials[i]` is the file for
+        `material_roles[i]`. A multipart body cannot nest, and inventing a
+        JSON side-channel to carry the pairing would mean the roles arrived
+        through a different validation path than the files they describe.
+        The length check below is what makes the positional pairing safe --
+        a mismatched pair would otherwise silently shift every role by one.
+        """
+        if len(uploads) != len(roles):
+            raise HTTPException(
+                422,
+                detail=(
+                    f"materials and material_roles must be the same length, "
+                    f"got {len(uploads)} and {len(roles)}"
+                ),
+            )
+        read: list[MaterialUpload] = []
+        for upload, raw_role in zip(uploads, roles, strict=True):
+            try:
+                role = MaterialRole(raw_role)
+            except ValueError as exc:
+                raise HTTPException(422, detail=f"unknown material role: {raw_role!r}") from exc
+            try:
+                data = await _read_upload_within_limit(upload, limits.max_size_bytes)
+            except PdfIntakeError as exc:
+                raise _pdf_intake_http_exception(exc) from exc
+            read.append(
+                MaterialUpload(
+                    role=role,
+                    filename=(upload.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
+                    data=data,
+                )
+            )
+        return read
 
     @router.post("/tests", response_model=TestResponse, status_code=status.HTTP_201_CREATED)
     async def create_test(
         name: str = Form(...),
         subject: str | None = Form(None),
-        model_answer: UploadFile = File(...),
-        manual: UploadFile = File(...),
+        criteria: UploadFile = File(...),
+        materials: list[UploadFile] = File(default_factory=list),
+        material_roles: list[str] = Form(default_factory=list),
         uow: SqlAlchemyUnitOfWork = uow_dependency,
     ) -> TestResponse:
+        """Register a test from its 採点基準PDF plus any optional materials.
+
+        ``criteria`` is the one required file (Issue #95 decision 1). **There
+        is no model-answer parameter**: that document does not exist in real
+        grading material, and requiring it is what made this screen unusable.
+        A model answer a reviewer happens to have goes in ``materials`` with
+        the ``reference`` role like any other extra file.
+
+        Registering does **not** make the test gradable. Points and rubrics
+        still have to come from somewhere, and extracting them from the
+        criteria PDF is separate work (Issue #95 decision A) -- callers must
+        say so rather than implying grading can start.
+        """
         if not name.strip():
             raise HTTPException(422, detail="name must not be empty")
         # Cheapest possible rejection, before a single upload byte is read:
         # an authenticated caller could otherwise pack most of the request
         # size limit into these two form fields, which are stored verbatim
         # and returned in full on every registration list response (Issue
-        # #16 review round 8; `Test.__post_init__` guarantees the same
-        # bound regardless of entry point, this just fails faster here).
+        # #16 review round 8; `Test.__post_init__` guarantees the same bound
+        # regardless of entry point, this just fails faster here).
         if len(name) > MAX_TEST_NAME_LENGTH:
             raise HTTPException(
                 422, detail=f"name must be at most {MAX_TEST_NAME_LENGTH} characters"
@@ -364,11 +503,21 @@ def build_test_registration_router(
             raise HTTPException(
                 422, detail=f"subject must be at most {MAX_TEST_SUBJECT_LENGTH} characters"
             )
+
+        uploads = await _read_materials(materials, material_roles)
         try:
-            model_answer_data = await _read_upload_within_limit(model_answer, limits.max_size_bytes)
-            manual_data = await _read_upload_within_limit(manual, limits.max_size_bytes)
+            criteria_data = await _read_upload_within_limit(criteria, limits.max_size_bytes)
         except PdfIntakeError as exc:
             raise _pdf_intake_http_exception(exc) from exc
+        all_materials = [
+            MaterialUpload(
+                role=MaterialRole.GRADING_CRITERIA,
+                filename=(criteria.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
+                data=criteria_data,
+            ),
+            *uploads,
+        ]
+
         try:
             # PDF parsing/validation and the DB+file write are synchronous,
             # blocking work that can take a while for a large PDF; running
@@ -377,30 +526,96 @@ def build_test_registration_router(
             # intake holding the same `lock`) takes (Issue #16 review, same
             # reasoning as api.app.create_app's own `_run_intake`). Offload
             # it to a worker thread instead.
-            test = await to_thread(
+            test, _ = await to_thread(
                 _register_test_locked,
                 uow,
                 name=name,
                 subject=subject,
-                model_answer_filename=(model_answer.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
-                model_answer_mime=model_answer.content_type,
-                model_answer_data=model_answer_data,
-                manual_filename=(manual.filename or "")[:MAX_ORIGINAL_FILENAME_LENGTH],
-                manual_mime=manual.content_type,
-                manual_data=manual_data,
+                materials=all_materials,
                 now=_now(),
             )
-        except PdfIntakeError as exc:
-            raise _pdf_intake_http_exception(exc) from exc
+        except (PdfIntakeError, MaterialIntakeError) as exc:
+            raise _intake_http_exception(exc) from exc
         except FinalizationError as exc:
             # The Test row was compensated away (register_test's own
             # handling) -- report a retryable failure rather than a 500
             # that suggests the id survived when it didn't.
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"could not save the registered PDFs to disk: {exc}",
+                detail=f"could not save the registered files to disk: {exc}",
             ) from exc
         return TestResponse.from_domain(test)
+
+    @router.get("/tests/{test_id}/materials", response_model=list[TestMaterialResponse])
+    def list_materials(
+        test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
+    ) -> list[TestMaterialResponse]:
+        """Which file became which role for this test.
+
+        The answer to "did my 採点基準 actually land as the 採点基準?", which
+        is only answerable after import if the name the reviewer chose the
+        file by survives -- so `original_filename` is carried through.
+        """
+        _get_test_or_404(uow, test_id)
+        return [
+            TestMaterialResponse.from_domain(material)
+            for material in uow.test_materials.list_for_test(test_id)
+        ]
+
+    @router.post(
+        "/tests/{test_id}/materials",
+        response_model=list[TestMaterialResponse],
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def add_materials(
+        test_id: str,
+        materials: list[UploadFile] = File(...),
+        material_roles: list[str] = Form(...),
+        uow: SqlAlchemyUnitOfWork = uow_dependency,
+    ) -> list[TestMaterialResponse]:
+        """Attach more materials to a test that already exists.
+
+        The weekly flow needs this in both directions: answers for an
+        already-registered test arrive as submissions, and a 添削資料 that
+        turns up later must be attachable without re-registering the test.
+
+        Re-sending a file already attached under the same role returns the
+        existing material instead of a second copy, so retrying a batch that
+        failed part-way through is safe (Issue #101: 成功した分は残る).
+        """
+        _get_test_or_404(uow, test_id)
+        uploads = await _read_materials(materials, material_roles)
+        try:
+            attached = await to_thread(
+                _attach_materials_locked,
+                uow,
+                test_id=test_id,
+                materials=uploads,
+                now=_now(),
+            )
+        except (PdfIntakeError, MaterialIntakeError) as exc:
+            raise _intake_http_exception(exc) from exc
+        except FinalizationError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"could not save the attached files to disk: {exc}",
+            ) from exc
+        return [TestMaterialResponse.from_domain(material) for material in attached]
+
+    @router.delete("/tests/{test_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_test(test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency) -> Response:
+        """Delete a test and everything under it.
+
+        Exposed because importing into the wrong test is an ordinary mistake,
+        not an exotic one: the reviewer finds out after the fact, and without
+        this the only remedy would be editing `app-data/` by hand. The bulk
+        delete itself already existed (`adapters.purge.purge_test`: rows
+        cascade, files are removed, and the deletion is written to the audit
+        log per business-rules §2 (11)) -- it simply had no HTTP route.
+        """
+        _get_test_or_404(uow, test_id)
+        purge_test(uow, store, test_id=test_id, occurred_at=_now(), detail="deleted via API")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @router.get("/test-registrations", response_model=list[TestResponse])
     def list_test_registrations(uow: SqlAlchemyUnitOfWork = uow_dependency) -> list[TestResponse]:
@@ -439,6 +654,35 @@ def build_test_registration_router(
                     ),
                 )
 
+            materials = uow.test_materials.list_for_test(test_id)
+            layout_source = _layout_source_material(materials)
+            criteria = _first_material(materials, MaterialRole.GRADING_CRITERIA)
+            if layout_source is None or criteria is None:
+                # Automatic candidate generation reads *two* documents: it
+                # takes the page geometry (the profile's `FormatSignature`,
+                # which submissions are later matched against) from a
+                # model-answer-shaped PDF, and only the rubric/score text
+                # from the criteria PDF. Issue #101 made the model answer
+                # optional because it does not exist in real material --
+                # which means this analysis frequently has nothing to derive
+                # a layout from.
+                #
+                # Deriving the layout from the answers instead is the right
+                # fix and is deliberately *not* done here (Issue #95
+                # decision 2, scheduled separately). Until it is, say so:
+                # the reviewer draws the regions by hand on the same screen,
+                # which works today. Silently analysing the criteria PDF's
+                # own geometry instead would produce a profile bound to a
+                # page layout no submission has, and every later crop would
+                # be taken from the wrong coordinates.
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=(
+                        "自動解析には、回答欄の位置が分かる参考資料 (模範解答PDF など) が"
+                        "必要です。この教材には登録されていません。"
+                        "領域は画面上で手動で追加してください。"
+                    ),
+                )
             try:
                 # Same `pdfium_lock` register_test uses above -- see
                 # build_test_registration_router's docstring. FastAPI runs
@@ -451,9 +695,17 @@ def build_test_registration_router(
                         pdf_engine,
                         test_id,
                         test_id,
-                        store.test_model_answer_pdf_path(test_id),
-                        store.test_manual_pdf_path(test_id),
+                        store.resolve_stored_path(layout_source.stored_path),
+                        store.resolve_stored_path(criteria.stored_path),
                     )
+            except FileNotFoundError as exc:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"test {test_id!r}'s registered files are missing on disk; "
+                        "re-attach them before analysing"
+                    ),
+                ) from exc
             except PdfIntakeError as exc:
                 raise _pdf_intake_http_exception(exc) from exc
             except DomainError as exc:

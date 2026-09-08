@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from auto_scoring.domain.dependency_graph import DependencyGraph
+from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     Annotation,
     AnswerImage,
@@ -34,6 +35,7 @@ from auto_scoring.domain.models import (
     SubmissionState,
     Test,
 )
+from auto_scoring.domain.test_material import TestMaterial
 
 
 class TestRepository(Protocol):
@@ -59,6 +61,23 @@ class TestRepository(Protocol):
         -- so two concurrent "complete registration" requests for the same
         test can't both observe ``draft`` and both report success. Returns
         whether this call won the race.
+        """
+        ...
+
+
+class TestMaterialRepository(Protocol):
+    """The role-tagged files registered for a test (Issue #101)."""
+
+    def add(self, material: TestMaterial) -> None: ...
+    def list_for_test(self, test_id: str) -> list[TestMaterial]: ...
+
+    def find_by_content(
+        self, test_id: str, *, role: MaterialRole, sha256: str
+    ) -> TestMaterial | None:
+        """The material already holding this content under this role, if any.
+
+        Lets a retry of a partially-failed batch recognize a write that
+        actually succeeded, instead of attaching a second copy of the file.
         """
         ...
 
@@ -388,6 +407,7 @@ class UnitOfWork(Protocol):
     """One transaction boundary over every repository."""
 
     tests: TestRepository
+    test_materials: TestMaterialRepository
     questions: QuestionRepository
     rubrics: RubricRepository
     submissions: SubmissionRepository

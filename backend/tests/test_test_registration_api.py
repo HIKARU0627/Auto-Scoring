@@ -13,6 +13,7 @@ Japanese text into a hand-built PDF (which would require a full CID font).
 
 from __future__ import annotations
 
+import shutil
 import threading
 from io import BytesIO
 from pathlib import Path
@@ -81,14 +82,22 @@ def _session_factory(data_root: Path) -> sessionmaker[Session]:
 
 
 def _register_test(client: TestClient, *, name: str = "国語 第1回") -> str:
+    """Register with the required criteria PDF plus a reference PDF.
+
+    The reference is what the profile tests below need: automatic candidate
+    generation takes its page geometry from a model-answer-shaped document,
+    and Issue #101 made that optional -- so a test registered without one
+    gets a 409 from `/profile/analyze` telling the reviewer to draw the
+    regions by hand (`test_analyze_without_a_reference_pdf_says_so`).
+    """
     response = client.post(
         "/tests",
         headers=_auth(),
-        data={"name": name, "subject": "国語"},
-        files={
-            "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-            "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-        },
+        data={"name": name, "subject": "国語", "material_roles": ["reference"]},
+        files=[
+            ("criteria", ("02_criteria.pdf", _pdf_bytes(), "application/pdf")),
+            ("materials", ("reference.pdf", _pdf_bytes(), "application/pdf")),
+        ],
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]  # type: ignore[no-any-return]
@@ -152,17 +161,14 @@ def _minimal_regions(*, label: str = "1", score_text: str = "5点") -> list[dict
 class TestCreateTest:
     def test_requires_auth(self, client: TestClient, data_root: Path) -> None:
         """Rejected by SubmissionUploadGateMiddleware at the ASGI boundary,
-        before FastAPI ever spools the two-PDF multipart body (Issue #16
+        before FastAPI ever spools the multipart body (Issue #16
         review) -- see test_submission_upload_gate.py for the unit-level
         proof this happens before the body is read.
         """
         response = client.post(
             "/tests",
             data={"name": "国語"},
-            files={
-                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-            },
+            files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
         )
         assert response.status_code == 401
 
@@ -196,10 +202,7 @@ class TestCreateTest:
             "/tests",
             headers=_auth(),
             data={"name": "不正PDF"},
-            files={
-                "model_answer": ("model-answer.pdf", b"not a pdf", "application/pdf"),
-                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-            },
+            files={"criteria": ("02_criteria.pdf", b"not a pdf", "application/pdf")},
         )
         assert response.status_code == 400
 
@@ -208,14 +211,7 @@ class TestCreateTest:
             "/tests",
             headers=_auth(),
             data={"name": "暗号化PDF"},
-            files={
-                "model_answer": (
-                    "model-answer.pdf",
-                    _encrypted_pdf_bytes(),
-                    "application/pdf",
-                ),
-                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-            },
+            files={"criteria": ("02_criteria.pdf", _encrypted_pdf_bytes(), "application/pdf")},
         )
         assert response.status_code == 400
 
@@ -224,10 +220,7 @@ class TestCreateTest:
             "/tests",
             headers=_auth(),
             data={"name": "   "},
-            files={
-                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-            },
+            files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
         )
         assert response.status_code == 422
 
@@ -241,10 +234,7 @@ class TestCreateTest:
             "/tests",
             headers=_auth(),
             data={"name": "国" * 201},
-            files={
-                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-            },
+            files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
         )
         assert response.status_code == 422
 
@@ -253,17 +243,14 @@ class TestCreateTest:
             "/tests",
             headers=_auth(),
             data={"name": "国語", "subject": "国" * 201},
-            files={
-                "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-                "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-            },
+            files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
         )
         assert response.status_code == 422
 
     def test_does_not_413_when_two_within_limit_pdfs_exceed_one_files_worth(
         self, client: TestClient
     ) -> None:
-        """`POST /tests` carries two independently size-limited PDFs in one
+        """`POST /tests` can carry several independently size-limited files in one
         multipart body. The ASGI-level `MaxBodySizeMiddleware` must be sized
         for *two* files, not one -- each file here is within the 5 MiB
         fixture limit on its own, but their combined body exceeds a
@@ -279,13 +266,115 @@ class TestCreateTest:
         response = client.post(
             "/tests",
             headers=_auth(),
-            data={"name": "サイズ確認"},
-            files={
-                "model_answer": ("model-answer.pdf", padded, "application/pdf"),
-                "manual": ("manual.pdf", padded, "application/pdf"),
-            },
+            data={"name": "サイズ確認", "material_roles": ["reference"]},
+            files=[
+                ("criteria", ("02_criteria.pdf", padded, "application/pdf")),
+                ("materials", ("reference.pdf", padded, "application/pdf")),
+            ],
+            # `material_roles` pairs positionally with `materials`.
         )
         assert response.status_code != 413
+
+
+class TestMaterials:
+    """Issue #101: what was registered, under which role, and undoing it."""
+
+    def test_a_test_registers_without_a_model_answer(self, client: TestClient) -> None:
+        """Acceptance criterion 3. `criteria` is the only required file."""
+        response = client.post(
+            "/tests",
+            headers=_auth(),
+            data={"name": "模範解答なし"},
+            files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
+        )
+        assert response.status_code == 201, response.text
+        materials = client.get(f"/tests/{response.json()['id']}/materials", headers=_auth()).json()
+        assert [material["role"] for material in materials] == ["grading_criteria"]
+
+    def test_materials_report_the_reviewers_own_file_name(self, client: TestClient) -> None:
+        """ "Which of my files became the 採点基準?" has to stay answerable
+        after import, so the name the reviewer chose the file by is kept.
+        """
+        test_id = _register_test(client)
+        materials = client.get(f"/tests/{test_id}/materials", headers=_auth()).json()
+        by_role = {material["role"]: material for material in materials}
+        assert by_role["grading_criteria"]["original_filename"] == "02_criteria.pdf"
+        assert by_role["reference"]["original_filename"] == "reference.pdf"
+
+    def test_materials_can_be_attached_later(self, client: TestClient) -> None:
+        """The weekly flow needs this: a 添削資料 that turns up after the test
+        was registered must be attachable without re-registering it.
+        """
+        test_id = _register_test(client)
+        response = client.post(
+            f"/tests/{test_id}/materials",
+            headers=_auth(),
+            data={"material_roles": ["annotation_sample"]},
+            files=[("materials", ("04_1_sample.pdf", _pdf_bytes(), "application/pdf"))],
+        )
+        assert response.status_code == 201, response.text
+        roles = [
+            material["role"]
+            for material in client.get(f"/tests/{test_id}/materials", headers=_auth()).json()
+        ]
+        assert sorted(roles) == ["annotation_sample", "grading_criteria", "reference"]
+
+    def test_mismatched_material_and_role_counts_are_refused(self, client: TestClient) -> None:
+        """The two lists pair positionally; a mismatch would shift every role
+        by one and attach files under roles nobody chose.
+        """
+        test_id = _register_test(client)
+        response = client.post(
+            f"/tests/{test_id}/materials",
+            headers=_auth(),
+            data={"material_roles": ["annotation_sample", "reference"]},
+            files=[("materials", ("04_1_sample.pdf", _pdf_bytes(), "application/pdf"))],
+        )
+        assert response.status_code == 422
+
+    def test_an_unknown_role_is_refused(self, client: TestClient) -> None:
+        test_id = _register_test(client)
+        response = client.post(
+            f"/tests/{test_id}/materials",
+            headers=_auth(),
+            data={"material_roles": ["not-a-role"]},
+            files=[("materials", ("x.pdf", _pdf_bytes(), "application/pdf"))],
+        )
+        assert response.status_code == 422
+
+    def test_a_test_can_be_deleted(self, client: TestClient) -> None:
+        """Importing into the wrong test is an ordinary mistake. Without a
+        route for the delete that already existed, the only remedy would be
+        editing `app-data/` by hand.
+        """
+        test_id = _register_test(client)
+        assert client.delete(f"/tests/{test_id}", headers=_auth()).status_code == 204
+        assert client.get(f"/tests/{test_id}", headers=_auth()).status_code == 404
+
+    def test_deleting_a_test_that_is_not_there_is_a_404(self, client: TestClient) -> None:
+        assert client.delete("/tests/nope", headers=_auth()).status_code == 404
+
+    def test_analyze_without_a_reference_pdf_says_what_to_do_instead(
+        self, client: TestClient
+    ) -> None:
+        """Automatic candidate generation reads the page layout from a
+        model-answer-shaped PDF, which Issue #101 made optional -- so most
+        tests now have none.
+
+        It must say so, not fall back to the criteria PDF's own geometry: a
+        profile bound to a page layout no submission has would crop every
+        later answer from the wrong coordinates, silently.
+        """
+        created = client.post(
+            "/tests",
+            headers=_auth(),
+            data={"name": "参考資料なし"},
+            files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
+        )
+        test_id = created.json()["id"]
+        response = client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        assert response.status_code == 409
+        assert "手動" in response.json()["detail"]
 
 
 class TestProfileReviewAndConfirm:
@@ -796,12 +885,12 @@ def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
 ) -> None:
     """`create_app()` runs a startup repair sweep (api/app.py) for exactly
     the case a caught `FinalizationError` can't cover: a `Test` row
-    committed successfully in a *previous* process, one of whose two PDFs
-    never actually reached disk before that process died. Unlike a
+    committed successfully in a *previous* process, whose grading-criteria
+    file never actually reached disk before that process died. Unlike a
     `Submission`, a `Test` has no `error` state to move into -- the only
     usable recovery is removing the row outright (Issue #16 review round
-    4). Simulate the crash by deleting a PDF after a normal successful
-    registration, then create a fresh app instance against the same
+    4). Simulate the crash by deleting the criteria file after a normal
+    successful registration, then create a fresh app instance against the same
     data_root (as a restart would) and confirm the sweep removes the
     now-unusable draft before the app ever serves a request.
 
@@ -820,7 +909,10 @@ def test_starting_the_app_repairs_a_draft_test_left_incomplete_by_a_prior_crash(
     with TestClient(first_app) as first_client:
         test_id = _register_test(first_client)
 
-    LocalFileStore(data_root).test_manual_pdf_path(test_id).unlink()
+    # Everything the registration wrote except its marker -- the marker is
+    # what tells the sweep this row went through `register_test` at all, and
+    # a crash between the DB commit and the file writes leaves exactly this.
+    shutil.rmtree(LocalFileStore(data_root).test_dir(test_id) / "materials")
 
     restarted_app = create_app(
         api_token=_TOKEN,

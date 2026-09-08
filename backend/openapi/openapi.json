@@ -203,6 +203,31 @@
         "title": "ApproveReviewRequest",
         "type": "object"
       },
+      "Body_add_materials_tests__test_id__materials_post": {
+        "properties": {
+          "material_roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Material Roles",
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Materials",
+            "type": "array"
+          }
+        },
+        "required": [
+          "materials",
+          "material_roles"
+        ],
+        "title": "Body_add_materials_tests__test_id__materials_post",
+        "type": "object"
+      },
       "Body_create_submission_tests__test_id__submissions_post": {
         "properties": {
           "file": {
@@ -231,15 +256,25 @@
       },
       "Body_create_test_tests_post": {
         "properties": {
-          "manual": {
+          "criteria": {
             "contentMediaType": "application/octet-stream",
-            "title": "Manual",
+            "title": "Criteria",
             "type": "string"
           },
-          "model_answer": {
-            "contentMediaType": "application/octet-stream",
-            "title": "Model Answer",
-            "type": "string"
+          "material_roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Material Roles",
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "contentMediaType": "application/octet-stream",
+              "type": "string"
+            },
+            "title": "Materials",
+            "type": "array"
           },
           "name": {
             "title": "Name",
@@ -259,8 +294,7 @@
         },
         "required": [
           "name",
-          "model_answer",
-          "manual"
+          "criteria"
         ],
         "title": "Body_create_test_tests_post",
         "type": "object"
@@ -971,6 +1005,19 @@
         ],
         "title": "ManualRecognitionRequest",
         "type": "object"
+      },
+      "MaterialRole": {
+        "description": "What one file is, once a human has confirmed it.\n\nMirrors the material kinds Issue #95 recorded for the real batches. Note\nwhat is *not* here: there is no \"model answer\" role. The model-answer PDF\nwas dropped as a required input (Issue #95 decision 1) because it does\nnot exist in the real material -- a model answer that happens to be on\nhand is imported as :attr:`REFERENCE`.",
+        "enum": [
+          "student_answer",
+          "grading_criteria",
+          "annotation_resource",
+          "annotation_sample",
+          "reference",
+          "ignore"
+        ],
+        "title": "MaterialRole",
+        "type": "string"
       },
       "NormalizedBBoxModel": {
         "properties": {
@@ -1703,6 +1750,56 @@
           "created_at"
         ],
         "title": "SubmissionResponse",
+        "type": "object"
+      },
+      "TestMaterialResponse": {
+        "description": "One registered file, and the role it was registered under.\n\n``original_filename`` is the name the reviewer chose the file by. It is\ncarried purely so \"which of my files became the \u63a1\u70b9\u57fa\u6e96?\" stays\nanswerable after import; nothing matches on it, because names in real\nmaterial are not reliable evidence (`domain.intake_template`).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "role": {
+            "$ref": "#/components/schemas/MaterialRole"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "test_id",
+          "role",
+          "sha256",
+          "size_bytes",
+          "created_at"
+        ],
+        "title": "TestMaterialResponse",
         "type": "object"
       },
       "TestResponse": {
@@ -3217,6 +3314,7 @@
         "summary": "List Tests"
       },
       "post": {
+        "description": "Register a test from its \u63a1\u70b9\u57fa\u6e96PDF plus any optional materials.\n\n``criteria`` is the one required file (Issue #95 decision 1). **There\nis no model-answer parameter**: that document does not exist in real\ngrading material, and requiring it is what made this screen unusable.\nA model answer a reviewer happens to have goes in ``materials`` with\nthe ``reference`` role like any other extra file.\n\nRegistering does **not** make the test gradable. Points and rubrics\nstill have to come from somewhere, and extracting them from the\ncriteria PDF is separate work (Issue #95 decision A) -- callers must\nsay so rather than implying grading can start.",
         "operationId": "create_test_tests_post",
         "requestBody": {
           "content": {
@@ -3262,6 +3360,45 @@
       }
     },
     "/tests/{test_id}": {
+      "delete": {
+        "description": "Delete a test and everything under it.\n\nExposed because importing into the wrong test is an ordinary mistake,\nnot an exotic one: the reviewer finds out after the fact, and without\nthis the only remedy would be editing `app-data/` by hand. The bulk\ndelete itself already existed (`adapters.purge.purge_test`: rows\ncascade, files are removed, and the deletion is written to the audit\nlog per business-rules \u00a72 (11)) -- it simply had no HTTP route.",
+        "operationId": "delete_test_tests__test_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Test",
+        "tags": [
+          "test-registration"
+        ]
+      },
       "get": {
         "operationId": "get_test_tests__test_id__get",
         "parameters": [
@@ -3564,6 +3701,118 @@
         "summary": "List Versions",
         "tags": [
           "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/materials": {
+      "get": {
+        "description": "Which file became which role for this test.\n\nThe answer to \"did my \u63a1\u70b9\u57fa\u6e96 actually land as the \u63a1\u70b9\u57fa\u6e96?\", which\nis only answerable after import if the name the reviewer chose the\nfile by survives -- so `original_filename` is carried through.",
+        "operationId": "list_materials_tests__test_id__materials_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestMaterialResponse"
+                  },
+                  "title": "Response List Materials Tests  Test Id  Materials Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Materials",
+        "tags": [
+          "test-registration"
+        ]
+      },
+      "post": {
+        "description": "Attach more materials to a test that already exists.\n\nThe weekly flow needs this in both directions: answers for an\nalready-registered test arrive as submissions, and a \u6dfb\u524a\u8cc7\u6599 that\nturns up later must be attachable without re-registering the test.\n\nRe-sending a file already attached under the same role returns the\nexisting material instead of a second copy, so retrying a batch that\nfailed part-way through is safe (Issue #101: \u6210\u529f\u3057\u305f\u5206\u306f\u6b8b\u308b).",
+        "operationId": "add_materials_tests__test_id__materials_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_materials_tests__test_id__materials_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestMaterialResponse"
+                  },
+                  "title": "Response Add Materials Tests  Test Id  Materials Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add Materials",
+        "tags": [
+          "test-registration"
         ]
       }
     },

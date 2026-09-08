@@ -35,6 +35,7 @@ from auto_scoring.db.orm import (
     RubricCriterionRow,
     RubricRow,
     SubmissionRow,
+    TestMaterialRow,
     TestRow,
 )
 from auto_scoring.domain.dependency_graph import (
@@ -42,6 +43,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyGraphError,
     DependencyGraphStatus,
 )
+from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     Annotation,
     AnswerImage,
@@ -62,6 +64,7 @@ from auto_scoring.domain.models import (
     ensure_job_transition,
     ensure_submission_transition,
 )
+from auto_scoring.domain.test_material import TestMaterial
 
 
 class SqlAlchemyTestRepository:
@@ -99,6 +102,44 @@ class SqlAlchemyTestRepository:
         if cached is not None:
             self._session.refresh(cached)
         return result.rowcount == 1
+
+
+class SqlAlchemyTestMaterialRepository:
+    """The role-tagged files registered for a test (Issue #101)."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, material: TestMaterial) -> None:
+        self._session.add(m.test_material_to_row(material))
+        self._session.flush()
+
+    def list_for_test(self, test_id: str) -> list[TestMaterial]:
+        rows = self._session.scalars(
+            select(TestMaterialRow)
+            .where(TestMaterialRow.test_id == test_id)
+            .order_by(TestMaterialRow.created_at, TestMaterialRow.id)
+        )
+        return [m.test_material_from_row(row) for row in rows]
+
+    def find_by_content(
+        self, test_id: str, *, role: MaterialRole, sha256: str
+    ) -> TestMaterial | None:
+        """The material already holding this exact content under this role.
+
+        What makes retrying a partially-failed batch safe: the intake screen
+        re-runs only the rows that failed, but a row can fail *after* its
+        write committed (a dropped response), so the retry must recognize its
+        own earlier success instead of attaching a second copy.
+        """
+        row = self._session.scalars(
+            select(TestMaterialRow).where(
+                TestMaterialRow.test_id == test_id,
+                TestMaterialRow.role == role,
+                TestMaterialRow.sha256 == sha256,
+            )
+        ).first()
+        return m.test_material_from_row(row) if row is not None else None
 
 
 class SqlAlchemyQuestionRepository:

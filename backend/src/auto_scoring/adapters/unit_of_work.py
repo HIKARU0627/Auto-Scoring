@@ -30,6 +30,7 @@ from auto_scoring.adapters.sqlalchemy_repositories import (
     SqlAlchemyReviewRepository,
     SqlAlchemyRubricRepository,
     SqlAlchemySubmissionRepository,
+    SqlAlchemyTestMaterialRepository,
     SqlAlchemyTestRepository,
 )
 
@@ -38,6 +39,7 @@ class SqlAlchemyUnitOfWork:
     """Concrete :class:`auto_scoring.domain.repositories.UnitOfWork`."""
 
     tests: SqlAlchemyTestRepository
+    test_materials: SqlAlchemyTestMaterialRepository
     questions: SqlAlchemyQuestionRepository
     rubrics: SqlAlchemyRubricRepository
     submissions: SqlAlchemySubmissionRepository
@@ -58,6 +60,7 @@ class SqlAlchemyUnitOfWork:
         self._session = self._session_factory()
         session = self._session
         self.tests = SqlAlchemyTestRepository(session)
+        self.test_materials = SqlAlchemyTestMaterialRepository(session)
         self.questions = SqlAlchemyQuestionRepository(session)
         self.rubrics = SqlAlchemyRubricRepository(session)
         self.submissions = SqlAlchemySubmissionRepository(session)

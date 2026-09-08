@@ -61,6 +61,7 @@ CASCADE_REACHABLE_TABLES = {
     "rubric_criteria",
     "rubrics",
     "submissions",
+    "test_materials",
     "tests",
 }
 
