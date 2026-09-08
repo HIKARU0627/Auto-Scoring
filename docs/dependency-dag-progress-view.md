@@ -1,5 +1,9 @@
 # 設問依存DAGによるAI処理の進捗表示
 
+> **Issue #101 で画面が変わった。** 「答案取込画面」は 資料取込画面 (`/intake`) に
+> 統合された。読み書きするものは変わっていない。
+> 詳細は [`intake-and-settings.md`](./intake-and-settings.md)。
+
 GitHub Issue [#64](https://github.com/HIKARU0627/Auto-Scoring/issues/64)（親
 [#3](https://github.com/HIKARU0627/Auto-Scoring/issues/3)）。答案のAI処理中に
 **何が今動いていて、何が何待ちで、次に何が始まるか**を、添削レビュー画面上の
