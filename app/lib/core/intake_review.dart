@@ -204,7 +204,7 @@ class IntakeGroupState {
     required this.key,
     required this.name,
     required this.files,
-    required this.missingRequiredRolesIfNew,
+    required this.requiredRoles,
     this.targetKind = IntakeTargetKind.create,
     this.targetTestId,
   });
@@ -216,9 +216,16 @@ class IntakeGroupState {
 
   final List<IntakeFileState> files;
 
-  /// What the template's required roles would find missing, computed by the
-  /// sidecar under the assumption this becomes a new test.
-  final List<MaterialRole> missingRequiredRolesIfNew;
+  /// Every role the template marks required -- **the whole set, not what was
+  /// missing when the plan was built.**
+  ///
+  /// The plan's own "missing" list is a snapshot of the moment it was
+  /// computed, and this is an editing screen. A group that had its criteria at
+  /// plan time and has it excluded now is missing it, and a snapshot cannot
+  /// say so: the role was never in that list to begin with (review round 4,
+  /// P2-1). Holding the requirement rather than the shortfall makes the check
+  /// answerable at any point.
+  final List<MaterialRole> requiredRoles;
 
   final IntakeTargetKind targetKind;
   final String? targetTestId;
@@ -226,7 +233,13 @@ class IntakeGroupState {
   List<IntakeFileState> get includedFiles =>
       files.where((file) => !file.excluded).toList();
 
-  /// Which required roles actually block this group.
+  /// Which required roles block this group **right now**.
+  ///
+  /// Recomputed from [requiredRoles] against the files currently included, so
+  /// excluding a file on the confirmation screen is noticed. Computing it from
+  /// the plan's shortfall instead meant an exclusion made after planning was
+  /// invisible, and the batch went to the completion screen and failed there
+  /// rather than staying on the screen that could fix it.
   ///
   /// Empty for a group bound to an existing test: the criteria a new test
   /// would need are already attached to the test being added to. Advisory
@@ -235,9 +248,7 @@ class IntakeGroupState {
   List<MaterialRole> get unmetRequirements {
     if (targetKind != IntakeTargetKind.create) return const [];
     final present = includedFiles.map((file) => file.effectiveRole).toSet();
-    return missingRequiredRolesIfNew
-        .where((role) => !present.contains(role))
-        .toList();
+    return requiredRoles.where((role) => !present.contains(role)).toList();
   }
 
   /// Answers still waiting to be routed, when this group routes individually.
@@ -300,7 +311,7 @@ class IntakeGroupState {
     key: key,
     name: name ?? this.name,
     files: files ?? this.files,
-    missingRequiredRolesIfNew: missingRequiredRolesIfNew,
+    requiredRoles: requiredRoles,
     targetKind: targetKind ?? this.targetKind,
     targetTestId: clearTargetTestId
         ? null
@@ -498,9 +509,14 @@ class IntakeReviewState {
 /// The scan is needed because the plan deliberately carries no absolute paths
 /// -- it was built from a listing, and the files themselves never left the
 /// machine.
+///
+/// ``requiredRoles`` comes from the template the reviewer selected, not from
+/// the plan: the plan reports what was *missing* when it was computed, which
+/// stops being true the moment they exclude something here.
 IntakeReviewState buildReviewState({
   required IntakePlanResponse plan,
   required ScannedFolder folder,
+  required List<MaterialRole> requiredRoles,
   double? unitCost,
 }) {
   final byPath = {
@@ -513,7 +529,7 @@ IntakeReviewState buildReviewState({
         IntakeGroupState(
           key: group.key,
           name: group.suggestedName,
-          missingRequiredRolesIfNew: group.missingRequiredRolesIfNew.toList(),
+          requiredRoles: requiredRoles,
           files: [
             for (final file in group.files)
               IntakeFileState(

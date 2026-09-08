@@ -82,12 +82,30 @@ void main() {
       ),
   );
 
+  IntakeRuleModel requiredRule(String pattern, MaterialRole role) =>
+      IntakeRuleModel(
+        (builder) => builder
+          ..scope = RuleScope.file
+          ..pattern = pattern
+          ..role = role
+          ..requirement = Requirement.required_,
+      );
+
+  /// The default template, **with its required rules**.
+  ///
+  /// The screen reads the required roles from here rather than from the plan:
+  /// the plan reports what was missing when it was computed, and this screen
+  /// lets the reviewer exclude a file afterwards (review round 4, P2-1). A
+  /// template with no rules would make every requirement check vacuous.
   IntakeTemplateModel template() => IntakeTemplateModel(
     (builder) => builder
       ..id = 'serial-number-prefix'
       ..name = '連番の接頭辞 (既定)'
       ..splitChildDirectories = true
-      ..rules.replace(const <IntakeRuleModel>[]),
+      ..rules.replace([
+        requiredRule('01_*', MaterialRole.studentAnswer),
+        requiredRule('02_*', MaterialRole.gradingCriteria),
+      ]),
   );
 
   ClassificationAvailabilityResponse available({bool yes = true}) =>
@@ -1767,6 +1785,233 @@ void main() {
             .onPressed,
         isNotNull,
         reason: '再課金防止のフィルタが人の操作にまで効いていると、ここで止まる',
+      );
+    });
+  });
+
+  group('コードレビュー4回目で見つかった穴', () {
+    testWidgets('幅390pxでも取込ボタンが画面内にある [P2-2]', (tester) async {
+      // A phone-width window. `Row` neither shrinks nor wraps, so the import
+      // button sat 80px off-screen with no horizontal scroll to reach it.
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final withStray = plan([
+        ...ruleMatched,
+        planned('subject-a/stray.pdf', need: ClassificationNeed.pending),
+      ], pending: 1);
+      await openReview(
+        tester,
+        withPlan: withStray,
+        paths: const [
+          'subject-a/01_answers.pdf',
+          'subject-a/02_criteria.pdf',
+          'subject-a/stray.pdf',
+        ],
+        dependencies: importing(withPlan: withStray),
+      );
+
+      // Both controls are rendered, and both are inside the window.
+      expect(
+        find.byKey(const Key('intake-run-classification')),
+        findsOneWidget,
+      );
+      final importRect = tester.getRect(find.byKey(const Key('intake-import')));
+      expect(
+        importRect.right,
+        lessThanOrEqualTo(390.0),
+        reason: '取込ボタンが画面外に出ている',
+      );
+      expect(importRect.left, greaterThanOrEqualTo(0.0));
+      // And nothing overflowed while laying it out.
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('確認画面で採点基準を除外すると、取り込めなくなる [P2-1]', (tester) async {
+      // The plan reported nothing missing, because at plan time nothing was.
+      // Excluding it here has to be noticed on this screen -- not discovered
+      // by the import failing on the completion screen, which cannot fix it.
+      await openReview(
+        tester,
+        withPlan: plan(ruleMatched),
+        paths: const ['subject-a/01_answers.pdf', 'subject-a/02_criteria.pdf'],
+        dependencies: importing(withPlan: plan(ruleMatched)),
+      );
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('intake-include-subject-a/02_criteria.pdf')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('intake-unmet-subject-a')), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+    });
+
+    testWidgets('絞り込んだテストが消えても落ちない（同型の探索で発見）', (tester) async {
+      // `_narrowedTestIds` is a selection that outlives the list it points
+      // into: the registered tests are re-read on returning from settings and
+      // at the start of every batch. With the group routing answers
+      // individually, a chosen test that has since been deleted used to reach
+      // `_attributionCandidates.single` on an empty list.
+      var listCalls = 0;
+      final answersOnly = plan([
+        planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer),
+      ]);
+      await pumpAppAt(
+        tester,
+        AppRoutes.intake,
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          classificationAvailability: () async => available(),
+          listTests: () async {
+            listCalls++;
+            // Gone once the settings round-trip re-reads the list.
+            return listCalls >= 3
+                ? const <TestSummary>[]
+                : [
+                    TestSummary(
+                      (builder) => builder
+                        ..id = 'test-a'
+                        ..name = '国語',
+                    ),
+                  ];
+          },
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => answersOnly,
+        ),
+        overrides: [
+          chooseFolderProvider.overrideWithValue(() async => '/tmp/batch'),
+          scanFolderProvider.overrideWithValue(
+            (_) async => folder(const ['subject-a/01_answers.pdf']),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-choose-folder')));
+      await tester.pumpAndSettle();
+
+      // Route answers individually, and narrow to the one registered test.
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('答案ごとに登録済みのテストへ振り分ける').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-narrow-test-a')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('すべての答案を「国語」に振り分ける'), findsOneWidget);
+
+      // Going to settings and back re-reads the list; the chosen test is gone.
+      await tester.tap(find.byKey(const Key('intake-open-settings')));
+      await tester.pumpAndSettle();
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('intake-narrow-test-a')), findsNothing);
+      // The group's target is reset rather than left pointing at something
+      // that no longer exists, so the batch cannot be imported until the
+      // reviewer chooses again.
+      expect(find.byKey(const Key('intake-attribute-subject-a')), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+      );
+    });
+
+    testWidgets('紐づけ先のテストが消えたら、取り込み先を選び直させる', (tester) async {
+      // The other half of the same shape: a group bound to a registered test
+      // that has since gone used to still report itself ready, and failed at
+      // import time with a dead id -- on the completion screen, which cannot
+      // fix it.
+      var listCalls = 0;
+      final answersOnly = plan([
+        planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer),
+      ]);
+      await pumpAppAt(
+        tester,
+        AppRoutes.intake,
+        dependencies: AppDependencies(
+          listIntakeTemplates: () async => [template()],
+          intakeCost: () async => null,
+          classificationAvailability: () async => available(),
+          listTests: () async {
+            listCalls++;
+            return listCalls >= 3
+                ? [
+                    TestSummary(
+                      (builder) => builder
+                        ..id = 'test-b'
+                        ..name = '数学',
+                    ),
+                  ]
+                : [
+                    TestSummary(
+                      (builder) => builder
+                        ..id = 'test-a'
+                        ..name = '国語',
+                    ),
+                  ];
+          },
+          planIntake:
+              ({
+                required templateId,
+                required rootName,
+                required files,
+              }) async => answersOnly,
+        ),
+        overrides: [
+          chooseFolderProvider.overrideWithValue(() async => '/tmp/batch'),
+          scanFolderProvider.overrideWithValue(
+            (_) async => folder(const ['subject-a/01_answers.pdf']),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('intake-choose-folder')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('登録済み: 国語').last);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(find.byKey(const Key('intake-open-settings')));
+      await tester.pumpAndSettle();
+      tester.state<NavigatorState>(find.byType(Navigator)).pop();
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('intake-import')))
+            .onPressed,
+        isNull,
+        reason: '消えたテストに紐づいたまま取り込めてはいけない',
       );
     });
   });

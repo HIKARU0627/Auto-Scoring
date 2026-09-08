@@ -51,7 +51,7 @@ void main() {
     key: 'subject-a',
     name: name,
     files: files,
-    missingRequiredRolesIfNew: missing,
+    requiredRoles: missing,
     targetKind: kind,
     targetTestId: testId,
   );
@@ -357,6 +357,7 @@ void main() {
       final review = buildReviewState(
         plan: plan,
         folder: const ScannedFolder(name: 'subject-a', entries: []),
+        requiredRoles: const [],
       );
 
       expect(review.groups.single.files.single.excluded, isTrue);
@@ -546,6 +547,99 @@ void main() {
 
       expect(review.groups.single.unroutedAnswers, hasLength(1));
       expect(review.answersNeedingAttribution, isEmpty);
+    });
+  });
+
+  group('コードレビュー4回目で見つかった穴', () {
+    test('確認画面で採点基準を除外したら、不足として検出する [P2-1]', () {
+      // The plan said nothing was missing, because at plan time nothing was.
+      // The confirmation screen is an editing screen, so the check has to run
+      // against what is included *now*.
+      final withCriteria = buildGroup(
+        [
+          file(ruleRole: MaterialRole.studentAnswer),
+          file(
+            path: 'subject-a/02_criteria.pdf',
+            ruleRole: MaterialRole.gradingCriteria,
+          ),
+        ],
+        missing: const [
+          MaterialRole.studentAnswer,
+          MaterialRole.gradingCriteria,
+        ],
+      );
+      expect(state([withCriteria]).canImport, isTrue);
+
+      final withoutCriteria = state([withCriteria]).withFile(
+        'subject-a/02_criteria.pdf',
+        (current) => current.copyWith(excluded: true),
+      );
+
+      expect(withoutCriteria.groups.single.unmetRequirements, [
+        MaterialRole.gradingCriteria,
+      ]);
+      expect(withoutCriteria.canImport, isFalse);
+    });
+
+    test('除外を戻せば、また取り込める', () {
+      final review = state([
+        buildGroup(
+          [
+            file(ruleRole: MaterialRole.studentAnswer),
+            file(
+              path: 'subject-a/02_criteria.pdf',
+              ruleRole: MaterialRole.gradingCriteria,
+            ),
+          ],
+          missing: const [
+            MaterialRole.studentAnswer,
+            MaterialRole.gradingCriteria,
+          ],
+        ),
+      ]);
+      final excluded = review.withFile(
+        'subject-a/02_criteria.pdf',
+        (current) => current.copyWith(excluded: true),
+      );
+      final restored = excluded.withFile(
+        'subject-a/02_criteria.pdf',
+        (current) => current.copyWith(excluded: false),
+      );
+
+      expect(restored.groups.single.unmetRequirements, isEmpty);
+      expect(restored.canImport, isTrue);
+    });
+
+    test('役割を変えて必須役割が欠けた場合も検出する', () {
+      // Not only exclusion: re-labelling the criteria as something else
+      // removes it just as effectively.
+      final review =
+          state([
+            buildGroup(
+              [
+                file(ruleRole: MaterialRole.studentAnswer),
+                file(
+                  path: 'subject-a/02_criteria.pdf',
+                  ruleRole: MaterialRole.gradingCriteria,
+                ),
+              ],
+              missing: const [
+                MaterialRole.studentAnswer,
+                MaterialRole.gradingCriteria,
+              ],
+            ),
+          ]).withFile(
+            'subject-a/02_criteria.pdf',
+            (current) => current.copyWith(
+              humanRole: MaterialRole.reference,
+              proposalConfirmed: true,
+            ),
+          );
+
+      expect(review.groups.single.unmetRequirements, [
+        MaterialRole.gradingCriteria,
+      ]);
+      expect(review.canImport, isFalse);
     });
   });
 }

@@ -159,6 +159,58 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     _loadSettings();
   }
 
+  /// Replace the registered-test list and drop anything that pointed into the
+  /// old one.
+  ///
+  /// **Every path that replaces `_existingTests` goes through here.** A
+  /// narrowing, or an answer's routing, is a selection that can outlive the
+  /// list it points into -- the list is re-read at the start of every batch
+  /// and on returning from settings. Pruning in only one of those places
+  /// leaves the other broken, which is the shape this review round was about.
+  ///
+  /// Caller holds the `setState`.
+  void _applyExistingTests(List<TestSummary> tests) {
+    _existingTests = tests;
+    final known = tests.map((test) => test.id).toSet();
+    final stale = _narrowedTestIds.where((id) => !known.contains(id)).toList();
+    if (stale.isNotEmpty) {
+      _narrowedTestIds.removeAll(stale);
+      // An attribution run issued against the old list is answering a question
+      // that no longer exists.
+      _attributionGeneration++;
+      _dropRoutingOutsideCandidates();
+    }
+
+    // A group's *target* points into the same list. Left alone it produces two
+    // failures, both found by sweeping for values held across a state change:
+    //
+    // * a group bound to a test that has since gone still reports itself ready
+    //   and fails at import time with a dead id -- on the completion screen,
+    //   which cannot fix it;
+    // * a group routing answers individually keeps that mode while the option
+    //   that offers it disappears with the last registered test, so the
+    //   dropdown holds a value with no matching item and asserts.
+    //
+    // Reset to "not chosen" so the reviewer picks again. Losing a choice is
+    // worth saying out loud; silently keeping an impossible one is not.
+    _review = _review?.copyWith(
+      groups: [
+        for (final group in _review!.groups)
+          if (group.targetKind == IntakeTargetKind.existing &&
+              !known.contains(group.targetTestId))
+            group.copyWith(
+              targetKind: IntakeTargetKind.unassigned,
+              clearTargetTestId: true,
+            )
+          else if (group.targetKind == IntakeTargetKind.perAnswer &&
+              tests.isEmpty)
+            group.copyWith(targetKind: IntakeTargetKind.unassigned)
+          else
+            group,
+      ],
+    );
+  }
+
   /// Re-read the registered tests, without failing the caller.
   ///
   /// A stale list only costs the reviewer a target they could have picked; a
@@ -167,7 +219,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     try {
       final tests = await _dependencies.listTests();
       if (!mounted) return;
-      setState(() => _existingTests = tests);
+      setState(() => _applyExistingTests(tests));
     } on SidecarApiException {
       // Keep whatever list we had.
     }
@@ -181,6 +233,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       final availability = await _dependencies.classificationAvailability();
       if (!mounted) return;
       setState(() {
+        _applyExistingTests(tests);
         _templates = templates;
         // Keep the reviewer's own choice across a reload; only fall back to
         // the first template when what they had picked is gone.
@@ -188,7 +241,6 @@ class _IntakePageState extends ConsumerState<IntakePage> {
             ? _templateId
             : (templates.isEmpty ? null : templates.first.id);
         _unitCost = cost;
-        _existingTests = tests;
         _availability = availability;
         // A plan already on screen was priced with the old figure. `null` is
         // a real new value here ("the reviewer cleared the price"), not an
@@ -202,6 +254,24 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       if (!mounted) return;
       setState(() => _error = error.message);
     }
+  }
+
+  /// The roles a template marks required, in rule order and de-duplicated.
+  ///
+  /// Taken from the template the reviewer selected rather than from the plan:
+  /// the plan reports what was *missing* when it was computed, and this screen
+  /// lets them exclude a file afterwards.
+  List<MaterialRole> _requiredRolesOf(String templateId) {
+    final template = _templates.where((entry) => entry.id == templateId);
+    if (template.isEmpty) return const [];
+    final roles = <MaterialRole>[];
+    for (final rule in template.first.rules) {
+      if (rule.requirement == Requirement.required_ &&
+          !roles.contains(rule.role)) {
+        roles.add(rule.role);
+      }
+    }
+    return roles;
   }
 
   Future<void> _pickFolder() async {
@@ -244,6 +314,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         _review = buildReviewState(
           plan: plan,
           folder: folder,
+          requiredRoles: _requiredRolesOf(templateId),
           unitCost: _unitCost,
         );
         _step = _Step.review;
@@ -357,7 +428,16 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   /// registered" -- and the second is what every first-time user hits.
   /// Treating them the same assigned every answer with nobody having chosen
   /// anything. **A number does not carry an intention.**
-  bool get _reviewerChoseOneTest => _narrowedTestIds.length == 1;
+  ///
+  /// The candidate check on the right is not a second guess at intent: it
+  /// confirms the test they chose still exists. `_narrowedTestIds` is a
+  /// selection that can outlive the list it points into -- the registered
+  /// tests are re-read at the start of every batch -- and without it
+  /// `_attributionCandidates.single` throws on a chosen test that has since
+  /// been deleted. Found by sweeping for values held across a state change
+  /// (review round 4).
+  bool get _reviewerChoseOneTest =>
+      _narrowedTestIds.length == 1 && _attributionCandidates.length == 1;
 
   /// Route one group's answers.
   ///
@@ -929,7 +1009,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
               ],
             ),
           ),
-        Row(
+        // `Wrap`, not `Row`: at 390px the two buttons together are wider than
+        // the window, and a `Row` neither shrinks nor wraps -- the import
+        // button went 80px off-screen with no horizontal scroll to reach it
+        // (review round 4, P2-2; AGENTS.md: check desktop *and* mobile).
+        Wrap(
+          spacing: AppSpacing.md,
+          runSpacing: AppSpacing.sm,
           children: [
             // Cached answers are free and the sidecar serves them without
             // touching a provider, so this stays available on a host that has
@@ -937,26 +1023,20 @@ class _IntakePageState extends ConsumerState<IntakePage> {
             // reviewer whose credentials were missing had to redo forty
             // classifications they had already paid for.
             if (cachedOnly > 0)
-              Padding(
-                padding: const EdgeInsets.only(right: AppSpacing.md),
-                child: OutlinedButton.icon(
-                  key: const Key('intake-fetch-cached'),
-                  onPressed: _classifying || _busy
-                      ? null
-                      : () => _runClassification(cachedOnly: true),
-                  icon: const Icon(Icons.history),
-                  label: Text('前回の判定を取得する ($cachedOnly件・無料)'),
-                ),
+              OutlinedButton.icon(
+                key: const Key('intake-fetch-cached'),
+                onPressed: _classifying || _busy
+                    ? null
+                    : () => _runClassification(cachedOnly: true),
+                icon: const Icon(Icons.history),
+                label: Text('前回の判定を取得する ($cachedOnly件・無料)'),
               ),
             if (billable > 0 && _availability?.available == true)
-              Padding(
-                padding: const EdgeInsets.only(right: AppSpacing.md),
-                child: FilledButton.tonalIcon(
-                  key: const Key('intake-run-classification'),
-                  onPressed: _classifying || _busy ? null : _runClassification,
-                  icon: const Icon(Icons.auto_awesome),
-                  label: Text('AIで判定する ($billable件)'),
-                ),
+              FilledButton.tonalIcon(
+                key: const Key('intake-run-classification'),
+                onPressed: _classifying || _busy ? null : _runClassification,
+                icon: const Icon(Icons.auto_awesome),
+                label: Text('AIで判定する ($billable件)'),
               ),
             FilledButton.icon(
               key: const Key('intake-import'),
