@@ -57,6 +57,13 @@ GitHub Issue [#64](https://github.com/HIKARU0627/Auto-Scoring/issues/64)（親
 既存の `core/pdf_review_geometry.dart` と同じ分け方で、検証は
 `app/test/dependency_dag_test.dart`（ウィジェットツリー無し）。
 
+> **Issue #84 で状態導出だけ切り出した。** `DagNodeStatus` と
+> `deriveDagNodeStatus` は `core/question_status.dart` に
+> `QuestionStatus` / `deriveQuestionStatus` として移り、左レールと右パネルも
+> そこを読む。DAG専用の名前のまま3箇所で使うと、また別の語彙が生える。
+> `dependency_dag.dart` に残るのはレイアウト計算と、パネル固有のヘッダ要約
+> （`DagNodeProgress`）である。
+
 副作用として、テスト設定画面（`test_settings_page.dart`）が持っていた
 `_computeLayers` は `dependencyExecutionLayers` として `core` に移った。同じ計算が
 2画面に別々に存在する状態を作らないため。
@@ -65,7 +72,7 @@ GitHub Issue [#64](https://github.com/HIKARU0627/Auto-Scoring/issues/64)（親
 
 1ノードに出す状態は1つだけなので、`Job.state`（queued / running / blocked /
 succeeded / failed / cancelled）と `Review.action`（approved / modified / rejected /
-regrade_requested）を `DagNodeStatus` へ畳む。優先順位は**動いているジョブが常に
+regrade_requested）を `QuestionStatus` へ畳む。優先順位は**動いているジョブが常に
 勝つ**。
 
 理由: ジョブは常にレビューより**新しい試行**を表す。新しい確定グラフversionでの
@@ -109,11 +116,16 @@ regrade_requested）を `DagNodeStatus` へ畳む。優先順位は**動いて�
 
 添削レビュー画面は選択中の設問のレビュー履歴しか取得しない
 (`_ensureReviewLoaded`)。未訪問の設問のノードは**パイプラインがどこまで進んだか**を
-示し、その設問を開いた時点で人間の判断が乗る。NavigationRail のアイコンが元から
-持っていたのと同じ割り切りである。
+示し、その設問を開いた時点で人間の判断が乗る。
 
 全設問のレビュー履歴を毎ポーリングで取ると「設問数 × 3秒に1回」のリクエストになり、
 その対価は「まだ下されていない判断」の描き分けでしかない。
+
+**この割り切りは3箇所で同じである**（Issue #84）。「NavigationRail が元から
+持っていたのと同じ割り切り」と当初書いたが、それは正確ではなかった -- レールは
+ジョブを見ておらず、`_reviews` にその設問が入っているかどうかだけを見ていたので、
+未訪問の設問を状態に関わらず一律 `hourglass_empty` にしていた。いまは3箇所とも
+`_questionStatus` を通るので、レビュー半分が欠けている範囲もまったく同じである。
 
 ### 1.7 確定済みグラフだけを描く
 
@@ -222,8 +234,11 @@ DRAFT がジョブより**先**にいる場合（登録後に再分析した通�
 | 実行中             | 下辺の2pxの動くハイライト                    | —                      |
 | キーボード位置     | カードの外側を囲むリング                     | `colorScheme.primary`  |
 
-`app/test/dependency_dag_test.dart` が「全状態がそれぞれ固有のアイコンとラベルを
-持つ」ことを検査する。
+`app/test/question_status_test.dart` が「全状態がそれぞれ固有のアイコンとラベルを
+持つ」ことを検査する。この表は**DAGパネルだけの取り決めではない**（Issue #84）:
+左レールと右パネルのバッジも同じ `QuestionStatus` から形と語を取るので、同じ設問に
+ついて3箇所が同じアイコンと同じ日本語ラベルを出す。レールは幅が無いので語を
+tooltip と semantics label に載せる。
 
 ヘッダの要約は `DagNodeProgress`（待機 / 実行中 / 完了）の3つに落とす。3つの合計は
 常にノード数に一致する -- 以前は「未処理」がどれにも当たらず完了へ流れ込み、ジョブが
@@ -299,6 +314,14 @@ once, then the diagram settles` が代わりに検査している。
 ## 7. 未決事項
 
 - レイヤー内の並び替えによる交差削減（§1.1）。実データの設問数を見てから。
-- 未訪問の設問のレビュー状態（§1.5）。一括取得のAPIができたら見直す。
+- **未訪問の設問のレビュー状態**（§1.6）。一括取得のAPIができたら見直す。
+  Issue #84 で左レールもここへ寄せたので、**この割り切りの影響範囲が3箇所に
+  広がった**（DAGパネル・左レール・右パネルのバッジ）。ただし内容は変わって
+  いない: パイプラインの状態は `listJobs` が答案全体ぶん返すので全設問について
+  正しく、欠けるのは「未訪問の設問に対して人間が下した判断」だけである。
+  実運用でここが問題になるのは、**別のセッションで承認済みの設問を含む答案を
+  開き直したとき**に限られる。新しいAPIを足す判断はまだしていない。足すなら
+  `GET /submissions/{id}/reviews`（答案1件ぶんの effective review 一覧）で、
+  切り出し先は `backend/src/auto_scoring/api/review_router.py`。
 - ジョブがまだ作られていない答案（`未処理` だらけの図）の見せ方。現状は
   「これから走る計画」として同じ図をそのまま出している。

@@ -2,12 +2,11 @@
 /// 読む** (Issue #84)。
 ///
 /// 添削レビュー画面は同じ設問の状態を3箇所で出す -- 処理の進み方パネル (DAG)、
-/// 左の設問レール、右のインスペクタ。Issue #64 まで、この3つはそれぞれ別々に
-/// 状態を組み立てていた。結果、同じ「問1」について DAG が「承認済み」、
-/// インスペクタが「要確認」と言い、レールは 要確認・待機・レビュー待ち を
-/// 同じ砂時計に潰していた。提供元の異なる5体のAIエージェントが独立に、全員
-/// high で指摘した唯一の項目である (`docs/ui-ux-multi-agent-evaluation.md`
-/// §4.1)。
+/// 左の設問レール、右のインスペクタ。この3つはそれぞれ別々に状態を組み立てて
+/// いたので、同じ「問1」について DAG が「承認済み」、インスペクタが「要確認」
+/// と言い、レールは 要確認・前提待ち・レビュー待ち を同じ砂時計に潰していた。
+/// 提供元の異なる5体のAIエージェントが互いの評価を見ずに独立に、全員 high で
+/// 指摘した唯一の項目である (Issue #71 の集約結果)。
 ///
 /// 直し方は「3箇所の描画を揃える」ではなく **状態を導く場所を1つにする** こと。
 /// [QuestionStatus] が語(ラベル)・形(アイコン)・強調度(トーン)を1組で持ち、
@@ -41,10 +40,11 @@ enum QuestionStatus {
   /// created by an explicit `POST .../jobs`, never implicitly).
   pending('未処理', Icons.radio_button_unchecked, AppStatusTone.neutral),
 
-  /// `BLOCKED`: a prerequisite has not released this question yet. The node
-  /// names *which* prerequisite (`Job.blocked_on_question_id`) rather than
-  /// just saying "waiting" -- that name is the whole point of drawing the
-  /// graph (`docs/job-queue.md` §「`BLOCKED`を…両方に使う」).
+  /// `BLOCKED`: a prerequisite has not released this question yet. Every
+  /// place that has the prerequisite to hand names *which* one
+  /// (`Job.blocked_on_question_id`, via [labelWaitingFor]) rather than just
+  /// saying "waiting" -- that name is the whole point of drawing the graph
+  /// (`docs/job-queue.md` §「`BLOCKED`を…両方に使う」).
   blocked('前提待ち', Icons.lock_clock, AppStatusTone.neutral),
 
   /// `QUEUED`: every prerequisite is satisfied and the worker will pick this
@@ -72,7 +72,7 @@ enum QuestionStatus {
   /// The AI is done and usable, and no human decision has been recorded yet.
   /// Deliberately [AppStatusTone.neutral]: on this screen "waiting to be
   /// reviewed" is the *normal* state, and colouring it would leave the whole
-  /// diagram shouting (same reasoning as the Navigation Rail's icons).
+  /// screen shouting -- with three places drawing it, all the more so.
   graded('レビュー待ち', Icons.rate_review_outlined, AppStatusTone.neutral),
 
   /// A reviewer asked for a re-grade and the replacement job has not been
