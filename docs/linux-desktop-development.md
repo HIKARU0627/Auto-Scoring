@@ -118,9 +118,10 @@ cd app && flutter run -d linux
 ./scripts/screenshot-linux-app.sh                 # app/build/linux-screenshot.png へ
 ./scripts/screenshot-linux-app.sh -o /tmp/ui.png  # 出力先を指定
 ./scripts/screenshot-linux-app.sh -s 6            # 撮影前の待ち時間を延ばす
+./scripts/screenshot-linux-app.sh -r /tests -t dark -w 700x720  # 画面・テーマ・幅（§4.4）
 ```
 
-スクリプトは 1 コマンドで、ビルド → 起動 → ホーム画面が出るまで待機 → 撮影 →
+スクリプトは 1 コマンドで、ビルド → 起動 → 目的の画面が出るまで待機 → 撮影 →
 後片付け までを通しでやる。ビルドは差分ビルドなので最新なら素通りする。
 
 待ち方は固定 sleep ではなく、次の 3 つが観測できるまでのポーリングにしてある。
@@ -130,7 +131,7 @@ cd app && flutter run -d linux
    Flutter の first frame で初めて表示されるので（`app/linux/runner/my_application.cc`）、
    これ自体がエンジンの起動待ちを兼ねる。名前が引けるだけでは足りない。mutter が
    map するまでの一瞬は `Map State: IsUnMapped` で、そこでは `import` はまだ読めない。
-2. **そのウィンドウが画面に出ていて、スプラッシュからホーム画面へ実際に入れ替わる**
+2. **そのウィンドウが画面に出ていて、スプラッシュから目的の画面へ実際に入れ替わる**
    （§4.2）。ここを通らないと、撮れる画像が「今の画面」である保証が無い。
 3. サイドカーが `/healthz` に答える。`SidecarSupervisor` が
    `SidecarStarting` を抜ける条件と同じもの。ポートは `--port 0` で動的に決まる
@@ -298,6 +299,75 @@ gdbus call --session --dest org.gnome.ScreenSaver \
 
 **ファイル選択ダイアログや、パスを表示する画面を撮るときは中身を確認すること。**
 リポジトリは公開されている。
+
+### 4.4 画面・テーマ・幅を指定して撮る（Issue #71）
+
+ホーム画面以外を撮るには、**どの画面をどのテーマ・どの幅で出すかをアプリ側へ
+渡す**必要がある。スクリプトはクリックができないので、起動先の画面を指定できな
+ければホーム画面しか撮れない。
+
+```bash
+./scripts/screenshot-linux-app.sh -r /tests -t dark -w 700x720 -o /tmp/list.png
+```
+
+| オプション | 渡し方                                            | 読む側                                        |
+| ---------- | ------------------------------------------------- | --------------------------------------------- |
+| `-r ROUTE` | 環境変数 `AUTO_SCORING_INITIAL_ROUTE`             | `app/lib/main.dart`（**デバッグビルドのみ**） |
+| `-t THEME` | 環境変数 `AUTO_SCORING_THEME`（`light` / `dark`） | 同上。既定は `ThemeMode.system`               |
+| `-w WxH`   | 環境変数 `AUTO_SCORING_WINDOW_SIZE`               | `app/linux/runner/my_application.cc`          |
+
+- **route はアプリの経路そのもの**（`app/lib/core/app_routes.dart`）。
+  `/tests/<test-id>/submissions/<submission-id>/review` のように id を含む経路も
+  そのまま渡せる。
+- **テーマをアプリ側で固定するのは、デスクトップの配色設定に触らないため。**
+  Flutter Linux は GNOME の `color-scheme` に従うので、外から切り替えるには
+  ユーザーのデスクトップ設定を書き換えるしかない。作業中に画面全体が暗転し、
+  実行が途中で落ちればそのまま戻らない。§4.2 と同じ理由で、ユーザーのマシンの
+  設定はエージェントが触らない。
+- **route とテーマは `kDebugMode` の中だけで読む。** 配布ビルドの起動画面や配色が
+  環境変数で変わってよい理由はない。§2 が作るのは `--debug` なので、必要な場所で
+  だけ有効になる。
+- **ウィンドウ幅を C++ 側で読むのは、外から窓を広げる道具が無いため。** `xdotool` /
+  `wmctrl` は §1 の前提パッケージに無く、root 無しでは入れられない。`app/linux/` は
+  §0 のとおり配布物ではないので、ここに開発用の口を開けても製品には出ない。
+
+#### 画面に出すデータを用意する
+
+空のデータベースで撮った画面は、情報密度も優先順位も狭幅の破綻も評価できない。
+一方で、テスト登録も答案取込も OCR と AI を通るので、資格情報の無い開発機では
+**手で作れない**。
+
+```bash
+uv run --project backend python scripts/seed-demo-app-data.py
+```
+
+`app-data/` へ**全部が作り物のデータ**を書く（テスト2件・答案3件・確定済み依存
+グラフ・認識結果・採点結果・レビュー履歴）。`--app-data-dir` を省くとアプリが
+使うのと同じ既定の場所（§5.2）へ書く。既に **自分が書いたもの以外がある
+`app-data/` は触らずに終了する**ので、実データの入った場所を指しても消さない。
+**アプリを終了させてから実行すること**（起動中はロックを持っている、§5.1）。
+
+`queued` / `running` のジョブは置けない。サイドカーは起動と同時にキューを回すため、
+終端でないジョブは数秒で終端へ動く。撮れるのは「そのあと」の画面であって、置いた
+はずの状態ではない。実行中ノードの動き自体も静止画には写らないので、そこは
+`app/test/dependency_dag_panel_test.dart` が検査している
+（[dependency-dag-progress-view.md](./dependency-dag-progress-view.md) §5.2）。
+
+#### 一式を撮る
+
+1画面につき1回起動する。評価用の一式はこのスクリプトのループである。
+
+```bash
+for theme in light dark; do
+  for geom in 1280x720 700x720; do
+    ./scripts/screenshot-linux-app.sh -r / -t "$theme" -w "$geom" \
+      -o "$OUT/home-$theme-$geom.png"
+  done
+done
+```
+
+**スクロールできない**ことは頭に入れておくこと。テスト設定画面のように縦に長い
+画面は、1枚に写るのは最初の画面ぶんだけである。
 
 ## 5. Linux 固有の注意
 
