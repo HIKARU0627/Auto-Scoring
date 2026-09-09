@@ -65,7 +65,6 @@ from auto_scoring.adapters.submission_intake import RENDER_SCALE
 from auto_scoring.adapters.test_intake import MaterialUpload, attach_materials, register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.test_artifact_lock import TestArtifactLocks
-from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaStatus
 from auto_scoring.domain.ai_provider import ProviderUnavailable, SchemaViolation
 from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionError,
@@ -77,6 +76,7 @@ from auto_scoring.domain.answer_area_detection import (
     unassigned_answer_area_ids,
     undetected_question_numbers,
 )
+from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaStatus
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.material_intake import MaterialIntakeError, MaterialTooLargeError
@@ -494,6 +494,7 @@ def build_test_registration_router(
         except FileNotFoundError:
             return None
         return draft if draft.status is CriteriaStatus.CONFIRMED else None
+
     def _question_numbers(uow: SqlAlchemyUnitOfWork, test_id: str) -> list[str]:
         """This test's confirmed question numbers, in review order.
 

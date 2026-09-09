@@ -20,13 +20,14 @@ from auto_scoring import __version__
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_classification.factory import create_material_classifier
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
+from auto_scoring.adapters.answer_area_detection.factory import (
+    AnswerAreaDetectorConfigError,
+    create_answer_area_detector,
+)
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.criteria_extraction.factory import (
     CriteriaExtractorConfigError,
     create_criteria_extractor,
-from auto_scoring.adapters.answer_area_detection.factory import (
-    AnswerAreaDetectorConfigError,
-    create_answer_area_detector,
 )
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
@@ -60,11 +61,11 @@ from auto_scoring.api.test_registration_router import build_test_registration_ro
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.ai_provider import AIProvider
-from auto_scoring.domain.criteria_extraction import CriteriaExtractor
 from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetector,
     UnconfiguredAnswerAreaDetector,
 )
+from auto_scoring.domain.criteria_extraction import CriteriaExtractor
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
 from auto_scoring.domain.models import MAX_STUDENT_LABEL_LENGTH, JobKind, Submission, TestStatus
@@ -294,6 +295,8 @@ def build_criteria_extractor(
             f"building the criteria extractor failed ({type(error).__name__}); see the sidecar log"
         )
     return UnconfiguredCriteriaExtractor(redact(reason, configuration_secrets(env)))
+
+
 #: How `build_answer_area_detector` reaches the detection adapter. Injected
 #: for the same reason `AIProviderFactory` is: the real factory probes this
 #: host for ADC credentials, and a test must be able to say which world it is
@@ -825,6 +828,9 @@ def create_app(
             intake_limits=limits,
             pdfium_lock=pdfium_lock,
             locks=test_artifact_locks,
+            answer_area_detector=(
+                answer_area_detector or UnconfiguredAnswerAreaDetector(_NO_DETECTOR_INJECTED)
+            ),
         )
     )
     protected.include_router(
@@ -835,9 +841,6 @@ def create_app(
             criteria_extractor or UnconfiguredCriteriaExtractor(_NO_EXTRACTOR_INJECTED),
             locks=test_artifact_locks,
             pdfium_lock=pdfium_lock,
-            answer_area_detector=(
-                answer_area_detector or UnconfiguredAnswerAreaDetector(_NO_DETECTOR_INJECTED)
-            ),
         )
     )
     protected.include_router(

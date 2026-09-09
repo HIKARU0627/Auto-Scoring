@@ -14,7 +14,7 @@ import pytest
 import uvicorn
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
-from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
 from auto_scoring.adapters.ai_grading.vertex_gemini_provider import VertexGeminiAIProvider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.api import sidecar
@@ -46,10 +46,14 @@ def _pinned_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     The one test that cares which provider arrives installs its own
     (`test_run_starts_and_serves_on_a_host_with_no_ai_credentials`).
     """
+    # `**_` absorbs the injection keywords `run()` passes (since Issue #105
+    # it hands both builders a shared ADC token source). A double that
+    # spelled them out would have to be edited every time the composition
+    # root wires something new, for a value it does not look at.
     monkeypatch.setattr(
         sidecar,
         "build_ai_provider",
-        lambda _env: UnconfiguredAIProvider("pinned by the test suite"),
+        lambda _env, **_: UnconfiguredAIProvider("pinned by the test suite"),
     )
 
 
@@ -368,7 +372,7 @@ def test_run_starts_and_serves_on_a_host_with_no_ai_credentials(
     seen: dict[str, Mapping[str, str]] = {}
     provider = UnconfiguredAIProvider("no transport configured on this host")
 
-    def fake_build(env: Mapping[str, str]) -> UnconfiguredAIProvider:
+    def fake_build(env: Mapping[str, str], **_: Any) -> UnconfiguredAIProvider:
         seen["env"] = env
         return provider
 
@@ -607,3 +611,58 @@ class TestDefaultAppDataDir:
         made an installed app find a different database depending on how it
         was launched."""
         assert default_app_data_dir().is_absolute()
+
+
+def test_adc_is_resolved_once_and_shared_by_every_consumer() -> None:
+    """Grading and answer-area detection want the *same* Vertex credentials.
+
+    Resolving ADC costs ~300ms on a host with a `gcloud` login, and Issue #105
+    added the second consumer -- so without sharing, sidecar startup paid that
+    twice for nothing. The sidecar's handshake is timing-sensitive, which is
+    how the regression showed up.
+    """
+    calls: list[str | None] = []
+
+    def build(project_id: str | None) -> AdcTokenSource:
+        calls.append(project_id)
+        return AdcTokenSource(credentials=_FakeCredentials(), project_id=project_id or "p")
+
+    factory = sidecar.shared_adc_token_source(build)
+    first = factory(None)
+    second = factory(None)
+
+    assert first is second
+    assert calls == [None]
+
+
+def test_a_different_vertex_project_gets_its_own_credentials() -> None:
+    """Keyed by project id, not shared blindly: two callers pointed at
+    different projects must not be handed each other's credentials.
+    """
+    built: list[str | None] = []
+
+    def build(project_id: str | None) -> AdcTokenSource:
+        built.append(project_id)
+        return AdcTokenSource(credentials=_FakeCredentials(), project_id=project_id or "p")
+
+    factory = sidecar.shared_adc_token_source(build)
+    assert factory("project-a") is not factory("project-b")
+    assert built == ["project-a", "project-b"]
+
+
+def test_a_missing_login_is_raised_afresh_for_every_caller() -> None:
+    """Failures are not cached: each factory has to classify a missing login
+    itself, exactly as it would with a token source of its own.
+    """
+    attempts = 0
+
+    def build(project_id: str | None) -> AdcTokenSource:
+        nonlocal attempts
+        attempts += 1
+        raise AdcCredentialsError("no application default credentials on this host")
+
+    factory = sidecar.shared_adc_token_source(build)
+    for _ in range(2):
+        with pytest.raises(AdcCredentialsError):
+            factory(None)
+    assert attempts == 2

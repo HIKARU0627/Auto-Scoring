@@ -33,17 +33,25 @@ import logging.handlers
 import os
 import socket
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TypedDict
 
 import uvicorn
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ai_grading.factory import create_ai_provider
+from auto_scoring.adapters.answer_area_detection.factory import create_answer_area_detector
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
+from auto_scoring.adapters.criteria_extraction.factory import create_criteria_extractor
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
-from auto_scoring.api.app import build_ai_provider, build_criteria_extractor, create_app
-from auto_scoring.api.app import build_ai_provider, build_answer_area_detector, create_app
+from auto_scoring.api.app import (
+    build_ai_provider,
+    build_answer_area_detector,
+    build_criteria_extractor,
+    create_app,
+)
 from auto_scoring.api.auth import generate_token
 from auto_scoring.api.secret_redaction import configuration_secrets, redact
 from auto_scoring.domain.answer_area_detection import UnconfiguredAnswerAreaDetector
@@ -461,7 +469,11 @@ def run(argv: Sequence[str] | None = None) -> int:
     # `build_ai_provider` never raises: a host with no usable credentials
     # still gets an app that imports answers, serves review and exports PDFs,
     # and says on every screen that grading is unavailable.
-    ai_provider = build_ai_provider(os.environ)
+    shared_token_source = shared_adc_token_source()
+    ai_provider = build_ai_provider(
+        os.environ,
+        factory=lambda env: create_ai_provider(env, token_source_factory=shared_token_source),
+    )
     if isinstance(ai_provider, UnconfiguredAIProvider):
         # Warning, not error: the sidecar is about to serve normally. The
         # reason names variables and prerequisites, never their values
@@ -476,14 +488,26 @@ def run(argv: Sequence[str] | None = None) -> int:
     # either -- a host with no image-capable transport still gets the 配点と
     # 採点基準 screen, where every value can be typed in by hand (Issue #95
     # decision 8).
-    criteria_extractor = build_criteria_extractor(os.environ)
+    criteria_extractor = build_criteria_extractor(
+        os.environ,
+        factory=lambda env: create_criteria_extractor(
+            env, token_source_factory=shared_token_source
+        ),
+    )
     if isinstance(criteria_extractor, UnconfiguredCriteriaExtractor):
         logging.getLogger(__name__).warning(
             "採点基準の自動抽出 is unavailable on this host: %s", criteria_extractor.reason
+        )
+
     # Same contract, same reason it is read here and not inside `create_app`
     # (Issue #105). A host with no image-capable provider still gets a working
     # テスト設定 screen; only the 自動検出 button is off, and it says why.
-    answer_area_detector = build_answer_area_detector(os.environ)
+    answer_area_detector = build_answer_area_detector(
+        os.environ,
+        factory=lambda env: create_answer_area_detector(
+            env, token_source_factory=shared_token_source
+        ),
+    )
     if isinstance(answer_area_detector, UnconfiguredAnswerAreaDetector):
         logging.getLogger(__name__).warning(
             "answer-area detection is unavailable on this host: %s", answer_area_detector.reason
@@ -550,6 +574,39 @@ def run(argv: Sequence[str] | None = None) -> int:
         logging.getLogger(__name__).exception("sidecar stopped serving")
         return STARTUP_FAILED_EXIT_CODE
     return 0
+
+
+def shared_adc_token_source(
+    build: Callable[[str | None], AdcTokenSource] = lambda project_id: AdcTokenSource(
+        project_id=project_id
+    ),
+) -> Callable[[str | None], AdcTokenSource]:
+    """One ADC resolution, reused by everything in this process that needs it.
+
+    Grading, 採点基準 extraction and answer-area detection all authenticate to
+    Vertex AI with the same credentials, and resolving them is not free --
+    measured at ~300ms per call on a host with a `gcloud` login. There are
+    three consumers now (Issues #103 and #105 each added one), so without
+    this the sidecar paid that three times at startup for no benefit. This lives in
+    the composition root because that is the one place that knows both exist;
+    neither factory should have to know about the other.
+
+    Keyed by project id, because `AUTO_SCORING_VERTEX_PROJECT` can point the
+    two at different projects in principle, and a cache that ignored that
+    would hand back credentials for the wrong one.
+
+    **Failures are deliberately not cached.** `AdcCredentialsError` is raised
+    afresh on every call, so each factory classifies a missing login exactly
+    as it would with a token source of its own.
+    """
+    resolved: dict[str | None, AdcTokenSource] = {}
+
+    def factory(project_id: str | None) -> AdcTokenSource:
+        if project_id not in resolved:
+            resolved[project_id] = build(project_id)
+        return resolved[project_id]
+
+    return factory
 
 
 def main() -> None:
