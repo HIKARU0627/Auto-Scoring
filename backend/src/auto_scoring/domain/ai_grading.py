@@ -177,7 +177,28 @@ class AnnotationCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    target: _NonBlankStr
+    #: The description reaches the model: it is what the generated JSON
+    #: Schema carries for this field, and until Issue #141 there was none --
+    #: the model was handed a bare ``{"type": "string"}`` and told nothing
+    #: about what a usable ``target`` is. In the live re-verification several
+    #: models filled it with text that is nowhere in the answer: a reading
+    #: tidied up into correct notation, a handwritten formula rewritten in
+    #: LaTeX, two non-adjacent sub-answers joined into one string, and in one
+    #: case an invented placeholder for a blank answer. None of those can be
+    #: found among the OCR boxes, so none of them could be placed.
+    target: _NonBlankStr = Field(
+        description=(
+            "The text this annotation is about, copied verbatim from the "
+            "student's OCR reading: the same characters in the same order, "
+            "as one contiguous run, exactly as they appear there. Do not "
+            "correct, normalize, translate, re-notate (for example into "
+            "LaTeX) or tidy it, and do not join text from separate parts of "
+            "the answer. The application finds this text among the reading's "
+            "word boxes to decide where to draw the mark; text that does not "
+            "appear there verbatim cannot be placed on the answer. If no "
+            "verbatim quote fits what you mean, leave the annotation out."
+        )
+    )
     type: AnnotationKind
     comment: _CommentStr | None = None
 

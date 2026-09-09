@@ -2487,7 +2487,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       final resolved = resolveAnnotationRect(
         annotation: annotation,
         questionAnswerArea: question.answerArea,
-        questionScoreArea: question.scoreArea,
         recognitions: review.recognitionsForDisplayedAttempt,
       );
       if (resolved == null) continue;
@@ -2521,7 +2520,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             resolveAnnotationRect(
               annotation: a,
               questionAnswerArea: question.answerArea,
-              questionScoreArea: question.scoreArea,
               recognitions: review.recognitionsForDisplayedAttempt,
             ) ==
             null,

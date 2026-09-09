@@ -137,7 +137,6 @@ void main() {
       final resolved = resolveAnnotationRect(
         annotation: annotation(rect: explicitRect),
         questionAnswerArea: null,
-        questionScoreArea: null,
         recognitions: const [],
       );
 
@@ -165,7 +164,6 @@ void main() {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'underline', anchorText: '行く'),
         questionAnswerArea: null,
-        questionScoreArea: null,
         recognitions: [
           recognitionWithBoxes([('走る', _dummyRect), ('行く', wordBox)]),
         ],
@@ -204,7 +202,6 @@ void main() {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'underline', anchorText: '酸素'),
         questionAnswerArea: answerArea,
-        questionScoreArea: null,
         recognitions: [
           recognitionWithBoxes([('酸素', cropRelativeBox)]),
         ],
@@ -258,7 +255,6 @@ void main() {
         final resolved = resolveAnnotationRect(
           annotation: annotation(kind: 'underline', anchorText: '酸素'),
           questionAnswerArea: degenerateArea.$2,
-          questionScoreArea: null,
           recognitions: [
             recognitionWithBoxes([('酸素', wordBox)]),
           ],
@@ -271,56 +267,245 @@ void main() {
       });
     }
 
-    test('a fixed-position mark with no OCR match falls back to the '
-        "question's score_area, per simplified-design-spec §12.2", () {
-      final scoreArea = NormalizedRectResponse(
+    test('a box still matches despite the line break the OCR leaves on its '
+        'text -- Document AI slices a token out of the page text, so the '
+        'detected break travels with it (Issue #141)', () {
+      final wordBox = NormalizedRectResponse(
         (b) => b
-          ..x = 0.8
-          ..y = 0.05
-          ..width = 0.1
-          ..height = 0.1,
-      );
-
-      for (final kind in ['circle', 'cross', 'triangle', 'score']) {
-        final resolved = resolveAnnotationRect(
-          annotation: annotation(kind: kind),
-          questionAnswerArea: null,
-          questionScoreArea: scoreArea,
-          recognitions: const [],
-        );
-        expect(resolved, same(scoreArea), reason: 'kind: $kind');
-      }
-    });
-
-    test('an anchor_text that matches nothing falls back to score_area for a '
-        'fixed-position kind instead of leaving it unresolved', () {
-      final scoreArea = NormalizedRectResponse(
-        (b) => b
-          ..x = 0.8
-          ..y = 0.05
-          ..width = 0.1
+          ..x = 0.1
+          ..y = 0.2
+          ..width = 0.3
           ..height = 0.1,
       );
 
       final resolved = resolveAnnotationRect(
-        annotation: annotation(kind: 'score', anchorText: '存在しない語'),
+        annotation: annotation(kind: 'cross', anchorText: '酸素'),
         questionAnswerArea: null,
-        questionScoreArea: scoreArea,
         recognitions: [
-          recognitionWithBoxes([('別の語', _dummyRect)]),
+          recognitionWithBoxes([('酸素\n', wordBox)]),
         ],
       );
 
-      expect(resolved, same(scoreArea));
+      expect(resolved?.x, wordBox.x);
+      expect(resolved?.y, wordBox.y);
+      expect(resolved?.width, wordBox.width);
+      expect(resolved?.height, wordBox.height);
     });
 
-    test('a non-fixed-position annotation with no rect, no OCR match, and no '
-        'score_area is left unresolved (routed to the comment fallback area '
-        'by the caller, per simplified-design-spec §12.4)', () {
+    test('an anchor spanning several boxes resolves to their union -- an OCR '
+        'box is one token, so 葉緑体で arrives as 葉緑体 + で', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '葉緑体で'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '葉緑体',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.20
+                  ..width = 0.08
+                  ..height = 0.04,
+              ),
+            ),
+            (
+              'で',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.18
+                  ..y = 0.21
+                  ..width = 0.04
+                  ..height = 0.03,
+              ),
+            ),
+          ]),
+        ],
+      );
+
+      expect(resolved?.x, closeTo(0.10, 1e-9));
+      expect(resolved?.y, closeTo(0.20, 1e-9));
+      expect(resolved?.width, closeTo(0.12, 1e-9));
+      expect(resolved?.height, closeTo(0.04, 1e-9));
+    });
+
+    test('a full-width anchor matches the ASCII the OCR read', () {
+      final wordBox = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.4
+          ..y = 0.1
+          ..width = 0.05
+          ..height = 0.03,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'circle', anchorText: '\uFF41'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([('a\n', wordBox)]),
+        ],
+      );
+
+      expect(resolved?.x, wordBox.x);
+      expect(resolved?.width, wordBox.width);
+    });
+
+    test('the shortest run containing the anchor wins -- the tightest rect is '
+        'the one about the words the mark is for', () {
+      final tight = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.50
+          ..y = 0.20
+          ..width = 0.04
+          ..height = 0.03,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '酸素'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '酸',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.20
+                  ..width = 0.02
+                  ..height = 0.03,
+              ),
+            ),
+            (
+              '素',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.12
+                  ..y = 0.20
+                  ..width = 0.02
+                  ..height = 0.03,
+              ),
+            ),
+            ('酸素', tight),
+          ]),
+        ],
+      );
+
+      expect(resolved?.x, tight.x);
+      expect(resolved?.width, tight.width);
+    });
+
+    test('a run that reads far more than the anchor is refused -- the rect '
+        'drawn is the run\'s, not the anchor\'s', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: 'の'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '光合成は葉緑体で行われる',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.1
+                  ..y = 0.2
+                  ..width = 0.8
+                  ..height = 0.04,
+              ),
+            ),
+          ]),
+        ],
+      );
+
+      expect(resolved, isNull);
+    });
+
+    test('boxes that are not consecutive do not match -- a model joining two '
+        'different sub-answers into one anchor names no run on the page', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '水デンプン'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '水\n',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.20
+                  ..width = 0.04
+                  ..height = 0.03,
+              ),
+            ),
+            (
+              'b\n',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.30
+                  ..width = 0.04
+                  ..height = 0.03,
+              ),
+            ),
+            (
+              'デンプン',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.40
+                  ..width = 0.08
+                  ..height = 0.03,
+              ),
+            ),
+          ]),
+        ],
+      );
+
+      expect(resolved, isNull);
+    });
+
+    test('no kind falls back to the score_area when its anchor matched '
+        'nothing -- the position is unknown, so nothing on the answer may '
+        'claim to know it (Issue #141, simplified-design-spec §12.4)', () {
+      for (final kind in ['circle', 'cross', 'triangle', 'score']) {
+        final resolved = resolveAnnotationRect(
+          annotation: annotation(kind: kind, anchorText: '存在しない語'),
+          questionAnswerArea: null,
+          recognitions: [
+            recognitionWithBoxes([('別の語', _dummyRect)]),
+          ],
+        );
+        expect(resolved, isNull, reason: 'kind: $kind');
+      }
+    });
+
+    test('an explicit rect still places a shape kind -- dropping the fallback '
+        'must not stop a mark whose position really is known', () {
+      final placed = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.2
+          ..y = 0.3
+          ..width = 0.1
+          ..height = 0.05,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'circle', rect: placed),
+        questionAnswerArea: null,
+        recognitions: const [],
+      );
+
+      // Field equality, not `same()` -- see the note on the first test.
+      expect(resolved?.x, placed.x);
+      expect(resolved?.y, placed.y);
+      expect(resolved?.width, placed.width);
+      expect(resolved?.height, placed.height);
+    });
+
+    test('an annotation with no rect and no OCR match is left unresolved '
+        '(routed to the comment fallback area by the caller, per '
+        'simplified-design-spec §12.4)', () {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'comment', anchorText: '存在しない語'),
         questionAnswerArea: null,
-        questionScoreArea: null,
         recognitions: const [],
       );
 

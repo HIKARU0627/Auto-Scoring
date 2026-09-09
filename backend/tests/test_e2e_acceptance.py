@@ -88,6 +88,7 @@ from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from auto_scoring.jobs.settings import QueueSettings
 from tests.font_support import install_font_covering
+from tests.pdf_content import drawn_paths, drawn_text
 from tests.support import make_job
 
 _TOKEN = "e2e-acceptance-token"
@@ -1350,6 +1351,116 @@ def test_the_exported_pdf_carries_the_reviewed_comment_text(
     # And the source has nothing of the sort to have been copied from.
     assert CONFIRMED_COMMENT not in _page_text(
         data_root / "submissions" / submission_id / "source.pdf", 0
+    )
+
+
+#: The comment attached to a *shape* annotation, whose text the export used
+#: to throw away entirely (Issue #141).
+CROSS_COMMENT = "計算の途中が誤っています。"
+
+
+def test_the_exported_pdf_carries_a_shape_annotation_s_comment_as_well(
+    client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #141: a ``×`` explains nothing on its own.
+
+    `PdfEngine.render_annotations` renders a mark's text only for the SCORE
+    and COMMENT kinds, so the explanation handed to a CROSS mark was dropped
+    by the engine without a word: the live re-verification produced fourteen
+    annotations and not one character of their comments reached any page. The
+    comment now goes to the question's margin band instead of to the shape.
+    """
+    install_font_covering(monkeypatch, CROSS_COMMENT + "×")
+    _, submission_id = _reviewed_answer(
+        client,
+        data_root,
+        annotations=[
+            {
+                "kind": "cross",
+                "x": 0.20,
+                "y": 0.30,
+                "width": 0.15,
+                "height": 0.04,
+                "comment": CROSS_COMMENT,
+            }
+        ],
+    )
+
+    exported = _export(client, submission_id)
+
+    text = _page_text(data_root / exported["file_path"], 0)
+    assert CROSS_COMMENT in text, f"the cross's comment is missing from the export: {text!r}"
+    # And the source has nothing of the sort to have been copied from.
+    assert CROSS_COMMENT not in _page_text(
+        data_root / "submissions" / submission_id / "source.pdf", 0
+    )
+
+
+#: The AI's comment on an annotation it could not have placed -- its
+#: ``anchor_text`` names words the OCR never read.
+UNPLACEABLE_COMMENT = "計算の途中が誤っています。"
+
+
+def test_an_unplaceable_annotation_draws_no_shape_and_says_so_in_the_margin(
+    client: TestClient,
+    data_root: Path,
+    ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #141, the harmful half.
+
+    A CROSS whose ``anchor_text`` matches no OCR box used to be drawn at
+    ``score_area``, which Issue #120 derives as a band the height of the
+    answer box: the live output carried a red cross across a quarter of the
+    page, over the score, reading as the whole answer struck out. Nothing may
+    be drawn on the answer at a position nobody knows (§12.4).
+
+    Counted as *drawing operations* out of the content stream rather than as
+    red pixels: "no ink in this rect" is the kind of negative assertion that
+    passes just as happily when the export stops drawing anything at all.
+    The text assertion below is the other half that keeps this honest.
+    """
+    install_font_covering(monkeypatch, UNPLACEABLE_COMMENT + "×（位置特定できず）")
+    test_id, submission_id, crops = _one_answer(client, data_root)
+    question_id, other_question_id = _question_ids(test_id)
+
+    def _with_unplaceable_cross(request: GradingRequest) -> GradingResponse:
+        return grading_response(
+            request,
+            annotations=(
+                GradingAnnotationCandidate(
+                    target="この語はOCR結果に存在しない",
+                    type=AnnotationKind.CROSS,
+                    comment=UNPLACEABLE_COMMENT,
+                ),
+            ),
+        )
+
+    ai_provider.script(crops[question_id], [_with_unplaceable_cross])
+    start_jobs(client, submission_id)
+    wait_until_settled(client, submission_id)
+    # Approved, not edited: an edit replaces the AI's annotations with the
+    # reviewer's own, and it is the AI's unplaceable one that must reach the
+    # export here.
+    for each in (question_id, other_question_id):
+        approved = client.post(
+            f"/submissions/{submission_id}/questions/{each}/review/approve",
+            headers=_AUTH,
+            json={"expected_version": _review_version(client, submission_id, each)},
+        )
+        assert approved.status_code == 201, approved.text
+
+    exported = _export(client, submission_id)
+
+    source = data_root / "submissions" / submission_id / "source.pdf"
+    output = data_root / exported["file_path"]
+    assert drawn_paths(output) == drawn_paths(source), (
+        "an annotation with no known position must add no shape to the answer"
+    )
+    text = drawn_text(output)
+    assert UNPLACEABLE_COMMENT in text, f"the comment never reached the page: {text!r}"
+    assert "位置特定できず" in text, (
+        f"the margin must say the mark could not be placed, not stay silent: {text!r}"
     )
 
 

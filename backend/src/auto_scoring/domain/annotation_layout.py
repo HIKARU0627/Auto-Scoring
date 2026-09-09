@@ -12,23 +12,16 @@ pdf_review_geometry_test.dart` are expected to agree on the same fixtures.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
 
 from auto_scoring.domain.models import (
     Annotation,
-    AnnotationKind,
     BoundingBox,
     NormalizedRect,
     Question,
     RecognitionResult,
-)
-
-#: Annotation kinds placed at a question's fixed "Annotation配置領域" (§12.2)
-#: rather than at a specific word/phrase -- mirrors `pdf_review_geometry.dart`'s
-#: `fixedPositionAnnotationKinds`.
-FIXED_POSITION_KINDS = frozenset(
-    {AnnotationKind.CIRCLE, AnnotationKind.CROSS, AnnotationKind.TRIANGLE, AnnotationKind.SCORE}
 )
 
 #: Identity crop (offset 0, scale 1): what a `None`/degenerate `answer_area`
@@ -73,13 +66,25 @@ def resolve_annotation_rect(
 
     1. An explicit ``rect`` is used as-is.
     2. Otherwise, an ``anchor_text`` is looked up against ``recognitions``'
-       OCR bounding boxes (§12.3), newest attempt first, and mapped from
-       crop-relative into page-relative space through ``question.
-       answer_area`` (§12.3, ``_crop_relative_to_page``).
-    3. Otherwise, a fixed-position kind (`FIXED_POSITION_KINDS`) falls back to
-       ``question.score_area`` (§12.2).
-    4. Anything still unresolved returns ``None`` -- the caller falls back to
-       ``question.comment_area`` (§12.4).
+       OCR bounding boxes (§12.3, `_find_anchor_text_rect`), newest attempt
+       first, and mapped from crop-relative into page-relative space through
+       ``question.answer_area`` (§12.3, ``_crop_relative_to_page``).
+    3. Anything still unresolved returns ``None`` -- **nothing is drawn on
+       the answer**, and the caller says so in the question's comment area
+       instead (§12.4).
+
+    **There is deliberately no fixed-position fallback** (Issue #141). Until
+    then a CIRCLE/CROSS/TRIANGLE/SCORE whose anchor matched nothing was drawn
+    at ``question.score_area``, on the grounds that §12.2 places
+    question-level symbols there. Two different things were being conflated:
+    "the AI meant a mark about the whole question" and "we could not find the
+    words the AI meant". In the live re-verification every one of the
+    fourteen annotations took this path, and since Issue #120 derives
+    ``score_area`` as a band the height of the answer box, the result was a
+    red ``×`` cutting across a quarter of the page -- on top of the score,
+    and reading as though the whole answer had been struck out over an error
+    in one term of one formula. §12.4 already said what to do instead
+    ("無理に本文付近へ配置しない"): a position nobody knows is not a position.
 
     ``recognitions`` must already be scoped to the attempt being exported
     (`recognitions_up_to_attempt`).
@@ -92,8 +97,6 @@ def resolve_annotation_rect(
         )
         if matched is not None:
             return matched
-    if annotation.kind in FIXED_POSITION_KINDS:
-        return question.score_area
     return None
 
 
@@ -108,28 +111,151 @@ def _effective_answer_area(answer_area: NormalizedRect | None) -> NormalizedRect
     return answer_area
 
 
+#: How much longer than the anchor a matched run of boxes may read, before
+#: the match is rejected as too loose to draw a mark from.
+#:
+#: OCR boxes are whole tokens, so a run containing the anchor almost always
+#: carries a little more than the anchor itself (a five-character anchor is
+#: found inside a six-character box), and the rect drawn is the run's, not the anchor's.
+#: A little slop is the resolution the OCR gives us; a lot of it is Issue #141
+#: again in miniature -- a one-character anchor landing on a whole line and a
+#: ``×`` stroked across all of it. Twice the anchor plus two characters
+#: absorbs token-boundary overshoot at every real length seen in the live run
+#: (the widest was a 5-character anchor matched by a 6-character box) while
+#: still refusing a box that is mostly not the anchor.
+def _run_length_limit(needle: str) -> int:
+    return 2 * len(needle) + 2
+
+
+#: Matches what both `_normalized_for_anchor` and its Dart twin call
+#: whitespace. Written as a regex rather than as `str.split()` so the two
+#: implementations are comparing the same set of characters: Dart's `RegExp`
+#: `\s` and Python's `re` `\s` agree, while `str.split()` also eats a handful
+#: of separators Dart would keep.
+_WHITESPACE = re.compile(r"\s+")
+
+
+def _normalized_for_anchor(text: str) -> str:
+    """``text`` reduced to what the anchor and the OCR box can be compared on:
+    no whitespace, and full-width ASCII folded to ASCII.
+
+    Both halves are mismatches this comparison must not fail on, and both were
+    measured in the live run rather than imagined:
+
+    * **Whitespace.** Document AI slices each token's text straight out of
+      ``document.text`` (`adapters.ocr.document_ai_provider._segment_text`),
+      so the detected line break travels with it: the box reading the word
+      酸素 has the text ``"酸素\n"``. Against an exact ``==`` that
+      trailing newline alone was enough to leave the annotation unplaced.
+    * **Full-width ASCII.** The live run also had a question whose printed
+      sub-question labels are full-width Latin letters (U+FF41 and up) while
+      the OCR read them back as their ASCII equivalents. A model quoting the
+      printed form could never match the read form.
+
+    Deliberately *not* NFKC, which would be the obvious library answer here:
+    `pdf_review_geometry.dart` must fold identically (the review screen and
+    the export have to agree on where a mark goes -- ``docs/pdf-export.md``
+    §2), Dart's core library has no NFKC, and adding a normalization
+    dependency to reach one is a bigger commitment than the two rules above,
+    which are portable in a few lines. Both rules are idempotent and
+    order-independent, so the two implementations cannot drift on them.
+    """
+    folded = "".join(
+        chr(ord(character) - 0xFEE0) if 0xFF01 <= ord(character) <= 0xFF5E else character
+        for character in text
+    )
+    return _WHITESPACE.sub("", folded)
+
+
 def _find_anchor_text_rect(
     anchor_text: str, recognitions: Sequence[RecognitionResult], answer_area: NormalizedRect
 ) -> NormalizedRect | None:
-    """The page-normalized rect of the most recent OCR box whose text exactly
-    matches ``anchor_text``, searching ``recognitions`` newest-first (a stale
-    earlier attempt can report the same text at a different position).
+    """The page-normalized rect of the OCR boxes reading ``anchor_text``,
+    searching ``recognitions`` newest-first (a stale earlier attempt can
+    report the same text at a different position).
+
+    **Matching is per *run of boxes*, not per box** (Issue #141). It used to
+    be ``box.text == anchor_text``, and in the live re-verification that
+    placed **none of the fourteen** annotations -- not one, across eight
+    subjects, with the OCR working. Two reasons, both structural rather than
+    bad luck:
+
+    * A Document AI box is one *token*. ``葉緑体で`` is two of them (``葉緑体``,
+      ``で``) and a longer phrase is six. Any anchor longer than a
+      single token could never equal one box's text.
+    * A token's text carries its own trailing break, so even ``酸素`` --
+      read perfectly, as one box -- did not equal the anchor ``酸素``.
+
+    So the anchor is looked for inside the text of consecutive boxes, on both
+    sides `_normalized_for_anchor`, and the rect is those boxes' union. The
+    *shortest* such run wins: a short anchor can be contained in many longer
+    ones, and the tightest is the one whose rect most nearly covers the words
+    the annotation is actually about.
+
+    What is deliberately **not** done is fuzzy matching (edit distance,
+    longest-common-subsequence). It would place several more of the live
+    run's annotations, and it would place them by guessing -- which is the
+    failure this whole issue is about. An anchor that cannot be found
+    verbatim goes to the margin band and says it could not be placed.
     """
+    needle = _normalized_for_anchor(anchor_text)
+    if not needle:
+        return None
     for recognition in reversed(recognitions):
-        for box in recognition.boxes:
-            if box.text == anchor_text:
-                return _crop_relative_to_page(box, answer_area)
+        matched = _shortest_box_run(needle, recognition.boxes)
+        if matched is not None:
+            return _crop_relative_to_page(matched, answer_area)
     return None
 
 
-def _crop_relative_to_page(box: BoundingBox, answer_area: NormalizedRect) -> NormalizedRect:
-    """Map ``box`` -- normalized against the cropped answer image the OCR
+def _shortest_box_run(needle: str, boxes: Sequence[BoundingBox]) -> NormalizedRect | None:
+    """The union rect of the fewest consecutive ``boxes`` whose joined,
+    normalized text contains ``needle`` -- or ``None`` if no run does."""
+    texts = [_normalized_for_anchor(box.text) for box in boxes]
+    limit = _run_length_limit(needle)
+    best: tuple[int, int] | None = None
+    for start in range(len(boxes)):
+        joined = ""
+        for end in range(start, len(boxes)):
+            joined += texts[end]
+            # Checked *before* containment: a run that reads far more than
+            # the anchor is refused outright rather than accepted for its
+            # rect. The rect drawn is the run's, not the anchor's.
+            if len(joined) > limit:
+                break
+            if needle in joined:
+                if best is None or end - start < best[1] - best[0]:
+                    best = (start, end)
+                break
+    if best is None:
+        return None
+    return _union([box.rect for box in boxes[best[0] : best[1] + 1]])
+
+
+def _union(rects: Sequence[NormalizedRect]) -> NormalizedRect:
+    """The smallest rect covering ``rects``.
+
+    A single rect is handed back as-is rather than recomputed: ``x + width -
+    x`` is not exactly ``width`` in binary floating point, and one box is by
+    far the commonest run, so recomputing would put rounding noise into the
+    position of nearly every annotation for nothing.
+    """
+    if len(rects) == 1:
+        return rects[0]
+    left = min(rect.x for rect in rects)
+    top = min(rect.y for rect in rects)
+    right = max(rect.x + rect.width for rect in rects)
+    bottom = max(rect.y + rect.height for rect in rects)
+    return NormalizedRect(x=left, y=top, width=right - left, height=bottom - top)
+
+
+def _crop_relative_to_page(rect: NormalizedRect, answer_area: NormalizedRect) -> NormalizedRect:
+    """Map ``rect`` -- normalized against the cropped answer image the OCR
     provider actually saw -- into a rect normalized against the whole page,
     by composing it with the crop's own page-normalized ``answer_area``
     (``adapters/image/opencv_preprocessor.crop_normalized_rect``: an
     axis-aligned crop, offset + scale only, no rotation).
     """
-    rect = box.rect
     return NormalizedRect(
         x=answer_area.x + rect.x * answer_area.width,
         y=answer_area.y + rect.y * answer_area.height,

@@ -1541,9 +1541,8 @@ void main() {
   );
 
   testWidgets(
-    'falls back a fixed-position mark with no OCR match to the question\'s '
-    'score_area (simplified-design-spec §12.2), instead of dropping it to '
-    'the comment list',
+    'draws no mark on the answer for a shape annotation with no OCR match, '
+    'and lists it under 設問コメント instead (Issue #141, §12.4)',
     (tester) async {
       final scoreArea = _rect(0.8, 0.05, 0.1, 0.1);
       final dependencies = _dependencies(
@@ -1565,6 +1564,7 @@ void main() {
           _annotation(
             kind: 'circle',
             rect: null,
+            comment: '位置が特定できない印',
           ), // no anchor_text and no OCR boxes -- nothing to match against
         ],
       );
@@ -1573,32 +1573,12 @@ void main() {
       await tester.pump();
       await _settlePdf(tester);
 
-      expect(find.byKey(const Key('annotation-anno-1')), findsOneWidget);
-      expect(find.text('設問コメント'), findsNothing);
-
-      final pageOverlayPositioned = tester.widget<Positioned>(
-        find.byKey(const Key('#__pageOverlay__:1')),
-      );
-      final pageRect = Rect.fromLTWH(
-        pageOverlayPositioned.left!,
-        pageOverlayPositioned.top!,
-        pageOverlayPositioned.width!,
-        pageOverlayPositioned.height!,
-      );
-      final overlayTopLeft = tester.getTopLeft(
-        find.byKey(const Key('annotation-anno-1')),
-      );
-      final pdfViewerTopLeft = tester.getTopLeft(find.byType(PdfViewer));
-      final localOffset = overlayTopLeft - pdfViewerTopLeft;
-
-      expect(
-        localOffset.dx,
-        closeTo(pageRect.left + 0.8 * pageRect.width, 5.0),
-      );
-      expect(
-        localOffset.dy,
-        closeTo(pageRect.top + 0.05 * pageRect.height, 5.0),
-      );
+      // Before Issue #141 this landed on `score_area`, which Issue #120
+      // derives as a band the height of the answer box -- a ○ or × stroked
+      // across a quarter of the page at a position nobody knows.
+      expect(find.byKey(const Key('annotation-anno-1')), findsNothing);
+      expect(find.text('設問コメント'), findsOneWidget);
+      expect(find.text('位置が特定できない印'), findsOneWidget);
     },
   );
 
