@@ -46,7 +46,10 @@ from auto_scoring.adapters.ai_grading._prompt import (
     sniff_image_format,
 )
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
-from auto_scoring.domain.ai_grading import parse_ai_grading_result
+from auto_scoring.domain.ai_grading import (
+    describe_schema_violation,
+    parse_ai_grading_result,
+)
 from auto_scoring.domain.ai_provider import (
     GradingRequest,
     GradingResponse,
@@ -709,11 +712,16 @@ class CodexAppServerProvider:
 
         try:
             parsed_result = parse_ai_grading_result(text)
-        except ValidationError:
+        except ValidationError as exc:
             # `from None`: see the matching comment in openrouter_provider.py
             # -- do not chain the raw ValidationError (AGENTS.md "Security").
+            # The *summary* is safe and goes on the exception as
+            # `detail` (Issue #121): field paths and pydantic error
+            # codes only, never `input_value` -- see
+            # `describe_schema_violation`.
             raise SchemaViolation(
-                "codex app-server response failed AIGradingResult schema validation"
+                "codex app-server response failed AIGradingResult schema validation",
+                detail=describe_schema_violation(exc),
             ) from None
 
         descriptor = ProviderDescriptor(

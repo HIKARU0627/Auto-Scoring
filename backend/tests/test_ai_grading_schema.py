@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from auto_scoring.domain.ai_grading import (
     AIGradingResult,
+    describe_schema_violation,
     parse_ai_grading_result,
 )
 from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
@@ -289,3 +290,61 @@ def test_snake_case_max_score_is_rejected_not_populated_by_name() -> None:
     payload["grading"] = grading
     with pytest.raises(ValidationError):
         parse_ai_grading_result(json.dumps(payload))
+
+
+# --------------------------------------------------------------------------- #
+# describe_schema_violation (Issue #121: which field, and why -- never a value)
+# --------------------------------------------------------------------------- #
+
+
+def _violation(overrides: dict[str, object] | None = None, remove: list[str] | None = None) -> str:
+    with pytest.raises(ValidationError) as caught:
+        _parse(overrides, remove)
+    return describe_schema_violation(caught.value)
+
+
+def test_violation_names_the_field_and_the_reason() -> None:
+    """Issue #121: ``Job.last_error`` stopped at "[gemini SchemaViolation]",
+    so identifying the cause needed the provider response captured by hand.
+    The field path and pydantic's own error code are both fixed literals of
+    this schema, so both can be said out loud."""
+    assert _violation(remove=["rationale"]) == "rationale: missing"
+
+
+def test_violation_names_a_nested_field_by_its_full_path() -> None:
+    """The live failure's own ``loc``: the offending comment was inside
+    ``annotations[0]``, not at the top level, and a summary that said only
+    "comment" would have pointed at the wrong field."""
+    summary = _violation(
+        {"annotations": [{"target": "行く", "type": "underline", "comment": "  "}]}
+    )
+    assert summary == "annotations.0.comment: string_too_short"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "remove", "secret"),
+    [
+        ({"comment": ""}, None, ""),
+        ({"rationale": "生徒の答案から写した文字列"}, ["comment"], "生徒の答案から写した文字列"),
+        ({"grading": {"score": 6, "maxScore": 5, "confidence": 0.5}}, None, "6"),
+    ],
+)
+def test_violation_never_echoes_the_value_that_failed(
+    overrides: dict[str, object], remove: list[str] | None, secret: str
+) -> None:
+    """``str(ValidationError)`` embeds each error's ``input_value``, which at
+    this boundary can be OCR'd student answer text (AGENTS.md "Security").
+    The summary is built from ``loc`` and ``type`` only -- never ``input``."""
+    summary = _violation(overrides, remove)
+    assert summary
+    if secret:
+        assert secret not in summary
+
+
+def test_violation_hides_an_unexpected_field_s_own_name() -> None:
+    """``extra_forbidden``'s ``loc`` *is* the offending key, copied verbatim
+    from the provider's response -- the one path segment that is not a
+    literal of this schema, so it is the one that gets replaced."""
+    summary = _violation({"生徒の答案らしき文字列": "x"})
+    assert "生徒の答案らしき文字列" not in summary
+    assert summary.endswith("extra_forbidden")

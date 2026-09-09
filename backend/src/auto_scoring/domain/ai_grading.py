@@ -60,6 +60,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    ValidationError,
     model_validator,
 )
 
@@ -185,6 +186,42 @@ class AIGradingResult(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("criteria contains duplicate ids")
         return self
+
+
+#: Stands in for an ``extra_forbidden`` error's own ``loc`` segment (see
+#: `describe_schema_violation`) -- never the real key.
+_UNEXPECTED_FIELD_LABEL = "<unexpected field>"
+
+
+def describe_schema_violation(error: ValidationError) -> str:
+    """Which fields failed and why, with nothing that could be a value.
+
+    Issue #121: `Job.last_error` stopped at ``[gemini SchemaViolation]``, so
+    working out *why* a question failed permanently meant capturing the
+    provider's response by hand. The field path and pydantic's error code
+    are both fixed literals -- ``loc`` segments are this module's own field
+    names and list indices, ``type`` is one of pydantic's own codes -- so
+    both can be reported, which is the same "assemble diagnosis out of safe
+    parts" rule `domain.ai_provider.ProviderAttempt` follows.
+
+    What is never reported is ``error["input"]``: at this boundary that can
+    be OCR'd student answer text, and ``str(ValidationError)`` (and so any
+    f-string embedding it, or any default traceback printed for a chained
+    exception) includes it for every error (AGENTS.md "Security").
+
+    One ``loc`` segment is not a literal of this module: for an
+    ``extra_forbidden`` error, pydantic's last segment *is* the unrecognized
+    key, copied verbatim from the provider's response -- a model that echoed
+    student text as a stray JSON key would otherwise carry it straight into
+    this "safe" summary. That segment, and only that one, is replaced.
+    """
+    parts = []
+    for detail in error.errors():
+        loc = list(detail["loc"])
+        if detail["type"] == "extra_forbidden" and loc:
+            loc[-1] = _UNEXPECTED_FIELD_LABEL
+        parts.append(f"{'.'.join(str(segment) for segment in loc)}: {detail['type']}")
+    return "; ".join(parts) if parts else "validation failed"
 
 
 def parse_ai_grading_result(raw: str | bytes) -> AIGradingResult:

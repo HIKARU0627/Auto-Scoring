@@ -7,6 +7,8 @@ data.md sections 3 (A)/(B) have no adapters wired up yet).
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -448,6 +450,47 @@ async def test_schema_violation_fails_permanently_without_persisting_a_grade(
     assert result.error_message is not None
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_schema_violation_records_which_field_failed_and_why(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #121: `Job.last_error` stopped at "[gemini SchemaViolation]",
+    and the sidecar log said nothing at all -- so a question that failed
+    permanently on every retry could only be explained by capturing the
+    provider's response by hand.
+
+    The field path and pydantic's error code are literals of this project's
+    own schema, so both belong in the diagnosis `ProviderAttempt` assembles
+    (Issue #97 round 4's rule, not an exception to it).
+    """
+    _seed(session_factory, store)
+    ai_provider.name = "gemini"
+    ai_provider.script(
+        SchemaViolation(
+            "provider returned invalid structured output",
+            detail="annotations.0.comment: string_too_long",
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    with caplog.at_level(logging.WARNING):
+        result = await processor.process(job)
+
+    assert result.error_message is not None
+    assert "annotations.0.comment: string_too_long" in result.error_message
+    # A permanent failure that leaves no `GradeResult` behind must also
+    # leave a line in the sidecar log -- the live run found none, because a
+    # single-provider setup never goes through `FallbackAIProvider`, which
+    # until now was the only thing that logged one.
+    assert any(
+        record.levelno == logging.WARNING and result.error_message in record.getMessage()
+        for record in caplog.records
+    )
 
 
 async def test_mismatched_response_fails_permanently_without_persisting_a_grade(

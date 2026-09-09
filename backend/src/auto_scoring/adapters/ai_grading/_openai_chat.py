@@ -39,7 +39,10 @@ from auto_scoring.adapters.ai_grading._prompt import (
     sniff_image_format,
 )
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
-from auto_scoring.domain.ai_grading import parse_ai_grading_result
+from auto_scoring.domain.ai_grading import (
+    describe_schema_violation,
+    parse_ai_grading_result,
+)
 from auto_scoring.domain.ai_provider import (
     GradingRequest,
     GradingResponse,
@@ -248,15 +251,20 @@ class ChatCompletionsAIProvider:
 
         try:
             parsed_result = parse_ai_grading_result(content)
-        except ValidationError:
+        except ValidationError as exc:
             # Do not chain the raw ValidationError (`from exc`): pydantic's
             # `errors()` retains the actual malformed field value under
             # `input_value`, and Python's default traceback rendering
             # prints a chained cause's own `str()` -- which would leak that
             # value (possibly OCR'd student content) into logs (AGENTS.md
             # "Security", docs/poc-2-ai-grading.md section 3.7).
+            # The *summary* is safe and goes on the exception as
+            # `detail` (Issue #121): field paths and pydantic error
+            # codes only, never `input_value` -- see
+            # `describe_schema_violation`.
             raise SchemaViolation(
-                f"{self._label} response failed AIGradingResult schema validation"
+                f"{self._label} response failed AIGradingResult schema validation",
+                detail=describe_schema_violation(exc),
             ) from None
 
         return grading_response_from_result(

@@ -198,23 +198,29 @@ URL のログを止めた時点の説明「必要な情報は `GradeResult` と 
 aiplatform を有効化するのか(403)・`AUTO_SCORING_GEMINI_MODEL` の綴りが違うのか(404) を
 区別できない。
 
-`domain/ai_provider.py` に `ProviderAttempt` を足した。持てるのは3つだけ:
+`domain/ai_provider.py` に `ProviderAttempt` を足した。持てるのは次の 4 つだけ
+（3 つ目までが Issue #97、4 つ目は Issue #121 で足した）:
 
-| 記録するもの      | 何を使うか                                                            |
-| ----------------- | --------------------------------------------------------------------- |
-| provider の識別子 | アダプタの `name` **リテラル**（`describe().model` は設定なので不可） |
-| 失敗の種類        | このポートの**例外クラス名**（`ErrorCategory` と1:1）                 |
-| HTTP ステータス   | **数値**。応答が無い場合（timeout/transport）は `None`                |
+| 記録するもの      | 何を使うか                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| provider の識別子 | アダプタの `name` **リテラル**（`describe().model` は設定なので不可）                                       |
+| 失敗の種類        | このポートの**例外クラス名**（`ErrorCategory` と1:1）                                                       |
+| HTTP ステータス   | **数値**。応答が無い場合（timeout/transport）は `None`                                                      |
+| schema 違反の詳細 | このリポジトリの schema 定義由来の**フィールドパス**と pydantic の**種別コード**（Issue #121 で追加。後掲） |
 
 例外メッセージ・レスポンスボディ・URL・ヘッダは入れない。**濾すのではなく組み立てる**
 ので、アダプタのメッセージが将来また設定値を含んでも `Job.last_error` へは出ない。
+4 つ目も同じ規律の適用であって例外ではない -- 組み立てる部品が全部リテラルであることを
+`describe_schema_violation` 側で保証している。
 
-出口は2つ。`Job.last_error`（jobs API が返し、画面へ出せる。答案1件・設問1件の粒度で
-再起動をまたいで残る）と、`FallbackAIProvider` の WARNING 1行（**フォールスルーした段
+出口は3つ。`Job.last_error`（jobs API が返し、画面へ出せる。答案1件・設問1件の粒度で
+再起動をまたいで残る）、`FallbackAIProvider` の WARNING 1行（**フォールスルーした段
 ごと**に出す。全滅時の途中の段 — 「Vertex が 403 で OpenRouter が 401」 — は最後の例外
-だけでは表せず、成功して落ちたとき、つまり例外が誰にも渡らないときにも残る必要がある）。
+だけでは表せず、成功して落ちたとき、つまり例外が誰にも渡らないときにも残る必要がある）、
+そして `GradingJobProcessor._failed` の WARNING 1行（Issue #121 で追加。
+**チェーンを組まない単一プロバイダ構成**では前者が一度も出ないため）。
 
-**「全部のケースを診断できる」とは主張しない。** 主張できるのはこの3つを記録することまで。
+**「全部のケースを診断できる」とは主張しない。** 主張できるのはこの4つを記録することまで。
 
 詳細と教訓は `docs/quality-gates.md`
 「新しい公開経路を作ったら、そこへ流れ込むものを全部見直す」。
@@ -268,6 +274,33 @@ loc: ('annotations', 0, 'comment')   type: string_too_long
 **プロンプトだけには頼らない。** 実機はまさにその指示を守らなかった。
 文面は「超えた分は切り捨てられる」に直してある（以前の「reject される」は、
 この変更で嘘になるため）。
+
+### どのフィールドがなぜ落ちたかを残す（Issue #121）
+
+同じ実機検証で、**サイドカーのログに恒久失敗が 1 行も記録されず**、
+`Job.last_error` も `[gemini SchemaViolation]` までしか言わなかった。原因の特定には
+プロバイダ応答を自前で捕まえる必要があった。
+
+`ProviderAttempt` の「濾すのではなく組み立てる」規律（前掲）は、この情報を**禁じていない**。
+フィールドパスはこのリポジトリ自身の schema 定義のリテラルであり、
+`string_too_long` のような種別コードは pydantic 自身のリテラルである。**値だけが危ない。**
+
+- `domain/ai_grading.py` の `describe_schema_violation` が `loc` と `type` だけから
+  `annotations.0.comment: string_too_long` を組み立てる。`error["input"]` は読まない。
+  `extra_forbidden` の `loc` 末尾は**プロバイダが送ってきたキーそのもの**なので、
+  そこだけ固定のプレースホルダに置き換える。
+  （この処理は PoC 2 のレポータが既に持っていたものを domain へ移して共有した。
+  同じ判断を 2 箇所で維持しない。）
+- `ProviderAttempt` に `detail` を足し、3 つのアダプタが
+  `SchemaViolation(..., detail=describe_schema_violation(exc))` を投げる。
+  `Job.last_error` は
+  `gemini AI provider returned a malformed response [gemini SchemaViolation annotations.0.comment: string_too_long]`
+  になる。
+- `GradingJobProcessor._failed` が、同じ文字列を WARNING で 1 行出す。
+  `FallbackAIProvider` の WARNING は**チェーンを組んだときしか出ない**が、
+  実機はプロバイダ 1 本の構成だった（鍵の無い openrouter / openai は
+  `factory` が除外する）。ログが 1 行も無かったのはそれが理由で、
+  恒久失敗の記録をチェーンの有無に依存させない。
 
 ### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
 
@@ -346,7 +379,9 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
 （provider adapter内部）で`SchemaViolation`として弾くため、`GradingJobProcessor`
 が改めて数値レンジをチェックする必要が無い。`error_message`にはprovider例外の
 生メッセージを含めない（request/response本文（答案本文を含み得る）を含み得る
-ため、AGENTS.md「Security」）。
+ため、AGENTS.md「Security」）。schema 違反のときだけ、**フィールドパスと
+pydantic の種別コード**（値ではない）が `describe_schema_violation` 経由で
+`ProviderAttempt.detail` に載る（Issue #121。前掲）。
 
 ### provider requestで全rubric意味論を保持する
 

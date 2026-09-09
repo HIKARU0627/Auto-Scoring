@@ -23,7 +23,10 @@ rejecting responses the adapter itself had asked for.
 
 Never logs the access token, the request payload (answer image / OCR text /
 rubric text), or the raw response body (AGENTS.md "Security"): exceptions
-carry only HTTP status codes and exception type names, never field values.
+carry only HTTP status codes, exception type names, and -- for a schema
+violation -- the failing field paths and pydantic error codes this project's
+own schema defines (``domain.ai_grading.describe_schema_violation``), never
+field values.
 """
 
 from __future__ import annotations
@@ -46,7 +49,10 @@ from auto_scoring.adapters.ai_grading._prompt import (
     sniff_image_format,
 )
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
-from auto_scoring.domain.ai_grading import parse_ai_grading_result
+from auto_scoring.domain.ai_grading import (
+    describe_schema_violation,
+    parse_ai_grading_result,
+)
 from auto_scoring.domain.ai_provider import (
     GradingRequest,
     GradingResponse,
@@ -239,14 +245,19 @@ class VertexGeminiAIProvider:
 
         try:
             parsed_result = parse_ai_grading_result(_response_text(data))
-        except ValidationError:
+        except ValidationError as exc:
             # Never chain the ValidationError: pydantic keeps the offending
             # field value in `input_value`, and a chained cause's `str()`
             # is printed by Python's default traceback rendering -- which
             # would leak OCR'd student content into logs (AGENTS.md
             # "Security", docs/poc-2-ai-grading.md section 3.7).
+            # The *summary* is safe and goes on the exception as
+            # `detail` (Issue #121): field paths and pydantic error
+            # codes only, never `input_value` -- see
+            # `describe_schema_violation`.
             raise SchemaViolation(
-                f"{_LABEL} response failed AIGradingResult schema validation"
+                f"{_LABEL} response failed AIGradingResult schema validation",
+                detail=describe_schema_violation(exc),
             ) from None
 
         return grading_response_from_result(
