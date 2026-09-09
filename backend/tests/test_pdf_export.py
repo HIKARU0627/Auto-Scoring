@@ -734,38 +734,59 @@ class TestTheScoreNeverLandsOnTheAnswer:
         questions, _ = build_questions_and_rubrics("test-1", regions, criteria=draft)
         return questions
 
-    def test_a_score_slot_never_overlaps_any_answer_box_on_its_page(self) -> None:
+    @staticmethod
+    def _score_rect(question: Question, questions: list[Question]) -> NormalizedRect:
+        """その設問の点数が**実際に描かれる**矩形。
+
+        自前の `score_area` があればそれ、無ければ出力時に割り当てられる余白
+        スロット（`build_export_marks` が使う順序と同じ）。**どちらを通ったかを
+        問わない**のは、#159 が言っているのが「点数がどこに落ちるか」であって
+        「どの関数が返したか」ではないからである。片方だけを見るテストは、
+        導出が復活したときに「スロットが無い」と落ちて、**重なっていること自体は
+        一度も評価しない。**
+        """
+        if question.score_area is not None:
+            return question.score_area
+        slot = fallback_score_areas(questions).get(question.id)
+        assert slot is not None, f"{question.id} は点数を書く場所が無い"
+        return slot
+
+    def test_the_score_never_overlaps_any_answer_box_on_its_page(self) -> None:
         """6/16 が次の設問の回答欄に入っていた件。**縦に積んだ回答欄**という、
-        実機で最も多かった形で測る。直す前は 1問目の得点欄が 2問目の回答欄に
+        実機で最も多かった形で測る。直す前は1問目の点数が2問目の回答欄に
         丸ごと入る。"""
         stacked = self._questions(
             NormalizedBBox(x0=0.08, y0=0.20, x1=0.92, y1=0.45),
             NormalizedBBox(x0=0.08, y0=0.45, x1=0.92, y1=0.70),
             NormalizedBBox(x0=0.08, y0=0.70, x1=0.92, y1=0.95),
         )
-        slots = fallback_score_areas(stacked)
+        answer_boxes = [question.answer_area for question in stacked]
+        assert all(box is not None for box in answer_boxes), "回答欄が確定していない"
 
-        assert len(slots) == len(stacked), "点数の書き場所が無い設問がある"
-        answer_boxes = [q.answer_area for q in stacked]
         for question in stacked:
-            slot = slots[question.id]
-            for box in answer_boxes:
+            score = self._score_rect(question, stacked)
+            for index, box in enumerate(answer_boxes):
                 assert box is not None
-                assert _overlap(slot, box) == 0.0, f"{question.id} の得点欄が回答欄に重なっている"
+                assert _overlap(score, box) == 0.0, (
+                    f"{question.id} の点数が設問{index + 1}の回答欄に重なっている"
+                )
 
-    def test_a_vertical_answer_column_puts_its_score_in_the_margin_too(self) -> None:
+    def test_the_score_of_a_vertical_answer_column_goes_to_the_margin(self) -> None:
         """縦書きの回答欄（縦に長く横に狭い一列）。#159 が報告した形。
 
-        真下の帯を取ると同じマス目の続きに入る。列そのものにも重ならないこと。
+        一列しかないので**矩形どうしは交差しない** —— 実機で重なっていたのは
+        「真下の帯」が同じマス目の続き、つまり紙のインクだったからで、それは
+        domain からは見えない。ここで固定できるのは「点数の位置が回答欄の形から
+        導かれていないこと」の方である: 実測で空だと確かめた左余白帯の中に入る。
         """
         (question,) = self._questions(NormalizedBBox(x0=0.797, y0=0.222, x1=0.843, y1=0.457))
-        slot = fallback_score_areas([question])[question.id]
+        score = self._score_rect(question, [question])
 
         assert question.answer_area is not None
-        assert _overlap(slot, question.answer_area) == 0.0
-        assert slot.x + slot.width <= question.answer_area.x, "得点欄が回答欄の脇より右にある"
+        assert score.x + score.width <= 0.035, "点数が左余白帯の外にある"
+        assert score.x + score.width <= question.answer_area.x, "点数が回答欄より右にある"
 
-    def test_the_score_slot_never_breaks_the_minimum_font_size(self) -> None:
+    def test_the_score_never_breaks_the_minimum_font_size(self) -> None:
         """Issue #133: 縦書きで導出された得点欄が最小フォントサイズを下回る。
 
         実機の該当設問は `score_area.width = 0.0031`（A4縦で約1.8pt）で、6pt の
@@ -780,13 +801,13 @@ class TestTheScoreNeverLandsOnTheAnswer:
             # #133 を起こす形: 幅がページの1.6%しかない縦一列。
             NormalizedBBox(x0=0.638, y0=0.236, x1=0.654, y1=0.960)
         )
-        slot = fallback_score_areas([question])[question.id]
+        score = self._score_rect(question, [question])
 
         # このプロジェクトが扱う最小のページ = A4横の短辺 (595pt)。
         # 正規化された幅・高さはそこで最も小さい実寸になる。
         shortest_page_pt = 595.0
-        assert slot.width * shortest_page_pt >= _MIN_FONT_SIZE_PT, "全角1文字が幅に入らない"
-        assert slot.height * shortest_page_pt >= _MIN_FONT_SIZE_PT * _LINE_HEIGHT_FACTOR, (
+        assert score.width * shortest_page_pt >= _MIN_FONT_SIZE_PT, "全角1文字が幅に入らない"
+        assert score.height * shortest_page_pt >= _MIN_FONT_SIZE_PT * _LINE_HEIGHT_FACTOR, (
             "1行が高さに入らない"
         )
 

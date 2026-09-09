@@ -753,9 +753,6 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
     # for a page nothing was drawn on, which is the Issue #120 failure.
     engine = PdfiumPypdfEngine()
     for question in client.get(f"/tests/{test_id}/questions", headers=_AUTH).json():
-        assert question["score_area"] is None, (
-            f"{question['id']} still has a derived score area (Issue #159)"
-        )
         answer_area = question["answer_area"]
         assert answer_area is not None, f"{question['id']} lost its answer box"
         rendered = engine.render_page_png(output, question["page"] - 1, scale=2.0)
@@ -764,6 +761,12 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
         )
         assert not has_red_within(rendered, NormalizedRect(**answer_area), margin=0.0), (
             f"{question['id']}'s ink landed on the student's answer"
+        )
+        # Last, not first: the two ink assertions above are what this test is
+        # for, and a `score_area` check ahead of them would short-circuit
+        # before either one ever ran.
+        assert question["score_area"] is None, (
+            f"{question['id']} still has a derived score area (Issue #159)"
         )
 
 
