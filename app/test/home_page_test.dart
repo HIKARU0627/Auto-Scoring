@@ -187,6 +187,22 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('まだテストが登録されていません'), findsOneWidget);
+
+    // Issue #95 決定 1 で模範解答PDFは廃止した。実在しない資料なので、画面が
+    // それを要求すると利用者は用意できないものを探すことになる (オーナーが実機で
+    // 指摘した最初の問題がこれ)。この文言は Issue #101 が入力を作り直したあとも
+    // main に残っていたので、ここで固定する。
+    expect(
+      find.textContaining('模範解答'),
+      findsNothing,
+      reason: '模範解答PDFは廃止された。画面が要求してはいけない',
+    );
+    expect(
+      find.textContaining('採点マニュアル'),
+      findsNothing,
+      reason: '「採点マニュアルPDF」は旧仕様の呼び名。いまは採点基準PDF',
+    );
+
     await tester.tap(find.byKey(const Key('home-next-up-action')));
     await tester.pumpAndSettle();
 
