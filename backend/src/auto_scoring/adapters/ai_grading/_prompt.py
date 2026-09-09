@@ -43,6 +43,16 @@ def sniff_image_format(data: bytes) -> str:
 #: formatting mismatch from being counted as a grading-quality difference
 #: between candidates.
 #:
+#: The verbatim-quote sentence is Issue #141's half of the same problem, at
+#: the other end of the pipeline. An annotation carries no coordinates
+#: (§12.1): the app places it by looking its ``target`` up among the OCR
+#: word boxes. Nothing had ever told a model that, so several of them wrote
+#: a tidied-up or re-notated version of what the student had written, which
+#: is nowhere in the reading and therefore nowhere on the page. Saying it in
+#: the trusted channel costs one sentence; `domain.ai_grading.
+#: AnnotationCandidate.target` says the same thing in the schema, since a
+#: model that reads only one of the two still gets it.
+#:
 #: It also promises less than it used to, on purpose. Until Issue #121 it
 #: said an over-long value was rejected rather than truncated, which was
 #: true and was the bug: a live run threw away complete, correct grades over
@@ -63,7 +73,12 @@ GRADING_SYSTEM_INSTRUCTIONS = (
     "rubric lists it (the first criterion is 1), never by copying any other "
     "text. Obey every length limit the schema states: a comment longer than "
     "its maxLength is cut off at that limit, so anything you write past it "
-    "is lost. Say what matters first, within the limit."
+    "is lost. Say what matters first, within the limit. An annotation's "
+    "'target' must be quoted verbatim from the student's OCR reading -- one "
+    "contiguous run of characters exactly as it appears there, never "
+    "rewritten, corrected, re-notated or stitched together from separate "
+    "parts of the answer -- because that is how the mark is located on the "
+    "page; if you cannot quote it, leave the annotation out."
 )
 
 
