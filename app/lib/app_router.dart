@@ -5,6 +5,7 @@ import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/features/home/home_page.dart';
 import 'package:auto_scoring_app/features/intake/intake_page.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
+import 'package:auto_scoring_app/features/review_queue/submission_queue_page.dart';
 import 'package:auto_scoring_app/features/settings/settings_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
@@ -49,6 +50,11 @@ GoRouter createAppRouter({String initialLocation = AppRoutes.home}) {
         path: AppRoutes.testSettingsPattern,
         builder: (context, state) =>
             TestSettingsPage(testId: state.pathParameters['testId']!),
+      ),
+      GoRoute(
+        path: AppRoutes.submissionQueuePattern,
+        builder: (context, state) =>
+            SubmissionQueuePage(testId: state.pathParameters['testId']!),
       ),
       GoRoute(
         path: AppRoutes.pdfReviewPattern,

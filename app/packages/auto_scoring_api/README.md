@@ -109,6 +109,7 @@ Class | Method | HTTP request | Description
 [*ReviewApi*](doc/ReviewApi.md) | [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](doc/ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
 [*ReviewApi*](doc/ReviewApi.md) | [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](doc/ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
 [*ReviewApi*](doc/ReviewApi.md) | [**listQuestionsTestsTestIdQuestionsGet**](doc/ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
+[*ReviewApi*](doc/ReviewApi.md) | [**listReviewProgressTestsTestIdReviewProgressGet**](doc/ReviewApi.md#listreviewprogressteststestidreviewprogressget) | **GET** /tests/{test_id}/review-progress | List Review Progress
 [*ReviewApi*](doc/ReviewApi.md) | [**listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet**](doc/ReviewApi.md#listreviewssubmissionssubmissionidquestionsquestionidreviewsget) | **GET** /submissions/{submission_id}/questions/{question_id}/reviews | List Reviews
 [*ReviewApi*](doc/ReviewApi.md) | [**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](doc/ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
 [*ReviewApi*](doc/ReviewApi.md) | [**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](doc/ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
@@ -201,6 +202,7 @@ Class | Method | HTTP request | Description
  - [ScoreResponse](doc/ScoreResponse.md)
  - [ScoreValueResponse](doc/ScoreValueResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
+ - [SubmissionReviewProgressResponse](doc/SubmissionReviewProgressResponse.md)
  - [TestMaterialResponse](doc/TestMaterialResponse.md)
  - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)

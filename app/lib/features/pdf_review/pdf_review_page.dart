@@ -4,10 +4,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
+import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/core/confidence_level.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
@@ -17,6 +19,7 @@ import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/material_read_ranges.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
+import 'package:auto_scoring_app/core/review_queue.dart';
 import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
@@ -1014,11 +1017,43 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       if (!mounted) return;
       _updatePolling();
       unawaited(_ensureReviewLoaded());
+      // 待たない。現在地と「次の答案」はこの画面の骨格ではないので、届いたら
+      // 出せばよく、届くまで答案を見せないほうが損である。
+      unawaited(_loadQueue());
     } on SidecarApiException catch (error) {
       if (!mounted) return;
       _setStateIfMounted(() => _shellError = error.message);
     } finally {
       _setStateIfMounted(() => _loadingShell = false);
+    }
+  }
+
+  /// このテストの答案キュー -- 何枚目か、次はどれか (Issue #113)。
+  ///
+  /// **並び順は `core/review_queue.dart` が決める。** 答案キュー画面と同じ規則で
+  /// なければ、一覧で見えている順と Enter で進む順がずれる。
+  ///
+  /// 取れなくても画面は成立する。そのときは現在地が出ず、最後の設問で止まる
+  /// (Issue #113 より前の挙動に戻るだけ) -- キューが引けないことを理由に、
+  /// 目の前の答案のレビューまで止める意味は無い。
+  ReviewQueue? _queue;
+
+  /// キューの読み込み。**失敗しても握り潰す** -- 上の理由による。
+  Future<void> _loadQueue() async {
+    try {
+      final submissions = await _dependencies.listSubmissions(widget.testId);
+      List<SubmissionReviewProgressResponse> progress = const [];
+      try {
+        progress = await _dependencies.listReviewProgress(widget.testId);
+      } on SidecarApiException {
+        progress = const [];
+      }
+      if (!mounted) return;
+      _setStateIfMounted(() {
+        _queue = ReviewQueue.from(submissions: submissions, progress: progress);
+      });
+    } on SidecarApiException {
+      // 現在地が出ないだけ。レビューそのものは続けられる。
     }
   }
 
@@ -1570,10 +1605,74 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (_questionIndex < _questions.length - 1) {
       _moveQuestion(1);
     } else {
+      _goToNextSubmission();
+    }
+  }
+
+  /// この答案を終えたので、次の答案の最初の設問へ移る (Issue #113 受入2)。
+  ///
+  /// **ここが行き止まりだった。** 最後の設問を確定すると「最後の設問です」と
+  /// 出るだけで、次へ行く導線が無く、ホームへ戻るしかなかった。40枚だと
+  /// その往復だけで80回の操作になる。
+  ///
+  /// `push` ではなく `replace` を使う。40枚ぶんの答案を戻るスタックに積んでも
+  /// 意味が無く、戻る先は「入ってきた場所」(キュー、またはホーム) のままで
+  /// あるべきだからである。答案ごとに `State` が作り直されることは
+  /// `app_router.dart` の `ValueKey` が保証している。
+  void _goToNextSubmission() {
+    final next = _queue?.nextAfter(widget.submissionId);
+    if (next == null) {
+      // キューが引けていないか、本当に残りが無いか。**どちらなのかを言い分ける。**
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _queue == null ? '最後の設問です（次の答案は取得できませんでした）' : 'このテストの答案はすべて確認しました',
+          ),
+          action: _queue == null
+              ? null
+              : SnackBarAction(
+                  label: '答案キューへ',
+                  onPressed: () =>
+                      context.go(AppRoutes.submissionQueue(widget.testId)),
+                ),
+        ),
+      );
+      return;
+    }
+    context.replace(
+      AppRoutes.pdfReview(testId: widget.testId, submissionId: next.id),
+    );
+  }
+
+  /// この答案を後回しにして、次の答案へ移る (Issue #113、`docs/business-rules-
+  /// and-evaluation-data.md` §2 (16) の `S`)。
+  ///
+  /// **何も確定しない。答案の状態も書き換えない。** だから未了のままキューに
+  /// 残り、また回ってくる。「無視する」ではなく「順番を変える」である。
+  ///
+  /// 40枚を続けてさばく最中に手が止まる理由は、AIの失敗だけではない。採点基準を
+  /// 確認したい、後の答案と見比べたい、単に判断を保留したい -- どれも「いま
+  /// 決めない」であって、**決めないまま次へ行けることが要る**。
+  ///
+  /// 当初はこれを「AI採点が失敗した設問があると、その答案は確定できない」ことへの
+  /// 逃げ道として入れた。Issue #118 の「点数を入力」が入ったので**その理由は
+  /// 無くなった**が、後回しにした答案が最後に必ず片付けられるようになったぶん、
+  /// この操作はむしろ安全になっている。
+  void _deferSubmission() {
+    final next = _queue?.nextAfter(widget.submissionId);
+    if (next == null) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('最後の設問です')));
+      ).showSnackBar(const SnackBar(content: Text('ほかに確認できる答案がありません')));
+      return;
     }
+    // **押したことを言う。** 黙って次へ飛ぶと「消えた」と読まれる。
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('後回しにしました。答案キューに残っています')));
+    context.replace(
+      AppRoutes.pdfReview(testId: widget.testId, submissionId: next.id),
+    );
   }
 
   Future<void> _reject() async {
@@ -1955,7 +2054,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   ///
   /// Key assignments per docs/business-rules-and-evaluation-data.md §2 (16):
   /// Enter=承認して次へ, E=修正, X=却下, R=再判定, G=点数を入力,
-  /// ↑/↓=設問移動, Ctrl+Z=Undo.
+  /// S=この答案を後回しにする, ↑/↓=設問移動, Ctrl+Z=Undo.
   ///
   /// `G` is bound unconditionally, like every other action key: the
   /// callbacks are the gate (`_showManualGradeDialog` returns immediately
@@ -1977,6 +2076,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           unawaited(_showManualGradeDialog()),
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyZ): () =>
           unawaited(_undo()),
+      LogicalKeySet(LogicalKeyboardKey.keyS): _deferSubmission,
     };
   }
 
@@ -2025,7 +2125,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
 
   String _appBarTitle() {
     final label = _submission?.studentLabel ?? widget.submissionId;
-    return '添削レビュー - $label';
+    // 何枚目かを常に出す (Issue #113 受入5)。40枚を流す作業で「あと何枚か」が
+    // 見えないのは、終わりの見えない作業をさせることになる。
+    //
+    // キューが引けていないときは**書かない**。「1 / 1」と出すと、残り1枚だと
+    // 読まれる。分からないことを、分かっているように見せない。
+    final position = _queue?.positionOf(widget.submissionId) ?? 0;
+    if (position == 0) return '添削レビュー - $label';
+    return '添削レビュー - $label（$position / ${_queue!.total} 件目）';
   }
 
   Widget _buildShellError() {
@@ -3031,6 +3138,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       spacing: AppSpacing.md,
       runSpacing: AppSpacing.sm,
       children: [
+        // 逃げ道は一番左に置く。確定の操作 (却下・修正・承認) と並べるのでは
+        // なく、「この答案から離れる」ものとして分ける。
+        OutlinedButton.icon(
+          key: const Key('review-defer-button'),
+          onPressed: _deferSubmission,
+          icon: const Icon(Icons.low_priority),
+          label: const Text('後回し (S)'),
+        ),
         OutlinedButton.icon(
           key: const Key('review-undo-button'),
           onPressed: _canUndo ? _undo : null,

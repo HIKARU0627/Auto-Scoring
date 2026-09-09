@@ -35,6 +35,15 @@ abstract final class AppRoutes {
   static String testSettings(String testId) =>
       '/tests/${Uri.encodeComponent(testId)}/settings';
 
+  /// 答案キュー -- そのテストの答案が何枚あって、どれが済んでいて、次はどれか
+  /// (Issue #113)。
+  ///
+  /// ここから添削レビューへ入り、最後の設問を確定すると**次の答案へ直接進む**。
+  /// 40枚を続けてさばくのにホームへ戻らせない、というのがこの経路の理由である。
+  static const String submissionQueuePattern = '/tests/:testId/submissions';
+  static String submissionQueue(String testId) =>
+      '/tests/${Uri.encodeComponent(testId)}/submissions';
+
   /// 添削レビュー画面 for one submission of one test.
   static const String pdfReviewPattern =
       '/tests/:testId/submissions/:submissionId/review';

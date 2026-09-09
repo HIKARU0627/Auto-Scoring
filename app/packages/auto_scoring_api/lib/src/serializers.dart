@@ -83,6 +83,7 @@ import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
 import 'package:auto_scoring_api/src/model/score_value_response.dart';
 import 'package:auto_scoring_api/src/model/submission_response.dart';
+import 'package:auto_scoring_api/src/model/submission_review_progress_response.dart';
 import 'package:auto_scoring_api/src/model/test_material_response.dart';
 import 'package:auto_scoring_api/src/model/test_response.dart';
 import 'package:auto_scoring_api/src/model/test_summary.dart';
@@ -164,6 +165,7 @@ part 'serializers.g.dart';
   ScoreResponse,
   ScoreValueResponse,
   SubmissionResponse,
+  SubmissionReviewProgressResponse,
   TestMaterialResponse,
   TestResponse,
   TestSummary,
@@ -251,6 +253,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(AnnotationResponse)]),
         () => ListBuilder<AnnotationResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(SubmissionReviewProgressResponse)]),
+        () => ListBuilder<SubmissionReviewProgressResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(IntakeRuleModel)]),

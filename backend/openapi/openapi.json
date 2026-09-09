@@ -2676,6 +2676,35 @@
         "title": "SubmissionResponse",
         "type": "object"
       },
+      "SubmissionReviewProgressResponse": {
+        "description": "How far one answer has got, counted per question (Issue #113).\n\n**Counts only.** \u7b54\u6848\u30ad\u30e5\u30fc needs three numbers per row and nothing else; the\nrow's own\u72b6\u614b already comes from `SubmissionResponse.state`, and anything\nricher belongs to the screen that opens the answer.\n\nWhy it exists at all: `GET /submissions/{id}/questions/{qid}/reviews` is\nper-question, so a 40-answer test would cost 200 requests to draw one list\n-- the same shape \u30db\u30fc\u30e0\u753b\u9762 already refuses for jobs\n(`docs/home-dashboard.md` \u00a74). One request for the whole test instead.",
+        "properties": {
+          "confirmed_questions": {
+            "title": "Confirmed Questions",
+            "type": "integer"
+          },
+          "manual_grading_questions": {
+            "title": "Manual Grading Questions",
+            "type": "integer"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          },
+          "total_questions": {
+            "title": "Total Questions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "submission_id",
+          "total_questions",
+          "confirmed_questions",
+          "manual_grading_questions"
+        ],
+        "title": "SubmissionReviewProgressResponse",
+        "type": "object"
+      },
       "TestMaterialResponse": {
         "description": "One registered file, and the role it was registered under.\n\n``original_filename`` is the name the reviewer chose the file by. It is\ncarried purely so \"which of my files became the \u63a1\u70b9\u57fa\u6e96?\" stays\nanswerable after import; nothing matches on it, because names in real\nmaterial are not reliable evidence (`domain.intake_template`).",
         "properties": {
@@ -5883,6 +5912,58 @@
           }
         ],
         "summary": "List Questions",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/tests/{test_id}/review-progress": {
+      "get": {
+        "description": "Per-question review progress for every answer of one test.\n\nOrdered by the answers' own ``created_at``, the order every other list\nof a test's answers already uses (`SubmissionRepository.list_for_test`),\nso the client never has to re-sort to line this up with\n`GET /tests/{id}/submissions`.",
+        "operationId": "list_review_progress_tests__test_id__review_progress_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SubmissionReviewProgressResponse"
+                  },
+                  "title": "Response List Review Progress Tests  Test Id  Review Progress Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Review Progress",
         "tags": [
           "review"
         ]

@@ -77,6 +77,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         ScoreResponse,
         ScoreValueResponse,
         SubmissionResponse,
+        SubmissionReviewProgressResponse,
         TestResponse,
         TestSummary,
         UnresolvedQuestionModel,
@@ -1210,6 +1211,33 @@ class SidecarApiClient {
         cancelToken: cancelToken,
       );
       return (response.data ?? const <QuestionResponse>[]).toList();
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// How far review has got on **every** answer of [testId], counted per
+  /// question (Issue #113).
+  ///
+  /// One request for the whole test. The per-question review history is only
+  /// readable one `(submission, question)` at a time, so drawing 答案キュー from
+  /// it would cost 40 x 5 requests for a normal week -- the same shape
+  /// ホーム画面 already refuses for jobs (`docs/home-dashboard.md` §4).
+  ///
+  /// Rows come back in the answers' own intake order, the same order
+  /// [listSubmissions] uses, so the two line up without re-sorting.
+  Future<List<SubmissionReviewProgressResponse>> listReviewProgress(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _reviewApi
+          .listReviewProgressTestsTestIdReviewProgressGet(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return (response.data ?? const <SubmissionReviewProgressResponse>[])
+          .toList();
     } on DioException catch (error) {
       throw _translate(error);
     }

@@ -333,7 +333,7 @@ class _TestProgressCard extends StatelessWidget {
             if (progress.isDraft)
               const _DraftNotice()
             else ...[
-              _SubmissionProgress(progress: progress),
+              _SubmissionProgress(progress: progress, onOpen: onOpen),
               const SizedBox(height: AppSpacing.sm),
               _BucketCounts(progress: progress),
             ],
@@ -379,9 +379,10 @@ class _DraftNotice extends StatelessWidget {
 /// 「進んでいる実感」の担当。件数の羅列ではなく、そのテストで自分がどこまで
 /// 来たかを1本のバーで見せる。
 class _SubmissionProgress extends StatelessWidget {
-  const _SubmissionProgress({required this.progress});
+  const _SubmissionProgress({required this.progress, required this.onOpen});
 
   final HomeTestProgress progress;
+  final ValueChanged<String> onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -395,19 +396,47 @@ class _SubmissionProgress extends StatelessWidget {
     }
     final done = progress.doneCount;
     final total = progress.total;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text('確認済み $done / $total', style: context.texts.bodyMedium),
-        const SizedBox(height: AppSpacing.xs),
-        // semanticsValue は渡さない -- Flutter が既定で百分率を読み上げる。
-        // 件数そのものは真上の行が読まれるので、ここで重ねる必要は無い。
-        LinearProgressIndicator(
-          value: done / total,
-          borderRadius: AppRadius.smAll,
-          semanticsLabel: '${progress.test.name} の確認済み答案',
+    // **数そのものを入口にする** (Issue #113)。ボタンを1つ増やすより、既に
+    // 出ている「確認済み N / M」を押せるほうが素直である -- 新しい要素が増えず、
+    // 押した先が何かも自明になる。
+    //
+    // #68 でホームの情報量を絞ったのは正しい判断だったが、**あのときは答案キューが
+    // 存在しなかった**。いまは「40枚のうちどれを見たか分からない」ほうが問題である。
+    return InkWell(
+      key: Key('home-open-queue-${progress.test.id}'),
+      onTap: () => onOpen(AppRoutes.submissionQueue(progress.test.id)),
+      borderRadius: AppRadius.smAll,
+      child: Padding(
+        // InkWell の反応する範囲を、文字の行より少しだけ広げる。行そのものと
+        // 同じ高さだと、押せることが指先で分かりにくい。
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Text('確認済み $done / $total', style: context.texts.bodyMedium),
+                // **数のすぐ隣に置く。** 押せることは形でも示さないと、InkWell の
+                // 波紋だけでは触ってみるまで分からない。カードの右端へ寄せると
+                // 数から600px以上離れ、別の部品に見えてしまう（実機で確認）。
+                Icon(
+                  Icons.chevron_right,
+                  size: AppIconSize.inline,
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            // semanticsValue は渡さない -- Flutter が既定で百分率を読み上げる。
+            // 件数そのものは真上の行が読まれるので、ここで重ねる必要は無い。
+            LinearProgressIndicator(
+              value: done / total,
+              borderRadius: AppRadius.smAll,
+              semanticsLabel: '${progress.test.name} の確認済み答案',
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

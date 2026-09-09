@@ -202,6 +202,7 @@ AppDependencies _dependencies({
   RegradeReview? regradeReview,
   ApproveReview? approveReview,
   UndoReview? undoReview,
+  List<SubmissionResponse>? queueSubmissions,
 }) {
   final questions = [
     q1,
@@ -214,6 +215,10 @@ AppDependencies _dependencies({
   ];
   return AppDependencies(
     getSubmission: (submissionId) async => submission ?? _submission(),
+    // 添削レビュー画面は答案キューを引いて「何枚目か」「次はどれか」を出す
+    // (Issue #113)。既定は空 -- キューが引けない画面も成立しなければならない。
+    listSubmissions: (testId) async =>
+        queueSubmissions ?? const <SubmissionResponse>[],
     listQuestions: (testId) async => questions,
     getSourcePdf: (submissionId) async => pdfBytes,
     getDependencyGraph: (testId) async =>
@@ -5268,6 +5273,223 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(regrades, ['q-1']);
+    });
+  });
+
+  group('Issue #113: 答案をまたいで続けてさばく', () {
+    List<SubmissionResponse> queueOf(List<String> ids) => [
+      for (var i = 0; i < ids.length; i++)
+        _submission(
+          id: ids[i],
+          state: 'ai_processed',
+          studentLabel: 'answer-${ids[i]}',
+        ),
+    ];
+
+    /// 判断材料を最後まで表示してから承認する。
+    ///
+    /// Issue #85 のゲートがあるので、**スクロールせずに承認はできない** --
+    /// 押しても「この下にまだ判断材料があります」と言われるだけである。
+    /// #122 で切り出し画像が先頭に入り、材料はさらに縦に伸びた。
+    Future<void> approveAfterReadingMaterial(WidgetTester tester) async {
+      for (var page = 0; page < 40; page++) {
+        final reveal = find.byKey(const Key('review-reveal-material-button'));
+        if (reveal.evaluate().isEmpty) break;
+        await tester.tap(reveal);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const Key('review-approve-button')));
+      await tester.pump();
+      await _settlePdf(tester);
+    }
+
+    testWidgets('最後の設問を確定すると、次の答案へ進む', (tester) async {
+      // **この Issue の受入条件2そのもの。** これまでは「最後の設問です」と
+      // 出て止まり、ホームへ戻るしかなかった。40枚だとその往復だけで80回の
+      // 操作になる。
+      //
+      // 設問は1問だけなので、最初の設問がそのまま最後の設問である。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          queueSubmissions: queueOf(['sub-1', 'sub-2']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await approveAfterReadingMaterial(tester);
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(
+        find.byKey(const ValueKey('pdf-review/test-1/sub-2')),
+        findsOneWidget,
+      );
+      // 行き止まりの文言は、もう出さない。
+      expect(find.textContaining('最後の設問です'), findsNothing);
+    });
+
+    testWidgets('次の答案が無ければ、終わったと言ってキューへ戻せる', (tester) async {
+      // 「最後の設問です」で止めるのと、「すべて確認しました」と言うのとでは、
+      // 講師にとって全く違う話である。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          queueSubmissions: queueOf(['sub-1']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await approveAfterReadingMaterial(tester);
+
+      expect(find.textContaining('このテストの答案はすべて確認しました'), findsOneWidget);
+      expect(find.text('答案キューへ'), findsOneWidget);
+    });
+
+    testWidgets('AppBarに何枚目かが出る', (tester) async {
+      // 40枚を流す作業で「あと何枚か」が見えないのは、終わりの見えない作業を
+      // させることになる (受入5)。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          queueSubmissions: queueOf(['sub-0', 'sub-1', 'sub-2']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.textContaining('2 / 3 件目'), findsOneWidget);
+    });
+
+    testWidgets('キューが引けなければ、何枚目かを書かない', (tester) async {
+      // 「1 / 1」と出すと残り1枚だと読まれる。分からないことを、分かっている
+      // ように見せない。
+      await _pumpReview(
+        tester,
+        _dependencies(pdfBytes: _pocA4PortraitPdf(), q1: _question()),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // **先に「画面が描けている」ことを言う。** これが無いと、画面が出て
+      // いなくても `findsNothing` は通ってしまい、何も検査していないテストが
+      // 緑のまま残る (Issue #129 が5箇所で見つけた形)。
+      expect(find.textContaining('添削レビュー'), findsOneWidget);
+      expect(find.textContaining('件目'), findsNothing);
+    });
+
+    testWidgets('後回しを押すと、確定せずに次の答案へ移る', (tester) async {
+      // AI採点が失敗した設問があるとその答案はいまは確定できない (Issue #118)。
+      // 40枚を続けてさばく最中にそこで止まらないための逃げ道である。
+      var approveCalls = 0;
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          queueSubmissions: queueOf(['sub-1', 'sub-2']),
+          approveReview:
+              (
+                submissionId,
+                questionId, {
+                required expectedVersion,
+                expectedAiGradeId,
+                note,
+              }) async {
+                approveCalls++;
+                return _reviewAction(
+                  _review(questionId: questionId, action: 'approved'),
+                );
+              },
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-defer-button')));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      // 次の答案が開いている。
+      expect(
+        find.byKey(const ValueKey('pdf-review/test-1/sub-2')),
+        findsOneWidget,
+      );
+      // **何も確定していない。** 答案の状態も書き換えていないので、キューに残る。
+      expect(approveCalls, 0);
+    });
+
+    testWidgets('後回しは、押したことを画面で言う', (tester) async {
+      // 黙って次へ飛ぶと「消えた」と読まれる。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          queueSubmissions: queueOf(['sub-1', 'sub-2']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-defer-button')));
+      await tester.pump();
+
+      expect(find.textContaining('後回しにしました'), findsOneWidget);
+    });
+
+    testWidgets('S キーでも後回しになる', (tester) async {
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          queueSubmissions: queueOf(['sub-1', 'sub-2']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(
+        find.byKey(const ValueKey('pdf-review/test-1/sub-2')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('ほかに答案が無ければ、後回しにできないと言う', (tester) async {
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          queueSubmissions: queueOf(['sub-1']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-defer-button')));
+      await tester.pump();
+
+      expect(find.textContaining('ほかに確認できる答案がありません'), findsOneWidget);
+      // 行き先が無いので、この答案のままである。
+      expect(
+        find.byKey(const ValueKey('pdf-review/test-1/sub-1')),
+        findsOneWidget,
+      );
     });
   });
 }

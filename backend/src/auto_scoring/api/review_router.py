@@ -31,6 +31,7 @@ Endpoints:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Response
@@ -57,18 +58,61 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import (
     MAX_COMMENT_CHARS,
     MAX_RECOGNIZED_TEXT_LENGTH,
+    TERMINAL_JOB_STATES,
     Annotation,
     AnnotationKind,
     CriterionOutcome,
     DomainError,
     GradeResult,
+    GradingSource,
+    Job,
     NormalizedRect,
     Question,
     RecognitionResult,
     Review,
+    latest_job_for_question,
 )
-from auto_scoring.domain.review_workflow import ReviewVersionConflict
+from auto_scoring.domain.review_workflow import (
+    ReviewVersionConflict,
+    count_confirmed_questions,
+    effective_latest_review,
+    is_confirmed,
+)
 from auto_scoring.jobs.queue import JobQueueService
+
+
+class SubmissionReviewProgressResponse(BaseModel):
+    """How far one answer has got, counted per question (Issue #113).
+
+    **Counts only.** 答案キュー needs three numbers per row and nothing else; the
+    row's own状態 already comes from `SubmissionResponse.state`, and anything
+    richer belongs to the screen that opens the answer.
+
+    Why it exists at all: `GET /submissions/{id}/questions/{qid}/reviews` is
+    per-question, so a 40-answer test would cost 200 requests to draw one list
+    -- the same shape ホーム画面 already refuses for jobs
+    (`docs/home-dashboard.md` §4). One request for the whole test instead.
+    """
+
+    submission_id: str
+    total_questions: int
+    confirmed_questions: int
+    #: Questions the reviewer will have to grade themselves: the pipeline has
+    #: stopped on them (`TERMINAL_JOB_STATES`) without producing an AI grade,
+    #: and nobody has confirmed them yet. This is the count 「点数を入力」
+    #: (Issue #118) exists for.
+    #:
+    #: **Not "the job failed".** A question can end up here without any failure
+    #: -- a crop that was never worth sending to the AI, a host with no OCR
+    #: (Issue #114) -- and what matters to the reviewer is the same either way:
+    #: this answer needs them to produce N grades by hand rather than confirm N
+    #: proposals. 金曜の午後の終わりに「残り3枚」を見たとき、それが「見るだけ」
+    #: なのか「1問ずつ自分で採点する」なのかで、残り時間の見積もりがまるで違う。
+    #:
+    #: Deliberately the server-side twin of the client's `_canGradeManually`
+    #: (`pdf_review_page.dart`): 一覧が0と言っているのに開いた先が
+    #: 「点数を入力」を出す、は起きてはならない (Issue #84)。
+    manual_grading_questions: int
 
 
 class NormalizedRectResponse(BaseModel):
@@ -383,6 +427,37 @@ def _version_conflict(error: ReviewVersionConflict) -> HTTPException:
     return HTTPException(409, detail=str(error))
 
 
+def _needs_manual_grading(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    submission_id: str,
+    question_id: str,
+    jobs: Sequence[Job],
+    reviews: Sequence[Review],
+) -> bool:
+    """Whether this question is one the reviewer has to grade themselves.
+
+    Three conditions, and all three are the client's (`_canGradeManually` in
+    `pdf_review_page.dart`) restated on the server:
+
+    1. The pipeline has stopped on it (`TERMINAL_JOB_STATES`). A question still
+       queued or running may yet produce a grade, so it is not the reviewer's
+       job *yet*. A question with no job at all has not even been asked.
+    2. The AI produced no grade. Issue #97 deliberately persists nothing when
+       grading fails, and Issue #122 will stop sending crops that are almost
+       blank at all -- **neither leaves a `GradeResult` behind**, which is
+       exactly why "the job failed" is the wrong thing to count.
+    3. Nobody has confirmed it yet -- including by having already graded it
+       manually. This counts *remaining* work, not work that once existed.
+    """
+    job = latest_job_for_question(jobs, question_id)
+    if job is None or job.state not in TERMINAL_JOB_STATES:
+        return False
+    if uow.grades.latest(submission_id, question_id, GradingSource.AI) is not None:
+        return False
+    return not is_confirmed(effective_latest_review(reviews))
+
+
 def build_review_router(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
@@ -416,6 +491,51 @@ def build_review_router(
                 )
                 responses.append(QuestionResponse.from_domain(question, criteria))
         return responses
+
+    @router.get(
+        "/tests/{test_id}/review-progress",
+        response_model=list[SubmissionReviewProgressResponse],
+    )
+    def list_review_progress(test_id: str) -> list[SubmissionReviewProgressResponse]:
+        """Per-question review progress for every answer of one test.
+
+        Ordered by the answers' own ``created_at``, the order every other list
+        of a test's answers already uses (`SubmissionRepository.list_for_test`),
+        so the client never has to re-sort to line this up with
+        `GET /tests/{id}/submissions`.
+        """
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            if uow.tests.get(test_id) is None:
+                raise HTTPException(404, detail=f"test {test_id!r} not found")
+            question_ids = [question.id for question in uow.questions.list_for_test(test_id)]
+            progress = []
+            for submission in uow.submissions.list_for_test(test_id):
+                reviews_by_question = {
+                    question_id: uow.reviews.history(submission.id, question_id)
+                    for question_id in question_ids
+                }
+                jobs = uow.jobs.list_for_submission(submission.id)
+                progress.append(
+                    SubmissionReviewProgressResponse(
+                        submission_id=submission.id,
+                        total_questions=len(question_ids),
+                        confirmed_questions=count_confirmed_questions(
+                            question_ids, reviews_by_question
+                        ),
+                        manual_grading_questions=sum(
+                            1
+                            for question_id in question_ids
+                            if _needs_manual_grading(
+                                uow,
+                                submission_id=submission.id,
+                                question_id=question_id,
+                                jobs=jobs,
+                                reviews=reviews_by_question[question_id],
+                            )
+                        ),
+                    )
+                )
+        return progress
 
     @router.get(
         "/submissions/{submission_id}/source-pdf",
