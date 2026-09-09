@@ -57,9 +57,61 @@ def unconfirmed_question_ids(
     ]
 
 
+def fallback_score_areas(questions: Iterable[Question]) -> dict[str, NormalizedRect]:
+    """Where each question with no `score_area` gets its score written
+    instead, keyed by question id (Issue #150).
+
+    **Why there is a fallback at all.** Issue #120 refused the whole export
+    when any question had nowhere to draw, because the alternative it faced
+    was a PDF byte-for-byte identical to the answer sheet. Live re-run #4
+    showed what that refusal costs in practice: four of seven subjects could
+    not be exported at all, every one of them after a human had confirmed
+    every single question, because the answer-box detection had missed some
+    boxes (Issue #131). Refusing threw away *all* of that confirmed work to
+    protect the part of it that had no home.
+
+    Both of the outcomes this replaces are worse than a margin note:
+
+    * dropping the unplaceable question's score and exporting the rest is
+      Issue #121's failure exactly -- a confirmed grade discarded while the
+      run reports success, with nothing on the paper to show it happened;
+    * refusing is the Issue #137 dead end by another route -- the reviewer
+      finished the work and cannot get the artefact out, and (before Issue
+      #150's other half) was told to go and confirm what was already
+      confirmed.
+
+    **Why the margin and not next to the answer.** Because the position is
+    exactly what is not known: these questions have no answer box, so any
+    spot on the page would be a guess dressed as knowledge. That is the
+    mistake Issue #141 removed for annotations whose anchor matched nothing,
+    and the reasoning carries over unchanged. The margin claims nothing
+    about where on the page the question was; it says only "this question
+    scored this", which is true and is the thing that would otherwise be
+    lost. Each line therefore names its question (`build_export_marks`) --
+    a bare ``3/5`` in a margin belongs to nothing.
+
+    Questions keep their page (`Question.page`), so each page's strip holds
+    only that page's questions, stacked in the order they were registered.
+    A question the strip cannot hold is left out of the result entirely and
+    `unplaceable_question_ids` then names it: better to refuse than to write
+    a score the reader cannot read (`_MIN_FALLBACK_SCORE_HEIGHT`).
+    """
+    by_page: dict[int, list[Question]] = {}
+    for question in questions:
+        if question.score_area is None:
+            by_page.setdefault(question.page, []).append(question)
+    areas: dict[str, NormalizedRect] = {}
+    for page_questions in by_page.values():
+        slots = _fallback_score_slots(len(page_questions))
+        for question, slot in zip(page_questions, slots, strict=False):
+            areas[question.id] = slot
+    return areas
+
+
 def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
-    """Every question with nowhere to draw its score -- no `score_area`, and
-    none derivable from an answer box either (Issue #120).
+    """Every question whose score cannot be written anywhere at all -- no
+    `score_area` of its own (Issue #120) *and* no slice of its page's
+    fallback strip left to put it in (Issue #150).
 
     The twin of `unconfirmed_question_ids`, for the other way an export can
     come out blank. That one is about a human not having decided the grade
@@ -69,6 +121,16 @@ def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
     file byte-for-byte identical to the answer sheet, and said nothing --
     which is the outcome this refuses.
 
+    **Issue #150 narrowed this to what it is really for.** It used to mean
+    "no ``score_area``", which in live re-run #4 was true of some question on
+    four of the seven subjects and blocked all four. `fallback_score_areas`
+    now gives those questions a place, so what is left here is only the case
+    where even that runs out: a page with more unplaceable questions than its
+    margin strip can hold legibly. That is a real refusal and not a
+    theoretical one -- the alternative is drawing scores the reader cannot
+    read -- but it is no longer the common one, and the caller must say which
+    refusal it is (`api.export_router.ExportConflictCode`).
+
     Only `score_area` is checked, not `comment_area`. The score is drawn for
     every question (`build_export_marks`), so a missing `score_area` always
     means something confirmed is missing from the page. A missing
@@ -76,7 +138,12 @@ def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
     back to it, and since Issue #120 both are derived from the same answer
     box -- a question that has one has the other.
     """
-    return [question.id for question in questions if question.score_area is None]
+    placeable = fallback_score_areas(questions)
+    return [
+        question.id
+        for question in questions
+        if question.score_area is None and question.id not in placeable
+    ]
 
 
 def review_version_snapshot(
@@ -174,6 +241,39 @@ _UNPLACED_SUFFIX = "（位置特定できず）"
 #: can be read in is not an output, it is a blank page with extra steps.
 _MIN_NOTE_HEIGHT = 0.012
 
+#: The page-normalized strip a score falls back into when its own question
+#: has nowhere to put it (Issue #150) -- the sheet's left margin, running
+#: from just below the top edge to just above the bottom one.
+#:
+#: **Measured on the real material, not chosen for looking tidy.** Every
+#: answer page in the target set (13 pages across the 11 subjects that ship
+#: one) was rendered and its dark-pixel density taken in 1%-of-width slices,
+#: with the scan's own page frame excluded. ``x`` in [0.00, 0.03] came back
+#: empty -- at most 0.02% dark, i.e. nothing -- on 12 of the 13; the
+#: exception is one subject whose [0.01, 0.02] slice holds a scan-edge
+#: artefact, and every question of that subject has its own `score_area`, so
+#: it never reaches this fallback. On all four subjects Issue #150 blocks the
+#: strip holds at most 0.15%, a few stray specks. Wider is not safe: from
+#: [0.03, 0.05] outward, four subjects start showing printed rules and text.
+#:
+#: See ``docs/pdf-export.md`` §2.2.2 for the numbers, and for why writing here
+#: beats both alternatives (dropping the score, refusing the export).
+_FALLBACK_SCORE_STRIP = NormalizedRect(x=0.005, y=0.05, width=0.03, height=0.90)
+
+#: The shortest slice of `_FALLBACK_SCORE_STRIP` a fallback score can be read
+#: in. Four `_MIN_NOTE_HEIGHT` lines rather than one: the strip is only 3% of
+#: the page wide (about 18pt on A4), so "問1 4/5" wraps down it over several
+#: lines, and a slice too short for them all would be *truncated with an
+#: ellipsis* (`adapters.pdf.pdfium_pypdf_engine._draw_text`) -- which can eat
+#: the score itself. A margin note may be cut short; a score may not.
+_MIN_FALLBACK_SCORE_HEIGHT = _MIN_NOTE_HEIGHT * 4
+
+
+def _fallback_score_slots(count: int) -> tuple[NormalizedRect, ...]:
+    """``count`` slices of `_FALLBACK_SCORE_STRIP`, or as many as fit at
+    `_MIN_FALLBACK_SCORE_HEIGHT` when ``count`` of them would not."""
+    return _stacked_rects(_FALLBACK_SCORE_STRIP, count, _MIN_FALLBACK_SCORE_HEIGHT)
+
 
 def _note_text(annotation: Annotation, *, placed: bool) -> str | None:
     """One margin-band line for ``annotation``, or ``None`` when it has
@@ -199,18 +299,25 @@ def _note_text(annotation: Annotation, *, placed: bool) -> str | None:
     return f"{symbol} {comment}{_UNPLACED_SUFFIX}" if comment else f"{symbol} {_UNPLACED_SUFFIX}"
 
 
-def _stacked_note_rects(area: NormalizedRect, count: int) -> tuple[NormalizedRect, ...]:
+def _stacked_rects(
+    area: NormalizedRect, count: int, minimum_height: float
+) -> tuple[NormalizedRect, ...]:
     """``count`` equal, non-overlapping slices of ``area`` stacked top to
-    bottom -- or as many as fit at `_MIN_NOTE_HEIGHT`, when ``count`` of them
+    bottom -- or as many as fit at ``minimum_height``, when ``count`` of them
     would not.
 
-    Each note gets its own rect rather than all of them sharing one, because
+    Each item gets its own rect rather than all of them sharing one, because
     `PdfEngine.render_annotations` draws every mark from its own rect: one
     joined string would be re-wrapped and shrunk as a single block, so a
     single long comment could push every other note below the band's bottom
     edge and out of sight.
+
+    ``minimum_height`` is the caller's, not this function's, because what
+    counts as legible depends on what is being written: an annotation note
+    may be cut short at one line (`_MIN_NOTE_HEIGHT`), a score may not
+    (`_MIN_FALLBACK_SCORE_HEIGHT`).
     """
-    capacity = max(1, int(area.height / _MIN_NOTE_HEIGHT))
+    capacity = max(1, int(area.height / minimum_height))
     slots = min(count, capacity)
     height = area.height / slots
     return tuple(
@@ -238,7 +345,7 @@ def _note_marks(comment_area: NormalizedRect | None, notes: Sequence[str]) -> li
     """
     if not notes or comment_area is None:
         return []
-    rects = _stacked_note_rects(comment_area, len(notes))
+    rects = _stacked_rects(comment_area, len(notes), _MIN_NOTE_HEIGHT)
     if len(rects) < len(notes):
         shown = len(rects) - 1
         notes = [*notes[:shown], _OVERFLOW_NOTE.format(count=len(notes) - shown)]
@@ -254,6 +361,7 @@ def build_export_marks(
     grade: GradeResult,
     annotations: Sequence[Annotation],
     recognitions: Sequence[RecognitionResult],
+    fallback_score_area: NormalizedRect | None = None,
 ) -> list[AnnotationMark]:
     """The resolved `AnnotationMark` list to draw for one question's
     confirmed attempt: its effective ``grade`` (per `domain.review_workflow.
@@ -275,9 +383,13 @@ def build_export_marks(
     and in the live run no provider proposed one, so every exported PDF came
     out with no score written on it at all.
 
-    A question with no ``score_area`` draws no score rather than one at a
-    guessed position; `unplaceable_question_ids` refuses the export before it
-    can reach that state.
+    A question with no ``score_area`` draws no score at a guessed position.
+    It draws one in ``fallback_score_area`` instead when the caller supplies
+    one (`fallback_score_areas` -- the page's margin strip, Issue #150), and
+    that line names its question, because a score in the margin has nothing
+    beside it to say which question it belongs to. With no fallback either,
+    no score is drawn and `unplaceable_question_ids` has already refused the
+    export before it could reach that state.
 
     **Where an annotation's comment text goes** (Issue #141). Every
     annotation contributes at most two marks, and they are separate things:
@@ -317,6 +429,14 @@ def build_export_marks(
                 kind=AnnotationKind.SCORE, rect=question.score_area, text=_score_text(grade)
             )
         )
+    elif fallback_score_area is not None:
+        marks.append(
+            AnnotationMark(
+                kind=AnnotationKind.SCORE,
+                rect=fallback_score_area,
+                text=f"{question.number} {_score_text(grade)}",
+            )
+        )
     notes: list[str] = []
     for annotation in attempt_annotations:
         # Its text and its rect would both be this mark's (§2.1: the number
@@ -340,6 +460,7 @@ __all__ = [
     "ReexportDecision",
     "build_export_marks",
     "decide_reexport",
+    "fallback_score_areas",
     "review_version_snapshot",
     "unconfirmed_question_ids",
     "unplaceable_question_ids",

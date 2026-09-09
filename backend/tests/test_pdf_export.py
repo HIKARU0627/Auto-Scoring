@@ -25,6 +25,7 @@ from auto_scoring.domain.pdf_export import (
     ReexportDecision,
     build_export_marks,
     decide_reexport,
+    fallback_score_areas,
     review_version_snapshot,
     unconfirmed_question_ids,
     unplaceable_question_ids,
@@ -592,17 +593,60 @@ class TestBuildExportMarks:
         assert marks[0].rect == NormalizedRect(x=0.5, y=0.5, width=0.1, height=0.1)
 
 
+class TestFallbackScoreAreas:
+    """Issue #150: `score_area` の無い設問にも点数を書く場所を与える。"""
+
+    def test_a_question_with_no_score_area_gets_a_margin_slot(self) -> None:
+        areas = fallback_score_areas([_question(id="q-1")])
+
+        assert set(areas) == {"q-1"}
+        slot = areas["q-1"]
+        # 実データ計測で空だと確かめた左余白の帯の中に入っていること
+        # (`_FALLBACK_SCORE_STRIP`)。**幅と位置まで見る。** 「何か rect が
+        # 返った」だけでは、答案の真ん中に置いても緑になる。
+        assert slot.x + slot.width <= 0.035
+        assert slot.y >= 0.05
+        assert slot.y + slot.height == pytest.approx(0.95)
+
+    def test_a_question_that_has_its_own_score_area_gets_no_slot(self) -> None:
+        placeable = _question(score_area=NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05))
+
+        assert fallback_score_areas([placeable]) == {}
+
+    def test_two_questions_on_one_page_get_slots_that_do_not_overlap(self) -> None:
+        """スライスを配り分けているか。同じ矩形を2つに渡すと、エンジンは両方を
+        その左上から描くので重なって両方読めなくなる (Issue #141 の P2 review
+        が注釈で踏んだのと同じ失敗)。"""
+        areas = fallback_score_areas([_question(id="q-1"), _question(id="q-2")])
+
+        first, second = areas["q-1"], areas["q-2"]
+        assert first.y + first.height <= second.y
+
+    def test_slots_are_allocated_per_page(self) -> None:
+        """ページごとに帯を持つ。ページをまたいで詰めると、2ページ目の設問が
+        1ページ目の帯の下の方に置かれ、**別のページの余白に書かれる。**"""
+        areas = fallback_score_areas([_question(id="q-1", page=1), _question(id="q-2", page=2)])
+
+        assert areas["q-1"] == areas["q-2"]
+
+
 class TestUnplaceableQuestionIds:
     """Issue #120 acceptance 3: 書く場所が決まらないときに、黙って空の PDF を
-    出さないこと。出力前に分かること."""
+    出さないこと。出力前に分かること.
 
-    def test_a_question_with_nowhere_to_write_is_named_before_the_export_runs(self) -> None:
+    Issue #150 で意味が狭まった。`score_area` が無いだけでは拒まない (余白帯に
+    書く)。**帯にも収まらないときだけ**拒む。"""
+
+    def test_a_question_with_no_score_area_is_no_longer_refused(self) -> None:
+        """#150 の本体。実機再検証 #4 で7教科中4教科が出力できなかったのは、
+        回答欄が検出できなかった設問が1つでもあると、**全問確定済みでも**答案
+        まるごと拒まれていたからである。"""
         placeable = _question(
             id="q-1", score_area=NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05)
         )
-        unplaceable = _question(id="q-2")
+        no_area = _question(id="q-2")
 
-        assert unplaceable_question_ids([placeable, unplaceable]) == ["q-2"]
+        assert unplaceable_question_ids([placeable, no_area]) == []
 
     def test_a_question_that_can_be_written_on_is_not_named(self) -> None:
         assert (
@@ -611,3 +655,17 @@ class TestUnplaceableQuestionIds:
             )
             == []
         )
+
+    def test_questions_beyond_the_strip_s_capacity_are_still_named(self) -> None:
+        """拒否経路が生きていることを**肯定形で**先に言う。ここが死ぬと、読めない
+        大きさの点数を描いて成功を返す方に倒れ、しかもテストは緑のままになる。
+
+        `_FALLBACK_SCORE_STRIP` は高さ 0.90、1件あたり最低
+        `_MIN_FALLBACK_SCORE_HEIGHT` (0.048) なので容量は18件。19件目から溢れる。
+        """
+        crowded = [_question(id=f"q-{index}") for index in range(19)]
+
+        named = unplaceable_question_ids(crowded)
+
+        assert len(fallback_score_areas(crowded)) == 18
+        assert named == ["q-18"]

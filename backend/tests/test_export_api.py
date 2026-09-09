@@ -135,6 +135,58 @@ def test_export_refuses_and_names_unconfirmed_questions(
     assert detail["question_ids"] == ["q-1"]
 
 
+def test_the_two_refusals_are_told_apart_by_their_code(
+    client: TestClient, session_factory: sessionmaker[Session], store: LocalFileStore
+) -> None:
+    """Issue #150: both of this endpoint's 409s used to be
+    ``{message, question_ids}`` and nothing else, so the only way a client
+    could tell them apart was to match on the English message text -- which
+    the Flutter client did not do. It assumed the single refusal that existed
+    when it was written (Issue #23's) and printed that wording over both, so
+    a reviewer who had confirmed every question was told to confirm them.
+
+    The two are asserted **against each other** rather than one at a time:
+    the bug was not that either code was wrong, it was that the two bodies
+    were indistinguishable. A test that only checked one code would stay
+    green if the other were given the same value.
+    """
+    _write_source_pdf(store.submission_source_pdf_path("sub-1"))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.submissions.add(make_submission())
+        # No `score_area` and no `answer_area` to derive one from -- the
+        # state Issue #131's subject leaves every question in. One such
+        # question is *not* a refusal any more (Issue #150 writes it in the
+        # page's margin strip); it takes more of them than that strip can
+        # hold legibly, which is what this seeds.
+        # Zero-padded: `QuestionRepository.list_for_test` orders by
+        # `(page, number)` as strings, so "問9" would sort after "問18" and
+        # the assertion below would be about a different question than the
+        # one the seeding intends to overflow with.
+        for index in range(19):
+            question_id = f"q-{index:02d}"
+            uow.questions.add(
+                make_question(id=question_id, number=f"問{index:02d}", score_area=None)
+            )
+            uow.grades.add(make_grade(id=f"grade-{index:02d}", question_id=question_id))
+            uow.reviews.add(
+                make_review(
+                    id=f"review-{index:02d}",
+                    question_id=question_id,
+                    ai_grade_result_id=f"grade-{index:02d}",
+                )
+            )
+        uow.commit()
+
+    refused = client.post("/submissions/sub-1/export", headers=_AUTH)
+
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["code"] == ExportConflictCode.NO_ROOM_FOR_SCORE.value
+    assert detail["code"] != ExportConflictCode.UNCONFIRMED_QUESTIONS.value
+    assert detail["question_ids"] == ["q-18"]
+
+
 @pytest.mark.usefixtures("score_font")
 def test_export_queues_a_job_and_completes_through_the_real_queue(
     client: TestClient, session_factory: sessionmaker[Session], store: LocalFileStore

@@ -32,6 +32,7 @@ from auto_scoring.domain.models import (
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_export import (
     build_export_marks,
+    fallback_score_areas,
     review_version_snapshot,
     unconfirmed_question_ids,
 )
@@ -175,6 +176,13 @@ class ExportJobProcessor:
                     )
                 snapshot = review_version_snapshot(question_ids, reviews_by_question)
 
+            # Issue #150: where each question with no `score_area` of its
+            # own gets its score written instead. Allocated once for the
+            # whole submission, not per question, because the slices are
+            # shared out across a page's questions and two questions must
+            # not be handed the same slice.
+            fallback_areas = fallback_score_areas(questions)
+
             marks_by_page: dict[int, list[AnnotationMark]] = {}
             for question in questions:
                 grades = uow.grades.history(job.submission_id, question.id)
@@ -193,6 +201,7 @@ class ExportJobProcessor:
                     grade=grade,
                     annotations=annotations,
                     recognitions=recognitions,
+                    fallback_score_area=fallback_areas.get(question.id),
                 )
                 marks_by_page.setdefault(question.page - 1, []).extend(marks)
 
