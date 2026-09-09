@@ -6,6 +6,7 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/features/home/home_dashboard.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
+import 'package:auto_scoring_app/features/review_queue/submission_queue_page.dart';
 import 'package:auto_scoring_app/features/intake/intake_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_settings_page.dart';
 
@@ -159,6 +160,39 @@ void main() {
 
     final page = tester.widget<PdfReviewPage>(find.byType(PdfReviewPage));
     expect(page.submissionId, 'open');
+  });
+
+  testWidgets('確認済みの数を押すと、そのテストの答案キューへ行ける', (tester) async {
+    // **答案キューへの入口はここだけである** (Issue #113)。これが無いと、
+    // 一覧は作ってあるのに誰もたどり着けない。
+    //
+    // ボタンを増やさず、既に出ている「確認済み N / M」を押せるようにしてある。
+    // #68 でホームの情報量を絞ったのは正しかったが、**あのときは答案キューが
+    // 存在しなかった**。
+    final test = buildTest(id: 't1', name: '国語 第1回');
+    await pumpAppAt(
+      tester,
+      AppRoutes.home,
+      dependencies: dependenciesFor({
+        test: [
+          buildSubmission(id: 'done', testId: 't1', state: 'reviewed'),
+          buildSubmission(id: 'todo', testId: 't1', state: 'ai_processed'),
+        ],
+      }),
+    );
+    await tester.pumpAndSettle();
+
+    // 押す前に、押す対象が本当に出ていることを言う。これが無いと、画面が
+    // 描けていなくても後続の findsNothing 系が通ってしまう。
+    expect(find.text('確認済み 1 / 2'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('home-open-queue-t1')));
+    await tester.pumpAndSettle();
+
+    final page = tester.widget<SubmissionQueuePage>(
+      find.byType(SubmissionQueuePage),
+    );
+    expect(page.testId, 't1');
   });
 
   testWidgets('登録が途中のテストはテスト設定画面へ戻す', (tester) async {
