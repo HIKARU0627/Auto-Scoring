@@ -142,10 +142,6 @@ _DECLARED_TOTAL_POINTS = 20
 #: distinguishable, exactly as a real handwritten answer would be.
 _MARKER_XY = (60, 700)
 _ANSWER_AREA = (0.05, 0.10, 0.60, 0.25)
-#: 点数配置領域 / コメント配置候補領域. Detection reports answer areas only,
-#: so these are the regions the reviewer draws by hand on the same sheet.
-_SCORE_AREA = (0.70, 0.03, 0.90, 0.09)
-_COMMENT_AREA = (0.05, 0.30, 0.90, 0.42)
 
 #: The folder the reviewer picked, as the app's own scan would list it. The
 #: names follow the default template's `01_`/`02_`/`03_` rules, so planning
@@ -442,33 +438,23 @@ def _confirm_criteria(client: TestClient, test_id: str) -> None:
     assert confirmed.json()["totals"]["is_complete"] is True
 
 
-def _region(
-    *,
-    region_id: str,
-    kind: str,
-    label: str,
-    page_index: int,
-    bbox: tuple[float, float, float, float],
-) -> dict[str, Any]:
-    x0, y0, x1, y1 = bbox
-    return {
-        "region_id": region_id,
-        "kind": kind,
-        "page_index": page_index,
-        "bbox": {"x0": x0, "y0": y0, "x1": x1, "y1": y1},
-        "label": label,
-        "confirmed": False,
-        "text": None,
-    }
-
-
 def _confirm_answer_layout(client: TestClient, test_id: str) -> None:
     """Issue #105: upload one answer sheet, detect the answer areas on it,
-    add the 点数/コメント配置領域 by hand, and confirm.
+    and confirm exactly what came back.
 
-    Detection reports answer areas and nothing else, so the other two kinds
-    are the reviewer's own drawing -- which is also why this keeps the
-    detected regions exactly as they came back rather than rebuilding them.
+    **Nothing is added by hand.** Until Issue #120 this helper also drew a
+    `score` and an `annotation_area` region per question, described as "the
+    reviewer's own drawing" -- but Issue #103 removed both from the profile
+    screen so that the 配点 would have exactly one input, and a real reviewer
+    on this path cannot draw either one. Injecting them over the raw API gave
+    every question a `score_area` that no real registration would have, and
+    that is why this module could report the new path green while the live
+    run exported a PDF with nothing written on it (Issue #120).
+
+    A fixture that reaches a state the product cannot reach is not a
+    shortcut; it is the test agreeing with itself. What detection returns is
+    all there is, and `domain.annotation_layout.derive_mark_areas` is what
+    has to turn that into somewhere to write.
     """
     uploaded = client.put(
         f"/tests/{test_id}/answer-layout",
@@ -487,28 +473,7 @@ def _confirm_answer_layout(client: TestClient, test_id: str) -> None:
     answer_areas = [region for region in body["regions"] if region["kind"] == "answer_area"]
     assert {region["label"] for region in answer_areas} == {number for number, _ in _QUESTIONS}
 
-    regions: list[dict[str, Any]] = list(answer_areas)
-    for number, page_index in _QUESTIONS:
-        regions.append(
-            _region(
-                region_id=f"score-{number}",
-                kind="score",
-                label=number,
-                page_index=page_index,
-                bbox=_SCORE_AREA,
-            )
-        )
-        regions.append(
-            _region(
-                region_id=f"comment-{number}",
-                kind="annotation_area",
-                label=number,
-                page_index=page_index,
-                bbox=_COMMENT_AREA,
-            )
-        )
-
-    saved = client.put(f"/tests/{test_id}/profile", headers=_AUTH, json={"regions": regions})
+    saved = client.put(f"/tests/{test_id}/profile", headers=_AUTH, json={"regions": answer_areas})
     assert saved.status_code == 200, saved.text
     confirmed = client.post(
         f"/tests/{test_id}/profile/confirm",
