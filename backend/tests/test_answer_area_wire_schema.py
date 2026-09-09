@@ -20,15 +20,18 @@ from pydantic import ValidationError
 
 from auto_scoring.adapters.answer_area_detection._prompt import (
     ANSWER_AREA_SYSTEM_INSTRUCTIONS,
+    build_answer_area_user_content,
     strict_answer_area_detection_schema,
 )
 from auto_scoring.domain.answer_area_detection import (
     MAX_NOTE_CHARS,
     UNASSIGNED_QUESTION_LABEL,
     AnswerAreaDetectionOutput,
+    AnswerAreaDetectionRequest,
     parse_answer_area_detection,
     question_number_choices,
 )
+from auto_scoring.domain.answer_area_snapping import PageRuling
 
 _NUMBERS = ("Q1", "Q2", "Q3")
 
@@ -119,6 +122,60 @@ class TestWireSchema:
         enum.
         """
         assert UNASSIGNED_QUESTION_LABEL in ANSWER_AREA_SYSTEM_INSTRUCTIONS
+
+
+class TestMeasuredRulingInThePrompt:
+    """Issue #122: the model is handed the page's real printed lines.
+
+    Measured, it does not locate a thin ruled column -- it returns a
+    stereotyped one (see `domain.answer_area_snapping`). Listing the lines
+    turns the coordinate into the same kind of multiple choice the question
+    number already is.
+    """
+
+    def test_the_measured_lines_are_listed_for_the_model_to_copy(self) -> None:
+        content = build_answer_area_user_content(
+            AnswerAreaDetectionRequest(
+                page_images=(b"png",),
+                question_numbers=_NUMBERS,
+                page_rulings=(PageRuling(vertical=(0.6671, 0.7158), horizontal=(0.25,)),),
+            )
+        )
+
+        assert "0.6671" in content
+        assert "0.7158" in content
+        assert "0.2500" in content
+
+    def test_a_page_without_ruling_is_listed_as_having_none(self) -> None:
+        """Left out entirely, "this page has no printed lines" would read as
+        an oversight the model might try to compensate for."""
+        content = build_answer_area_user_content(
+            AnswerAreaDetectionRequest(
+                page_images=(b"png", b"png"),
+                question_numbers=_NUMBERS,
+                page_rulings=(PageRuling(vertical=(0.5,)), PageRuling()),
+            )
+        )
+
+        assert "Page 2" in content
+        assert "(none)" in content
+
+    def test_nothing_is_said_when_the_caller_measured_nothing(self) -> None:
+        content = build_answer_area_user_content(
+            AnswerAreaDetectionRequest(page_images=(b"png",), question_numbers=_NUMBERS)
+        )
+
+        assert "Measured ruling" not in content
+
+    def test_the_instructions_tell_the_model_to_copy_the_values(self) -> None:
+        """The list is useless without the rule that says what to do with it.
+        Same belt-and-braces the question-number enum gets: stated once where
+        it can be read, once where it can be enforced (the snap in
+        `domain.answer_area_detection.regions_from_detection`).
+        """
+        assert "Measured ruling" not in ANSWER_AREA_SYSTEM_INSTRUCTIONS
+        assert "measured ruling" in ANSWER_AREA_SYSTEM_INSTRUCTIONS
+        assert "copied exactly" in ANSWER_AREA_SYSTEM_INSTRUCTIONS
 
 
 def _question_number_node(schema: dict[str, object]) -> dict[str, object]:

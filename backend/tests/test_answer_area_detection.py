@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from auto_scoring.domain.answer_area_detection import (
     MAX_NOTE_CHARS,
+    SNAPPED_NOTE_PREFIX,
     UNASSIGNED_QUESTION_LABEL,
     AnswerAreaDetectionError,
     AnswerAreaDetectionOutput,
@@ -28,6 +29,7 @@ from auto_scoring.domain.answer_area_detection import (
     unassigned_answer_area_ids,
     undetected_question_numbers,
 )
+from auto_scoring.domain.answer_area_snapping import PageRuling
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
 
 _NUMBERS = ("Q1", "Q2", "Q3")
@@ -317,6 +319,68 @@ class TestVisibleGaps:
         ensure_answer_areas_confirmable(regions)
 
 
+class TestSnappingIntoRegions:
+    """`regions_from_detection` moves each reported box onto the printed
+    ruling before merging (Issue #122). The snapping rule itself is covered
+    by ``test_answer_area_snapping.py``; these check the wiring."""
+
+    #: Two narrow columns, at the positions measured on a real sheet.
+    _RULING = PageRuling(vertical=(0.6671, 0.7158, 0.8102, 0.8581))
+
+    def test_a_box_is_snapped_onto_the_ruling(self) -> None:
+        regions = regions_from_detection(
+            _parse([_area(bbox=(0.6558, 0.25, 0.7045, 0.48))]),
+            page_rulings=(self._RULING,),
+        )
+        assert regions[0].bbox.x0 == 0.6671
+        assert regions[0].bbox.x1 == 0.7158
+
+    def test_snapping_says_so_in_the_region_note(self) -> None:
+        """The rectangle on the overlay is then not the one the model
+        reported, and the reviewer is about to confirm it."""
+        regions = regions_from_detection(
+            _parse([_area(bbox=(0.6558, 0.25, 0.7045, 0.48))]),
+            page_rulings=(self._RULING,),
+        )
+        assert regions[0].text is not None
+        assert SNAPPED_NOTE_PREFIX in regions[0].text
+
+    def test_boxes_are_snapped_before_they_are_merged_not_after(self) -> None:
+        """A union of two stereotyped rectangles is not a rectangle the page
+        has anywhere, so snapping the union would pick a rule near an edge
+        that was never real. Here two boxes each land on their own column and
+        the merged region spans both -- which snapping afterwards could not
+        produce, because the union's own edges are already on rules.
+        """
+        regions = regions_from_detection(
+            _parse(
+                [
+                    _area(bbox=(0.6558, 0.25, 0.7045, 0.48)),
+                    _area(bbox=(0.8210, 0.25, 0.8690, 0.48)),
+                ]
+            ),
+            page_rulings=(self._RULING,),
+        )
+        assert len(regions) == 1
+        assert (regions[0].bbox.x0, regions[0].bbox.x1) == (0.6671, 0.8581)
+
+    def test_a_page_with_no_measured_ruling_keeps_the_model_coordinates(self) -> None:
+        """Callers that measured nothing -- and pages that have no ruling --
+        must not have coordinates invented for them."""
+        regions = regions_from_detection(_parse([_area(bbox=(0.6558, 0.25, 0.7045, 0.48))]))
+        assert regions[0].bbox.x0 == 0.6558
+        assert regions[0].text is None
+
+    def test_each_page_is_snapped_to_its_own_ruling(self) -> None:
+        """Two pages of one sheet can be ruled differently; using page 1's
+        lines on page 2 would move boxes onto lines that page does not have."""
+        regions = regions_from_detection(
+            _parse([_area(page=2, number="Q2", bbox=(0.1050, 0.25, 0.2050, 0.48))]),
+            page_rulings=(self._RULING, PageRuling(vertical=(0.1000, 0.2000))),
+        )
+        assert (regions[0].bbox.x0, regions[0].bbox.x1) == (0.1000, 0.2000)
+
+
 class TestRequest:
     def test_rejects_an_empty_question_set(self) -> None:
         """A multiple-choice question with no choices is not one. The caller
@@ -332,6 +396,16 @@ class TestRequest:
     def test_rejects_an_empty_page_image(self) -> None:
         with pytest.raises(AnswerAreaDetectionError):
             AnswerAreaDetectionRequest(page_images=(b"png", b""), question_numbers=_NUMBERS)
+
+    def test_rejects_a_ruling_that_does_not_cover_every_page(self) -> None:
+        """One entry per page, or the measured lines of one page would be
+        attached to the image of another (Issue #122)."""
+        with pytest.raises(AnswerAreaDetectionError):
+            AnswerAreaDetectionRequest(
+                page_images=(b"png", b"png"),
+                question_numbers=_NUMBERS,
+                page_rulings=(PageRuling(vertical=(0.5,)),),
+            )
 
     def test_rejects_a_question_number_equal_to_the_sentinel(self) -> None:
         """Otherwise "the model could not decide" and "the model chose this
