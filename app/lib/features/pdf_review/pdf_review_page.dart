@@ -17,8 +17,10 @@ import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/material_read_ranges.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
+import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/features/pdf_review/answer_crop_view.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
 
@@ -2675,12 +2677,26 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         fallbackAnnotations.isEmpty &&
         question.rubric.isEmpty;
     final aiProducedNoGrade = _aiProducedNoGrade(review, question.id);
+    // The crop sits above the empty branch, not inside the populated one:
+    // when it came out blank, intake stops the question *before* grading
+    // (`crop_nearly_blank`), so there is no AI result to show -- and that is
+    // exactly the case where the reviewer most needs to see what was cut out
+    // (Issue #122).
     if (isEmpty && !aiProducedNoGrade) {
-      return const Text('まだAI結果がありません', key: Key('review-question-empty'));
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildAnswerCrop(question),
+          const Divider(height: AppLayout.sectionDivider),
+          const Text('まだAI結果がありません', key: Key('review-question-empty')),
+        ],
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _buildAnswerCrop(question),
+        const Divider(height: AppLayout.sectionDivider),
         if (aiProducedNoGrade) ...[
           _buildAiGradingFailedNotice(question.id),
           const SizedBox(height: AppSpacing.sm),
@@ -2877,6 +2893,19 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           ],
         ],
       ],
+    );
+  }
+
+  /// 「AIが見た画像」 -- first in the 判断材料, above the text and the score
+  /// derived from it (Issue #122). See `AnswerCropView` for why it is here
+  /// and not only on the registration screen.
+  Widget _buildAnswerCrop(QuestionResponse question) {
+    return AnswerCropView(
+      key: Key('review-answer-crop-${question.id}'),
+      submissionId: widget.submissionId,
+      questionId: question.id,
+      getAnswerImage: _dependencies.getAnswerImage,
+      isNearlyBlank: hasNearlyBlankCrop(_submission?.reviewReason, question.id),
     );
   }
 

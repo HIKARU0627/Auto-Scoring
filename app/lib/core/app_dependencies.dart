@@ -174,6 +174,11 @@ Future<List<QuestionResponse>> _unavailableListQuestions(String testId) async =>
 Future<Uint8List> _unavailableGetSourcePdf(String submissionId) async =>
     _unavailable();
 
+Future<Uint8List> _unavailableGetAnswerImage(
+  String submissionId,
+  String questionId,
+) async => _unavailable();
+
 Future<List<RecognitionResponse>> _unavailableListRecognitions(
   String submissionId,
   String questionId,
@@ -479,6 +484,12 @@ typedef ListQuestions = Future<List<QuestionResponse>> Function(String testId);
 /// viewer to render underneath the annotation overlay (§13.1).
 typedef GetSourcePdf = Future<Uint8List> Function(String submissionId);
 
+/// The cropped answer-area image the grading AI was sent for one
+/// submission-question -- what the reviewer needs in order to doubt a score
+/// (Issue #122).
+typedef GetAnswerImage =
+    Future<Uint8List> Function(String submissionId, String questionId);
+
 /// Every `RecognitionResult` recorded for one submission-question so far
 /// (AI proposals and human corrections, oldest first).
 typedef ListRecognitions =
@@ -709,6 +720,7 @@ class AppDependencies {
     this.confirmDependencyGraph = _unavailableConfirmDependencyGraph,
     this.listQuestions = _unavailableListQuestions,
     this.getSourcePdf = _unavailableGetSourcePdf,
+    this.getAnswerImage = _unavailableGetAnswerImage,
     this.listRecognitions = _unavailableListRecognitions,
     this.listGrades = _unavailableListGrades,
     this.listAnnotations = _unavailableListAnnotations,
@@ -776,6 +788,7 @@ class AppDependencies {
       confirmDependencyGraph = client.confirmDependencyGraph,
       listQuestions = client.listQuestions,
       getSourcePdf = client.getSourcePdf,
+      getAnswerImage = client.getAnswerImage,
       listRecognitions = client.listRecognitions,
       listGrades = client.listGrades,
       listAnnotations = client.listAnnotations,
@@ -836,6 +849,7 @@ class AppDependencies {
   final ConfirmDependencyGraph confirmDependencyGraph;
   final ListQuestions listQuestions;
   final GetSourcePdf getSourcePdf;
+  final GetAnswerImage getAnswerImage;
   final ListRecognitions listRecognitions;
   final ListGrades listGrades;
   final ListAnnotations listAnnotations;

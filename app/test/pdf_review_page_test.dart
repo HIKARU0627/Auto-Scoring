@@ -4691,7 +4691,14 @@ void main() {
       // 持たない変化**がここにあった（レビュー3回目 P2）。
       await pumpAt(
         tester,
-        const Size(700, 1200),
+        // Raised from 1200 with Issue #122, which put 「AIが見た画像」 at the
+        // top of the 判断材料. The window has to grow by what that row adds,
+        // or folding the band away no longer brings the last row on screen
+        // and the second assertion below stops being about the trigger.
+        // Measured on this fixture: 1290 fails the second assertion, 1600
+        // fails the premise, and 1350/1400/1450 all pass. 1400 is picked to
+        // sit inside that window rather than on either edge.
+        const Size(700, 1400),
         reviewableQuestion(
           // Two criteria: enough that a 判断材料 row is below the fold while
           // the band is open, few enough that folding the band away brings
