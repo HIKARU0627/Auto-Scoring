@@ -493,14 +493,23 @@ async def test_schema_violation_records_which_field_failed_and_why(
     )
 
 
-async def test_mismatched_response_fails_permanently_without_persisting_a_grade(
+async def test_a_response_scored_out_of_the_wrong_total_is_rejected_before_persisting(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
     ai_provider: _ScriptedAIProvider,
     processor: GradingJobProcessor,
 ) -> None:
+    """A response whose ``maxScore`` is not this question's registered points
+    is grading a different scale, and "4" out of the wrong total is not a
+    grade -- never persisted.
+
+    There is no companion "wrong question id" case any more: since Issue
+    #117 the response carries no question identifier at all, so
+    `GradingResponse.question_id` is filled in from the request that was
+    sent rather than copied out of the answer. What that check used to
+    catch is now impossible to express."""
     _seed(session_factory, store)
-    ai_provider.script(_response(question_id="some-other-question"))
+    ai_provider.script(_response(max_score=99))
     job = make_job(kind=JobKind.GRADING, question_id="q-1")
 
     result = await processor.process(job)
@@ -897,25 +906,30 @@ async def test_the_graders_own_corrected_recognition_is_persisted_and_gates_usab
     assert grading_recognition.source is GradingSource.AI
 
 
-async def test_rubric_text_includes_criterion_ids_and_scoring_method(
+async def test_the_rubric_is_numbered_for_the_provider_and_ids_travel_beside_it(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
     ai_provider: _ScriptedAIProvider,
     processor: GradingJobProcessor,
 ) -> None:
-    """Issue #20 review, P1: the provider must receive each criterion's
-    registered id (to map its response back onto the rubric) and the
-    question's scoring method (additive vs. subtractive)."""
+    """The provider receives the criteria as a numbered list plus the
+    question's scoring method (additive vs. subtractive, Issue #20 review
+    P1), and the registered ids ride along in ``criterion_ids`` -- out of
+    the prompt entirely (Issue #117), in the same order the numbering
+    implies, so a response naming a position can still be mapped back."""
     _seed(session_factory, store)
     ai_provider.script(_response())
     job = make_job(kind=JobKind.GRADING, question_id="q-1")
 
     await processor.process(job)
 
-    rubric_text = ai_provider.calls[0].rubric_text
-    assert "id=c-1" in rubric_text
-    assert "id=c-2" in rubric_text
-    assert "加算方式" in rubric_text  # tests.support.make_question() defaults to ADDITIVE
+    request = ai_provider.calls[0]
+    assert "1. " in request.rubric_text
+    assert "2. " in request.rubric_text
+    assert "c-1" not in request.rubric_text
+    assert "c-2" not in request.rubric_text
+    assert request.criterion_ids == ("c-1", "c-2")
+    assert "加算方式" in request.rubric_text  # tests.support.make_question() defaults to ADDITIVE
 
 
 async def test_response_with_an_unknown_criterion_id_is_rejected_before_persisting(

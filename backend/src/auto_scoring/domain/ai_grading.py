@@ -44,10 +44,23 @@ Design decisions this schema encodes:
   would not have helped: while a cap exists, a response will exceed it.
 * Every model is ``strict=True``: a provider sending ``"score": "4"`` or
   ``"confidence": "0.8"`` (a string standing in for a number) is a schema
-  violation, not a value to coerce. Required text fields
-  (``question_id`` / ``comment`` / ``rationale`` / criterion ``id`` /
-  ``rationale`` / annotation ``target`` / ``type``) also reject a
-  whitespace-only string, since ``min_length`` alone would let one through.
+  violation, not a value to coerce. Required text fields (``comment`` /
+  ``rationale`` / criterion ``rationale`` / annotation ``target`` /
+  ``type``) also reject a whitespace-only string, since ``min_length``
+  alone would let one through.
+* **Nothing here asks a provider to copy an identifier back** (Issue #117).
+  A criterion is named by its 1-based ``index`` into the rubric as the
+  prompt numbered it, and there is no ``questionId`` field at all: one call
+  grades one question, so echoing its id proves nothing that the request
+  does not already know. Found on real material against real Vertex AI --
+  a 45-character rubric criterion id came back with one character
+  duplicated, 4 times out of 4, and the grading job failed ``PERMANENT``.
+  A JSON Schema constrains the *shape* of a response and can say nothing
+  about whether a string inside that shape is an accurate transcription, so
+  shortening the id would only have lowered the odds. Mapping ``index``
+  back onto the registered criterion ids is
+  ``ai_provider.grading_response_from_result``'s job, from the same ordered
+  list the prompt was built from.
 """
 
 from __future__ import annotations
@@ -127,11 +140,23 @@ class GradingOutput(BaseModel):
 
 
 class CriterionResultOutput(BaseModel):
-    """One rubric criterion's outcome, confidence, and required rationale."""
+    """One rubric criterion's outcome, confidence, and required rationale.
+
+    ``index`` is which criterion this is: its 1-based position in the rubric
+    exactly as the prompt numbered it
+    (``jobs.grading_processor.build_rubric_prompt``). Deliberately a small
+    integer rather than the criterion's registered id -- see this module's
+    docstring, Issue #117. The upper bound is not expressible here (it is
+    the calling request's own criterion count, not a property of the wire
+    format); ``ai_provider.grading_response_from_result`` enforces it, and
+    ``adapters.ai_grading._schema`` additionally pins the exact candidate
+    set into the per-request JSON Schema so a provider that enforces the
+    schema cannot emit an out-of-range one at all.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    id: _NonBlankStr
+    index: int = Field(ge=1)
     result: CriterionOutcome
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: _NonBlankStr
@@ -164,15 +189,19 @@ class AnnotationCandidate(BaseModel):
 
 
 class AIGradingResult(BaseModel):
-    """The full structured output for one question (section 9.2 example)."""
+    """The full structured output for one question (section 9.2 example).
+
+    Carries no question identifier (Issue #117): the response belongs to
+    the single question its request named, and the caller maps it back from
+    that request rather than from anything the model wrote.
+    """
 
     #: See :class:`GradingOutput` -- ``populate_by_name`` is deliberately
-    #: off at this untrusted wire boundary: only the documented ``questionId``
-    #: alias is accepted, not the Python-style ``question_id`` (code review
+    #: off at this untrusted wire boundary: only the documented camelCase
+    #: aliases are accepted, not the Python-style field names (code review
     #: finding).
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    question_id: Annotated[_NonBlankStr, Field(alias="questionId")]
     recognition: RecognitionOutput
     grading: GradingOutput
     criteria: tuple[CriterionResultOutput, ...] = Field(min_length=1)
@@ -181,10 +210,10 @@ class AIGradingResult(BaseModel):
     annotations: tuple[AnnotationCandidate, ...] = ()
 
     @model_validator(mode="after")
-    def _criteria_ids_unique(self) -> AIGradingResult:
-        ids = [c.id for c in self.criteria]
-        if len(ids) != len(set(ids)):
-            raise ValueError("criteria contains duplicate ids")
+    def _criteria_indices_unique(self) -> AIGradingResult:
+        indices = [c.index for c in self.criteria]
+        if len(indices) != len(set(indices)):
+            raise ValueError("criteria names the same rubric position twice")
         return self
 
 
@@ -229,8 +258,9 @@ def parse_ai_grading_result(raw: str | bytes) -> AIGradingResult:
 
     Raises ``pydantic.ValidationError`` on any schema violation (missing
     field, wrong type, score > maxScore, empty ``rationale``/``comment``,
-    unknown extra field, ...). Callers (``ai_provider`` adapters and the PoC
-    harness) wrap this in :class:`auto_scoring.domain.ai_provider.SchemaViolation`
+    a rubric position named twice, unknown extra field, ...). Callers
+    (``ai_provider`` adapters and the PoC harness) wrap this in
+    :class:`auto_scoring.domain.ai_provider.SchemaViolation`
     -- there is no fallback that extracts a partial answer from invalid JSON
     or free text.
     """

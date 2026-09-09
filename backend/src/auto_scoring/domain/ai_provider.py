@@ -13,6 +13,11 @@ only pins the contract every provider must honour:
 * a response is either a validated :class:`GradingResponse` or a raised
   :class:`SchemaViolation` / :class:`ProviderUnavailable` -- never a
   best-effort free-text parse (Issue #14 acceptance);
+* a response never carries an identifier the provider had to copy from the
+  request (Issue #117): the question is the one the request named, and a
+  rubric criterion is named by its 1-based position in
+  :attr:`GradingRequest.criterion_ids`, which
+  :func:`grading_response_from_result` maps back;
 * Recognition confidence and Grading confidence travel as two separate
   numbers, end to end (section 10);
 * every response carries the :class:`ProviderDescriptor` needed to reproduce
@@ -425,6 +430,17 @@ class GradingRequest:
     student left blank (mirrors
     ``ai_grading_metrics.GradingInputRecord.ocr_clean``).
 
+    ``criterion_ids`` (Issue #117) is the rubric's registered criterion ids
+    in the order ``rubric_text`` numbers them, and is the *only* thing that
+    maps a response back onto the rubric. It is not sent to the provider:
+    the prompt numbers the criteria ``1.``..``N.`` and the response names a
+    position, so a 45-character id never has to survive a round trip
+    through a language model -- which is what was actually failing on real
+    material (see ``domain.ai_grading``'s own docstring). Built together
+    with ``rubric_text`` by ``jobs.grading_processor.build_rubric_prompt``,
+    from one ordered sequence, so the numbering and this list cannot drift
+    apart.
+
     ``prerequisite_context`` (Issue #20) carries only the prerequisite
     question data business-rules-and-evaluation-data.md section 4.3
     allows to cross into a dependent question's grading call -- built by
@@ -439,6 +455,7 @@ class GradingRequest:
     ocr_text: str
     model_answer: str
     rubric_text: str
+    criterion_ids: tuple[str, ...]
     max_score: int
     prerequisite_context: tuple[PrerequisiteAnswer, ...] = ()
 
@@ -455,6 +472,17 @@ class GradingRequest:
             raise ValueError("GradingRequest.answer_image must not be empty")
         if self.max_score < 0:
             raise ValueError(f"GradingRequest.max_score must be >= 0, got {self.max_score!r}")
+        # A grading call with nothing to grade against, or with two criteria
+        # sharing an id, cannot have its response mapped back at all -- and
+        # `GradingJobProcessor.process` already refuses a question with no
+        # rubric before it gets here, so either would be a bug upstream
+        # rather than an input to tolerate.
+        if not self.criterion_ids:
+            raise ValueError("GradingRequest.criterion_ids must include at least one criterion")
+        if any(not criterion_id.strip() for criterion_id in self.criterion_ids):
+            raise ValueError("GradingRequest.criterion_ids must not contain a blank id")
+        if len(set(self.criterion_ids)) != len(self.criterion_ids):
+            raise ValueError("GradingRequest.criterion_ids must not contain a duplicate id")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -512,6 +540,8 @@ class GradingResponse:
 def grading_response_from_result(
     result: AIGradingResult,
     *,
+    question_id: str,
+    criterion_ids: Sequence[str],
     descriptor: ProviderDescriptor,
     latency_seconds: float,
 ) -> GradingResponse:
@@ -520,9 +550,31 @@ def grading_response_from_result(
     Takes a *parsed* result -- callers first run
     ``ai_grading.parse_ai_grading_result`` (or catch the ``ValidationError`` it
     raises and re-raise as :class:`SchemaViolation`) before calling this.
+
+    ``question_id`` and ``criterion_ids`` come from the *request* (they are
+    ``GradingRequest``'s own fields), not from the response: since Issue
+    #117 the wire format carries no identifier the model had to copy. A
+    ``criteria[].index`` outside ``1..len(criterion_ids)`` is raised as
+    :class:`SchemaViolation` -- the same treatment any other malformed
+    response gets, so an unmappable answer is still never scored as if it
+    were a real grade (Issue #14 acceptance, Issue #117 acceptance 3).
     """
+    for position, criterion in enumerate(result.criteria):
+        if criterion.index > len(criterion_ids):
+            # ``detail`` follows Issue #121's rule for a schema violation's
+            # diagnosis: the field path and a reason code, both literals or
+            # integers of this project's own schema, never a provider-written
+            # value. Without it this failure would reach `Job.last_error` as a
+            # bare "SchemaViolation" -- the exact blind spot #121 removed for
+            # every other violation, and it would be the likeliest one to hit
+            # if a provider ever ignores the ``index`` enum.
+            raise SchemaViolation(
+                f"response named rubric position {criterion.index}, but the question has "
+                f"{len(criterion_ids)} criteria",
+                detail=f"criteria.{position}.index: out_of_range",
+            )
     return GradingResponse(
-        question_id=result.question_id,
+        question_id=question_id,
         recognition_text=result.recognition.text,
         recognition_confidence=result.recognition.confidence,
         score=result.grading.score,
@@ -532,7 +584,7 @@ def grading_response_from_result(
         comment=result.comment,
         criteria=tuple(
             GradingCriterionOutcome(
-                criterion_id=c.id,
+                criterion_id=criterion_ids[c.index - 1],
                 outcome=c.result,
                 confidence=c.confidence,
                 rationale=c.rationale,

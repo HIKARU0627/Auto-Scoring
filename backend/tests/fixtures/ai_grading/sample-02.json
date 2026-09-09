@@ -33,7 +33,6 @@
         "synthetic-a": {
           "ocr_clean": {
             "response": {
-              "questionId": "poc2-synth-02",
               "recognition": {
                 "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美術の制作が始まった。",
                 "confidence": 0.95
@@ -45,13 +44,13 @@
               },
               "criteria": [
                 {
-                  "id": "k1",
+                  "index": 1,
                   "result": "fail",
                   "confidence": 0.8,
                   "rationale": "設問が求める東西伝播ではなく成立過程を述べており対象外。"
                 },
                 {
-                  "id": "k2",
+                  "index": 2,
                   "result": "pass",
                   "confidence": 0.75,
                   "rationale": "造形美術という具体例が1つ挙げられている。"
@@ -73,7 +72,6 @@
           },
           "ocr_noisy": {
             "response": {
-              "questionId": "poc2-synth-02",
               "recognition": {
                 "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美祢の制作が始まった。",
                 "confidence": 0.55
@@ -85,13 +83,13 @@
               },
               "criteria": [
                 {
-                  "id": "k1",
+                  "index": 1,
                   "result": "fail",
                   "confidence": 0.7,
                   "rationale": "成立過程の説明のみで加点対象外。"
                 },
                 {
-                  "id": "k2",
+                  "index": 2,
                   "result": "fail",
                   "confidence": 0.4,
                   "rationale": "「美祢」の誤字により具体例が造形美術か判断できないと判定。"
@@ -115,7 +113,6 @@
         "synthetic-b": {
           "ocr_clean": {
             "response": {
-              "questionId": "poc2-synth-02",
               "recognition": {
                 "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美術の制作が始まった。",
                 "confidence": 0.95
@@ -127,13 +124,13 @@
               },
               "criteria": [
                 {
-                  "id": "k1",
+                  "index": 1,
                   "result": "fail",
                   "confidence": 0.6,
                   "rationale": "成立過程のみで加点対象外と判断。"
                 },
                 {
-                  "id": "k2",
+                  "index": 2,
                   "result": "pass",
                   "confidence": 0.6,
                   "rationale": "造形美術の具体例あり。"
@@ -155,7 +152,6 @@
           },
           "ocr_noisy": {
             "response": {
-              "questionId": "poc2-synth-02",
               "recognition": {
                 "text": "文化圏Xは他の文化との融合で生まれ、各地に広まり、東方では造形美祢の制作が始まった。",
                 "confidence": 0.5
@@ -167,13 +163,13 @@
               },
               "criteria": [
                 {
-                  "id": "k1",
+                  "index": 1,
                   "result": "fail",
                   "confidence": 0.9,
                   "rationale": "文章が破損しており評価不能と判断。"
                 },
                 {
-                  "id": "k2",
+                  "index": 2,
                   "result": "fail",
                   "confidence": 0.9,
                   "rationale": "文章が破損しており評価不能と判断。"

@@ -205,7 +205,9 @@ class VertexGeminiAIProvider:
             "generationConfig": {
                 "temperature": self._temperature,
                 "responseMimeType": "application/json",
-                "responseJsonSchema": strict_ai_grading_result_schema(),
+                "responseJsonSchema": strict_ai_grading_result_schema(
+                    criterion_count=len(request.criterion_ids)
+                ),
             },
         }
 
@@ -261,5 +263,9 @@ class VertexGeminiAIProvider:
             ) from None
 
         return grading_response_from_result(
-            parsed_result, descriptor=self.describe(), latency_seconds=latency_seconds
+            parsed_result,
+            question_id=request.question_id,
+            criterion_ids=request.criterion_ids,
+            descriptor=self.describe(),
+            latency_seconds=latency_seconds,
         )

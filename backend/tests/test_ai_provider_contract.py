@@ -33,13 +33,20 @@ from auto_scoring.domain.ai_provider import (
 from auto_scoring.domain.dependency_graph import DependencyProvision
 from auto_scoring.domain.models import AnnotationKind
 
+#: What a request asks an adapter's test double for a *deliberately*
+#: malformed response with. Carried in ``prompt_text`` (see
+#: ``test_schema_violation_never_falls_back_to_free_text_parsing``), so an
+#: HTTP-level fake can select on it from the request body alone.
+MALFORMED_MARKER = "malformed"
+
 _VALID_REQUEST = GradingRequest(
     question_id="q1",
     prompt_text="設問文",
     answer_image=b"\x89PNG\r\n\x1a\n",
     ocr_text="答案テキスト",
     model_answer="模範解答",
-    rubric_text="採点基準",
+    rubric_text="1. 採点基準(配点5点)",
+    criterion_ids=("c1",),
     max_score=5,
 )
 
@@ -101,7 +108,8 @@ class AIProviderContract:
             answer_image=b"\x89PNG\r\n\x1a\nnot-really-a-png",
             ocr_text="答案テキスト",
             model_answer="模範解答",
-            rubric_text="採点基準",
+            rubric_text="1. 採点基準(配点5点)",
+            criterion_ids=("c1",),
             max_score=5,
         )
         assert isinstance(request.answer_image, bytes)
@@ -115,25 +123,33 @@ class AIProviderContract:
     ) -> None:
         """A provider that returns invalid structured output must raise
         SchemaViolation, not synthesize a best-effort grade from the raw text
-        (Issue #14 acceptance)."""
+        (Issue #14 acceptance).
+
+        ``prompt_text`` carries the marker as well as ``question_id``
+        because, since Issue #117, the question id is no longer sent to the
+        provider at all -- an adapter's own test double sees only what was
+        actually put on the wire, and that is what must be able to select
+        the malformed canned response."""
         with pytest.raises(SchemaViolation):
             provider.grade(
                 GradingRequest(
-                    question_id="malformed",
-                    prompt_text="設問文",
+                    question_id=MALFORMED_MARKER,
+                    prompt_text=MALFORMED_MARKER,
                     answer_image=b"\x89PNG\r\n\x1a\n",
                     ocr_text="答案テキスト",
                     model_answer="模範解答",
-                    rubric_text="採点基準",
+                    rubric_text="1. 採点基準(配点5点)",
+                    criterion_ids=("c1",),
                     max_score=5,
                 )
             )
 
 
 class _ReplayAIProvider:
-    """Replays a canned response for every request except ``question_id ==
-    "malformed"``, which simulates a provider returning invalid structured
-    output. Test-only: never call a real API, never promote to ``src/``.
+    """Replays a canned response for every request except one whose
+    ``question_id`` is :data:`MALFORMED_MARKER`, which simulates a provider
+    returning invalid structured output. Test-only: never call a real API,
+    never promote to ``src/``.
     """
 
     name = "replay-stub"
@@ -149,24 +165,23 @@ class _ReplayAIProvider:
         )
 
     def grade(self, request: GradingRequest) -> GradingResponse:
-        if request.question_id == "malformed":
-            raw = json.dumps({"questionId": request.question_id, "grading": {"score": 1}})
+        if request.question_id == MALFORMED_MARKER:
+            raw = json.dumps({"grading": {"score": 1}})
         else:
             raw = json.dumps(
                 {
-                    "questionId": request.question_id,
                     "recognition": {"text": request.ocr_text, "confidence": 0.9},
                     "grading": {"score": 4, "maxScore": request.max_score, "confidence": 0.8},
                     "criteria": [
                         {
-                            "id": "c1",
+                            "index": 1,
                             "result": "pass",
                             "confidence": 0.9,
                             "rationale": "模範解答と一致する要素を含む。",
                         }
                     ],
                     "comment": "概ね良好です。",
-                    "rationale": "criterion c1を充足するため4点とした。",
+                    "rationale": "1つめのcriterionを充足するため4点とした。",
                     "annotations": [
                         {"target": request.ocr_text, "type": "underline", "comment": "過去形"}
                     ],
@@ -179,7 +194,11 @@ class _ReplayAIProvider:
             raise SchemaViolation("provider returned invalid structured output") from exc
 
         return grading_response_from_result(
-            parsed_result, descriptor=self.describe(), latency_seconds=0.01
+            parsed_result,
+            question_id=request.question_id,
+            criterion_ids=request.criterion_ids,
+            descriptor=self.describe(),
+            latency_seconds=0.01,
         )
 
 
@@ -243,7 +262,8 @@ def test_replay_provider_preserves_annotation_candidates() -> None:
             answer_image=b"\x89PNG\r\n\x1a\n",
             ocr_text="行く",
             model_answer="模範解答",
-            rubric_text="採点基準",
+            rubric_text="1. 採点基準(配点5点)",
+            criterion_ids=("c1",),
             max_score=5,
         )
     )
@@ -263,11 +283,10 @@ def test_grading_response_from_result_preserves_a_corrected_recognition_text() -
     to something else."""
     raw = json.dumps(
         {
-            "questionId": "q1",
             "recognition": {"text": "訂正後の認識結果", "confidence": 0.95},
             "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
             "criteria": [
-                {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+                {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
             ],
             "comment": "コメント",
             "rationale": "全体根拠",
@@ -283,7 +302,13 @@ def test_grading_response_from_result_preserves_a_corrected_recognition_text() -
         temperature=0.0,
         structured_output_mode="json_schema",
     )
-    response = grading_response_from_result(parsed, descriptor=descriptor, latency_seconds=0.0)
+    response = grading_response_from_result(
+        parsed,
+        question_id="q1",
+        criterion_ids=("c1",),
+        descriptor=descriptor,
+        latency_seconds=0.0,
+    )
     assert response.recognition_text == "訂正後の認識結果"
 
 
@@ -432,7 +457,8 @@ _VALID_REQUEST_KWARGS: dict[str, object] = {
     "answer_image": b"\x89PNG\r\n\x1a\n",
     "ocr_text": "答案テキスト",
     "model_answer": "模範解答",
-    "rubric_text": "採点基準",
+    "rubric_text": "1. 採点基準(配点5点)",
+    "criterion_ids": ("c1",),
     "max_score": 5,
 }
 

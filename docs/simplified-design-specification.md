@@ -691,12 +691,20 @@ AIから自由文だけを返させず、構造化データとして取得する
 > §8.1.3 の照合をUIで行うにはこの区別が必要なので、
 > **どちらが読んだかを明示的に持たせる見直しが要る**（本Issueはdocsのみのため未着手）。
 
+> **2026-09-09 追記（Issue #117）**: **この構造はモデルに識別子を返させない。**
+> `questionId` は無く、criterionは登録済みidではなく
+> **rubricでの1始まりの番号（`index`）** で指す。実機（実データ × 実 Vertex AI）
+> で、45文字のcriterion idをモデルが書き写し損ね（`d4a534d8…` → `d4a4534d8…`）、
+> 採点が4/4で permanent 失敗した。構造化出力が強制できるのは応答の**形**で
+> あって、その中の文字列が入力の正確な転記であることではない。
+> 詳細と、なぜ「短いidにする」では不十分かは
+> [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)「モデルに識別子を
+> 転記させない」。
+
 例：
 
 ```json
 {
-  "questionId": "q3",
-
   "recognition": {
     "text": "光合成によって酸素が発生する",
     "confidence": 0.91,
@@ -711,12 +719,12 @@ AIから自由文だけを返させず、構造化データとして取得する
 
   "criteria": [
     {
-      "id": "criterion-1",
+      "index": 1,
       "result": "pass",
       "confidence": 0.97
     },
     {
-      "id": "criterion-2",
+      "index": 2,
       "result": "partial",
       "confidence": 0.76
     }

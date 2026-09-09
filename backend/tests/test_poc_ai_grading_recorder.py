@@ -79,8 +79,12 @@ class _StubProvider:
         self._failure = failure
         self._remaining_failures = failures
         #: A schema-valid provider that returns content in every string it
-        #: controls -- the ids and the deployment metadata included, not
-        #: just the fields that obviously hold prose.
+        #: controls -- the deployment metadata included, not just the
+        #: fields that obviously hold prose. Since Issue #117 the ids are
+        #: no longer among the strings a provider controls: the wire format
+        #: has no ``questionId``, and a criterion is a position this run's
+        #: own request supplied the candidates for, so the stub takes both
+        #: from the request exactly as a real adapter does.
         self._hostile = hostile
         #: Overridden by the COMMENT-annotation regression test below.
         self.annotation_kind = AnnotationKind.UNDERLINE
@@ -102,7 +106,7 @@ class _StubProvider:
             self._remaining_failures -= 1
             raise self._failure
         return GradingResponse(
-            question_id=_ANSWER_TEXT if self._hostile else request.question_id,
+            question_id=request.question_id,
             recognition_text=_ANSWER_TEXT,
             recognition_confidence=0.9,
             score=4,
@@ -116,7 +120,7 @@ class _StubProvider:
             # as a schema violation.
             criteria=(
                 GradingCriterionOutcome(
-                    criterion_id=_ANSWER_TEXT if self._hostile else "c1",
+                    criterion_id=request.criterion_ids[0],
                     outcome=CriterionOutcome.PASS,
                     confidence=0.9,
                     rationale=f"{_ANSWER_TEXT}が条件を満たす。",
@@ -180,12 +184,14 @@ def test_no_provider_controlled_text_reaches_the_recorded_file(
 
     The provider here is schema-valid but hostile: it puts content in every
     string it controls -- the recognized reading, comment, rationale,
-    criterion rationale, annotation target, **and** the ``questionId``, the
-    ``criteria[].id`` and the deployment metadata. Those last three were
-    waved through by the first fix on the grounds that "the metrics read
-    them, so they are safe"; schema validation checks the *shape* of a
-    value and says nothing about its content, so that reasoning does not
-    hold (code review finding).
+    criterion rationale, annotation target, and the deployment metadata.
+    The last of those was waved through by the first fix on the grounds
+    that "the metrics read it, so it is safe"; schema validation checks the
+    *shape* of a value and says nothing about its content, so that
+    reasoning does not hold (code review finding). The ``questionId`` and
+    ``criteria[].id`` used to belong on that list too, and since Issue #117
+    they are not provider-controlled at all -- see
+    ``test_a_recorded_cell_holds_no_identifier_the_provider_chose``.
 
     Asserted against the whole file, not against the fields known to be
     redacted, so a field added later and forgotten is caught by this same
@@ -201,21 +207,43 @@ def test_no_provider_controlled_text_reaches_the_recorded_file(
     assert _ANSWER_TEXT not in json.dumps(recorded, ensure_ascii=False)
 
 
-def test_an_unverifiable_id_is_recorded_as_a_marker_that_still_reads_as_a_mismatch(
-    dataset: Path,
-) -> None:
-    """Replacing an unverifiable id must not also erase the disagreement it
-    represents: ``evaluate_sample`` counts a response whose ``questionId``
-    differs from the label's as ``mismatched``, and a marker that happened
-    to equal the label's id would drive that column to zero by
-    construction."""
+def test_a_recorded_cell_holds_no_identifier_the_provider_chose(dataset: Path) -> None:
+    """Issue #117 removed the two fields this file used to have to police.
+
+    A cell records the criterion as a *position* in the rubric this run
+    sent, and records no question id at all -- so there is no longer any
+    identifier a provider could have written, and none to match back or
+    replace with an "unverified" marker. This pins that: the recorded shape
+    itself is what makes the leak impossible, not a redaction step that a
+    later change could forget to apply.
+    """
     _run(dataset, _StubProvider(hostile=True))
 
     response = _cell(dataset, "stub", "ocr_clean")["response"]
 
-    assert response["questionId"] == record._UNVERIFIED_QUESTION_ID
-    assert response["questionId"] != "poc2-synth-01"
-    assert response["criteria"][0]["id"].startswith(record._UNVERIFIED_CRITERION_ID_PREFIX)
+    assert "questionId" not in response
+    assert response["criteria"][0]["index"] == 1
+    assert "id" not in response["criteria"][0]
+
+
+def test_a_criterion_outside_this_runs_rubric_is_refused_not_recorded(dataset: Path) -> None:
+    """The one way an id could still reach the recorder is a caller that
+    built a ``GradingResponse`` without mapping it through
+    ``grading_response_from_result``. That is a programming error, and the
+    recorder stops rather than writing a string it cannot vouch for."""
+
+    class _UnmappedProvider(_StubProvider):
+        def grade(self, request: GradingRequest) -> GradingResponse:
+            response = super().grade(request)
+            return replace(
+                response,
+                criteria=(replace(response.criteria[0], criterion_id=_ANSWER_TEXT),),
+            )
+
+    with pytest.raises(AssertionError, match="rubric criteria this run sent"):
+        _run(dataset, _UnmappedProvider())
+
+    assert _ANSWER_TEXT not in (dataset / "sample-01.json").read_text(encoding="utf-8")
 
 
 def test_deployment_metadata_is_recorded_as_a_content_free_fingerprint(
@@ -238,16 +266,15 @@ def test_deployment_metadata_is_recorded_as_a_content_free_fingerprint(
 
 def test_the_metric_bearing_fields_survive_redaction(dataset: Path) -> None:
     """Redaction must not cost the harness anything it actually scores:
-    ``evaluate_sample`` reads the question id, the score/maxScore, the
-    criterion ids and outcomes, and the two confidences."""
+    ``evaluate_sample`` reads the score/maxScore, the criterion outcomes
+    (resolved from their recorded positions) and the two confidences."""
     _run(dataset, _StubProvider())
 
     response = _cell(dataset, "stub", "ocr_clean")["response"]
 
-    assert response["questionId"] == "poc2-synth-01"
     assert response["grading"] == {"score": 4, "maxScore": 20, "confidence": 0.8}
     assert response["recognition"]["confidence"] == 0.9
-    assert response["criteria"][0]["id"] == "c1"
+    assert response["criteria"][0]["index"] == 1
     assert response["criteria"][0]["result"] == "pass"
     # An annotation's kind carries no content, so "the model proposed one
     # underline" survives even though what it pointed at does not.
@@ -272,7 +299,7 @@ def test_a_successful_call_is_recorded_in_the_shape_report_py_reads(dataset: Pat
     # `provider` is not part of the descriptor block: report.py takes the
     # provider id from the cell's key and rejects the extra field.
     assert "provider" not in cell["descriptor"]
-    assert cell["response"]["questionId"] == "poc2-synth-01"
+    assert cell["response"]["criteria"][0]["index"] == 1
     assert cell["latency_seconds"] == 1.25
 
 

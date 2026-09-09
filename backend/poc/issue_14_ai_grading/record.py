@@ -47,9 +47,13 @@ docs/poc-2-ai-grading.md section 11):
   free-text field, because schema validation checks the *shape* of a value
   and says nothing about its content. So the rule is an allowlist, not a
   list of fields known to hold answer text: a provider-supplied value is
-  written only when it is (a) a value this run sent, matched back
-  (``questionId``, ``criteria[].id``, the descriptor's configured strings),
-  or (b) constrained by type and range (a number, an enum, a bool).
+  written only when it is (a) a value this run sent, matched back (the
+  descriptor's configured strings), or (b) constrained by type and range (a
+  number, an enum, a bool). Since Issue #117 the wire format carries no
+  provider-written identifier at all -- no ``questionId``, and a criterion
+  is a 1-based ``index`` into the rubric this run sent -- so the two values
+  that used to need matching back cannot carry provider content in the
+  first place.
   Everything else is replaced with a fixed marker or a content-free
   fingerprint (:func:`_wire_response`, :func:`_wire_descriptor`).
 """
@@ -63,7 +67,7 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -130,10 +134,6 @@ class _Cell:
     question_index: int
     variant: str
     request: GradingRequest
-    #: The rubric criteria the human label lists. A ``criteria[].id`` the
-    #: provider returns is written only if it is one of these; anything
-    #: else is a provider-controlled string (see :func:`_wire_response`).
-    allowed_criterion_ids: frozenset[str]
 
 
 def _load_image(images: Path, ref: str, *, locator: str) -> bytes:
@@ -202,10 +202,9 @@ def _ground_truth(question: dict[str, Any], *, locator: str) -> GradingGroundTru
     """The human label for this question, strictly validated.
 
     Validated here rather than only later by ``report.py``: the label
-    supplies both allowlists this recorder checks provider output against
-    (the question id a response must echo back, and the criterion ids it may
-    name), so a malformed label has to stop the run *before* any paid call,
-    not after.
+    supplies the rubric criteria this run grades against (and so the
+    candidate set a response chooses a position from), so a malformed label
+    has to stop the run *before* any paid call, not after.
 
     The ``ValidationError``'s own message is never shown: pydantic keeps the
     offending value under ``input_value``, and a human label file holds
@@ -325,9 +324,9 @@ def _plan(
                             ocr_text=ocr_text,
                             model_answer=input_record.model_answer,
                             rubric_text=input_record.rubric_text,
+                            criterion_ids=tuple(c.id for c in truth.criteria),
                             max_score=input_record.max_score,
                         ),
-                        allowed_criterion_ids=frozenset(c.id for c in truth.criteria),
                     )
                 )
     return cells
@@ -371,27 +370,9 @@ def _already_recorded(recorded: dict[str, Any], variant: str, provider_id: str |
 #: which the wire schema length-limits.
 _REDACTED = "[redacted: PoC 2 records no free text]"
 
+
 #: Written in place of a ``questionId`` that is not the one this run sent.
-#: Deliberately *not* the expected id: ``evaluate_sample`` classifies a
-#: response whose ``question_id`` differs from the label's as ``mismatched``,
-#: and normalizing the disagreement away would drive the 対応不一致率 column
-#: to zero by construction. No real (opaque) question id can collide with
-#: it, so a genuine match is never reported as a mismatch.
-_UNVERIFIED_QUESTION_ID = "[unverified: provider returned a different questionId]"
-
-#: Prefix for a ``criteria[].id`` that is not one of the rubric criteria the
-#: human label lists. Suffixed with the criterion's position -- an integer,
-#: so it carries no content -- because collapsing several unrecognized ids
-#: onto one string would put duplicate ids in the array.
-_UNVERIFIED_CRITERION_ID_PREFIX = "[unverified-criterion-"
-
-
-def _wire_response(
-    response: GradingResponse,
-    *,
-    expected_question_id: str,
-    allowed_criterion_ids: frozenset[str],
-) -> dict[str, Any]:
+def _wire_response(response: GradingResponse, *, criterion_ids: Sequence[str]) -> dict[str, Any]:
     """The verifiable, metric-bearing part of a response -- and nothing else.
 
     **No provider-controlled string reaches disk.** Issue #35's acceptance
@@ -407,12 +388,17 @@ def _wire_response(
 
     So each value is written only if one of two things is true:
 
-    * **it is a value this run sent, matched back** -- ``questionId``
-      against the request's own id, ``criteria[].id`` against the rubric
-      criteria the human label lists;
+    * **it is a value this run sent, matched back** -- since Issue #117 the
+      wire format has no field a provider fills in with an identifier at
+      all, so nothing is left in this category here (the descriptor's own
+      configured strings, handled by :func:`_wire_descriptor`, are the
+      remaining case);
     * **its type and range constrain it** -- ``score``/``maxScore``
       (integers), the three ``confidence`` values (floats in 0..1),
-      ``criteria[].result`` and ``annotations[].type`` (enums).
+      ``criteria[].index`` (a position in the rubric *this run* sent, which
+      ``grading_response_from_result`` has already refused to map if it is
+      out of range), ``criteria[].result`` and ``annotations[].type``
+      (enums).
 
     Every other field carries :data:`_REDACTED`. They are replaced rather
     than dropped because the wire schema requires them: a cell has to stay
@@ -422,24 +408,12 @@ def _wire_response(
     format for hand-authored fixtures and live recordings, and keeps the
     redaction visible in the data instead of implicit in its absence.
 
-    A mismatched ``questionId`` or an unrecognized ``criteria[].id`` is
-    recorded as a *fixed* unverified marker, never as the provider's raw
-    string. The disagreement itself still survives: ``evaluate_sample``
-    reads the marker, sees it is not the label's id, and counts the cell as
-    ``mismatched`` (or, for a criterion, as not agreeing) exactly as it
-    would have with the raw value.
-
     Built from the already-parsed :class:`GradingResponse`, never from the
     provider's raw body, so what is recorded is exactly what passed
     ``parse_ai_grading_result`` -- and no un-validated bytes from a remote
     service reach the disk.
     """
     body = {
-        "questionId": (
-            expected_question_id
-            if response.question_id == expected_question_id
-            else _UNVERIFIED_QUESTION_ID
-        ),
         "recognition": {
             "text": _REDACTED,
             "confidence": response.recognition_confidence,
@@ -451,16 +425,12 @@ def _wire_response(
         },
         "criteria": [
             {
-                "id": (
-                    criterion.criterion_id
-                    if criterion.criterion_id in allowed_criterion_ids
-                    else f"{_UNVERIFIED_CRITERION_ID_PREFIX}{position}]"
-                ),
+                "index": _rubric_position(criterion.criterion_id, criterion_ids),
                 "result": criterion.outcome.value,
                 "confidence": criterion.confidence,
                 "rationale": _REDACTED,
             }
-            for position, criterion in enumerate(response.criteria)
+            for criterion in response.criteria
         ],
         "comment": _REDACTED,
         "rationale": _REDACTED,
@@ -488,6 +458,27 @@ def _wire_response(
     }
     _assert_still_parses(body)
     return body
+
+
+def _rubric_position(criterion_id: str, criterion_ids: Sequence[str]) -> int:
+    """``criterion_id``'s 1-based position in this run's own rubric.
+
+    Cannot fail for a response that came through
+    ``grading_response_from_result``: since Issue #117 that function is what
+    turns a provider's chosen position back into an id, from this same
+    list. So an id it does not recognize means the caller assembled a
+    ``GradingResponse`` some other way -- and the safe answer is to stop,
+    not to write a string of unknown provenance into the dataset. The id
+    itself is never included in the message: it is exactly the value this
+    function has just decided it cannot vouch for.
+    """
+    try:
+        return criterion_ids.index(criterion_id) + 1
+    except ValueError:
+        raise AssertionError(
+            "a graded criterion is not one of the rubric criteria this run sent; "
+            "the response was not mapped through grading_response_from_result"
+        ) from None
 
 
 def _assert_still_parses(body: dict[str, Any]) -> None:
@@ -646,11 +637,7 @@ def _call_with_backoff(
         return (
             response.descriptor,
             {
-                "response": _wire_response(
-                    response,
-                    expected_question_id=cell.request.question_id,
-                    allowed_criterion_ids=cell.allowed_criterion_ids,
-                ),
+                "response": _wire_response(response, criterion_ids=cell.request.criterion_ids),
                 "descriptor": _wire_descriptor(response.descriptor),
                 # `GradingResponse` carries the successful call's own
                 # measurement, taken inside the adapter around the HTTP

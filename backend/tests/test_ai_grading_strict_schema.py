@@ -26,7 +26,7 @@ def _assert_no_object_node_omits_a_declared_property(node: object) -> None:
 
 
 def test_strict_schema_requires_every_declared_property() -> None:
-    schema = strict_ai_grading_result_schema()
+    schema = strict_ai_grading_result_schema(criterion_count=3)
     _assert_no_object_node_omits_a_declared_property(schema)
 
 
@@ -34,10 +34,9 @@ def test_strict_schema_still_has_the_expected_top_level_shape() -> None:
     """A sanity check that the transform did not also strip real content:
     the top-level object still declares the documented wire fields
     (docs/poc-2-ai-grading.md section 9.2)."""
-    schema: dict[str, Any] = strict_ai_grading_result_schema()
+    schema: dict[str, Any] = strict_ai_grading_result_schema(criterion_count=3)
     assert schema["type"] == "object"
     assert set(schema["properties"]) == {
-        "questionId",
         "recognition",
         "grading",
         "criteria",

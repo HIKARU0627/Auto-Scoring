@@ -41,7 +41,6 @@
         "synthetic-a": {
           "ocr_clean": {
             "response": {
-              "questionId": "poc2-synth-01",
               "recognition": {
                 "text": "役職Aは中央から派遣され、役職Bは地元の有力者から任命された。役職Aには任期があり、役職Bはほぼ終身であった。",
                 "confidence": 0.96
@@ -53,25 +52,25 @@
               },
               "criteria": [
                 {
-                  "id": "c1",
+                  "index": 1,
                   "result": "pass",
                   "confidence": 0.95,
                   "rationale": "中央からの派遣に明確に言及している。"
                 },
                 {
-                  "id": "c2",
+                  "index": 2,
                   "result": "pass",
                   "confidence": 0.9,
                   "rationale": "任期があると明記している。"
                 },
                 {
-                  "id": "c3",
+                  "index": 3,
                   "result": "partial",
                   "confidence": 0.7,
                   "rationale": "地元出身とは述べるが階層の明示が弱い。"
                 },
                 {
-                  "id": "c4",
+                  "index": 4,
                   "result": "fail",
                   "confidence": 0.6,
                   "rationale": "「ほぼ終身」と曖昧で終身官と断定していない。"
@@ -93,7 +92,6 @@
           },
           "ocr_noisy": {
             "response": {
-              "questionId": "poc2-synth-01",
               "recognition": {
                 "text": "役職Aは中央がら派遣され、役職Bは地元の有力者がら任命された。役職Aには任期があり、役職Bはほぼ終身であった。",
                 "confidence": 0.62
@@ -105,25 +103,25 @@
               },
               "criteria": [
                 {
-                  "id": "c1",
+                  "index": 1,
                   "result": "pass",
                   "confidence": 0.88,
                   "rationale": "誤字はあるが中央からの派遣の趣旨は読み取れる。"
                 },
                 {
-                  "id": "c2",
+                  "index": 2,
                   "result": "pass",
                   "confidence": 0.85,
                   "rationale": "任期があるとの記述は維持されている。"
                 },
                 {
-                  "id": "c3",
+                  "index": 3,
                   "result": "partial",
                   "confidence": 0.6,
                   "rationale": "誤字により地元有力者の趣旨がやや不明瞭。"
                 },
                 {
-                  "id": "c4",
+                  "index": 4,
                   "result": "fail",
                   "confidence": 0.55,
                   "rationale": "終身官の断定がない。"
@@ -147,7 +145,6 @@
         "synthetic-b": {
           "ocr_clean": {
             "response": {
-              "questionId": "poc2-synth-01",
               "recognition": {
                 "text": "役職Aは中央から派遣され、役職Bは地元の有力者から任命された。役職Aには任期があり、役職Bはほぼ終身であった。",
                 "confidence": 0.96
@@ -170,7 +167,6 @@
           },
           "ocr_noisy": {
             "response": {
-              "questionId": "poc2-synth-01",
               "recognition": {
                 "text": "役職Aは中央がら派遣され、役職Bは地元の有力者がら任命された。役職Aには任期があり、役職Bはほぼ終身であった。",
                 "confidence": 0.6
@@ -182,25 +178,25 @@
               },
               "criteria": [
                 {
-                  "id": "c1",
+                  "index": 1,
                   "result": "pass",
                   "confidence": 0.8,
                   "rationale": "中央からの派遣は読み取れる。"
                 },
                 {
-                  "id": "c2",
+                  "index": 2,
                   "result": "pass",
                   "confidence": 0.75,
                   "rationale": "任期の記述あり。"
                 },
                 {
-                  "id": "c3",
+                  "index": 3,
                   "result": "fail",
                   "confidence": 0.5,
                   "rationale": "誤字により出身階層の記述が不明瞭と判断。"
                 },
                 {
-                  "id": "c4",
+                  "index": 4,
                   "result": "fail",
                   "confidence": 0.5,
                   "rationale": "終身官の断定がない。"

@@ -19,19 +19,18 @@ from auto_scoring.domain.ai_grading import (
 from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
 
 _VALID: dict[str, object] = {
-    "questionId": "q1",
     "recognition": {"text": "光合成によって酸素が発生する", "confidence": 0.9},
     "grading": {"score": 4, "maxScore": 5, "confidence": 0.85},
     "criteria": [
         {
-            "id": "c1",
+            "index": 1,
             "result": "pass",
             "confidence": 0.95,
             "rationale": "反応の名称に正しく言及している。",
         }
     ],
     "comment": "理由の説明が不足しています。",
-    "rationale": "criterion c1のみ充足のため4点とした。",
+    "rationale": "1つめのcriterionのみ充足のため4点とした。",
     "annotations": [],
 }
 
@@ -49,7 +48,7 @@ def _parse(
 
 def test_valid_payload_parses() -> None:
     result = _parse()
-    assert result.question_id == "q1"
+    assert result.criteria[0].index == 1
     assert result.grading.score == 4
     assert result.criteria[0].result == "pass"
 
@@ -104,9 +103,15 @@ def test_over_long_comment_is_truncated_not_rejected() -> None:
     """Issue #121: a comment over the cap must never cost the grade.
 
     The live run's failures were complete, ``finishReason: STOP`` responses
-    whose score, criterion ids and question id were all correct -- discarded
-    whole because one comment ran 147 characters. The response is trusted;
-    only its comment is too long, so the comment is what gives.
+    whose score and criterion outcomes were all correct -- discarded whole
+    because one comment ran 147 characters. The response is trusted; only
+    its comment is too long, so the comment is what gives.
+
+    (The live run also had a correct ``questionId`` and ``criteria[].id``.
+    Issue #117 removed both from the wire format -- an identifier the model
+    had to copy was its own source of permanent failures -- so what stands
+    in for "everything else survived" here is the criterion the response
+    names by position, plus the rationale.)
     """
     over_long = "あ" * _OVER_CAP_LENGTH
     result = _parse({"comment": over_long})
@@ -114,8 +119,9 @@ def test_over_long_comment_is_truncated_not_rejected() -> None:
     # The grade itself survives intact -- the whole point of the change.
     assert result.grading.score == 4
     assert result.grading.max_score == 5
-    assert result.question_id == "q1"
-    assert result.criteria[0].id == "c1"
+    assert result.criteria[0].index == 1
+    assert result.criteria[0].result == "pass"
+    assert result.rationale == _VALID["rationale"]
 
     assert len(result.comment) <= MAX_COMMENT_CHARS
     assert result.comment.endswith(COMMENT_TRUNCATION_MARK)
@@ -158,13 +164,17 @@ def test_unknown_extra_field_is_rejected_not_ignored() -> None:
         _parse({"explanation": "unexpected extra field"})
 
 
-def test_duplicate_criterion_ids_are_rejected() -> None:
+def test_the_same_rubric_position_judged_twice_is_rejected() -> None:
+    """Two judgements for one criterion cannot both be recorded, and picking
+    one would be a guess -- so the response is a schema violation (Issue
+    #117: the position replaced a free-text id, and this is the property
+    that used to be "duplicate criterion ids")."""
     with pytest.raises(ValidationError):
         _parse(
             {
                 "criteria": [
-                    {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "a"},
-                    {"id": "c1", "result": "fail", "confidence": 0.5, "rationale": "b"},
+                    {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "a"},
+                    {"index": 1, "result": "fail", "confidence": 0.5, "rationale": "b"},
                 ]
             }
         )
@@ -231,12 +241,16 @@ def test_whitespace_only_top_level_field_is_rejected(field: str) -> None:
         _parse({field: "   　  "})
 
 
-def test_whitespace_only_criterion_id_is_rejected() -> None:
+@pytest.mark.parametrize("index", [0, -1, "1", 1.0])
+def test_a_criterion_position_that_is_not_a_positive_integer_is_rejected(index: object) -> None:
+    """The position is 1-based, and strict-mode means a string or float
+    standing in for it is a violation rather than a value to coerce (Issue
+    #117)."""
     with pytest.raises(ValidationError):
         _parse(
             {
                 "criteria": [
-                    {"id": "  ", "result": "pass", "confidence": 0.9, "rationale": "a"},
+                    {"index": index, "result": "pass", "confidence": 0.9, "rationale": "a"},
                 ]
             }
         )
@@ -247,15 +261,19 @@ def test_whitespace_only_criterion_rationale_is_rejected() -> None:
         _parse(
             {
                 "criteria": [
-                    {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "   "},
+                    {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "   "},
                 ]
             }
         )
 
 
-def test_whitespace_only_question_id_is_rejected() -> None:
+def test_a_question_identifier_is_rejected_as_an_unknown_field() -> None:
+    """Issue #117: the wire format has no ``questionId`` at all any more, so
+    a provider still sending one is a schema violation rather than a value
+    quietly ignored -- ``extra="forbid"`` is what makes the removal
+    observable instead of silent."""
     with pytest.raises(ValidationError):
-        _parse({"questionId": "   "})
+        _parse({"questionId": "q1"})
 
 
 def test_whitespace_only_annotation_target_is_rejected() -> None:
@@ -269,17 +287,6 @@ def test_recognition_text_may_be_empty_for_an_unreadable_region() -> None:
     (mirrors domain.ocr.OcrResult, not a value to reject)."""
     result = _parse({"recognition": {"text": "", "confidence": 0.1}})
     assert result.recognition.text == ""
-
-
-def test_snake_case_question_id_is_rejected_not_populated_by_name() -> None:
-    """Code review finding: the documented wire contract is camelCase
-    (``questionId``) only. Accepting the Python-style ``question_id`` too
-    would let a non-conformant provider response pass as schema-valid,
-    understating the real schema violation rate."""
-    payload = dict(_VALID)
-    payload["question_id"] = payload.pop("questionId")
-    with pytest.raises(ValidationError):
-        parse_ai_grading_result(json.dumps(payload))
 
 
 def test_snake_case_max_score_is_rejected_not_populated_by_name() -> None:

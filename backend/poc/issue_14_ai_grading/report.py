@@ -295,6 +295,7 @@ from auto_scoring.domain.ai_grading_metrics import (
 from auto_scoring.domain.ai_provider import (
     GradingResponse,
     ProviderDescriptor,
+    SchemaViolation,
     descriptor_key,
     grading_response_from_result,
     parse_provider_descriptor,
@@ -536,7 +537,13 @@ class _CellResult:
     is_unavailable: bool
 
 
-def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) -> _CellResult:
+def _load_cell(
+    cell: dict[str, Any] | None,
+    *,
+    provider: str,
+    path: Path | str,
+    truth: GradingGroundTruth,
+) -> _CellResult:
     """Parse one recorded ``(provider, input_variant)`` cell.
 
     A cell is one of three states (its shape is already validated by
@@ -618,7 +625,20 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
 
     try:
         parsed = parse_ai_grading_result(json.dumps(cell["response"]))
-    except ValidationError:
+        # Since Issue #117 a recorded cell names a rubric criterion by its
+        # 1-based position, and this is where that position is resolved back
+        # to the human label's own criterion ids. A position outside the
+        # label's rubric raises `SchemaViolation` -- counted here exactly
+        # like any other unparseable cell, which is the same treatment the
+        # previous "unrecognized ``criteria[].id``" marker got.
+        response = grading_response_from_result(
+            parsed,
+            question_id=truth.question_id,
+            criterion_ids=tuple(criterion.id for criterion in truth.criteria),
+            descriptor=descriptor,
+            latency_seconds=latency_seconds or 0.0,
+        )
+    except (ValidationError, SchemaViolation):
         return _CellResult(
             response=None,
             config_key=config_key,
@@ -627,10 +647,6 @@ def _load_cell(cell: dict[str, Any] | None, *, provider: str, path: Path | str) 
             is_pending=False,
             is_unavailable=False,
         )
-
-    response = grading_response_from_result(
-        parsed, descriptor=descriptor, latency_seconds=latency_seconds or 0.0
-    )
     return _CellResult(
         response=response,
         config_key=config_key,
@@ -1136,7 +1152,10 @@ def _parse_cell_grid(
             cells_for_provider = sample.recorded.get(raw_key, {})
             cells_for_sample[provider] = {
                 variant: _load_cell(
-                    cells_for_provider.get(variant), provider=provider, path=sample.path
+                    cells_for_provider.get(variant),
+                    provider=provider,
+                    path=sample.path,
+                    truth=sample.truth,
                 )
                 for variant in _INPUT_VARIANTS
             }

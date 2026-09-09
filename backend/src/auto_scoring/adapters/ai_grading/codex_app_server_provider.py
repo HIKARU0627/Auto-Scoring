@@ -671,7 +671,9 @@ class CodexAppServerProvider:
                             {"type": "text", "text": build_grading_user_content(request)},
                             {"type": "localImage", "path": image_path},
                         ],
-                        "outputSchema": strict_ai_grading_result_schema(),
+                        "outputSchema": strict_ai_grading_result_schema(
+                            criterion_count=len(request.criterion_ids)
+                        ),
                         # Belt-and-braces on top of the thread-level
                         # `sandbox: "read-only"`: an explicit per-turn
                         # policy object that also disables network access,
@@ -733,7 +735,11 @@ class CodexAppServerProvider:
             structured_output_mode="json_schema",
         )
         return grading_response_from_result(
-            parsed_result, descriptor=descriptor, latency_seconds=latency_seconds
+            parsed_result,
+            question_id=request.question_id,
+            criterion_ids=request.criterion_ids,
+            descriptor=descriptor,
+            latency_seconds=latency_seconds,
         )
 
     def _write_temp_workspace(self, data: bytes) -> tuple[str, str]:
