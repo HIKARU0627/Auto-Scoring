@@ -835,6 +835,8 @@ void main() {
   group('配点と採点基準', () {
     testWidgets('抽出できなかった配点は「不明」として一覧に出る', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -858,6 +860,8 @@ void main() {
     testWidgets('合計と不明件数を必ず並べて出す', (tester) async {
       // 不明を含む一覧の横に合計だけを置くと、それが満点だと読める。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -876,6 +880,8 @@ void main() {
 
     testWidgets('総得点と合計が食い違えば差を示す', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -894,6 +900,8 @@ void main() {
 
     testWidgets('配点が不明なままでは確定できず、理由が画面に出る', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -919,6 +927,8 @@ void main() {
       // Issue #95 決定 8 の退避手段。抽出が無い状態が出発点。
       List<CriteriaQuestionModel>? saved;
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -955,6 +965,8 @@ void main() {
       // 押した瞬間に有料 provider へ全ページ送るのを止める。
       var extracted = 0;
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -986,6 +998,8 @@ void main() {
     testWidgets('キャンセルすれば1ページも送らない', (tester) async {
       var extracted = 0;
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1009,6 +1023,8 @@ void main() {
 
     testWidgets('単価が未設定なら 0 円ではなく「未設定」と出す', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1032,6 +1048,8 @@ void main() {
 
     testWidgets('単価が設定されていれば概算を出す', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1054,6 +1072,8 @@ void main() {
     testWidgets('ページ数が上限を超えていれば、実行させずに理由を出す', (tester) async {
       var extracted = 0;
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1085,6 +1105,8 @@ void main() {
 
     testWidgets('抽出が 0 件だったことと、実行していないことを別の文言で示す', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1106,6 +1128,8 @@ void main() {
     testWidgets('抽出結果を編集すると、保存前でも合計が追随する', (tester) async {
       // サーバの totals をそのまま出していると、ここで合計が古いままになる。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1150,6 +1174,8 @@ void main() {
       var savedRevision = 0;
       int? confirmedWith;
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1190,6 +1216,8 @@ void main() {
     testWidgets('配点を確定しても、なぜまだ採点が始まらないかを画面に出す', (tester) async {
       // #104 の取込完了画面と同じ規律: できないことをできるように見せない。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(),
@@ -1218,6 +1246,8 @@ void main() {
       // そこで「配点が未確定です」と出すのは、止めていないものを
       // 止めているように見せることになる。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
@@ -1233,6 +1263,8 @@ void main() {
 
     testWidgets('配点領域が無ければ、配点未確定を残作業に挙げる', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(
@@ -1254,6 +1286,8 @@ void main() {
       // 「未確定」と同じに扱って 409 で断る。`status` だけを見ていると
       // 画面だけが「残っていることはありません」と言う。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
@@ -1290,6 +1324,8 @@ void main() {
 
     testWidgets('設問集合が一致していれば、確定済みグラフはそのまま済み扱い', (tester) async {
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(status: 'confirmed'),
@@ -1321,6 +1357,8 @@ void main() {
       // A案: 配点の入力口を「配点と採点基準」節ひとつに絞る。
       // fallback の経路はコードに残るが、画面からは作れない。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(
@@ -1332,9 +1370,7 @@ void main() {
 
       await _pumpSettings(tester, dependencies);
 
-      await tester.tap(find.byKey(const Key('region-tile-0')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byIcon(Icons.edit_outlined).first);
+      await tester.tap(find.byKey(const Key('answer-area-edit-0')));
       await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const Key('region-kind-field')));
@@ -1350,6 +1386,8 @@ void main() {
       // 選択肢から外しただけだと `DropdownButtonFormField` が
       // `initialValue` を候補に見つけられず、既存の領域を開けなくなる。
       final dependencies = AppDependencies(
+        listQuestions: (testId) async => _questions(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         getAnswerLayout: (testId) async => _answerLayout(),
         getProfile: (testId) async => _profile(
@@ -1361,7 +1399,7 @@ void main() {
 
       await _pumpSettings(tester, dependencies);
 
-      await tester.tap(find.byIcon(Icons.edit_outlined).first);
+      await tester.tap(find.byKey(const Key('answer-area-edit-0')));
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull);
@@ -1377,6 +1415,7 @@ void main() {
       // name -- the one thing this app must not claim it can do.
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
@@ -1397,6 +1436,7 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(pageCount: null),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
@@ -1423,6 +1463,7 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
         // No confirmed questions yet -- the 配点 has not been confirmed, so
@@ -1451,6 +1492,7 @@ void main() {
           detectionAvailable: false,
           reason: 'AUTO_SCORING_AI_GRADING_TRANSPORT に画像を送れる provider がありません',
         ),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
@@ -1479,6 +1521,7 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(const ['1', '2']),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
@@ -1506,6 +1549,7 @@ void main() {
       // impossible on exactly these tests (review round 1, P1).
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async => _questions(const ['1', '2']),
         getTest: (testId) async => _test(),
@@ -1535,6 +1579,7 @@ void main() {
       // profile, which is what turns the manual path on.
       var uploaded = false;
       final dependencies = AppDependencies(
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayout: (testId) async =>
             _answerLayout(pageCount: uploaded ? 1 : null),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
@@ -1585,6 +1630,7 @@ void main() {
       var attempts = 0;
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async {
           attempts++;
           if (attempts == 1) {
@@ -1641,6 +1687,7 @@ void main() {
       // (review round 1, P2).
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async => _questions(const ['1', '2']),
         getTest: (testId) async => _test(),
@@ -1674,6 +1721,7 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async => _questions(),
         getTest: (testId) async => _test(),
@@ -1698,6 +1746,7 @@ void main() {
         'number', (tester) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(pageCount: 3),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async => _questions(),
         getTest: (testId) async => _test(),
@@ -1725,6 +1774,7 @@ void main() {
       var detected = 0;
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async => _questions(),
         getTest: (testId) async => _test(),
@@ -1761,6 +1811,7 @@ void main() {
         var detected = 0;
         final dependencies = AppDependencies(
           getAnswerLayout: (testId) async => _answerLayout(),
+          getCriteria: (testId) async => throw _notFound(),
           getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
           listQuestions: (testId) async => _questions(),
           getTest: (testId) async => _test(),
@@ -1791,6 +1842,7 @@ void main() {
       var confirmed = false;
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async =>
             confirmed ? _questions() : _questions(const ['1', '2']),
@@ -1831,6 +1883,7 @@ void main() {
       // guards against (review round 2).
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         listQuestions: (testId) async => _questions(),
         getTest: (testId) async => _test(),
@@ -1866,6 +1919,7 @@ void main() {
       // reviewer learns why before pressing it, not after.
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
@@ -1895,6 +1949,7 @@ void main() {
     ) async {
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),
@@ -1926,6 +1981,7 @@ void main() {
       // page and marked 要確認 -- it fails loudly, in front of a human.
       final dependencies = AppDependencies(
         getAnswerLayout: (testId) async => _answerLayout(),
+        getCriteria: (testId) async => throw _notFound(),
         listQuestions: (testId) async => _questions(const ['1', '2']),
         getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
         getTest: (testId) async => _test(),

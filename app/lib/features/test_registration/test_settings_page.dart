@@ -1542,9 +1542,12 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         if (_criteriaConfirmed && !_profileConfirmed) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(
+            // Issue #103 wrote this when 自動検出 did not exist yet. It does
+            // now, so the copy points at it -- shipping a screen that calls a
+            // shipped feature unimplemented is worse than the diff.
             '配点は確定しました。採点の開始には回答欄の設定が必要です。'
-            '答案から回答欄を自動検出する機能は未実装なので（#95 決定 2、別 Issue）、'
-            'いまは上の「領域を手動追加」で回答欄を引いて確定してください。',
+            '上の「回答欄を決める答案を選ぶ」で答案を1枚取り込み、'
+            '「回答欄を自動検出」するか「領域を手動追加」で引いて確定してください。',
             key: const Key('criteria-confirmed-next-step'),
             style: context.texts.bodySmall,
           ),
