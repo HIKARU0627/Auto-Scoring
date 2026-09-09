@@ -72,11 +72,12 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-# `×` (U+00D7) and `＿` (U+FF3F) are the marks this product actually draws on a
-# Japanese answer sheet (`domain.pdf_export._KIND_SYMBOLS`, Issue #141), not
-# typos for ASCII `x`/`_`. RUF001-003 flags them as confusable by default, and
-# the ASCII characters it suggests are the wrong glyphs for the job.
-allowed-confusables = ["×", "＿"]
+# Characters this product actually prints on a Japanese answer sheet
+# (`domain.pdf_export._KIND_SYMBOLS` / `_UNPLACED_SUFFIX`, Issue #141), not
+# typos for their ASCII lookalikes. RUF001-003 flags them as confusable by
+# default, and the ASCII characters it suggests are the wrong glyphs for text
+# set in Japanese.
+allowed-confusables = ["×", "＿", "（", "）"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's parameter-default idiom (`file: UploadFile = File(...)`) intentionally

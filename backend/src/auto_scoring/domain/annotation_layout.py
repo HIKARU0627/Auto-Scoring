@@ -17,18 +17,10 @@ from datetime import datetime
 
 from auto_scoring.domain.models import (
     Annotation,
-    AnnotationKind,
     BoundingBox,
     NormalizedRect,
     Question,
     RecognitionResult,
-)
-
-#: Annotation kinds placed at a question's fixed "Annotation配置領域" (§12.2)
-#: rather than at a specific word/phrase -- mirrors `pdf_review_geometry.dart`'s
-#: `fixedPositionAnnotationKinds`.
-FIXED_POSITION_KINDS = frozenset(
-    {AnnotationKind.CIRCLE, AnnotationKind.CROSS, AnnotationKind.TRIANGLE, AnnotationKind.SCORE}
 )
 
 #: Identity crop (offset 0, scale 1): what a `None`/degenerate `answer_area`
@@ -76,10 +68,22 @@ def resolve_annotation_rect(
        OCR bounding boxes (§12.3), newest attempt first, and mapped from
        crop-relative into page-relative space through ``question.
        answer_area`` (§12.3, ``_crop_relative_to_page``).
-    3. Otherwise, a fixed-position kind (`FIXED_POSITION_KINDS`) falls back to
-       ``question.score_area`` (§12.2).
-    4. Anything still unresolved returns ``None`` -- the caller falls back to
-       ``question.comment_area`` (§12.4).
+    3. Anything still unresolved returns ``None`` -- **nothing is drawn on
+       the answer**, and the caller says so in the question's comment area
+       instead (§12.4).
+
+    **There is deliberately no fixed-position fallback** (Issue #141). Until
+    then a CIRCLE/CROSS/TRIANGLE/SCORE whose anchor matched nothing was drawn
+    at ``question.score_area``, on the grounds that §12.2 places
+    question-level symbols there. Two different things were being conflated:
+    "the AI meant a mark about the whole question" and "we could not find the
+    words the AI meant". In the live re-verification every one of the
+    fourteen annotations took this path, and since Issue #120 derives
+    ``score_area`` as a band the height of the answer box, the result was a
+    red ``×`` cutting across a quarter of the page -- on top of the score,
+    and reading as though the whole answer had been struck out over an error
+    in one term of one formula. §12.4 already said what to do instead
+    ("無理に本文付近へ配置しない"): a position nobody knows is not a position.
 
     ``recognitions`` must already be scoped to the attempt being exported
     (`recognitions_up_to_attempt`).
@@ -92,8 +96,6 @@ def resolve_annotation_rect(
         )
         if matched is not None:
             return matched
-    if annotation.kind in FIXED_POSITION_KINDS:
-        return question.score_area
     return None
 
 

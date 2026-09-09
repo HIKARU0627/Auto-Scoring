@@ -158,19 +158,43 @@ class TestResolveAnnotationRect:
             AnnotationKind.SCORE,
         ],
     )
-    def test_a_fixed_position_kind_falls_back_to_score_area_when_unresolved(
+    def test_no_kind_falls_back_to_score_area_when_its_anchor_matched_nothing(
         self, kind: AnnotationKind
     ) -> None:
+        """Issue #141: a ``×`` whose anchor matched nothing used to be drawn at
+        ``score_area``. Since Issue #120 that area is a band as tall as the
+        answer box, so the live run's output carried a red cross over a
+        quarter of the page -- reading as the whole answer struck out, for an
+        error in one term of one formula. The position is unknown; nothing on
+        the answer may claim otherwise (§12.4)."""
         score_area = _rect(0.8, 0.05, 0.1, 0.05)
-        annotation = _annotation(kind=kind, anchor_text=None, rect=None)
-
-        resolved = resolve_annotation_rect(
-            annotation, question=_question(score_area=score_area), recognitions=()
+        annotation = _annotation(kind=kind, anchor_text="答案に無い語", rect=None)
+        recognition = _recognition(
+            boxes=(BoundingBox(text="別の語", rect=_rect(0.1, 0.1, 0.1, 0.1)),)
         )
 
-        assert resolved == score_area
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(score_area=score_area), recognitions=(recognition,)
+        )
 
-    def test_a_non_fixed_kind_with_nothing_resolvable_returns_none(self) -> None:
+        assert resolved is None
+
+    def test_an_explicit_rect_still_places_a_fixed_position_kind(self) -> None:
+        """Dropping the fallback must not stop a mark whose position *is*
+        known from being drawn: a reviewer who placed a ○ by hand
+        (`review/edit`) supplies a rect, and it is used as-is."""
+        rect = _rect(0.2, 0.3, 0.1, 0.05)
+        annotation = _annotation(kind=AnnotationKind.CIRCLE, rect=rect, anchor_text=None)
+
+        resolved = resolve_annotation_rect(
+            annotation,
+            question=_question(score_area=_rect(0.8, 0.05, 0.1, 0.05)),
+            recognitions=(),
+        )
+
+        assert resolved == rect
+
+    def test_an_annotation_with_nothing_resolvable_returns_none(self) -> None:
         annotation = _annotation(
             kind=AnnotationKind.COMMENT, anchor_text=None, rect=None, comment="コメント"
         )

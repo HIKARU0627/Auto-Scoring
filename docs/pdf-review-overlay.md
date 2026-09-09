@@ -76,12 +76,19 @@ REST エンドポイントは Issue #21 着手時点で存在しなかった（�
    契約上あり得るが、現状どの書き込み経路も設定しない）。
 2. なければ`anchor_text`を、その設問のOCR`RecognitionResult.boxes`と
    完全一致で突き合わせ、一致した語のBounding Boxを使う（§12.3）。
-3. `○`・`×`・`△`・`点数`（`fixedPositionAnnotationKinds`）は特定の語では
-   なく解答全体に対する印なので、上記で解決できなければ設問の
-   `score_area`（Annotation配置領域）へフォールバックする（§12.2）。
-4. それでも解決できないもの（`anchor_text`が一致せず、かつ固定位置種別
-   でもないもの）は`null`を返し、呼び出し側が設問のInspector内
-   「設問コメント」欄へ退避表示する（§12.4）。
+3. それでも解決できないものは`null`を返し、呼び出し側が設問のInspector内
+   「設問コメント」欄へ退避表示する（§12.4）。**PDF上には何も描かない。**
+
+**Issue #141 で手順3の前にあった`score_area`フォールバックを廃止した。**
+`○`・`×`・`△`・`点数`は特定の語ではなく解答全体への印だから、という理由で
+`fixedPositionAnnotationKinds`が`score_area`（Annotation配置領域、§12.2）へ
+退避していた。しかしそれは「AIが解答全体を指した」場合の規約であって、
+「AIが指した語をこちらが見つけられなかった」場合の規約ではない。
+実機再検証ではAIの注釈14件が1件残らずこの経路を通り、Issue #120 以降
+`score_area`は回答欄と同じ高さの帯として導出されるため、
+**ページの高さの23%を横切る×**として描かれた。
+位置が分からないものは、分からないと分かる形で出す（`docs/pdf-export.md`
+§2.0.1）。明示`rect`のあるもの（人が置いた印）は従来どおり描画される。
 
 **R5レビュー対応**: 上記2.のOCR Bounding Boxは、`adapters/submission_
 intake.py`が答案areaごとに`crop_normalized_rect`でpageからcropした
@@ -853,10 +860,10 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   page全体の場合、および答案areaがpageの一部分にcropされている場合の
   両方で、crop相対座標からpage正規化座標への変換が正しいこと。R5レビュー
   対応）、幅または高さが0の`answer_area`もpage全体のフォールバックとして
-  扱われ、annotationの幅/高さが0に潰れないこと（R6レビュー対応）、固定
-  位置種別（○・×・△・点数）4種すべてでのscore_areaへのフォールバック、
-  `anchor_text`が一致しない場合の固定位置種別のscore_areaフォールバック、
-  非固定位置種別で何も解決できない場合に`null`を返すことを検証。
+  扱われ、annotationの幅/高さが0に潰れないこと（R6レビュー対応）、○・×・△・
+  点数の4種いずれも`anchor_text`が一致しなければ`score_area`へ退避せず
+  `null`を返すこと（Issue #141）、明示`rect`のある印はそれでも描画される
+  こと、何も解決できない場合に`null`を返すことを検証。
 - `app/test/pdf_review_page_test.dart`: loading/empty/error状態、
   認識文字・点数・根拠・rubric（`question.rubric`の定義自体）・2種の
   Confidenceの同時表示、AI/human結果がsource別に区別されること、
@@ -869,8 +876,8 @@ OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
   なること（§2.11）、submissionが既に`ai_processed`を報告していても
   その設問にまだAI結果が無ければpollingを継続すること（§2.8）、
   text系annotationが実際のOCR単語Bounding Box（自身のrectではなく）へ
-  配置されること、固定位置markがOCR未一致時に設問のscore_areaへ
-  フォールバックすること、OCRと採点AI訂正の2つの認識段階が並べて
+  配置されること、OCR未一致の印は答案の上に描かれず「設問コメント」欄に
+  出ること（Issue #141）、OCRと採点AI訂正の2つの認識段階が並べて
   表示されること（§2.10）、処理中submissionが手動更新で追随すること、
   設問データ未読み込み時に承認/却下がブロックされること、キーボードでの
   設問移動・承認、action barのキーボード到達性、狭幅・低い高さの

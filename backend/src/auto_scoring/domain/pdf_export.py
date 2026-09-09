@@ -159,6 +159,12 @@ _KIND_SYMBOLS: Mapping[AnnotationKind, str] = {
 #: silent truncation.
 _OVERFLOW_NOTE = "ほか{count}件は余白に収まらず未表示"
 
+#: Appended to a note whose annotation could not be placed on the answer
+#: (Issue #141). Saying so is the whole point: the reader has a comment about
+#: their answer and no mark pointing at anything, and a note that stayed
+#: silent about it would look like a mark that failed to print.
+_UNPLACED_SUFFIX = "（位置特定できず）"
+
 #: A note slice shorter than this (page-normalized) cannot hold a legible
 #: line. `adapters.pdf.pdfium_pypdf_engine` draws text at `_MIN_FONT_SIZE_PT`
 #: (6pt) on a `_LINE_HEIGHT_FACTOR` (1.2) baseline, i.e. 7.2pt, and the
@@ -169,16 +175,28 @@ _OVERFLOW_NOTE = "ほか{count}件は余白に収まらず未表示"
 _MIN_NOTE_HEIGHT = 0.012
 
 
-def _note_text(annotation: Annotation) -> str | None:
+def _note_text(annotation: Annotation, *, placed: bool) -> str | None:
     """One margin-band line for ``annotation``, or ``None`` when it has
-    nothing to say (a shape with no comment is fully expressed by the shape
-    drawn on the answer itself).
+    nothing to say.
+
+    ``placed`` is whether a shape for it was drawn on the answer, and only a
+    shape kind cares: `AnnotationKind.COMMENT` has no shape, so the band is
+    simply where a comment lives (§12.4's own example is a bare line of
+    text) and marking it "unplaced" would be noise on every one of them.
+
+    A shape kind that *was* placed needs no marker either -- the reader can
+    see the mark. One that was not says so (`_UNPLACED_SUFFIX`), even with no
+    comment to carry: a bare ``× （位置特定できず）`` is little, but it is the
+    difference between "something was marked here and we could not locate it"
+    and silence.
     """
     comment = (annotation.comment or "").strip()
-    if not comment:
-        return None
     symbol = _KIND_SYMBOLS.get(annotation.kind)
-    return f"{symbol} {comment}" if symbol else comment
+    if symbol is None:
+        return comment or None
+    if placed:
+        return f"{symbol} {comment}" if comment else None
+    return f"{symbol} {comment}{_UNPLACED_SUFFIX}" if comment else f"{symbol} {_UNPLACED_SUFFIX}"
 
 
 def _stacked_note_rects(area: NormalizedRect, count: int) -> tuple[NormalizedRect, ...]:
@@ -266,7 +284,9 @@ def build_export_marks(
 
     * its *shape* (``×``/``○``/``△``/underline/box), drawn on the answer at
       the rect `domain.annotation_layout.resolve_annotation_rect` resolved --
-      and only when it resolved one;
+      and **only** when it resolved one. An annotation whose anchor matched
+      nothing gets no shape at all: the position is not known, so nothing on
+      the answer may claim to know it (Issue #141);
     * its *comment*, always drawn as one line in the question's
       ``comment_area`` margin band (`_note_marks`), never on the answer.
 
@@ -280,7 +300,9 @@ def build_export_marks(
     anchored COMMENT-kind annotation used to do.
 
     A `COMMENT`-kind annotation therefore never draws a shape at all -- it
-    has none -- and contributes only its band line. Each note gets its own
+    has none -- and contributes only its band line. A line whose annotation
+    could not be placed says so (`_UNPLACED_SUFFIX`), so an unplaced mark is
+    visibly unplaced rather than absent. Each note gets its own
     slice of the band rather than every note sharing one rect: marks are
     drawn independently from their own top-left corner, so two notes on one
     rect would land on top of one another, both illegible, while the export
@@ -307,7 +329,7 @@ def build_export_marks(
         )
         if rect is not None and annotation.kind is not AnnotationKind.COMMENT:
             marks.append(AnnotationMark(kind=annotation.kind, rect=rect))
-        note = _note_text(annotation)
+        note = _note_text(annotation, placed=rect is not None)
         if note is not None:
             notes.append(note)
     marks.extend(_note_marks(question.comment_area, notes))

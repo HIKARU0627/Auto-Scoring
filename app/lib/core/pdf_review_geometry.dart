@@ -22,11 +22,6 @@ Rect normalizedRectToLocal(NormalizedRectResponse rect, Size pageSize) {
   );
 }
 
-/// Annotation kinds placed at a question's fixed "Annotation配置領域"
-/// (simplified-design-spec §12.2) rather than at a specific word/phrase --
-/// ○・×・△・点数 mark the answer as a whole, not one piece of text in it.
-const fixedPositionAnnotationKinds = {'circle', 'cross', 'triangle', 'score'};
-
 /// The identity crop (offset 0, scale 1) -- what a question with no
 /// confirmed `answer_area` yet effectively has. `_build_answer_image`
 /// (backend `adapters/submission_intake.py`) falls back to sending the OCR
@@ -66,15 +61,23 @@ final NormalizedRectResponse _fullPageArea = NormalizedRectResponse(
 ///    holds one OCR result per attempt, and a stale or not-yet-displayed
 ///    attempt's result can report the same text at a different position
 ///    (P2 review; see `QuestionReviewState.recognitionsForDisplayedAttempt`).
-/// 3. Otherwise, a fixed-position mark ([fixedPositionAnnotationKinds])
-///    falls back to the question's own `score_area`, its designated
-///    "Annotation配置領域" (§12.2).
-/// 4. Anything still unresolved returns `null` -- the caller routes it to
-///    the question's comment area instead of guessing (§12.4).
+/// 3. Anything still unresolved returns `null` -- **nothing is drawn on the
+///    answer**, and the caller routes it to the question's comment area
+///    instead of guessing (§12.4).
+///
+/// There is deliberately no fixed-position fallback (Issue #141). A
+/// circle/cross/triangle/score whose anchor matched nothing used to be drawn
+/// at the question's `score_area`, on the grounds that §12.2 places
+/// question-level symbols there -- conflating "the AI meant a mark about the
+/// whole question" with "we could not find the words the AI meant". Since
+/// Issue #120 derives `score_area` as a band the height of the answer box,
+/// every unmatched mark came out as a stroke across a quarter of the page:
+/// on the review screen as well as in the export, since this function is
+/// what both of them ask. §12.4 already said not to
+/// ("無理に本文付近へ配置しない").
 NormalizedRectResponse? resolveAnnotationRect({
   required AnnotationResponse annotation,
   required NormalizedRectResponse? questionAnswerArea,
-  required NormalizedRectResponse? questionScoreArea,
   required List<RecognitionResponse> recognitions,
 }) {
   if (annotation.rect != null) return annotation.rect;
@@ -85,9 +88,6 @@ NormalizedRectResponse? resolveAnnotationRect({
       _effectiveAnswerArea(questionAnswerArea),
     );
     if (matched != null) return matched;
-  }
-  if (fixedPositionAnnotationKinds.contains(annotation.kind)) {
-    return questionScoreArea;
   }
   return null;
 }

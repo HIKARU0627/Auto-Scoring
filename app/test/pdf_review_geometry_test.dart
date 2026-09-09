@@ -137,7 +137,6 @@ void main() {
       final resolved = resolveAnnotationRect(
         annotation: annotation(rect: explicitRect),
         questionAnswerArea: null,
-        questionScoreArea: null,
         recognitions: const [],
       );
 
@@ -165,7 +164,6 @@ void main() {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'underline', anchorText: '行く'),
         questionAnswerArea: null,
-        questionScoreArea: null,
         recognitions: [
           recognitionWithBoxes([('走る', _dummyRect), ('行く', wordBox)]),
         ],
@@ -204,7 +202,6 @@ void main() {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'underline', anchorText: '酸素'),
         questionAnswerArea: answerArea,
-        questionScoreArea: null,
         recognitions: [
           recognitionWithBoxes([('酸素', cropRelativeBox)]),
         ],
@@ -258,7 +255,6 @@ void main() {
         final resolved = resolveAnnotationRect(
           annotation: annotation(kind: 'underline', anchorText: '酸素'),
           questionAnswerArea: degenerateArea.$2,
-          questionScoreArea: null,
           recognitions: [
             recognitionWithBoxes([('酸素', wordBox)]),
           ],
@@ -271,56 +267,50 @@ void main() {
       });
     }
 
-    test('a fixed-position mark with no OCR match falls back to the '
-        "question's score_area, per simplified-design-spec §12.2", () {
-      final scoreArea = NormalizedRectResponse(
-        (b) => b
-          ..x = 0.8
-          ..y = 0.05
-          ..width = 0.1
-          ..height = 0.1,
-      );
-
+    test('no kind falls back to the score_area when its anchor matched '
+        'nothing -- the position is unknown, so nothing on the answer may '
+        'claim to know it (Issue #141, simplified-design-spec §12.4)', () {
       for (final kind in ['circle', 'cross', 'triangle', 'score']) {
         final resolved = resolveAnnotationRect(
-          annotation: annotation(kind: kind),
+          annotation: annotation(kind: kind, anchorText: '存在しない語'),
           questionAnswerArea: null,
-          questionScoreArea: scoreArea,
-          recognitions: const [],
+          recognitions: [
+            recognitionWithBoxes([('別の語', _dummyRect)]),
+          ],
         );
-        expect(resolved, same(scoreArea), reason: 'kind: $kind');
+        expect(resolved, isNull, reason: 'kind: $kind');
       }
     });
 
-    test('an anchor_text that matches nothing falls back to score_area for a '
-        'fixed-position kind instead of leaving it unresolved', () {
-      final scoreArea = NormalizedRectResponse(
+    test('an explicit rect still places a shape kind -- dropping the fallback '
+        'must not stop a mark whose position really is known', () {
+      final placed = NormalizedRectResponse(
         (b) => b
-          ..x = 0.8
-          ..y = 0.05
+          ..x = 0.2
+          ..y = 0.3
           ..width = 0.1
-          ..height = 0.1,
+          ..height = 0.05,
       );
 
       final resolved = resolveAnnotationRect(
-        annotation: annotation(kind: 'score', anchorText: '存在しない語'),
+        annotation: annotation(kind: 'circle', rect: placed),
         questionAnswerArea: null,
-        questionScoreArea: scoreArea,
-        recognitions: [
-          recognitionWithBoxes([('別の語', _dummyRect)]),
-        ],
+        recognitions: const [],
       );
 
-      expect(resolved, same(scoreArea));
+      // Field equality, not `same()` -- see the note on the first test.
+      expect(resolved?.x, placed.x);
+      expect(resolved?.y, placed.y);
+      expect(resolved?.width, placed.width);
+      expect(resolved?.height, placed.height);
     });
 
-    test('a non-fixed-position annotation with no rect, no OCR match, and no '
-        'score_area is left unresolved (routed to the comment fallback area '
-        'by the caller, per simplified-design-spec §12.4)', () {
+    test('an annotation with no rect and no OCR match is left unresolved '
+        '(routed to the comment fallback area by the caller, per '
+        'simplified-design-spec §12.4)', () {
       final resolved = resolveAnnotationRect(
         annotation: annotation(kind: 'comment', anchorText: '存在しない語'),
         questionAnswerArea: null,
-        questionScoreArea: null,
         recognitions: const [],
       );
 
