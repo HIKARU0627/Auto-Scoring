@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
@@ -55,6 +57,21 @@ def _grade(**overrides: object) -> GradeResult:
     }
     values.update(overrides)
     return GradeResult(**values)  # type: ignore[arg-type]
+
+
+def _recognition(
+    *, boxes: tuple[BoundingBox, ...], created_at: datetime = _NOW
+) -> RecognitionResult:
+    return RecognitionResult(
+        id="rec-1",
+        submission_id="sub-1",
+        question_id="q-1",
+        source=GradingSource.AI,
+        text="",
+        confidence=0.9,
+        created_at=created_at,
+        boxes=boxes,
+    )
 
 
 def _review(**overrides: object) -> Review:
@@ -300,15 +317,15 @@ class TestBuildExportMarks:
 
         assert marks[0].rect == comment_area
 
-    def test_multiple_unresolvable_comments_are_merged_into_one_mark_instead_of_overlapping(
+    def test_multiple_notes_get_their_own_slice_of_the_band_instead_of_overlapping(
         self,
     ) -> None:
-        """P2 review, round 5: two COMMENT annotations that both fall back to
-        the same ``comment_area`` (neither has a rect, an anchor_text match,
-        or is a fixed-position kind) must not become two separate marks --
+        """P2 review, round 5: two annotations whose comments both land in the
+        same ``comment_area`` must not be drawn on top of one another --
         `PdfEngine.render_annotations` draws each mark independently from its
-        rect's own top-left corner, so two marks on the identical rect would
-        be drawn on top of one another and both become illegible."""
+        rect's own top-left corner. Issue #141 keeps that property by giving
+        each note its own slice rather than by merging them into one string:
+        a single long comment can no longer push the others out of the band."""
         grade = _grade()
         comment_area = NormalizedRect(x=0.0, y=0.9, width=1.0, height=0.1)
         first = Annotation(
@@ -337,9 +354,162 @@ class TestBuildExportMarks:
             recognitions=[],
         )
 
-        assert len(marks) == 1
-        assert marks[0].rect == comment_area
-        assert marks[0].text == "誤字があります。\n\n根拠が不足しています。"
+        notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
+        assert [note.text for note in notes] == ["誤字があります。", "根拠が不足しています。"]
+        assert notes[0].rect.y + notes[0].rect.height == pytest.approx(notes[1].rect.y)
+        assert notes[0].rect.height == pytest.approx(comment_area.height / 2)
+
+    def test_a_shape_annotation_s_comment_reaches_the_page_as_a_band_note(self) -> None:
+        """Issue #141: the live run produced twelve annotations and not one
+        character of their comments was drawn. `PdfEngine.render_annotations`
+        renders ``text`` only for SCORE/COMMENT marks, so a CROSS carrying an
+        explanation had it silently dropped by the engine."""
+        grade = _grade()
+        box = NormalizedRect(x=0.2, y=0.2, width=0.1, height=0.05)
+        annotation = Annotation(
+            id="a1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.AI,
+            kind=AnnotationKind.CROSS,
+            anchor_text="葉緑体で",
+            comment="記述が不完全です。",
+            created_at=_NOW,
+        )
+        recognition = _recognition(boxes=(BoundingBox(text="葉緑体で", rect=box),))
+
+        marks = build_export_marks(
+            question=_question(
+                answer_area=None,
+                comment_area=NormalizedRect(x=0.0, y=0.9, width=1.0, height=0.1),
+            ),
+            grade=grade,
+            annotations=[annotation],
+            recognitions=[recognition],
+        )
+
+        shape = next(mark for mark in marks if mark.kind is AnnotationKind.CROSS)
+        note = next(mark for mark in marks if mark.kind is AnnotationKind.COMMENT)
+        assert shape.rect == box
+        # The engine would throw a shape's text away; carrying one would be a
+        # lie about what reaches the page.
+        assert shape.text is None
+        assert note.text == "× 記述が不完全です。"
+
+    def test_a_placed_comment_annotation_is_written_in_the_band_not_over_the_answer(
+        self,
+    ) -> None:
+        """A COMMENT is prose, not a mark: drawing it at the anchored word's
+        own rect put it across the student's writing (Issue #141)."""
+        grade = _grade()
+        box = NormalizedRect(x=0.2, y=0.2, width=0.1, height=0.05)
+        comment_area = NormalizedRect(x=0.0, y=0.9, width=1.0, height=0.1)
+        annotation = Annotation(
+            id="a1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.AI,
+            kind=AnnotationKind.COMMENT,
+            anchor_text="行く",
+            comment="時制を確認してください。",
+            created_at=_NOW,
+        )
+        recognition = _recognition(boxes=(BoundingBox(text="行く", rect=box),))
+
+        marks = build_export_marks(
+            question=_question(answer_area=None, comment_area=comment_area),
+            grade=grade,
+            annotations=[annotation],
+            recognitions=[recognition],
+        )
+
+        notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
+        assert [note.rect for note in notes] == [comment_area]
+
+    def test_a_shape_annotation_with_no_comment_contributes_no_band_note(self) -> None:
+        grade = _grade()
+        box = NormalizedRect(x=0.2, y=0.2, width=0.1, height=0.05)
+        annotation = Annotation(
+            id="a1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.HUMAN,
+            kind=AnnotationKind.CIRCLE,
+            anchor_text="行く",
+            created_at=_NOW,
+        )
+        recognition = _recognition(boxes=(BoundingBox(text="行く", rect=box),))
+
+        marks = build_export_marks(
+            question=_question(
+                answer_area=None,
+                comment_area=NormalizedRect(x=0.0, y=0.9, width=1.0, height=0.1),
+            ),
+            grade=grade,
+            annotations=[annotation],
+            recognitions=[recognition],
+        )
+
+        assert [mark.kind for mark in marks] == [AnnotationKind.CIRCLE]
+
+    def test_notes_that_do_not_fit_the_band_are_counted_rather_than_dropped(self) -> None:
+        """Issue #141 condition: the overflow behaviour is a decision, not an
+        accident of whatever the renderer happened to clip. Issue #121 is the
+        precedent -- a correct grade thrown away over a long comment, with the
+        run still reporting success."""
+        grade = _grade()
+        # 0.03 tall fits two `_MIN_NOTE_HEIGHT` (0.012) slices, not four.
+        comment_area = NormalizedRect(x=0.0, y=0.9, width=1.0, height=0.03)
+        annotations = [
+            Annotation(
+                id=f"a{index}",
+                submission_id="sub-1",
+                question_id="q-1",
+                source=GradingSource.AI,
+                kind=AnnotationKind.COMMENT,
+                comment=f"コメント{index}",
+                created_at=_NOW,
+            )
+            for index in range(4)
+        ]
+
+        marks = build_export_marks(
+            question=_question(comment_area=comment_area),
+            grade=grade,
+            annotations=annotations,
+            recognitions=[],
+        )
+
+        notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
+        assert [note.text for note in notes] == ["コメント0", "ほか3件は余白に収まらず未表示"]
+
+    def test_a_band_too_short_for_even_one_note_still_reports_every_missing_note(
+        self,
+    ) -> None:
+        grade = _grade()
+        comment_area = NormalizedRect(x=0.0, y=0.99, width=1.0, height=0.005)
+        annotations = [
+            Annotation(
+                id=f"a{index}",
+                submission_id="sub-1",
+                question_id="q-1",
+                source=GradingSource.AI,
+                kind=AnnotationKind.COMMENT,
+                comment=f"コメント{index}",
+                created_at=_NOW,
+            )
+            for index in range(3)
+        ]
+
+        marks = build_export_marks(
+            question=_question(comment_area=comment_area),
+            grade=grade,
+            annotations=annotations,
+            recognitions=[],
+        )
+
+        notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
+        assert [note.text for note in notes] == ["ほか3件は余白に収まらず未表示"]
 
     def test_a_mark_with_no_resolvable_position_at_all_is_skipped_not_crashed_on(
         self,

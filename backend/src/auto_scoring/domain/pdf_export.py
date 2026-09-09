@@ -141,6 +141,95 @@ def _score_text(grade: GradeResult) -> str:
     return f"{grade.score.awarded}/{grade.score.maximum}"
 
 
+#: The symbol put at the head of a shape-kind annotation's note line, so a
+#: reader of the margin band can tell which note belongs to the ``×`` on the
+#: answer and which to the ``○`` (Issue #141). `AnnotationKind.COMMENT` has
+#: none on purpose: it is prose, not a mark, and §12.4's own example shows a
+#: bare line of text.
+_KIND_SYMBOLS: Mapping[AnnotationKind, str] = {
+    AnnotationKind.CIRCLE: "○",
+    AnnotationKind.CROSS: "×",
+    AnnotationKind.TRIANGLE: "△",
+    AnnotationKind.UNDERLINE: "＿",
+    AnnotationKind.BOX: "□",
+}
+
+#: The final note line when `_note_marks` cannot give every note a legible
+#: slice of the band. See `_note_marks` for why this exists rather than a
+#: silent truncation.
+_OVERFLOW_NOTE = "ほか{count}件は余白に収まらず未表示"
+
+#: A note slice shorter than this (page-normalized) cannot hold a legible
+#: line. `adapters.pdf.pdfium_pypdf_engine` draws text at `_MIN_FONT_SIZE_PT`
+#: (6pt) on a `_LINE_HEIGHT_FACTOR` (1.2) baseline, i.e. 7.2pt, and the
+#: shortest page this project handles is A4 portrait's 595pt-wide landscape
+#: sibling -- 7.2/595 rounds up to this. Deliberately the same kind of
+#: constant as `annotation_layout._MIN_DERIVED_BAND_HEIGHT`: a slice nothing
+#: can be read in is not an output, it is a blank page with extra steps.
+_MIN_NOTE_HEIGHT = 0.012
+
+
+def _note_text(annotation: Annotation) -> str | None:
+    """One margin-band line for ``annotation``, or ``None`` when it has
+    nothing to say (a shape with no comment is fully expressed by the shape
+    drawn on the answer itself).
+    """
+    comment = (annotation.comment or "").strip()
+    if not comment:
+        return None
+    symbol = _KIND_SYMBOLS.get(annotation.kind)
+    return f"{symbol} {comment}" if symbol else comment
+
+
+def _stacked_note_rects(area: NormalizedRect, count: int) -> tuple[NormalizedRect, ...]:
+    """``count`` equal, non-overlapping slices of ``area`` stacked top to
+    bottom -- or as many as fit at `_MIN_NOTE_HEIGHT`, when ``count`` of them
+    would not.
+
+    Each note gets its own rect rather than all of them sharing one, because
+    `PdfEngine.render_annotations` draws every mark from its own rect: one
+    joined string would be re-wrapped and shrunk as a single block, so a
+    single long comment could push every other note below the band's bottom
+    edge and out of sight.
+    """
+    capacity = max(1, int(area.height / _MIN_NOTE_HEIGHT))
+    slots = min(count, capacity)
+    height = area.height / slots
+    return tuple(
+        NormalizedRect(x=area.x, y=area.y + index * height, width=area.width, height=height)
+        for index in range(slots)
+    )
+
+
+def _note_marks(comment_area: NormalizedRect | None, notes: Sequence[str]) -> list[AnnotationMark]:
+    """The margin-band marks for ``notes``, stacked inside ``comment_area``.
+
+    **The overflow policy** (Issue #141): when the band cannot hold every
+    note, the last slice says how many are missing (`_OVERFLOW_NOTE`) instead
+    of the notes simply stopping. Issue #121 is the precedent -- a complete,
+    correct grade was thrown away over a long comment and the run reported
+    success -- and the same shape of mistake is available here: a question
+    with a shallow ``comment_area`` and five annotations would show two of
+    them and look finished. Counting what did not fit costs one line and
+    makes the loss visible to the person holding the paper.
+
+    An unregistered ``comment_area`` (``None``) leaves nowhere to write at
+    all, and the notes are dropped -- `unplaceable_question_ids` refuses an
+    export before it can reach that state for any question that has a
+    ``score_area``, and since Issue #120 a question has both or neither.
+    """
+    if not notes or comment_area is None:
+        return []
+    rects = _stacked_note_rects(comment_area, len(notes))
+    if len(rects) < len(notes):
+        shown = len(rects) - 1
+        notes = [*notes[:shown], _OVERFLOW_NOTE.format(count=len(notes) - shown)]
+    return [
+        AnnotationMark(kind=AnnotationKind.COMMENT, rect=rect, text=note)
+        for rect, note in zip(rects, notes, strict=True)
+    ]
+
+
 def build_export_marks(
     *,
     question: Question,
@@ -172,26 +261,30 @@ def build_export_marks(
     guessed position; `unplaceable_question_ids` refuses the export before it
     can reach that state.
 
-    An annotation `domain.annotation_layout.resolve_annotation_rect` cannot
-    place anywhere (no rect, no matching OCR box, not a fixed-position kind)
-    falls back to ``question.comment_area`` (simplified-design-spec.md
-    §12.4); one still unresolved after that (no `comment_area` registered
-    either) is skipped -- there is nowhere left to draw it. Since Issue #120
-    both areas are derived from the confirmed answer box when nobody placed
-    them (`domain.annotation_layout.derive_mark_areas`), so a question that
-    reaches an export has both or neither.
+    **Where an annotation's comment text goes** (Issue #141). Every
+    annotation contributes at most two marks, and they are separate things:
 
-    A `COMMENT`-kind annotation that falls back this way is never drawn as
-    its own mark: `PdfEngine.render_annotations` draws every mark
-    independently from its rect's own top-left corner, so two or more
-    COMMENT annotations all landing on the same ``comment_area`` (nothing
-    else distinguishes where each individually belongs) would be drawn on
-    top of one another, both illegible, while the export itself still
-    reports success (P2 review, round 5). Every such comment is instead
-    collected and drawn as a single merged text block -- one mark, its text
-    the individual comments joined with a blank line -- so multiple
-    unplaceable comments still show as several stacked paragraphs rather
-    than overlapping text.
+    * its *shape* (``×``/``○``/``△``/underline/box), drawn on the answer at
+      the rect `domain.annotation_layout.resolve_annotation_rect` resolved --
+      and only when it resolved one;
+    * its *comment*, always drawn as one line in the question's
+      ``comment_area`` margin band (`_note_marks`), never on the answer.
+
+    Splitting them is what Issue #141 found missing. `PdfEngine.
+    render_annotations` renders a mark's ``text`` only for the SCORE and
+    COMMENT kinds, so a ``×`` carrying an explanation had that explanation
+    silently thrown away by the engine: the live run produced twelve
+    annotations and not one character of their comments reached any page.
+    Handing the comment to the band instead of to the shape also stops prose
+    from being drawn across the student's own writing, which is what an
+    anchored COMMENT-kind annotation used to do.
+
+    A `COMMENT`-kind annotation therefore never draws a shape at all -- it
+    has none -- and contributes only its band line. Each note gets its own
+    slice of the band rather than every note sharing one rect: marks are
+    drawn independently from their own top-left corner, so two notes on one
+    rect would land on top of one another, both illegible, while the export
+    still reported success (P2 review, round 5).
     """
     attempt_annotations = annotations_for_attempt(annotations, grade.created_at)
     attempt_recognitions = recognitions_up_to_attempt(recognitions, grade.created_at)
@@ -202,8 +295,7 @@ def build_export_marks(
                 kind=AnnotationKind.SCORE, rect=question.score_area, text=_score_text(grade)
             )
         )
-    fallback_comment_texts: list[str] = []
-    fallback_comment_rect: NormalizedRect | None = None
+    notes: list[str] = []
     for annotation in attempt_annotations:
         # Its text and its rect would both be this mark's (§2.1: the number
         # comes from the confirmed grade, the position from `score_area`),
@@ -213,26 +305,12 @@ def build_export_marks(
         rect = resolve_annotation_rect(
             annotation, question=question, recognitions=attempt_recognitions
         )
-        used_fallback_rect = rect is None
-        if used_fallback_rect:
-            rect = question.comment_area
-        if rect is None:
-            continue
-        text = annotation.comment
-        if used_fallback_rect and annotation.kind is AnnotationKind.COMMENT:
-            fallback_comment_texts.append(text or "")
-            fallback_comment_rect = rect
-            continue
-        marks.append(AnnotationMark(kind=annotation.kind, rect=rect, text=text))
-    if fallback_comment_texts:
-        assert fallback_comment_rect is not None
-        marks.append(
-            AnnotationMark(
-                kind=AnnotationKind.COMMENT,
-                rect=fallback_comment_rect,
-                text="\n\n".join(fallback_comment_texts),
-            )
-        )
+        if rect is not None and annotation.kind is not AnnotationKind.COMMENT:
+            marks.append(AnnotationMark(kind=annotation.kind, rect=rect))
+        note = _note_text(annotation)
+        if note is not None:
+            notes.append(note)
+    marks.extend(_note_marks(question.comment_area, notes))
     return marks
 
 

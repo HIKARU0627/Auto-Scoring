@@ -1353,6 +1353,48 @@ def test_the_exported_pdf_carries_the_reviewed_comment_text(
     )
 
 
+#: The comment attached to a *shape* annotation, whose text the export used
+#: to throw away entirely (Issue #141).
+CROSS_COMMENT = "計算の途中が誤っています。"
+
+
+def test_the_exported_pdf_carries_a_shape_annotation_s_comment_as_well(
+    client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #141: a ``×`` explains nothing on its own.
+
+    `PdfEngine.render_annotations` renders a mark's text only for the SCORE
+    and COMMENT kinds, so the explanation handed to a CROSS mark was dropped
+    by the engine without a word: the live re-verification produced fourteen
+    annotations and not one character of their comments reached any page. The
+    comment now goes to the question's margin band instead of to the shape.
+    """
+    install_font_covering(monkeypatch, CROSS_COMMENT + "×")
+    _, submission_id = _reviewed_answer(
+        client,
+        data_root,
+        annotations=[
+            {
+                "kind": "cross",
+                "x": 0.20,
+                "y": 0.30,
+                "width": 0.15,
+                "height": 0.04,
+                "comment": CROSS_COMMENT,
+            }
+        ],
+    )
+
+    exported = _export(client, submission_id)
+
+    text = _page_text(data_root / exported["file_path"], 0)
+    assert CROSS_COMMENT in text, f"the cross's comment is missing from the export: {text!r}"
+    # And the source has nothing of the sort to have been copied from.
+    assert CROSS_COMMENT not in _page_text(
+        data_root / "submissions" / submission_id / "source.pdf", 0
+    )
+
+
 def test_the_exported_pdf_carries_the_reviewed_score(
     client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
