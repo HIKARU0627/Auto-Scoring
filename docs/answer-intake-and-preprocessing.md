@@ -114,7 +114,47 @@ unprocessed → ai_processing → ai_processed → (問題なければそのま�
 `needs_review` は `ai_processed` からしか到達できない（状態機械の制約）ため、
 取込パイプラインは問題の有無に関わらず必ず `ai_processed` を経由してから
 `needs_review` へ遷移する。`review_reason` に理由の文字列を記録する
-（`missing_pages:2`、`no_questions_registered`、`answer_area_undefined:<question-id,...>` 等）。
+（`missing_pages:2`、`no_questions_registered`、`answer_area_undefined:<question-id,...>`、
+`crop_nearly_blank:<question-id,...>` 等）。
+
+**設問ごとの理由は、理由ごとに分けて書く**（Issue #122）。形は
+`<reason>:<value>` を `;` で連ねたもので、値は設問 ID のカンマ区切り
+（例: `answer_area_undefined:q-1;crop_nearly_blank:q-2,q-3`）。
+以前は設問側の旗をすべて `answer_area_undefined` にまとめていたが、
+`crop_nearly_blank` が加わってからは**送り先が違う** —— 前者は登録画面、
+後者は答案そのもの —— ため、ラベルが嘘になる。app 側は
+`core/submission_review_reason.dart` がこの形を読む（知らない理由は
+**何も表示しない**。当てずっぽうで別の設問に警告を出すより良い）。
+
+### 切り出しがほぼ余白なら、採点に送らない（Issue #122）
+
+`answer_area` から切り出した画像のインク比率を測り
+（`adapters.image.ink.ink_coverage`）、`NEARLY_BLANK_INK_COVERAGE` 以下なら
+`AnswerImageStatus.NEEDS_REVIEW` と理由 `crop_nearly_blank` を立てる。
+`jobs.grading_processor` は信用できない切り出しを**AI に送らずに人へ回す**——
+この契約は Issue #17 からあり、新しい仕組みは足していない。
+
+**なぜ必要か。** 検出枠が余白に落ちると、採点 AI は「空白なので 0 点」と
+**確信度 0.95〜1.00** で答える。画面には `0点` と `確信度 95%` しか出ず、
+正しい 0 点と見分けが付かない。実機検証で 0 点 15 件中 9 件がこれだった。
+
+**閾値 `0.002` は実測で、意図的に「明白な余白」だけを拾う。** 実資料 3 教科で:
+
+| 何を測ったか                   | インク比率     |
+| ------------------------------ | -------------- |
+| 白紙の紙面                     | 0.000015 以下  |
+| 検出枠が余白に落ちた切り出し   | 0.0000         |
+| 検出枠が**半分**外れた切り出し | 0.034 〜 0.062 |
+| 答案が書かれている切り出し     | 0.050 〜 0.121 |
+
+**半分外れたケースは拾わない。** 真の答案と範囲が重なっており、
+そこまで拾う閾値にすると本物の答案を弾き始める。これは判定で決める話ではなく
+**人が見る話**なので、添削レビュー画面が切り出し画像そのものを出す
+（[`pdf-review-overlay.md`](./pdf-review-overlay.md)）。
+
+**無記入の答案も同じ旗が立つ。** 切り出しから「枠がずれている」と
+「生徒が書いていない」は区別できない。**どちらも人が見るべきもの**なので、
+画面は両方の可能性を書き、どちらかを断定しない。
 
 **この `review_reason` は、取込のあと下流でも判別子として使われる**（Issue #112）。
 `needs_review` は取込が立てた旗であり、**理由の無い `needs_review` は作らない**
