@@ -488,6 +488,20 @@
         "title": "CompleteRegistrationResponse",
         "type": "object"
       },
+      "ConfirmCriteriaRequest": {
+        "description": "The revision the reviewer is signing off on.",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "title": "ConfirmCriteriaRequest",
+        "type": "object"
+      },
       "ConfirmProfileRequest": {
         "properties": {
           "revision": {
@@ -521,6 +535,273 @@
         ],
         "title": "ConfirmRequest",
         "type": "object"
+      },
+      "CriteriaEstimateResponse": {
+        "description": "What one extraction would send, and what it would cost -- answered\n*before* anything is sent (code review P2-2).\n\nPressing \u62bd\u51fa uploads every page of the criteria PDF to a paid provider,\nand pressing it again does it again. A reviewer is entitled to see the\nsize of that before it happens, the same way Issue #101's intake screen\nshows its own call count and estimate.",
+        "properties": {
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "max_pages": {
+            "title": "Max Pages",
+            "type": "integer"
+          },
+          "page_count": {
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "unit_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Cost"
+          }
+        },
+        "required": [
+          "page_count",
+          "max_pages"
+        ],
+        "title": "CriteriaEstimateResponse",
+        "type": "object"
+      },
+      "CriteriaItemModel": {
+        "description": "One marking criterion, over the wire.",
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CriterionKind"
+          },
+          "points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Points"
+          }
+        },
+        "required": [
+          "description",
+          "kind"
+        ],
+        "title": "CriteriaItemModel",
+        "type": "object"
+      },
+      "CriteriaQuestionModel": {
+        "description": "One question's allocation and criteria, over the wire.\n\n``points`` being ``null`` is the \u4e0d\u660e the whole feature is built around:\nit means \"this could not be read\", never 0. The app renders it as \u4e0d\u660e\nand refuses to confirm while any remain.",
+        "properties": {
+          "criteria": {
+            "items": {
+              "$ref": "#/components/schemas/CriteriaItemModel"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "model_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Answer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "number": {
+            "title": "Number",
+            "type": "string"
+          },
+          "points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Points"
+          },
+          "source_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Source Pages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "number",
+          "criteria",
+          "source_pages"
+        ],
+        "title": "CriteriaQuestionModel",
+        "type": "object"
+      },
+      "CriteriaResponse": {
+        "description": "A test's \u914d\u70b9\u3068\u63a1\u70b9\u57fa\u6e96, as the review screen sees it.",
+        "properties": {
+          "declared_total_points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Total Points"
+          },
+          "extracted": {
+            "title": "Extracted",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/CriteriaQuestionModel"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CriteriaStatus"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/CriteriaTotalsModel"
+          },
+          "unreadable_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Unreadable Pages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "test_id",
+          "status",
+          "revision",
+          "extracted",
+          "questions",
+          "unreadable_pages",
+          "totals"
+        ],
+        "title": "CriteriaResponse",
+        "type": "object"
+      },
+      "CriteriaStatus": {
+        "description": "Whether a human has signed off on this draft.\n\nOne-way, exactly like ``domain.profile.ProfileStatus``: ``CONFIRMED`` is\nthe attestation that a person looked at every point value, and there is\nno path back that would let an edit slip in behind that attestation.",
+        "enum": [
+          "draft",
+          "confirmed"
+        ],
+        "title": "CriteriaStatus",
+        "type": "string"
+      },
+      "CriteriaTotalsModel": {
+        "description": "The sum, the unknown count, and the comparison with the document's\nown stated total.\n\nA snapshot of what is **saved**. The screen recomputes all of it from\nwhatever the reviewer has typed but not yet saved -- showing this value\nbeside unsaved edits would report a total for a list that is no longer on\nscreen, the same trap ``test_settings_page.dart`` already avoids for the\ndependency graph's execution layers.",
+        "properties": {
+          "declared_difference": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Difference"
+          },
+          "declared_total_points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Total Points"
+          },
+          "is_complete": {
+            "title": "Is Complete",
+            "type": "boolean"
+          },
+          "known_points": {
+            "title": "Known Points",
+            "type": "integer"
+          },
+          "unknown_count": {
+            "title": "Unknown Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "known_points",
+          "unknown_count",
+          "is_complete"
+        ],
+        "title": "CriteriaTotalsModel",
+        "type": "object"
+      },
+      "CriterionKind": {
+        "description": "Whether a criterion adds points or takes them away.\n\nBoth exist in the measured material: most subjects list what earns\npoints, and at least one is written entirely as deductions from a full\nallocation. Collapsing the two into a signed number was rejected -- a\nreviewer editing \"-2\" cannot tell a deduction of 2 from a typo, and the\ngrading prompt (``jobs.grading_processor._rubric_text_for``) has to say\nwhich it is.",
+        "enum": [
+          "add",
+          "deduct"
+        ],
+        "title": "CriterionKind",
+        "type": "string"
       },
       "CriterionOutcomeRequest": {
         "properties": {
@@ -2332,6 +2613,34 @@
           "reason"
         ],
         "title": "UnresolvedQuestionModel",
+        "type": "object"
+      },
+      "UpdateCriteriaRequest": {
+        "description": "The reviewed question set to save.\n\n``declared_total_points`` is editable because the reviewer may be\ncorrecting a total the model misread, or clearing one it invented from a\nfooter page number.",
+        "properties": {
+          "declared_total_points": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Total Points"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/CriteriaQuestionModel"
+            },
+            "title": "Questions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "questions"
+        ],
+        "title": "UpdateCriteriaRequest",
         "type": "object"
       },
       "UpdateProfileRequest": {
@@ -4234,6 +4543,263 @@
         "summary": "Complete Registration",
         "tags": [
           "test-registration"
+        ]
+      }
+    },
+    "/tests/{test_id}/criteria": {
+      "get": {
+        "operationId": "get_criteria_tests__test_id__criteria_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriteriaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Criteria",
+        "tags": [
+          "criteria"
+        ]
+      },
+      "put": {
+        "description": "Save a reviewed (or entirely hand-entered) question set.\n\nCreates the draft when there is none. That upsert is the escape\nhatch Issue #95 decision 8 asks for: a subject whose criteria PDF\nthe model could not read at all must still be enterable, and\nrequiring an extraction to succeed first would make the failure\nunrecoverable on exactly the documents that need the fallback.\n\nSaving does not confirm. ``unreadable_pages`` and the extraction's\nown ``note`` are carried through untouched -- they describe what the\nextraction saw, and an edit does not change that.",
+        "operationId": "update_criteria_tests__test_id__criteria_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCriteriaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriteriaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Criteria",
+        "tags": [
+          "criteria"
+        ]
+      }
+    },
+    "/tests/{test_id}/criteria/confirm": {
+      "post": {
+        "description": "Sign off on every point value, and write the test's questions.\n\nRefuses while any \u914d\u70b9 is \u4e0d\u660e. That is the gate: `Question.points`\nis the maximum every grade for that question is computed against, so\na value nobody read must be typed in by a person before it can reach\nthe database -- never defaulted, never skipped\n(`ensure_confirmable`).",
+        "operationId": "confirm_criteria_tests__test_id__criteria_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmCriteriaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriteriaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm Criteria",
+        "tags": [
+          "criteria"
+        ]
+      }
+    },
+    "/tests/{test_id}/criteria/estimate": {
+      "get": {
+        "description": "How many pages an extraction would send, and what that would cost.\n\nReads only the page count -- no rendering, no provider call, no\ncharge. Takes the shared PDFium lock anyway: ``page_count`` opens the\ndocument, and this app serializes every PDF read for the reason\n`build_criteria_router` documents.",
+        "operationId": "estimate_criteria_tests__test_id__criteria_estimate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriteriaEstimateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Estimate Criteria",
+        "tags": [
+          "criteria"
+        ]
+      }
+    },
+    "/tests/{test_id}/criteria/extract": {
+      "post": {
+        "description": "Read the registered \u63a1\u70b9\u57fa\u6e96PDF with the configured model.\n\nEvery page is rendered and sent as an image. That is not a fallback\nfor a failed text extraction -- 6 of the 11 measured subjects have no\ntext layer at all, and they are the subjects whose answers are\nformulae, so the image path is the only one that covers them\n(``adapters.criteria_extraction.source``).\n\nThe result is a **proposal**. It is stored as a DRAFT and nothing\ndownstream reads it until a human confirms it.\n\nDeliberately a **synchronous** handler, like ``/profile/analyze``:\nFastAPI runs those in its worker threadpool, so the per-test lock\nbelow and the minute-long provider call are held off the event loop.\nWritten as ``async def`` with ``await to_thread(...)`` inside, the\ntwo blocking calls would move off the loop but ``with\ntest_locks.for_test(...)`` would not -- a second extraction of the\nsame test would then block the whole sidecar for as long as the\nfirst one takes to answer (code review of this Issue).",
+        "operationId": "extract_criteria_tests__test_id__criteria_extract_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CriteriaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Extract Criteria",
+        "tags": [
+          "criteria"
         ]
       }
     },

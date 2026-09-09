@@ -9,6 +9,7 @@ import 'package:auto_scoring_api/src/auth/api_key_auth.dart';
 import 'package:auto_scoring_api/src/auth/basic_auth.dart';
 import 'package:auto_scoring_api/src/auth/bearer_auth.dart';
 import 'package:auto_scoring_api/src/auth/oauth.dart';
+import 'package:auto_scoring_api/src/api/criteria_api.dart';
 import 'package:auto_scoring_api/src/api/default_api.dart';
 import 'package:auto_scoring_api/src/api/dependency_graph_api.dart';
 import 'package:auto_scoring_api/src/api/export_api.dart';
@@ -136,6 +137,12 @@ class AutoScoringApi {
           .apiKeys
           .remove(name);
     }
+  }
+
+  /// Get CriteriaApi instance, base route and serializer can be overridden by a given but be careful,
+  /// by doing that all interceptors will not be executed
+  CriteriaApi getCriteriaApi() {
+    return CriteriaApi(dio, serializers);
   }
 
   /// Get DefaultApi instance, base route and serializer can be overridden by a given but be careful,

@@ -109,6 +109,27 @@ Future<ProfileResponse> _unavailableUpdateProfile(
   List<RegionModel> regions,
 ) async => _unavailable();
 
+Future<CriteriaEstimateResponse> _unavailableEstimateCriteria(
+  String testId,
+) async => _unavailable();
+
+Future<CriteriaResponse> _unavailableExtractCriteria(String testId) async =>
+    _unavailable();
+
+Future<CriteriaResponse> _unavailableGetCriteria(String testId) async =>
+    _unavailable();
+
+Future<CriteriaResponse> _unavailableUpdateCriteria(
+  String testId,
+  List<CriteriaQuestionModel> questions, {
+  int? declaredTotalPoints,
+}) async => _unavailable();
+
+Future<CriteriaResponse> _unavailableConfirmCriteria(
+  String testId, {
+  required int revision,
+}) async => _unavailable();
+
 Future<ProfileResponse> _unavailableConfirmProfile(
   String testId, {
   required int revision,
@@ -349,6 +370,35 @@ typedef UpdateProfile =
 typedef ConfirmProfile =
     Future<ProfileResponse> Function(String testId, {required int revision});
 
+/// 抽出が送るページ数と概算費用を、送る前に答える。
+/// `unitCost` が `null` なら「見積もれません」であって 0 円ではない。
+typedef EstimateCriteria =
+    Future<CriteriaEstimateResponse> Function(String testId);
+
+/// Reads a test's 配点と採点基準 out of its registered 採点基準PDF (Issue
+/// #103). Always a proposal a human edits, never a value grading reads
+/// directly.
+typedef ExtractCriteria = Future<CriteriaResponse> Function(String testId);
+
+/// The current (draft or confirmed) 配点と採点基準 for a test.
+typedef GetCriteria = Future<CriteriaResponse> Function(String testId);
+
+/// Saves a reviewed -- or entirely hand-entered -- question set (still
+/// DRAFT). Creates the draft when there is none, which is what lets a
+/// reviewer enter every 配点 by hand on a test whose extraction failed.
+typedef UpdateCriteria =
+    Future<CriteriaResponse> Function(
+      String testId,
+      List<CriteriaQuestionModel> questions, {
+      int? declaredTotalPoints,
+    });
+
+/// The human sign-off over a test's 配点. `revision` must match the draft
+/// currently on disk, the same staleness contract [ConfirmProfile] has.
+/// Rejected (422) while any 配点 is still 不明.
+typedef ConfirmCriteria =
+    Future<CriteriaResponse> Function(String testId, {required int revision});
+
 /// The final registration gate: moves a test from `draft` to `ready` once
 /// both the profile and the dependency graph are confirmed.
 typedef CompleteRegistration =
@@ -576,6 +626,11 @@ class AppDependencies {
     this.getProfile = _unavailableGetProfile,
     this.updateProfile = _unavailableUpdateProfile,
     this.confirmProfile = _unavailableConfirmProfile,
+    this.estimateCriteria = _unavailableEstimateCriteria,
+    this.extractCriteria = _unavailableExtractCriteria,
+    this.getCriteria = _unavailableGetCriteria,
+    this.updateCriteria = _unavailableUpdateCriteria,
+    this.confirmCriteria = _unavailableConfirmCriteria,
     this.completeRegistration = _unavailableCompleteRegistration,
     this.analyzeDependencyGraph = _unavailableAnalyzeDependencyGraph,
     this.getDependencyGraph = _unavailableGetDependencyGraph,
@@ -633,6 +688,11 @@ class AppDependencies {
       getProfile = client.getProfile,
       updateProfile = client.updateProfile,
       confirmProfile = client.confirmProfile,
+      estimateCriteria = client.estimateCriteria,
+      extractCriteria = client.extractCriteria,
+      getCriteria = client.getCriteria,
+      updateCriteria = client.updateCriteria,
+      confirmCriteria = client.confirmCriteria,
       completeRegistration = client.completeRegistration,
       analyzeDependencyGraph = client.analyzeDependencyGraph,
       getDependencyGraph = client.getDependencyGraph,
@@ -683,6 +743,11 @@ class AppDependencies {
   final GetProfile getProfile;
   final UpdateProfile updateProfile;
   final ConfirmProfile confirmProfile;
+  final EstimateCriteria estimateCriteria;
+  final ExtractCriteria extractCriteria;
+  final GetCriteria getCriteria;
+  final UpdateCriteria updateCriteria;
+  final ConfirmCriteria confirmCriteria;
   final CompleteRegistration completeRegistration;
   final AnalyzeDependencyGraph analyzeDependencyGraph;
   final GetDependencyGraph getDependencyGraph;

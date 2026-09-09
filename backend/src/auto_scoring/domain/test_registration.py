@@ -13,6 +13,25 @@ Validation here covers the Issue #16 acceptance criteria the domain layer is
 responsible for: invalid scoring, duplicate question numbers, and regions
 that don't add up to a usable question. Out-of-range coordinates are already
 rejected by `NormalizedBBox`/`NormalizedRect` themselves.
+
+Issue #103 added a second source for the same rows. Real grading material
+has no model-answer PDF to derive a layout from, so most tests never get a
+profile at all and the region path alone can produce no questions for them
+(`api.test_registration_router.analyze_profile` answers 409 in that case).
+A `CriteriaDraft` -- per-question points, criteria, and model answers read
+out of the 採点基準PDF and corrected by a human -- can therefore stand in
+for, or override, what the regions carry:
+
+* **regions** remain the only source of *coordinates* (which page, and where
+  the answer/score/comment areas are);
+* **the criteria draft** is the source of *points, criteria, and model
+  answers* whenever it has them.
+
+`build_questions_and_rubrics` takes both and is the only place they are
+combined, so whichever confirm step runs last -- `/profile/confirm` or
+`/criteria/confirm` -- rebuilds the same rows from the same two artefacts
+and the order the reviewer works in does not matter. Passing
+``criteria=None`` reproduces the pre-Issue-#103 behaviour exactly.
 """
 
 from __future__ import annotations
@@ -21,6 +40,11 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 
+from auto_scoring.domain.criteria_extraction import (
+    CriteriaDraft,
+    CriteriaQuestion,
+    CriterionKind,
+)
 from auto_scoring.domain.models import (
     DomainError,
     NormalizedRect,
@@ -51,6 +75,33 @@ class IncompleteRegionsError(TestRegistrationError):
 class CrossPageRegionError(TestRegistrationError):
     """A question's area regions are not all on the same page as its
     `QUESTION` region.
+    """
+
+
+class QuestionsInUseError(TestRegistrationError):
+    """Rebuilding this test's questions would destroy grading data.
+
+    `build_questions_and_rubrics`' callers rebuild by **deleting every
+    `Question` row and re-inserting** (see `confirm_profile`'s own comment on
+    why replace-not-merge is right for a retry). Six tables carry a
+    ``question_id`` foreign key declared ``ON DELETE CASCADE`` -- answer
+    images, recognitions, grades, criterion results, annotations, review
+    history. So once a submission has been imported for this test, that
+    delete is not a rebuild, it is **an irreversible loss of every answer
+    image and every grade**, and re-inserting a `Question` with an identical
+    id does not bring any of it back.
+
+    Until Issue #103 this was unreachable by accident rather than by rule:
+    the only rebuild path was `/profile/confirm`, a submission requires the
+    test to be READY, READY requires a confirmed profile, and confirming an
+    already-confirmed profile is a 409. Issue #103 added a second rebuild
+    path with no such lifecycle in front of it -- a test made READY through
+    the pre-Issue-#103 `SCORE`-region route has no confirmed criteria, so
+    `/criteria/confirm` reached the delete on a test that was already being
+    graded (code review P1).
+
+    The rule now exists in its own right, and both paths state it, rather
+    than one of them being safe because of a coincidence somewhere else.
     """
 
 
@@ -117,6 +168,36 @@ _MAX_SQLITE_INTEGER = 2**63 - 1
 _MAX_QUESTION_NUMBER_BYTES = 40
 
 
+def ensure_questions_can_be_rebuilt(*, test_id: str, submission_count: int) -> None:
+    """Refuse to rebuild a test's questions once answers have been imported.
+
+    Checked on the **server**, not in the screen: AGENTS.md ("Architecture")
+    requires an invariant this important to be guaranteed by something other
+    than UI state, and the screen is not the only caller of these endpoints.
+
+    ``submission_count`` is the caller's read of the test's submissions
+    inside the same transaction as the rebuild. That read and the delete are
+    not isolated from a submission created in between by a *different*
+    process -- but importing an answer requires the test to be READY with a
+    confirmed dependency graph, and this app is a single-operator desktop
+    tool, so the remaining window is not one a person can drive. Stated here
+    rather than left for a reader to wonder about.
+
+    The message names the way forward, not just the refusal: a reviewer who
+    has to correct a wrong 配点 needs to know that the answer is a new test,
+    and that nothing they already have is going to be taken away.
+    """
+    if submission_count <= 0:
+        return
+    raise QuestionsInUseError(
+        f"このテストにはすでに答案が {submission_count} 件取り込まれています。"
+        "設問と配点を作り直すと、取り込んだ答案の画像・文字認識結果・採点結果・"
+        "レビュー履歴がすべて失われ、元に戻せません。"
+        "配点を直すには、新しいテストとして登録し直してください。"
+        "いまのテストと答案はそのまま残ります。"
+    )
+
+
 def _bbox_to_rect(bbox: NormalizedBBox) -> NormalizedRect:
     """`NormalizedBBox` (x0/y0/x1/y1, Issue #15) -> `NormalizedRect` (x/y/width/height,
     Issue #11). Both use the same top-left-origin, 0..1 convention (see
@@ -132,7 +213,7 @@ def _combined_text(regions: Sequence[Region]) -> str | None:
 
 
 def _require_same_page(
-    number: str, question_region: Region, *area_region_groups: Sequence[Region]
+    number: str, anchor_page_index: int, *area_region_groups: Sequence[Region]
 ) -> None:
     """`Question.page` (`domain.models.Question`) is a single page, and its
     `answer_area`/`score_area`/`comment_area` rects carry no page of their
@@ -149,14 +230,21 @@ def _require_same_page(
     "未設計"); reject the mismatch instead so it surfaces as a confirm-time
     error the reviewer can fix via `PUT /profile`, not a silently corrupt
     crop.
+
+    ``anchor_page_index`` is the `QUESTION` region's page when there is one.
+    Since Issue #103 a question can exist without a `QUESTION` region (it
+    came from the criteria draft, and the reviewer only drew an answer
+    area), in which case the first area region's own page anchors the rest
+    -- the invariant being checked is "every area of one question is on one
+    page", which does not depend on which region named that page.
     """
     for regions in area_region_groups:
         for region in regions:
-            if region.page_index != question_region.page_index:
+            if region.page_index != anchor_page_index:
                 raise CrossPageRegionError(
                     f"question {number!r}'s {region.kind.value} region is on page "
-                    f"{region.page_index + 1}, but its QUESTION region is on page "
-                    f"{question_region.page_index + 1}; areas must be on the same "
+                    f"{region.page_index + 1}, but its other regions are on page "
+                    f"{anchor_page_index + 1}; areas must be on the same "
                     "page as their question"
                 )
 
@@ -194,39 +282,144 @@ def _extract_points(score_regions: Sequence[Region]) -> int | None:
     return None
 
 
+def _points_from_draft_or_regions(
+    number: str, draft_question: CriteriaQuestion | None, score_regions: Sequence[Region]
+) -> int:
+    """The question's maximum score, preferring the human-confirmed draft.
+
+    The draft wins whenever it carries a value, because that value went
+    through the 配点と採点基準 panel and someone signed off on it, while a
+    `SCORE` region's number was read out of free text by
+    `_extract_points`'s regular expression. The region path stays as the
+    fallback for tests registered before Issue #103, which have no draft at
+    all.
+
+    `ensure_confirmable` already refuses a draft with an unknown or
+    non-positive value, so reaching the region fallback here means the draft
+    genuinely had nothing for this number (e.g. a question that exists only
+    as regions).
+    """
+    if draft_question is not None and draft_question.points is not None:
+        points = draft_question.points
+    else:
+        extracted = _extract_points(score_regions)
+        if extracted is None:
+            raise InvalidScoreError(
+                f"question {number!r} has no valid score (SCORE region missing or non-numeric, "
+                "and the confirmed 採点基準 carries no points for it)"
+            )
+        points = extracted
+    if points <= 0:
+        raise InvalidScoreError(f"question {number!r} has a non-positive score: {points}")
+    if points > _MAX_SQLITE_INTEGER:
+        raise InvalidScoreError(f"question {number!r} has a score too large to store: {points}")
+    return points
+
+
+def _rubric_from_draft(
+    question_id: str, points: int, draft_question: CriteriaQuestion
+) -> tuple[Rubric, ScoringMethod] | None:
+    """One `Rubric` built from the draft's per-criterion rows, plus the
+    scoring method those rows imply.
+
+    Returns `None` when the draft has no criteria for this question, so the
+    caller falls back to the `RUBRIC`-region text.
+
+    Two details the draft carries that `RubricCriterion` cannot:
+
+    * a criterion with no point value of its own (a clause like 「文意が
+      通らない場合は減点」 with no number) takes the question's full
+      allocation as its `max_points`, which is what the pre-Issue-#103
+      single-criterion rubric already did for the whole rubric text;
+    * `CriterionKind`. A question whose criteria are *all* deductions is a
+      `SUBTRACTIVE` question, and `jobs.grading_processor._rubric_text_for`
+      states that method to the provider. In a mixed question the method
+      cannot express it, so the deducting rows say so in their own
+      description instead -- never dropped, because a deduction silently
+      read as an addition inverts the grade.
+    """
+    if not draft_question.criteria:
+        return None
+    all_deduct = all(item.kind is CriterionKind.DEDUCT for item in draft_question.criteria)
+    scoring_method = ScoringMethod.SUBTRACTIVE if all_deduct else ScoringMethod.ADDITIVE
+    criteria = tuple(
+        RubricCriterion(
+            id=f"{question_id}:rubric:c{index + 1}",
+            description=(
+                item.description
+                if all_deduct or item.kind is CriterionKind.ADD
+                else f"減点: {item.description}"
+            ),
+            max_points=item.points if item.points is not None else points,
+            position=index,
+        )
+        for index, item in enumerate(draft_question.criteria)
+    )
+    rubric = Rubric(id=f"{question_id}:rubric", question_id=question_id, criteria=criteria)
+    return rubric, scoring_method
+
+
 def build_questions_and_rubrics(
     test_id: str,
     regions: Sequence[Region],
     *,
     default_scoring_method: ScoringMethod = ScoringMethod.ADDITIVE,
+    criteria: CriteriaDraft | None = None,
 ) -> tuple[list[Question], list[Rubric]]:
-    """Group confirmed `regions` by question number and build the test's
-    `Question`/`Rubric` rows.
+    """Build the test's `Question`/`Rubric` rows from its confirmed regions
+    and, since Issue #103, its confirmed 採点基準 draft.
 
     Every region's `label` is treated as the question number it belongs to
     (candidate generation and manual region edits both set this) -- a
     `QUESTION` region names the question itself, and any `ANSWER_AREA` /
     `ANNOTATION_AREA` / `SCORE` / `MODEL_ANSWER` / `RUBRIC` region sharing the
-    same label is folded into that question. Labels with no `QUESTION` region
-    (e.g. a stray manually-added area) are ignored rather than raising, since
-    the profile itself is not required to be question-shaped end to end --
-    only the labels that *do* have a `QUESTION` region become real questions.
+    same label is folded into that question.
+
+    A question exists if it has a `QUESTION` region **or** a row in
+    ``criteria``. Labels with neither (e.g. a stray manually-added area) are
+    ignored rather than raising, since the profile itself is not required to
+    be question-shaped end to end.
+
+    Where each field comes from, when both sources have something:
+
+    ==================  ==========================================
+    field               source
+    ==================  ==========================================
+    ``points``          ``criteria`` if it has one, else `SCORE`
+    ``criteria``        ``criteria`` if it has any, else `RUBRIC`
+    ``model_answer``    ``criteria`` if non-blank, else `MODEL_ANSWER`
+    ``page``/areas      regions only (a draft has no coordinates)
+    ==================  ==========================================
+
+    A question that exists only in ``criteria`` gets ``page=1`` and no areas.
+    That is deliberately not an error: `adapters.submission_intake` already
+    flags such a question for human review (``no_answer_area_defined``)
+    instead of cropping from guessed coordinates, so the honest outcome is
+    a question that grades against the whole page and says so -- not a
+    registration that refuses to complete.
 
     Raises `DuplicateQuestionNumberError` if the same number has more than
     one `QUESTION` region, `InvalidScoreError` if a question has no usable
-    (positive, numeric) score, and `IncompleteRegionsError` if no question
-    was found at all.
+    (positive, numeric) score from either source, and
+    `IncompleteRegionsError` if no question was found at all.
     """
     grouped: dict[str, dict[RegionKind, list[Region]]] = defaultdict(lambda: defaultdict(list))
     for region in regions:
         grouped[region.label][region.kind].append(region)
 
+    draft_questions: dict[str, CriteriaQuestion] = (
+        {question.number: question for question in criteria.questions}
+        if criteria is not None
+        else {}
+    )
+
     questions: list[Question] = []
     rubrics: list[Rubric] = []
-    for number in sorted(grouped):
-        kinds = grouped[number]
+    for number in sorted(set(grouped) | set(draft_questions)):
+        kinds = grouped.get(number, {})
+        draft_question = draft_questions.get(number)
         question_regions = kinds.get(RegionKind.QUESTION, [])
-        if not question_regions:
+        if not question_regions and draft_question is None:
             continue
         if len(question_regions) > 1:
             raise DuplicateQuestionNumberError(
@@ -239,7 +432,6 @@ def build_questions_and_rubrics(
                 f"question number {number!r} is {number_bytes} bytes, "
                 f"exceeding the {_MAX_QUESTION_NUMBER_BYTES}-byte limit"
             )
-        question_region = question_regions[0]
 
         score_regions = kinds.get(RegionKind.SCORE, [])
         answer_regions = kinds.get(RegionKind.ANSWER_AREA, [])
@@ -247,30 +439,67 @@ def build_questions_and_rubrics(
         model_answer_regions = kinds.get(RegionKind.MODEL_ANSWER, [])
         rubric_regions = kinds.get(RegionKind.RUBRIC, [])
 
-        _require_same_page(
-            number, question_region, answer_regions, score_regions, annotation_regions
+        # The `QUESTION` region names the page when there is one. Otherwise
+        # the first area region does, and a question with no regions at all
+        # falls back to page 1 -- see this function's own docstring.
+        anchor_region = next(
+            iter(question_regions or answer_regions or score_regions or annotation_regions), None
+        )
+        if anchor_region is not None:
+            _require_same_page(
+                number,
+                anchor_region.page_index,
+                answer_regions,
+                score_regions,
+                annotation_regions,
+            )
+
+        points = _points_from_draft_or_regions(number, draft_question, score_regions)
+
+        draft_model_answer = draft_question.model_answer if draft_question is not None else None
+        model_answer = (
+            draft_model_answer.strip()
+            if draft_model_answer is not None and draft_model_answer.strip()
+            else _combined_text(model_answer_regions)
         )
 
-        points = _extract_points(score_regions)
-        if points is None:
-            raise InvalidScoreError(
-                f"question {number!r} has no valid score (SCORE region missing or non-numeric)"
-            )
-        if points <= 0:
-            raise InvalidScoreError(f"question {number!r} has a non-positive score: {points}")
-        if points > _MAX_SQLITE_INTEGER:
-            raise InvalidScoreError(f"question {number!r} has a score too large to store: {points}")
-
         question_id = f"{test_id}:{number}"
+        scoring_method = default_scoring_method
+        from_draft = (
+            _rubric_from_draft(question_id, points, draft_question)
+            if draft_question is not None
+            else None
+        )
+        if from_draft is not None:
+            rubric, scoring_method = from_draft
+            rubrics.append(rubric)
+        else:
+            rubric_text = _combined_text(rubric_regions)
+            if rubric_text is not None:
+                rubrics.append(
+                    Rubric(
+                        id=f"{question_id}:rubric",
+                        question_id=question_id,
+                        criteria=(
+                            RubricCriterion(
+                                id=f"{question_id}:rubric:c1",
+                                description=rubric_text,
+                                max_points=points,
+                                position=0,
+                            ),
+                        ),
+                    )
+                )
+
         questions.append(
             Question(
                 id=question_id,
                 test_id=test_id,
                 number=number,
-                page=question_region.page_index + 1,
+                page=(anchor_region.page_index + 1) if anchor_region is not None else 1,
                 points=points,
-                scoring_method=default_scoring_method,
-                model_answer=_combined_text(model_answer_regions),
+                scoring_method=scoring_method,
+                model_answer=model_answer,
                 answer_area=_bbox_to_rect(answer_regions[0].bbox) if answer_regions else None,
                 score_area=_bbox_to_rect(score_regions[0].bbox) if score_regions else None,
                 comment_area=(
@@ -278,23 +507,6 @@ def build_questions_and_rubrics(
                 ),
             )
         )
-
-        rubric_text = _combined_text(rubric_regions)
-        if rubric_text is not None:
-            rubrics.append(
-                Rubric(
-                    id=f"{question_id}:rubric",
-                    question_id=question_id,
-                    criteria=(
-                        RubricCriterion(
-                            id=f"{question_id}:rubric:c1",
-                            description=rubric_text,
-                            max_points=points,
-                            position=0,
-                        ),
-                    ),
-                )
-            )
 
     if not questions:
         raise IncompleteRegionsError(

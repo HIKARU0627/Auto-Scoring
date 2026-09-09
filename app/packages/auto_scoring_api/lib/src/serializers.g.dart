@@ -17,8 +17,16 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ClassificationEstimateModel.serializer)
       ..add(ClassificationNeed.serializer)
       ..add(CompleteRegistrationResponse.serializer)
+      ..add(ConfirmCriteriaRequest.serializer)
       ..add(ConfirmProfileRequest.serializer)
       ..add(ConfirmRequest.serializer)
+      ..add(CriteriaEstimateResponse.serializer)
+      ..add(CriteriaItemModel.serializer)
+      ..add(CriteriaQuestionModel.serializer)
+      ..add(CriteriaResponse.serializer)
+      ..add(CriteriaStatus.serializer)
+      ..add(CriteriaTotalsModel.serializer)
+      ..add(CriterionKind.serializer)
       ..add(CriterionOutcomeRequest.serializer)
       ..add(CriterionResultResponse.serializer)
       ..add(DependencyEdgeModel.serializer)
@@ -70,6 +78,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(TestSummary.serializer)
       ..add(UndoReviewRequest.serializer)
       ..add(UnresolvedQuestionModel.serializer)
+      ..add(UpdateCriteriaRequest.serializer)
       ..add(UpdateProfileRequest.serializer)
       ..add(ValidationError.serializer)
       ..addBuilderFactory(
@@ -87,6 +96,23 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(
               BuiltList, const [const FullType(BoundingBoxResponse)]),
           () => ListBuilder<BoundingBoxResponse>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(CriteriaItemModel)]),
+          () => ListBuilder<CriteriaItemModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(int)]),
+          () => ListBuilder<int>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(CriteriaQuestionModel)]),
+          () => ListBuilder<CriteriaQuestionModel>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(CriteriaQuestionModel)]),
+          () => ListBuilder<CriteriaQuestionModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(int)]),
+          () => ListBuilder<int>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(CriterionResultResponse)]),

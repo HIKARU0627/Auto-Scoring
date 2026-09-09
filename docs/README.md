@@ -22,6 +22,7 @@ the former is updated in the same PR.
 | 文書                                                                       | 内容                                                             |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | [test-registration.md](./test-registration.md)                             | テスト登録とテストプロファイルの生成・人間による確定             |
+| [criteria-extraction.md](./criteria-extraction.md)                         | 採点基準PDFからの配点・採点基準の抽出と人による確定              |
 | `intake-and-settings.md`（Issue #101 で追加予定）                          | 登録と答案取込の統合画面、ディレクトリ取込、命名規則（型）の設定 |
 | [answer-intake-and-preprocessing.md](./answer-intake-and-preprocessing.md) | 生徒答案の取り込み、レンダリング、OpenCV 前処理、回答欄 crop     |
 | [ocr-recognition-pipeline.md](./ocr-recognition-pipeline.md)               | 文字認識パイプラインと低 Confidence の扱い                       |
