@@ -185,4 +185,56 @@ void main() {
       expect(queue.entryFor('a')!.isPartiallyReviewed, isFalse);
     });
   });
+
+  group('出力してよい答案 (Issue #137)', () {
+    test('全設問が確定していれば、状態が reviewed でなくても出力できる', () {
+      // **これが `isDone` では取りこぼす答案である。** Issue #112 より前は
+      // `ai_processed` が `_REVIEWABLE_SUBMISSION_STATES` から外れていたため、
+      // 普通に取り込めた答案は全問承認しても状態が動かなかった。遡って直す
+      // マイグレーションは無いので、それ以前に採点し終えた答案はいまも
+      // `ai_processed` のまま、全設問が確定した状態で残っている。
+      //
+      // サイドカーはこれを出力する (`unconfirmed_question_ids` が空)。画面が
+      // 状態を見て導線を隠せば、出力できるのに出せない答案ができる -- #137 が
+      // 消しに来た行き止まりそのものである。
+      final queue = ReviewQueue.from(
+        submissions: [sub(id: 'legacy', state: 'ai_processed', day: 1)],
+        progress: [progress(id: 'legacy', total: 5, confirmed: 5)],
+      );
+
+      final entry = queue.entryFor('legacy')!;
+      expect(entry.isDone, isFalse, reason: '状態は動いていない');
+      expect(entry.isFullyConfirmed, isTrue, reason: 'それでも全問確定している');
+    });
+
+    test('確認済みの答案はもちろん出力できる', () {
+      final queue = ReviewQueue.from(
+        submissions: [sub(id: 'done', state: 'reviewed', day: 1)],
+        progress: [progress(id: 'done', total: 3, confirmed: 3)],
+      );
+
+      expect(queue.entryFor('done')!.isFullyConfirmed, isTrue);
+    });
+
+    test('1問でも残っていれば出力できない', () {
+      final queue = ReviewQueue.from(
+        submissions: [sub(id: 'half', state: 'ai_processed', day: 1)],
+        progress: [progress(id: 'half', total: 5, confirmed: 4)],
+      );
+
+      expect(queue.entryFor('half')!.isFullyConfirmed, isFalse);
+    });
+
+    test('進捗が引けていないときは出力できると言わない', () {
+      // 0 / 0 を「全部確定した」と読むと、押した先で必ず 409 になるボタンが
+      // 出る。**分からないときは出さない。**
+      final queue = ReviewQueue.from(
+        submissions: [sub(id: 'unknown', state: 'reviewed', day: 1)],
+      );
+
+      final entry = queue.entryFor('unknown')!;
+      expect(entry.totalQuestions, 0, reason: '進捗が無い状態を作れている');
+      expect(entry.isFullyConfirmed, isFalse);
+    });
+  });
 }

@@ -25,7 +25,7 @@ import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/pdf_review/answer_crop_view.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
-import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
+import 'package:auto_scoring_app/core/widgets/export_dialog.dart';
 
 /// 添削レビュー画面 (simplified-design-specification.md §16.5, Issue #21 + #22).
 ///

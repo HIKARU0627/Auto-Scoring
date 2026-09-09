@@ -11,6 +11,7 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/review_queue.dart';
 import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
+import 'package:auto_scoring_app/core/widgets/export_dialog.dart';
 
 /// 答案キュー画面 (Issue #113)。
 ///
@@ -147,6 +148,16 @@ class _SubmissionQueuePageState extends ConsumerState<SubmissionQueuePage> {
                         // 戻ってきたときには、その答案が済んでいるかもしれない。
                         if (mounted) await _reload();
                       },
+                      onExport: () async {
+                        await showExportDialog(
+                          context,
+                          submissionId: data.queue.entries[index].id,
+                        );
+                        // 出力は答案の状態を `exported` へ動かしうる。行の
+                        // 見た目がそのままだと、押したのに何も起きていないように
+                        // 見える。
+                        if (mounted) await _reload();
+                      },
                     ),
                   ),
                 ),
@@ -202,12 +213,14 @@ class _QueueRow extends StatelessWidget {
     required this.position,
     required this.total,
     required this.onOpen,
+    required this.onExport,
   });
 
   final ReviewQueueEntry entry;
   final int position;
   final int total;
   final VoidCallback onOpen;
+  final VoidCallback onExport;
 
   String? get _reasonSummary =>
       describeReviewReason(entry.submission.reviewReason);
@@ -259,6 +272,26 @@ class _QueueRow extends StatelessWidget {
           ],
         ],
       ),
+      // 確定し終えた答案から、**レビュー画面を経由せずに**出力する
+      // (Issue #137)。#113 が入るまで出力ボタンは添削レビュー画面にしか無く、
+      // 全問承認した答案はホームからも消えていたので、成果物である採点済みPDFに
+      // 到達する手段が利用者側に無かった。
+      //
+      // 行ごとに出すのは、出力が**答案1件の操作**だからである。ヘッダに1つ置くと
+      // 「どれを出すのか」を別に選ばせることになり、一覧の意味が薄れる。
+      //
+      // 開く導線 (`onTap`) は消さない。ここは近道で、確定していない答案や進捗が
+      // 引けなかった答案には出ない ([ReviewQueueEntry.isFullyConfirmed])。
+      trailing: entry.isFullyConfirmed
+          ? IconButton(
+              key: Key('queue-export-${entry.id}'),
+              onPressed: onExport,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              // ツールチップだけに頼らない。キーボードとスクリーンリーダーに
+              // 対しては、これが名前そのものになる (Issue #25)。
+              tooltip: 'PDF出力',
+            )
+          : null,
       isThreeLine: _reasonSummary != null,
       onTap: onOpen,
     );

@@ -68,6 +68,36 @@ class ReviewQueueEntry {
   /// 戻ってきた講師には「どこまでやったか」が画面から読めない。
   bool get isPartiallyReviewed =>
       !isDone && confirmedQuestions > 0 && confirmedQuestions < totalQuestions;
+
+  /// 全設問が確定していて、**PDF出力を試す価値がある**答案 (Issue #137)。
+  ///
+  /// **[isDone] ではなくこちらで出力の導線を出す。** 状態は設問粒度の事実の
+  /// 写しであって、事実そのものではないからである。取りこぼすのは
+  /// **全設問を確定したのに `reviewed` へ動かなかった答案**で、これは実在する:
+  /// Issue #112 より前は `ai_processed` が `_REVIEWABLE_SUBMISSION_STATES` から
+  /// 外れており、**普通に取り込めた答案ほど、全問承認しても状態が動かなかった**。
+  /// #112 に遡って直すマイグレーションは無い (`backend/migrations/versions/` の
+  /// 最新は `0016`) ので、それ以前に採点し終えた答案はいまも `ai_processed` の
+  /// まま、全設問が確定した状態で残っている。**出力できるのに導線が出ない**のは
+  /// #137 が消しに来た行き止まりそのものである。
+  ///
+  /// #113 が `manualGradingQuestions` で踏んだのと同じ形の誤りで、あちらは
+  /// 「ジョブが失敗した」という粗い読みが #122・#114 の形を取りこぼしていた。
+  /// **粗いほうの記録から細かい事実を推測しない。**
+  ///
+  /// 数え方はサイドカーの出力ゲートと**同一の述語**である。
+  /// `GET /tests/{id}/review-progress` の `confirmed_questions` は
+  /// `domain.review_workflow.count_confirmed_questions`、出力が拒む条件は
+  /// `domain.pdf_export.unconfirmed_question_ids` で、どちらも
+  /// `is_confirmed(effective_latest_review(...))` を設問ごとに評価している。
+  /// つまりこれは判定のやり直しではなく、**同じ数を読んでいる**。
+  ///
+  /// [totalQuestions] が0のとき false になるのは正しい。進捗が引けなかった
+  /// (`listReviewProgress` の失敗) ときも0で、そこで導線を出すと「押せるのに
+  /// 必ず断られる」ボタンになる。**分からないときは出さない**。出力そのものは
+  /// 添削レビュー画面から常に起動できるので、これは近道が消えるだけである。
+  bool get isFullyConfirmed =>
+      totalQuestions > 0 && confirmedQuestions == totalQuestions;
 }
 
 /// 1つのテストの答案キュー。
