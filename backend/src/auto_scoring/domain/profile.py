@@ -169,6 +169,26 @@ class ProfileStatus(StrEnum):
     CONFIRMED = "confirmed"
 
 
+def _duplicate_region_ids(regions: Sequence[Region]) -> list[str]:
+    """Region ids that appear more than once.
+
+    A region id is how everything downstream *addresses* one region: the
+    review screen selects by it, the 回答欄 editor's numeric dialog opens by
+    it, and a reviewer's edit is sent back keyed on it. Two regions sharing
+    one id means an edit lands on whichever the code happened to find first,
+    and the other silently keeps its old value -- so this is rejected at
+    construction rather than left to each caller (Issue #105; `PUT /profile`
+    accepts whatever a client sends, and nothing else checked).
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for region in regions:
+        if region.region_id in seen and region.region_id not in duplicates:
+            duplicates.append(region.region_id)
+        seen.add(region.region_id)
+    return duplicates
+
+
 def _pages_out_of_range(regions: Sequence[Region], signature: FormatSignature) -> list[str]:
     return [
         region.region_id for region in regions if not 0 <= region.page_index < len(signature.pages)
@@ -198,6 +218,9 @@ class Profile:
     revision: int = 1
 
     def __post_init__(self) -> None:
+        duplicate_ids = _duplicate_region_ids(self.regions)
+        if duplicate_ids:
+            raise ValueError(f"regions must have distinct ids; repeated: {duplicate_ids}")
         invalid_pages = _pages_out_of_range(self.regions, self.signature)
         if invalid_pages:
             raise ValueError(

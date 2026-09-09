@@ -15,15 +15,21 @@ part 'profile_response.g.dart';
 ///
 /// Properties:
 /// * [pages]
+/// * [questionNumbers]
 /// * [regions]
 /// * [revision]
 /// * [status]
 /// * [testId]
+/// * [unassignedRegionIds]
+/// * [undetectedQuestionNumbers]
 @BuiltValue()
 abstract class ProfileResponse
     implements Built<ProfileResponse, ProfileResponseBuilder> {
   @BuiltValueField(wireName: r'pages')
   BuiltList<PageFormatModel> get pages;
+
+  @BuiltValueField(wireName: r'question_numbers')
+  BuiltList<String> get questionNumbers;
 
   @BuiltValueField(wireName: r'regions')
   BuiltList<RegionModel> get regions;
@@ -36,6 +42,12 @@ abstract class ProfileResponse
 
   @BuiltValueField(wireName: r'test_id')
   String get testId;
+
+  @BuiltValueField(wireName: r'unassigned_region_ids')
+  BuiltList<String> get unassignedRegionIds;
+
+  @BuiltValueField(wireName: r'undetected_question_numbers')
+  BuiltList<String> get undetectedQuestionNumbers;
 
   ProfileResponse._();
 
@@ -68,6 +80,11 @@ class _$ProfileResponseSerializer
       object.pages,
       specifiedType: const FullType(BuiltList, [FullType(PageFormatModel)]),
     );
+    yield r'question_numbers';
+    yield serializers.serialize(
+      object.questionNumbers,
+      specifiedType: const FullType(BuiltList, [FullType(String)]),
+    );
     yield r'regions';
     yield serializers.serialize(
       object.regions,
@@ -87,6 +104,16 @@ class _$ProfileResponseSerializer
     yield serializers.serialize(
       object.testId,
       specifiedType: const FullType(String),
+    );
+    yield r'unassigned_region_ids';
+    yield serializers.serialize(
+      object.unassignedRegionIds,
+      specifiedType: const FullType(BuiltList, [FullType(String)]),
+    );
+    yield r'undetected_question_numbers';
+    yield serializers.serialize(
+      object.undetectedQuestionNumbers,
+      specifiedType: const FullType(BuiltList, [FullType(String)]),
     );
   }
 
@@ -121,6 +148,13 @@ class _$ProfileResponseSerializer
           ) as BuiltList<PageFormatModel>;
           result.pages.replace(valueDes);
           break;
+        case r'question_numbers':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [FullType(String)]),
+          ) as BuiltList<String>;
+          result.questionNumbers.replace(valueDes);
+          break;
         case r'regions':
           final valueDes = serializers.deserialize(
             value,
@@ -148,6 +182,20 @@ class _$ProfileResponseSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.testId = valueDes;
+          break;
+        case r'unassigned_region_ids':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [FullType(String)]),
+          ) as BuiltList<String>;
+          result.unassignedRegionIds.replace(valueDes);
+          break;
+        case r'undetected_question_numbers':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [FullType(String)]),
+          ) as BuiltList<String>;
+          result.undetectedQuestionNumbers.replace(valueDes);
           break;
         default:
           unhandled.add(key);

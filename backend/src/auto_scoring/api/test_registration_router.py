@@ -43,11 +43,13 @@ Registration flow (simplified-design-specification.md §6, docs/test-registratio
 
 from __future__ import annotations
 
+import tempfile
 import threading
 from asyncio import to_thread
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
@@ -59,9 +61,21 @@ from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.profile_candidate_generation import generate_profile_candidates
 from auto_scoring.adapters.purge import purge_test
+from auto_scoring.adapters.submission_intake import RENDER_SCALE
 from auto_scoring.adapters.test_intake import MaterialUpload, attach_materials, register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.test_artifact_lock import TestArtifactLocks
+from auto_scoring.domain.ai_provider import ProviderUnavailable, SchemaViolation
+from auto_scoring.domain.answer_area_detection import (
+    AnswerAreaDetectionError,
+    AnswerAreaDetectionRequest,
+    AnswerAreaDetector,
+    UnconfiguredAnswerAreaDetector,
+    ensure_answer_areas_confirmable,
+    regions_from_detection,
+    unassigned_answer_area_ids,
+    undetected_question_numbers,
+)
 from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaStatus
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
 from auto_scoring.domain.intake_template import MaterialRole
@@ -77,11 +91,17 @@ from auto_scoring.domain.models import (
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_intake import (
     IntakeLimits,
+    PdfCorruptedError,
+    PdfEncryptedError,
     PdfIntakeError,
     PdfTooLargeError,
     StagedOutputTooLargeError,
+    validate_page_count,
+    validate_render_dimensions,
+    validate_upload_bytes,
 )
 from auto_scoring.domain.profile import (
+    FormatSignature,
     NormalizedBBox,
     PageFormat,
     Profile,
@@ -91,6 +111,7 @@ from auto_scoring.domain.profile import (
 )
 from auto_scoring.domain.test_material import TestMaterial
 from auto_scoring.domain.test_registration import (
+    CrossPageRegionError,
     QuestionsInUseError,
     build_questions_and_rubrics,
     ensure_questions_can_be_rebuilt,
@@ -277,16 +298,61 @@ class ProfileResponse(BaseModel):
     #: Compare-and-set token for `POST /profile/confirm` -- see
     #: `domain.profile.Profile.revision`'s own docstring.
     revision: int
+    #: This test's confirmed question numbers, in the order the review screen
+    #: should list them (page, then number). Since Issue #105 the 回答欄 editor
+    #: assigns each drawn box to one of these -- a dropdown, not a text field,
+    #: for the same reason detection itself is a multiple-choice question
+    #: (`domain.answer_area_detection`). Empty until the 採点基準 has been
+    #: confirmed, which is what makes the questions exist at all.
+    question_numbers: list[str]
+    #: Questions with no `ANSWER_AREA` region. **Derived on every response,
+    #: never stored** -- a stored copy would still be listing a question as
+    #: undetected in the one moment it matters, immediately after the reviewer
+    #: draws its box. Shown, but does not block confirming: see
+    #: `domain.answer_area_detection`'s module docstring for why this is
+    #: treated differently from Issue #103's unknown 配点.
+    undetected_question_numbers: list[str]
+    #: Region ids of detected boxes that still have no question assigned.
+    #: These *do* block confirming (`ensure_answer_areas_confirmable`) --
+    #: `build_questions_and_rubrics` would ignore them without a word.
+    unassigned_region_ids: list[str]
 
     @classmethod
-    def from_domain(cls, profile: Profile) -> ProfileResponse:
+    def from_domain(cls, profile: Profile, *, question_numbers: Sequence[str]) -> ProfileResponse:
         return cls(
             test_id=profile.format_id,
             status=profile.status.value,
             pages=[PageFormatModel.from_domain(page) for page in profile.signature.pages],
             regions=[RegionModel.from_domain(region) for region in profile.regions],
             revision=profile.revision,
+            question_numbers=list(question_numbers),
+            undetected_question_numbers=list(
+                undetected_question_numbers(profile.regions, question_numbers)
+            ),
+            unassigned_region_ids=list(unassigned_answer_area_ids(profile.regions)),
         )
+
+
+class AnswerLayoutResponse(BaseModel):
+    """The reference answer sheet this test's answer areas are laid out
+    against (Issue #105), and whether detection can run here at all.
+    """
+
+    test_id: str
+    #: ``None`` when no answer sheet has been uploaded yet -- distinct from
+    #: ``0``, which no PDF has (the same "not run" vs "ran and found nothing"
+    #: distinction Issue #103 drew for extraction).
+    page_count: int | None
+    detection_available: bool
+    #: Why detection is unavailable, in terms of configuration *variable
+    #: names* only (`adapters.answer_area_detection.factory`). ``None`` when
+    #: it is available.
+    detection_unavailable_reason: str | None = None
+    #: How many existing regions a replacement answer sheet left behind
+    #: because their page no longer exists (a 3-page sheet swapped for a
+    #: 1-page one). Always ``0`` on `GET`. Reported rather than dropped in
+    #: silence -- the coordinates were somebody's work.
+    dropped_region_count: int = 0
 
 
 class UpdateProfileRequest(BaseModel):
@@ -312,13 +378,25 @@ class CompleteRegistrationResponse(BaseModel):
     dependency_graph_confirmed: bool
 
 
+class _AnswerLayoutConfirmedError(Exception):
+    """The reference answer sheet cannot be replaced: the profile confirmed
+    against it is immutable (Issue #105 review round 1, P2).
+
+    Internal to this module -- `upload_answer_layout` turns it into a 409.
+    Raised from inside `_store_answer_layout`, which runs in a worker thread,
+    so it must be an exception rather than an `HTTPException` raised there.
+    """
+
+    def __init__(self, test_id: str) -> None:
+        super().__init__(
+            f"test {test_id!r}'s profile is already confirmed; its reference answer sheet "
+            "cannot be replaced, because the confirmed answer areas are coordinates on it"
+        )
+
+
 def _intake_http_exception(exc: PdfIntakeError | MaterialIntakeError) -> HTTPException:
     status_code = _INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
     return HTTPException(status_code, detail=str(exc))
-
-
-def _pdf_intake_http_exception(exc: PdfIntakeError) -> HTTPException:
-    return _intake_http_exception(exc)
 
 
 def build_test_registration_router(
@@ -329,6 +407,7 @@ def build_test_registration_router(
     intake_limits: IntakeLimits | None = None,
     pdfium_lock: threading.Lock | None = None,
     locks: TestArtifactLocks | None = None,
+    answer_area_detector: AnswerAreaDetector | None = None,
 ) -> APIRouter:
     """Build the router. One `SqlAlchemyUnitOfWork` is opened per request.
 
@@ -352,11 +431,21 @@ def build_test_registration_router(
     `Question`/`Rubric` rows `confirm_profile` below does, from the very same
     pair of artefacts (`api.test_artifact_lock` spells out the interleave a
     second registry would allow).
+    ``answer_area_detector`` is the Issue #105 detection port. Omitted (in
+    tests that never call it, and in schema export) it becomes an
+    `UnconfiguredAnswerAreaDetector`, so the endpoints still exist and answer
+    with a reason -- the screen must be able to open and let a reviewer draw
+    the boxes by hand on a host with no image-capable provider.
     """
     limits = intake_limits or IntakeLimits()
     profile_store = ProfileStore(store.root)
     criteria_store = CriteriaStore(store.root)
     lock = pdfium_lock or threading.Lock()
+    detector = answer_area_detector or UnconfiguredAnswerAreaDetector(
+        "回答欄の自動検出は、このパソコンでは設定されていません。"
+        "AUTO_SCORING_AI_GRADING_TRANSPORT に画像を送れる provider を設定してください。"
+        "設定しなくても、回答欄は画面上で手動で引けます。"
+    )
     router = APIRouter(tags=["test-registration"])
 
     # `Profile` has no DB row or version -- it is a JSON file that
@@ -405,6 +494,24 @@ def build_test_registration_router(
         except FileNotFoundError:
             return None
         return draft if draft.status is CriteriaStatus.CONFIRMED else None
+
+    def _question_numbers(uow: SqlAlchemyUnitOfWork, test_id: str) -> list[str]:
+        """This test's confirmed question numbers, in review order.
+
+        The single source of the choices the 回答欄 editor offers and the
+        detector is constrained to (Issue #105). Deliberately the `Question`
+        rows and not the 採点基準 draft directly: since Issue #103 those rows
+        *are* the confirmed draft (``/criteria/confirm`` builds them), and
+        reading them keeps this module from importing that Issue's domain at
+        all -- so a test registered before it, whose questions came from
+        `QUESTION`/`SCORE` regions instead, offers exactly the same choices
+        through exactly the same code.
+
+        Empty means "no questions confirmed yet", which is a stop, not a
+        default: with nothing to choose from there is no multiple-choice
+        question to ask.
+        """
+        return [question.number for question in uow.questions.list_for_test(test_id)]
 
     def _load_profile_or_404(test_id: str) -> Profile:
         try:
@@ -484,7 +591,7 @@ def build_test_registration_router(
             try:
                 data = await _read_upload_within_limit(upload, limits.max_size_bytes)
             except PdfIntakeError as exc:
-                raise _pdf_intake_http_exception(exc) from exc
+                raise _intake_http_exception(exc) from exc
             read.append(
                 MaterialUpload(
                     role=role,
@@ -537,7 +644,7 @@ def build_test_registration_router(
         try:
             criteria_data = await _read_upload_within_limit(criteria, limits.max_size_bytes)
         except PdfIntakeError as exc:
-            raise _pdf_intake_http_exception(exc) from exc
+            raise _intake_http_exception(exc) from exc
         all_materials = [
             MaterialUpload(
                 role=MaterialRole.GRADING_CRITERIA,
@@ -696,20 +803,25 @@ def build_test_registration_router(
                 # which means this analysis frequently has nothing to derive
                 # a layout from.
                 #
-                # Deriving the layout from the answers instead is the right
-                # fix and is deliberately *not* done here (Issue #95
-                # decision 2, scheduled separately). Until it is, say so:
-                # the reviewer draws the regions by hand on the same screen,
-                # which works today. Silently analysing the criteria PDF's
-                # own geometry instead would produce a profile bound to a
-                # page layout no submission has, and every later crop would
-                # be taken from the wrong coordinates.
+                # Deriving the layout from the answers instead is what Issue
+                # #105 added, and it is now the normal path: `PUT
+                # /answer-layout` + `/answer-layout/detect` take the page
+                # geometry from a real answer sheet, which every test has.
+                # This endpoint stays for tests that *do* carry a
+                # reference PDF (migration 0015 gives every pre-Issue-#101
+                # test one), and says where to go otherwise.
+                #
+                # Silently analysing the criteria PDF's own geometry instead
+                # would produce a profile bound to a page layout no
+                # submission has, and every later crop would be taken from
+                # the wrong coordinates.
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     detail=(
-                        "自動解析には、回答欄の位置が分かる参考資料 (模範解答PDF など) が"
+                        "この解析には、回答欄の位置が分かる参考資料 (模範解答PDF など) が"
                         "必要です。この教材には登録されていません。"
-                        "領域は画面上で手動で追加してください。"
+                        "回答欄は答案そのものから決めてください。"
+                        "答案を取り込んで「回答欄を自動検出」するか、画面上で手動追加できます。"
                     ),
                 )
             try:
@@ -736,7 +848,7 @@ def build_test_registration_router(
                     ),
                 ) from exc
             except PdfIntakeError as exc:
-                raise _pdf_intake_http_exception(exc) from exc
+                raise _intake_http_exception(exc) from exc
             except DomainError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc
 
@@ -747,12 +859,16 @@ def build_test_registration_router(
             # does (Issue #16 review round 8).
             profile = replace(profile, revision=(existing.revision + 1 if existing else 1))
             profile_store.save(profile)
-        return ProfileResponse.from_domain(profile)
+        return ProfileResponse.from_domain(
+            profile, question_numbers=_question_numbers(uow, test_id)
+        )
 
     @router.get("/tests/{test_id}/profile", response_model=ProfileResponse)
     def get_profile(test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency) -> ProfileResponse:
         _get_test_or_404(uow, test_id)
-        return ProfileResponse.from_domain(_load_profile_or_404(test_id))
+        return ProfileResponse.from_domain(
+            _load_profile_or_404(test_id), question_numbers=_question_numbers(uow, test_id)
+        )
 
     @router.put("/tests/{test_id}/profile", response_model=ProfileResponse)
     def update_profile(
@@ -782,7 +898,9 @@ def build_test_registration_router(
             # `analyze_profile`'s matching comment above.
             updated = replace(updated, revision=existing.revision + 1)
             profile_store.save(updated)
-        return ProfileResponse.from_domain(updated)
+        return ProfileResponse.from_domain(
+            updated, question_numbers=_question_numbers(uow, test_id)
+        )
 
     @router.post("/tests/{test_id}/profile/confirm", response_model=ProfileResponse)
     def confirm_profile(
@@ -824,6 +942,15 @@ def build_test_registration_router(
                 raise HTTPException(
                     422, detail=f"test {test_id!r}'s profile has no regions to confirm"
                 )
+            try:
+                # A detected box nobody attributed to a question would be
+                # dropped in silence by `build_questions_and_rubrics` (which
+                # ignores a label no question claims). Stopping here turns
+                # that silence into something the reviewer can act on:
+                # assign it, or delete it (Issue #105 acceptance 4).
+                ensure_answer_areas_confirmable(profile.regions)
+            except AnswerAreaDetectionError as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
             # Confirming is the single act of human sign-off over the whole
             # current region set (there is no per-region "confirmed"
             # checkbox in the review UI -- `Profile.__post_init__` itself
@@ -859,6 +986,25 @@ def build_test_registration_router(
                     default_scoring_method=test.default_scoring_method,
                     criteria=_confirmed_criteria(test_id),
                 )
+            except CrossPageRegionError as exc:
+                # Measured, not hypothetical: one of the 11 real subjects
+                # prints a single question's answer space across two pages
+                # ("その1"/"その2"). `Question` holds one page and one rect,
+                # so this app genuinely cannot represent that question yet
+                # (docs/answer-area-detection.md; its own Issue). Detection
+                # deliberately reports the areas on *both* pages rather than
+                # dropping half a student's answer -- which means the
+                # reviewer meets this error, and it has to say what is wrong
+                # and what to do, not just restate the invariant.
+                raise HTTPException(
+                    422,
+                    detail=(
+                        f"{exc} —— この設問の回答欄が複数ページにまたがっています。"
+                        "いまは1設問につき1ページ分しか扱えません。"
+                        "どちらか一方のページの回答欄だけを残してから確定してください。"
+                        "残したページの分だけが採点に送られます。"
+                    ),
+                ) from exc
             except DomainError as exc:
                 # `build_questions_and_rubrics` raises `TestRegistrationError`
                 # for a business-rule violation (duplicate number, bad
@@ -894,7 +1040,9 @@ def build_test_registration_router(
             # them, and only the file write needs to succeed the second
             # time.
             profile_store.save(confirmed)
-        return ProfileResponse.from_domain(confirmed)
+        return ProfileResponse.from_domain(
+            confirmed, question_numbers=_question_numbers(uow, test_id)
+        )
 
     @router.post(
         "/tests/{test_id}/complete-registration", response_model=CompleteRegistrationResponse
@@ -960,5 +1108,334 @@ def build_test_registration_router(
             profile_confirmed=profile_confirmed,
             dependency_graph_confirmed=dependency_graph_confirmed,
         )
+
+    # ----------------------------------------------------------------- #
+    # 回答欄 (Issue #105)
+    # ----------------------------------------------------------------- #
+    def _validated_signature(data: bytes) -> FormatSignature:
+        """Parse one uploaded answer sheet in a scratch directory and return
+        the format its pages describe.
+
+        Raises `PdfIntakeError` without touching anything stored: a corrupt or
+        absurdly-sized upload must not destroy the sheet the current answer
+        areas were drawn on, and must not be discovered later by an
+        out-of-memory render inside `/detect`.
+        """
+        with tempfile.TemporaryDirectory(prefix="auto-scoring-answer-layout-") as scratch_dir:
+            scratch = Path(scratch_dir) / "upload.pdf"
+            scratch.write_bytes(data)
+            # Holds the same `pdfium_lock` every other PDFium call in this
+            # process holds -- see `build_test_registration_router`'s docstring.
+            with lock:
+                try:
+                    page_count = pdf_engine.page_count(scratch)
+                except Exception as exc:
+                    raise PdfCorruptedError(f"could not parse PDF: {exc}") from exc
+                if pdf_engine.is_encrypted(scratch):
+                    raise PdfEncryptedError("the answer sheet PDF is password protected")
+                validate_page_count(page_count, limits)
+                geometries = []
+                for index in range(page_count):
+                    try:
+                        geometry = pdf_engine.page_geometry(scratch, index)
+                    except Exception as exc:
+                        raise PdfCorruptedError(f"could not parse PDF: {exc}") from exc
+                    # A tiny PDF can declare an enormous CropBox; `/detect`
+                    # rasterizes every page at RENDER_SCALE, so an absurd
+                    # declared size is rejected here rather than discovered
+                    # as an out-of-memory crash there.
+                    validate_render_dimensions(
+                        geometry.displayed_width * RENDER_SCALE,
+                        geometry.displayed_height * RENDER_SCALE,
+                        limits,
+                    )
+                    geometries.append(geometry)
+        return FormatSignature(
+            pages=tuple(
+                PageFormat(width_pt=g.displayed_width, height_pt=g.displayed_height)
+                for g in geometries
+            )
+        )
+
+    def _store_answer_layout(test_id: str, data: bytes) -> int:
+        """Commit one answer sheet as this test's layout reference and bring
+        the profile into line with it. Returns how many regions were dropped.
+
+        **The sheet and the profile are one artefact, so they move together.**
+        The profile's regions are coordinates *on this sheet*; swapping the
+        sheet changes what every one of them means. So this runs under the
+        same per-test lock as `/detect` and `PUT /profile`, bumps `revision`
+        (a confirm pinned to a revision reviewed against the *old* sheet is
+        then rejected as stale), and refuses outright once the profile is
+        confirmed -- without which another client could swap the sheet under
+        a reviewer mid-review, or change the sheet a finished test was
+        confirmed against (Issue #105 review round 1, P2).
+
+        It also *creates* the profile when there is none. That is what makes
+        the manual path reachable at all: a test registered without a
+        model-answer PDF has no profile, and with no profile there is no
+        page format to draw a region on -- so "領域を手動追加" had nothing to
+        add to (Issue #105 review round 1, P1). Uploading the sheet is
+        precisely the act of saying which document the coordinates are for.
+        """
+        signature = _validated_signature(data)
+        with _profile_lock(test_id):
+            try:
+                existing: Profile | None = profile_store.load(test_id)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and existing.status is ProfileStatus.CONFIRMED:
+                raise _AnswerLayoutConfirmedError(test_id)
+
+            # Regions on a page the new sheet does not have cannot be
+            # reinterpreted -- but they are reported rather than dropped in
+            # silence, because they were somebody's work.
+            kept = [
+                region
+                for region in (existing.regions if existing else ())
+                if region.page_index < len(signature.pages)
+            ]
+            dropped = (len(existing.regions) if existing else 0) - len(kept)
+
+            store.write_atomic(store.test_answer_layout_pdf_path(test_id), data)
+            profile = Profile.from_candidates(test_id, test_id, signature, kept)
+            profile_store.save(
+                replace(profile, revision=(existing.revision + 1 if existing else 1))
+            )
+        return dropped
+
+    def _answer_layout_response(test_id: str, *, dropped: int = 0) -> AnswerLayoutResponse:
+        path = store.test_answer_layout_pdf_path(test_id)
+        page_count: int | None = None
+        if path.exists():
+            with lock:
+                page_count = pdf_engine.page_count(path)
+        unavailable = getattr(detector, "reason", None)
+        return AnswerLayoutResponse(
+            test_id=test_id,
+            page_count=page_count,
+            detection_available=unavailable is None,
+            detection_unavailable_reason=unavailable,
+            dropped_region_count=dropped,
+        )
+
+    @router.get("/tests/{test_id}/answer-layout", response_model=AnswerLayoutResponse)
+    def get_answer_layout(
+        test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
+    ) -> AnswerLayoutResponse:
+        """Whether a reference answer sheet is stored, and whether detection
+        can run on this host.
+
+        The screen asks this first so it can say *why* the 自動検出 button is
+        disabled -- an unconfigured provider and a missing answer sheet are
+        different problems with different fixes, and the reviewer can draw
+        the boxes by hand in either case.
+        """
+        _get_test_or_404(uow, test_id)
+        try:
+            return _answer_layout_response(test_id)
+        except Exception as exc:
+            # A stored answer sheet that no longer parses must not make the
+            # whole settings screen unopenable; it is re-uploadable.
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"the stored answer sheet could not be read: {type(exc).__name__}",
+            ) from None
+
+    @router.put("/tests/{test_id}/answer-layout", response_model=AnswerLayoutResponse)
+    async def upload_answer_layout(
+        test_id: str,
+        file: UploadFile = File(...),
+        uow: SqlAlchemyUnitOfWork = uow_dependency,
+    ) -> AnswerLayoutResponse:
+        """Store one student's answer sheet as the layout reference for this
+        test (Issue #105).
+
+        ``PUT``, not ``POST``: there is exactly one per test and re-uploading
+        replaces it. Kept separate from ``/detect`` so a provider failure --
+        the common case, since detection is one long multimodal call -- can be
+        retried without asking the reviewer for the file again.
+
+        This is not a submission. It gets no `Submission` row and is never
+        graded; it exists because the boxes have to be drawn on *something*,
+        and a test cannot accept real submissions until they are drawn
+        (`adapters.submission_intake.intake_submission` refuses a test that is
+        not ``ready``).
+
+        Fully validated -- including per-page render size -- *before* it
+        replaces whatever is already stored, in a scratch directory the same
+        way `intake_submission` does it. A corrupt or absurdly-sized upload
+        must not destroy the sheet the current answer areas were drawn on,
+        and must not be discovered later by an out-of-memory render inside
+        `/detect`.
+        """
+        _get_test_or_404(uow, test_id)
+        try:
+            data = await _read_upload_within_limit(file, limits.max_size_bytes)
+            validate_upload_bytes(
+                filename=file.filename or "",
+                declared_mime=file.content_type,
+                data=data,
+                limits=limits,
+            )
+            dropped = await to_thread(_store_answer_layout, test_id, data)
+        except _AnswerLayoutConfirmedError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except PdfIntakeError as exc:
+            raise _intake_http_exception(exc) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"could not save the answer sheet to disk: {exc}",
+            ) from exc
+        return _answer_layout_response(test_id, dropped=dropped)
+
+    @router.get(
+        "/tests/{test_id}/answer-layout/pdf",
+        response_class=Response,
+        responses={
+            200: {
+                "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}},
+                "description": "The reference answer sheet this test's answer areas are drawn on.",
+            }
+        },
+    )
+    def get_answer_layout_pdf(test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency) -> Response:
+        """The stored answer sheet's bytes, for the overlay editor to draw on.
+
+        Returned as a PDF rather than page images: the app already renders
+        PDFs with `pdfrx` and places normalized overlays on them
+        (`features/pdf_review`), so serving pictures would mean a second
+        rendering path and a second set of coordinate bugs.
+        """
+        _get_test_or_404(uow, test_id)
+        path = store.test_answer_layout_pdf_path(test_id)
+        if not path.exists():
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                detail=f"test {test_id!r} has no answer sheet uploaded yet",
+            )
+        return Response(content=store.read_bytes(path), media_type="application/pdf")
+
+    @router.post("/tests/{test_id}/answer-layout/detect", response_model=ProfileResponse)
+    def detect_answer_areas(
+        test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
+    ) -> ProfileResponse:
+        """Detect this test's answer areas on the stored answer sheet and save
+        them as DRAFT profile regions (Issue #105).
+
+        Safe to call again -- like `analyze_profile`, it overwrites whatever
+        DRAFT profile was there and bumps `revision` so a confirm pinned to
+        the previous one is rejected. Refused once the profile is confirmed.
+
+        **Every page goes to the provider, once per test.** Grading sends one
+        cropped answer per question per submission; this sends whole pages,
+        and only here (simplified-design-specification.md §26.1.1). Whatever
+        is printed or handwritten on those pages goes with them.
+        """
+        _get_test_or_404(uow, test_id)
+        numbers = _question_numbers(uow, test_id)
+        if not numbers:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=(
+                    f"test {test_id!r} has no confirmed questions yet; confirm its 配点と採点基準 "
+                    "first, so each detected answer area can be assigned to one of them"
+                ),
+            )
+        source = store.test_answer_layout_pdf_path(test_id)
+        if not source.exists():
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"test {test_id!r} has no answer sheet to detect answer areas on",
+            )
+
+        # Serializes against `analyze_profile`/`update_profile`/
+        # `confirm_profile` for this same test -- see `_profile_lock`.
+        with _profile_lock(test_id):
+            try:
+                existing: Profile | None = profile_store.load(test_id)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None and existing.status is ProfileStatus.CONFIRMED:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"test {test_id!r}'s profile is already confirmed and cannot be re-detected"
+                    ),
+                )
+
+            try:
+                # Same `pdfium_lock` the rest of this router and the intake
+                # pipeline use: pypdfium2 is not safe to call concurrently
+                # from several threads of one process.
+                # Every page, at the same rasterization scale the answer-area
+                # crop itself uses -- so what the model is shown and what the
+                # grader will later be sent come from one rendering, not two.
+                # Size/encryption/page-count were all checked at upload.
+                with lock:
+                    page_count = pdf_engine.page_count(source)
+                    geometries = [
+                        pdf_engine.page_geometry(source, index) for index in range(page_count)
+                    ]
+                    page_images = tuple(
+                        pdf_engine.render_page_png(source, index, scale=RENDER_SCALE)
+                        for index in range(page_count)
+                    )
+            except Exception as exc:
+                raise HTTPException(
+                    422, detail=f"could not read the stored answer sheet: {type(exc).__name__}"
+                ) from None
+
+            signature = FormatSignature(
+                pages=tuple(
+                    PageFormat(width_pt=g.displayed_width, height_pt=g.displayed_height)
+                    for g in geometries
+                )
+            )
+
+            try:
+                output = detector.detect(
+                    AnswerAreaDetectionRequest(
+                        page_images=page_images, question_numbers=tuple(numbers)
+                    )
+                )
+            except SchemaViolation as exc:
+                # Nothing is saved. A partial region set looks exactly like a
+                # complete one on the overlay, so half a detection is worse
+                # than none (Issue #105 acceptance 5).
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
+            except ProviderUnavailable as exc:
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+            except AnswerAreaDetectionError as exc:
+                # `UnconfiguredAnswerAreaDetector`, or a request this host
+                # could not even build. Its message names configuration
+                # variables only.
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
+
+            # A profile whose signature describes a *different* document (a
+            # legacy one built from the model-answer PDF, before Issue #105)
+            # holds regions whose coordinates mean nothing on this answer
+            # sheet, so it is replaced outright rather than partly carried
+            # over. When the signature matches, the reviewer's own non-
+            # answer-area regions survive re-running detection -- which is a
+            # normal thing to do after a provider failure.
+            carried = (
+                existing.regions
+                if existing is not None and existing.signature.matches(signature)
+                else ()
+            )
+            try:
+                profile = Profile.from_candidates(
+                    test_id,
+                    test_id,
+                    signature,
+                    regions_from_detection(output, existing_regions=carried),
+                )
+            except ValueError as exc:
+                raise HTTPException(422, detail=str(exc)) from exc
+            profile = replace(profile, revision=(existing.revision + 1 if existing else 1))
+            profile_store.save(profile)
+        return ProfileResponse.from_domain(profile, question_numbers=numbers)
 
     return router

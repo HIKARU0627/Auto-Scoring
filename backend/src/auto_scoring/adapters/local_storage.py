@@ -154,6 +154,26 @@ class LocalFileStore:
         """
         return self._resolve(*stored_path.split("/"))
 
+    def test_answer_layout_pdf_path(self, test_id: str) -> Path:
+        """The reference student answer sheet a test's answer areas were laid
+        out against (Issue #105).
+
+        One per test, deliberately: the reviewer picks a single representative
+        answer, confirms the boxes on it, and every later submission of the
+        same format is cropped with those same coordinates -- so this file's
+        only job is to be the page the overlay editor draws on, and to be
+        re-detectable against without asking for the file again after a
+        provider failure.
+
+        Stored under the *test*, not the submissions tree, because it is not a
+        submission: it is never graded, never gets a `Submission` row, and can
+        be uploaded while the test is still `draft` -- which it has to be,
+        since `adapters.submission_intake.intake_submission` refuses a test
+        that is not `ready` and a test cannot become `ready` until these
+        boxes exist.
+        """
+        return self._resolve("tests", test_id, "answer-layout.pdf")
+
     def submission_dir(self, submission_id: str) -> Path:
         return self._resolve("submissions", submission_id)
 

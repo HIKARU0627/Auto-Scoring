@@ -130,6 +130,20 @@ Future<CriteriaResponse> _unavailableConfirmCriteria(
   required int revision,
 }) async => _unavailable();
 
+Future<AnswerLayoutResponse> _unavailableGetAnswerLayout(String testId) async =>
+    _unavailable();
+
+Future<AnswerLayoutResponse> _unavailableUploadAnswerLayout(
+  String testId, {
+  required String filePath,
+}) async => _unavailable();
+
+Future<Uint8List> _unavailableGetAnswerLayoutPdf(String testId) async =>
+    _unavailable();
+
+Future<ProfileResponse> _unavailableDetectAnswerAreas(String testId) async =>
+    _unavailable();
+
 Future<ProfileResponse> _unavailableConfirmProfile(
   String testId, {
   required int revision,
@@ -399,6 +413,25 @@ typedef UpdateCriteria =
 typedef ConfirmCriteria =
     Future<CriteriaResponse> Function(String testId, {required int revision});
 
+/// Whether a test has a reference answer sheet stored, and whether
+/// answer-area detection can run on this machine (Issue #105).
+typedef GetAnswerLayout = Future<AnswerLayoutResponse> Function(String testId);
+
+/// Stores one student's answer sheet as a test's layout reference,
+/// replacing any previous one.
+typedef UploadAnswerLayout =
+    Future<AnswerLayoutResponse> Function(
+      String testId, {
+      required String filePath,
+    });
+
+/// A test's stored answer sheet as PDF bytes, for the overlay editor.
+typedef GetAnswerLayoutPdf = Future<Uint8List> Function(String testId);
+
+/// Detects a test's answer areas on its stored answer sheet and saves them
+/// as DRAFT profile regions. Safe to call again.
+typedef DetectAnswerAreas = Future<ProfileResponse> Function(String testId);
+
 /// The final registration gate: moves a test from `draft` to `ready` once
 /// both the profile and the dependency graph are confirmed.
 typedef CompleteRegistration =
@@ -631,6 +664,10 @@ class AppDependencies {
     this.getCriteria = _unavailableGetCriteria,
     this.updateCriteria = _unavailableUpdateCriteria,
     this.confirmCriteria = _unavailableConfirmCriteria,
+    this.getAnswerLayout = _unavailableGetAnswerLayout,
+    this.uploadAnswerLayout = _unavailableUploadAnswerLayout,
+    this.getAnswerLayoutPdf = _unavailableGetAnswerLayoutPdf,
+    this.detectAnswerAreas = _unavailableDetectAnswerAreas,
     this.completeRegistration = _unavailableCompleteRegistration,
     this.analyzeDependencyGraph = _unavailableAnalyzeDependencyGraph,
     this.getDependencyGraph = _unavailableGetDependencyGraph,
@@ -693,6 +730,10 @@ class AppDependencies {
       getCriteria = client.getCriteria,
       updateCriteria = client.updateCriteria,
       confirmCriteria = client.confirmCriteria,
+      getAnswerLayout = client.getAnswerLayout,
+      uploadAnswerLayout = client.uploadAnswerLayout,
+      getAnswerLayoutPdf = client.getAnswerLayoutPdf,
+      detectAnswerAreas = client.detectAnswerAreas,
       completeRegistration = client.completeRegistration,
       analyzeDependencyGraph = client.analyzeDependencyGraph,
       getDependencyGraph = client.getDependencyGraph,
@@ -748,6 +789,10 @@ class AppDependencies {
   final GetCriteria getCriteria;
   final UpdateCriteria updateCriteria;
   final ConfirmCriteria confirmCriteria;
+  final GetAnswerLayout getAnswerLayout;
+  final UploadAnswerLayout uploadAnswerLayout;
+  final GetAnswerLayoutPdf getAnswerLayoutPdf;
+  final DetectAnswerAreas detectAnswerAreas;
   final CompleteRegistration completeRegistration;
   final AnalyzeDependencyGraph analyzeDependencyGraph;
   final GetDependencyGraph getDependencyGraph;

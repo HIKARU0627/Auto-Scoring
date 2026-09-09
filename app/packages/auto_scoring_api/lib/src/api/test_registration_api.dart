@@ -8,7 +8,9 @@ import 'package:built_value/json_object.dart';
 import 'package:built_value/serializer.dart';
 import 'package:dio/dio.dart';
 
+import 'dart:typed_data';
 import 'package:auto_scoring_api/src/api_util.dart';
+import 'package:auto_scoring_api/src/model/answer_layout_response.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
 import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
@@ -592,6 +594,259 @@ class TestRegistrationApi {
     return _response;
   }
 
+  /// Detect Answer Areas
+  /// Detect this test&#39;s answer areas on the stored answer sheet and save them as DRAFT profile regions (Issue #105).  Safe to call again -- like &#x60;analyze_profile&#x60;, it overwrites whatever DRAFT profile was there and bumps &#x60;revision&#x60; so a confirm pinned to the previous one is rejected. Refused once the profile is confirmed.  **Every page goes to the provider, once per test.** Grading sends one cropped answer per question per submission; this sends whole pages, and only here (simplified-design-specification.md §26.1.1). Whatever is printed or handwritten on those pages goes with them.
+  ///
+  /// Parameters:
+  /// * [testId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ProfileResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ProfileResponse>>
+      detectAnswerAreasTestsTestIdAnswerLayoutDetectPost({
+    required String testId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/tests/{test_id}/answer-layout/detect'.replaceAll(
+        '{' r'test_id' '}',
+        encodeQueryParameter(_serializers, testId, const FullType(String))
+            .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ProfileResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ProfileResponse),
+            ) as ProfileResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ProfileResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Get Answer Layout Pdf
+  /// The stored answer sheet&#39;s bytes, for the overlay editor to draw on.  Returned as a PDF rather than page images: the app already renders PDFs with &#x60;pdfrx&#x60; and places normalized overlays on them (&#x60;features/pdf_review&#x60;), so serving pictures would mean a second rendering path and a second set of coordinate bugs.
+  ///
+  /// Parameters:
+  /// * [testId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [Uint8List] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<Uint8List>> getAnswerLayoutPdfTestsTestIdAnswerLayoutPdfGet({
+    required String testId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/tests/{test_id}/answer-layout/pdf'.replaceAll(
+        '{' r'test_id' '}',
+        encodeQueryParameter(_serializers, testId, const FullType(String))
+            .toString());
+    final _options = Options(
+      method: r'GET',
+      responseType: ResponseType.bytes,
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    Uint8List? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null ? null : rawResponse as Uint8List;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<Uint8List>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Get Answer Layout
+  /// Whether a reference answer sheet is stored, and whether detection can run on this host.  The screen asks this first so it can say *why* the 自動検出 button is disabled -- an unconfigured provider and a missing answer sheet are different problems with different fixes, and the reviewer can draw the boxes by hand in either case.
+  ///
+  /// Parameters:
+  /// * [testId]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [AnswerLayoutResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<AnswerLayoutResponse>>
+      getAnswerLayoutTestsTestIdAnswerLayoutGet({
+    required String testId,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/tests/{test_id}/answer-layout'.replaceAll(
+        '{' r'test_id' '}',
+        encodeQueryParameter(_serializers, testId, const FullType(String))
+            .toString());
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    AnswerLayoutResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(AnswerLayoutResponse),
+            ) as AnswerLayoutResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<AnswerLayoutResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
   /// Get Profile
   ///
   ///
@@ -1027,6 +1282,114 @@ class TestRegistrationApi {
     }
 
     return Response<ProfileResponse>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Upload Answer Layout
+  /// Store one student&#39;s answer sheet as the layout reference for this test (Issue #105).  &#x60;&#x60;PUT&#x60;&#x60;, not &#x60;&#x60;POST&#x60;&#x60;: there is exactly one per test and re-uploading replaces it. Kept separate from &#x60;&#x60;/detect&#x60;&#x60; so a provider failure -- the common case, since detection is one long multimodal call -- can be retried without asking the reviewer for the file again.  This is not a submission. It gets no &#x60;Submission&#x60; row and is never graded; it exists because the boxes have to be drawn on *something*, and a test cannot accept real submissions until they are drawn (&#x60;adapters.submission_intake.intake_submission&#x60; refuses a test that is not &#x60;&#x60;ready&#x60;&#x60;).  Fully validated -- including per-page render size -- *before* it replaces whatever is already stored, in a scratch directory the same way &#x60;intake_submission&#x60; does it. A corrupt or absurdly-sized upload must not destroy the sheet the current answer areas were drawn on, and must not be discovered later by an out-of-memory render inside &#x60;/detect&#x60;.
+  ///
+  /// Parameters:
+  /// * [testId]
+  /// * [file]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [AnswerLayoutResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<AnswerLayoutResponse>>
+      uploadAnswerLayoutTestsTestIdAnswerLayoutPut({
+    required String testId,
+    required MultipartFile file,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/tests/{test_id}/answer-layout'.replaceAll(
+        '{' r'test_id' '}',
+        encodeQueryParameter(_serializers, testId, const FullType(String))
+            .toString());
+    final _options = Options(
+      method: r'PUT',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'multipart/form-data',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      _bodyData = FormData.fromMap(<String, dynamic>{
+        r'file': file,
+      });
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    AnswerLayoutResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(AnswerLayoutResponse),
+            ) as AnswerLayoutResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<AnswerLayoutResponse>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

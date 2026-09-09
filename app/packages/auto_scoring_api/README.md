@@ -117,11 +117,15 @@ Class | Method | HTTP request | Description
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**confirmProfileTestsTestIdProfileConfirmPost**](doc/TestRegistrationApi.md#confirmprofileteststestidprofileconfirmpost) | **POST** /tests/{test_id}/profile/confirm | Confirm Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**createTestTestsPost**](doc/TestRegistrationApi.md#createtesttestspost) | **POST** /tests | Create Test
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**deleteTestTestsTestIdDelete**](doc/TestRegistrationApi.md#deletetestteststestiddelete) | **DELETE** /tests/{test_id} | Delete Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**detectAnswerAreasTestsTestIdAnswerLayoutDetectPost**](doc/TestRegistrationApi.md#detectanswerareasteststestidanswerlayoutdetectpost) | **POST** /tests/{test_id}/answer-layout/detect | Detect Answer Areas
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getAnswerLayoutPdfTestsTestIdAnswerLayoutPdfGet**](doc/TestRegistrationApi.md#getanswerlayoutpdfteststestidanswerlayoutpdfget) | **GET** /tests/{test_id}/answer-layout/pdf | Get Answer Layout Pdf
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getAnswerLayoutTestsTestIdAnswerLayoutGet**](doc/TestRegistrationApi.md#getanswerlayoutteststestidanswerlayoutget) | **GET** /tests/{test_id}/answer-layout | Get Answer Layout
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getProfileTestsTestIdProfileGet**](doc/TestRegistrationApi.md#getprofileteststestidprofileget) | **GET** /tests/{test_id}/profile | Get Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getTestTestsTestIdGet**](doc/TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listMaterialsTestsTestIdMaterialsGet**](doc/TestRegistrationApi.md#listmaterialsteststestidmaterialsget) | **GET** /tests/{test_id}/materials | List Materials
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listTestRegistrationsTestRegistrationsGet**](doc/TestRegistrationApi.md#listtestregistrationstestregistrationsget) | **GET** /test-registrations | List Test Registrations
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**updateProfileTestsTestIdProfilePut**](doc/TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**uploadAnswerLayoutTestsTestIdAnswerLayoutPut**](doc/TestRegistrationApi.md#uploadanswerlayoutteststestidanswerlayoutput) | **PUT** /tests/{test_id}/answer-layout | Upload Answer Layout
 
 
 ## Documentation For Models
@@ -129,6 +133,7 @@ Class | Method | HTTP request | Description
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
  - [AnnotationEditRequest](doc/AnnotationEditRequest.md)
  - [AnnotationResponse](doc/AnnotationResponse.md)
+ - [AnswerLayoutResponse](doc/AnswerLayoutResponse.md)
  - [ApproveReviewRequest](doc/ApproveReviewRequest.md)
  - [AttributionProposalResponse](doc/AttributionProposalResponse.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)

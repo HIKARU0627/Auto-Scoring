@@ -123,3 +123,27 @@ def test_region_from_dict_defaults_text_to_none_for_pre_issue_16_data() -> None:
     data = region.to_dict()
     del data["text"]
     assert Region.from_dict(data).text is None
+
+
+def test_a_profile_rejects_two_regions_sharing_an_id() -> None:
+    """A region id is how everything downstream addresses one region -- the
+    review screen selects by it, the 回答欄 editor opens its numeric dialog by
+    it, and `PUT /profile` sends edits back keyed on it (Issue #105).
+
+    Two regions with one id means an edit lands on whichever is found first
+    while the other silently keeps its old value. `PUT /profile` accepts
+    whatever a client sends, so the invariant has to live here.
+    """
+    with pytest.raises(ValueError, match="distinct ids"):
+        Profile.from_candidates(
+            "p1", "t1", _SIGNATURE, [_region("q1"), replace(_region("q1"), label="Q2")]
+        )
+
+
+def test_a_profile_rejects_a_duplicate_id_at_confirm_time_too() -> None:
+    """`confirm` replaces the whole region set with a reviewer-supplied one,
+    so it is a second way in and needs the same guarantee.
+    """
+    draft = Profile.from_candidates("p1", "t1", _SIGNATURE, [_region("q1")])
+    with pytest.raises(ValueError, match="distinct ids"):
+        draft.confirm([_region("q1", confirmed=True), _region("q1", confirmed=True)])

@@ -20,6 +20,7 @@ import 'package:http_parser/http_parser.dart';
 export 'package:auto_scoring_api/auto_scoring_api.dart'
     show
         AnnotationEditRequest,
+        AnswerLayoutResponse,
         AttributionProposalResponse,
         ClassificationAvailabilityResponse,
         ClassificationEstimateModel,
@@ -988,6 +989,112 @@ class SidecarApiClient {
           .confirmCriteriaTestsTestIdCriteriaConfirmPost(
             testId: testId,
             confirmCriteriaRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Whether [testId] has a reference answer sheet stored, and whether
+  /// answer-area detection can run on this machine at all (Issue #105).
+  ///
+  /// The 回答欄 panel asks this before it draws anything: "no sheet uploaded"
+  /// and "no image-capable provider configured" are different problems with
+  /// different fixes, and in both cases the reviewer can still draw the boxes
+  /// by hand.
+  Future<AnswerLayoutResponse> getAnswerLayout(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .getAnswerLayoutTestsTestIdAnswerLayoutGet(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Store one student's answer sheet as [testId]'s layout reference,
+  /// replacing any previous one (Issue #105).
+  ///
+  /// Uses the longer intake timeout for the same reason [createTest] does:
+  /// the sidecar validates every page's geometry behind the shared PDFium
+  /// lock before it answers.
+  Future<AnswerLayoutResponse> uploadAnswerLayout(
+    String testId, {
+    required String filePath,
+    CancelToken? cancelToken,
+  }) async {
+    final MultipartFile file;
+    try {
+      // Explicit contentType for the same reason [createSubmission] gives:
+      // the sidecar rejects any declared type other than application/pdf, and
+      // MultipartFile defaults to application/octet-stream.
+      file = await MultipartFile.fromFile(
+        filePath,
+        contentType: MediaType('application', 'pdf'),
+      );
+    } catch (error) {
+      throw SidecarApiException(
+        SidecarErrorKind.unknown,
+        'could not read the selected file: $error',
+      );
+    }
+    try {
+      final response = await _uploadTestRegistrationApi
+          .uploadAnswerLayoutTestsTestIdAnswerLayoutPut(
+            testId: testId,
+            file: file,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// [testId]'s stored answer sheet as PDF bytes, for the `pdfrx` viewer the
+  /// 回答欄 overlay editor draws on. Throws [SidecarApiException] (404) when
+  /// no sheet has been uploaded.
+  Future<Uint8List> getAnswerLayoutPdf(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _testRegistrationApi
+          .getAnswerLayoutPdfTestsTestIdAnswerLayoutPdfGet(
+            testId: testId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Detect [testId]'s answer areas on its stored answer sheet and save them
+  /// as DRAFT profile regions (Issue #105). Safe to call again; throws
+  /// [SidecarApiException] (409) when the profile is already confirmed, when
+  /// no sheet is stored, or when the test has no confirmed questions to
+  /// assign areas to.
+  ///
+  /// Uses the longer intake timeout: this is one multimodal call carrying
+  /// every page of the sheet, and the sidecar renders those pages behind the
+  /// shared PDFium lock before it even starts.
+  Future<ProfileResponse> detectAnswerAreas(
+    String testId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _uploadTestRegistrationApi
+          .detectAnswerAreasTestsTestIdAnswerLayoutDetectPost(
+            testId: testId,
             cancelToken: cancelToken,
           );
       return _requireBody(response);

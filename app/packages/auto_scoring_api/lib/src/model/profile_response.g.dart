@@ -10,6 +10,8 @@ class _$ProfileResponse extends ProfileResponse {
   @override
   final BuiltList<PageFormatModel> pages;
   @override
+  final BuiltList<String> questionNumbers;
+  @override
   final BuiltList<RegionModel> regions;
   @override
   final int revision;
@@ -17,16 +19,23 @@ class _$ProfileResponse extends ProfileResponse {
   final String status;
   @override
   final String testId;
+  @override
+  final BuiltList<String> unassignedRegionIds;
+  @override
+  final BuiltList<String> undetectedQuestionNumbers;
 
   factory _$ProfileResponse([void Function(ProfileResponseBuilder)? updates]) =>
       (ProfileResponseBuilder()..update(updates))._build();
 
   _$ProfileResponse._(
       {required this.pages,
+      required this.questionNumbers,
       required this.regions,
       required this.revision,
       required this.status,
-      required this.testId})
+      required this.testId,
+      required this.unassignedRegionIds,
+      required this.undetectedQuestionNumbers})
       : super._();
   @override
   ProfileResponse rebuild(void Function(ProfileResponseBuilder) updates) =>
@@ -40,20 +49,26 @@ class _$ProfileResponse extends ProfileResponse {
     if (identical(other, this)) return true;
     return other is ProfileResponse &&
         pages == other.pages &&
+        questionNumbers == other.questionNumbers &&
         regions == other.regions &&
         revision == other.revision &&
         status == other.status &&
-        testId == other.testId;
+        testId == other.testId &&
+        unassignedRegionIds == other.unassignedRegionIds &&
+        undetectedQuestionNumbers == other.undetectedQuestionNumbers;
   }
 
   @override
   int get hashCode {
     var _$hash = 0;
     _$hash = $jc(_$hash, pages.hashCode);
+    _$hash = $jc(_$hash, questionNumbers.hashCode);
     _$hash = $jc(_$hash, regions.hashCode);
     _$hash = $jc(_$hash, revision.hashCode);
     _$hash = $jc(_$hash, status.hashCode);
     _$hash = $jc(_$hash, testId.hashCode);
+    _$hash = $jc(_$hash, unassignedRegionIds.hashCode);
+    _$hash = $jc(_$hash, undetectedQuestionNumbers.hashCode);
     _$hash = $jf(_$hash);
     return _$hash;
   }
@@ -62,10 +77,13 @@ class _$ProfileResponse extends ProfileResponse {
   String toString() {
     return (newBuiltValueToStringHelper(r'ProfileResponse')
           ..add('pages', pages)
+          ..add('questionNumbers', questionNumbers)
           ..add('regions', regions)
           ..add('revision', revision)
           ..add('status', status)
-          ..add('testId', testId))
+          ..add('testId', testId)
+          ..add('unassignedRegionIds', unassignedRegionIds)
+          ..add('undetectedQuestionNumbers', undetectedQuestionNumbers))
         .toString();
   }
 }
@@ -78,6 +96,12 @@ class ProfileResponseBuilder
   ListBuilder<PageFormatModel> get pages =>
       _$this._pages ??= ListBuilder<PageFormatModel>();
   set pages(ListBuilder<PageFormatModel>? pages) => _$this._pages = pages;
+
+  ListBuilder<String>? _questionNumbers;
+  ListBuilder<String> get questionNumbers =>
+      _$this._questionNumbers ??= ListBuilder<String>();
+  set questionNumbers(ListBuilder<String>? questionNumbers) =>
+      _$this._questionNumbers = questionNumbers;
 
   ListBuilder<RegionModel>? _regions;
   ListBuilder<RegionModel> get regions =>
@@ -96,6 +120,19 @@ class ProfileResponseBuilder
   String? get testId => _$this._testId;
   set testId(String? testId) => _$this._testId = testId;
 
+  ListBuilder<String>? _unassignedRegionIds;
+  ListBuilder<String> get unassignedRegionIds =>
+      _$this._unassignedRegionIds ??= ListBuilder<String>();
+  set unassignedRegionIds(ListBuilder<String>? unassignedRegionIds) =>
+      _$this._unassignedRegionIds = unassignedRegionIds;
+
+  ListBuilder<String>? _undetectedQuestionNumbers;
+  ListBuilder<String> get undetectedQuestionNumbers =>
+      _$this._undetectedQuestionNumbers ??= ListBuilder<String>();
+  set undetectedQuestionNumbers(
+          ListBuilder<String>? undetectedQuestionNumbers) =>
+      _$this._undetectedQuestionNumbers = undetectedQuestionNumbers;
+
   ProfileResponseBuilder() {
     ProfileResponse._defaults(this);
   }
@@ -104,10 +141,13 @@ class ProfileResponseBuilder
     final $v = _$v;
     if ($v != null) {
       _pages = $v.pages.toBuilder();
+      _questionNumbers = $v.questionNumbers.toBuilder();
       _regions = $v.regions.toBuilder();
       _revision = $v.revision;
       _status = $v.status;
       _testId = $v.testId;
+      _unassignedRegionIds = $v.unassignedRegionIds.toBuilder();
+      _undetectedQuestionNumbers = $v.undetectedQuestionNumbers.toBuilder();
       _$v = null;
     }
     return this;
@@ -132,6 +172,7 @@ class ProfileResponseBuilder
       _$result = _$v ??
           _$ProfileResponse._(
             pages: pages.build(),
+            questionNumbers: questionNumbers.build(),
             regions: regions.build(),
             revision: BuiltValueNullFieldError.checkNotNull(
                 revision, r'ProfileResponse', 'revision'),
@@ -139,14 +180,23 @@ class ProfileResponseBuilder
                 status, r'ProfileResponse', 'status'),
             testId: BuiltValueNullFieldError.checkNotNull(
                 testId, r'ProfileResponse', 'testId'),
+            unassignedRegionIds: unassignedRegionIds.build(),
+            undetectedQuestionNumbers: undetectedQuestionNumbers.build(),
           );
     } catch (_) {
       late String _$failedField;
       try {
         _$failedField = 'pages';
         pages.build();
+        _$failedField = 'questionNumbers';
+        questionNumbers.build();
         _$failedField = 'regions';
         regions.build();
+
+        _$failedField = 'unassignedRegionIds';
+        unassignedRegionIds.build();
+        _$failedField = 'undetectedQuestionNumbers';
+        undetectedQuestionNumbers.build();
       } catch (e) {
         throw BuiltValueNestedFieldError(
             r'ProfileResponse', _$failedField, e.toString());

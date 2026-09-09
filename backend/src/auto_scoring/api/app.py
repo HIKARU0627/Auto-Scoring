@@ -20,6 +20,10 @@ from auto_scoring import __version__
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_classification.factory import create_material_classifier
 from auto_scoring.adapters.ai_grading.factory import AIProviderConfigError, create_ai_provider
+from auto_scoring.adapters.answer_area_detection.factory import (
+    AnswerAreaDetectorConfigError,
+    create_answer_area_detector,
+)
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.criteria_extraction.factory import (
     CriteriaExtractorConfigError,
@@ -57,6 +61,10 @@ from auto_scoring.api.test_registration_router import build_test_registration_ro
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.db.migrator import upgrade
 from auto_scoring.domain.ai_provider import AIProvider
+from auto_scoring.domain.answer_area_detection import (
+    AnswerAreaDetector,
+    UnconfiguredAnswerAreaDetector,
+)
 from auto_scoring.domain.criteria_extraction import CriteriaExtractor
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.job_execution import JobProcessor
@@ -289,6 +297,53 @@ def build_criteria_extractor(
     return UnconfiguredCriteriaExtractor(redact(reason, configuration_secrets(env)))
 
 
+#: How `build_answer_area_detector` reaches the detection adapter. Injected
+#: for the same reason `AIProviderFactory` is: the real factory probes this
+#: host for ADC credentials, and a test must be able to say which world it is
+#: in rather than inherit the machine's.
+AnswerAreaDetectorFactory = Callable[[Mapping[str, str]], AnswerAreaDetector]
+
+#: What a caller that injected no detector gets. Not reachable from the
+#: sidecar (which always passes `build_answer_area_detector`'s result); it is
+#: what a test or a schema export sees, and it says so rather than claiming
+#: anything about this host.
+_NO_DETECTOR_INJECTED = "no answer-area detector was supplied to create_app()"
+
+
+def build_answer_area_detector(
+    env: Mapping[str, str],
+    *,
+    factory: AnswerAreaDetectorFactory = create_answer_area_detector,
+) -> AnswerAreaDetector:
+    """Build the configured detector, degrading to
+    `UnconfiguredAnswerAreaDetector` instead of refusing to start (Issue #105).
+
+    Same shape and same reasoning as `build_ai_provider`: a host with no
+    image-capable provider must still be able to open the テスト設定 screen and
+    draw answer areas by hand -- that is the documented fallback, not an
+    error state -- so a missing provider becomes a reason the screen can show
+    rather than a startup crash.
+
+    Both failure paths keep configuration *values* out of the reason string,
+    which is published by ``GET /tests/{id}/answer-layout`` and shown on
+    screen: `AnswerAreaDetectorConfigError` is required to name variables
+    only (`adapters.answer_area_detection.factory`'s module docstring), and
+    anything else surfaces as its exception type alone, since an adapter
+    constructing itself badly could put anything in its message.
+    """
+    try:
+        return factory(env)
+    except AnswerAreaDetectorConfigError as error:
+        reason = str(error)
+    except Exception as error:
+        reason = f"could not build an answer-area detector: {type(error).__name__}"
+    # `redact` is the same belt-and-braces gate Issue #103 put on its own
+    # published reason: the factory is *required* not to quote a
+    # configuration value, and this makes a lapse in that rule fail closed
+    # rather than end up on screen and in the sidecar log.
+    return UnconfiguredAnswerAreaDetector(redact(reason, configuration_secrets(env)))
+
+
 def create_app(
     *,
     api_token: str | None = None,
@@ -306,6 +361,7 @@ def create_app(
     recognition_settings: RecognitionSettings | None = None,
     ai_provider: AIProvider | None = None,
     criteria_extractor: CriteriaExtractor | None = None,
+    answer_area_detector: AnswerAreaDetector | None = None,
     grading_settings: GradingSettings | None = None,
     export_processor: JobProcessor | None = None,
     material_classifier_factory: ClassifierFactory | None = None,
@@ -772,6 +828,9 @@ def create_app(
             intake_limits=limits,
             pdfium_lock=pdfium_lock,
             locks=test_artifact_locks,
+            answer_area_detector=(
+                answer_area_detector or UnconfiguredAnswerAreaDetector(_NO_DETECTOR_INJECTED)
+            ),
         )
     )
     protected.include_router(

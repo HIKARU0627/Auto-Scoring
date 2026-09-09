@@ -10,6 +10,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnalyzeRequest.serializer)
       ..add(AnnotationEditRequest.serializer)
       ..add(AnnotationResponse.serializer)
+      ..add(AnswerLayoutResponse.serializer)
       ..add(ApproveReviewRequest.serializer)
       ..add(AttributionProposalResponse.serializer)
       ..add(BoundingBoxResponse.serializer)
@@ -155,8 +156,17 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(BuiltList, const [const FullType(PageFormatModel)]),
           () => ListBuilder<PageFormatModel>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
+      ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(RegionModel)]),
           () => ListBuilder<RegionModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(PlannedFileModel)]),
           () => ListBuilder<PlannedFileModel>())
