@@ -213,6 +213,11 @@ env -u GOOGLE_APPLICATION_CREDENTIALS -u OP_SERVICE_ACCOUNT_TOKEN \
 **壊した状態を残さないこと。** 確かめ終えたら `git status` と `git diff` で
 実測してから次へ進む。
 
+**変異させる前にコミットしておくこと。** 戻し方は `git checkout -- <path>` に
+なるが、これは**同じファイルの未コミットの編集ごと消す**。Issue #137 では実際に
+これで実装中の 4 箇所の編集を失った（`git status` にそのファイルが出なくなって
+気付いた）。コミット済みなら、変異は必ず 1 コマンドで正確に戻せる。
+
 ## 新しい公開経路を作ったら、そこへ流れ込むものを全部見直す
 
 Issue #97 は「なぜ採点が使えないかを画面で伝える」ために、`GET /grading/availability`
