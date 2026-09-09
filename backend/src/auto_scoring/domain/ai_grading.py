@@ -33,7 +33,15 @@ Design decisions this schema encodes:
   would fail later at persistence or rendering time.
 * ``comment`` reuses the same character cap as human-confirmed annotation
   comments (``domain.models.MAX_COMMENT_CHARS``,
-  business-rules-and-evaluation-data.md section 2 (6): "全角 120 文字").
+  business-rules-and-evaluation-data.md section 2 (6): "全角 120 文字") --
+  but as a *normalization*, not a rejection. Issue #121: a live run returned
+  complete (``finishReason: STOP``) responses whose score, criterion ids and
+  question id were all correct, and every one of them was discarded because
+  a single annotation comment ran 147 characters. Everything in this schema
+  except comment length says whether the grade can be believed; comment
+  length says only how much of the comment fits, so it is the comment that
+  gives (``domain.models.truncate_comment`` marks the cut). Raising the cap
+  would not have helped: while a cap exists, a response will exceed it.
 * Every model is ``strict=True``: a provider sending ``"score": "4"`` or
   ``"confidence": "0.8"`` (a string standing in for a number) is a schema
   violation, not a value to coerce. Required text fields
@@ -46,13 +54,37 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
-from auto_scoring.domain.models import MAX_COMMENT_CHARS, AnnotationKind, CriterionOutcome
+from auto_scoring.domain.models import AnnotationKind, CriterionOutcome, truncate_comment
 
 #: A required string that must contain more than just whitespace. Plain
 #: ``min_length=1`` accepts ``" "``; this also strips before checking length.
 _NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def _truncated_comment(value: object) -> object:
+    """Cut an over-long comment down to the cap instead of failing the whole
+    response (Issue #121); pass anything that is not a string through
+    untouched so strict-mode type validation still reports it.
+    """
+    if isinstance(value, str):
+        return truncate_comment(value.strip())
+    return value
+
+
+#: A comment field at this untrusted wire boundary: non-blank like any other
+#: required text, but *normalized* to `domain.models.MAX_COMMENT_CHARS`
+#: rather than rejected for exceeding it -- see `_truncated_comment` and the
+#: module docstring's ``comment`` bullet.
+_CommentStr = Annotated[_NonBlankStr, BeforeValidator(_truncated_comment)]
 
 
 class RecognitionOutput(BaseModel):
@@ -121,7 +153,7 @@ class AnnotationCandidate(BaseModel):
 
     target: _NonBlankStr
     type: AnnotationKind
-    comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)] | None = None
+    comment: _CommentStr | None = None
 
     @model_validator(mode="after")
     def _comment_type_requires_comment_text(self) -> AnnotationCandidate:
@@ -143,7 +175,7 @@ class AIGradingResult(BaseModel):
     recognition: RecognitionOutput
     grading: GradingOutput
     criteria: tuple[CriterionResultOutput, ...] = Field(min_length=1)
-    comment: Annotated[_NonBlankStr, Field(max_length=MAX_COMMENT_CHARS)]
+    comment: _CommentStr
     rationale: _NonBlankStr
     annotations: tuple[AnnotationCandidate, ...] = ()
 

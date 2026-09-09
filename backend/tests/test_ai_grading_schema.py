@@ -15,7 +15,7 @@ from auto_scoring.domain.ai_grading import (
     AIGradingResult,
     parse_ai_grading_result,
 )
-from auto_scoring.domain.models import MAX_COMMENT_CHARS
+from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
 
 _VALID: dict[str, object] = {
     "questionId": "q1",
@@ -92,9 +92,62 @@ def test_empty_rationale_is_rejected() -> None:
         _parse({"rationale": ""})
 
 
-def test_comment_over_character_cap_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        _parse({"comment": "あ" * (MAX_COMMENT_CHARS + 1)})
+#: The comment length a live Vertex AI run actually returned for a
+#: long-answer question (Issue #121: 147 and 157 characters, against a cap
+#: of 120). Used verbatim so these tests fix the behaviour at the size that
+#: really occurred, not at an arbitrary cap+1.
+_OVER_CAP_LENGTH = 147
+
+
+def test_over_long_comment_is_truncated_not_rejected() -> None:
+    """Issue #121: a comment over the cap must never cost the grade.
+
+    The live run's failures were complete, ``finishReason: STOP`` responses
+    whose score, criterion ids and question id were all correct -- discarded
+    whole because one comment ran 147 characters. The response is trusted;
+    only its comment is too long, so the comment is what gives.
+    """
+    over_long = "あ" * _OVER_CAP_LENGTH
+    result = _parse({"comment": over_long})
+
+    # The grade itself survives intact -- the whole point of the change.
+    assert result.grading.score == 4
+    assert result.grading.max_score == 5
+    assert result.question_id == "q1"
+    assert result.criteria[0].id == "c1"
+
+    assert len(result.comment) <= MAX_COMMENT_CHARS
+    assert result.comment.endswith(COMMENT_TRUNCATION_MARK)
+    assert over_long.startswith(result.comment.removesuffix(COMMENT_TRUNCATION_MARK))
+
+
+def test_over_long_annotation_comment_is_truncated_not_rejected() -> None:
+    """The field the live run actually failed on: ``annotations.0.comment``
+    (Issue #121's recorded ``loc``), not the top-level ``comment``."""
+    over_long = "い" * _OVER_CAP_LENGTH
+    result = _parse({"annotations": [{"target": "行く", "type": "comment", "comment": over_long}]})
+
+    assert result.grading.score == 4
+    annotation_comment = result.annotations[0].comment
+    assert annotation_comment is not None
+    assert len(annotation_comment) <= MAX_COMMENT_CHARS
+    assert annotation_comment.endswith(COMMENT_TRUNCATION_MARK)
+
+
+def test_comment_at_the_cap_is_left_exactly_as_sent() -> None:
+    """Truncation must not touch a comment that already fits: a response
+    ending in a real ellipsis stays distinguishable from a truncated one
+    only if the mark is never added to text that did not need cutting."""
+    at_cap = "う" * MAX_COMMENT_CHARS
+    assert _parse({"comment": at_cap}).comment == at_cap
+
+
+def test_blank_comment_is_still_rejected() -> None:
+    """Truncating an over-long comment does not weaken the other end: a
+    comment with nothing in it still has nothing to display."""
+    for blank in ("", "   "):
+        with pytest.raises(ValidationError):
+            _parse({"comment": blank})
 
 
 def test_unknown_extra_field_is_rejected_not_ignored() -> None:

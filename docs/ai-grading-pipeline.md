@@ -229,6 +229,46 @@ aiplatform を有効化するのか(403)・`AUTO_SCORING_GEMINI_MODEL` の綴り
 **設問の連鎖**のほうで、経緯と決着は
 [`ocr-recognition-pipeline.md`](./ocr-recognition-pipeline.md) §8 にある。
 
+### 上限を超えた注釈コメントは切り詰める。採点結果は捨てない（Issue #121）
+
+2026-09-09 の実機検証（実データ × 実 Vertex AI）で、AI 採点が恒久失敗した 6 件のうち
+**5 件がこれ**だった。
+
+```
+loc: ('annotations', 0, 'comment')   type: string_too_long
+     String should have at most 120 characters
+```
+
+性質を先に押さえる。**`finishReason` は `STOP`** で、応答は完全な JSON。**点数も
+採点基準 ID も設問 ID も正しい。** 落ちた理由は注釈コメントが 147 字／157 字
+あったこと**だけ**である。Gemini の structured output は schema の形は守るが
+`maxLength` は強制しないので（`poc-2-ai-grading.md` §7.4）、上限は手元でしか効かない。
+そして**記述量の多い設問ほど落ちる**。
+
+**上限を上げても同じことが起きる。** 上限がある限り超える応答は来る。直したのは
+上限の値ではなく、**上限の役割**である。
+
+- `MAX_COMMENT_CHARS`(120、業務ルール §2 (6)) は据え置き。DB の CHECK 制約
+  (`0012` / `0013`) でもあるので、値を動かすのは移行を伴う別の判断になる。
+- `domain/ai_grading.py` の 2 つの `comment` フィールドは、上限超過を**拒否**する
+  代わりに `domain.models.truncate_comment` で**切り詰める**。切った印として
+  末尾に `…` を付ける（PDF 描画側が既に使っている打ち切り記号と同じ文字。
+  `adapters/pdf/pdfium_pypdf_engine.py` の `_ELLIPSIS`）。
+- 切り詰めの対象は**コメントだけ**。点数・基準 ID・設問 ID・`rationale`・
+  `recognition` は 1 文字も触らない。
+
+**これは Issue #97 / PR #100 の「崩れた応答は保存しない」規律の例外ではない。**
+あの規律が捨てるのは**信用できない応答**である。ここで起きていたのは、
+**信用できる応答の付随部分が長い**だけで、応答の信用に関わる項目
+（点数・基準 ID・設問 ID）はすべて正しかった。schema のうち
+「その採点を信じてよいか」を語る項目は今までどおり違反で捨てる。
+コメントの長さが語るのは「コメントが何文字入るか」だけなので、譲るのはコメントの側になる。
+
+プロンプト（`adapters/ai_grading/_prompt.py`）にも上限は書いてあるが、
+**プロンプトだけには頼らない。** 実機はまさにその指示を守らなかった。
+文面は「超えた分は切り捨てられる」に直してある（以前の「reject される」は、
+この変更で嘘になるため）。
+
 ### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
 
 `docs/job-queue.md`が決定した「1 Question = 1 Job（`JobKind.GRADING`）、
@@ -296,6 +336,10 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
 | `SchemaViolation`             | `PERMANENT`     | されない  |
 | 応答の対応不一致（上記手順7） | `PERMANENT`     | されない  |
 | その他の`ProviderUnavailable` | `PERMANENT`     | されない  |
+
+注釈コメントの長さ超過は**この表に現れない**。Issue #121 以降、上限超過は
+`SchemaViolation` ではなく切り詰めになったため、そもそも失敗として分類されない
+（前掲「上限を超えた注釈コメントは切り詰める」）。
 
 「範囲外score」はこの表に現れない -- `ai_grading.GradingOutput`のPydantic
 バリデーション（`score <= max_score`、両方とも`>= 0`）が構造化出力のパース時点
