@@ -1,8 +1,10 @@
 """OCR domain types and the ``OCRProvider`` port.
 
 Framework-free (see ``AGENTS.md`` "Architecture" -- ``api -> domain <- adapters``).
-The concrete provider is chosen by PoC 1 (GitHub Issue #13); until then this
-module only pins the contract every provider must honour:
+The concrete provider is Google Document AI (business-rules-and-evaluation-
+data.md section 3 (A), Issue #81; adapter in
+``auto_scoring.adapters.ocr.document_ai_provider``, Issue #114). This module
+pins only the contract every provider must honour:
 
 * text, per-token bounding boxes, and a confidence value plus a coarse band come
   back together (simplified-design-specification.md section 8.1);
@@ -30,6 +32,38 @@ class ConfidenceBand(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+#: Where :func:`band_for` cuts. **Presentation only** -- never a gate.
+#:
+#: The decision that actually matters (needs_review, and whether a dependent
+#: question is released) is made once, elsewhere, against
+#: `auto_scoring.jobs.recognition_settings.RecognitionSettings.
+#: confidence_threshold` -- business-rules-and-evaluation-data.md section
+#: 3.1 (C): "閾値ハードコードで判定を分岐させない、閾値は設定の単一箇所から
+#: 読む". These two numbers are deliberately *not* that threshold and must
+#: never be compared against a score to decide anything; they only choose
+#: which of design section 8.2's three words to show next to a number the
+#: reviewer can already see. Cutting HIGH at the same 0.80 the default
+#: threshold happens to use would invite exactly the drift that rule exists
+#: to prevent, by making the band look like the gate.
+_HIGH_BAND_MINIMUM = 0.90
+_MEDIUM_BAND_MINIMUM = 0.70
+
+
+def band_for(confidence: float) -> ConfidenceBand:
+    """The coarse band to show alongside ``confidence`` (design section 8.2).
+
+    Lives here, in the domain, rather than in each adapter: it is the one
+    place every `OCRProvider` implementation maps a provider's own score onto
+    this project's three words, so two adapters cannot silently disagree
+    about what "medium" means in the same review screen.
+    """
+    if confidence >= _HIGH_BAND_MINIMUM:
+        return ConfidenceBand.HIGH
+    if confidence >= _MEDIUM_BAND_MINIMUM:
+        return ConfidenceBand.MEDIUM
+    return ConfidenceBand.LOW
 
 
 @dataclass(frozen=True)
@@ -155,6 +189,10 @@ class OCRProvider(Protocol):
     ``auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`` can
     classify the failure for retry purposes
     (``auto_scoring.domain.models.ErrorCategory``).
+
+    :class:`OCRUnavailable` is the one exception that does not mean a failed
+    call: it means this host has no OCR at all, which the same caller treats
+    as "no reading" rather than as an error (Issue #114). See its docstring.
     """
 
     @property
@@ -188,6 +226,36 @@ class OCRServerError(OCRProviderError):
 
 class OCRResponseSchemaError(OCRProviderError):
     """The provider's response could not be parsed into an :class:`OcrResult`."""
+
+
+class OCRUnavailable(OCRProviderError):
+    """This host cannot do OCR at all -- not "this call failed" (Issue #114).
+
+    Distinct from every other member of this hierarchy, which all mean a
+    provider that *exists here* did not answer this one call. This one means
+    there is no provider on this machine: no Document AI processor
+    configured, or no Application Default Credentials to reach it with
+    (`auto_scoring.adapters.ocr.unconfigured_provider.UnconfiguredOCRProvider`).
+    Retrying cannot change that, and neither can a human pressing "resume" on
+    a question.
+
+    It exists because those two are not the same fact and the app must not
+    conflate them (Issue #114 acceptance 8): "the OCR read this answer and
+    was not confident" is a reason to send the question to a human, while
+    "this machine has no OCR" is a reason to carry on without one --
+    simplified-design-specification.md section 24 ("OCR失敗: **採点は止め
+    ない。**... 読み取り結果は「なし」として提示する") and section 8.1.5
+    ("OCRは採点の critical path から外れる").
+
+    `auto_scoring.jobs.recognition_processor.RecognitionJobProcessor` is
+    therefore the one caller that treats this as a *completed* recognition
+    step with no reading, rather than as a failure: it persists no
+    `RecognitionResult` at all, because section 8.1.4 forbids attaching a
+    confidence number to something nothing read ("**読めていないものに数値を
+    与えない**"). A row saying ``confidence=0.0`` -- what the deleted
+    ``NullOCRProvider`` used to write -- is indistinguishable in the review UI
+    from an OCR that looked and found nothing.
+    """
 
 
 def overall_confidence(result: OcrResult) -> float:

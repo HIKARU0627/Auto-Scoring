@@ -78,6 +78,7 @@ from auto_scoring.domain.models import AnnotationKind, CriterionOutcome, JobStat
 from auto_scoring.domain.ocr import (
     BoundingBox,
     ConfidenceBand,
+    OCRProvider,
     OcrResult,
     OCRTimeoutError,
     OcrToken,
@@ -423,7 +424,7 @@ def ai_provider() -> ScriptedAIProvider:
 
 def build_app_client(
     data_root: Path,
-    ocr_provider: ScriptedOCRProvider,
+    ocr_provider: OCRProvider,
     ai_provider: ScriptedAIProvider,
     *,
     max_concurrency: int = _MAX_CONCURRENCY,
@@ -568,7 +569,12 @@ def _regions_for(number: str, page_index: int) -> list[dict[str, object]]:
     ]
 
 
-def register_ready_test(client: TestClient, *, name: str = "理科 第1回") -> str:
+def register_ready_test(
+    client: TestClient,
+    *,
+    name: str = "理科 第1回",
+    edges: list[dict[str, object]] | None = None,
+) -> str:
     """Acceptance scenario 1, through the real endpoints.
 
     Register the criteria PDF (plus a reference PDF, which is what automatic
@@ -621,10 +627,13 @@ def register_ready_test(client: TestClient, *, name: str = "理科 第1回") -> 
     confirmed_graph = client.post(
         f"/tests/{test_id}/dependency-graph/confirm",
         headers=_AUTH,
-        # No edges: the two questions are independent, which is what lets the
-        # queue run them in parallel below. Dependent ordering has its own,
-        # dedicated coverage in `test_e2e_dag_parallelism.py`.
-        json={"version": analyzed_graph.json()["version"], "edges": []},
+        # No edges by default: the two questions are independent, which is
+        # what lets the queue run them in parallel below. Dependent ordering
+        # through the *fake* processor has its own coverage in
+        # `test_e2e_dag_parallelism.py`; ``edges`` exists so a scenario can
+        # drive a real dependency through this real stack instead
+        # (`test_e2e_ocr_unavailable_chain.py`, Issue #114).
+        json={"version": analyzed_graph.json()["version"], "edges": edges or []},
     )
     assert confirmed_graph.status_code == 200, confirmed_graph.text
 

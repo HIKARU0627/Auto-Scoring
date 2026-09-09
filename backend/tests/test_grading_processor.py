@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.local_storage import LocalFileStore
+from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_provider import (
     GradingAnnotationCandidate,
@@ -332,6 +333,76 @@ async def test_low_recognition_confidence_still_grades_but_is_not_usable(
     assert result.outcome is ProcessingOutcome.SUCCEEDED
     assert result.usable is False
     assert len(ai_provider.calls) == 1  # grading was still attempted
+
+
+async def test_a_host_with_no_ocr_still_grades_and_still_releases_dependents(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+) -> None:
+    """Issue #114, the shipped composition before this change.
+
+    `api.sidecar` never injected an `ocr_provider`, so every install ran the
+    placeholder: text always empty, Recognition Confidence always 0.0, and
+    therefore ``usable=False`` on every question and every dependent
+    `BLOCKED` until a human pressed /resume on it. Grading itself worked --
+    the provider is multimodal and reads the crop -- which is why the gap
+    survived: scores came out, only the chain stopped.
+
+    What must hold now: grading still runs (with an empty ``ocr_text``, the
+    OCR reading being merely "得られていれば" per design section 8.1.1), and
+    the question comes out usable on the strength of the two confidences
+    that do exist.
+    """
+    recognition = RecognitionJobProcessor(
+        session_factory,
+        store,
+        UnconfiguredOCRProvider("AUTO_SCORING_DOCUMENT_AI_PROCESSOR is not set"),
+    )
+    processor = GradingJobProcessor(session_factory, store, recognition, ai_provider)
+    _seed(session_factory, store)
+    ai_provider.script(_response())
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is True
+    assert ai_provider.calls[0].ocr_text == ""
+    assert ai_provider.calls[0].answer_image == _IMAGE_BYTES
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.grades.history("sub-1", "q-1")) == 1
+        # No OCR row -- only the grader's own reading. That absence is how
+        # "no OCR here" stays distinguishable from "the OCR read it and got
+        # nothing" (Issue #114 acceptance 8).
+        readings = uow.recognitions.history("sub-1", "q-1")
+    assert [reading.id for reading in readings] == [grading_recognition_id(job)]
+
+
+async def test_a_host_with_no_ocr_is_still_gated_by_the_grader_s_own_confidence(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+) -> None:
+    """Dropping the OCR term is not the same as dropping the gate.
+
+    With no OCR reading to compare against, the two remaining checks of
+    design section 8.1.3 -- the grading AI's own reading, and its grading
+    confidence -- are what stands between an unread answer and an
+    auto-released dependent. Both still block.
+    """
+    recognition = RecognitionJobProcessor(
+        session_factory, store, UnconfiguredOCRProvider("not configured")
+    )
+    processor = GradingJobProcessor(session_factory, store, recognition, ai_provider)
+    _seed(session_factory, store)
+    ai_provider.script(_response(recognition_confidence=0.2))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is False
 
 
 async def test_needs_review_answer_image_skips_grading_entirely(

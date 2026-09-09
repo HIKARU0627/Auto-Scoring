@@ -1,15 +1,27 @@
 """Contract every :class:`OCRProvider` implementation must satisfy.
 
-``OCRProviderContract`` is the reusable part: when PoC 1 (Issue #13) promotes a
-real adapter, add a test class that subclasses it and overrides the ``provider``
-and ``unreadable_image`` fixtures. ``_StubOCRProvider`` is test-only scaffolding
-that keeps the contract exercised until then -- it is not an OCR candidate and
-must never move into ``src/`` (Issue #13 promotion condition).
+``OCRProviderContract`` is the reusable part: a real adapter subclasses it and
+overrides the ``provider`` and ``unreadable_image`` fixtures.
+`DocumentAiOCRProvider` (Issue #114) is the shipped one and does exactly that,
+against a `httpx.MockTransport` serving recorded-shape responses -- no
+network, no credentials, so it runs in ordinary CI.
+
+``_StubOCRProvider`` is test-only scaffolding from Issue #13, kept because it
+exercises the contract from a second, deliberately different direction (an
+in-memory provider with no HTTP at all). It is not an OCR candidate and must
+never move into ``src/``.
 """
 
-import pytest
+import base64
+import json
+from typing import Any
 
-from auto_scoring.adapters.ocr.null_provider import NullOCRProvider
+import httpx
+import pytest
+from google.auth.credentials import Credentials
+
+from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ocr.document_ai_provider import DocumentAiOCRProvider
 from auto_scoring.domain.ocr import (
     BoundingBox,
     ConfidenceBand,
@@ -17,6 +29,69 @@ from auto_scoring.domain.ocr import (
     OcrResult,
     OcrToken,
 )
+
+#: A processor resource name shaped like the real thing but pointing nowhere.
+PROCESSOR = "projects/test-project/locations/us/processors/testprocessor"
+
+#: The crop the contract's ``unreadable_image`` fixture sends. Distinct
+#: bytes so the mock transport can answer it differently.
+UNREADABLE_IMAGE = b"\x89PNG\r\n\x1a\nunreadable"
+
+
+class FakeAdcCredentials(Credentials):
+    """ADC credentials that are always valid and never hit the network."""
+
+    def __init__(self) -> None:
+        super().__init__()  # type: ignore[no-untyped-call]
+        self.token = "fake-access-token"
+
+    def refresh(self, request: object) -> None:
+        self.token = "fake-access-token"
+
+
+def fake_tokens() -> AdcTokenSource:
+    return AdcTokenSource(credentials=FakeAdcCredentials(), project_id="test-project")
+
+
+def document_ai_body(text: str, tokens: tuple[tuple[int, int, float], ...]) -> dict[str, Any]:
+    """One ``:process`` response, in Document AI's own shape.
+
+    ``tokens`` is ``(start, end, confidence)`` per token; the boxes are
+    generated so that each token occupies its own horizontal band. Indices
+    are JSON strings and ``startIndex`` is omitted when zero, because that is
+    what Document AI actually sends (int64 fields, and proto3 omits
+    defaults) -- a fixture that pre-normalized those would not exercise the
+    parsing this adapter has to do.
+    """
+    page_tokens = []
+    for index, (start, end, confidence) in enumerate(tokens):
+        top = index / max(len(tokens), 1)
+        anchor: dict[str, Any] = {"endIndex": str(end)}
+        if start:
+            anchor["startIndex"] = str(start)
+        page_tokens.append(
+            {
+                "layout": {
+                    "textAnchor": {"textSegments": [anchor]},
+                    "confidence": confidence,
+                    "boundingPoly": {
+                        "normalizedVertices": [
+                            {"x": 0.1, "y": top},
+                            {"x": 0.9, "y": top},
+                            {"x": 0.9, "y": top + 0.05},
+                            {"x": 0.1, "y": top + 0.05},
+                        ]
+                    },
+                }
+            }
+        )
+    return {"document": {"text": text, "pages": [{"tokens": page_tokens}]}}
+
+
+def document_ai_provider(handler: httpx.MockTransport) -> DocumentAiOCRProvider:
+    return DocumentAiOCRProvider(
+        processor=PROCESSOR, tokens=fake_tokens(), client=httpx.Client(transport=handler)
+    )
 
 
 class OCRProviderContract:
@@ -98,16 +173,31 @@ class TestStubOCRProviderContract(OCRProviderContract):
         return b"unreadable"
 
 
-class TestNullOCRProviderContract(OCRProviderContract):
-    """`NullOCRProvider` (Issue #19) is the real, shipped placeholder
-    adapter until the OCR service decided in business-rules-and-evaluation-
-    data.md section 3 (A) (Google Document AI, Issue #81) has an adapter --
-    it must satisfy the same contract as that one will."""
+class TestDocumentAiOCRProviderContract(OCRProviderContract):
+    """`DocumentAiOCRProvider` (Issue #114) is the shipped adapter for the
+    OCR service business-rules-and-evaluation-data.md section 3 (A) adopted
+    (Google Document AI, Issue #81). It has to satisfy the same contract the
+    stub above does.
 
-    @pytest.fixture
-    def provider(self) -> NullOCRProvider:
-        return NullOCRProvider()
+    The "unreadable" case is a real Document AI shape, not an invented one:
+    a token it read but is not confident about still comes back, with a low
+    ``layout.confidence`` -- which is exactly what `domain.ocr.OcrToken`'s
+    docstring requires an adapter to preserve rather than drop or replace
+    with a guess. The handler branches on the *image it was sent*, which
+    also pins that the adapter sends the caller's bytes and not something
+    else.
+    """
 
     @pytest.fixture
     def unreadable_image(self) -> bytes:
-        return b"anything -- NullOCRProvider never reads the image"
+        return UNREADABLE_IMAGE
+
+    @pytest.fixture
+    def provider(self) -> DocumentAiOCRProvider:
+        def handle(request: httpx.Request) -> httpx.Response:
+            sent = base64.b64decode(json.loads(request.content)["rawDocument"]["content"])
+            if sent == UNREADABLE_IMAGE:
+                return httpx.Response(200, json=document_ai_body("?", ((0, 1, 0.11),)))
+            return httpx.Response(200, json=document_ai_body("光合成", ((0, 3, 0.97),)))
+
+        return document_ai_provider(httpx.MockTransport(handle))

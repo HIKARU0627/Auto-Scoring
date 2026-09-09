@@ -43,6 +43,7 @@ from auto_scoring.domain.grading_context import (
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
 from auto_scoring.domain.models import (
     Annotation,
+    AnswerImageStatus,
     CriterionResult,
     ErrorCategory,
     GradeResult,
@@ -104,14 +105,28 @@ class GradingJobProcessor:
     Grading Confidenceのどちらかが閾値未満ならneeds_reviewにする". A
     dependent question stays `BLOCKED` unless all three hold.
 
+    **On a host with no OCR the first of the three drops out** rather than
+    being failed against a fabricated 0.0 (Issue #114). It has to: this is
+    also the shape of a question whose answer is a formula or a diagram,
+    which design section 8.1.4 says OCR cannot read at all and must not be
+    given a confidence number for. `RecognitionJobProcessor` reports
+    ``usable=True`` there meaning "no OCR term to gate on", so what remains
+    is the grading AI's own reading and its grading confidence -- exactly
+    the substitution business-rules-and-evaluation-data.md section 4.3
+    prescribes ("**OCR テキストとは限らない。**... 採点 AI 自身の読み取りが
+    引き継ぐ対象になる場合がある"). An OCR that *did* read the answer and was
+    not confident still blocks, unchanged: section 4.4 was written for that
+    case, and this leaves it alone.
+
     Grading is skipped -- without ever calling `AIProvider` -- when there is
-    nothing to grade: no answer text at all (the recognition step itself
-    could not run, e.g. an untrusted crop), no registered model answer, or no
-    rubric. These surface as `ProcessingOutcome.FAILED`
-    (`ErrorCategory.PERMANENT`), the same "insufficient setup" treatment
-    `RecognitionJobProcessor` already gives a missing answer image -- a human
-    must register the missing material, not have the AI guess it
-    (AGENTS.md "Verification": "読めない文字や判断不能を推測で補完しない").
+    nothing to grade: an untrusted crop (`AnswerImageStatus.NEEDS_REVIEW` --
+    the image, not the reading, is what cannot be trusted), no registered
+    model answer, or no rubric. The last two surface as
+    `ProcessingOutcome.FAILED` (`ErrorCategory.PERMANENT`), the same
+    "insufficient setup" treatment `RecognitionJobProcessor` already gives a
+    missing answer image -- a human must register the missing material, not
+    have the AI guess it (AGENTS.md "Verification": "読めない文字や判断不能
+    を推測で補完しない").
     """
 
     def __init__(
@@ -140,12 +155,30 @@ class GradingJobProcessor:
         assert question_id is not None  # RecognitionJobProcessor already required this
 
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
-            recognition = uow.recognitions.get(recognition_result_id(job))
-            if recognition is None:
-                # The crop itself could not be trusted (no RecognitionResult
-                # was ever persisted for this attempt) -- there is no answer
-                # text to grade at all.
+            images = uow.answer_images.list_for_submission(job.submission_id)
+            image = find_answer_image(images, question_id)
+            assert image is not None  # the recognition step above already required this
+            if image.status is AnswerImageStatus.NEEDS_REVIEW:
+                # The crop itself could not be trusted (Issue #17 section 7.1).
+                # The recognition step already declined to send it anywhere,
+                # and grading a region that may not be this question's answer
+                # at all would be worse than not grading it -- a human
+                # corrects the crop or types the text in.
+                #
+                # Checked on the image rather than on "no RecognitionResult
+                # was persisted", which used to stand in for it: since Issue
+                # #114 an absent row also means "this host has no OCR", and
+                # that one must go on to grade.
                 return recognition_outcome
+
+            recognition = uow.recognitions.get(recognition_result_id(job))
+            # An absent row therefore means only that no OCR reading exists
+            # (`domain.ocr.OCRUnavailable`). That is an empty ``ocr_text``,
+            # not a reason to skip grading: design section 8.1.1 makes the
+            # answer-area crop the grading input and the OCR reading merely
+            # "得られていれば補助情報として添える", and section 24 says
+            # "OCR失敗: **採点は止めない。**"
+            ocr_text = recognition.text if recognition is not None else ""
 
             existing_grade = uow.grades.get(grade_result_id(job))
             if existing_grade is not None:
@@ -227,9 +260,6 @@ class GradingJobProcessor:
                 return self._failed(ErrorCategory.PERMANENT, "prerequisite context unavailable")
             context_entries = build_context_entries(graph, question_id, sources=sources)
 
-            images = uow.answer_images.list_for_submission(job.submission_id)
-            image = find_answer_image(images, question_id)
-            assert image is not None  # the recognition step above already required this
             image_bytes = self._store.read_bytes(Path(image.image_path))
             rubric_text = _rubric_text_for(question.scoring_method, rubric.criteria)
 
@@ -237,7 +267,7 @@ class GradingJobProcessor:
             question_id=question_id,
             prompt_text=_prompt_text_for(question.number),
             answer_image=image_bytes,
-            ocr_text=recognition.text,
+            ocr_text=ocr_text,
             model_answer=model_answer,
             rubric_text=rubric_text,
             max_score=question.points,

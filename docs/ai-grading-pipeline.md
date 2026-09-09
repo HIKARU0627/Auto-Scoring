@@ -222,9 +222,12 @@ aiplatform を有効化するのか(403)・`AUTO_SCORING_GEMINI_MODEL` の綴り
 実キーでの疎通・schema 検証は Issue #35 で 4 経路すべて実施済み
 （[`poc-2-ai-grading.md`](./poc-2-ai-grading.md) §7.4。合成フィクスチャのみを送信）。
 
-**OCR 側（`NullOCRProvider`）は依然未接続である。** Document AI のアダプタが
-無いため（本Issueの対象外、業務ルール §3 (A)）、`GradingJobProcessor`が採点へ
-渡すOCRテキストは空のままで、実際に設問が採点されるにはそのアダプタが要る。
+**OCR 側は Issue #114 で接続した。** 本Issue（#97）の時点では `NullOCRProvider`
+のままで、`GradingJobProcessor` が採点へ渡す OCR テキストは常に空だった。ただし
+**採点自体はそれでも動いていた** — 多モーダルの provider が回答欄の切り出し画像を
+直接読むためである（簡易設計書 §8.1.1）。止まっていたのは採点ではなく
+**設問の連鎖**のほうで、経緯と決着は
+[`ocr-recognition-pipeline.md`](./ocr-recognition-pipeline.md) §8 にある。
 
 ### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
 

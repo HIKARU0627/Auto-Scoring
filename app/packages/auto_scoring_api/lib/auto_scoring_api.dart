@@ -62,6 +62,7 @@ export 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 export 'package:auto_scoring_api/src/model/material_role.dart';
 export 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 export 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
+export 'package:auto_scoring_api/src/model/ocr_availability_response.dart';
 export 'package:auto_scoring_api/src/model/page_format_model.dart';
 export 'package:auto_scoring_api/src/model/plan_request.dart';
 export 'package:auto_scoring_api/src/model/planned_file_model.dart';

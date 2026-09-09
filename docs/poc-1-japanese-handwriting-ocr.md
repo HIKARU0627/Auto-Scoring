@@ -332,6 +332,12 @@ Issue #19（`docs/ocr-recognition-pipeline.md`）は、実アダプタの実装�
 ——そのアダプタを`OCRProviderContract`のサブクラスとして追加し、
 `create_app(ocr_provider=...)`で差し替えるだけでよい。
 
+**この見込みは当たった。** Issue #114 が `DocumentAiOCRProvider` を追加したとき、
+`domain/ocr.py` のポート定義は `OCRUnavailable`（「この端末に OCR が無い」）を
+1つ足しただけで、`recognize()` の形も contract test の構造も変えずに済んでいる。
+ダミー実装 `NullOCRProvider` は同 Issue で削除した（`UnconfiguredOCRProvider` が
+置き換えた。理由は `docs/ocr-recognition-pipeline.md` §8.3）。
+
 ---
 
 ## 12. コミット禁止（決定書 §6.7 / §7.1 再掲）

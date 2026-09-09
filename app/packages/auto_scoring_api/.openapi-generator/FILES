@@ -49,6 +49,7 @@ doc/ManualRecognitionRequest.md
 doc/MaterialRole.md
 doc/NormalizedBBoxModel.md
 doc/NormalizedRectResponse.md
+doc/OcrAvailabilityResponse.md
 doc/PageFormatModel.md
 doc/PlanRequest.md
 doc/PlannedFileModel.md
@@ -146,6 +147,7 @@ lib/src/model/manual_recognition_request.dart
 lib/src/model/material_role.dart
 lib/src/model/normalized_b_box_model.dart
 lib/src/model/normalized_rect_response.dart
+lib/src/model/ocr_availability_response.dart
 lib/src/model/page_format_model.dart
 lib/src/model/plan_request.dart
 lib/src/model/planned_file_model.dart

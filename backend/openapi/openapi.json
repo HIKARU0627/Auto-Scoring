@@ -1646,6 +1646,31 @@
         "title": "NormalizedRectResponse",
         "type": "object"
       },
+      "OcrAvailabilityResponse": {
+        "description": "Whether this sidecar can OCR at all, and if not, why (Issue #114).\n\nThe counterpart of `GradingAvailabilityResponse`, and it exists for the\nsame reason: without it, \"usable=False\" on a question is the same shape\nwhether the OCR read the answer and was unsure or this machine has no\nOCR at all -- and those are different facts that call for different\nactions (Issue #114 acceptance 8).\n\nUnlike grading, ``available=False`` here does not stop anything: design\nsection 24 has grading carry on without a reading. What is lost is\nstated in section 8.1.5 -- the cross-check against the grading AI's own\nreading, and text-anchored annotation positions -- so this is an\n\"OCR is off, verification is weaker\" notice, never a blocker.\n\n``reason`` never contains a credential: it is\n`UnconfiguredOCRProvider.reason`, which names configuration variables and\nhost prerequisites only (see `build_ocr_provider`).",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "OcrAvailabilityResponse",
+        "type": "object"
+      },
       "PageFormatModel": {
         "properties": {
           "height_pt": {
@@ -3309,6 +3334,30 @@
         "tags": [
           "jobs"
         ]
+      }
+    },
+    "/ocr/availability": {
+      "get": {
+        "description": "Whether OCR is configured on this host (Issue #114).\n\nBehind the bearer token for the same reason as\n``/grading/availability``: it reports on this installation's\nconfiguration, and it is not a liveness probe.",
+        "operationId": "ocr_availability_ocr_availability_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OcrAvailabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ocr Availability"
       }
     },
     "/score": {

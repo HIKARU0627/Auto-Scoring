@@ -47,7 +47,7 @@ Substituted, and nothing else:
 * 回答欄検出 provider -- `_ScriptedAnswerAreaDetector`, whose output still
   goes through the real `parse_answer_area_detection`
 * OCR provider -- `ScriptedOCRProvider`, and **deliberately absent** in the
-  two shipped-shape scenarios at the bottom of this module
+  shipped-shape scenarios at the bottom of this module
 * AI 採点 provider -- `ScriptedAIProvider`
 * 分類 provider (#101) -- never reached at all: every file name in the
   fixture is matched by a template rule, so the plan's own estimate is zero
@@ -101,6 +101,7 @@ from tests.test_e2e_acceptance import (
     ScriptedOCRProvider,
     answer_crops,
     grading_response,
+    ocr_result,
 )
 
 _TOKEN = "e2e-intake-to-export-token"
@@ -299,9 +300,10 @@ def _build_client(
     """The real app, wired to the scripted external services.
 
     ``ocr_provider=None`` leaves `create_app` to install its own default --
-    `NullOCRProvider`, which is what a host that has not configured an OCR
-    service actually runs. The scenarios at the bottom of this module use
-    that deliberately; everything above injects a scripted reader.
+    `UnconfiguredOCRProvider` (Issue #114), which is what a host with no
+    `AUTO_SCORING_DOCUMENT_AI_PROCESSOR` actually runs. The scenarios at the
+    bottom of this module use that deliberately; everything above injects a
+    scripted reader.
 
     ``with TestClient(...)`` (never the bare form) is what starts the queue's
     workers -- `create_app`'s lifespan owns `JobQueueService.start`.
@@ -793,15 +795,28 @@ def test_export_is_refused_until_every_question_of_the_new_path_is_confirmed(
 # --------------------------------------------------------------------------- #
 # The same path on a host with no OCR service -- the shipped shape
 # --------------------------------------------------------------------------- #
-# `create_app` installs `NullOCRProvider` when no OCR provider is injected,
-# and that is what ships today: the chosen service (Google Document AI,
-# business-rules-and-evaluation-data.md section 3 (A)) has no adapter yet.
-# It reports every image as completely unrecognized at confidence 0.0, which
-# is below any threshold, so **every** question comes back `usable=False`.
+# What a host with no OCR service actually does.
 #
-# The two tests below fix what that actually costs, rather than what it is
-# hoped to cost. They are the current behaviour, not the desired one: Issue
-# #114 is where changing it is decided. If it changes, these fail and say so.
+# `create_app` installs `UnconfiguredOCRProvider` when no OCR provider is
+# injected, and that is what ships on a machine where
+# `AUTO_SCORING_DOCUMENT_AI_PROCESSOR` is unset -- a supported configuration,
+# not a broken one (simplified-design-specification.md section 24: "OCR失敗:
+# **採点は止めない。**").
+#
+# **These three tests changed in Issue #114.** Until then `create_app` fell
+# back to `NullOCRProvider`, which answered every image with an empty reading
+# at ``confidence=0.0`` -- so every question came back ``usable=False`` and
+# every dependency edge stalled its downstream until a human pressed
+# ``/resume`` on the prerequisite. The two tests here recorded that, honestly
+# labelled as "current behaviour, not the desired one: Issue #114 is where
+# changing it is decided". It was decided: a host with no OCR has no OCR term
+# to gate on, so the gate is the grading AI's own reading and its grading
+# confidence (docs/ocr-recognition-pipeline.md section 8.2).
+#
+# The third test is the half that must NOT change and so is pinned
+# separately: an OCR that *did* read the crop and was not confident still
+# blocks its dependents, and only a human opens that gate. "The OCR could not
+# read this" and "this machine has no OCR" are different facts.
 def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
@@ -809,11 +824,16 @@ def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
 ) -> None:
     """No OCR adapter, no dependencies between questions.
 
-    Grading still runs and still produces a proposal for each question -- the
-    AI provider is multimodal and is handed the crop itself, so an empty OCR
-    reading does not stop it. What is lost is the automatic release: every
-    question is `usable=False`, so nothing is ever auto-confirmed and the
-    reviewer confirms all of them. The answer still reaches an exported PDF.
+    Grading runs and produces a proposal for each question -- the AI provider
+    is multimodal and is handed the crop itself, so a missing OCR reading
+    does not stop it.
+
+    Since Issue #114 the questions also come back ``usable=True``: with no OCR
+    reading there is no Recognition Confidence to compare, and inventing a
+    0.0 to fail against is what section 8.1.4 forbids ("読めていないものに
+    数値を与えない"). ``usable`` releases *dependent questions*, though --
+    never a confirmation. **Confirming is still the reviewer's**, which is why
+    this scenario still ends by hand.
     """
     with _build_client(
         data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=None
@@ -826,33 +846,44 @@ def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
         for question_id in _question_ids(test_id):
             job = _job_for(client, submission_id, question_id)
             assert job["state"] == "succeeded", job
-            assert job["usable"] is False, "a 0.0-confidence reading must release nothing"
+            assert job["usable"] is True, "with no OCR reading there is no OCR term to gate on"
             grades = client.get(
                 f"/submissions/{submission_id}/questions/{question_id}/grades", headers=_AUTH
             ).json()
             assert grades, "the proposal must be kept for the reviewer, not discarded"
+            recognitions = client.get(
+                f"/submissions/{submission_id}/questions/{question_id}/recognitions",
+                headers=_AUTH,
+            ).json()
+            # Only the grader's own reading. No OCR row at all -- which is how
+            # "this host has no OCR" stays distinguishable afterwards from
+            # "the OCR looked and found nothing" (Issue #114).
+            assert [r["id"].split(":")[0] for r in recognitions] == ["grading-recognition"]
 
+        # Nothing was auto-confirmed: every question still needs the reviewer.
         _approve_every_question(client, test_id, submission_id)
         exported = _export(client, submission_id)
         assert (data_root / exported["file_path"]).exists()
 
 
-def test_without_an_ocr_service_a_dependent_question_stays_blocked_until_a_human_resumes_it(
+def test_without_an_ocr_service_a_dependent_question_still_runs_without_a_human(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
     ai_provider: ScriptedAIProvider,
 ) -> None:
     """The same host, with one confirmed dependency 問1 -> 問2.
 
-    `NullOCRProvider` makes 問1 unusable, and an unusable prerequisite is
-    exactly what `evaluate_readiness` refuses to release a dependent on. So
-    問2 never runs on its own: it stays BLOCKED, naming 問1. **On a host with
-    no OCR service, every dependency edge stalls its downstream.** That is
-    today's behaviour on the shipped configuration, and Issue #114 is where
-    it is decided whether it stays.
+    **This test asserted the opposite until Issue #114**, and its old name
+    said so: ``..._stays_blocked_until_a_human_resumes_it``. On the shipped
+    configuration every dependency edge stalled its downstream, because
+    `NullOCRProvider`'s fabricated 0.0 made every prerequisite unusable and
+    `evaluate_readiness` refuses to release a dependent on an unusable one.
+    For an app whose premise is 採点の自動化, a reviewer pressing ``/resume``
+    once per question is not a workaround -- it is the feature not working.
 
-    The way through it today is the reviewer's: `resume` marks the
-    prerequisite usable, and the dependent runs immediately afterwards.
+    So: 問2 runs on its own, and this test never calls ``/resume``. What
+    still gates it is the grading half -- see the test below, which is where
+    a prerequisite the OCR genuinely could not read still stops.
     """
     with _build_client(
         data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=None
@@ -860,8 +891,52 @@ def test_without_an_ocr_service_a_dependent_question_stays_blocked_until_a_human
         test_id = _register_via_the_new_path(client, edges=True)
         submission_id = _upload_answer(client, test_id, marker="ans-d")
         _script_the_grader(ai_provider, answer_crops(data_root, submission_id))
+        _start_and_wait(client, submission_id)
 
         first, second = f"{test_id}:問1", f"{test_id}:問2"
+        prerequisite = _job_for(client, submission_id, first)
+        assert prerequisite["state"] == "succeeded"
+        assert prerequisite["usable"] is True
+
+        dependent = _job_for(client, submission_id, second)
+        assert dependent["state"] == "succeeded", dependent
+        # Ran, rather than merely being unblocked: a released dependent that
+        # was never graded would satisfy the state assertion alone.
+        assert client.get(
+            f"/submissions/{submission_id}/questions/{second}/grades", headers=_AUTH
+        ).json(), "問2 was released but never graded"
+
+
+def test_an_ocr_reading_it_could_not_trust_still_blocks_until_a_human_resumes_it(
+    data_root: Path,
+    extractor: _ScriptedCriteriaExtractor,
+    ocr_provider: ScriptedOCRProvider,
+    ai_provider: ScriptedAIProvider,
+) -> None:
+    """The half Issue #114 deliberately left alone, pinned on its own.
+
+    Here the host *has* an OCR service and it read 問1's crop -- it just was
+    not confident about what it read. That is the case
+    business-rules-and-evaluation-data.md section 4.4 was written for, and it
+    still stops the dependent: the reading exists, it is below the threshold,
+    and a human decides whether to trust it.
+
+    Together with the test above this is the whole distinction Issue #114
+    turns on. Loosening "no OCR here" must not quietly loosen "the OCR could
+    not read this", and only running both proves it did not.
+    """
+    with _build_client(
+        data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=ocr_provider
+    ) as client:
+        test_id = _register_via_the_new_path(client, edges=True)
+        submission_id = _upload_answer(client, test_id, marker="ans-e")
+        crops = answer_crops(data_root, submission_id)
+        _script_the_grader(ai_provider, crops)
+        first, second = f"{test_id}:問1", f"{test_id}:問2"
+        ocr_provider.script(
+            crops[first], [ocr_result(text="こうごうせい(判読不能)", confidence=0.3)]
+        )
+
         started = client.post(f"/submissions/{submission_id}/jobs", headers=_AUTH)
         assert started.status_code == 200, started.text
         _wait_for(

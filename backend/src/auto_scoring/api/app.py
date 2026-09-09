@@ -33,7 +33,8 @@ from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.image.opencv_preprocessor import OpenCvImagePreprocessor
 from auto_scoring.adapters.in_memory_repository import InMemoryScoreRepository
 from auto_scoring.adapters.local_storage import LocalFileStore
-from auto_scoring.adapters.ocr.null_provider import NullOCRProvider
+from auto_scoring.adapters.ocr.factory import OCRProviderConfigError, create_ocr_provider
+from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.submission_intake import (
     DuplicateSubmissionError,
@@ -190,6 +191,74 @@ _NO_PROVIDER_INJECTED = "no AI grading provider was supplied to create_app()"
 #: discipline, as `_NO_PROVIDER_INJECTED` above: it says what was not supplied
 #: rather than claiming anything about this host.
 _NO_EXTRACTOR_INJECTED = "no criteria extractor was supplied to create_app()"
+
+#: How `build_ocr_provider` reaches the OCR adapter. Injected for the same
+#: reason `AIProviderFactory` is: the real factory probes this host for ADC
+#: credentials, and a test must be able to say which world it is in rather
+#: than inherit the machine's.
+OCRProviderFactory = Callable[[Mapping[str, str]], OCRProvider]
+
+#: The `UnconfiguredOCRProvider.reason` `create_app` falls back to when no
+#: ``ocr_provider`` was injected. Same role and wording discipline as
+#: `_NO_PROVIDER_INJECTED`.
+_NO_OCR_PROVIDER_INJECTED = "no OCR provider was supplied to create_app()"
+
+
+class OcrAvailabilityResponse(BaseModel):
+    """Whether this sidecar can OCR at all, and if not, why (Issue #114).
+
+    The counterpart of `GradingAvailabilityResponse`, and it exists for the
+    same reason: without it, "usable=False" on a question is the same shape
+    whether the OCR read the answer and was unsure or this machine has no
+    OCR at all -- and those are different facts that call for different
+    actions (Issue #114 acceptance 8).
+
+    Unlike grading, ``available=False`` here does not stop anything: design
+    section 24 has grading carry on without a reading. What is lost is
+    stated in section 8.1.5 -- the cross-check against the grading AI's own
+    reading, and text-anchored annotation positions -- so this is an
+    "OCR is off, verification is weaker" notice, never a blocker.
+
+    ``reason`` never contains a credential: it is
+    `UnconfiguredOCRProvider.reason`, which names configuration variables and
+    host prerequisites only (see `build_ocr_provider`).
+    """
+
+    available: bool
+    reason: str | None = None
+
+
+def build_ocr_provider(
+    env: Mapping[str, str],
+    *,
+    factory: OCRProviderFactory = create_ocr_provider,
+) -> OCRProvider:
+    """Build the configured OCR provider, degrading to
+    `UnconfiguredOCRProvider` instead of refusing to start (Issue #114).
+
+    Exactly the shape of `build_ai_provider`, for a stronger version of its
+    reason: a host with no OCR must not merely still import and export, it
+    must still *grade and still release dependent questions*, because design
+    section 24 says so outright ("OCR失敗: **採点は止めない。**"). The
+    provider this returns raises `domain.ocr.OCRUnavailable` on every call,
+    which `jobs.recognition_processor.RecognitionJobProcessor` turns into
+    "no reading" rather than into a fabricated confidence of 0.0.
+
+    Both failure paths keep configuration values out of the reason string,
+    which is published by ``GET /ocr/availability`` and written to the
+    sidecar log: `OCRProviderConfigError` is required to name variables only
+    (`adapters.ocr.factory`'s module docstring), and anything else surfaces
+    as its exception type alone, since an adapter constructing itself badly
+    could put anything in its message. `redact` is the gate behind both, for
+    the reason `build_ai_provider` states.
+    """
+    try:
+        return factory(env)
+    except OCRProviderConfigError as error:
+        reason = str(error)
+    except Exception as error:
+        reason = f"building the OCR provider failed ({type(error).__name__}); see the sidecar log"
+    return UnconfiguredOCRProvider(redact(reason, configuration_secrets(env)))
 
 
 class GradingAvailabilityResponse(BaseModel):
@@ -425,14 +494,21 @@ def create_app(
 
     ``ocr_provider``/``recognition_settings`` and ``ai_provider``/
     ``grading_settings`` configure that default processor's two halves.
-    ``ocr_provider`` defaults to `auto_scoring.adapters.ocr.null_provider.
-    NullOCRProvider` -- the chosen OCR service (Google Document AI,
-    business-rules-and-evaluation-data.md section 3 (A), Issue #81) has no
-    adapter yet, and that null adapter is honest about it (confidence 0.0,
-    never a fabricated reading) rather than raising, so every question routes
-    to needs-review until a real one is injected.
 
-    ``ai_provider`` has no such default any more (Issue #97). Section 3 (B)'s
+    ``ocr_provider`` no longer defaults to a placeholder that answers
+    (Issue #114). Google Document AI (business-rules-and-evaluation-data.md
+    section 3 (A), Issue #81) now has an adapter, and this function is
+    deliberately not the place that decides whether this host can reach it --
+    for exactly the reason given for ``ai_provider`` below. The composition
+    root (`auto_scoring.api.sidecar.run`) calls `build_ocr_provider` and
+    passes the result in; omitting it yields an `UnconfiguredOCRProvider`
+    that raises `domain.ocr.OCRUnavailable` on every call, which the
+    recognition step treats as "no reading" (no `RecognitionResult` row, no
+    OCR term in ``usable``) rather than as the fabricated ``confidence=0.0``
+    the deleted ``NullOCRProvider`` used to persist. Whichever arrives is
+    published by ``GET /ocr/availability`` (`OcrAvailabilityResponse`).
+
+    ``ai_provider`` has no default either (Issue #97). Section 3 (B)'s
     fallback chain *is* implemented, and this function is deliberately not
     the place that decides whether this host can run it: reading `os.environ`
     (and, through it, probing for a `codex` executable and a `gcloud` login)
@@ -556,10 +632,15 @@ def create_app(
     # the core). Production passes nothing and gets a fresh one, as before.
     pdfium_lock = pdfium_lock or threading.Lock()
 
+    recognition_provider = ocr_provider or UnconfiguredOCRProvider(_NO_OCR_PROVIDER_INJECTED)
+    # Published on `app.state` for the same reason as `ai_provider` below: it
+    # is how a caller that built this app (`api.sidecar.run`, and its test)
+    # can see what it actually got, without going through HTTP.
+    app.state.ocr_provider = recognition_provider
     default_recognition_processor = RecognitionJobProcessor(
         session_factory,
         store,
-        ocr_provider or NullOCRProvider(),
+        recognition_provider,
         settings=recognition_settings,
         clock=clock,
     )
@@ -709,6 +790,18 @@ def create_app(
         if isinstance(grading_provider, UnconfiguredAIProvider):
             return GradingAvailabilityResponse(available=False, reason=grading_provider.reason)
         return GradingAvailabilityResponse(available=True)
+
+    @protected.get("/ocr/availability")
+    def ocr_availability() -> OcrAvailabilityResponse:
+        """Whether OCR is configured on this host (Issue #114).
+
+        Behind the bearer token for the same reason as
+        ``/grading/availability``: it reports on this installation's
+        configuration, and it is not a liveness probe.
+        """
+        if isinstance(recognition_provider, UnconfiguredOCRProvider):
+            return OcrAvailabilityResponse(available=False, reason=recognition_provider.reason)
+        return OcrAvailabilityResponse(available=True)
 
     @protected.post("/score")
     def score(request: ScoreRequest) -> ScoreResponse:
