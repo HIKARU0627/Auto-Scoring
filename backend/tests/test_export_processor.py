@@ -35,6 +35,7 @@ from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import PageGeometry
 from auto_scoring.jobs.export_processor import ExportJobProcessor, export_id
 from tests.font_support import install_font_covering
+from tests.pdf_content import drawn_text
 from tests.support import at, make_grade, make_question, make_review, make_submission, make_test
 
 #: The comment every export-ready fixture below stamps on the page. Named
@@ -251,6 +252,130 @@ async def test_generates_an_annotated_pdf_and_records_the_export(
         store.submission_source_pdf_path("sub-1").stat().st_size
         == (store.root / "submissions" / "sub-1" / "source.pdf").stat().st_size
     )
+
+
+async def test_a_question_with_no_score_area_has_its_score_written_in_the_margin(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #150 本体の受入。**回答欄が検出できなかった設問がある答案でも
+    出力でき、その設問の点数が紙に乗ること。**
+
+    実機再検証 #4 では、この形の答案 (7教科中4教科) が 409 で拒まれて1枚も
+    出力できなかった。ここで見るのは「ファイルが出来た」ではなく
+    `tests.pdf_content.drawn_text` が読み出す**実際に置かれた文字**である
+    (Issue #141 の教訓: インクの有無は「どの字か」を答えない)。
+
+    余白帯は幅がページの3%しかないので、文字は帯の中で**縦に折り返して積まれる**
+    (`_draw_text` の `_wrap_text`)。読める向きなので折り返し自体は問題ないが、
+    **切り詰め (`_ELLIPSIS`) が起きていないこと**は見る。点数が "問2 4…" に
+    なって出るのは、出ないのと同じくらい悪い。したがって改行を落として
+    突き合わせる。
+    """
+    # 場所のある設問 (q-1) と無い設問 (q-2) を1ページに混ぜる。片方だけの
+    # 答案では「余白帯に落ちた」のか「元から全部落ちた」のか区別できない。
+    _write_source_pdf(store.submission_source_pdf_path("sub-1"))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(
+            make_question(
+                id="q-1",
+                number="問1",
+                score_area=NormalizedRect(x=0.8, y=0.0, width=0.18, height=0.06),
+            )
+        )
+        uow.questions.add(make_question(id="q-2", number="問2", score_area=None))
+        uow.submissions.add(make_submission())
+        for question_id, grade_id in (("q-1", "grade-1"), ("q-2", "grade-2")):
+            uow.grades.add(make_grade(id=grade_id, question_id=question_id))
+            uow.reviews.add(
+                make_review(
+                    id=f"review-{question_id}",
+                    question_id=question_id,
+                    ai_grade_result_id=grade_id,
+                )
+            )
+        uow.commit()
+    install_font_covering(monkeypatch, "問1 問2 4/5")
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export = uow.exports.get(export_id(job))
+        assert export is not None
+    placed = "".join(drawn_text(store.root / export.file_path).split())
+    # 肯定形が先: 通常の経路 (`score_area` のある設問) が生きていることを言って
+    # から、余白帯の行を見る。前者が死ぬと後者だけでは気づけない。
+    assert placed.count("4/5") == 2
+    assert "4/5問2" in placed
+    assert "…" not in placed
+
+
+async def test_a_long_question_number_never_eats_the_margin_score(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """余白帯の行が長すぎて切り詰められるとき、**消えるのは番号であって点数では
+    ないこと。**
+
+    `_draw_text` は入り切らない行を省略記号で打ち切るので、**行の末尾にあるものが
+    食われる。** 帯の幅はページの3%（A4で約18pt）しかなく、`Question.number` は
+    `test_registration._MAX_QUESTION_NUMBER_BYTES`（40バイト）まで許される。
+    番号を先に置くと、40文字のASCII番号は9行に折り返して点数を枠外へ押し出し、
+    **確定した点数が消えたまま出力は成功を返す**（Issue #121 と同じ形）。
+
+    ここでは1ページに18件（帯の容量ぴったり、つまり1件あたりの高さが最小になる条件）を
+    並べ、そのうち1件に上限いっぱいの番号を与える。容量を1件でも増やせば 409 に
+    なるので、これが「切り詰めが実際に起こりうる最小の高さ」である。
+    """
+    long_number = "Q" + "1234567890" * 3 + "123456789"  # 40 bytes, the limit
+    assert len(long_number.encode()) == 40
+    _write_source_pdf(store.submission_source_pdf_path("sub-1"))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.submissions.add(make_submission())
+        for index in range(18):
+            question_id = f"q-{index:02d}"
+            uow.questions.add(
+                make_question(
+                    id=question_id,
+                    number=long_number if index == 0 else f"問{index:02d}",
+                    score_area=None,
+                )
+            )
+            uow.grades.add(make_grade(id=f"grade-{index:02d}", question_id=question_id))
+            uow.reviews.add(
+                make_review(
+                    id=f"review-{index:02d}",
+                    question_id=question_id,
+                    ai_grade_result_id=f"grade-{index:02d}",
+                )
+            )
+        uow.commit()
+    install_font_covering(monkeypatch, "問0123456789/Q")
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export = uow.exports.get(export_id(job))
+        assert export is not None
+    placed = "".join(drawn_text(store.root / export.file_path).split())
+    # 肯定形が先: 18件ぶんの点数がすべて紙に乗っていること。ここが死ぬと下の
+    # 「切り詰めは番号側に起きた」は、何も描かれていなくても真になる。
+    assert placed.count("4/5") == 18
+    # そして切り詰めは実際に起きている（起きない条件で測っても意味がない）。
+    assert "…" in placed
+    # それでも消えたのは番号の末尾で、点数ではない。
+    assert long_number not in placed
+    assert "4/5Q1234" in placed
 
 
 async def test_exports_a_question_a_person_graded_after_ai_failed(

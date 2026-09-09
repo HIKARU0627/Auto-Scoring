@@ -114,11 +114,15 @@ enum SidecarErrorKind {
   /// The sidecar rejected the bearer token (HTTP 401).
   unauthorized,
 
-  /// The sidecar refused a review action (HTTP 409): a stale
-  /// `expected_version` (someone else already acted on this question), no AI
-  /// grade to approve/edit yet, or nothing left to undo. The caller should
-  /// reload this question's review history and let the reviewer retry
-  /// (Issue #22 acceptance: "同時/重複requestが…古いversionの更新を拒否する").
+  /// The sidecar refused the request as conflicting with the current state
+  /// (HTTP 409): a stale `expected_version` (someone else already acted on
+  /// this question), no AI grade to approve/edit yet, nothing left to undo
+  /// (Issue #22 acceptance: "同時/重複requestが…古いversionの更新を拒否する"),
+  /// or one of `POST .../export`'s refusals.
+  ///
+  /// **One kind, many causes with different remedies.** Read
+  /// [SidecarApiException.conflictCode] before telling the user what to do
+  /// about it; assuming a single cause is exactly what Issue #150 fixed.
   conflict,
 
   /// The sidecar answered with an error status or an unreadable body.
@@ -134,21 +138,38 @@ class SidecarApiException implements Exception {
     this.kind,
     this.message, {
     this.statusCode,
-    this.unconfirmedQuestionIds,
+    this.conflictCode,
+    this.conflictQuestionIds,
   });
 
   final SidecarErrorKind kind;
   final String message;
   final int? statusCode;
 
-  /// Present only for `POST .../export`'s 409 (Issue #23 acceptance: "未確認
-  /// 設問がある場合は出力を拒否し、対象を表示する") -- the question ids the
-  /// sidecar reports are not yet confirmed. `null` for every other error.
-  final List<String>? unconfirmedQuestionIds;
+  /// The sidecar's own name for *which* refusal a 409 is
+  /// (`api.export_router.ExportConflictCode`), or `null` when the body
+  /// carries none.
+  ///
+  /// [SidecarErrorKind.conflict] covers every 409 the sidecar can answer,
+  /// and `POST .../export` alone has two with **opposite remedies**: one the
+  /// reviewer fixes by confirming the questions, one confirming cannot fix
+  /// at all. Reading this instead of assuming is what Issue #150 found
+  /// missing -- the caller had been printing Issue #23's wording over both,
+  /// so a reviewer who had confirmed everything was told to confirm it
+  /// again. Callers must treat an unrecognised (or `null`) code as "some
+  /// refusal I don't know the shape of" and fall back to [message], never
+  /// to a guess.
+  final String? conflictCode;
+
+  /// The question ids a 409 names as its subject (`detail.question_ids`) --
+  /// what [conflictCode] says about them differs per code. `null` for every
+  /// error that carries no such list.
+  final List<String>? conflictQuestionIds;
 
   @override
   String toString() =>
-      'SidecarApiException($kind, "$message", status: $statusCode)';
+      'SidecarApiException($kind, "$message", status: $statusCode, '
+      'code: $conflictCode)';
 }
 
 /// Raised by [SidecarApiClient.createSubmission] when the sidecar already has
@@ -1794,7 +1815,8 @@ class SidecarApiClient {
             _detailMessage(error.response?.data) ??
                 'sidecar reported a conflict',
             statusCode: status,
-            unconfirmedQuestionIds: _detailQuestionIds(error.response?.data),
+            conflictCode: _detailCode(error.response?.data),
+            conflictQuestionIds: _detailQuestionIds(error.response?.data),
           );
         }
         return SidecarApiException(
@@ -1844,8 +1866,18 @@ String? _detailMessage(Object? data) {
   return null;
 }
 
+/// Our structured errors' `{"detail": {"code": "..."}}` (Issue #150), or
+/// `null` if absent/malformed -- see [SidecarApiException.conflictCode].
+String? _detailCode(Object? data) {
+  if (data is! Map) return null;
+  final detail = data['detail'];
+  if (detail is! Map) return null;
+  final code = detail['code'];
+  return code is String ? code : null;
+}
+
 /// `POST .../export`'s 409 body's `detail.question_ids` (Issue #23), or
-/// `null` if absent/malformed -- see [SidecarApiException.unconfirmedQuestionIds].
+/// `null` if absent/malformed -- see [SidecarApiException.conflictQuestionIds].
 List<String>? _detailQuestionIds(Object? data) {
   if (data is! Map) return null;
   final detail = data['detail'];

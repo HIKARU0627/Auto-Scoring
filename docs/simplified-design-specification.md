@@ -1209,9 +1209,10 @@ AIが抽出した値と人が確定した値は区別して表示する。
 - Annotation削除
 
 > Issue #23でAppBarへ「PDF出力」ボタンを追加した
-> （`app/lib/features/pdf_review/export_dialog.dart`）。未確認設問がある
-> 場合の一覧表示、出力の進捗、保存先表示、失敗時の再試行を1つのdialogで
-> 行う。詳細は[`pdf-export.md`](./pdf-export.md)。
+> （`app/lib/core/widgets/export_dialog.dart`、Issue #137で移動）。拒否された
+> 場合の理由と対象設問の表示、出力の進捗、保存先表示、失敗時の再試行を1つの
+> dialogで行う。拒否は1種類ではなく、直し方も種別で異なる（Issue #150、
+> [`pdf-export.md`](./pdf-export.md) §8.1）。詳細は[`pdf-export.md`](./pdf-export.md)。
 
 ---
 

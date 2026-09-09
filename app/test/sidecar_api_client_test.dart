@@ -353,6 +353,59 @@ void main() {
       ),
     );
   });
+
+  test('a 409 carries the sidecar\'s own refusal code through', () async {
+    // Issue #150: `SidecarErrorKind.conflict` is one kind over several
+    // refusals whose remedies differ, so the code the sidecar names
+    // (`api.export_router.ExportConflictCode`) has to survive translation.
+    // Without it the caller can only guess, and the guess it had been making
+    // told a reviewer to redo work that was already done.
+    final connection = await ensureSidecar();
+    final dio = Dio()
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) => handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.badResponse,
+              response: Response<Object?>(
+                requestOptions: options,
+                statusCode: 409,
+                data: const {
+                  'detail': {
+                    'code': 'no_room_for_score',
+                    'message':
+                        'one or more questions have no area to write '
+                        'the score in',
+                    'question_ids': ['q-3'],
+                  },
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+    final client = SidecarApiClient(connection, dio: dio);
+    addTearDown(client.close);
+
+    await expectLater(
+      client.requestExport('sub-1'),
+      throwsA(
+        isA<SidecarApiException>()
+            .having((error) => error.kind, 'kind', SidecarErrorKind.conflict)
+            .having(
+              (error) => error.conflictCode,
+              'conflictCode',
+              'no_room_for_score',
+            )
+            .having(
+              (error) => error.conflictQuestionIds,
+              'conflictQuestionIds',
+              const ['q-3'],
+            ),
+      ),
+    );
+  });
 }
 
 /// Windows can hold the killed sidecar's SQLite WAL/shm files open for a

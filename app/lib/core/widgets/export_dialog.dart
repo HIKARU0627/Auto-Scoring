@@ -23,9 +23,9 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 /// はまさに「複数画面で重複していた見た目の要素」の置き場。移す前の時点で
 /// `features` を1つも import していなかったので、そのまま動く。
 ///
-/// **答案の状態は見ない。** 出力してよいかを決めるのはサイドカーで、未確定の
-/// 設問があれば 409 が返り、それを [_ExportStage.unconfirmed] が設問名まで
-/// 出して伝える。呼ぶ側が先回りして「この答案はまだだろう」と判断しないこと --
+/// **答案の状態は見ない。** 出力してよいかを決めるのはサイドカーで、拒まれた
+/// ときは 409 が返り、それを [_ExportStage.refused] が理由と対象設問まで出して
+/// 伝える。呼ぶ側が先回りして「この答案はまだだろう」と判断しないこと --
 /// 判断が2か所に増えれば、必ず食い違う。
 Future<void> showExportDialog(
   BuildContext context, {
@@ -38,7 +38,21 @@ Future<void> showExportDialog(
   );
 }
 
-enum _ExportStage { running, succeeded, unconfirmed, failed }
+enum _ExportStage { running, succeeded, refused, failed }
+
+/// `api.export_router.ExportConflictCode` の値。**サイドカーが名乗る拒否理由**
+/// であって、こちら側が推測したものではない (Issue #150)。
+///
+/// Issue #150 まで、この画面は 409 を1種類しか想定しておらず、#120 が足した
+/// 「点数を書く場所が無い」の 409 にも Issue #23 の「未確認の設問がある」の
+/// 文言を出していた。**全問を確定させ終えた利用者に、確定させろと表示していた。**
+/// 直し方が既に済んでいる作業を指していたので、画面の指示に従っても何も変わらない。
+///
+/// 知らないコード (将来サイドカーが増やしたもの) が来たら、推測して文言を選ばず
+/// サイドカーの `message` をそのまま出す。嘘の理由を出すより、そっけない理由を
+/// 出す方がましである。
+const String _conflictUnconfirmedQuestions = 'unconfirmed_questions';
+const String _conflictNoRoomForScore = 'no_room_for_score';
 
 /// What `_retry()` should do once the reviewer taps 再試行, derived from the
 /// *last actually-observed* job state (P2 review):
@@ -92,7 +106,12 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   String? _jobId;
   String? _filePath;
   String? _errorMessage;
-  List<String> _unconfirmedQuestionIds = const [];
+
+  /// The sidecar's `detail.code` for the 409 that produced
+  /// [_ExportStage.refused], and the question ids it named -- see
+  /// [_conflictUnconfirmedQuestions].
+  String? _refusalCode;
+  List<String> _refusedQuestionIds = const [];
 
   /// The job's own last-observed terminal state (`'failed'`/`'cancelled'`),
   /// or `null` if it was never observed as terminal (still running, or every
@@ -123,7 +142,8 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     setState(() {
       _stage = _ExportStage.running;
       _errorMessage = null;
-      _unconfirmedQuestionIds = const [];
+      _refusalCode = null;
+      _refusedQuestionIds = const [];
       _jobId = null;
       _lastObservedJobState = null;
       _transientPollFailures = 0;
@@ -155,8 +175,9 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
       if (!mounted) return;
       if (error.kind == SidecarErrorKind.conflict) {
         setState(() {
-          _stage = _ExportStage.unconfirmed;
-          _unconfirmedQuestionIds = error.unconfirmedQuestionIds ?? const [];
+          _stage = _ExportStage.refused;
+          _refusalCode = error.conflictCode;
+          _refusedQuestionIds = error.conflictQuestionIds ?? const [];
           _errorMessage = error.message;
         });
       } else {
@@ -293,6 +314,35 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     );
   }
 
+  /// 拒否の見出し。**サイドカーが名乗ったコードだけで選ぶ。**知らないコード
+  /// なら、サイドカー自身の `message` を出す (`_refusalCode` の docstring)。
+  String get _refusalHeadline {
+    switch (_refusalCode) {
+      case _conflictUnconfirmedQuestions:
+        return '未確認の設問があるため出力できません:';
+      case _conflictNoRoomForScore:
+        return '点数を書き込める場所が無い設問があるため出力できません:';
+      default:
+        return '出力できません:';
+    }
+  }
+
+  /// 見出しの下に足す一行。**利用者が次に何をすればよいか**が種別で正反対に
+  /// なるので、対象設問を並べただけでは足りない (Issue #150)。知らないコード
+  /// では直し方を書けないので、サイドカー自身の説明をそのまま出す。
+  String? get _refusalDetail {
+    switch (_refusalCode) {
+      case _conflictUnconfirmedQuestions:
+        return '上記の設問を確定させると出力できます。';
+      case _conflictNoRoomForScore:
+        // 確定させても解消しない。これを言わないと、利用者は #150 で実際に
+        // 起きたとおり「確定すれば出せる」と読んで、済んでいる作業を繰り返す。
+        return 'ページに点数を書き込める余白がありません。確定操作では解消しません。';
+      default:
+        return _errorMessage;
+    }
+  }
+
   Widget _buildContent() {
     switch (_stage) {
       case _ExportStage.running:
@@ -314,19 +364,20 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           key: const Key('export-dialog-success'),
           _filePath != null ? '保存先: $_filePath' : '出力が完了しました',
         );
-      case _ExportStage.unconfirmed:
+      case _ExportStage.refused:
         return Column(
-          key: const Key('export-dialog-unconfirmed'),
+          key: const Key('export-dialog-refused'),
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('未確認の設問があるため出力できません:'),
+            Text(_refusalHeadline),
             const SizedBox(height: AppSpacing.sm),
-            if (_unconfirmedQuestionIds.isEmpty)
-              Text(_errorMessage ?? '')
-            else
-              for (final questionId in _unconfirmedQuestionIds)
-                Text('・$questionId'),
+            for (final questionId in _refusedQuestionIds) Text('・$questionId'),
+            if (_refusedQuestionIds.isNotEmpty)
+              const SizedBox(height: AppSpacing.sm),
+            // 知らないコードなら直し方の代わりにサイドカー自身の説明が
+            // 入る (`_refusalDetail`) -- 直し方を推測しないため。
+            if (_refusalDetail != null) Text(_refusalDetail!),
           ],
         );
       case _ExportStage.failed:
@@ -359,7 +410,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           ),
         ];
       case _ExportStage.succeeded:
-      case _ExportStage.unconfirmed:
+      case _ExportStage.refused:
         return [
           FilledButton(
             key: const Key('export-dialog-close-button'),
