@@ -222,7 +222,7 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 | 許容点差内率          | `abs(AI score - 人間 score) <= tolerance` を満たす割合（既定 tolerance=1点）        | `evaluate_sample`       |
 | criterion 別一致率    | 正解ラベルに存在する criterion のうち、応答の `result` が一致する割合（§3.4 参照）  | `evaluate_sample`       |
 | schema violation 率   | `AIGradingResult` のスキーマ検証に失敗した応答の割合                                | `evaluate_sample`       |
-| 対応不一致率          | 応答の `questionId`/`maxScore` が正解ラベルと対応しない割合（§3.1 参照）            | `evaluate_sample`       |
+| 対応不一致率          | 応答が正解ラベルと対応しない割合（Issue #117 以降は `maxScore` のみ。§3.1 参照）    | `evaluate_sample`       |
 | unavailable 率        | 呼び出しが持続的に失敗し `unavailable` として明示的に記録された割合（§3.13 参照）   | `evaluate_sample`       |
 | 平均 Recognition Conf | `recognition.confidence` の平均（Grading Conf とは別集計）                          | `summarize_by_provider` |
 | 平均 Grading Conf     | `grading.confidence` の平均（Recognition Conf とは別集計）                          | `summarize_by_provider` |
@@ -245,6 +245,17 @@ Gemini、Claude、OpenAI GPT のうち利用可能な最低 2 候補を同一デ
 （Issue #14 受入条件）。
 
 ### 3.1 対応不一致（mismatch）の扱い
+
+> **2026-09-09 更新（Issue #117）**: 応答の wire フォーマットから `questionId`
+> が消えた（本番パイプラインでモデルに 34/45 文字の識別子を転記させ、実機で
+> 採点が permanent 失敗したため。`ai-grading-pipeline.md`「モデルに識別子を
+> 転記させない」）。`GradingResponse.question_id` は**送ったリクエスト側**から
+> 埋まるので、`report.py` 経由の集計では `questionId` 起因の対応不一致は原理的
+> に発生しない。この列が拾うのは `maxScore` の食い違いだけになった。
+> `evaluate_sample` 自身の判定条件は、別の呼び出し元のために従来どおり両方を
+> 見る。「rubric へ写せない criterion」は対応不一致ではなく schema violation
+> として数える（範囲外の `criteria[].index` は
+> `grading_response_from_result` が `SchemaViolation` にする）。
 
 応答が schema 検証を通っても、その `questionId` が今比較している正解ラベルと
 異なる、または `maxScore` が正解ラベルの `max_score` と食い違う場合は、
@@ -343,8 +354,9 @@ criterion 一致率の分母は**正解ラベルに存在する criterion の数
 
 `AIGradingResult`/`GradingOutput`、そして `GradingGroundTruth`（§3.8）は
 いずれも `populate_by_name` を有効にしない。ドキュメント化された wire
-フォーマットは camelCase（`questionId`/`maxScore`）のみで、Python 形式の
-`question_id`/`max_score` を受理しない（コードレビュー指摘:
+フォーマットは camelCase（`AIGradingResult` は `maxScore`、`GradingGroundTruth`
+は `questionId`/`maxScore`）のみで、Python 形式の `question_id`/`max_score` を
+受理しない（コードレビュー指摘:
 `populate_by_name=True` のままだと、ドキュメントと異なるフィールド名を
 返す非準拠な provider 応答も schema 検証を通過してしまい、schema
 violation 率を過小評価する）。
@@ -873,23 +885,28 @@ uv run python poc/issue_14_ai_grading/report.py --dataset "<local eval-dataset d
   あり、リポジトリ外に書くから安全、ではない。方針は**「本文が入ると分かって
   いるフィールドを伏せる」ではなく「検証できないものは保存しない」**である。
   **schema 検証は形しか見ない**ので、「ここは ID だから安全」「ここは
-  メタデータだから安全」は成り立たない — provider は `questionId` に答案本文を
+  メタデータだから安全」は成り立たない — provider は文字列フィールドに答案本文を
   返しても検証を通せる。
 
   記録するのは次のどちらかを満たす値だけ。
 
-  | 条件                             | 対象                                                                                                                                                                                                               |
-  | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | **こちらが送った値と照合できる** | `questionId`（リクエストの ID と一致した場合のみ）、`criteria[].id`（人間ラベルが挙げる rubric criterion の ID のみ）、descriptor の `prompt_version`/`structured_output_mode`（応答から導出されない構成値・定数） |
-  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数）                                                                   |
+  | 条件                             | 対象                                                                                                                                                                                                                                                           |
+  | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | **こちらが送った値と照合できる** | descriptor の `prompt_version`/`structured_output_mode`（応答から導出されない構成値・定数）                                                                                                                                                                    |
+  | **型と範囲で縛れる**             | `grading.score`/`maxScore`（整数）、3 つの `confidence`（0〜1 の実数）、`criteria[].index`（こちらが送った rubric の位置。範囲外は `grading_response_from_result` が既に弾いている）、`criteria[].result`・`annotations[].type`（enum）、`temperature`（実数） |
 
   それ以外はすべて固定の marker に置き換える。自由文（`recognition.text`・
   `comment`・`rationale`・`criteria[].rationale`・`annotations[].target`/
-  `comment`）は `[redacted: PoC 2 records no free text]`。照合できなかった
-  `questionId`・`criteria[].id` は**生文字列ではなく固定の unverified marker**
-  にする。marker は正解ラベルの ID と決して一致しないので、`evaluate_sample`
-  はこのセルを従来どおり `mismatched`（criterion なら不一致）として数える —
-  **食い違いという情報は失わずに、食い違いの中身だけを落とす**。
+  `comment`）は `[redacted: PoC 2 records no free text]`。
+
+  > **2026-09-09 更新（Issue #117）**: 1 行目は以前 `questionId`（リクエストの
+  > ID と一致した場合のみ）と `criteria[].id`（人間ラベルが挙げる criterion の
+  > ID のみ）も挙げており、照合できなかった場合は固定の unverified marker に
+  > 置き換えていた。**その 2 つは provider が書く値ではなくなった。** wire
+  > フォーマットに `questionId` は無く、criterion はこちらが候補を与えた
+  > 1 始まりの位置である（`ai-grading-pipeline.md`「モデルに識別子を転記させ
+  > ない」）。照合も marker も不要になり、**記録の形そのものが漏洩を不可能に
+  > する** — 後から誰かが忘れうる redaction 手順ではなく。
 
 - **集計用の identity は応答だけから決まる純粋関数にする**。`report.py` は
   記録された descriptor から `descriptor_key`（§3.3）を作るので、**同じ応答は
@@ -1028,11 +1045,11 @@ distinct submissions (answers, by submissionId) per subject -- decision record s
 逆転パターンである。これは本物のモデル挙動ではなく、メトリクスがこの種の
 不整合を検出できることを示すためのフィクスチャ。
 
-「対応不一致率」（`mismatch_rate`）は本合成データではすべて 0（`questionId`/
-`maxScore` が正解ラベルと一致しないセルを作っていない）。この列が非ゼロに
-なるのは、応答が別の設問へのものだったり点数スケールが食い違ったりした
-場合で、その場合も完全一致率・許容点差内率へは加算しない
-（`evaluate_sample` が `mismatched` として別集計するため）。cost は
+「対応不一致率」（`mismatch_rate`）は本合成データではすべて 0（`maxScore` が
+正解ラベルと一致しないセルを作っていない）。この列が非ゼロになるのは点数
+スケールが食い違った場合で、その場合も完全一致率・許容点差内率へは加算しない
+（`evaluate_sample` が `mismatched` として別集計するため）。Issue #117 以降、
+「別の設問への応答」はこの列では表現できない（§3.1 の注記）。cost は
 採用ゲート（§8.1）と同じ単位（設問 1,000 問あたり USD）で表示する。
 
 ### 6.2 実データ予備調査（pilot） — 統計的な採用根拠にはならない

@@ -264,7 +264,9 @@ class GradingJobProcessor:
             context_entries = build_context_entries(graph, question_id, sources=sources)
 
             image_bytes = self._store.read_bytes(Path(image.image_path))
-            rubric_text = _rubric_text_for(question.scoring_method, rubric.criteria)
+            rubric_text, criterion_ids = build_rubric_prompt(
+                question.scoring_method, rubric.criteria
+            )
 
         request = GradingRequest(
             question_id=question_id,
@@ -273,6 +275,7 @@ class GradingJobProcessor:
             ocr_text=ocr_text,
             model_answer=model_answer,
             rubric_text=rubric_text,
+            criterion_ids=criterion_ids,
             max_score=question.points,
             prerequisite_context=prerequisite_context,
         )
@@ -293,21 +296,23 @@ class GradingJobProcessor:
         except ProviderUnavailable as exc:
             return self._failed(ErrorCategory.PERMANENT, "call failed", exc)
 
-        rubric_criterion_ids = {c.id for c in rubric.criteria}
         response_criterion_ids = {c.criterion_id for c in response.criteria}
-        if (
-            response.question_id != question_id
-            or response.max_score != question.points
-            or response_criterion_ids != rubric_criterion_ids
-        ):
-            # A schema-valid response for the wrong question, or one whose
-            # criteria don't correspond 1:1 to the registered rubric (an
-            # unknown criterion id, or a registered one silently omitted) --
-            # never scored as if it were a real grade (mirrors
-            # `ai_grading_metrics.evaluate_sample`'s "mismatched" handling in
-            # the PoC 2 harness this pipeline adopted; extended per Issue #20
-            # review to also cover criteria that don't map onto the rubric,
-            # not just question_id/max_score).
+        if response.max_score != question.points or response_criterion_ids != set(criterion_ids):
+            # A schema-valid response whose max score is not this question's,
+            # or whose criteria don't correspond 1:1 to the registered rubric
+            # (a registered criterion silently omitted, since Issue #117 the
+            # only way this set can differ) -- never scored as if it were a
+            # real grade (mirrors `ai_grading_metrics.evaluate_sample`'s
+            # "mismatched" handling in the PoC 2 harness this pipeline
+            # adopted; extended per Issue #20 review to also cover criteria
+            # that don't map onto the rubric, not just max_score).
+            #
+            # There is no ``response.question_id != question_id`` check any
+            # more: since Issue #117 that field is filled in from *this*
+            # request rather than copied out of the response, so comparing
+            # it to itself could only ever pass. What it used to catch -- a
+            # model writing a subtly different id -- is now impossible by
+            # construction instead of caught after the fact.
             return self._failed(ErrorCategory.PERMANENT, "returned a mismatched response")
 
         now = self._clock.now()
@@ -443,18 +448,37 @@ _SCORING_METHOD_LABEL = {
 }
 
 
-def _rubric_text_for(scoring_method: ScoringMethod, criteria: Sequence[RubricCriterion]) -> str:
-    """Rubric text sent to the provider (Issue #20 review, P1): must carry
-    every criterion's registered ``id`` (not just its description/points) so
-    a real provider's response can be mapped back onto the rubric
-    unambiguously, and the question's `scoring_method` so it knows whether to
-    grade additively or apply `SUBTRACTIVE` deductions -- omitting either
-    left a real provider unable to reliably reproduce the registered rubric
-    from the description text alone.
+def build_rubric_prompt(
+    scoring_method: ScoringMethod, criteria: Sequence[RubricCriterion]
+) -> tuple[str, tuple[str, ...]]:
+    """The rubric text sent to the provider, and the registered criterion ids
+    that text's numbering stands for.
+
+    Returned together, from one ordered read of ``criteria``, because they
+    are two halves of one correspondence: the prompt says 「1. ...」 and the
+    response answers ``index: 1``, and if the numbering and the id list were
+    built in two places they could drift into scoring the wrong criterion
+    silently. Ordered by `RubricCriterion.position` -- the rubric's own
+    registered order, not whatever order a repository happened to return.
+
+    Carries the question's `scoring_method` so the provider knows whether to
+    grade additively or apply `SUBTRACTIVE` deductions (Issue #20 review,
+    P1: omitting it left a real provider unable to reproduce the registered
+    rubric from the description text alone).
+
+    It deliberately does **not** carry the criteria's registered ids any
+    more (Issue #117). It used to send ``- id=<45 chars>: ...`` and ask for
+    that string back; on real material a model duplicated one character of
+    it 4 times out of 4 and every one of those gradings failed
+    ``PERMANENT``. A number is not a transcription, so this sends numbers.
     """
+    ordered = sorted(criteria, key=lambda c: c.position)
     lines = [f"採点方式: {_SCORING_METHOD_LABEL[scoring_method]}"]
-    lines.extend(f"- id={c.id}: {c.description}(配点{c.max_points}点)" for c in criteria)
-    return "\n".join(lines)
+    lines.extend(
+        f"{position}. {c.description}(配点{c.max_points}点)"
+        for position, c in enumerate(ordered, start=1)
+    )
+    return "\n".join(lines), tuple(c.id for c in ordered)
 
 
 def _prompt_text_for(question_number: str) -> str:

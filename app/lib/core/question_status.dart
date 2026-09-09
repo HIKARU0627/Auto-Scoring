@@ -125,6 +125,24 @@ enum QuestionStatus {
 /// job that is running again would tell the reviewer the opposite of what is
 /// happening.
 ///
+/// **Once the job has stopped, that reasoning runs out** (Issue #118). A
+/// job that failed, was cancelled, or finished with an untrustworthy result
+/// is not going to describe anything newer, and a person who has since
+/// recorded a decision *is* the newer fact -- they graded the question by
+/// hand precisely because the queue could not. Leaving 失敗 on such a
+/// question would have made 承認済み unreachable for it forever, in the rail,
+/// the DAG and the Inspector at once, while the answer sheet itself
+/// correctly counted it as 確認済み ([Issue #112]'s
+/// `Submission.REVIEWED`) -- three places saying one thing and the fourth
+/// saying the opposite, which is the exact failure Issue #84 collapsed this
+/// function into one place to prevent.
+///
+/// So for a *terminal* job the human decision wins, but only when it was
+/// recorded after that job was created -- the same "is this decision about
+/// this attempt?" test [_regradeAnswered] already applies in the other
+/// direction. A decision predating the job is about an older attempt and
+/// stays outranked.
+///
 /// [review] is the *effective* `Review` (post-Undo) or `null` when none
 /// exists -- or when this screen has simply not fetched this question's
 /// reviews yet, which is the common case for a question the reviewer has not
@@ -147,17 +165,29 @@ QuestionStatus deriveQuestionStatus({
     'blocked' => QuestionStatus.blocked,
     'queued' => QuestionStatus.queued,
     'running' => QuestionStatus.running,
-    'failed' => QuestionStatus.failed,
-    'cancelled' => QuestionStatus.cancelled,
+    'failed' => _decisionSince(review, job) ?? QuestionStatus.failed,
+    'cancelled' => _decisionSince(review, job) ?? QuestionStatus.cancelled,
     // `usable` is only ever set on a terminal transition, and `false` means
     // the queue itself judged the result not good enough to release anything
     // downstream -- a stronger statement than "nobody has reviewed it yet",
-    // so it outranks the review overlay.
-    'succeeded' when job.usable == false => QuestionStatus.needsCheck,
+    // so it outranks a review the reviewer recorded *before* this attempt.
+    // Not one they recorded after it: that is a person having looked at
+    // exactly this result and decided (Issue #118).
+    'succeeded' when job.usable == false =>
+      _decisionSince(review, job) ?? QuestionStatus.needsCheck,
     'succeeded' => _reviewStatus(review, job) ?? QuestionStatus.graded,
     // An unknown state from a newer backend: say nothing rather than guess.
     _ => QuestionStatus.pending,
   };
+}
+
+/// [_reviewStatus], but only for a decision recorded *after* [job] was
+/// created -- the human decision that is about this attempt rather than an
+/// older one. `null` when there is no such decision, leaving the caller's
+/// own job-derived status in place.
+QuestionStatus? _decisionSince(ReviewResponse? review, JobResponse job) {
+  if (review == null || !review.createdAt.isAfter(job.createdAt)) return null;
+  return _reviewStatus(review, job);
 }
 
 QuestionStatus? _reviewStatus(ReviewResponse? review, JobResponse? job) =>

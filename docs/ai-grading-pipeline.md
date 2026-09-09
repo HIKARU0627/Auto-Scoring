@@ -89,7 +89,7 @@ Issue #97 で無くなっている（下記「アプリ本体への接続」）�
 | `SchemaViolation`（構造化出力に従わない）                     | 落とす               | モデル固有の能力差。同じモデルへ再送しても直らないが、別モデルなら通りうる                                                                                                    |
 | 認証情報不足・設定不正（`AIProviderConfigError`）             | チェーン構築時に除外 | 実行時ではなく組み立て時に落とす（上記）。Codex App Server は鍵を持たないが、`codex` 実行ファイルが無いホストでは同じく構築時に除外する（無ければ確実に失敗する段を残さない） |
 | 素の`ProviderUnavailable`（実行時の401/4xx・transport error） | 落とす               | 表に無い経路。構築時には有効だった認証情報が呼び出し時に拒否される場合であり、チェーンが存在する理由そのもの                                                                  |
-| 応答の対応不一致（手順7、criterion id不一致）                 | 落とさない           | ポートの外（processor）で判定するため合成アダプタからは見えない。現状どおり`PERMANENT`                                                                                        |
+| 応答の対応不一致（手順7、rubricへ写せない応答）               | 落とさない           | ポートの外（processor）で判定するため合成アダプタからは見えない。現状どおり`PERMANENT`                                                                                        |
 
 **上表に無い例外はチェーンを止める。** 上表はポート（`domain/ai_provider.py`）が
 宣言している例外がすべてなので、それ以外はアダプタの不具合であって provider の
@@ -296,6 +296,11 @@ loc: ('annotations', 0, 'comment')   type: string_too_long
   `Job.last_error` は
   `gemini AI provider returned a malformed response [gemini SchemaViolation annotations.0.comment: string_too_long]`
   になる。
+- **schema 検証を通ったあとの失敗にも同じ規律を適用する。** Issue #117 が足した
+  「rubric の位置が範囲外」は pydantic の `ValidationError` ではないので
+  `describe_schema_violation` を通らない。`grading_response_from_result` が
+  `detail="criteria.<位置>.index: out_of_range"` を直接付ける（前掲
+  「モデルに識別子を転記させない」）。
 - `GradingJobProcessor._failed` が、同じ文字列を WARNING で 1 行出す。
   `FallbackAIProvider` の WARNING は**チェーンを組んだときしか出ない**が、
   実機はプロバイダ 1 本の構成だった（鍵の無い openrouter / openai は
@@ -329,19 +334,25 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
    （後述）。
 6. `AIProvider.grade()`を呼ぶ（`asyncio.to_thread`でイベントループをブロック
    しない。ネットワーク呼び出し中はDBトランザクションを保持しない --
-   `jobs/queue.py`・`RecognitionJobProcessor`と同じ規約）。rubric_textには
-   各criterionの登録済み`id`と設問の`scoring_method`（加算/減点）を含める
-   （後述「provider requestで全rubric意味論を保持する」、コードレビュー
-   指摘）。
-7. 応答の`question_id`/`max_score`が要求したものと一致しない場合、または
-   応答の`criteria[].id`の集合が登録済みrubricのcriterion id集合と完全一致
-   しない場合（未知のidを含む、または既知のidを省略している）は
-   `FAILED`(`PERMANENT`)にする -- PoC 2のメトリクスハーネス
+   `jobs/queue.py`・`RecognitionJobProcessor`と同じ規約）。rubric_textは
+   criterionを**番号付きの箇条書き**にし、設問の`scoring_method`（加算/減点）
+   を含める。登録済みcriterion `id`はrubric_textには入れず、
+   `GradingRequest.criterion_ids`として番号と同じ順で別に運ぶ
+   （後述「provider requestで全rubric意味論を保持する」・
+   「モデルに識別子を転記させない」）。
+7. 応答の`max_score`が要求したものと一致しない場合、または応答の
+   `criteria[].index`から解決したcriterion idの集合が登録済みrubricのcriterion
+   id集合と完全一致しない場合（登録済みのidを省略している場合。範囲外の
+   `index`はここへ来る前に`SchemaViolation`になる）は`FAILED`(`PERMANENT`)に
+   する -- PoC 2のメトリクスハーネス
    （`ai_grading_metrics.evaluate_sample`）が「対応不一致」として実装している
-   分類を、本番パイプラインでも同じ理由で採用・拡張する: 別設問への応答や、
-   rubricへ確実にマッピングできない応答をこの設問の採点として保存しない
+   分類を、本番パイプラインでも同じ理由で採用・拡張する: rubricへ確実に
+   マッピングできない応答をこの設問の採点として保存しない
    （コードレビュー指摘: schema上は妥当でもcriterion idが登録済みrubricと
    食い違う応答を、そのまま高confidenceで永続化・usableにしていた）。
+   なお`question_id`の照合は無くなった（Issue #117）: 応答は識別子を持たず、
+   `GradingResponse.question_id`は送ったrequestから埋めるため、比較しても
+   常に一致する。
 8. 成功応答は`GradeResult`（`source=ai`、常に）として永続化し、応答に含まれる
    `annotations[]`も`Annotation`（`source=ai`）として保存する
    （`target`を`anchor_text`へ、座標は一切持たない -- 簡易設計書 §12.1）。
@@ -393,10 +404,68 @@ providerが区別するために必須）のどちらも欠けていた -- 実pr
 された場合、outcomeをrubricへ確実にマッピングできず、減点式採点を加算式と
 取り違えるおそれがあった（コードレビュー指摘）。
 
-修正: `jobs.grading_processor._rubric_text_for`が「採点方式:
-加算方式/減点方式」の1行と、`- id=<criterion id>: <description>(配点<max_points>点)`
-という行をcriterionごとに生成する。この`id`が、次節の応答検証で使う
-「登録済みrubricのcriterion id集合」と一致することを要求する。
+修正: `jobs.grading_processor.build_rubric_prompt`が「採点方式:
+加算方式/減点方式」の1行と、criterionごとの1行を生成する。
+
+> **2026-09-09 更新（Issue #117）**: この行は当初
+> `- id=<criterion id>: <description>(配点<max_points>点)` だった。現在は
+> `<番号>. <description>(配点<max_points>点)` であり、登録済み`id`は
+> プロンプトに入れない。理由は次節。
+
+### モデルに識別子を転記させない（Issue #117）
+
+**実機（実データ × 実 Vertex AI）で採点が permanent 失敗した。** 期待した
+criterion id `d4a534d8…` に対しモデルが返したのは `d4a4534d8…` で、「4」が
+1つ多い。criterion idは`f"{test_id}:{number}:rubric:c{n}"`（`test_id`は
+`uuid4().hex`の32文字）で**45文字**あり、それをモデルに書き写させていた。
+計測は **45文字のid → 4/4で不一致、短いid → 0/4**。長さが直接の原因である。
+
+**構造化出力では防げない。** JSON Schemaが強制できるのは応答の**形**であって、
+「その形の中の文字列が入力の正確な転記であること」ではない。実際この
+リポジトリは、Vertex AIの`responseJsonSchema`が形は守りながら`maxLength`を
+無視した実測を既に記録している（`poc-2-ai-grading.md` §7.4）。
+
+**「短いidにする」は採らない。** 短くしても転記は転記で、確率が下がるだけ。
+決定は次の2つで、どちらも「転記させない」側に寄せてある:
+
+1. **`questionId`をワイヤ形式から削除した。** 1回の呼び出しは1設問なので、
+   エコーバックは呼び出し側が既に知っていること以上を何も証明しない。
+   `GradingResponse.question_id`は送った`GradingRequest`から埋める。
+   これで34文字の転記要求も消えた（Issueの報告はcriterion idだけだったが、
+   同じ欠陥が`questionId`にもあった）。
+2. **`criteria[].id`（自由文字列）を`criteria[].index`（1始まりの整数）に
+   置き換えた。** プロンプトのrubricは`1. <description>(配点N点)`と番号だけを
+   出し、`index`→登録済みidの対応は
+   `domain.ai_provider.grading_response_from_result`が
+   `GradingRequest.criterion_ids`（rubric_textと同じ順・同じ関数が生成）で
+   解決する。さらに`adapters.ai_grading._schema.strict_ai_grading_result_schema`
+   はリクエストごとにスキーマを組み、`index`に`enum: [1..N]`、`criteria`に
+   `minItems`/`maxItems` = N を入れる -- 自由回答ではなく**選択問題として
+   問う**（Issue #101の帰属判定と同じ手）。ただしこれは多重防御であって
+   本体ではない。本体は「小さい整数は何かの転記ではない」ことのほうである。
+
+**`index`ではなく配列の位置そのもの（idもindexも持たない）にはしなかった。**
+欠落や並べ替えを静かに取り違えるため。`index`があれば手順7の集合一致判定が
+欠落・重複を必ず捕まえ、「誤った採点結果を保存しない」（Issue #97）が保たれる。
+範囲外の`index`は`grading_response_from_result`が`SchemaViolation`にする。
+
+**この新しい失敗経路も診断できる**（Issue #121 の決定「どのフィールドがなぜ落ちたかを
+残す」を、後から足した経路に適用し忘れない）。範囲外`index`の`SchemaViolation`は
+`detail="criteria.<位置>.index: out_of_range"`を持つので、`Job.last_error`は
+`[gemini SchemaViolation criteria.0.index: out_of_range]`になる。
+フィールドパスはこのリポジトリ自身のリテラル、位置は整数で、provider が書いた値は
+1つも混ざらない。`describe_schema_violation`（pydantic の`ValidationError`が対象）は
+この経路を通らないため、`detail`を明示的に付けている。
+
+**副次的な効果**: providerへ送るペイロードから`test_id`が消えた。
+`mvp-acceptance.md`は従来「設問idとrubric criterion idが構造上`testId`を
+含むため送信は不可避」と書いていたが、もう不可避ではない
+（`test_no_student_identifying_data_reaches_either_provider`が禁止語に
+`test_id`を追加して実測している）。
+
+この性質は`backend/tests/test_ai_grading_identifier_echo.py`が外側から固定する
+（「45文字級のidがプロンプトに現れない」を、文字数の閾値ではなく**不在**として
+書いてある）。
 
 ### Confidence閾値: 3つの確信度すべてが閾値以上のときだけusable
 
@@ -558,6 +627,10 @@ Issue #20追加受入条件「使用したgraph versionと前提result version�
 
 ## 検証
 
+- `backend/tests/test_ai_grading_identifier_echo.py`: providerへ送るテキストに
+  `question_id`もcriterion idも現れないこと、応答スキーマの`index`が
+  `enum: [1..N]`で`criteria`が丁度N件であること（Issue #117）。実際に失敗した
+  34/45文字のidをそのまま組み立てて確かめる。
 - `backend/tests/test_ai_provider_contract.py`: `ProviderTimeoutError`等の
   新しい例外階層、`PrerequisiteAnswer`のバリデーション（provides要求データの
   必須化、空白ocr_textの許容）、`UnconfiguredAIProvider`のcontract相当テスト。
@@ -568,6 +641,7 @@ Issue #20追加受入条件「使用したgraph versionと前提result version�
   スクリプト可能なfake `OCRProvider`/`AIProvider`＋実SQLite＋実
   `LocalFileStore`で検証 -- 正常系（GradeResult/Annotation永続化・
   再現性メタデータ）、schema不正、対応不一致、timeout/rate limit/5xx分類、
+  rubricの番号付けとcriterion idが別々に運ばれること（Issue #117）、
   低Recognition/低Grading Confidenceそれぞれのneeds_review化、model
   answer/rubric未登録時の`PERMANENT`失敗、クラッシュ後の再処理で二重に
   providerを呼ばないこと、前提設問contextの実際の組み立てと`GradeResult.

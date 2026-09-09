@@ -972,3 +972,165 @@ def test_submission_returns_to_needs_review_once_an_undo_unconfirms_a_question(
         submission = uow.submissions.get("sub-1")
     assert submission is not None
     assert submission.review_reason == "answer_area_undefined:q-1"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #118: a question AI could not grade at all
+# --------------------------------------------------------------------------- #
+def test_a_question_with_no_ai_grade_can_be_graded_by_a_person(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #118 受入1/2: AI 採点が失敗した設問に、人が点数を入れられる。
+
+    Nothing here seeds a `GradeResult`: this is exactly the state a
+    permanently-failed grading job leaves behind, and Issue #97 is right to
+    leave it that way rather than persist a grade nobody produced. What was
+    missing is the way back out of it -- ``approve``/``edit`` both need an AI
+    grade to confirm or correct, so the answer sheet stopped there.
+    """
+    _seed_question_and_submission(session_factory)
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/grade",
+        headers=_AUTH,
+        json={
+            "expected_version": 0,
+            "score_awarded": 3,
+            "score_maximum": 5,
+            "criteria": [{"criterion_id": "c-1", "outcome": "pass"}],
+            "rationale": "AI採点が失敗したため人が採点した",
+            "comment": "おおむね良い",
+            "recognized_text": "人が読んだ答案",
+            "note": "AI採点が失敗",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["review"]["action"] == "modified"
+    assert body["grade"]["source"] == "human"
+    assert body["grade"]["score"] == {"awarded": 3, "maximum": 5, "ratio": 0.6}
+    assert body["grade"]["criteria"] == [
+        {"criterion_id": "c-1", "outcome": "pass", "confidence": None}
+    ]
+    assert body["recognition"]["text"] == "人が読んだ答案"
+    # Issue #118 受入5: the history says the AI produced nothing to base this
+    # on -- a `modified` row with no AI grade behind it is a person grading
+    # from scratch, not a correction of something.
+    assert body["review"]["ai_grade_result_id"] is None
+    assert body["review"]["human_grade_result_id"] == body["grade"]["id"]
+    assert body["review"]["note"] == "AI採点が失敗"
+
+
+def test_a_manually_graded_question_counts_as_confirmed_and_completes_the_answer(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #118 受入3, kept consistent with Issue #112.
+
+    A question a person graded from scratch is confirmed exactly like an
+    approved one -- otherwise the one question AI could not read would hold
+    the whole answer sheet out of 「確認済み」 forever.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.questions.add(make_question(id="q-2", number="2"))
+        uow.rubrics.add(make_rubric())
+        uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
+        # Only q-2 was graded: q-1's grading job failed permanently.
+        uow.grades.add(make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI))
+        uow.commit()
+
+    manual = client.post(
+        "/submissions/sub-1/questions/q-1/review/grade",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 5, "score_maximum": 5},
+    )
+    assert manual.status_code == 201
+    assert manual.json()["submission_state"] == "ai_processed"
+
+    approved = client.post(
+        "/submissions/sub-1/questions/q-2/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert approved.status_code == 201
+    assert approved.json()["submission_state"] == "reviewed"
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.REVIEWED
+
+
+def test_manual_grading_is_refused_once_an_ai_grade_exists(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """This route exists for the "AI produced nothing" case only.
+
+    Letting it through when an AI grade *does* exist would let a reviewer
+    record a grade that silently ignores an AI attempt they never saw -- the
+    same hazard ``expected_ai_grade_id`` guards on ``edit``/``approve``
+    (Issue #22 P1 review). The reviewer is told to reload and use those
+    instead.
+    """
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(make_grade(id="grade-ai", source=GradingSource.AI))
+        uow.commit()
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/grade",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 5, "score_maximum": 5},
+    )
+
+    assert response.status_code == 409
+
+    reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
+    assert reviews == []
+    grades = client.get("/submissions/sub-1/questions/q-1/grades", headers=_AUTH).json()
+    assert [g["source"] for g in grades] == ["ai"]
+
+
+def test_manual_grading_still_scores_against_the_registered_points(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The same trust-boundary check ``edit`` makes (AGENTS.md "Security"):
+    a human grade is scored out of the question's own registered total, never
+    out of one the request invented."""
+    _seed_question_and_submission(session_factory)
+
+    response = client.post(
+        "/submissions/sub-1/questions/q-1/review/grade",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 7, "score_maximum": 7},
+    )
+
+    assert response.status_code == 422
+
+
+def test_manual_grading_can_be_undone_back_to_unconfirmed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Undo has to reach this row too -- it is an ordinary ``modified`` row,
+    and the append-only history keeps the human grade retrievable after it."""
+    _seed_question_and_submission(session_factory, state=SubmissionState.AI_PROCESSED)
+
+    created = client.post(
+        "/submissions/sub-1/questions/q-1/review/grade",
+        headers=_AUTH,
+        json={"expected_version": 0, "score_awarded": 4, "score_maximum": 5},
+    )
+    assert created.status_code == 201
+
+    undone = client.post(
+        "/submissions/sub-1/questions/q-1/review/undo",
+        headers=_AUTH,
+        json={"expected_version": 1},
+    )
+
+    assert undone.status_code == 201
+    assert undone.json()["submission_state"] == "ai_processed"
+    grades = client.get("/submissions/sub-1/questions/q-1/grades", headers=_AUTH).json()
+    assert [g["source"] for g in grades] == ["human"]

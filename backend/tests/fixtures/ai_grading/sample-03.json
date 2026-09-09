@@ -29,7 +29,6 @@
         "synthetic-a": {
           "ocr_clean": {
             "response": {
-              "questionId": "poc2-synth-03",
               "recognition": {
                 "text": "1234年",
                 "confidence": 0.99
@@ -41,7 +40,7 @@
               },
               "criteria": [
                 {
-                  "id": "d1",
+                  "index": 1,
                   "result": "pass",
                   "confidence": 0.99,
                   "rationale": "年号1234が模範解答と一致している。"
@@ -63,7 +62,6 @@
           },
           "ocr_noisy": {
             "response": {
-              "questionId": "poc2-synth-03",
               "recognition": {
                 "text": "l234年",
                 "confidence": 0.4
@@ -75,7 +73,7 @@
               },
               "criteria": [
                 {
-                  "id": "d1",
+                  "index": 1,
                   "result": "pass",
                   "confidence": 0.6,
                   "rationale": "「l234」は「1234」のOCR誤読と推定し、数字として妥当と判断。"
@@ -99,7 +97,6 @@
         "synthetic-b": {
           "ocr_clean": {
             "response": {
-              "questionId": "poc2-synth-03",
               "recognition": {
                 "text": "1234年",
                 "confidence": 0.99
@@ -111,7 +108,7 @@
               },
               "criteria": [
                 {
-                  "id": "d1",
+                  "index": 1,
                   "result": "pass",
                   "confidence": 0.95,
                   "rationale": "年号が一致。"
@@ -133,7 +130,6 @@
           },
           "ocr_noisy": {
             "response": {
-              "questionId": "poc2-synth-03",
               "recognition": {
                 "text": "l234年",
                 "confidence": 0.35
@@ -145,7 +141,7 @@
               },
               "criteria": [
                 {
-                  "id": "d1",
+                  "index": 1,
                   "result": "partial",
                   "confidence": 0.4,
                   "rationale": "文字化けのため確信が持てず部分点とした。"

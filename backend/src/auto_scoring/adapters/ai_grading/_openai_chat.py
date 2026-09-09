@@ -59,7 +59,7 @@ _STRUCTURED_OUTPUT_MODE = "json_schema"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
-def _build_response_format() -> dict[str, object]:
+def _build_response_format(*, criterion_count: int) -> dict[str, object]:
     """OpenAI-compatible ``response_format`` constraining the completion to
     :class:`AIGradingResult`'s wire shape (camelCase aliases, ``extra:
     forbid`` -- section 3.6 of ``docs/poc-2-ai-grading.md``).
@@ -72,13 +72,17 @@ def _build_response_format() -> dict[str, object]:
     ``parse_ai_grading_result`` regardless of whether the routed-to model
     actually honours this hint (Issue #14 acceptance: never trust a
     provider's own claim of schema-conformance without checking).
+
+    ``criterion_count`` is this request's own rubric size, which is what
+    turns ``criteria[].index`` into a fixed multiple choice (Issue #117) --
+    see ``_schema.strict_ai_grading_result_schema``.
     """
     return {
         "type": "json_schema",
         "json_schema": {
             "name": "ai_grading_result",
             "strict": True,
-            "schema": strict_ai_grading_result_schema(),
+            "schema": strict_ai_grading_result_schema(criterion_count=criterion_count),
         },
     }
 
@@ -188,7 +192,7 @@ class ChatCompletionsAIProvider:
         payload: dict[str, Any] = {
             "model": self._model,
             "temperature": self._temperature,
-            "response_format": _build_response_format(),
+            "response_format": _build_response_format(criterion_count=len(request.criterion_ids)),
             "messages": [
                 {"role": "system", "content": GRADING_SYSTEM_INSTRUCTIONS},
                 {
@@ -268,5 +272,9 @@ class ChatCompletionsAIProvider:
             ) from None
 
         return grading_response_from_result(
-            parsed_result, descriptor=self.describe(), latency_seconds=latency_seconds
+            parsed_result,
+            question_id=request.question_id,
+            criterion_ids=request.criterion_ids,
+            descriptor=self.describe(),
+            latency_seconds=latency_seconds,
         )

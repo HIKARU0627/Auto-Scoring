@@ -26,7 +26,11 @@ from auto_scoring.domain.ai_provider import (
 )
 from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
 
-from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
+from .test_ai_provider_contract import (
+    _VALID_REQUEST,
+    MALFORMED_MARKER,
+    AIProviderContract,
+)
 
 _OCR_TEXT = "答案テキスト"
 _PROJECT = "test-project"
@@ -47,17 +51,16 @@ def _tokens() -> AdcTokenSource:
     return AdcTokenSource(credentials=_FakeCredentials(), project_id=_PROJECT)
 
 
-def _canned_generate_content(question_id: str) -> dict[str, object]:
-    if question_id == "malformed":
-        content = json.dumps({"questionId": question_id, "grading": {"score": 1}})
+def _canned_generate_content(*, malformed: bool) -> dict[str, object]:
+    if malformed:
+        content = json.dumps({"grading": {"score": 1}})
     else:
         content = json.dumps(
             {
-                "questionId": question_id,
                 "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
                 "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
                 "criteria": [
-                    {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}
+                    {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠"}
                 ],
                 "comment": "コメント",
                 "rationale": "根拠",
@@ -77,10 +80,12 @@ def _fake_transport_handler(request: httpx.Request) -> httpx.Response:
     # mixed into the user turn that carries student-controlled OCR text.
     assert payload["systemInstruction"]["parts"][0]["text"]
     user_text = payload["contents"][0]["parts"][0]["text"]
-    marker = 'The questionId in your response must be exactly "'
-    start = user_text.index(marker) + len(marker)
-    end = user_text.index('"', start)
-    return httpx.Response(200, json=_canned_generate_content(user_text[start:end]))
+    # Selected from the prompt text itself: since Issue #117 nothing that
+    # identifies the question is sent, so a request asking for the malformed
+    # canned response says so in the one field this fake can still see.
+    return httpx.Response(
+        200, json=_canned_generate_content(malformed=MALFORMED_MARKER in user_text)
+    )
 
 
 def _make_provider(handler: object = None, *, location: str = "global") -> VertexGeminiAIProvider:
@@ -212,10 +217,9 @@ def test_multi_part_text_is_concatenated_in_order() -> None:
     violation the model never actually committed."""
     body = json.dumps(
         {
-            "questionId": "q1",
             "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
             "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
-            "criteria": [{"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
+            "criteria": [{"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
             "comment": "コメント",
             "rationale": "根拠",
             "annotations": [],
@@ -321,16 +325,18 @@ def test_a_corrupt_compressed_body_does_not_stop_the_chain() -> None:
 
 def _over_long_comment_response(*, comment_chars: int) -> dict[str, object]:
     """The shape the live run actually returned for a long-answer question:
-    ``finishReason: STOP``, complete JSON, correct score/criterion id/question
-    id -- and one annotation comment of 147 characters against a 120-character
-    cap. Every one of those was discarded whole.
+    ``finishReason: STOP``, complete JSON, a correct score and a correct
+    criterion outcome -- and one annotation comment of 147 characters against
+    a 120-character cap. Every one of those was discarded whole. (The live
+    run's correct ``questionId``/``criteria[].id`` are not in the payload any
+    more: Issue #117 removed both, since an identifier the model had to copy
+    was itself a source of permanent failures.)
     """
     content = json.dumps(
         {
-            "questionId": _VALID_REQUEST.question_id,
             "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
             "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
-            "criteria": [{"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
+            "criteria": [{"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
             "comment": "コメント",
             "rationale": "根拠",
             "annotations": [{"target": "行く", "type": "comment", "comment": "あ" * comment_chars}],
@@ -371,10 +377,9 @@ def test_a_schema_violation_reports_the_field_and_reason_but_not_the_value() -> 
     student_text = "答案から写した文字列"
     content = json.dumps(
         {
-            "questionId": _VALID_REQUEST.question_id,
             "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
             "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
-            "criteria": [{"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
+            "criteria": [{"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
             "comment": "コメント",
             "rationale": "根拠",
             "annotations": [{"target": "行く", "type": student_text}],

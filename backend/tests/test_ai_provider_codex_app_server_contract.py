@@ -28,21 +28,23 @@ from auto_scoring.adapters.ai_grading.codex_app_server_provider import (
 )
 from auto_scoring.domain.ai_provider import AIProvider, ProviderUnavailable, SchemaViolation
 
-from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
+from .test_ai_provider_contract import (
+    _VALID_REQUEST,
+    MALFORMED_MARKER,
+    AIProviderContract,
+)
 
 _OCR_TEXT = "答案テキスト"
-_QUESTION_ID_MARKER = 'The questionId in your response must be exactly "'
 
 
-def _canned_grading_json(question_id: str) -> str:
-    if question_id == "malformed":
-        return json.dumps({"questionId": question_id, "grading": {"score": 1}})
+def _canned_grading_json(*, malformed: bool) -> str:
+    if malformed:
+        return json.dumps({"grading": {"score": 1}})
     return json.dumps(
         {
-            "questionId": question_id,
             "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
             "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
-            "criteria": [{"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
+            "criteria": [{"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
             "comment": "コメント",
             "rationale": "根拠",
             "annotations": [],
@@ -57,7 +59,10 @@ class _FakeAppServerTransport:
 
     def __init__(self) -> None:
         self._thread_id = "thread-1"
-        self._last_question_id: str | None = None
+        #: Whether the turn's prompt asked for the deliberately malformed
+        #: canned response. Read off the prompt text, the only thing this
+        #: fake sees -- since Issue #117 no identifier is sent at all.
+        self._malformed_requested: bool | None = None
         self.closed = False
 
     def request(
@@ -76,9 +81,7 @@ class _FakeAppServerTransport:
             input_items = params["input"]
             assert isinstance(input_items, list)
             text = input_items[0]["text"]
-            start = text.index(_QUESTION_ID_MARKER) + len(_QUESTION_ID_MARKER)
-            end = text.index('"', start)
-            self._last_question_id = text[start:end]
+            self._malformed_requested = MALFORMED_MARKER in text
             image_path = input_items[1]["path"]
             assert input_items[1]["type"] == "localImage"
             assert os.path.exists(image_path)  # the adapter must write the image to disk
@@ -96,7 +99,7 @@ class _FakeAppServerTransport:
         timeout_seconds: float,
     ) -> dict[str, object]:
         assert method == "turn/completed"
-        assert self._last_question_id is not None
+        assert self._malformed_requested is not None
         params: dict[str, object] = {
             "threadId": self._thread_id,
             "turn": {
@@ -106,7 +109,7 @@ class _FakeAppServerTransport:
                     {
                         "id": "item-1",
                         "type": "agentMessage",
-                        "text": _canned_grading_json(self._last_question_id),
+                        "text": _canned_grading_json(malformed=self._malformed_requested),
                     }
                 ],
             },
@@ -190,12 +193,12 @@ def test_grade_falls_back_to_item_completed_when_turn_items_is_not_loaded() -> N
 
     class _NotLoadedItemsViewTransport(_FakeAppServerTransport):
         def peek_thread_items(self, thread_id: str) -> list[dict[str, object]]:
-            assert self._last_question_id is not None
+            assert self._malformed_requested is not None
             return [
                 {
                     "id": "item-1",
                     "type": "agentMessage",
-                    "text": _canned_grading_json(self._last_question_id),
+                    "text": _canned_grading_json(malformed=self._malformed_requested),
                 }
             ]
 

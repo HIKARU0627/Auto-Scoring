@@ -45,6 +45,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(IntakeTemplateModel.serializer)
       ..add(JobResponse.serializer)
       ..add(LocationInner.serializer)
+      ..add(ManualGradeRequest.serializer)
       ..add(ManualRecognitionRequest.serializer)
       ..add(MaterialRole.serializer)
       ..add(NormalizedBBoxModel.serializer)
@@ -83,6 +84,14 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(UpdateCriteriaRequest.serializer)
       ..add(UpdateProfileRequest.serializer)
       ..add(ValidationError.serializer)
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(AnnotationEditRequest)]),
+          () => ListBuilder<AnnotationEditRequest>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(CriterionOutcomeRequest)]),
+          () => ListBuilder<CriterionOutcomeRequest>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(AnnotationEditRequest)]),

@@ -1523,12 +1523,18 @@ def test_no_student_identifying_data_reaches_either_provider(
     wait_until_settled(client, submission_id)
     assert ai_provider.requests, "nothing was sent, so nothing was proved"
 
-    # The test id is deliberately *not* on this list: it identifies the exam,
-    # not the student, and it legitimately prefixes the question and rubric
-    # criterion ids the request has to carry. Section 2 (2)'s list is about
-    # the student -- name, student id, seat number, school, answer filename --
-    # plus the per-student `submissionId` those map onto internally.
-    forbidden = [_STUDENT_LABEL, submission_id, _ANSWER_FILENAME_MARKER]
+    # Section 2 (2)'s list is about the student -- name, student id, seat
+    # number, school, answer filename -- plus the per-student
+    # `submissionId` those map onto internally.
+    #
+    # The test id used to be excluded here, on the grounds that the question
+    # and rubric criterion ids the request had to carry were built from it.
+    # Since Issue #117 no identifier is sent at all (a criterion is a
+    # position in the numbered rubric, and there is no question id on the
+    # wire), so the test id has nothing left to ride in on and is asserted
+    # absent like the rest. It is still not *student* data; this is simply
+    # a payload that no longer needs it.
+    forbidden = [_STUDENT_LABEL, submission_id, _ANSWER_FILENAME_MARKER, test_id]
     for request in ai_provider.requests:
         text_fields = (
             request.prompt_text,
@@ -1539,10 +1545,12 @@ def test_no_student_identifying_data_reaches_either_provider(
         for needle in forbidden:
             for field in text_fields:
                 assert needle not in field, f"{needle!r} leaked into a grading request"
-        # One question's material, and only this question's.
+        # One question's material, and only this question's -- and neither
+        # this question's own identifiers nor any other question's.
         assert request.question_id in _question_ids(test_id)
-        other = [q for q in _question_ids(test_id) if q != request.question_id]
-        assert all(q not in "".join(text_fields) for q in other)
+        joined = "".join(text_fields)
+        assert all(q not in joined for q in _question_ids(test_id))
+        assert all(criterion_id not in joined for criterion_id in request.criterion_ids)
 
     # The image is the registered answer area's crop, never the whole page:
     # a full page carries the header the student's name is written in

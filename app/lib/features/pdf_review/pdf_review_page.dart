@@ -1433,6 +1433,47 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     return review.latestAiGrade != null && _materialFullyRead;
   }
 
+  /// Whether the AI pipeline has finished with this question and produced
+  /// no grade at all -- the state Issue #118 is about.
+  ///
+  /// Two ways to reach it, and the reviewer needs the same way out of both:
+  /// the grading job failed permanently (`AIProvider` unreachable, a
+  /// malformed response, a response that could not be mapped onto the
+  /// rubric), or it "succeeded" without grading anything because the answer
+  /// crop could not be trusted (`AnswerImageStatus.needsReview` --
+  /// `GradingJobProcessor.process` returns without ever calling the
+  /// provider). Either way `GradeResult` is deliberately absent (Issue #97:
+  /// never persist a grade nothing produced), and every other action on this
+  /// bar needs one.
+  ///
+  /// Deliberately requires a terminal job rather than merely "no grade yet":
+  /// a question whose job is still queued or running may be about to produce
+  /// one, and offering to grade it by hand there would invite a person to
+  /// race the pipeline. A question with no job at all is 未処理 -- AI has
+  /// not been asked yet, and 採点を開始 is the answer to that, not this.
+  bool _aiProducedNoGrade(QuestionReviewState review, String questionId) {
+    final job = _latestJobFor(questionId);
+    if (job == null || !_terminalJobStates.contains(job.state)) return false;
+    return review.latestAiGrade == null;
+  }
+
+  /// Whether 「点数を入力」 may act (Issue #118): the question's data is
+  /// loaded, AI produced nothing, and no human decision is currently in
+  /// effect.
+  ///
+  /// Unlike 承認, this is not gated on [_materialFullyRead]: Issue #85's gate
+  /// exists so a reviewer cannot confirm *the AI's* judgement without having
+  /// looked at the 根拠 behind it. Here there is no AI judgement -- the
+  /// person is producing the grade themselves, from the answer image, and
+  /// there is nothing below the fold for them to have skipped.
+  bool get _canGradeManually {
+    final review = _currentReview;
+    final question = _currentQuestion;
+    if (!_canDecide || question == null) return false;
+    if (review!.isConfirmed) return false;
+    return _aiProducedNoGrade(review, question.id);
+  }
+
   /// Whether Ctrl+Z has something to revert.
   bool get _canUndo {
     final review = _currentReview;
@@ -1745,6 +1786,157 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// Opens the 「点数を入力」 dialog for a question the AI never graded
+  /// (Issue #118) and saves the result as a human `GradeResult`.
+  ///
+  /// Unlike [_showEditDialog] this one carries nothing forward -- there is
+  /// no AI attempt to carry anything from -- so it also asks for the rubric
+  /// 判定 per criterion. Without that, a manually graded question would keep
+  /// showing 未評価 against every criterion of its own 採点基準 forever, and
+  /// 「基準ごとの判定」 is one of the 判断材料 rows the reviewer is required to
+  /// have read (Issue #85). The 認識文字 field starts from whatever reading
+  /// does exist: OCR usually ran even when grading did not
+  /// (`GradingJobProcessor` commits it first, in its own transaction).
+  Future<void> _showManualGradeDialog() async {
+    if (!_canGradeManually) return;
+    final review = _currentReview!;
+    final question = _currentQuestion!;
+    // Frozen before the dialog opens, for the same reason [_showEditDialog]
+    // freezes its own tokens: the background poll keeps updating [review] in
+    // place, and a save must not carry a version the reviewer never saw.
+    final expectedVersion = review.expectedVersion;
+    final currentText =
+        review.effectiveHumanRecognition?.text ??
+        review.latestGradingRecognition?.text ??
+        review.latestOcrRecognition?.text ??
+        '';
+    final scoreController = TextEditingController();
+    final commentController = TextEditingController();
+    final textController = TextEditingController(text: currentText);
+    // `null` = 未評価: a criterion the reviewer did not judge stays
+    // unjudged rather than being defaulted to 合格 or 不合格 on their behalf
+    // (AGENTS.md "Verification": 判断不能を推測で補完しない).
+    final outcomes = <String, String?>{
+      for (final criterion in question.rubric) criterion.id: null,
+    };
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: Text('問${question.number} の点数を入力'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('AIの採点結果がないため、人が採点します。'),
+                const SizedBox(height: AppSpacing.md),
+                TextField(
+                  key: const Key('manual-grade-dialog-text'),
+                  controller: textController,
+                  decoration: const InputDecoration(labelText: '認識文字'),
+                  maxLines: 3,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                TextField(
+                  key: const Key('manual-grade-dialog-score'),
+                  controller: scoreController,
+                  decoration: InputDecoration(
+                    labelText: '点数 (0〜${question.points})',
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: AppSpacing.md),
+                TextField(
+                  key: const Key('manual-grade-dialog-comment'),
+                  controller: commentController,
+                  decoration: const InputDecoration(labelText: 'コメント'),
+                  maxLines: 2,
+                ),
+                for (final criterion in question.rubric) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    '${criterion.description}（${criterion.maxPoints}点）',
+                    style: context.textRoles.questionText,
+                  ),
+                  // A dropdown rather than segmented buttons: four options
+                  // per criterion across a rubric of four would not fit the
+                  // dialog at 1280x720, which is the size this screen is
+                  // designed against (Issue #85).
+                  DropdownButton<String?>(
+                    key: Key('manual-grade-dialog-criterion-${criterion.id}'),
+                    value: outcomes[criterion.id],
+                    isExpanded: true,
+                    items: const [null, 'pass', 'partial', 'fail']
+                        .map(
+                          (outcome) => DropdownMenuItem<String?>(
+                            value: outcome,
+                            child: Text(_criterionLabel(outcome)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (outcome) =>
+                        setDialogState(() => outcomes[criterion.id] = outcome),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              key: const Key('manual-grade-dialog-save'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved != true || !mounted) return;
+    final score = int.tryParse(scoreController.text.trim());
+    if (score == null || score < 0 || score > question.points) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('点数は0〜${question.points}の整数で入力してください')),
+      );
+      return;
+    }
+    final text = textController.text.trim();
+    final comment = commentController.text.trim();
+    await _performReviewAction(
+      question,
+      review,
+      () => _dependencies.gradeManually(
+        widget.submissionId,
+        question.id,
+        expectedVersion: expectedVersion,
+        scoreAwarded: score,
+        scoreMaximum: question.points,
+        criteria: [
+          for (final entry in outcomes.entries)
+            if (entry.value case final outcome?)
+              CriterionOutcomeRequest(
+                (b) => b
+                  ..criterionId = entry.key
+                  ..outcome = outcome,
+              ),
+        ],
+        // Why this grade exists at all, recorded on the grade itself rather
+        // than only in the reviewer's memory (Issue #118 受入5).
+        rationale: 'AI採点が無いため人が採点した',
+        comment: comment.isEmpty ? null : comment,
+        // Unlike [_showEditDialog] there is never an earlier human
+        // recognition to preserve here, so "the field is empty and nothing
+        // was recognized" simply means there is nothing to record.
+        recognizedText: text.isEmpty && currentText.isEmpty ? null : text,
+        note: _reasonFromNote(review),
+      ),
+    );
+  }
+
   void _saveNote(String value) {
     final question = _currentQuestion;
     if (question == null) return;
@@ -1760,7 +1952,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// no-op, while typing (P1 review).
   ///
   /// Key assignments per docs/business-rules-and-evaluation-data.md §2 (16):
-  /// Enter=承認して次へ, E=修正, X=却下, R=再判定, ↑/↓=設問移動, Ctrl+Z=Undo.
+  /// Enter=承認して次へ, E=修正, X=却下, R=再判定, G=点数を入力,
+  /// ↑/↓=設問移動, Ctrl+Z=Undo.
+  ///
+  /// `G` is bound unconditionally, like every other action key: the
+  /// callbacks are the gate (`_showManualGradeDialog` returns immediately
+  /// unless [_canGradeManually]), and a binding that appears and disappears
+  /// with the selected question would make the key silently fall through to
+  /// whatever is underneath on some questions and not others.
   Map<ShortcutActivator, VoidCallback> get _shortcutBindings {
     if (_noteFocusNode.hasFocus) return const {};
     return {
@@ -1772,6 +1971,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       LogicalKeySet(LogicalKeyboardKey.keyE): () =>
           unawaited(_showEditDialog()),
       LogicalKeySet(LogicalKeyboardKey.keyR): () => unawaited(_regrade()),
+      LogicalKeySet(LogicalKeyboardKey.keyG): () =>
+          unawaited(_showManualGradeDialog()),
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyZ): () =>
           unawaited(_undo()),
     };
@@ -2406,6 +2607,35 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     );
   }
 
+  /// What happened, and what the reviewer can do about it, when AI grading
+  /// left this question with no grade (Issue #118 受入4).
+  ///
+  /// Says the two things a person needs at 15:40 on a Friday with forty
+  /// answer sheets on the desk: *this one did not get graded*, and *you are
+  /// not stuck*. The queue's own `last_error` is appended when there is one
+  /// -- it is assembled from literals and numbers only (provider name,
+  /// exception class, HTTP status; Issue #97 review round 4), never from a
+  /// provider message that could carry answer text, which is precisely why
+  /// it is safe to put on screen.
+  ///
+  /// [AppErrorBanner] with `retryable: false`: the two ways out are 再判定
+  /// and 点数を入力 on the action bar, which is exactly the case that flag
+  /// documents (several explicit actions, no single thing to re-run).
+  Widget _buildAiGradingFailedNotice(String questionId) {
+    final lastError = _latestJobFor(questionId)?.lastError;
+    final reason = (lastError == null || lastError.isEmpty)
+        ? ''
+        : '\n$lastError';
+    return AppErrorBanner(
+      key: const Key('review-ai-grading-failed'),
+      message:
+          'AIはこの設問を採点できませんでした。'
+          '「再判定」でもう一度AIに任せるか、「点数を入力」で自分で採点できます。$reason',
+      messageKey: const Key('review-ai-grading-failed-message'),
+      retryable: false,
+    );
+  }
+
   Widget _buildQuestionError(String message) {
     return AppErrorBanner(
       message: message,
@@ -2444,12 +2674,17 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         humanGrade == null &&
         fallbackAnnotations.isEmpty &&
         question.rubric.isEmpty;
-    if (isEmpty) {
+    final aiProducedNoGrade = _aiProducedNoGrade(review, question.id);
+    if (isEmpty && !aiProducedNoGrade) {
       return const Text('まだAI結果がありません', key: Key('review-question-empty'));
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (aiProducedNoGrade) ...[
+          _buildAiGradingFailedNotice(question.id),
+          const SizedBox(height: AppSpacing.sm),
+        ],
         if (ocrRecognition != null)
           _materialRowEdge('ocr:${ocrRecognition.id}', _materialTop),
         Text('AI認識文字', style: context.texts.titleSmall),
@@ -2785,6 +3020,17 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           icon: const Icon(Icons.edit_outlined),
           label: const Text('修正 (E)'),
         ),
+        // Only offered where it is the answer (Issue #118): a question the
+        // AI finished without producing a grade. Everywhere else 修正 is the
+        // way a person changes a score, and two buttons that both mean
+        // "enter a score" would be a worse screen than one.
+        if (_canGradeManually)
+          OutlinedButton.icon(
+            key: const Key('review-manual-grade-button'),
+            onPressed: _showManualGradeDialog,
+            icon: const Icon(Icons.edit_note),
+            label: const Text('点数を入力 (G)'),
+          ),
         OutlinedButton.icon(
           key: const Key('review-reject-button'),
           // Disabled while the question's data is still loading (or

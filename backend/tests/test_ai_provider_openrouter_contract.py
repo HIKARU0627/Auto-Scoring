@@ -22,22 +22,25 @@ from auto_scoring.domain.ai_provider import (
     SchemaViolation,
 )
 
-from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
+from .test_ai_provider_contract import (
+    _VALID_REQUEST,
+    MALFORMED_MARKER,
+    AIProviderContract,
+)
 
 _OCR_TEXT = "答案テキスト"
 
 
-def _canned_chat_completion(question_id: str) -> dict[str, object]:
-    if question_id == "malformed":
-        content = json.dumps({"questionId": question_id, "grading": {"score": 1}})
+def _canned_chat_completion(*, malformed: bool) -> dict[str, object]:
+    if malformed:
+        content = json.dumps({"grading": {"score": 1}})
     else:
         content = json.dumps(
             {
-                "questionId": question_id,
                 "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
                 "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
                 "criteria": [
-                    {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}
+                    {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠"}
                 ],
                 "comment": "コメント",
                 "rationale": "根拠",
@@ -55,11 +58,12 @@ def _fake_transport_handler(request: httpx.Request) -> httpx.Response:
     payload = json.loads(request.content)
     assert payload["messages"][0]["role"] == "system"
     user_text = payload["messages"][1]["content"][0]["text"]
-    marker = 'The questionId in your response must be exactly "'
-    start = user_text.index(marker) + len(marker)
-    end = user_text.index('"', start)
-    question_id = user_text[start:end]
-    return httpx.Response(200, json=_canned_chat_completion(question_id))
+    # Selected from the prompt text itself: since Issue #117 nothing that
+    # identifies the question is sent, so a request asking for the malformed
+    # canned response says so in the one field this fake can still see.
+    return httpx.Response(
+        200, json=_canned_chat_completion(malformed=MALFORMED_MARKER in user_text)
+    )
 
 
 def _make_client() -> httpx.Client:

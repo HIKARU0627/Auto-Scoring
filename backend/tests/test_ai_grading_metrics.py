@@ -23,6 +23,7 @@ from auto_scoring.domain.ai_grading_metrics import (
 from auto_scoring.domain.ai_provider import (
     GradingResponse,
     ProviderDescriptor,
+    SchemaViolation,
     descriptor_key,
     grading_response_from_result,
 )
@@ -50,14 +51,27 @@ _OTHER_DESCRIPTOR = ProviderDescriptor(
 _OTHER_CONFIG = descriptor_key(_OTHER_DESCRIPTOR)
 
 
-def _response(**overrides: object) -> GradingResponse:
+def _response(
+    *,
+    question_id: str = "q1",
+    criterion_ids: tuple[str, ...] = ("c1", "c2"),
+    **overrides: object,
+) -> GradingResponse:
+    """One graded response, built the way a real adapter builds one.
+
+    ``question_id``/``criterion_ids`` are arguments to the *mapping*, not
+    fields of the payload: since Issue #117 the wire format carries neither,
+    and a response is tied back to its question and its rubric by the
+    request that produced it. Passing a ``question_id`` the ground-truth
+    label does not have is how a "response to a different question" is
+    expressed here now.
+    """
     payload: dict[str, object] = {
-        "questionId": "q1",
         "recognition": {"text": "答案", "confidence": 0.9},
         "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
         "criteria": [
-            {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
-            {"id": "c2", "result": "fail", "confidence": 0.6, "rationale": "根拠2"},
+            {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+            {"index": 2, "result": "fail", "confidence": 0.6, "rationale": "根拠2"},
         ],
         "comment": "コメント",
         "rationale": "全体根拠",
@@ -65,7 +79,13 @@ def _response(**overrides: object) -> GradingResponse:
     }
     payload.update(overrides)
     parsed = parse_ai_grading_result(json.dumps(payload))
-    return grading_response_from_result(parsed, descriptor=_DESCRIPTOR, latency_seconds=1.0)
+    return grading_response_from_result(
+        parsed,
+        question_id=question_id,
+        criterion_ids=criterion_ids,
+        descriptor=_DESCRIPTOR,
+        latency_seconds=1.0,
+    )
 
 
 def _truth(**overrides: object) -> GradingGroundTruth:
@@ -126,8 +146,8 @@ def test_outside_tolerance() -> None:
 def test_criterion_mismatch_is_counted_not_averaged_away() -> None:
     response = _response(
         criteria=[
-            {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
-            {"id": "c2", "result": "pass", "confidence": 0.6, "rationale": "根拠2 (誤り)"},
+            {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+            {"index": 2, "result": "pass", "confidence": 0.6, "rationale": "根拠2 (誤り)"},
         ]
     )
     outcome = _evaluate(_truth(), response)
@@ -142,7 +162,7 @@ def test_omitted_labeled_criterion_counts_as_a_mismatch_not_a_smaller_denominato
     clear the 85% criterion-agreement gate just by omitting hard criteria."""
     response = _response(
         criteria=[
-            {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+            {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
         ]
     )
     outcome = _evaluate(_truth(), response)
@@ -155,11 +175,12 @@ def test_unlabeled_response_criterion_is_ignored_not_penalized() -> None:
     ``truth.criteria``) must not affect the denominator either way --
     only labeled criteria are counted."""
     response = _response(
+        criterion_ids=("c1", "c2", "c-unlabeled"),
         criteria=[
-            {"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
-            {"id": "c2", "result": "fail", "confidence": 0.6, "rationale": "根拠2"},
-            {"id": "c-unlabeled", "result": "pass", "confidence": 0.9, "rationale": "根拠3"},
-        ]
+            {"index": 1, "result": "pass", "confidence": 0.9, "rationale": "根拠1"},
+            {"index": 2, "result": "fail", "confidence": 0.6, "rationale": "根拠2"},
+            {"index": 3, "result": "pass", "confidence": 0.9, "rationale": "根拠3"},
+        ],
     )
     outcome = _evaluate(_truth(), response)
     assert outcome.criterion_total == 2
@@ -170,7 +191,7 @@ def test_schema_violation_sample_is_excluded_from_exact_match_not_scored_as_wron
     """A schema violation must not be silently coerced into "score 0" -- it is
     a distinct outcome (Issue #14 acceptance)."""
     with pytest.raises(ValidationError):
-        parse_ai_grading_result(json.dumps({"questionId": "q1"}))
+        parse_ai_grading_result(json.dumps({"comment": "コメント"}))
 
     outcome = _evaluate(_truth(), None)
     assert outcome.schema_violation is True
@@ -219,7 +240,7 @@ def test_response_to_a_different_question_is_mismatched_not_an_accidental_match(
     4/100 grade) must never register as matching a 4/5 truth label just
     because the raw ``score`` happens to line up on its own."""
     response = _response(
-        questionId="some-other-question",
+        question_id="some-other-question",
         grading={"score": 4, "maxScore": 100, "confidence": 0.8},
     )
     outcome = _evaluate(_truth(), response)
@@ -241,7 +262,7 @@ def test_response_with_wrong_max_score_is_mismatched_even_with_matching_question
 
 
 def test_mismatched_sample_still_preserves_latency_and_cost() -> None:
-    response = _response(questionId="other")
+    response = _response(question_id="other")
     outcome = _evaluate(_truth(), response, latency_seconds=2.5, cost_usd=0.001)
     assert outcome.mismatched is True
     assert outcome.latency_seconds == pytest.approx(2.5)
@@ -335,7 +356,7 @@ def test_bucket_with_no_scorable_sample_reports_undefined_not_zero_accuracy() ->
     score"."""
     outcomes = [
         _evaluate(_truth(), None),  # schema violation
-        _evaluate(_truth(), _response(questionId="other")),  # mismatched
+        _evaluate(_truth(), _response(question_id="other")),  # mismatched
     ]
     summary = summarize_by_provider(outcomes)[0]
     assert summary.exact_match_rate is None
@@ -671,16 +692,17 @@ def _load_fixture_outcomes() -> list[SampleOutcome]:
                     config_key = descriptor_key(descriptor)
                     try:
                         parsed = parse_ai_grading_result(json.dumps(cell["response"]))
-                    except ValidationError:
-                        response = None
-                    else:
                         response = grading_response_from_result(
                             parsed,
+                            question_id=truth.question_id,
+                            criterion_ids=tuple(c.id for c in truth.criteria),
                             descriptor=descriptor,
                             latency_seconds=(
                                 latency_seconds if latency_seconds is not None else 0.0
                             ),
                         )
+                    except (ValidationError, SchemaViolation):
+                        response = None
                     outcomes.append(
                         evaluate_sample(
                             truth,

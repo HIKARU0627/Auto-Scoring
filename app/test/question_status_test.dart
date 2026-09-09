@@ -126,6 +126,51 @@ void main() {
       }
     });
 
+    test(
+      'a stopped job does not outrank a decision made since (Issue #118)',
+      () {
+        // A job that failed, was cancelled, or finished with an untrustworthy
+        // result is not going to describe anything newer. A person who has
+        // graded the question by hand since then is the newer fact, and the
+        // answer sheet already counts that question as 確認済み server-side --
+        // leaving 失敗 here would have the rail, the DAG and the Inspector all
+        // contradicting the submission's own state.
+        for (final (state, usable) in const [
+          ('failed', false),
+          ('cancelled', null),
+          ('succeeded', false),
+        ]) {
+          expect(
+            deriveQuestionStatus(
+              job: _job(state: state, usable: usable, createdAtSeconds: 1),
+              review: _review(action: 'modified', createdAtSeconds: 2),
+            ),
+            QuestionStatus.approved,
+            reason: state,
+          );
+        }
+      },
+    );
+
+    test('a stopped job still outranks a decision that predates it', () {
+      // The other half of the same rule: a re-submission creates a fresh job
+      // after an old 承認, and that approval is about the previous attempt.
+      for (final (state, usable, expected) in const [
+        ('failed', false, QuestionStatus.failed),
+        ('cancelled', null, QuestionStatus.cancelled),
+        ('succeeded', false, QuestionStatus.needsCheck),
+      ]) {
+        expect(
+          deriveQuestionStatus(
+            job: _job(state: state, usable: usable, createdAtSeconds: 2),
+            review: _review(action: 'modified', createdAtSeconds: 1),
+          ),
+          expected,
+          reason: state,
+        );
+      }
+    });
+
     test('再判定待ち ends when the job the request created succeeds', () {
       // Nothing ever closes a `regrade_requested` row -- the replacement
       // grade lands as a new GradeResult, not a new Review -- so treating

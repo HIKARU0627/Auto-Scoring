@@ -128,6 +128,7 @@ JobResponse _jobFor(
   bool? usable = true,
   String? blockedOnQuestionId,
   int graphVersion = 1,
+  String? lastError,
 }) => JobResponse(
   (b) => b
     ..id = 'job-$questionId-v$graphVersion'
@@ -137,6 +138,7 @@ JobResponse _jobFor(
     ..state = state
     ..usable = usable
     ..blockedOnQuestionId = blockedOnQuestionId
+    ..lastError = lastError
     ..dependencyGraphVersion = graphVersion
     ..attempts = 1
     ..maxAttempts = 3
@@ -195,6 +197,7 @@ AppDependencies _dependencies({
   DependencyGraphResponse? graph,
   List<JobResponse> jobs = const [],
   EditReview? editReview,
+  GradeManually? gradeManually,
   RejectReview? rejectReview,
   RegradeReview? regradeReview,
   ApproveReview? approveReview,
@@ -255,6 +258,30 @@ AppDependencies _dependencies({
             action: 'modified',
             version: expectedVersion + 1,
             humanGradeResultId: 'grade-human-$questionId-$expectedVersion',
+          ),
+        ),
+    gradeManually:
+        gradeManually ??
+        (
+          submissionId,
+          questionId, {
+          required expectedVersion,
+          required scoreAwarded,
+          required scoreMaximum,
+          confidence = 1.0,
+          criteria = const [],
+          rationale,
+          comment,
+          recognizedText,
+          annotations,
+          note,
+        }) async => _reviewAction(
+          _review(
+            questionId: questionId,
+            action: 'modified',
+            version: expectedVersion + 1,
+            aiGradeResultId: null,
+            humanGradeResultId: 'grade-manual-$questionId-$expectedVersion',
           ),
         ),
     rejectReview:
@@ -4982,6 +5009,233 @@ void main() {
             .onPressed,
         isNotNull,
       );
+    });
+  });
+
+  group('AI採点が失敗した設問 (Issue #118)', () {
+    testWidgets('失敗したことと、そこからの進み方が画面に出る', (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        jobs: [
+          _jobFor(
+            'q-1',
+            state: 'failed',
+            usable: false,
+            lastError: 'gemini AI provider returned a malformed response',
+          ),
+        ],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-ai-grading-failed')), findsOneWidget);
+      // The queue's own diagnosis reaches the person looking at the screen:
+      // it is built from a provider id, an exception class and an HTTP
+      // status only (Issue #97 review round 4), never from a message that
+      // could carry answer text.
+      final message = tester.widget<Text>(
+        find.byKey(const Key('review-ai-grading-failed-message')),
+      );
+      expect(message.data, contains('AIはこの設問を採点できませんでした'));
+      expect(message.data, contains('malformed response'));
+      // 「まだAI結果がありません」 -- the old, silent empty state -- must not
+      // be what a failed question shows. That message is why the answer
+      // sheet looked merely unfinished rather than stuck.
+      expect(find.byKey(const Key('review-question-empty')), findsNothing);
+    });
+
+    testWidgets('点数を入力すると source=human の採点として保存される', (tester) async {
+      final calls = <Map<String, Object?>>[];
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(
+          rubric: [
+            RubricCriterionResponse(
+              (b) => b
+                ..id = 'c-1'
+                ..description = '反応の名称に言及している'
+                ..maxPoints = 3
+                ..position = 0,
+            ),
+          ],
+        ),
+        jobs: [_jobFor('q-1', state: 'failed', usable: false)],
+        gradeManually:
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              required scoreAwarded,
+              required scoreMaximum,
+              confidence = 1.0,
+              criteria = const [],
+              rationale,
+              comment,
+              recognizedText,
+              annotations,
+              note,
+            }) async {
+              calls.add({
+                'questionId': questionId,
+                'expectedVersion': expectedVersion,
+                'scoreAwarded': scoreAwarded,
+                'scoreMaximum': scoreMaximum,
+                'comment': comment,
+                'criteria': {
+                  for (final c in criteria) c.criterionId: c.outcome,
+                },
+              });
+              return _reviewAction(
+                _review(
+                  action: 'modified',
+                  version: expectedVersion + 1,
+                  aiGradeResultId: null,
+                  humanGradeResultId: 'grade-manual',
+                ),
+                submissionState: 'reviewed',
+              );
+            },
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await tester.tap(find.byKey(const Key('review-manual-grade-button')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('manual-grade-dialog-score')),
+        '3',
+      );
+      await tester.enterText(
+        find.byKey(const Key('manual-grade-dialog-comment')),
+        '人が採点しました',
+      );
+      await tester.tap(
+        find.byKey(const Key('manual-grade-dialog-criterion-c-1')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('合格').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('manual-grade-dialog-save')));
+      await tester.pumpAndSettle();
+
+      expect(calls, hasLength(1));
+      expect(calls.single['questionId'], 'q-1');
+      expect(calls.single['expectedVersion'], 0);
+      expect(calls.single['scoreAwarded'], 3);
+      // Scored out of the question's own registered points, never a value
+      // the dialog invented.
+      expect(calls.single['scoreMaximum'], 5);
+      expect(calls.single['comment'], '人が採点しました');
+      expect(calls.single['criteria'], {'c-1': 'pass'});
+    });
+
+    testWidgets('点数を入力した設問は承認済みとして数えられる', (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        jobs: [_jobFor('q-1', state: 'failed', usable: false)],
+        reviews: [
+          _review(
+            action: 'modified',
+            aiGradeResultId: null,
+            humanGradeResultId: 'grade-manual',
+            // Recorded after the job that failed -- which is what makes it a
+            // decision *about* that failure rather than about an older
+            // attempt (`deriveQuestionStatus`).
+            createdAt: DateTime.utc(2026, 1, 2),
+          ),
+        ],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Issue #112's own vocabulary: the rail/DAG/inspector all read
+      // `deriveQuestionStatus`, and a `modified` row with no AI grade behind
+      // it is still a person having decided -- otherwise the one question AI
+      // could not read would hold the whole answer sheet open forever.
+      expect(find.text('承認済み'), findsWidgets);
+      // Already decided, so the manual-grade route is no longer offered:
+      // 修正 is how a recorded decision changes.
+      expect(find.byKey(const Key('review-manual-grade-button')), findsNothing);
+    });
+
+    testWidgets('AI採点がある設問には点数入力を出さない', (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        grades: [_grade()],
+        jobs: [_jobFor('q-1')],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.byKey(const Key('review-ai-grading-failed')), findsNothing);
+      expect(find.byKey(const Key('review-manual-grade-button')), findsNothing);
+    });
+
+    testWidgets('AI採点がまだ走っている間は点数入力を出さない', (tester) async {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        jobs: [_jobFor('q-1', state: 'running', usable: null)],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // A grade may still be on its way; offering to grade it by hand here
+      // would invite a person to race the pipeline.
+      expect(find.byKey(const Key('review-ai-grading-failed')), findsNothing);
+      expect(find.byKey(const Key('review-manual-grade-button')), findsNothing);
+    });
+
+    testWidgets('再判定もそのまま選べる', (tester) async {
+      final regrades = <String>[];
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        jobs: [_jobFor('q-1', state: 'failed', usable: false)],
+        regradeReview:
+            (
+              submissionId,
+              questionId, {
+              required expectedVersion,
+              reason,
+            }) async {
+              regrades.add(questionId);
+              return _reviewAction(
+                _review(
+                  action: 'regrade_requested',
+                  version: expectedVersion + 1,
+                  aiGradeResultId: null,
+                  regradeJobId: 'job-regrade',
+                ),
+                jobId: 'job-regrade',
+              );
+            },
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // Issue #118 受入4: a transient provider failure only needs another
+      // try, and that must stay one press away rather than being replaced by
+      // the manual route.
+      await tester.tap(find.byKey(const Key('review-regrade-button')));
+      await tester.pumpAndSettle();
+
+      expect(regrades, ['q-1']);
     });
   });
 }
