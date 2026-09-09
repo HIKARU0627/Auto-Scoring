@@ -610,7 +610,26 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       deriveQuestionStatus(
         job: _latestJobFor(question.id),
         review: _reviews[question.id]?.effectiveReview,
+        hasWaitingDependents: _hasWaitingDependents(question.id),
       );
+
+  /// Whether another question's `Job` is `BLOCKED` waiting on [questionId].
+  ///
+  /// Read straight off `Job.blocked_on_question_id` rather than off the
+  /// dependency graph's edges: an edge says the dependency *exists*, this
+  /// says the queue is *actually* holding a question behind it right now,
+  /// which is the only version of the fact a reviewer can act on (Issue
+  /// #156). It also keeps the answer available on a screen that has not
+  /// fetched a graph -- the rail and the Inspector ask for it too, and only
+  /// the 処理の進み方 panel has a `DependencyGraphResponse` to hand.
+  ///
+  /// Every job is scanned, not just the latest per question: a superseded
+  /// attempt is never `BLOCKED` (the queue moves it to a terminal state
+  /// before creating the replacement), so an older row cannot invent a
+  /// dependent, and restricting the scan would only add a way to miss one.
+  bool _hasWaitingDependents(String questionId) => _jobs.any(
+    (job) => job.state == 'blocked' && job.blockedOnQuestionId == questionId,
+  );
 
   /// The words for [_questionStatus], with a blocked question naming the
   /// prerequisite it is waiting on -- the same string the DAG node prints,
@@ -2897,6 +2916,34 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             key: const Key('review-score'),
             style: context.textRoles.score,
           ),
+          // 採点AI自身が「渡された画像に何が写っていたか」として申告した区分
+          // (Issue #136)。**点数は、それが何の画像から出たかを言わない。**
+          // 実機再検証 #4 では `blank` 申告の3件が3件とも切り出しの誤りで、
+          // 採点信頼度はちょうど 1.00 -- 数字の側から正しい0点と見分ける材料は
+          // 一つも無く、AI自身のこの申告だけが残っていた (Issue #156)。
+          //
+          // **旗ではなく本文**である。アイコンも強調色も付けないのは、これが
+          // 「確認せよ」という指示ではなく「AIはこう言った」という事実だから
+          // で、`blank` は本当の無記入 -- つまり正しい0点 -- でもあり得る
+          // (#136 が `not_the_answer` と別の値に分けた理由そのもの)。だから
+          // 文面もAIの申告と、そこから確実に言える両義性までで止め、切り出しが
+          // 誤っているとは言わない。人が見るべき現物は #122 が既にこの上に
+          // 出しているので、そこへ案内するだけでよい。
+          //
+          // `not_the_answer` はここに来ない (採点が `GradeResult` を作らずに
+          // 失敗するので `aiGrade` が存在しない)。`answer` と null も出さない
+          // -- 出せば全設問に文が付き、#156 が畳んだ「常時点いている旗」を
+          // 別の形で作り直すことになる。
+          if (aiGrade.answerImageFinding == AnswerImageFinding.blank) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'AIは「解答欄に何も書かれていない」と報告しました。'
+              '本当に無記入ならこの0点は正しく、切り出しがずれていても'
+              '同じ0点になります。上の画像を確かめてください。',
+              key: const Key('review-answer-image-blank'),
+              style: context.textRoles.gradingComment,
+            ),
+          ],
           const SizedBox(height: AppSpacing.xs),
           _ConfidenceBadge(
             key: const Key('review-grading-confidence'),
@@ -3268,6 +3315,22 @@ class _ProvenanceLabel extends StatelessWidget {
 /// Numeric confidence + a textual level label + a distinct icon, so
 /// Recognition/Grading Confidence is never distinguished by color alone
 /// (Issue #21 acceptance criteria).
+///
+/// **Only 低 is marked** (Issue #156). 高 used to carry `check_circle` in
+/// [AppStatusTone.success], and 実機再検証 #4 measured what that green tick
+/// was worth: all 12 AI grades came back at 採点信頼度 ≥ 0.95, so the tick was
+/// on all 12 -- including all 5 of the wrong zeros, and including the 3
+/// questions the grader itself reported as 空白 (every one of which was a bad
+/// crop) at exactly 1.00. Confidence did not separate a right zero from a
+/// wrong one, so it must not be drawn as though it had: a green check beside
+/// a score reads as 「見なくてよい」 on the one screen whose entire job is to
+/// get a person to look.
+///
+/// The number itself stays. It does not license approval (簡易設計書 §25.2
+/// forbids deriving 確認済み from it at all), but it is still the hint for
+/// which question to open first (§8.2・§10) -- and a reviewer who wants to
+/// judge the reading has it, next to the reading. What is removed is the
+/// affirmation, not the fact.
 class _ConfidenceBadge extends StatelessWidget {
   const _ConfidenceBadge({
     super.key,
@@ -3281,17 +3344,18 @@ class _ConfidenceBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final level = ConfidenceLevel.of(confidence);
+    // 中と高は同じ無彩色の目盛りアイコンで、区別は数値と「中」「高」の語が
+    // 付ける。高だけ別のアイコンを与えれば、色を外しても「高は良い印」が
+    // 残ってしまう -- Issue #156 で外したのは色ではなく、太鼓判そのもの。
     final icon = switch (level) {
-      ConfidenceLevel.high => Icons.check_circle,
-      ConfidenceLevel.medium => Icons.info_outline,
+      ConfidenceLevel.high || ConfidenceLevel.medium => Icons.straighten,
       ConfidenceLevel.low => Icons.warning_amber,
     };
     // 低Confidence は「人間が見ないと決められない」の代表例なので、この画面で
     // 強調色を使ってよい数少ない場所。中/高は進行中と同じく無彩色に置く --
     // 全部に色を付ければ、どれも目立たなくなる。
     final tone = switch (level) {
-      ConfidenceLevel.high => AppStatusTone.success,
-      ConfidenceLevel.medium => AppStatusTone.neutral,
+      ConfidenceLevel.high || ConfidenceLevel.medium => AppStatusTone.neutral,
       ConfidenceLevel.low => AppStatusTone.attention,
     };
     final color = tone.color(context);

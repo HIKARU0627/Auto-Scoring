@@ -17,6 +17,7 @@ import 'package:auto_scoring_api/src/model/date.dart';
 import 'package:auto_scoring_api/src/model/analyze_request.dart';
 import 'package:auto_scoring_api/src/model/annotation_edit_request.dart';
 import 'package:auto_scoring_api/src/model/annotation_response.dart';
+import 'package:auto_scoring_api/src/model/answer_image_finding.dart';
 import 'package:auto_scoring_api/src/model/answer_layout_response.dart';
 import 'package:auto_scoring_api/src/model/approve_review_request.dart';
 import 'package:auto_scoring_api/src/model/attribution_proposal_response.dart';
@@ -99,6 +100,7 @@ part 'serializers.g.dart';
   AnalyzeRequest,
   AnnotationEditRequest,
   AnnotationResponse,
+  AnswerImageFinding,
   AnswerLayoutResponse,
   ApproveReviewRequest,
   AttributionProposalResponse,

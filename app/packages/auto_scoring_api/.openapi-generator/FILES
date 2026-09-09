@@ -4,6 +4,7 @@ analysis_options.yaml
 doc/AnalyzeRequest.md
 doc/AnnotationEditRequest.md
 doc/AnnotationResponse.md
+doc/AnswerImageFinding.md
 doc/AnswerLayoutResponse.md
 doc/ApproveReviewRequest.md
 doc/AttributionProposalResponse.md
@@ -109,6 +110,7 @@ lib/src/date_serializer.dart
 lib/src/model/analyze_request.dart
 lib/src/model/annotation_edit_request.dart
 lib/src/model/annotation_response.dart
+lib/src/model/answer_image_finding.dart
 lib/src/model/answer_layout_response.dart
 lib/src/model/approve_review_request.dart
 lib/src/model/attribution_proposal_response.dart

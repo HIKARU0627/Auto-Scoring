@@ -166,6 +166,16 @@
         "title": "AnnotationResponse",
         "type": "object"
       },
+      "AnswerImageFinding": {
+        "description": "What the grading AI reports it actually saw in the answer image it was\ngiven -- as distinct from the score it awarded (Issue #136).\n\nThree values, not a boolean, and the reason is the whole point. On the\nreal re-run that produced this Issue, 7 of the 14 questions that got a\ngrade were a **wrong** 0 with confidence 1.00, and the AI's own rationale\nalready said so in two different ways:\n\n* 2 said the image it was given is not this question's answer at all\n  (one described a header field, one described another question's\n  label) -- :attr:`NOT_THE_ANSWER`;\n* 4 said only that the answer is blank -- :attr:`BLANK`.\n\nCollapsing those into one \"something is wrong\" flag would put the same\nflag on a genuinely unanswered question, which is a real thing a student\ndoes and a correct 0. So the two claims stay separate values, and only\n:attr:`NOT_THE_ANSWER` currently stops a grade\n(`jobs.grading_processor`): a crop that does not show this question's\nanswer is a *detection* failure, and no score derived from it means\nanything. :attr:`BLANK` is recorded and otherwise left alone until the\nfrequency of genuinely unanswered questions has been measured -- see\ndocs/ai-grading-pipeline.md.\n\n``None`` (the field's absence) is its own, fourth state everywhere this\nappears: the provider did not report anything. It is never read as\n:attr:`ANSWER` -- that would be vouching for a crop nothing looked at.",
+        "enum": [
+          "answer",
+          "blank",
+          "not_the_answer"
+        ],
+        "title": "AnswerImageFinding",
+        "type": "string"
+      },
       "AnswerLayoutResponse": {
         "description": "The reference answer sheet this test's answer areas are laid out\nagainst (Issue #105), and whether detection can run here at all.",
         "properties": {
@@ -1243,6 +1253,16 @@
       },
       "GradeResultResponse": {
         "properties": {
+          "answer_image_finding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnswerImageFinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "comment": {
             "anyOf": [
               {

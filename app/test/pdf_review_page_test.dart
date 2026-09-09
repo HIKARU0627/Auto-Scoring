@@ -10,6 +10,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 import 'app_harness.dart';
@@ -86,6 +87,7 @@ GradeResultResponse _grade({
   String? rationale = '理由の説明が不足しています。',
   String? comment,
   List<CriterionResultResponse> criteria = const [],
+  AnswerImageFinding? answerImageFinding,
   DateTime? createdAt,
 }) => GradeResultResponse(
   (b) => b
@@ -100,6 +102,7 @@ GradeResultResponse _grade({
     ..rationale = rationale
     ..comment = comment
     ..criteria.replace(criteria)
+    ..answerImageFinding = answerImageFinding
     ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
 );
 
@@ -688,6 +691,117 @@ void main() {
       semantics.dispose();
     },
   );
+
+  testWidgets('高い確信度に緑チェックを付けない -- 印が付くのは低だけ (Issue #156)', (tester) async {
+    // 実機再検証 #4 の実測: AI採点12件すべてが採点信頼度 >= 0.95 で、
+    // 緑チェックも12件すべてに付いていた。その12件には誤った0点5件が
+    // 含まれ、AI自身が「空白」と申告した3件(3件とも切り出しの誤り)は
+    // ちょうど 1.00 だった。確信度は正誤を分けていない以上、
+    // 「見なくてよい」と読める印を score の隣に置いてはいけない。
+    final dependencies = _dependencies(
+      pdfBytes: _pocA4PortraitPdf(),
+      q1: _question(),
+      recognitions: [_recognition(confidence: 0.55)],
+      grades: [_grade(confidence: 0.97)],
+    );
+
+    await _pumpReview(tester, dependencies);
+    await tester.pump();
+    await _settlePdf(tester);
+
+    // 肯定形から。画面が描けていなければ以下の否定形は何も守らない。
+    expect(find.byKey(const Key('review-score')), findsOneWidget);
+    expect(find.text('採点信頼度: 97% (高)'), findsOneWidget);
+    expect(find.text('OCR文字認識信頼度: 55% (低)'), findsOneWidget);
+
+    final high = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('review-grading-confidence')),
+        matching: find.byType(Icon),
+      ),
+    );
+    final low = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('review-recognition-confidence')),
+        matching: find.byType(Icon),
+      ),
+    );
+    expect(
+      high.icon,
+      isNot(Icons.check_circle),
+      reason:
+          '高 must not carry a tick: it vouches for a score nothing '
+          'verified',
+    );
+    expect(
+      low.icon,
+      Icons.warning_amber,
+      reason:
+          '低 keeps its mark -- it is the one level that says a person '
+          'is needed',
+    );
+    // 色でも太鼓判を押さない。低だけが自分の色を持つ。
+    final context = tester.element(find.byKey(const Key('review-score')));
+    expect(high.color, AppStatusTone.neutral.color(context));
+    expect(low.color, AppStatusTone.attention.color(context));
+  });
+
+  testWidgets('AIが「解答欄は空白」と申告した0点は、その申告を本文で伴う (Issue #156)', (tester) async {
+    // Issue #136 が保存していた `answer_image_finding` を画面へ通す。
+    // 0点は「採点できた」ではなく「点を与えられなかった」で、切り出しが
+    // 誤っていても正しくても同じ数字になる -- 見分ける材料はAI自身の
+    // この申告しか残っていない。
+    final dependencies = _dependencies(
+      pdfBytes: _pocA4PortraitPdf(),
+      q1: _question(),
+      grades: [
+        _grade(
+          awarded: 0,
+          confidence: 1.0,
+          answerImageFinding: AnswerImageFinding.blank,
+        ),
+      ],
+    );
+
+    await _pumpReview(tester, dependencies);
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(find.text('0 / 5 点'), findsOneWidget);
+    final notice = find.byKey(const Key('review-answer-image-blank'));
+    expect(notice, findsOneWidget);
+    final text = tester.widget<Text>(notice).data!;
+    expect(text, contains('解答欄に何も書かれていない'));
+    // 両義性まで言って止める。切り出しが誤っているとは言わない --
+    // `blank` は本当の無記入(正しい0点)でもあり得る (#136)。
+    expect(text, contains('本当に無記入ならこの0点は正しく'));
+  });
+
+  testWidgets('`answer` 申告と申告なしの点数には何も足さない (Issue #156)', (tester) async {
+    // 全設問に文が付けば、#156 が畳んだ「常時点いている旗」を別の形で
+    // 作り直すだけになる。実測12件のうち `blank` は3件で、残り9件は
+    // ここを通る。
+    for (final finding in [null, AnswerImageFinding.answer]) {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        grades: [
+          _grade(awarded: 0, confidence: 1.0, answerImageFinding: finding),
+        ],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.text('0 / 5 点'), findsOneWidget, reason: '$finding');
+      expect(
+        find.byKey(const Key('review-answer-image-blank')),
+        findsNothing,
+        reason: '$finding',
+      );
+    }
+  });
 
   testWidgets('routes an annotation with no target Bounding Box to the comment '
       'fallback area instead of dropping it', (tester) async {
@@ -3894,6 +4008,13 @@ void main() {
       required List<JobResponse> jobs,
       List<ReviewResponse> reviews = const [],
       String submissionState = 'needs_review',
+      // Which dependency the graph draws. A test that needs 要確認 has to
+      // point this at the same question its `blocked` job names, because
+      // 要確認 now means "a dependent is stuck behind this one" and the two
+      // halves of that fact -- the edge and the blocked job -- come from two
+      // different endpoints (Issue #156).
+      String edgeFrom = 'q-1',
+      String edgeTo = 'q-3',
     }) => AppDependencies(
       getSubmission: (_) async => _submission(state: submissionState),
       listQuestions: (_) async => [
@@ -3903,7 +4024,8 @@ void main() {
         _question(id: 'q-4', number: '4'),
       ],
       getSourcePdf: (_) async => _pocA4PortraitPdf(),
-      getDependencyGraph: (_) async => _dependencyGraph(from: 'q-1', to: 'q-3'),
+      getDependencyGraph: (_) async =>
+          _dependencyGraph(from: edgeFrom, to: edgeTo),
       listJobs: (_) async => jobs,
       listRecognitions: (_, _) async => const [],
       listGrades: (_, _) async => const [],
@@ -4047,16 +4169,18 @@ void main() {
       await _pumpReview(
         tester,
         statesDependencies(
+          edgeFrom: 'q-2',
           jobs: [
             _jobFor('q-1'),
             // 要確認: succeeded, but the queue judged its own result not
-            // usable, so nothing downstream moves until a person looks.
+            // usable, and 問3 below is stuck behind it -- so 「下流を解放
+            // しなかった」 is a statement about something (Issue #156).
             _jobFor('q-2', state: 'succeeded', usable: false),
             _jobFor(
               'q-3',
               state: 'blocked',
               usable: null,
-              blockedOnQuestionId: 'q-1',
+              blockedOnQuestionId: 'q-2',
             ),
             _jobFor('q-4', state: 'running', usable: null),
           ],
@@ -4074,9 +4198,70 @@ void main() {
         questionId: 'q-3',
         number: '3',
         // A blocked question names its prerequisite in all three places.
-        label: '問1 待ち',
+        label: '問2 待ち',
       );
       expectAllThreeSay(tester, questionId: 'q-4', number: '4', label: 'AI処理中');
+
+      semantics.dispose();
+    });
+
+    testWidgets('待っている設問が無ければ、usable=false でも要確認にしない (Issue #156)', (
+      tester,
+    ) async {
+      // 実機再検証 #4 では、点数が作られた12件のうち11件が usable=false で、
+      // そのすべてに要確認が立っていた。ところが同じ実行の依存グラフの
+      // エッジは**0本**で、11件は1つも下流を止めていない。
+      // `Job.usable` が決めるのは「後続の依存設問へ進んでよいか」であって
+      // 「この設問を人間が見なくてよいか」ではない
+      // (docs/ai-grading-pipeline.md)。誰も待っていないなら、この設問は
+      // ほかの採点済みと同じ「レビュー待ち」である。
+      final semantics = tester.ensureSemantics();
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          jobs: [
+            _jobFor('q-1'),
+            _jobFor('q-2', state: 'succeeded', usable: false),
+            // 問3 は問1 待ちで、問2 を待ってはいない。
+            _jobFor(
+              'q-3',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+            _jobFor('q-4'),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      // 肯定形が先。画面が描けていないまま否定形だけ通るのを防ぐ
+      // (`docs/quality-gates.md`)。
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-1',
+        number: '1',
+        label: 'レビュー待ち',
+        selected: true,
+      );
+      expectAllThreeSay(tester, questionId: 'q-3', number: '3', label: '問1 待ち');
+
+      // そのうえで、usable=false の問2 が問1 と同じ語で出る。
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-2',
+        number: '2',
+        label: 'レビュー待ち',
+      );
+      // 「要確認」がこの画面のどこにも残っていない -- 答案そのものの状態
+      // (AppBar の「答案: 要確認」) は別の主語なので、そちらは統べない。
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('review-question-rail')),
+          matching: find.textContaining('要確認'),
+        ),
+        findsNothing,
+      );
 
       semantics.dispose();
     });
@@ -4085,6 +4270,7 @@ void main() {
       await _pumpReview(
         tester,
         statesDependencies(
+          edgeFrom: 'q-2',
           jobs: [
             _jobFor('q-1'),
             _jobFor('q-2', state: 'succeeded', usable: false),
@@ -4092,7 +4278,7 @@ void main() {
               'q-3',
               state: 'blocked',
               usable: null,
-              blockedOnQuestionId: 'q-1',
+              blockedOnQuestionId: 'q-2',
             ),
             _jobFor('q-4', state: 'running', usable: null),
           ],

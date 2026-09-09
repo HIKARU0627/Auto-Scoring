@@ -3,7 +3,11 @@
 /// scan quickly.
 ///
 /// The thresholds below are a UI categorization only -- they do not gate
-/// anything (no auto-confirm, no blocking). The business "low Confidence"
+/// anything (no auto-confirm, no blocking), and [high] is not an endorsement:
+/// 実機再検証 #4 measured 採点信頼度 ≥ 0.95 on all 12 AI grades, wrong zeros
+/// included, so the level says how sure the AI reported being and nothing
+/// about whether it was right (Issue #156). The screen draws only [low] with
+/// a tone of its own for that reason. The business "low Confidence"
 /// threshold is a backend setting that is tuned while operating rather than
 /// fixed once (`docs/business-rules-and-evaluation-data.md` §3 (C),
 /// `docs/data-model-and-local-storage.md` §9), so this screen deliberately

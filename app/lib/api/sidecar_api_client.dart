@@ -40,6 +40,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         ScannedFileModel,
         TestMaterialResponse,
         AnnotationResponse,
+        AnswerImageFinding,
         BoundingBoxResponse,
         CompleteRegistrationResponse,
         ConfirmCriteriaRequest,
