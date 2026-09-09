@@ -67,6 +67,7 @@ from typing import Annotated, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo
 from pydantic import model_validator as pydantic_model_validator
 
+from auto_scoring.domain.answer_area_snapping import PageRuling, snap_bbox_to_ruling
 from auto_scoring.domain.models import DomainError
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
 
@@ -100,6 +101,11 @@ MAX_NOTE_CHARS = 500
 #: Prefix for the note this module writes itself when it merges several
 #: reported boxes into one region -- see :func:`regions_from_detection`.
 MERGED_NOTE_PREFIX = "検出された枠"
+
+#: Prefix for the note written when snapping moved a box onto the printed
+#: ruling -- see :func:`regions_from_detection`. The reviewer is told, because
+#: the rectangle on screen is then not the one the model reported.
+SNAPPED_NOTE_PREFIX = "枠を印刷された罫線に合わせました"
 
 
 class AnswerAreaDetectionError(DomainError):
@@ -261,18 +267,21 @@ def _union(boxes: Sequence[NormalizedBBox]) -> NormalizedBBox:
     )
 
 
-def _merged_note(count: int, notes: Sequence[str]) -> str | None:
+def _merged_note(count: int, notes: Sequence[str], *, snap_shift: float = 0.0) -> str | None:
     """The reviewer-facing note for one merged region.
 
-    Says how many boxes were merged (only when more than one was), then the
-    model's own notes. Both matter: the count is this module's own action and
-    the reviewer must be able to see that a single rectangle on screen stands
-    for several the model reported, and the notes are the only place the
-    model can say why it could not attribute a box.
+    Says how many boxes were merged (only when more than one was) and how far
+    snapping moved the box (only when it moved), then the model's own notes.
+    All three matter: the first two are this module's own actions, and the
+    reviewer must be able to see that the rectangle on screen is not exactly
+    what the model reported -- while the notes are the only place the model
+    can say why it could not attribute a box.
     """
     parts: list[str] = []
     if count > 1:
         parts.append(f"{MERGED_NOTE_PREFIX} {count} 個を 1 つにまとめました。")
+    if snap_shift > 0.0:
+        parts.append(f"{SNAPPED_NOTE_PREFIX}。最大 {snap_shift:.3f} 動かしました。")
     parts.extend(notes)
     return " ".join(parts) if parts else None
 
@@ -281,6 +290,7 @@ def regions_from_detection(
     output: AnswerAreaDetectionOutput,
     *,
     existing_regions: Sequence[Region] = (),
+    page_rulings: Sequence[PageRuling] = (),
 ) -> tuple[Region, ...]:
     """Build the profile's new region set from a validated detection.
 
@@ -308,6 +318,18 @@ def regions_from_detection(
     it that is *not* an `ANSWER_AREA` is carried through untouched -- a
     reviewer's hand-drawn 問題文 or 添削記号領域 must survive re-running
     detection, which is a normal thing to do after a provider failure.
+
+    ``page_rulings`` (indexed by ``page - 1``) is where the printed lines
+    really run. Every box is snapped onto them before being merged
+    (`domain.answer_area_snapping`), and *before* rather than after the merge
+    on purpose: a union of two stereotyped rectangles is not a rectangle the
+    page has anywhere, so snapping it would only pick a rule near an edge
+    that was never real. The prompt already asks the model to copy these same
+    values (`adapters.answer_area_detection._prompt`); doing it again here is
+    the second half of the pattern that module documents -- state it once
+    where it can be read, once where it can be enforced. When a box moves,
+    the reviewer's note says so: a rectangle that shifted on its own is the
+    kind of correction the person about to trust it has to be able to see.
     """
     # Grouped by (question number, page) -- **except** for the unassigned
     # ones, which each get a key of their own.
@@ -338,15 +360,18 @@ def regions_from_detection(
         number, page, _ = key
         areas = grouped[key]
         notes = [area.note.strip() for area in areas if area.note and area.note.strip()]
+        ruling = page_rulings[page - 1] if page - 1 < len(page_rulings) else PageRuling()
+        snapped = [snap_bbox_to_ruling(area.bbox.to_domain(), ruling) for area in areas]
+        shift = max((box.largest_shift for box in snapped), default=0.0)
         regions.append(
             Region(
                 region_id=f"answer-area-{index}",
                 kind=RegionKind.ANSWER_AREA,
                 page_index=page - 1,
-                bbox=_union([area.bbox.to_domain() for area in areas]),
+                bbox=_union([box.bbox for box in snapped]),
                 label=number,
                 confirmed=False,
-                text=_merged_note(len(areas), notes),
+                text=_merged_note(len(areas), notes, snap_shift=shift),
             )
         )
     return tuple(regions)
@@ -422,15 +447,31 @@ class AnswerAreaDetectionRequest:
     ``question_numbers`` is the confirmed question set the model must choose
     from. Never empty: a caller with no confirmed questions has nothing to
     offer as choices, and must stop before building this.
+
+    ``page_rulings`` is where the long printed lines actually run on each
+    page, measured from the very images being attached
+    (`adapters.image.ink.measure_page_ruling`). Issue #122 measured that the
+    model does not locate a thin ruled column -- it returns a stereotyped
+    one -- so the lines are handed to it as the values to copy from, turning
+    "estimate a coordinate" back into the multiple-choice question this
+    prompt already makes of question attribution. Empty means "not measured",
+    and the prompt simply omits the section; otherwise it must have one entry
+    per page, or the numbers would be attached to the wrong image.
     """
 
     page_images: tuple[bytes, ...]
     question_numbers: tuple[str, ...]
+    page_rulings: tuple[PageRuling, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.page_images:
             raise AnswerAreaDetectionError(
                 "AnswerAreaDetectionRequest.page_images must not be empty"
+            )
+        if self.page_rulings and len(self.page_rulings) != len(self.page_images):
+            raise AnswerAreaDetectionError(
+                "AnswerAreaDetectionRequest.page_rulings must be empty or have one entry "
+                "per page image"
             )
         if any(not image for image in self.page_images):
             raise AnswerAreaDetectionError(

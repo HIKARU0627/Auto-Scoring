@@ -774,14 +774,47 @@ Inspector のビューポートだけが広がる。`maxScrollExtent` が 79.4 �
 それでも、判断材料が一度も画面に出ないまま確定される経路は無くなる。
 そこから先（本当に読んだか）は画面の側からは保証できない。
 
+## 2.9. 「AIが見た画像」を判断材料の先頭に置く（Issue #122）
+
+添削レビュー画面の 判断材料 の先頭に、**採点 AI に実際に送られた切り出し画像**を
+出す（`features/pdf_review/answer_crop_view.dart`）。
+
+**なぜ登録画面ではなく採点画面か。** 回答欄を人が直せる重ね合わせ編集は Issue #105
+が既に作ったが、それはテストを準備する画面にあり、**点数が間違っていると分かる頃には
+誰も見ていない**。Issue #122 が実測した代償はこうだった——検出枠が余白に落ち、
+採点 AI には白紙が渡り、「空白なので 0 点」が**確信度 0.95〜1.00**で返る。画面には
+`0点` と `確信度 95%` しか出ず、正しい 0 点と区別が付かない。**疑う手がかりが無い。**
+
+Issue #85 が 5 ラウンドかけて「判断材料と承認を同じ画面に置く」を作った。
+**AI が実際に見た画像は判断材料である**——だから、そこから導かれた文字や点数より
+**上**に置く。
+
+置き方で決めたこと:
+
+- **空の分岐より上に置く。** 切り出しが余白なら取込が採点**前**に止めるので
+  AI 結果が無い。その「まだAI結果がありません」だけを出すと、いちばん見せたい
+  ケースで何も見せないことになる。
+- **ほぼ余白のときは、そう書く。** ただし**理由は断定しない**。「回答欄の位置が
+  ずれているか、答案が無記入です」と両方を書く。切り出しから 2 つは区別できず、
+  区別できるふりをするほうが害になる。判定はサイドカーが実測した旗
+  （`crop_nearly_blank`）で、ウィジェットは測り直さない。
+- **高さを固定で制限する。** 縦書きの細長い列が、点数と承認ボタンを画面外へ
+  押し出さないようにする（Issue #85 の「同じ画面で判断して承認する」を壊さない）。
+- **`pdf_review_page.dart` には置かない。** 既に約 3,000 行あり Issue #126 で
+  分割対象。差分は `_buildAnswerCrop` の呼び出しだけに留めた。
+- **遅れて届いた応答は捨てる。** 設問を移動している間に前の設問の画像が届くと、
+  別の設問の点数の下に別の設問の画像が出る——このウィジェットが防ごうとしている
+  混同そのものになる。
+
 ## 3. 追加したAPI（読み取り専用）
 
-| メソッド | パス                                                               | 用途                                                           |
-| -------- | ------------------------------------------------------------------ | -------------------------------------------------------------- |
-| GET      | `/tests/{test_id}/questions`                                       | 設問一覧（各設問領域＋rubric）                                 |
-| GET      | `/submissions/{submission_id}/source-pdf`                          | 元答案PDFバイト列（`application/pdf`）                         |
-| GET      | `/submissions/{submission_id}/questions/{question_id}/grades`      | 採点結果の履歴（AI/human、両Confidence・AIの総評コメント含む） |
-| GET      | `/submissions/{submission_id}/questions/{question_id}/annotations` | annotation一覧                                                 |
+| メソッド | パス                                                                | 用途                                                                |
+| -------- | ------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| GET      | `/tests/{test_id}/questions`                                        | 設問一覧（各設問領域＋rubric）                                      |
+| GET      | `/submissions/{submission_id}/source-pdf`                           | 元答案PDFバイト列（`application/pdf`）                              |
+| GET      | `/submissions/{submission_id}/questions/{question_id}/grades`       | 採点結果の履歴（AI/human、両Confidence・AIの総評コメント含む）      |
+| GET      | `/submissions/{submission_id}/questions/{question_id}/annotations`  | annotation一覧                                                      |
+| GET      | `/submissions/{submission_id}/questions/{question_id}/answer-image` | 採点AIに送られた切り出し画像（`image/png`、Issue #122で画面に接続） |
 
 いずれも `SqlAlchemyUnitOfWork` 経由の読み取りのみで、DBへの書き込みは行わない。
 OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で

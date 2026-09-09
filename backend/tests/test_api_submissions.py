@@ -21,18 +21,15 @@ from auto_scoring.domain.models import NormalizedRect, TestStatus
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
 from auto_scoring.domain.pdf_intake import IntakeLimits
-from tests.support import make_question, make_test
+from tests.support import make_question, make_test, written_on_pdf_bytes
 
 _TOKEN = "submissions-test-token"
 
 
 def _pdf_bytes(*, pages: int = 1) -> bytes:
-    writer = PdfWriter()
-    for _ in range(pages):
-        writer.add_blank_page(width=300, height=400)
-    buffer = BytesIO()
-    writer.write(buffer)
-    return buffer.getvalue()
+    """An answer sheet with writing on it -- see `support.written_on_pdf_bytes`
+    for why a blank one no longer reaches ``ai_processed``."""
+    return written_on_pdf_bytes(pages=pages, width=300, height=400)
 
 
 @pytest.fixture

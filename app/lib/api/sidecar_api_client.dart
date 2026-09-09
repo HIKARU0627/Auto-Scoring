@@ -1232,6 +1232,32 @@ class SidecarApiClient {
     }
   }
 
+  /// The cropped answer-area image that was cut out of [submissionId]'s page
+  /// for [questionId] -- **exactly the picture the grading AI was sent**.
+  ///
+  /// Issue #122: a detected answer area can land on the margin, and the AI
+  /// then reports a confident zero for a picture of blank paper. The score
+  /// alone gives a reviewer nothing to doubt, so the review screen shows
+  /// this next to it. Throws [SidecarApiException] (404) when the submission
+  /// has no crop recorded for that question.
+  Future<Uint8List> getAnswerImage(
+    String submissionId,
+    String questionId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _recognitionsApi
+          .getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet(
+            submissionId: submissionId,
+            questionId: questionId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
   /// Every `RecognitionResult` recorded for [submissionId]/[questionId] so
   /// far, oldest first (AI proposals and human corrections, §19/§35-5).
   Future<List<RecognitionResponse>> listRecognitions(

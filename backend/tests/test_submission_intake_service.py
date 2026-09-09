@@ -45,7 +45,7 @@ from auto_scoring.domain.pdf_intake import (
     PdfPageTooLargeError,
     StagedOutputTooLargeError,
 )
-from tests.support import at, make_job, make_question, make_test
+from tests.support import at, make_job, make_question, make_test, written_on_pdf_bytes
 
 _ENGINE = PdfiumPypdfEngine()
 _PREPROCESSOR = OpenCvImagePreprocessor()
@@ -53,12 +53,14 @@ _LIMITS = IntakeLimits(max_size_bytes=10 * 1024 * 1024, max_pages=20)
 
 
 def _pdf_bytes(*, pages: int = 1, width: float = 300, height: float = 400) -> bytes:
-    writer = PdfWriter()
-    for _ in range(pages):
-        writer.add_blank_page(width=width, height=height)
-    buffer = BytesIO()
-    writer.write(buffer)
-    return buffer.getvalue()
+    """An answer sheet with writing on it.
+
+    Not `PdfWriter.add_blank_page`: since Issue #122 a crop with no ink in it
+    is refused rather than graded, so a blank fixture exercises the tripwire
+    instead of the happy path these tests are about. `test_nearly_blank`
+    below covers the blank sheet deliberately.
+    """
+    return written_on_pdf_bytes(pages=pages, width=width, height=height)
 
 
 def _encrypted_pdf_bytes() -> bytes:
@@ -292,6 +294,101 @@ def test_zero_area_answer_area_falls_back_to_page_preview_instead_of_a_useless_c
     assert image.image_path == str(
         store.submission_page_image_path(result.submission.id, 1).relative_to(store.root)
     ).replace("\\", "/")
+
+
+def test_a_crop_that_came_out_blank_is_stopped_before_it_is_graded(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """Issue #122's second half, at the point it can still act.
+
+    A detected answer area can land in the margin -- measured on real
+    material, one crop came out with an ink coverage of exactly 0.0000. Sent
+    on, the grading AI answered "空白なので0点" with a confidence of 0.95-1.00,
+    and the screen showed a confident zero with nothing to question. Flagged
+    here, `jobs.grading_processor` skips it without calling the provider and
+    a person is asked to look instead.
+
+    The same flag catches a genuinely unanswered question, and that is not a
+    defect: nothing can tell the two apart from the crop, and both want a
+    human.
+    """
+    q1 = make_question(
+        id="q-1",
+        page=1,
+        answer_area=NormalizedRect(x=0.1, y=0.1, width=0.3, height=0.2),
+    )
+    _seed_test_with_questions(make_uow, questions=[q1])
+    blank_sheet = PdfWriter()
+    blank_sheet.add_blank_page(width=300, height=400)
+    buffer = BytesIO()
+    blank_sheet.write(buffer)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=buffer.getvalue(),
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result.submission.state is SubmissionState.NEEDS_REVIEW
+    assert result.submission.review_reason == "crop_nearly_blank:q-1"
+    image = result.answer_images[0]
+    assert image.status is AnswerImageStatus.NEEDS_REVIEW
+    assert image.reason == "crop_nearly_blank"
+    # The crop itself is kept, unlike the "no answer area" fallback: it is
+    # exactly what would have been graded, so it is what the reviewer has to
+    # be able to look at.
+    assert image.image_path == str(
+        store.submission_question_image_path(result.submission.id, "q-1").relative_to(store.root)
+    ).replace("\\", "/")
+    assert (store.root / image.image_path).exists()
+
+
+def test_a_blank_crop_and_an_undefined_area_are_reported_as_different_reasons(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """They send the reviewer to different places -- the registration screen
+    for one, the answer for the other -- so one submission carrying both must
+    not collapse them into a single label."""
+    _seed_test_with_questions(
+        make_uow,
+        questions=[
+            make_question(id="q-1", page=1, answer_area=None),
+            make_question(
+                id="q-2",
+                number="問2",
+                page=1,
+                answer_area=NormalizedRect(x=0.1, y=0.1, width=0.3, height=0.2),
+            ),
+        ],
+    )
+    blank_sheet = PdfWriter()
+    blank_sheet.add_blank_page(width=300, height=400)
+    buffer = BytesIO()
+    blank_sheet.write(buffer)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=buffer.getvalue(),
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result.submission.review_reason == "answer_area_undefined:q-1;crop_nearly_blank:q-2"
 
 
 def test_duplicate_submission_is_rejected(

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +33,7 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 
 from auto_scoring.adapters.atomic import FinalizationError, StagedFiles, transactional_operation
+from auto_scoring.adapters.image.ink import ink_coverage
 from auto_scoring.adapters.image.opencv_preprocessor import crop_normalized_rect
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -55,10 +56,12 @@ from auto_scoring.domain.pdf_intake import (
     validate_upload_bytes,
 )
 from auto_scoring.domain.submission_intake import (
+    NEARLY_BLANK_CROP_REASON,
     PageCoverage,
     ReintakeDecision,
     decide_reintake,
     describe_coverage_issue,
+    is_nearly_blank_crop,
 )
 
 #: Rasterization scale (pixels per PDF point) for both the preview image and
@@ -338,12 +341,13 @@ def _write_submission(
             )
             if any_needs_review:
                 submission_state = SubmissionState.NEEDS_REVIEW
-                flagged = ",".join(
-                    image.question_id
-                    for image in answer_images
-                    if image.status is AnswerImageStatus.NEEDS_REVIEW
-                )
-                submission_review_reason = f"answer_area_undefined:{flagged}"
+                # Grouped by the per-image reason rather than all filed under
+                # ``answer_area_undefined``: since Issue #122 a flagged image
+                # can also mean "the crop came out blank", which is a
+                # different thing for the reviewer to go and look at, and a
+                # reason string that named the wrong one would send them to
+                # the registration screen for a problem that is not there.
+                submission_review_reason = _describe_flagged_images(answer_images)
             else:
                 submission_state = SubmissionState.AI_PROCESSED
                 submission_review_reason = None
@@ -412,6 +416,31 @@ def _write_submission(
     return final, answer_images
 
 
+#: `AnswerImage.reason` values that keep their historical spelling in
+#: `Submission.review_reason`. ``no_answer_area_defined`` and
+#: ``answer_area_zero_area`` have both been reported as
+#: ``answer_area_undefined:<ids>`` since Issue #17, and the intake screen and
+#: `docs/answer-intake-and-preprocessing.md` §3 both name that string.
+_SUBMISSION_REASON_BY_IMAGE_REASON = {
+    "no_answer_area_defined": "answer_area_undefined",
+    "answer_area_zero_area": "answer_area_undefined",
+    NEARLY_BLANK_CROP_REASON: NEARLY_BLANK_CROP_REASON,
+}
+
+
+def _describe_flagged_images(answer_images: Sequence[AnswerImage]) -> str:
+    """``<reason>:<question-id,...>`` for every reason that flagged at least
+    one image, joined by ``;`` -- the same shape `describe_coverage_issue`
+    produces, so one parser handles both."""
+    grouped: dict[str, list[str]] = {}
+    for image in answer_images:
+        if image.status is not AnswerImageStatus.NEEDS_REVIEW:
+            continue
+        reason = _SUBMISSION_REASON_BY_IMAGE_REASON.get(image.reason or "", "answer_area_undefined")
+        grouped.setdefault(reason, []).append(image.question_id)
+    return ";".join(f"{reason}:{','.join(ids)}" for reason, ids in sorted(grouped.items()))
+
+
 def _build_answer_image(
     *,
     question: Question,
@@ -427,7 +456,11 @@ def _build_answer_image(
     A question with no confirmed ``answer_area`` (test registration hasn't
     defined one yet) falls back to the full page preview image, marked
     ``NEEDS_REVIEW`` -- simplified-design-spec.md §24 "回答欄検出失敗は…元画像
-    を人間へ提示する". The domain model currently allows a zero-``width``/
+    を人間へ提示する". A crop that *was* taken but came out as good as blank
+    is marked the same way (`domain.submission_intake.is_nearly_blank_crop`,
+    Issue #122): a detected box can land in the margin, and grading paper
+    produced "0点・確信度 0.95" rather than anything a reviewer could
+    question. The domain model currently allows a zero-``width``/
     ``height`` ``NormalizedRect`` through, and ``crop_normalized_rect``'s own
     clamp would silently turn that into a meaningless 1x1px crop marked "OK"
     rather than failing; treated the same as "not defined" here instead, so a
@@ -444,9 +477,18 @@ def _build_answer_image(
     else:
         cropped = crop_normalized_rect(raw_png, question.answer_area)
         image_path = store.submission_question_image_path(submission_id, question.id)
+        # Staged either way, unlike the two branches above: this crop is
+        # exactly what would have been sent to be graded, so it is the one
+        # thing a person needs to look at to see that the box is in the
+        # wrong place (Issue #122). The other branches have no crop to show
+        # and fall back to the page.
         staged.add(image_path, cropped)
-        status = AnswerImageStatus.OK
-        reason = None
+        if is_nearly_blank_crop(ink_coverage(cropped)):
+            status = AnswerImageStatus.NEEDS_REVIEW
+            reason = NEARLY_BLANK_CROP_REASON
+        else:
+            status = AnswerImageStatus.OK
+            reason = None
     return AnswerImage(
         id=id_factory(),
         submission_id=submission_id,

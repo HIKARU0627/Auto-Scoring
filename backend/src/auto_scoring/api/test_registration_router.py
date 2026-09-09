@@ -56,6 +56,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.atomic import FinalizationError
+from auto_scoring.adapters.image.ink import measure_page_ruling
 from auto_scoring.adapters.local.criteria_store import CriteriaStore
 from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
@@ -1382,6 +1383,11 @@ def build_test_registration_router(
                         pdf_engine.render_page_png(source, index, scale=RENDER_SCALE)
                         for index in range(page_count)
                     )
+                # Measured from the very images being sent, so the model is
+                # choosing among lines it can actually see and the snap
+                # afterwards lands on the same values (Issue #122). Outside
+                # the pdfium lock: this is OpenCV over bytes already in hand.
+                page_rulings = tuple(measure_page_ruling(image) for image in page_images)
             except Exception as exc:
                 raise HTTPException(
                     422, detail=f"could not read the stored answer sheet: {type(exc).__name__}"
@@ -1397,7 +1403,9 @@ def build_test_registration_router(
             try:
                 output = detector.detect(
                     AnswerAreaDetectionRequest(
-                        page_images=page_images, question_numbers=tuple(numbers)
+                        page_images=page_images,
+                        question_numbers=tuple(numbers),
+                        page_rulings=page_rulings,
                     )
                 )
             except SchemaViolation as exc:
@@ -1430,7 +1438,9 @@ def build_test_registration_router(
                     test_id,
                     test_id,
                     signature,
-                    regions_from_detection(output, existing_regions=carried),
+                    regions_from_detection(
+                        output, existing_regions=carried, page_rulings=page_rulings
+                    ),
                 )
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc

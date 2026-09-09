@@ -102,3 +102,46 @@ def describe_coverage_issue(coverage: PageCoverage) -> str | None:
     if coverage.has_extra_pages:
         parts.append(f"extra_pages:{coverage.actual_page_count}>{max(coverage.expected_pages)}")
     return ";".join(parts)
+
+
+#: Ink coverage at or below which a cropped answer image counts as "nothing
+#: was cut out but paper" -- see :func:`is_nearly_blank_crop`.
+#:
+#: **Measured, and deliberately set to catch only the unambiguous case**
+#: (Issue #122). On three real answer sheets:
+#:
+#: * a region of blank paper measures ``0.000015`` or less
+#: * a crop that landed on a question the student answered measures
+#:   ``0.050``-``0.121``
+#: * a crop the detector put in the margin measured ``0.0000`` exactly
+#: * a crop that landed *half* on the answer measured ``0.034``-``0.062`` --
+#:   overlapping the range real answers occupy
+#:
+#: So this sits two orders of magnitude above blank paper and more than an
+#: order below the thinnest real answer, and the half-off case is **not**
+#: caught on purpose. There is no coverage number that separates "the box is
+#: half wrong" from "the student wrote little", and a threshold raised until
+#: it caught them would start rejecting real answers while still missing
+#: others. That case is for a person to see, not for this to rule on
+#: (Issue #122's second half).
+NEARLY_BLANK_INK_COVERAGE = 0.002
+
+#: `AnswerImage.reason` for a crop this rejected. Matches the existing
+#: ``no_answer_area_defined`` / ``answer_area_zero_area`` vocabulary.
+NEARLY_BLANK_CROP_REASON = "crop_nearly_blank"
+
+
+def is_nearly_blank_crop(ink_coverage: float) -> bool:
+    """Whether a cropped answer image holds so little ink that sending it to
+    be graded would be grading a piece of blank paper.
+
+    Two different things land here and this cannot tell them apart: the
+    answer area is in the wrong place, or the student left the question
+    blank. **Both belong in front of a person**, and the existing contract
+    already says so -- `AnswerImageStatus.NEEDS_REVIEW` means "the crop
+    itself could not be trusted", and `jobs.grading_processor` skips grading
+    for it without calling the provider. Before Issue #122 a blank crop went
+    to the AI instead, which answered "空白なので0点" with a confidence of
+    0.95-1.00: a wrong score that looked exactly like a right one.
+    """
+    return ink_coverage <= NEARLY_BLANK_INK_COVERAGE

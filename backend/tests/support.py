@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta
+from io import BytesIO
 from typing import Any
 
+from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -213,3 +216,48 @@ def seed_confirmed_dependency_graph(
         assert uow.dependency_graphs.try_confirm(confirmed) is True
         uow.commit()
     return confirmed.version
+
+
+def written_on_pdf_bytes(
+    *,
+    pages: int = 1,
+    width: float = 300.0,
+    height: float = 400.0,
+    metadata: Mapping[str, str] | None = None,
+) -> bytes:
+    """A PDF whose every page carries pen-like ink spread over the sheet.
+
+    Since Issue #122, intake refuses to send a crop that is as good as blank
+    to be graded (`domain.submission_intake.is_nearly_blank_crop`) -- so a
+    fixture built from `PdfWriter.add_blank_page` no longer stands in for "a
+    student's answer sheet". It stands in for an *unanswered* one, which is
+    what the tripwire exists to catch, and every intake test that used one
+    was asserting the happy path against material the product would now
+    correctly stop.
+
+    The strokes are a grid of short segments rather than one filled block:
+    dense enough that any answer area a test defines contains ink well above
+    the tripwire's threshold, sparse enough to stay handwriting-shaped, so
+    that neither `adapters.image.ink.measure_page_ruling` (which requires a
+    long unbroken run) nor the preview deskew reads them as page structure.
+    """
+    buffer = BytesIO()
+    pdf_canvas = canvas.Canvas(buffer, pagesize=(width, height))
+    for _ in range(pages):
+        pdf_canvas.setStrokeColorRGB(0.1, 0.1, 0.1)
+        pdf_canvas.setLineWidth(max(1.0, min(width, height) / 100.0))
+        step_x, step_y = width / 24.0, height / 32.0
+        for column in range(1, 24):
+            for row in range(1, 32):
+                x, y = column * step_x, row * step_y
+                pdf_canvas.line(x, y, x + step_x * 0.6, y + step_y * 0.35)
+        pdf_canvas.showPage()
+    pdf_canvas.save()
+
+    writer = PdfWriter()
+    writer.append(PdfReader(BytesIO(buffer.getvalue())))
+    if metadata:
+        writer.add_metadata(dict(metadata))
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()

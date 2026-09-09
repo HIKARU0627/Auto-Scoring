@@ -28,12 +28,10 @@ half: the coordinates, and the ``ready`` gate they open.
 from __future__ import annotations
 
 import json
-from io import BytesIO
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -45,6 +43,7 @@ from auto_scoring.domain.answer_area_detection import (
     parse_answer_area_detection,
 )
 from auto_scoring.domain.pdf_intake import IntakeLimits
+from tests.support import written_on_pdf_bytes
 
 _TOKEN = "answer-area-flow-token"
 
@@ -78,16 +77,17 @@ class _ScriptedDetector:
 
 
 def _pdf_bytes(*, pages: int = 1, marker: bytes = b"") -> bytes:
-    writer = PdfWriter()
-    for _ in range(pages):
-        writer.add_blank_page(width=595, height=842)
-    if marker:
-        # Distinguishes the answer being graded from the layout reference, so
-        # a duplicate-content check cannot conflate the two.
-        writer.add_metadata({"/Keywords": marker.decode()})
-    buffer = BytesIO()
-    writer.write(buffer)
-    return buffer.getvalue()
+    """An answer sheet with writing on it -- see `support.written_on_pdf_bytes`.
+
+    ``marker`` distinguishes the answer being graded from the layout
+    reference, so a duplicate-content check cannot conflate the two.
+    """
+    return written_on_pdf_bytes(
+        pages=pages,
+        width=595,
+        height=842,
+        metadata={"/Keywords": marker.decode()} if marker else None,
+    )
 
 
 @pytest.fixture
