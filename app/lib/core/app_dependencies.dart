@@ -171,6 +171,10 @@ Future<DependencyGraphResponse> _unavailableConfirmDependencyGraph(
 Future<List<QuestionResponse>> _unavailableListQuestions(String testId) async =>
     _unavailable();
 
+Future<List<SubmissionReviewProgressResponse>> _unavailableListReviewProgress(
+  String testId,
+) async => _unavailable();
+
 Future<Uint8List> _unavailableGetSourcePdf(String submissionId) async =>
     _unavailable();
 
@@ -476,6 +480,14 @@ typedef ConfirmDependencyGraph =
       required List<DependencyEdgeModel> edges,
     });
 
+/// 設問粒度の進捗を、そのテストの答案ぶんまとめて (Issue #113)。
+///
+/// 答案キューの1行が「3 / 5」を出すためのもの。答案の `state` が動くのは全設問が
+/// 確定したときだけ (Issue #112) なので、**途中まで確定した答案は `state` だけでは
+/// 未着手と見分けられない**。その穴をこの数が埋める。
+typedef ListReviewProgress =
+    Future<List<SubmissionReviewProgressResponse>> Function(String testId);
+
 /// Every `Question` for [testId] (its profile areas + rubric) -- the
 /// 添削レビュー画面's Navigation Rail and Inspector (§16.5, Issue #21).
 typedef ListQuestions = Future<List<QuestionResponse>> Function(String testId);
@@ -719,6 +731,7 @@ class AppDependencies {
     this.getDependencyGraph = _unavailableGetDependencyGraph,
     this.confirmDependencyGraph = _unavailableConfirmDependencyGraph,
     this.listQuestions = _unavailableListQuestions,
+    this.listReviewProgress = _unavailableListReviewProgress,
     this.getSourcePdf = _unavailableGetSourcePdf,
     this.getAnswerImage = _unavailableGetAnswerImage,
     this.listRecognitions = _unavailableListRecognitions,
@@ -787,6 +800,7 @@ class AppDependencies {
       getDependencyGraph = client.getDependencyGraph,
       confirmDependencyGraph = client.confirmDependencyGraph,
       listQuestions = client.listQuestions,
+      listReviewProgress = client.listReviewProgress,
       getSourcePdf = client.getSourcePdf,
       getAnswerImage = client.getAnswerImage,
       listRecognitions = client.listRecognitions,
@@ -848,6 +862,8 @@ class AppDependencies {
   final GetDependencyGraph getDependencyGraph;
   final ConfirmDependencyGraph confirmDependencyGraph;
   final ListQuestions listQuestions;
+
+  final ListReviewProgress listReviewProgress;
   final GetSourcePdf getSourcePdf;
   final GetAnswerImage getAnswerImage;
   final ListRecognitions listRecognitions;

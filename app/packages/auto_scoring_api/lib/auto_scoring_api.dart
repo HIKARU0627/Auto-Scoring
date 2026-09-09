@@ -89,6 +89,7 @@ export 'package:auto_scoring_api/src/model/score_request.dart';
 export 'package:auto_scoring_api/src/model/score_response.dart';
 export 'package:auto_scoring_api/src/model/score_value_response.dart';
 export 'package:auto_scoring_api/src/model/submission_response.dart';
+export 'package:auto_scoring_api/src/model/submission_review_progress_response.dart';
 export 'package:auto_scoring_api/src/model/test_material_response.dart';
 export 'package:auto_scoring_api/src/model/test_response.dart';
 export 'package:auto_scoring_api/src/model/test_summary.dart';

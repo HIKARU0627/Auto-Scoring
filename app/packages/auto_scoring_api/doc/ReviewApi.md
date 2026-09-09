@@ -16,6 +16,7 @@ Method | HTTP request | Description
 [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
 [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
 [**listQuestionsTestsTestIdQuestionsGet**](ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
+[**listReviewProgressTestsTestIdReviewProgressGet**](ReviewApi.md#listreviewprogressteststestidreviewprogressget) | **GET** /tests/{test_id}/review-progress | List Review Progress
 [**listReviewsSubmissionsSubmissionIdQuestionsQuestionIdReviewsGet**](ReviewApi.md#listreviewssubmissionssubmissionidquestionsquestionidreviewsget) | **GET** /submissions/{submission_id}/questions/{question_id}/reviews | List Reviews
 [**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
 [**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
@@ -315,6 +316,49 @@ Name | Type | Description  | Notes
 ### Return type
 
 [**BuiltList&lt;QuestionResponse&gt;**](QuestionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **listReviewProgressTestsTestIdReviewProgressGet**
+> BuiltList<SubmissionReviewProgressResponse> listReviewProgressTestsTestIdReviewProgressGet(testId)
+
+List Review Progress
+
+Per-question review progress for every answer of one test.  Ordered by the answers' own ``created_at``, the order every other list of a test's answers already uses (`SubmissionRepository.list_for_test`), so the client never has to re-sort to line this up with `GET /tests/{id}/submissions`.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String testId = testId_example; // String | 
+
+try {
+    final response = api.listReviewProgressTestsTestIdReviewProgressGet(testId);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->listReviewProgressTestsTestIdReviewProgressGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+
+### Return type
+
+[**BuiltList&lt;SubmissionReviewProgressResponse&gt;**](SubmissionReviewProgressResponse.md)
 
 ### Authorization
 

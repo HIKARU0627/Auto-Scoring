@@ -78,6 +78,7 @@ doc/ScoreRequest.md
 doc/ScoreResponse.md
 doc/ScoreValueResponse.md
 doc/SubmissionResponse.md
+doc/SubmissionReviewProgressResponse.md
 doc/TestMaterialResponse.md
 doc/TestRegistrationApi.md
 doc/TestResponse.md
@@ -175,6 +176,7 @@ lib/src/model/score_request.dart
 lib/src/model/score_response.dart
 lib/src/model/score_value_response.dart
 lib/src/model/submission_response.dart
+lib/src/model/submission_review_progress_response.dart
 lib/src/model/test_material_response.dart
 lib/src/model/test_response.dart
 lib/src/model/test_summary.dart
@@ -185,3 +187,4 @@ lib/src/model/update_profile_request.dart
 lib/src/model/validation_error.dart
 lib/src/serializers.dart
 pubspec.yaml
+test/submission_review_progress_response_test.dart
