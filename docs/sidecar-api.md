@@ -55,6 +55,15 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
   `app/packages/auto_scoring_api/`（path 依存パッケージ）としてコミットする。
   built_value のシリアライザは `build_runner` で生成し `.g.dart` もコミットする。
 - 生成物は手で編集しない。手書き DTO は置かない。
+- **生成物を迂回して値を手で組む場所では、必ず生成クライアントのシリアライザを通す。**
+  multipart の繰り返しフォーム項目（`POST /tests` の `material_roles`）のように、
+  生成クライアントが `BuiltList<String>` としか型付けできない引数がある。そこへ Dart の
+  列挙子名（`MaterialRole.annotationResource.name` = `annotationResource`）を入れると、
+  wire 名（`annotation_resource`）を持つ `MaterialRole.serializer` を通らないまま送られる。
+  型検査もリンタも通り、テストも全て緑のまま、実行時だけ 422 になる
+  （Issue #139: 実資料の全教科に 添削資料 があるため、画面からどの教科も取り込めなかった）。
+  対応表を手で書き足さず `standardSerializers.serializeWith(MaterialRole.serializer, role)`
+  で生成クライアント側の対応表を使う。二重に持つと次に役割が増えたときまた割れる。
 - Flutter 側の単一境界は `app/lib/api/sidecar_api_client.dart`（`SidecarApiClient`）。
   生成クライアントを包み、トークン付与（dio interceptor）・timeout・`CancelToken`・
   `DioException` → `SidecarApiException` 変換を担う。`core` / `features` はこの境界だけを使う。
@@ -80,13 +89,13 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 
 ## 5. テスト
 
-| レイヤ  | テスト                                                                | 対象                                                                                                                |
-| ------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Python  | `backend/tests/test_api.py`                                           | `/healthz` は無認証 200、`/score` は無トークン/誤トークンで 401、正トークンで 200                                   |
-| Python  | `backend/tests/test_sidecar.py`                                       | ポート 0 → 空きポート、占有ポート → フォールバック、ログのトークン秘匿、ハンドシェイク、`run()` が loopback で bind |
-| Python  | `backend/tests/test_openapi_schema.py`                                | コミット済み schema と生成結果の一致、security 設定                                                                 |
-| Flutter | `app/test/sidecar_api_client_test.dart`（tag: `sidecar`）             | 実サイドカーを起動し health check・保護 API（正トークン 200 / 誤トークン 401）・未起動時 `unavailable`              |
-| Flutter | `app/test/sidecar_supervisor_test.dart`                               | プロセス監督の状態遷移全部（`SidecarPlatform` を fake 化。時計も fake なので起動 timeout も一瞬で検証）             |
-| Flutter | `app/test/sidecar_supervisor_integration_test.dart`（tag: `sidecar`） | 実サイドカーに対して動的ポート・handshake 削除・通常終了・crash からの再起動・二重起動拒否                          |
+| レイヤ  | テスト                                                                | 対象                                                                                                                                   |
+| ------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Python  | `backend/tests/test_api.py`                                           | `/healthz` は無認証 200、`/score` は無トークン/誤トークンで 401、正トークンで 200                                                      |
+| Python  | `backend/tests/test_sidecar.py`                                       | ポート 0 → 空きポート、占有ポート → フォールバック、ログのトークン秘匿、ハンドシェイク、`run()` が loopback で bind                    |
+| Python  | `backend/tests/test_openapi_schema.py`                                | コミット済み schema と生成結果の一致、security 設定                                                                                    |
+| Flutter | `app/test/sidecar_api_client_test.dart`（tag: `sidecar`）             | 実サイドカーを起動し health check・保護 API（正トークン 200 / 誤トークン 401）・未起動時 `unavailable`・材料の役割が wire 名で渡ること |
+| Flutter | `app/test/sidecar_supervisor_test.dart`                               | プロセス監督の状態遷移全部（`SidecarPlatform` を fake 化。時計も fake なので起動 timeout も一瞬で検証）                                |
+| Flutter | `app/test/sidecar_supervisor_integration_test.dart`（tag: `sidecar`） | 実サイドカーに対して動的ポート・handshake 削除・通常終了・crash からの再起動・二重起動拒否                                             |
 
 `flutter test -x sidecar` で実サイドカー起動テストを除外できる（`uv` 不要の環境向け）。
