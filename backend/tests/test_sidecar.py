@@ -17,6 +17,7 @@ from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvide
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
 from auto_scoring.adapters.ai_grading.vertex_gemini_provider import VertexGeminiAIProvider
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
+from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
 from auto_scoring.api import sidecar
 from auto_scoring.api.secret_redaction import configuration_secrets
 from auto_scoring.api.sidecar import (
@@ -402,6 +403,63 @@ def test_run_starts_and_serves_on_a_host_with_no_ai_credentials(
     assert handshake_file.is_file()
     assert seen["env"] is os.environ
     assert captured["config"].app.state.ai_provider is provider
+
+
+def test_run_injects_the_ocr_provider_it_built(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #114, and the reason that Issue existed at all.
+
+    `run()` used to build three providers and pass all three to
+    `create_app` -- and pass **no** ``ocr_provider``, so `create_app` fell
+    back to its placeholder on every shipped install. Nothing caught it: the
+    adapter tests inject a provider, and the E2E tests inject a scripted one,
+    so no test in the tree ever ran the composition that actually ships.
+
+    This pins the wiring itself, in the same shape
+    `test_run_starts_and_serves_on_a_host_with_no_ai_credentials` pins the
+    grading half: the provider `run()` built is the provider the app got. An
+    adapter that is never injected changes nothing about what ships.
+    """
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
+
+    seen: dict[str, Mapping[str, str]] = {}
+    provider = UnconfiguredOCRProvider("AUTO_SCORING_DOCUMENT_AI_PROCESSOR is not set")
+
+    def fake_build(env: Mapping[str, str], **_: Any) -> UnconfiguredOCRProvider:
+        seen["env"] = env
+        return provider
+
+    monkeypatch.setattr(sidecar, "build_ocr_provider", fake_build)
+
+    captured: dict[str, Any] = {}
+
+    def fake_server_run(self: uvicorn.Server, sockets: list[socket.socket] | None = None) -> None:
+        captured["config"] = self.config
+        if sockets is not None:
+            for sock in sockets:
+                sock.close()
+
+    monkeypatch.setattr(uvicorn.Server, "run", fake_server_run)
+
+    with caplog.at_level(logging.WARNING, logger="auto_scoring.api.sidecar"):
+        exit_code = run(
+            [
+                "--handshake-file",
+                str(tmp_path / "handshake.json"),
+                "--app-data-dir",
+                str(tmp_path / "app-data"),
+            ]
+        )
+
+    assert exit_code == 0
+    assert seen["env"] is os.environ
+    assert captured["config"].app.state.ocr_provider is provider
+    # Says so, once, for the whole app -- and names the variable, not a value.
+    assert "AUTO_SCORING_DOCUMENT_AI_PROCESSOR is not set" in caplog.text
 
 
 def test_self_test_imports_native_backed_modules_without_a_handshake_file() -> None:

@@ -77,6 +77,7 @@ Class | Method | HTTP request | Description
 [*DefaultApi*](doc/DefaultApi.md) | [**healthzHealthzGet**](doc/DefaultApi.md#healthzhealthzget) | **GET** /healthz | Healthz
 [*DefaultApi*](doc/DefaultApi.md) | [**listSubmissionsTestsTestIdSubmissionsGet**](doc/DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
 [*DefaultApi*](doc/DefaultApi.md) | [**listTestsTestsGet**](doc/DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
+[*DefaultApi*](doc/DefaultApi.md) | [**ocrAvailabilityOcrAvailabilityGet**](doc/DefaultApi.md#ocravailabilityocravailabilityget) | **GET** /ocr/availability | Ocr Availability
 [*DefaultApi*](doc/DefaultApi.md) | [**scoreScorePost**](doc/DefaultApi.md#scorescorepost) | **POST** /score | Score
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**analyzeTestsTestIdDependencyGraphAnalyzePost**](doc/DependencyGraphApi.md#analyzeteststestiddependencygraphanalyzepost) | **POST** /tests/{test_id}/dependency-graph/analyze | Analyze
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
@@ -172,6 +173,7 @@ Class | Method | HTTP request | Description
  - [MaterialRole](doc/MaterialRole.md)
  - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)
  - [NormalizedRectResponse](doc/NormalizedRectResponse.md)
+ - [OcrAvailabilityResponse](doc/OcrAvailabilityResponse.md)
  - [PageFormatModel](doc/PageFormatModel.md)
  - [PlanRequest](doc/PlanRequest.md)
  - [PlannedFileModel](doc/PlannedFileModel.md)

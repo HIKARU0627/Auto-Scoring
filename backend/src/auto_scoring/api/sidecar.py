@@ -46,10 +46,13 @@ from auto_scoring.adapters.answer_area_detection.factory import create_answer_ar
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.criteria_extraction.factory import create_criteria_extractor
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
+from auto_scoring.adapters.ocr.factory import create_ocr_provider
+from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
 from auto_scoring.api.app import (
     build_ai_provider,
     build_answer_area_detector,
     build_criteria_extractor,
+    build_ocr_provider,
     create_app,
 )
 from auto_scoring.api.auth import generate_token
@@ -513,10 +516,39 @@ def run(argv: Sequence[str] | None = None) -> int:
             "answer-area detection is unavailable on this host: %s", answer_area_detector.reason
         )
 
+    # The OCR half of the same per-question job (Issue #114). Until this
+    # line existed, `create_app` was never passed an `ocr_provider` at all,
+    # so every shipped install silently ran the placeholder adapter: text
+    # always empty, Recognition Confidence always 0.0, and therefore every
+    # question `usable=False` and every dependent question `BLOCKED` until a
+    # human pressed /resume on it one at a time. Grading itself was fine --
+    # the provider is multimodal and reads the crop directly -- which is why
+    # the gap survived so long: scores and comments came out, only the chain
+    # stopped moving. Adding the adapter without this line would have
+    # changed nothing about what ships.
+    #
+    # Reuses `shared_adc_token_source` for the fourth time: Document AI
+    # authenticates with the same ADC credentials as the three Vertex AI
+    # callers above, and resolving them costs ~300ms each.
+    ocr_provider = build_ocr_provider(
+        os.environ,
+        factory=lambda env: create_ocr_provider(env, token_source_factory=shared_token_source),
+    )
+    if isinstance(ocr_provider, UnconfiguredOCRProvider):
+        # Warning, not error, and emphatically not a startup failure: design
+        # section 24 keeps grading running without OCR. What is lost is the
+        # cross-check against the grading AI's own reading and text-anchored
+        # annotation positions (section 8.1.5), so this line is how the
+        # operator finds out verification is weaker on this machine.
+        logging.getLogger(__name__).warning(
+            "OCR is unavailable on this host: %s", ocr_provider.reason
+        )
+
     try:
         app = create_app(
             api_token=token,
             data_root=args.app_data_dir,
+            ocr_provider=ocr_provider,
             ai_provider=ai_provider,
             criteria_extractor=criteria_extractor,
             answer_area_detector=answer_area_detector,
@@ -583,13 +615,17 @@ def shared_adc_token_source(
 ) -> Callable[[str | None], AdcTokenSource]:
     """One ADC resolution, reused by everything in this process that needs it.
 
-    Grading, 採点基準 extraction and answer-area detection all authenticate to
-    Vertex AI with the same credentials, and resolving them is not free --
+    Grading, 採点基準 extraction, answer-area detection and OCR all
+    authenticate with the same credentials, and resolving them is not free --
     measured at ~300ms per call on a host with a `gcloud` login. There are
-    three consumers now (Issues #103 and #105 each added one), so without
-    this the sidecar paid that three times at startup for no benefit. This lives in
-    the composition root because that is the one place that knows both exist;
-    neither factory should have to know about the other.
+    four consumers now (Issues #103, #105 and #114 each added one), so
+    without this the sidecar paid that four times at startup for no benefit.
+    This lives in the composition root because that is the one place that
+    knows they all exist; no factory should have to know about the others.
+
+    Document AI is not Vertex AI, but it takes the same
+    ``cloud-platform``-scoped ADC token, so it shares this cache rather than
+    resolving a second, identical one.
 
     Keyed by project id, because `AUTO_SCORING_VERTEX_PROJECT` can point the
     two at different projects in principle, and a cache that ignored that

@@ -15,6 +15,7 @@ Method | HTTP request | Description
 [**healthzHealthzGet**](DefaultApi.md#healthzhealthzget) | **GET** /healthz | Healthz
 [**listSubmissionsTestsTestIdSubmissionsGet**](DefaultApi.md#listsubmissionsteststestidsubmissionsget) | **GET** /tests/{test_id}/submissions | List Submissions
 [**listTestsTestsGet**](DefaultApi.md#listteststestsget) | **GET** /tests | List Tests
+[**ocrAvailabilityOcrAvailabilityGet**](DefaultApi.md#ocravailabilityocravailabilityget) | **GET** /ocr/availability | Ocr Availability
 [**scoreScorePost**](DefaultApi.md#scorescorepost) | **POST** /score | Score
 
 
@@ -246,6 +247,45 @@ This endpoint does not need any parameter.
 ### Return type
 
 [**BuiltList&lt;TestSummary&gt;**](TestSummary.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **ocrAvailabilityOcrAvailabilityGet**
+> OcrAvailabilityResponse ocrAvailabilityOcrAvailabilityGet()
+
+Ocr Availability
+
+Whether OCR is configured on this host (Issue #114).  Behind the bearer token for the same reason as ``/grading/availability``: it reports on this installation's configuration, and it is not a liveness probe.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getDefaultApi();
+
+try {
+    final response = api.ocrAvailabilityOcrAvailabilityGet();
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling DefaultApi->ocrAvailabilityOcrAvailabilityGet: $e\n');
+}
+```
+
+### Parameters
+This endpoint does not need any parameter.
+
+### Return type
+
+[**OcrAvailabilityResponse**](OcrAvailabilityResponse.md)
 
 ### Authorization
 

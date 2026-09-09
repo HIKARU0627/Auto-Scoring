@@ -56,6 +56,7 @@ import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 import 'package:auto_scoring_api/src/model/material_role.dart';
 import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 import 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
+import 'package:auto_scoring_api/src/model/ocr_availability_response.dart';
 import 'package:auto_scoring_api/src/model/page_format_model.dart';
 import 'package:auto_scoring_api/src/model/plan_request.dart';
 import 'package:auto_scoring_api/src/model/planned_file_model.dart';
@@ -135,6 +136,7 @@ part 'serializers.g.dart';
   MaterialRole,
   NormalizedBBoxModel,
   NormalizedRectResponse,
+  OcrAvailabilityResponse,
   PageFormatModel,
   PlanRequest,
   PlannedFileModel,
