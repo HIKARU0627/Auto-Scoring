@@ -6,6 +6,7 @@ Synthetic PDFs only (Issue #103 acceptance criterion 8).
 
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -26,6 +27,9 @@ from auto_scoring.domain.criteria_extraction import (
     CriteriaQuestion,
     CriteriaStatus,
 )
+from auto_scoring.domain.intake_template import MaterialRole
+from auto_scoring.domain.test_material import TestMaterial
+from tests.support import at
 
 
 def _write_pdf(path: Path, *, pages: int) -> Path:
@@ -67,11 +71,59 @@ def test_a_missing_file_raises_file_not_found(tmp_path: Path) -> None:
         build_extraction_request(PdfiumPypdfEngine(), tmp_path / "absent.pdf")
 
 
-def test_criteria_pdf_path_points_at_the_registered_manual(tmp_path: Path) -> None:
-    """The single seam between this Issue and Issue #101 -- see the
-    function's own docstring for what changes after those branches merge."""
+def _material(role: MaterialRole, stored_path: str, *, created_at: datetime) -> TestMaterial:
+    return TestMaterial(
+        id=stored_path,
+        test_id="test-1",
+        role=role,
+        stored_path=stored_path,
+        sha256="0" * 64,
+        size_bytes=1,
+        original_filename=None,
+        created_at=created_at,
+    )
+
+
+def test_criteria_pdf_path_picks_the_grading_criteria_material(tmp_path: Path) -> None:
+    """Issue #101 replaced the fixed ``manual.pdf`` slot with role-tagged
+    materials; the criteria document is the one carrying
+    ``GRADING_CRITERIA``. Tests registered earlier keep working because
+    migration 0015 backfills their ``manual.pdf`` under exactly that role."""
     store = LocalFileStore(tmp_path)
-    assert criteria_pdf_path(store, "test-1") == store.test_manual_pdf_path("test-1")
+    materials = [
+        _material(MaterialRole.REFERENCE, "tests/test-1/materials/a.pdf", created_at=at(1)),
+        _material(MaterialRole.GRADING_CRITERIA, "tests/test-1/materials/b.pdf", created_at=at(2)),
+    ]
+    assert criteria_pdf_path(store, materials) == store.resolve_stored_path(
+        "tests/test-1/materials/b.pdf"
+    )
+
+
+def test_criteria_pdf_path_prefers_the_oldest_and_skips_non_pdfs(tmp_path: Path) -> None:
+    """Oldest so the choice is stable when a second criteria file is
+    attached; PDFs only because this module hands the file to PDFium and
+    ``GRADING_CRITERIA`` accepts anything a reviewer attaches."""
+    store = LocalFileStore(tmp_path)
+    materials = [
+        _material(MaterialRole.GRADING_CRITERIA, "tests/test-1/materials/a.xlsx", created_at=at(1)),
+        _material(MaterialRole.GRADING_CRITERIA, "tests/test-1/materials/b.pdf", created_at=at(2)),
+        _material(MaterialRole.GRADING_CRITERIA, "tests/test-1/materials/c.pdf", created_at=at(3)),
+    ]
+    assert criteria_pdf_path(store, materials) == store.resolve_stored_path(
+        "tests/test-1/materials/b.pdf"
+    )
+
+
+def test_criteria_pdf_path_is_none_when_no_criteria_was_registered(tmp_path: Path) -> None:
+    """``None`` rather than a guessed path: the caller turns it into a 409
+    naming the missing role, which is more useful than failing later on a
+    file the reviewer never chose."""
+    store = LocalFileStore(tmp_path)
+    materials = [
+        _material(MaterialRole.REFERENCE, "tests/test-1/materials/a.pdf", created_at=at(1))
+    ]
+    assert criteria_pdf_path(store, materials) is None
+    assert criteria_pdf_path(store, []) is None
 
 
 def test_store_round_trips_a_draft(tmp_path: Path) -> None:

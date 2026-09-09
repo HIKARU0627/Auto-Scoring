@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -317,6 +318,27 @@ def build_criteria_router(
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"test {test_id!r} not found")
         return test
 
+    def _criteria_pdf_or_409(uow: SqlAlchemyUnitOfWork, test_id: str) -> Path:
+        """This test's 採点基準PDF, or a 409 naming what is missing.
+
+        Since Issue #101 the criteria document is a role-tagged material
+        rather than a fixed path, so "this test has no 採点基準" is now a
+        state a reviewer can actually be in -- a test whose criteria file was
+        registered under a different role, say. Reported as a conflict with
+        the role named, not as a file-not-found about a path they never
+        chose.
+        """
+        source = criteria_pdf_path(store, uow.test_materials.list_for_test(test_id))
+        if source is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=(
+                    f"test {test_id!r} に採点基準PDFが登録されていません。"
+                    "設定画面から採点基準の役割でPDFを追加してください。"
+                ),
+            )
+        return source
+
     def _load_draft(test_id: str) -> CriteriaDraft | None:
         try:
             return criteria_store.load(test_id)
@@ -402,7 +424,7 @@ def build_criteria_router(
         `build_criteria_router` documents.
         """
         _get_test_or_404(uow, test_id)
-        source = criteria_pdf_path(store, test_id)
+        source = _criteria_pdf_or_409(uow, test_id)
         try:
             with render_lock:
                 page_count = pdf_engine.page_count(source)
@@ -458,7 +480,7 @@ def build_criteria_router(
                         "re-extracted"
                     ),
                 )
-            source = criteria_pdf_path(store, test_id)
+            source = _criteria_pdf_or_409(uow, test_id)
             try:
                 # `render_lock` covers the PDFium work and **stops there**.
                 # Holding it across the provider call would serialize every

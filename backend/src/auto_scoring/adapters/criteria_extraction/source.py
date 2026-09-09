@@ -16,12 +16,15 @@ possible.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.text_layout_extraction import extract_text_lines
 from auto_scoring.domain.criteria_extraction import CriteriaError, CriteriaExtractionRequest
+from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.test_material import TestMaterial
 
 #: Render scale for a page image. 2.0 doubles PDF user-space points into
 #: pixels (~144 DPI for a page authored at 72 DPI), which is what made the
@@ -38,26 +41,34 @@ PAGE_RENDER_SCALE = 2.0
 MAX_CRITERIA_PAGES = 30
 
 
-def criteria_pdf_path(store: LocalFileStore, test_id: str) -> Path:
-    """Where this test's 採点基準PDF lives.
+def criteria_pdf_path(store: LocalFileStore, materials: Sequence[TestMaterial]) -> Path | None:
+    """The 採点基準PDF among this test's registered materials, or ``None``.
 
-    .. note::
+    Issue #101 replaced the fixed two-PDF registration with a list of
+    role-tagged materials, so the criteria document is the one carrying
+    :attr:`~auto_scoring.domain.intake_template.MaterialRole.GRADING_CRITERIA`.
+    Tests registered before that keep working without a special case here:
+    migration 0015 backfills their ``tests/<id>/manual.pdf`` under exactly
+    that role.
 
-       **This is the one place Issue #101 (PR #104) and this Issue meet.**
-       On this branch a test still has the fixed two-PDF layout Issue #16
-       created, whose *marking manual* slot is the criteria document -- and
-       ``POST /tests`` on the Issue #101 branch stores the file the reviewer
-       chose as 採点基準 under a role-tagged ``TestMaterial`` row instead.
-       That row type does not exist here, so it cannot be read yet.
+    **Oldest first, and PDFs only** -- the same two rules
+    `api.test_registration_router` applies when it picks a material:
 
-       After the two branches are merged this function becomes: return the
-       oldest ``MaterialRole.GRADING_CRITERIA`` material's
-       ``store.resolve_stored_path(...)``, falling back to the path below for
-       tests registered before that migration. **Nothing else in this
-       feature needs to change** -- that is why the lookup is a function of
-       its own rather than a call inlined into the router.
+    * oldest, so the choice is stable. A test may hold several materials of
+      one role, and silently switching documents when another is attached
+      would change what an extraction reads without anyone asking for it.
+    * PDF only, because this module hands the file to PDFium.
+      ``GRADING_CRITERIA`` is not restricted to PDFs by the model, and a
+      reviewer can attach anything to it through ``POST /materials``.
+
+    ``None`` rather than a guessed path: a test with no criteria material has
+    nothing to extract from, and saying so is more useful than failing later
+    on a file that was never there.
     """
-    return store.test_manual_pdf_path(test_id)
+    for material in materials:
+        if material.role is MaterialRole.GRADING_CRITERIA and material.stored_path.endswith(".pdf"):
+            return store.resolve_stored_path(material.stored_path)
+    return None
 
 
 def build_extraction_request(pdf_engine: PdfEngine, source: Path) -> CriteriaExtractionRequest:

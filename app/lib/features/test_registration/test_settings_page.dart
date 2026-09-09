@@ -1934,7 +1934,7 @@ class _DeclaredTotalDialogState extends State<_DeclaredTotalDialog> {
 
 /// 抽出を実行する前に、送信ページ数と概算費用を見せる。
 ///
-/// **単価が未設定なら「見積もれません」と出す。0 円ではない。** 0 円は
+/// **単価が未設定なら「未設定」と出す。0 円ではない。** 0 円は
 /// 「利用者が無料だと言った」という意味であり、未設定は「このアプリが
 /// 単価を知らない」という意味で、別のことである（#104 の取込画面が
 /// 同じ区別をしている）。
@@ -1959,8 +1959,11 @@ class _ExtractConfirmDialog extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
+            // 文言は #101 の取込画面（`features/intake/intake_page.dart`）と
+            // 揃えてある。**未設定は 0 円ではない。** 違うのは単位だけで、
+            // あちらは1件あたり、こちらは1ページあたり。
             cost == null
-                ? '概算費用: 1ページあたりの単価が未設定のため見積もれません'
+                ? '概算費用: 1ページあたりの単価が未設定です（設定画面で入力できます）'
                 : '概算費用: 約${cost.toStringAsFixed(2)}'
                       '（1ページあたり${estimate.unitCost?.toStringAsFixed(2)}）',
             key: const Key('extract-cost'),

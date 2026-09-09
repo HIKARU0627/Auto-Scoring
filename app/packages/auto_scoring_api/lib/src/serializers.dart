@@ -24,8 +24,16 @@ import 'package:auto_scoring_api/src/model/classification_availability_response.
 import 'package:auto_scoring_api/src/model/classification_estimate_model.dart';
 import 'package:auto_scoring_api/src/model/classification_need.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
+import 'package:auto_scoring_api/src/model/confirm_criteria_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
+import 'package:auto_scoring_api/src/model/criteria_estimate_response.dart';
+import 'package:auto_scoring_api/src/model/criteria_item_model.dart';
+import 'package:auto_scoring_api/src/model/criteria_question_model.dart';
+import 'package:auto_scoring_api/src/model/criteria_response.dart';
+import 'package:auto_scoring_api/src/model/criteria_status.dart';
+import 'package:auto_scoring_api/src/model/criteria_totals_model.dart';
+import 'package:auto_scoring_api/src/model/criterion_kind.dart';
 import 'package:auto_scoring_api/src/model/criterion_outcome_request.dart';
 import 'package:auto_scoring_api/src/model/criterion_result_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
@@ -77,6 +85,7 @@ import 'package:auto_scoring_api/src/model/test_response.dart';
 import 'package:auto_scoring_api/src/model/test_summary.dart';
 import 'package:auto_scoring_api/src/model/undo_review_request.dart';
 import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
+import 'package:auto_scoring_api/src/model/update_criteria_request.dart';
 import 'package:auto_scoring_api/src/model/update_profile_request.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
 
@@ -93,8 +102,16 @@ part 'serializers.g.dart';
   ClassificationEstimateModel,
   ClassificationNeed,
   CompleteRegistrationResponse,
+  ConfirmCriteriaRequest,
   ConfirmProfileRequest,
   ConfirmRequest,
+  CriteriaEstimateResponse,
+  CriteriaItemModel,
+  CriteriaQuestionModel,
+  CriteriaResponse,
+  CriteriaStatus,
+  CriteriaTotalsModel,
+  CriterionKind,
   CriterionOutcomeRequest,
   CriterionResultResponse,
   DependencyEdgeModel,
@@ -146,6 +163,7 @@ part 'serializers.g.dart';
   TestSummary,
   UndoReviewRequest,
   UnresolvedQuestionModel,
+  UpdateCriteriaRequest,
   UpdateProfileRequest,
   ValidationError,
 ])
@@ -199,6 +217,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(PlannedFileModel)]),
         () => ListBuilder<PlannedFileModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(CriteriaItemModel)]),
+        () => ListBuilder<CriteriaItemModel>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(LocationInner)]),
@@ -267,6 +289,14 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(RubricCriterionResponse)]),
         () => ListBuilder<RubricCriterionResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(int)]),
+        () => ListBuilder<int>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(CriteriaQuestionModel)]),
+        () => ListBuilder<CriteriaQuestionModel>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(QuestionTextOverride)]),

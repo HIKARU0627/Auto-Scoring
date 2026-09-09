@@ -890,7 +890,7 @@ void main() {
       expect(extracted, 0);
     });
 
-    testWidgets('単価が未設定なら 0 円ではなく「見積もれません」と出す', (tester) async {
+    testWidgets('単価が未設定なら 0 円ではなく「未設定」と出す', (tester) async {
       final dependencies = AppDependencies(
         getTest: (testId) async => _test(),
         getProfile: (testId) async => _profile(),
@@ -906,7 +906,9 @@ void main() {
       final cost = tester
           .widget<Text>(find.byKey(const Key('extract-cost')))
           .data;
-      expect(cost, contains('見積もれません'));
+      // #101 の取込画面と同じ言い回し。**0 円とは書かない。**
+      expect(cost, contains('単価が未設定です'));
+      expect(cost, contains('設定画面で入力できます'));
       expect(cost, isNot(contains('0')));
     });
 

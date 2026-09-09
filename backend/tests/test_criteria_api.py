@@ -130,14 +130,21 @@ def _session_factory(data_root: Path) -> sessionmaker[Session]:
 
 
 def _register_test(client: TestClient) -> str:
+    """Register with the required 採点基準PDF, plus a reference PDF.
+
+    Since Issue #101 the criteria document is a role-tagged material rather
+    than a fixed ``manual.pdf`` slot, and it is the one required upload. The
+    reference is what the profile-confirm tests below need, so that
+    `/profile/analyze` has a layout source to work from.
+    """
     response = client.post(
         "/tests",
         headers=_auth(),
-        data={"name": "第1回", "subject": "テスト科目"},
-        files={
-            "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-            "manual": ("criteria.pdf", _pdf_bytes(), "application/pdf"),
-        },
+        data={"name": "第1回", "subject": "テスト科目", "material_roles": ["reference"]},
+        files=[
+            ("criteria", ("02_criteria.pdf", _pdf_bytes(), "application/pdf")),
+            ("materials", ("reference.pdf", _pdf_bytes(), "application/pdf")),
+        ],
     )
     assert response.status_code == 201, response.text
     test_id: str = response.json()["id"]
@@ -260,7 +267,10 @@ def test_estimate_is_404_for_an_unknown_test_and_409_without_the_pdf(
 ) -> None:
     assert client.get("/tests/missing/criteria/estimate", headers=_auth()).status_code == 404
     test_id = _register_test(client)
-    (data_root / "tests" / test_id / "manual.pdf").unlink()
+    # The criteria file lives under `materials/` now, named by its
+    # material id (Issue #101), so remove whatever is there.
+    for stored in (data_root / "tests" / test_id / "materials").glob("*.pdf"):
+        stored.unlink()
     assert client.get(f"/tests/{test_id}/criteria/estimate", headers=_auth()).status_code == 409
 
 
