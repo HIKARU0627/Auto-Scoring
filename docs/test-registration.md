@@ -151,6 +151,14 @@ region が無いとき **`answer_area` から導出される**
 変わらない。導出の規約と、それでも決まらないとき出力前に断ることは
 [`pdf-export.md`](./pdf-export.md) §2.2.1。
 
+**Issue #159 以降**: 導出されるのは **`comment_area` だけ**になった
+（`domain.annotation_layout.derive_comment_area`）。`score_area` は
+`SCORE` region が無ければ `None` のままで、点数の位置は**出力時**に
+ページ左余白へ解決される（`domain.pdf_export.fallback_score_areas`）。
+導出した帯が実機で筆跡・印字の上に載っていたためで、計測と判断は
+[`pdf-export.md`](./pdf-export.md) §2.2.3。手で置いた `SCORE` region が
+優先される点は変わらない。
+
 ### Profile確認は一方向・一度きり
 
 `Profile.confirm()` はPoC 4から一方向（DRAFT→CONFIRMED）。Issue #16のAPI

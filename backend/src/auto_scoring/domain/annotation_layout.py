@@ -264,60 +264,67 @@ def _crop_relative_to_page(rect: NormalizedRect, answer_area: NormalizedRect) ->
     )
 
 
-#: Share of the derived band's width given to the score, at its right end --
-#: the rest is the comment's. See `derive_mark_areas`.
-_DERIVED_SCORE_WIDTH_SHARE = 0.2
-
 #: A derived band shorter than this (page-normalized) has no room for legible
-#: text, so `derive_mark_areas` falls back onto the answer area itself rather
-#: than producing a sliver nothing can be read in.
+#: text, so `derive_comment_area` falls back onto the answer area itself
+#: rather than producing a sliver nothing can be read in.
 _MIN_DERIVED_BAND_HEIGHT = 0.02
 
 
-def derive_mark_areas(
-    answer_area: NormalizedRect | None,
-) -> tuple[NormalizedRect, NormalizedRect] | None:
-    """``(score_area, comment_area)`` derived from where a question's answer
-    box is, or ``None`` when there is no box to derive from (Issue #120).
+def derive_comment_area(answer_area: NormalizedRect | None) -> NormalizedRect | None:
+    """The margin band a question's *comment* is written in, derived from
+    where its answer box is -- or ``None`` when there is no box to derive
+    from (Issue #120).
 
-    `Question.score_area`/`comment_area` used to come only from a `SCORE` /
-    `ANNOTATION_AREA` region, which a human placed on the profile screen.
-    Issue #103 took that screen away on purpose -- the 配点 must have exactly
-    one input -- and the registration path built by Issues #101/#103/#105
-    produces neither region. So every question registered through it had
-    ``None`` for both, `build_export_marks` had nowhere to draw, and the
-    export ran to success while writing nothing at all: a 添削済み PDF byte
-    for byte the same as the answer sheet it came from.
-
-    Deriving is what closes that without reopening #103's decision: nothing
-    is added to any screen, and a hand-placed region still wins
-    (`domain.test_registration.build_questions_and_rubrics` only falls back
-    to this). It is deliberately not a detection either -- the real material
-    does print a 得点欄 on some subjects (observed during Issue #105), but
-    not demonstrably on all of them, so a rule that needs one cannot be the
-    floor. Detecting it later fills `Question.score_area` in with something
-    better and changes nothing here or downstream.
+    `Question.comment_area` used to come only from an ``ANNOTATION_AREA``
+    region, which a human placed on the profile screen. Issue #103 took that
+    screen away on purpose -- the 配点 must have exactly one input -- and the
+    registration path built by Issues #101/#103/#105 produces no such region.
+    So every question registered through it had ``None``, `build_export_marks`
+    had nowhere to draw, and the export ran to success while writing nothing
+    at all: a 添削済み PDF byte for byte the same as the answer sheet it came
+    from.
 
     **The convention.** The band directly *below* the answer box, as tall as
     the box or as much of the page as is left, whichever is less: that is
-    where a human's red pen goes, and it does not cover what the student
-    wrote. The score takes the right `_DERIVED_SCORE_WIDTH_SHARE` of it and
-    the comment the rest, so the two never overlap -- `PdfEngine.
-    render_annotations` draws every mark from its own rect and would
-    otherwise stack them illegibly on top of one another. A box that reaches
-    the bottom of the page leaves no band, and there the answer area itself
-    is used: ink over the answer is worse than ink beside it, and both are
-    better than a PDF with nothing on it.
+    where a human's red pen goes. A box that reaches the bottom of the page
+    leaves no band, and there the answer area itself is used.
+
+    **This used to derive the score's position too, and no longer does**
+    (Issue #159). It returned ``(score_area, comment_area)``, the band split
+    with the score taking its right 20%. The rule reads as though it keeps
+    ink off the student's writing, and the live re-verification measured that
+    it does not: of the sixteen questions that had an answer box, **fourteen
+    had a derived band sitting on inked page content**, and **six had one
+    falling inside the *next* question's answer box** -- one of them
+    completely. Blank paper measures 0.0015% ink coverage at the same
+    threshold; the worst derived score band measured 16.5%, more ink than the
+    answer box it belonged to.
+
+    The reason is that "below the answer box" is only empty when the sheet
+    puts nothing there, and a sheet with several questions on it puts the
+    next question there. Issue #159 was filed as a vertical-writing bug --
+    a narrow column's band running down into more of the same grid -- and
+    the measurement showed the rule breaking on horizontally-written
+    subjects as well; vertical writing is only where it is most visible.
+
+    So the score no longer has a position derived from geometry at all. It
+    goes to the page's left margin strip (`domain.pdf_export.
+    fallback_score_areas`), the one place on these sheets that was *measured*
+    empty rather than assumed to be. `domain.test_registration.
+    build_questions_and_rubrics` therefore leaves `Question.score_area`
+    ``None`` unless a human placed a ``SCORE`` region, and every derived
+    question's score is resolved at export time like Issue #150's.
+
+    The comment keeps the band, whole rather than four fifths of it, and
+    keeps the defect: a comment band is on inked content just as often (the
+    same live measurement put the worst at 19.1%). Fixing that is not the
+    same change -- a score is three to five characters and fits the 3%-wide
+    strip, a comment is prose and would be ellipsis-truncated there -- so it
+    is tracked separately and deliberately left alone here.
     """
     if answer_area is None or answer_area.width <= 0 or answer_area.height <= 0:
         return None
-    band = _band_below(answer_area)
-    score_width = band.width * _DERIVED_SCORE_WIDTH_SHARE
-    comment = NormalizedRect(x=band.x, y=band.y, width=band.width - score_width, height=band.height)
-    score = NormalizedRect(
-        x=band.x + comment.width, y=band.y, width=score_width, height=band.height
-    )
-    return score, comment
+    return _band_below(answer_area)
 
 
 def _band_below(answer_area: NormalizedRect) -> NormalizedRect:

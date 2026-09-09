@@ -40,7 +40,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 
-from auto_scoring.domain.annotation_layout import derive_mark_areas
+from auto_scoring.domain.annotation_layout import derive_comment_area
 from auto_scoring.domain.criteria_extraction import (
     CriteriaDraft,
     CriteriaQuestion,
@@ -519,12 +519,12 @@ def build_questions_and_rubrics(
                 )
 
         answer_area = _union_bbox(answer_regions) if answer_regions else None
-        # Issue #120: a question nobody placed a `SCORE`/`ANNOTATION_AREA`
-        # region for still needs somewhere to draw its score and comment --
-        # see `derive_mark_areas` for why that is derived from the answer box
+        # Issue #120: a question nobody placed an `ANNOTATION_AREA` region for
+        # still needs somewhere to draw its comment -- see
+        # `derive_comment_area` for why that is derived from the answer box
         # rather than left `None` (the export used to succeed while writing
         # nothing) and why a hand-placed region still wins.
-        derived = derive_mark_areas(answer_area)
+        derived_comment_area = derive_comment_area(answer_area)
 
         questions.append(
             Question(
@@ -541,15 +541,22 @@ def build_questions_and_rubrics(
                 model_answer=model_answer,
                 answer_area=answer_area,
                 # First-wins, unlike `answer_area` above -- see `_union_bbox`.
-                score_area=(
-                    _bbox_to_rect(score_regions[0].bbox)
-                    if score_regions
-                    else (derived[0] if derived is not None else None)
-                ),
+                #
+                # Issue #159: `score_area` is deliberately *not* derived from
+                # the answer box any more. The band that derivation produced
+                # was measured sitting on inked page content for fourteen of
+                # the live run's sixteen answer-box questions, six of them
+                # inside the *next* question's box. A question nobody placed a
+                # `SCORE` region for now leaves this `None` and has its score
+                # resolved at export time into the page's left margin strip
+                # (`domain.pdf_export.fallback_score_areas`), which is the one
+                # place on these sheets measured empty rather than assumed to
+                # be. A hand-placed region still wins, as it always did.
+                score_area=(_bbox_to_rect(score_regions[0].bbox) if score_regions else None),
                 comment_area=(
                     _bbox_to_rect(annotation_regions[0].bbox)
                     if annotation_regions
-                    else (derived[1] if derived is not None else None)
+                    else derived_comment_area
                 ),
             )
         )
