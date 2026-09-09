@@ -88,6 +88,40 @@ void main() {
       expect(progress.countOf(HomeWorkBucket.failed), 0);
     });
 
+    test('人が確認し終えた答案だけが確認済みに数えられ、続きからも外れる', () {
+      // Issue #112 受入2・3、およびオーナー条件5。
+      //
+      // 進捗バーが数えるのは**講師が自分で見終えた数**であって、AIがどこまで
+      // 動いたかではない。`ai_processed` は「取込と回答欄の抽出が終わった」
+      // だけの状態なので (docs/home-dashboard.md §3.1)、分子に入れてはならない。
+      //
+      // #112 より前は、全問承認しても答案は `ai_processed` のままだったので
+      // 分子が動かず、しかも `_pickResumable` がその答案をまた「続き」として
+      // 差し出していた。講師には40枚のどれを見たのか分からなかった。
+      final progress = HomeTestProgress(
+        test: buildTest(id: 't1'),
+        submissions: [
+          buildSubmission(
+            id: 'done',
+            testId: 't1',
+            state: 'reviewed',
+            createdDay: 1,
+          ),
+          buildSubmission(
+            id: 'not-done',
+            testId: 't1',
+            state: 'ai_processed',
+            createdDay: 2,
+          ),
+        ],
+      );
+
+      expect(progress.doneCount, 1);
+      expect(progress.countOf(HomeWorkBucket.intakeDone), 1);
+      // 見終えた答案は、取込がより古くても「続き」に選ばれない。
+      expect(progress.resumableSubmission?.id, 'not-done');
+    });
+
     test('続きの1件は要確認を優先し、同じ状態なら取込の古い順', () {
       final progress = HomeTestProgress(
         test: buildTest(id: 't1'),
@@ -293,8 +327,17 @@ void main() {
       expect(detail, isNot(contains('採点済みです')));
       expect(detail, isNot(contains('採点中')));
       expect(dashboard.nextAction.headline, isNot(contains('採点済み')));
-      // 「待ち」とも言わない -- 承認済みの答案も `ai_processed` のまま
-      // ここに残る (review round 2, P3)。
+      // 「待ち」とも言わない。
+      //
+      // **理由は Issue #112 で1つ減った**が、無くなってはいない。かつては
+      // 「承認済みの答案も `ai_processed` のままここに残る」ことが理由の1つ
+      // だった (review round 2, P3)。#112 で全問確定した答案は `reviewed` へ
+      // 動くようになったので、その1件は当てはまらなくなった。
+      //
+      // それでもこの bucket には、起票されていない答案・実行待ち・AI処理中・
+      // `usable=false`・失敗/中止が残る (docs/home-dashboard.md §3.1)。
+      // **どれも「待っていれば済む」とは限らない**ので、ラベルは「取込済み」の
+      // ままである。
       expect(HomeWorkBucket.intakeDone.label, '取込済み');
       expect(dashboard.nextAction.headline, isNot(contains('レビュー待ち')));
     });

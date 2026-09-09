@@ -289,6 +289,14 @@ _SUBMISSION_TRANSITIONS: dict[SubmissionState, frozenset[SubmissionState]] = {
     SubmissionState.AI_PROCESSED: frozenset(
         {
             SubmissionState.NEEDS_REVIEW,
+            # A submission intake finished cleanly reaches REVIEWED directly,
+            # without the NEEDS_REVIEW detour (§25.1, Issue #112). NEEDS_REVIEW
+            # means "intake could not pin the answer areas" -- it carries a
+            # `review_reason` saying which (`adapters.submission_intake`) -- so
+            # routing a clean submission through it to record that a human
+            # confirmed every question would be claiming an intake problem that
+            # never happened.
+            SubmissionState.REVIEWED,
             SubmissionState.AI_PROCESSING,
             SubmissionState.ERROR,
         }
@@ -304,6 +312,16 @@ _SUBMISSION_TRANSITIONS: dict[SubmissionState, frozenset[SubmissionState]] = {
         {
             SubmissionState.EXPORTED,
             SubmissionState.NEEDS_REVIEW,
+            # The way back out of REVIEWED for a submission that entered it from
+            # AI_PROCESSED (Issue #112). Undo can un-confirm a question at any
+            # time, and the submission then has to return to *where intake left
+            # it*: sending a cleanly-intaken submission to NEEDS_REVIEW instead
+            # would raise the one flag this app reserves for "a human must look
+            # before this can go on" (`docs/design-tokens.md` §3.1) over a
+            # submission with nothing wrong with it, and nothing would ever
+            # lower it again. `adapters.review_actions` picks between the two
+            # using `review_reason`.
+            SubmissionState.AI_PROCESSED,
             SubmissionState.ERROR,
         }
     ),
