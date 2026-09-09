@@ -20,12 +20,19 @@ GitHub Issue [#19](https://github.com/HIKARU0627/Auto-Scoring/issues/19)（親
 > 何を読んだか」ではない**。別々のモデルが別々に読むため、OCR結果を確認しても採点AIの
 > 読み違いは検出できない）と、**文字に紐づくAnnotationのBounding Boxを供給する**ことの2つである。
 > 現在の仕様は [`simplified-design-specification.md`](./simplified-design-specification.md)
-> §8.1 が正。**本書のうち「OCR失敗＝採点不可」を前提にした箇所は見直しが要る**
-> （§24: OCRが失敗しても採点は止めない）。本書は実装当時の記録として残してある。
+> §8.1 が正。本書は実装当時の記録として残してある。
+>
+> **見直しは Issue #114 で実施した（2026-09-09）。** 旧版はここに
+> 「本書のうち『OCR失敗＝採点不可』を前提にした箇所は見直しが要る」とだけ書いて
+> 放置しており、**コードもその前提のままだった**。決着は下記
+> 「§8 実OCRアダプタと、OCRが無い端末（Issue #114）」にある。
 
 ## 決定事項
 
-### OCRサービス: Google Document AI（業務ルール §3 (A)、Issue #81 で確定）— 既定は依然 `NullOCRProvider`
+### OCRサービス: Google Document AI（業務ルール §3 (A)、Issue #81 で確定）
+
+> **本節は Issue #19 実装当時（アダプタ未実装）の記録である。**
+> 実アダプタは Issue #114 で追加し、`NullOCRProvider` は削除した。§8 を参照。
 
 PoC 1（`docs/poc-1-japanese-handwriting-ocr.md`）は`OCRProvider`契約と
 メトリクス集計基盤を実装したが、credentials・評価データセットが揃わず、実 OCR
@@ -50,12 +57,13 @@ NullOCRProvider`とする。`NullJobProcessor`と同じ理由（正直に「未�
 倒れる — 「OCR精度を前提にした自動確定フローを組まない」（§3.1 A）を構造的に
 満たす。
 
-実OCRアダプタ（Google Document AI）の追加は別Issueで行う（実 API キーでの疎通検証は
-#54）。Document AI のレスポンス形式・Bounding Box 座標系への依存は`OCRProvider`実装の
-内側に閉じ、座標変換・後処理へ漏らさない（§3.1 A）。`OCRProvider`のcontract test
-（`backend/tests/test_ocr_provider_contract.py`の`OCRProviderContract`）へ
-新しいサブクラスを追加するだけで済むよう、`domain/ocr.py`のポート定義は変更
-していない。
+実OCRアダプタ（Google Document AI）の追加は別Issueで行う（**Issue #114 で実施済み**。
+実 API キーでの疎通検証は #54）。Document AI のレスポンス形式・Bounding Box 座標系への
+依存は`OCRProvider`実装の内側に閉じ、座標変換・後処理へ漏らさない（§3.1 A）。
+`OCRProvider`のcontract test（`backend/tests/test_ocr_provider_contract.py`の
+`OCRProviderContract`）へ新しいサブクラスを追加するだけで済むよう、`domain/ocr.py`の
+ポート定義は変更していない — **この見込みは当たった**。Issue #114 が足したのは
+`OCRUnavailable` 1つだけで、`recognize()` の形は変わっていない。
 
 ### `RecognitionJobProcessor`: `JobProcessor`のOCR半分だけを実装する
 
@@ -187,3 +195,151 @@ Issue #18が`POST /submissions/{submission_id}/questions/{question_id}/resume`
   唯一の同梱アダプタで、ネットワークに一切アクセスしないため）。実アダプタを
   追加する後続Issueが、そのアダプタ専用のlive probe commandを
   `docs/poc-1-japanese-handwriting-ocr.md`の方針に従って追加する。
+
+---
+
+## 8. 実OCRアダプタと、OCRが無い端末（Issue #114）
+
+GitHub Issue [#114](https://github.com/HIKARU0627/Auto-Scoring/issues/114)。
+本書冒頭が「見直しが要る」と書いたまま放置していた箇所の決着でもある。
+
+### 8.1 何が起きていたか（実測）
+
+`api/sidecar.py` は `create_app()` に `ocr_provider` を**一度も渡していなかった**。
+したがって出荷されるすべての install が `NullOCRProvider` で動いていた。
+
+| OCR                        | grading job | `usable`  | 点数 |
+| -------------------------- | ----------- | --------- | ---- |
+| scripted（テストの世界）   | succeeded   | **True**  | 出る |
+| **注入なし＝出荷される姿** | succeeded   | **False** | 出る |
+
+**点数と講評は出ていた** — 採点providerは多モーダルで、回答欄の切り出し画像を
+直接読むため（簡易設計書 §8.1.1）。**だから長く気づかれなかった。**
+出ていなかったのは認識テキストで、`confidence=0.0` が
+`GradingJobProcessor` の3項ANDの第1項を常に落とし、結果として
+**依存エッジのある設問は、人が `/resume` を1つずつ押すまで `BLOCKED` のまま**
+だった。採点の自動化を掲げるアプリとして、これは機能していない状態である。
+
+**テストがこれを見つけられなかった理由**: 既存テストはすべて `OCRProvider` を
+注入する。「注入しない姿」を走らせるテストが1つも無かった。
+`backend/tests/test_e2e_ocr_unavailable_chain.py` がその穴を塞ぐ。
+
+### 8.2 `usable` の意味を3状態にした
+
+**これは新しい判断ではなく、Issue #95 決定10 の反映漏れの回収である。**
+決定10 は簡易設計書 §24（「OCR失敗: **採点は止めない。**」）・§8.1.4
+（「**読めていないものに数値を与えない**」）・§8.1.5（OCRは critical path から外れる）と
+業務ルール §4.3 には反映されていたが、**業務ルール §4.4 と本書とコードには反映されていなかった。**
+
+| OCRの状態            | `RecognitionResult`                | `usable` への寄与                   | 依存先                 |
+| -------------------- | ---------------------------------- | ----------------------------------- | ---------------------- |
+| 読めた・閾値以上     | 保存する                           | 第1項 True                          | 流れる                 |
+| **読めた・閾値未満** | 保存する（低Confidenceも必ず残す） | 第1項 **False**                     | **止まる（変更なし）** |
+| **OCRが使えない**    | **保存しない**                     | **第1項が消える**（2項のANDになる） | **流れる（新）**       |
+
+- 「読めた・閾値未満」は**据え置いた**。業務ルール §4.4 が想定していたのはこの場合で、
+  実際に読んだ結果が信用できないなら人が見るべきである。**ここは緩めていない**
+- 「OCRが使えない」は比較対象が存在しないので、比較して落とすことができない。
+  `confidence=0.0` という**存在しない読み取りの数値を作らない**（§8.1.4）。
+  残る2項 — **採点AI自身の読み取りConfidence**と**Grading Confidence** — が引き続き
+  ゲートする。これは業務ルール §4.3 の「**OCR テキストとは限らない。**…
+  採点 AI 自身の読み取りが引き継ぐ対象になる場合がある」そのものである
+
+**「読めなかった」と「読む道具が無い」は `RecognitionResult` 行の有無で区別できる**
+（Issue #114 受入条件 8）。行があって Confidence が低ければ前者、行が無ければ後者。
+
+**検討して採らなかった案:**
+
+- **`usable` に触らず `NullOCRProvider` の 0.0 を usable 扱いにする** — 0.0 を
+  「問題なし」と読み替えることになり、受入条件 8 の区別ができず、§8.1.4 に反する
+- **第1項を常に落とす（OCRは `usable` に一切関与しない）** — 業務ルール §4.4 の
+  「依存元の OCR Confidence が閾値未満なら止める」を決定なしに捨てることになる。
+  この案を実装すると既存テスト4件が落ちる（実際に変異させて確認した）
+
+### 8.3 未設定端末の扱い — #97 と同じ規律
+
+`NullOCRProvider` は**削除**した。#97 が `NullAIProvider`（0点・confidence 0.0 を
+返すプレースホルダ）を `UnconfiguredAIProvider` に置き換えたのと同じ理由である:
+**答えられないなら答えず、「答えられない」と言う。**
+
+- `adapters/ocr/unconfigured_provider.py` の `UnconfiguredOCRProvider` は
+  `domain.ocr.OCRUnavailable` を投げる。ネットワークに触らない
+- `RecognitionJobProcessor` はこれだけを他の `OCRProviderError` より**先に**捕まえ、
+  `SUCCEEDED` かつ `RecognitionResult` 無しで返す（＝ OCR項なし）
+- `GET /ocr/availability` が `{available, reason}` を返す
+  （`GET /grading/availability` と同型）。`reason` は**変数名だけを言い、値は言わない**
+- サイドカー起動時に WARNING を1行出す。**起動失敗にはしない** — §24 が
+  「採点は止めない」と言っている以上、OCRが無いことは起動を拒む理由にならない
+
+`OCRUnavailable` は `OCRProviderError` の subclass だが、**この階層で唯一
+「呼び出しが失敗した」を意味しない**メンバーである。ADCの期限切れも同じ扱いにする
+（retry しても資格情報は入らない）。
+
+### 8.4 Document AI アダプタ
+
+`adapters/ocr/document_ai_provider.py`。
+
+- **SDK を足さない。** 認証は既存の `adapters/ai_grading/_google_adc.AdcTokenSource`
+  （ADC。**オーナーの組織ポリシーが API キーを禁じている**）で解決済みで、
+  `:process` は JSON body 1つの POST である。`vertex_gemini_provider.py` が
+  Vertex AI に対してすでに採った判断と同じ（AGENTS.md「Architecture」）
+- サイドカーは `shared_adc_token_source` を**4つ目の利用者として再利用**する。
+  Document AI は Vertex AI とは別サービスだが同じ `cloud-platform` スコープの
+  ADC トークンで通るため、起動時の ~300ms を4回払わない
+- **送るのは回答欄の切り出しのみ**（簡易設計書 §26.1.1「答案の内容を採点する」行）。
+  このアダプタはページ画像に触れる経路を持たず、
+  `test_document_ai_provider.py` が「渡されたバイト列をそのまま送る」ことを固定する
+- `skipHumanReview: true` — Document AI 側のレビューキューに切り出しの複製を
+  残さない（§26.2）
+- 正規化座標（`normalizedVertices`）はすでに 0..1 で、送ったのは切り出し画像なので
+  ページ寸法によるスケーリングは不要。回転トークンは外接矩形にする
+- **ログ・例外に、画像・認識テキスト・processor リソース名・アクセストークンを
+  一切出さない。** 例外に載るのは HTTP ステータス番号と例外クラス名だけ（PR #100 の規律）
+
+#### 設定
+
+**変数は1つ。** `AUTO_SCORING_DOCUMENT_AI_PROCESSOR` に Cloud Console が表示する
+完全リソース名 `projects/<p>/locations/<l>/processors/<id>` をそのまま入れる。
+project / location / processor id は互いに整合していなければならない（processor は
+作成したlocationにしか存在しない）ので、3変数に分けると**食い違わせる方法を作るだけ**である。
+`AUTO_SCORING_` 接頭辞であることには意味がある — `api.secret_redaction` が
+この名前空間の値を自動で伏せる。
+
+未設定は**壊れた設定ではなく、サポートされた設定**である。
+
+### 8.5 まだ決めていないこと
+
+- **`RecognitionResult.boxes` の座標系。** `domain.models.NormalizedRect` の
+  docstring は「page-normalized」と書いているが、`OCRProvider` に渡すのは
+  **回答欄の切り出し画像**なので、実際に入るのは**切り出し正規化**である。
+  実アダプタが無く box が常に空だったため、これまで露見していなかった。
+  §12.3 の文字紐づけAnnotationの配置に効くので、**本Issueでは値をそのまま保存し、
+  食い違いは別Issueとして記録する**
+- **`processOptions.ocrConfig.hints.languageHints` が実際に効くか。**
+  ポートの `language` 引数を素直に渡しているだけで、**日本語手書きの精度が上がるという
+  実測は無い**。processor の種類によっては `processOptions` 自体を受け付けない可能性も
+  あり、どちらも live 疎通（Issue #54）でしか確かめられない
+- **非テキスト領域（数式・図）を判定して OCR 呼び出しを省く**かどうか。
+  簡易設計書 §8.1.5 が「その判定を確実に行えるかは検証していない」と書いており、
+  §33.2 の未決事項のまま。Document AI が読めずに 0 トークンを返した設問は、
+  本Issueでは「読めた・text 空・低Confidence」＝**止まる**に据え置いた
+  （「本当に読めなかった」であって「読む道具が無い」ではないため）
+
+### 8.6 検証
+
+- `test_document_ai_provider.py`: 送信ペイロード（切り出しのみ・`skipHumanReview`・
+  language hint・regional host）、失敗分類（429/5xx/4xx/timeout/transport/非JSON）、
+  応答パース（複数トークンのテキスト切り出し・回転矩形・欠損polygon・範囲外座標の
+  クランプ）、**例外にレスポンス本文もリソース名も出ないこと**
+- `test_ocr_provider_contract.py`: `DocumentAiOCRProvider` を `OCRProviderContract`
+  のサブクラスとして追加（`httpx.MockTransport`。ネットワークにも資格情報にも触らない）
+- `test_ocr_availability.py`: factory・`build_ocr_provider`・`GET /ocr/availability`、
+  および**leak matrix**（各設定変数に番兵値を入れ、`reason` にもHTTP応答にも出ないこと）
+- `test_e2e_ocr_unavailable_chain.py`: **出荷される合成**（OCR未注入＋scripted AI）で
+  依存エッジのあるDAGを流し、**`/resume` を一度も呼ばずに**全設問が succeeded / usable に
+  なること、OCR側の `RecognitionResult` が1行も書かれないこと
+- **変異させて確認した**（値ではなく直した性質を固定できているかの検査）:
+  `usable=True` を `False` に戻すと5件、`confidence=0.0` の行を書き戻すと2件、
+  OCR項を常に外すと4件が落ちる
+- **実 Document AI への疎通は未実施。** ADC と processor のある端末が要るため
+  Issue #54 に残す。本Issueが足したのは録画形状での疎通までである
