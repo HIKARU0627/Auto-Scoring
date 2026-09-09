@@ -5064,6 +5064,48 @@ void main() {
       expect(find.byKey(const Key('review-question-empty')), findsNothing);
     });
 
+    testWidgets('切り出しが解答でなかったときは、回答欄を直せと言う (Issue #136)', (tester) async {
+      // The failure this Issue is about does not end at "the AI could not
+      // grade this". The crop handed to the grader was not this question's
+      // answer, so the two ways out the generic notice offers are both
+      // wrong: 再判定 sends the same crop to the same model, and a
+      // hand-typed score would be a number for an answer nobody has seen.
+      // What has to be fixed is the 回答欄 the crop came from.
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        jobs: [
+          _jobFor(
+            'q-1',
+            state: 'failed',
+            usable: false,
+            lastError:
+                'gemini AI provider reported that the answer image is not '
+                "this question's answer (crop_not_the_answer)",
+          ),
+        ],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      // The question is on screen and in the failed state at all -- said
+      // before the negative assertion below, so that assertion cannot pass
+      // by the notice never having been built.
+      expect(find.byKey(const Key('review-ai-grading-failed')), findsOneWidget);
+      final message = tester.widget<Text>(
+        find.byKey(const Key('review-ai-grading-failed-message')),
+      );
+      expect(message.data, contains('回答欄'));
+      expect(message.data, contains('解答ではない'));
+      expect(
+        message.data,
+        isNot(contains('「再判定」でもう一度AIに任せるか')),
+        reason: '同じ切り出しを同じモデルへ送り直しても同じ答えが返る',
+      );
+    });
+
     testWidgets('点数を入力すると source=human の採点として保存される', (tester) async {
       final calls = <Map<String, Object?>>[];
       final dependencies = _dependencies(

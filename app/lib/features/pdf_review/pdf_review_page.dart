@@ -15,6 +15,7 @@ import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/grading_failure_reason.dart';
 import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/material_read_ranges.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
@@ -2728,16 +2729,30 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// [AppErrorBanner] with `retryable: false`: the two ways out are 再判定
   /// and 点数を入力 on the action bar, which is exactly the case that flag
   /// documents (several explicit actions, no single thing to re-run).
+  ///
+  /// One failure gets its own sentence (Issue #136): when the grading AI
+  /// reported that the image it was given is not this question's answer,
+  /// neither of the generic two ways out is the fix. 再判定 re-sends the
+  /// same crop to the same model, and a hand-typed score would be a number
+  /// for an answer nobody has seen -- the thing that is actually wrong is
+  /// the 回答欄 the crop was taken from (Issue #105 made those editable on
+  /// top of the answer sheet). 点数を入力 stays available for the reviewer
+  /// who has looked and decided otherwise; it is just no longer what the
+  /// screen recommends first.
   Widget _buildAiGradingFailedNotice(String questionId) {
     final lastError = _latestJobFor(questionId)?.lastError;
     final reason = (lastError == null || lastError.isEmpty)
         ? ''
         : '\n$lastError';
+    final message = isNotTheAnswerCrop(lastError)
+        ? 'AIは、この設問に渡された画像がこの設問の解答ではないと判断しました。'
+              'テスト設定の「回答欄」で、この設問の枠の位置を直してください。'
+              '位置を直さないまま点数だけ入れても、次の答案でも同じことが起きます。$reason'
+        : 'AIはこの設問を採点できませんでした。'
+              '「再判定」でもう一度AIに任せるか、「点数を入力」で自分で採点できます。$reason';
     return AppErrorBanner(
       key: const Key('review-ai-grading-failed'),
-      message:
-          'AIはこの設問を採点できませんでした。'
-          '「再判定」でもう一度AIに任せるか、「点数を入力」で自分で採点できます。$reason',
+      message: message,
       messageKey: const Key('review-ai-grading-failed-message'),
       retryable: false,
     );

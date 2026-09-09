@@ -22,6 +22,7 @@ from auto_scoring.api.app import create_app
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
+    AnswerImageStatus,
     CriterionOutcome,
     CriterionResult,
     GradingSource,
@@ -30,9 +31,11 @@ from auto_scoring.domain.models import (
     Score,
     SubmissionState,
 )
+from auto_scoring.domain.submission_intake import NOT_THE_ANSWER_CROP_REASON
 from tests.support import (
     at,
     make_annotation_comment,
+    make_answer_image,
     make_grade,
     make_job,
     make_question,
@@ -1235,6 +1238,50 @@ def test_review_progress_counts_a_finished_question_that_produced_no_ai_grade(
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.jobs.add(
             make_job(id="job-q1", question_id="q-1", state=JobState.SUCCEEDED, created_at=at(10))
+        )
+        uow.commit()
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body[0]["manual_grading_questions"] == 1
+
+
+def test_review_progress_counts_a_question_whose_crop_was_not_the_answer(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #136 の設問が、Issue #113 の数に入ることを固定する。
+
+    採点 AI が「渡された画像はこの設問の解答ではない」と報告した設問は、ジョブが
+    PERMANENT で終わり GradeResult を残さない -- つまり Issue #113 が数える形に
+    そのまま当てはまる。**当てはまってよい。** この答案は人の手が要るし、一覧の
+    「AIが採点できなかった設問があります」はこの設問について本当のことを言っている。
+    数えないほうが Issue #84 の形 [一覧が0と言い、開いた先に仕事がある] になる。
+
+    ただし**開いた先が勧める直し方は違う**。ここでは「点数を入力」ではなく
+    「回答欄の位置を直す」が先である [docs/pdf-review-overlay.md 2.13.2]。
+    一覧は直し方を名乗っていないので矛盾はしないが、切り出しの誤りは
+    **答案1枚ではなくテスト1つの問題**になりやすい [同じ枠が全答案でずれる]。
+    実データでこの形が何件出るかを見てから、一覧に別の手掛かりが要るかを決める。
+    """
+    _seed_two_question_test(session_factory, ai_graded=("q-2",))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.answer_images.add(
+            make_answer_image(
+                question_id="q-1",
+                status=AnswerImageStatus.NEEDS_REVIEW,
+                reason=NOT_THE_ANSWER_CROP_REASON,
+            )
+        )
+        uow.jobs.add(
+            make_job(
+                id="job-q1",
+                question_id="q-1",
+                state=JobState.FAILED,
+                created_at=at(10),
+                last_error=(
+                    "gemini AI provider reported that the answer image is not this "
+                    f"question's answer ({NOT_THE_ANSWER_CROP_REASON})"
+                ),
+            )
         )
         uow.commit()
 
