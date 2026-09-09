@@ -3894,6 +3894,13 @@ void main() {
       required List<JobResponse> jobs,
       List<ReviewResponse> reviews = const [],
       String submissionState = 'needs_review',
+      // Which dependency the graph draws. A test that needs 要確認 has to
+      // point this at the same question its `blocked` job names, because
+      // 要確認 now means "a dependent is stuck behind this one" and the two
+      // halves of that fact -- the edge and the blocked job -- come from two
+      // different endpoints (Issue #156).
+      String edgeFrom = 'q-1',
+      String edgeTo = 'q-3',
     }) => AppDependencies(
       getSubmission: (_) async => _submission(state: submissionState),
       listQuestions: (_) async => [
@@ -3903,7 +3910,8 @@ void main() {
         _question(id: 'q-4', number: '4'),
       ],
       getSourcePdf: (_) async => _pocA4PortraitPdf(),
-      getDependencyGraph: (_) async => _dependencyGraph(from: 'q-1', to: 'q-3'),
+      getDependencyGraph: (_) async =>
+          _dependencyGraph(from: edgeFrom, to: edgeTo),
       listJobs: (_) async => jobs,
       listRecognitions: (_, _) async => const [],
       listGrades: (_, _) async => const [],
@@ -4047,16 +4055,18 @@ void main() {
       await _pumpReview(
         tester,
         statesDependencies(
+          edgeFrom: 'q-2',
           jobs: [
             _jobFor('q-1'),
             // 要確認: succeeded, but the queue judged its own result not
-            // usable, so nothing downstream moves until a person looks.
+            // usable, and 問3 below is stuck behind it -- so 「下流を解放
+            // しなかった」 is a statement about something (Issue #156).
             _jobFor('q-2', state: 'succeeded', usable: false),
             _jobFor(
               'q-3',
               state: 'blocked',
               usable: null,
-              blockedOnQuestionId: 'q-1',
+              blockedOnQuestionId: 'q-2',
             ),
             _jobFor('q-4', state: 'running', usable: null),
           ],
@@ -4074,9 +4084,70 @@ void main() {
         questionId: 'q-3',
         number: '3',
         // A blocked question names its prerequisite in all three places.
-        label: '問1 待ち',
+        label: '問2 待ち',
       );
       expectAllThreeSay(tester, questionId: 'q-4', number: '4', label: 'AI処理中');
+
+      semantics.dispose();
+    });
+
+    testWidgets('待っている設問が無ければ、usable=false でも要確認にしない (Issue #156)', (
+      tester,
+    ) async {
+      // 実機再検証 #4 では、点数が作られた12件のうち11件が usable=false で、
+      // そのすべてに要確認が立っていた。ところが同じ実行の依存グラフの
+      // エッジは**0本**で、11件は1つも下流を止めていない。
+      // `Job.usable` が決めるのは「後続の依存設問へ進んでよいか」であって
+      // 「この設問を人間が見なくてよいか」ではない
+      // (docs/ai-grading-pipeline.md)。誰も待っていないなら、この設問は
+      // ほかの採点済みと同じ「レビュー待ち」である。
+      final semantics = tester.ensureSemantics();
+      await _pumpReview(
+        tester,
+        statesDependencies(
+          jobs: [
+            _jobFor('q-1'),
+            _jobFor('q-2', state: 'succeeded', usable: false),
+            // 問3 は問1 待ちで、問2 を待ってはいない。
+            _jobFor(
+              'q-3',
+              state: 'blocked',
+              usable: null,
+              blockedOnQuestionId: 'q-1',
+            ),
+            _jobFor('q-4'),
+          ],
+        ),
+      );
+      await _settlePdf(tester);
+
+      // 肯定形が先。画面が描けていないまま否定形だけ通るのを防ぐ
+      // (`docs/quality-gates.md`)。
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-1',
+        number: '1',
+        label: 'レビュー待ち',
+        selected: true,
+      );
+      expectAllThreeSay(tester, questionId: 'q-3', number: '3', label: '問1 待ち');
+
+      // そのうえで、usable=false の問2 が問1 と同じ語で出る。
+      expectAllThreeSay(
+        tester,
+        questionId: 'q-2',
+        number: '2',
+        label: 'レビュー待ち',
+      );
+      // 「要確認」がこの画面のどこにも残っていない -- 答案そのものの状態
+      // (AppBar の「答案: 要確認」) は別の主語なので、そちらは統べない。
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('review-question-rail')),
+          matching: find.textContaining('要確認'),
+        ),
+        findsNothing,
+      );
 
       semantics.dispose();
     });
@@ -4085,6 +4156,7 @@ void main() {
       await _pumpReview(
         tester,
         statesDependencies(
+          edgeFrom: 'q-2',
           jobs: [
             _jobFor('q-1'),
             _jobFor('q-2', state: 'succeeded', usable: false),
@@ -4092,7 +4164,7 @@ void main() {
               'q-3',
               state: 'blocked',
               usable: null,
-              blockedOnQuestionId: 'q-1',
+              blockedOnQuestionId: 'q-2',
             ),
             _jobFor('q-4', state: 'running', usable: null),
           ],

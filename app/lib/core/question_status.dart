@@ -55,11 +55,21 @@ enum QuestionStatus {
   /// `RUNNING`: an OCR/AI provider call is in flight for this question.
   running('AI処理中', Icons.play_circle_outline, AppStatusTone.neutral),
 
-  /// `SUCCEEDED` but `usable == false`: the pipeline finished and decided its
-  /// own result is not trustworthy enough to release the questions that
-  /// depend on it (low Confidence -- `docs/job-queue.md` §「依存の解放は
-  /// 「usable」を…」). Nothing downstream moves until a person looks, which is
-  /// exactly what [AppStatusTone.attention] is reserved for.
+  /// `SUCCEEDED` but `usable == false` **while a dependent question is stuck
+  /// behind it**: the pipeline finished, decided its own result is not good
+  /// enough to release what depends on it (low Confidence -- `docs/job-queue.md`
+  /// §「依存の解放は「usable」を…」), and something is actually waiting. Nothing
+  /// downstream moves until a person looks, which is exactly what
+  /// [AppStatusTone.attention] is reserved for.
+  ///
+  /// **`usable == false` on its own is not enough** (Issue #156).
+  /// `docs/ai-grading-pipeline.md` says what the flag decides: 「この設問を
+  /// 人間が見なくてよいか」ではなく「後続の依存設問へ進んでよいか」. Read as
+  /// 要確認 regardless of whether anything depends on the question, it fired on
+  /// **11 of the 12** graded questions of 実機再検証 #4 -- on material whose
+  /// dependency graphs held **0 edges**, so not one of those 11 was holding
+  /// anything back. A flag that is always up is not a flag; see
+  /// [deriveQuestionStatus] for what replaced the reading.
   needsCheck('要確認', Icons.help_outline, AppStatusTone.attention),
 
   /// `FAILED`: the job did not complete. Distinct from [needsCheck] -- there
@@ -152,9 +162,34 @@ enum QuestionStatus {
 /// reason the rail may not simply fall back to "not loaded yet" -- doing so
 /// was what flattened 要確認・実行待ち・レビュー待ち into one hourglass
 /// (`docs/dependency-dag-progress-view.md` §7).
+///
+/// [hasWaitingDependents] is whether some *other* question's `Job` is
+/// `BLOCKED` on this one (`Job.blocked_on_question_id`). It exists because
+/// `Job.usable` answers a different question from the one this function is
+/// asked (Issue #156). `docs/ai-grading-pipeline.md` states the flag's own
+/// scope -- 「`Job.usable`が制御するのは「この設問を人間が見なくてよいか」では
+/// なく「後続の依存設問へ進んでよいか」である」 -- and the screen was reading
+/// it as the former. Measured on 実機再検証 #4: `usable == false` on 11 of the
+/// 12 graded questions, across dependency graphs holding **0 edges**, so the
+/// flag stopped nothing and 要確認 stood over every question at once.
+///
+/// It is a parameter rather than something derived here because this library
+/// deliberately holds no data of its own: the caller has the `Job` list the
+/// answer comes from, and passing the conclusion keeps the three places on
+/// the 添削レビュー screen sharing one derivation (Issue #84). Required, not
+/// defaulted, for the same reason -- a caller that silently got `false` would
+/// be a second, quieter reading of `usable`, which is the drift this file
+/// exists to prevent.
+///
+/// **The fact itself is not lost.** 「下流を解放しなかった」 is drawn where it
+/// is about something: the DAG's edges, which take it from
+/// `releasesDependents` (`core/dependency_dag.dart`) and not from this
+/// status. The low Recognition Confidence that produced it stays on the
+/// Inspector as its own number (`OCR文字認識信頼度`).
 QuestionStatus deriveQuestionStatus({
   required JobResponse? job,
   required ReviewResponse? review,
+  required bool hasWaitingDependents,
 }) {
   if (job == null) {
     // A review with no job at all is not something the backend produces, but
@@ -173,7 +208,17 @@ QuestionStatus deriveQuestionStatus({
     // so it outranks a review the reviewer recorded *before* this attempt.
     // Not one they recorded after it: that is a person having looked at
     // exactly this result and decided (Issue #118).
-    'succeeded' when job.usable == false =>
+    //
+    // [hasWaitingDependents] is what makes that a statement at all (Issue
+    // #156): "did not release the dependents" says nothing to a reviewer
+    // when the question has no dependents, and with no dependent stuck the
+    // question is in exactly the state every other graded one is in --
+    // finished, waiting for a person, which is 「レビュー待ち」. So the
+    // reading falls through to the plain `succeeded` case below rather than
+    // being weakened in place: with nothing waiting, `usable` does not enter
+    // the derivation at all, and a question a person already approved does
+    // not read differently for having had a low-Confidence OCR pass.
+    'succeeded' when job.usable == false && hasWaitingDependents =>
       _decisionSince(review, job) ?? QuestionStatus.needsCheck,
     'succeeded' => _reviewStatus(review, job) ?? QuestionStatus.graded,
     // An unknown state from a newer backend: say nothing rather than guess.

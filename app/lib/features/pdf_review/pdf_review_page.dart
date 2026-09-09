@@ -610,7 +610,27 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       deriveQuestionStatus(
         job: _latestJobFor(question.id),
         review: _reviews[question.id]?.effectiveReview,
+        hasWaitingDependents: _hasWaitingDependents(question.id),
       );
+
+  /// Whether another question's `Job` is `BLOCKED` waiting on [questionId].
+  ///
+  /// Read straight off `Job.blocked_on_question_id` rather than off the
+  /// dependency graph's edges: an edge says the dependency *exists*, this
+  /// says the queue is *actually* holding a question behind it right now,
+  /// which is the only version of the fact a reviewer can act on (Issue
+  /// #156). It also keeps the answer available on a screen that has not
+  /// fetched a graph -- the rail and the Inspector ask for it too, and only
+  /// the 処理の進み方 panel has a `DependencyGraphResponse` to hand.
+  ///
+  /// Every job is scanned, not just the latest per question: a superseded
+  /// attempt is never `BLOCKED` (the queue moves it to a terminal state
+  /// before creating the replacement), so an older row cannot invent a
+  /// dependent, and restricting the scan would only add a way to miss one.
+  bool _hasWaitingDependents(String questionId) => _jobs.any(
+    (job) => job.state == 'blocked' && job.blockedOnQuestionId == questionId,
+  );
+
 
   /// The words for [_questionStatus], with a blocked question naming the
   /// prerequisite it is waiting on -- the same string the DAG node prints,
