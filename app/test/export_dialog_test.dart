@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_theme.dart';
-import 'package:auto_scoring_app/features/pdf_review/export_dialog.dart';
+import 'package:auto_scoring_app/core/widgets/export_dialog.dart';
 
 import 'app_harness.dart';
 

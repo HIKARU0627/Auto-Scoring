@@ -15,6 +15,18 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 /// Progress/retry are a thin UI over the existing job endpoints
 /// (`AppDependencies.getJob`/`retryJob`) exactly as `api.export_router`
 /// intends -- this dialog invents no new polling protocol of its own.
+///
+/// `features/pdf_review/` から `core/widgets/` へ移した (Issue #137)。出力を
+/// 起動する画面が添削レビューだけではなくなり (答案キューの行からも出す)、
+/// **`features` どうしの import を作らずに済ませるため**である -- 依存方向は
+/// `features → core → api` (`docs/technology-stack.md` §5) で、`core/widgets/`
+/// はまさに「複数画面で重複していた見た目の要素」の置き場。移す前の時点で
+/// `features` を1つも import していなかったので、そのまま動く。
+///
+/// **答案の状態は見ない。** 出力してよいかを決めるのはサイドカーで、未確定の
+/// 設問があれば 409 が返り、それを [_ExportStage.unconfirmed] が設問名まで
+/// 出して伝える。呼ぶ側が先回りして「この答案はまだだろう」と判断しないこと --
+/// 判断が2か所に増えれば、必ず食い違う。
 Future<void> showExportDialog(
   BuildContext context, {
   required String submissionId,
