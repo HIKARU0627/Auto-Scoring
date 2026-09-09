@@ -116,6 +116,13 @@ unprocessed → ai_processing → ai_processed → (問題なければそのま�
 `needs_review` へ遷移する。`review_reason` に理由の文字列を記録する
 （`missing_pages:2`、`no_questions_registered`、`answer_area_undefined:<question-id,...>` 等）。
 
+**この `review_reason` は、取込のあと下流でも判別子として使われる**（Issue #112）。
+`needs_review` は取込が立てた旗であり、**理由の無い `needs_review` は作らない**
+（`mark_intake_outcome` はどの分岐でも状態と理由を対で書く。`ai_processed` なら
+`None`）。添削レビューはこの対応関係を見て、確定が外れた答案を**取込が置いた場所へ**
+戻す — 理由があれば `needs_review`、無ければ `ai_processed`。
+[`review-edit-history.md`](./review-edit-history.md) §6、簡易設計書 §25.1。
+
 再取込（retry）は `error → unprocessed → ai_processing → ai_processed → (…)` を
 同一トランザクション内で連続して適用する。
 

@@ -737,7 +737,18 @@ def test_submission_becomes_reviewed_only_once_every_question_is_confirmed(
         uow.tests.add(make_test())
         uow.questions.add(make_question(id="q-1", number="1"))
         uow.questions.add(make_question(id="q-2", number="2"))
-        uow.submissions.add(make_submission(state=SubmissionState.NEEDS_REVIEW))
+        # With the `review_reason` intake always writes alongside NEEDS_REVIEW
+        # (`adapters.submission_intake`: every branch that picks that state
+        # picks a reason with it, pinned by `test_submission_intake_service.py`
+        # 193/220/245). Issue #112 made that pairing load-bearing -- it is how
+        # an un-confirm tells "intake flagged this" from "intake was fine" --
+        # so a fixture without it is a submission intake could never produce.
+        uow.submissions.add(
+            make_submission(
+                state=SubmissionState.NEEDS_REVIEW,
+                review_reason="answer_area_undefined:q-1",
+            )
+        )
         uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
         uow.grades.add(make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI))
         uow.commit()
@@ -764,13 +775,178 @@ def test_submission_becomes_reviewed_only_once_every_question_is_confirmed(
     assert submission.state is SubmissionState.REVIEWED
 
 
+def test_a_cleanly_intaken_submission_becomes_reviewed_when_every_question_is_confirmed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #112 受入1: 全問承認すると完了として記録される。
+
+    ``AI_PROCESSED`` -- no ``review_reason`` -- is what intake leaves an
+    ordinary submission in: `adapters.submission_intake` only routes on to
+    ``NEEDS_REVIEW`` when it could not pin the answer areas. Before this Issue
+    `_sync_submission_review_state` skipped that state outright, so approving
+    every question of a perfectly normal answer recorded nothing: ホーム画面's
+    「確認済み N / M」 never moved and the same answer kept being offered as the
+    one to resume.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.questions.add(make_question(id="q-2", number="2"))
+        uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
+        uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
+        uow.grades.add(make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI))
+        uow.commit()
+
+    first = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert first.status_code == 201
+    # 受入4: 1問でも未確定なら完了にならない。And it stays where intake left it --
+    # a half-reviewed ordinary answer is not an intake problem, so it must not
+    # start claiming to be one.
+    assert first.json()["submission_state"] == "ai_processed"
+
+    second = client.post(
+        "/submissions/sub-1/questions/q-2/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert second.status_code == 201
+    assert second.json()["submission_state"] == "reviewed"
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.REVIEWED
+    # Never acquired a reason it was never flagged for.
+    assert submission.review_reason is None
+
+
+def test_undo_returns_a_cleanly_intaken_submission_to_ai_processed_not_needs_review(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #112 受入5: Undoで完了が外れる。**ただし要確認にはしない。**
+
+    ``NEEDS_REVIEW`` is the one state this app colours as needing a person
+    (`docs/design-tokens.md` §3.1) and the one ホーム画面 opens first. Sending a
+    submission whose intake was fine there -- because a reviewer took one
+    approval back -- would raise that flag over an answer with nothing wrong
+    with it, and nothing would ever lower it again.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
+        uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
+        uow.commit()
+
+    approved = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert approved.json()["submission_state"] == "reviewed"
+
+    undone = client.post(
+        "/submissions/sub-1/questions/q-1/review/undo",
+        headers=_AUTH,
+        json={"expected_version": 1},
+    )
+    assert undone.status_code == 201
+    assert undone.json()["submission_state"] == "ai_processed"
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is SubmissionState.AI_PROCESSED
+    assert submission.review_reason is None
+
+
+def test_confidence_alone_never_makes_a_submission_reviewed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """簡易設計書 §25.2 / Issue #112 オーナー条件1: 完了はAI由来にならない。
+
+    Every question carries an AI grade at the maximum Confidence there is, and
+    the submission is still not complete, because **no person has confirmed
+    anything**. 「確認済み」 is the record of a human having looked; the moment it
+    can be derived from what the AI thought, it stops being evidence of that.
+
+    This is a regression test against a *future* change, not a past bug: it
+    fails the day someone adds a threshold, an auto-confirm, or a "skip the
+    high-confidence ones" shortcut to the completion rule.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.questions.add(make_question(id="q-2", number="2"))
+        uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
+        uow.grades.add(
+            make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI, confidence=1.0)
+        )
+        uow.grades.add(
+            make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI, confidence=1.0)
+        )
+        uow.commit()
+
+    # A review action on one question is what re-evaluates the submission, so
+    # this drives the recheck without confirming q-2. Rejecting is a human
+    # action that is deliberately *not* a confirmation.
+    rejected = client.post(
+        "/submissions/sub-1/questions/q-1/review/reject",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert rejected.status_code == 201
+    assert rejected.json()["submission_state"] == "ai_processed"
+
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.state is not SubmissionState.REVIEWED
+
+
+def test_the_lowest_confidence_still_completes_once_a_person_confirms(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The other half of `test_confidence_alone_never_makes_a_submission_reviewed`:
+    Confidence does not hold completion back either. What decides is the human
+    confirmation and nothing else (簡易設計書 §25.2).
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
+        uow.grades.add(
+            make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI, confidence=0.0)
+        )
+        uow.commit()
+
+    approved = client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+    assert approved.status_code == 201
+    assert approved.json()["submission_state"] == "reviewed"
+
+
 def test_submission_returns_to_needs_review_once_an_undo_unconfirms_a_question(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.tests.add(make_test())
         uow.questions.add(make_question(id="q-1", number="1"))
-        uow.submissions.add(make_submission(state=SubmissionState.NEEDS_REVIEW))
+        # Carries its intake reason: see the note in
+        # `test_submission_becomes_reviewed_only_once_every_question_is_confirmed`.
+        uow.submissions.add(
+            make_submission(
+                state=SubmissionState.NEEDS_REVIEW,
+                review_reason="answer_area_undefined:q-1",
+            )
+        )
         uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
         uow.commit()
     approved = client.post(
@@ -788,3 +964,11 @@ def test_submission_returns_to_needs_review_once_an_undo_unconfirms_a_question(
 
     assert undone.status_code == 201
     assert undone.json()["submission_state"] == "needs_review"
+
+    # The reason survives the round trip, so the submission goes back to being
+    # flagged for the same thing intake flagged it for -- not to a NEEDS_REVIEW
+    # nobody can explain (Issue #112).
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        submission = uow.submissions.get("sub-1")
+    assert submission is not None
+    assert submission.review_reason == "answer_area_undefined:q-1"

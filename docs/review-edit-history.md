@@ -153,19 +153,36 @@ UI は Issue #22 の対象外とする。理由:
 ゲートすることで満たす。まだ出力（PDF export）機能自体は実装されていない
 ため、`REVIEWED` は将来の export 機能の前提条件として振る舞う。
 
+> **訂正（Issue #112）: 上の段落は書かれた時点の計画であって、現在のコードの
+> 説明ではない。** 実際に出力を作った Issue #23 は、状態ではなく
+> `domain.pdf_export.unconfirmed_question_ids` でレビュー履歴を直接見る形に
+> した（`api/export_router.py`、`jobs/export_processor.py`）。
+> **したがって `REVIEWED` は門ではなく鏡である** -- 出力を守っているのは出力側の
+> 判定で、状態はその事実を画面へ映すためにある。`backend/tests/test_export_api.py`
+> が `make_submission()` の既定（`unprocessed`）のまま通っていることが、
+> 出力が `SubmissionState` から独立していることの実測である。
+
 `adapters.review_actions._sync_submission_review_state` を、edit/reject/
 regrade/approve/undo のどれが呼ばれた後でも同じトランザクション内で実行する:
 
-- 対象 Submission の現在の state が `NEEDS_REVIEW`/`REVIEWED` のときだけ動く
-  （処理中・出力済み・エラー状態はこの Issue の対象外 -- 出力済みの再オープン
-  は後続Issueの仕事）。
+- 対象 Submission の現在の state が `AI_PROCESSED`/`NEEDS_REVIEW`/`REVIEWED` の
+  ときだけ動く（`_REVIEWABLE_SUBMISSION_STATES`）。
+  **`AI_PROCESSED` は Issue #112 で足した。** Issue #22 の時点ではこれを
+  「処理中」と読んで外していたが、実際には**取込が問題なく終わった普通の答案が
+  留まる状態**であり、外している限り普通の答案ほど完了が記録されなかった。
+  いまも外れているのは `UNPROCESSED`/`AI_PROCESSING`（レビューされたものが
+  何も無い）、`EXPORTED`（出力済みの再オープンは後続Issueの仕事）、`ERROR`。
 - そのテストの全 `Question` について
   `domain.review_workflow.all_questions_confirmed` を評価する
   （各設問の `effective_latest_review` が `approved`/`modified` かどうか）。
-- 全問確定していれば `NEEDS_REVIEW → REVIEWED`、そうでなければ
-  `REVIEWED → NEEDS_REVIEW`（Undo が確定済みの設問を再び未確定に戻した場合を
-  含む）。`Submission.with_state`/`SubmissionRepository.set_state` が既存の
-  状態機械（`_SUBMISSION_TRANSITIONS`）でこの2方向を許可済み。
+  **Confidence はこの判定に一切関与しない**（簡易設計書 §25.2）。
+- 全問確定していれば `REVIEWED` へ。そうでなければ**取込が置いた場所へ戻す** --
+  `review_reason` があれば `NEEDS_REVIEW`、無ければ `AI_PROCESSED`
+  （`_unconfirmed_state`）。Undo が確定済みの設問を未確定に戻した場合もこれである。
+  **取込が問題なく終わった答案を `NEEDS_REVIEW` へ送らない**のが要点で、
+  あれは「人が見ないと先へ進めない」ことを表す唯一の旗
+  （[design-tokens.md](./design-tokens.md) §3.1）だから、無関係な答案に立てると
+  意味が薄まり、しかも二度と下りない。
 
 ## 7. キーボードショートカット
 

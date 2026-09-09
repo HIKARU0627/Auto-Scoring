@@ -128,6 +128,44 @@ def test_submission_state_machine_rejects_illegal_move() -> None:
         ensure_submission_transition(SubmissionState.UNPROCESSED, SubmissionState.EXPORTED)
 
 
+def test_a_cleanly_intaken_submission_can_reach_reviewed_directly() -> None:
+    """簡易設計書 §25.1 / Issue #112: 要確認は関門ではなく、取込が立てる旗である。
+
+    Intake leaves an ordinary submission at `AI_PROCESSED` and only routes on to
+    `NEEDS_REVIEW` when it could not pin the answer areas. So a person
+    confirming every question of an ordinary submission has to be able to
+    complete it without a detour through the state that means "intake failed".
+    """
+    assert (
+        ensure_submission_transition(SubmissionState.AI_PROCESSED, SubmissionState.REVIEWED)
+        is SubmissionState.REVIEWED
+    )
+
+
+def test_a_completed_submission_can_go_back_to_ai_processed() -> None:
+    """Issue #112: Undo で完了が外れたとき、取込が置いた場所へ戻れること。
+
+    The counterpart of the transition above: without it the only way out of
+    `REVIEWED` would be `NEEDS_REVIEW`, which would flag a submission whose
+    intake was fine -- and nothing would ever unflag it.
+    """
+    assert (
+        ensure_submission_transition(SubmissionState.REVIEWED, SubmissionState.AI_PROCESSED)
+        is SubmissionState.AI_PROCESSED
+    )
+
+
+def test_widening_the_reviewed_transitions_did_not_open_the_processing_ones() -> None:
+    """Issue #112 widened two edges; these stayed shut.
+
+    A submission still being processed has nothing a person could have
+    confirmed, so it must not be able to claim completion.
+    """
+    for source in (SubmissionState.UNPROCESSED, SubmissionState.AI_PROCESSING):
+        with pytest.raises(InvalidStateTransition):
+            ensure_submission_transition(source, SubmissionState.REVIEWED)
+
+
 def test_submission_with_state_rejects_illegal_move() -> None:
     submission = make_submission()
     with pytest.raises(InvalidStateTransition):

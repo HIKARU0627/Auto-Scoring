@@ -185,24 +185,73 @@ def _next_version(
     return version, existing
 
 
-def _sync_submission_review_state(uow: SqlAlchemyUnitOfWork, submission: Submission) -> Submission:
-    """Move ``submission`` between ``NEEDS_REVIEW``/``REVIEWED`` to match
-    whether every one of its questions currently has a confirmed effective
-    review (Issue #22 acceptance: "未確認設問が残るSubmissionは出力可能状態
-    にならない") -- run inside the same transaction as the `Review` row that
-    triggered the recheck, so the two commit atomically together.
+#: The states a review action can legitimately have happened against, and so the
+#: only ones `_sync_submission_review_state` moves between.
+#:
+#: `AI_PROCESSED` is here because it is what a *cleanly intaken* submission is
+#: (Issue #112): `adapters.submission_intake` only routes on to `NEEDS_REVIEW`
+#: when it could not pin the answer areas, which makes `AI_PROCESSED` the normal
+#: case rather than a mid-processing one. Leaving it out is why approving every
+#: question of an ordinary submission used to record nothing at all.
+#:
+#: Still excluded: `UNPROCESSED`/`AI_PROCESSING` (nothing to have reviewed yet),
+#: `EXPORTED` (reopening an exported submission is a later issue's job) and
+#: `ERROR`.
+_REVIEWABLE_SUBMISSION_STATES = (
+    SubmissionState.AI_PROCESSED,
+    SubmissionState.NEEDS_REVIEW,
+    SubmissionState.REVIEWED,
+)
 
-    A no-op for any other `SubmissionState` (still processing, exported,
-    errored): reopening an exported submission for correction is a later
-    issue's job, and a submission still mid-processing has nothing for a
-    review action to have legitimately happened against in the first place.
+
+def _unconfirmed_state(submission: Submission) -> SubmissionState:
+    """Where a submission belongs while some question of it is *not* confirmed
+    -- which is wherever intake left it (Issue #112).
+
+    ``review_reason`` is the record of that, and the only one there is: intake
+    writes it on every outcome through ``mark_intake_outcome`` (a reason when it
+    routed the submission to `NEEDS_REVIEW`, ``None`` when it did not), and
+    ``set_state`` never touches it. So a non-null reason means intake itself
+    flagged this submission, and a null one means intake finished cleanly.
+
+    The distinction matters because `NEEDS_REVIEW` is not a neutral "not done
+    yet": it is the one state this app colours as *needing a person*
+    (`docs/design-tokens.md` §3.1) and the one ホーム画面 opens first
+    (`HomeDashboard._pickResumable`). Undoing one approval on a submission
+    whose intake was fine must not manufacture that signal.
     """
-    if submission.state not in (SubmissionState.NEEDS_REVIEW, SubmissionState.REVIEWED):
+    if submission.review_reason is not None:
+        return SubmissionState.NEEDS_REVIEW
+    return SubmissionState.AI_PROCESSED
+
+
+def _sync_submission_review_state(uow: SqlAlchemyUnitOfWork, submission: Submission) -> Submission:
+    """Move ``submission`` to match whether every one of its questions currently
+    has a confirmed effective review -- run inside the same transaction as the
+    `Review` row that triggered the recheck, so the two commit atomically
+    together.
+
+    Confirmed means `domain.review_workflow.all_questions_confirmed`, and
+    nothing else: an ``approved``/``modified`` `Review` that Undo has not since
+    reverted. **No Confidence value reaches this decision** (簡易設計書 §25.2) --
+    "確認済み" is the record of a person having confirmed, so deriving it from
+    what the AI thought would make it stop being evidence that anyone looked.
+
+    Introduced for Issue #22 ("未確認設問が残るSubmissionは出力可能状態にならない")
+    as the gate on that, but that is not what it turned out to be: Issue #23 made
+    export check the review history itself (`domain.pdf_export`), so what this
+    writes is a *mirror* of that same fact, for the screens to count. Which is
+    why Issue #112 could widen it to `AI_PROCESSED` without touching export --
+    see `docs/review-edit-history.md` §6.
+
+    A no-op outside [_REVIEWABLE_SUBMISSION_STATES].
+    """
+    if submission.state not in _REVIEWABLE_SUBMISSION_STATES:
         return submission
     questions = uow.questions.list_for_test(submission.test_id)
     reviews_by_question = {q.id: uow.reviews.history(submission.id, q.id) for q in questions}
     confirmed = all_questions_confirmed((q.id for q in questions), reviews_by_question)
-    target = SubmissionState.REVIEWED if confirmed else SubmissionState.NEEDS_REVIEW
+    target = SubmissionState.REVIEWED if confirmed else _unconfirmed_state(submission)
     if target is submission.state:
         return submission
     uow.submissions.set_state(submission.id, target)

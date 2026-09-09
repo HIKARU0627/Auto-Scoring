@@ -108,8 +108,10 @@ business-rules §4.4 の `blocked` 状態を含む）。
 ```text
 Submission:
   unprocessed → ai_processing → ai_processed → needs_review → reviewed → exported
-                    ↑                 ↑              ↑            ↑
-                    └── error ────────┴──────────────┴────────────┘
+                    ↑                 ↑   ↑          ↑            ↑
+                    └── error ────────┴───┼──────────┴────────────┘
+                                          └──────────────┘
+                    (ai_processed ⇄ reviewed も許可。Issue #112)
                     (reviewed → needs_review, exported → needs_review も許可)
 
 Job:
@@ -118,6 +120,14 @@ Job:
         ╲        ↘ failed → queued
          → cancelled (queued/running/blocked/failed から)
 ```
+
+**`needs_review` は関門ではなく、取込が立てる旗である**（簡易設計書 §25.1、Issue #112）。
+取込が回答欄を確定できた答案は `ai_processed` で止まり、人が全設問を確定すれば
+そこから直接 `reviewed` へ動く。`needs_review` を経由するのは取込が何か問題を
+見つけた答案だけで、その理由は `Submission.review_reason` に残る。
+`reviewed` から戻るときも同じ判別で、**取込が置いた場所へ戻る**
+（理由があれば `needs_review`、無ければ `ai_processed`）。
+実装は `adapters/review_actions.py` の `_unconfirmed_state`。
 
 `SqlAlchemySubmissionRepository.set_state` はこの状態機械を経由してから更新するので、
 リポジトリ越しでも不正遷移は拒否される。DB 側にも `state` 列へ `CHECK ... IN (...)`

@@ -29,12 +29,12 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api import test_registration_router
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
-from auto_scoring.domain.models import Question, Rubric
+from auto_scoring.domain.models import Question, Rubric, SubmissionState
 from auto_scoring.domain.pdf_intake import IntakeLimits
 from auto_scoring.domain.test_registration import (
     build_questions_and_rubrics as _real_build_questions_and_rubrics,
 )
-from tests.support import make_test
+from tests.support import make_grade, make_review, make_submission, make_test
 
 _TOKEN = "test-registration-token"
 
@@ -616,6 +616,74 @@ class TestProfileReviewAndConfirm:
 
         with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
             assert {q.number for q in uow.questions.list_for_test(test_id)} == {"1"}
+
+    def test_confirm_is_refused_once_a_reviewed_answer_exists(
+        self, client: TestClient, data_root: Path
+    ) -> None:
+        """Issue #112: 完了した答案が、設問の作り直しで孤児にならないこと。
+
+        `ensure_questions_can_be_rebuilt` (Issue #103) guards both rebuild
+        paths. The other one -- `POST /criteria/confirm` -- is pinned by
+        `test_criteria_api.py::test_confirming_refuses_once_answers_exist_and_destroys_nothing`;
+        this path had no test at all (`make_submission` did not appear in this
+        file), so the guard here rested on nobody exercising it.
+
+        Why Issue #112 cares: 設問 ids are deterministic
+        (``f"{test_id}:{number}"``, `domain.test_registration`) and
+        ``reviews.question_id`` is ``ON DELETE CASCADE``. So a rebuild deletes
+        every `Review` and re-inserts questions under the same ids, while
+        nothing recomputes the submission's own state. A submission left at
+        ``REVIEWED`` would then be counted as 確認済み on ホーム画面 with **zero**
+        human confirmations behind it -- 「黙って古い完了が残る」.
+
+        The guard is what makes that unreachable, so it is what this pins:
+        the refusal, and that the completion is still intact afterwards.
+        """
+        test_id = _register_test(client)
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": _minimal_regions(label="1")},
+        )
+
+        # A submission that a person has finished reviewing: the exact thing a
+        # rebuild would silently orphan.
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            uow.questions.add(
+                Question(id=f"{test_id}:1", test_id=test_id, number="1", page=1, points=5)
+            )
+            uow.submissions.add(
+                make_submission(id="sub-1", test_id=test_id, state=SubmissionState.REVIEWED)
+            )
+            # An `approved` Review must name the AI grade it approved
+            # (`Review.__post_init__`), so the grade comes first.
+            uow.grades.add(
+                make_grade(id="grade-1", submission_id="sub-1", question_id=f"{test_id}:1")
+            )
+            uow.reviews.add(
+                make_review(
+                    id="rev-1",
+                    submission_id="sub-1",
+                    question_id=f"{test_id}:1",
+                    ai_grade_result_id="grade-1",
+                )
+            )
+            uow.commit()
+
+        response = _confirm(client, test_id)
+
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        # Names the way forward, not only the refusal.
+        assert "新しいテストとして登録し直して" in detail
+
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            submission = uow.submissions.get("sub-1")
+            assert submission is not None
+            assert submission.state is SubmissionState.REVIEWED
+            # The review history the completion stands on is still there.
+            assert len(uow.reviews.history("sub-1", f"{test_id}:1")) == 1
 
     def test_confirm_and_analyze_are_serialized_for_the_same_test(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
