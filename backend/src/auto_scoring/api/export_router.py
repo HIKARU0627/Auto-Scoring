@@ -36,6 +36,7 @@ from auto_scoring.domain.pdf_export import (
     decide_reexport,
     review_version_snapshot,
     unconfirmed_question_ids,
+    unplaceable_question_ids,
 )
 from auto_scoring.jobs.queue import JobQueueService
 
@@ -125,6 +126,22 @@ def build_export_router(
                     detail={
                         "message": "one or more questions are not yet confirmed",
                         "question_ids": sorted(missing),
+                    },
+                )
+
+            # Issue #120: the other way an export comes out blank. The live
+            # run's export returned 202, succeeded, and wrote a file
+            # byte-for-byte identical to the answer sheet, because no
+            # question had anywhere to draw. Refused here, in the same shape
+            # as the unconfirmed check, so the operator is told before a job
+            # is queued rather than handed an empty PDF.
+            unplaceable = unplaceable_question_ids(questions)
+            if unplaceable:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "message": "one or more questions have no area to write the score in",
+                        "question_ids": sorted(unplaceable),
                     },
                 )
 

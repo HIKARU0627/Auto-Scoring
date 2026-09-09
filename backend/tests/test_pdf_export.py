@@ -25,6 +25,7 @@ from auto_scoring.domain.pdf_export import (
     decide_reexport,
     review_version_snapshot,
     unconfirmed_question_ids,
+    unplaceable_question_ids,
 )
 
 _NOW = datetime(2026, 1, 1)
@@ -198,6 +199,61 @@ class TestBuildExportMarks:
         assert len(marks) == 1
         assert marks[0].text == "3/5"
 
+    def test_the_score_is_drawn_even_though_no_annotation_asked_for_it(self) -> None:
+        """Issue #120: nothing in this repository ever creates a `SCORE`-kind
+        `Annotation` -- only these tests do. The score reached the page only
+        if the AI happened to propose one, and in the live run none did, so
+        every exported PDF came out with no score on it. The confirmed grade
+        is the source of truth for that number (§2.1 of docs/pdf-export.md),
+        and it is now what puts the mark there, not a proposal that may never
+        arrive.
+        """
+        score_area = NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05)
+
+        marks = build_export_marks(
+            question=_question(score_area=score_area),
+            grade=_grade(score=Score(awarded=3, maximum=5)),
+            annotations=[],
+            recognitions=[],
+        )
+
+        assert [(mark.kind, mark.rect, mark.text) for mark in marks] == [
+            (AnnotationKind.SCORE, score_area, "3/5")
+        ]
+
+    def test_an_ai_proposed_score_annotation_does_not_double_the_score_mark(self) -> None:
+        """Both would carry the same text at the same rect, drawn on top of
+        each other."""
+        annotation = Annotation(
+            id="a1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.AI,
+            kind=AnnotationKind.SCORE,
+            comment="stale AI label: 4/5",
+            created_at=_NOW,
+        )
+
+        marks = build_export_marks(
+            question=_question(score_area=NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05)),
+            grade=_grade(score=Score(awarded=3, maximum=5)),
+            annotations=[annotation],
+            recognitions=[],
+        )
+
+        assert [mark.kind for mark in marks] == [AnnotationKind.SCORE]
+        assert marks[0].text == "3/5"
+
+    def test_no_score_area_draws_no_score_rather_than_guessing_where_it_goes(self) -> None:
+        """`unplaceable_question_ids` is what stops this reaching an export at
+        all; if one ever does, the honest outcome is a missing mark, not a
+        mark at a guessed spot on someone's answer sheet."""
+        marks = build_export_marks(
+            question=_question(), grade=_grade(), annotations=[], recognitions=[]
+        )
+
+        assert marks == []
+
     def test_comment_kind_draws_the_annotation_s_own_comment_text(self) -> None:
         grade = _grade()
         annotation = Annotation(
@@ -364,3 +420,24 @@ class TestBuildExportMarks:
 
         assert len(marks) == 1
         assert marks[0].rect == NormalizedRect(x=0.5, y=0.5, width=0.1, height=0.1)
+
+
+class TestUnplaceableQuestionIds:
+    """Issue #120 acceptance 3: 書く場所が決まらないときに、黙って空の PDF を
+    出さないこと。出力前に分かること."""
+
+    def test_a_question_with_nowhere_to_write_is_named_before_the_export_runs(self) -> None:
+        placeable = _question(
+            id="q-1", score_area=NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05)
+        )
+        unplaceable = _question(id="q-2")
+
+        assert unplaceable_question_ids([placeable, unplaceable]) == ["q-2"]
+
+    def test_a_question_that_can_be_written_on_is_not_named(self) -> None:
+        assert (
+            unplaceable_question_ids(
+                [_question(score_area=NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05))]
+            )
+            == []
+        )

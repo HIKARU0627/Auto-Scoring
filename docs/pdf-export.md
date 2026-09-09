@@ -22,6 +22,9 @@ POST /submissions/{id}/export
 未確認設問チェック（domain.pdf_export.unconfirmed_question_ids）
   → 1件でもあれば409、対象question_idを返して終了
         ↓
+書く場所チェック（domain.pdf_export.unplaceable_question_ids、Issue #120）
+  → 1件でもあれば409、対象question_idを返して終了
+        ↓
 review-version snapshotを計算し、直近の成功Exportと比較
 （domain.pdf_export.decide_reexport）
         ↓
@@ -66,19 +69,76 @@ AIが提案するSCORE種別Annotationの`comment`フィールドは自由文字
 毎回組み立てる（`domain.pdf_export.build_export_marks`）。こうすることで、
 表示される点数が常に実際に確定した点数と一致することを保証する。
 
+#### 2.1.1 点数はSCORE種別Annotationを待たずに必ず描く（Issue #120）
+
+上の規約には抜けがあった。**描画文字列は確定Gradeから作っていたが、
+そもそもマークを作るきっかけがAIの提案だった。**`AnnotationKind.SCORE`の
+`Annotation`を生成するコードはこのリポジトリのどこにも無く
+（テストだけが作っていた）、実機検証ではどのプロバイダも SCORE 種別を
+返さなかった。結果として**出力PDFに点数が1文字も描かれなかった。**
+
+`build_export_marks`は、`score_area`を持つ設問について**必ず1つ**
+SCOREマークを出す。AIがSCORE種別を返してきた場合はそれを別マークにしない
+（同じ位置に同じ文字列を重ねて描くことになるため）。
+確定Gradeが唯一の出所という §2.1 の規約はそのままで、
+**来ないかもしれない提案を待つのをやめた**だけである。
+
 ### 2.2 位置解決できないAnnotationは`comment_area`へ退避する
 
 `resolve_annotation_rect`が`None`を返した場合（固定位置種別でもなく、
 `anchor_text`もOCRと一致しない場合）、`Question.comment_area`
 （簡易設計書 §12.4「設問単位のコメント領域へ退避させる」）へ描画する。
-`comment_area`も未設定の場合はそのAnnotationの描画を諦める（スキップする）
---
+`comment_area`も未設定の場合はそのAnnotationの描画を諦める（スキップする）。
 
-テスト登録時に`comment_area`は常に設定される前提（`docs/test-registration.md`）
-のため実運用では発生しないはずだが、万一発生した場合に例外で全体を失敗させる
-より、確定した他のAnnotationは出力しきる方を選んだ。**未決事項**:
-`comment_area`が未設定のテストに対する挙動は改善の余地がある
-（例えば設問ごとの警告一覧をログへ残す等）。
+#### 2.2.1 「comment_areaは常に設定される前提」は崩れていた（Issue #120）
+
+ここには長らく次の未決事項が残っていた ——
+「テスト登録時に`comment_area`は常に設定される前提のため実運用では
+発生しないはずだが、万一発生した場合に例外で全体を失敗させるより、
+確定した他のAnnotationは出力しきる方を選んだ」。
+
+**この前提はすでに崩れていた。**`score_area`/`comment_area`は
+`SCORE`/`ANNOTATION_AREA`領域からしか作られないのに、Issue #103 が
+「配点の入力口を1つに絞る」ため`SCORE`領域を画面から外し、
+`ANNOTATION_AREA`はそもそも新経路の画面に無い。したがって
+Issue #101 → #103 → #105 で登録したテストは**全設問で両方とも`None`**であり、
+「発生しないはず」が100%発生していた。#103 の判断自体は正しく、
+見落としていたのは**それに依存していた側**である。
+
+Issue #120 で次の3つを決めた。
+
+**(1) 書く場所は確定済み回答欄から導出する**
+（`domain.annotation_layout.derive_mark_areas`）。回答欄の**真下の帯**
+（回答欄と同じ高さか、ページに残っている分の少ない方）を使い、
+右 20% を点数、残りをコメントに割る。人が赤ペンを入れる場所であり、
+生徒が書いた内容の上に重ならない。回答欄がページ下端まで達していて帯が
+取れない場合だけ回答欄そのものへ退避する（答案の上に重なるのは良くないが、
+何も描かれていないPDFよりは良い）。
+
+導出は**登録時**（`build_questions_and_rubrics`）に`Question`へ書く。
+出力時だけで解決しなかったのは、添削レビュー画面が
+`app/lib/core/pdf_review_geometry.dart`という**別実装**で同じ位置解決を
+しているためで（§2 冒頭）、片側だけ導出すると画面とPDFで位置がずれる。
+登録時に書けばAPI応答に載り、Dart側は変更なしで一致する。
+
+**手で置いた`SCORE`/`ANNOTATION_AREA`領域があればそちらが優先される。**
+導出はあくまで誰も置かなかった設問のための下限であって、上書きではない。
+画面に入力口を戻すわけでもないので、#103 の「入力口は1つ」は壊れない。
+
+**(2) 検出（#105 の仕組みの流用）は採らなかった。**
+実資料には設問ごとに得点記入枠が印字されている教科があるが（#105 の調査で観測）、
+**全教科にあるとは書けない。** 無い教科では今と同じ空のPDFになるため、
+検出は下限にはできない。後から検出が入れば`Question.score_area`が
+埋まるだけで、消費側（`build_export_marks`）は1行も変わらない。
+**検出は (1) の代替ではなく、上に載る改善**という整理である。
+
+**(3) 書く場所が決まらないときは出力前に断る。**
+回答欄も`score_area`も無い設問は、書く場所が本当に存在しない。
+`domain.pdf_export.unplaceable_question_ids`が対象設問を挙げ、
+`POST /submissions/{id}/export`が未確認設問チェックと**同じ形**で
+409 + `question_ids`を返す。実機では202が返り、ジョブが成功し、
+元の答案とほぼバイト同一のPDFが出ていた。**黙って空のPDFを出すより、
+出力前に断る。**
 
 ## 3. `PdfEngine.render_annotations`（Issue #23で追加）
 
