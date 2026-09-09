@@ -42,6 +42,13 @@ Design decisions this schema encodes:
   length says only how much of the comment fits, so it is the comment that
   gives (``domain.models.truncate_comment`` marks the cut). Raising the cap
   would not have helped: while a cap exists, a response will exceed it.
+* ``answerImage`` asks what the attached crop *shows*, separately from the
+  score (Issue #136). A wrong crop and an unanswered question both produce
+  "0 points, confidence 1.00", and on real material half the grades produced
+  were the first kind; the model's own rationale already distinguished them
+  in prose, and this field is that same judgement in a form the pipeline can
+  act on. Deliberately three values plus ``null`` -- see
+  :class:`~auto_scoring.domain.models.AnswerImageFinding`.
 * Every model is ``strict=True``: a provider sending ``"score": "4"`` or
   ``"confidence": "0.8"`` (a string standing in for a number) is a schema
   violation, not a value to coerce. Required text fields (``comment`` /
@@ -77,7 +84,12 @@ from pydantic import (
     model_validator,
 )
 
-from auto_scoring.domain.models import AnnotationKind, CriterionOutcome, truncate_comment
+from auto_scoring.domain.models import (
+    AnnotationKind,
+    AnswerImageFinding,
+    CriterionOutcome,
+    truncate_comment,
+)
 
 #: A required string that must contain more than just whitespace. Plain
 #: ``min_length=1`` accepts ``" "``; this also strips before checking length.
@@ -229,6 +241,24 @@ class AIGradingResult(BaseModel):
     comment: _CommentStr
     rationale: _NonBlankStr
     annotations: tuple[AnnotationCandidate, ...] = ()
+    #: What the model says the attached image actually shows
+    #: (`domain.models.AnswerImageFinding`, Issue #136) -- the crop it was
+    #: given, not the answer it graded.
+    #:
+    #: **Nullable, and absence is not a claim.** ``None`` means the provider
+    #: reported nothing, and is read as exactly that: the recorded PoC
+    #: datasets predate this field, and a provider that ignores it must keep
+    #: behaving the way it does today rather than being credited with
+    #: vouching for the crop. `adapters.ai_grading._schema` still lists it in
+    #: the strict schema's ``required`` (that is what that module does to
+    #: every property), so a provider that enforces the schema has to answer
+    #: -- with ``null`` if it will not commit to one of the three values.
+    #:
+    #: A single three-valued field rather than two booleans: "this is not the
+    #: answer" and "the answer is blank" are different claims about different
+    #: things, and a model cannot make both at once. Two flags would let it,
+    #: and a caller would then have to decide which one it meant.
+    answer_image_finding: AnswerImageFinding | None = Field(default=None, alias="answerImage")
 
     @model_validator(mode="after")
     def _criteria_indices_unique(self) -> AIGradingResult:

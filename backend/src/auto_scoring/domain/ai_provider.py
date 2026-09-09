@@ -37,7 +37,12 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 from auto_scoring.domain.ai_grading import AIGradingResult
 from auto_scoring.domain.dependency_graph import DependencyProvision
-from auto_scoring.domain.models import AnnotationKind, CriterionOutcome, CriterionResult
+from auto_scoring.domain.models import (
+    AnnotationKind,
+    AnswerImageFinding,
+    CriterionOutcome,
+    CriterionResult,
+)
 
 #: A required string that must contain more than just whitespace (mirrors
 #: ``ai_grading._NonBlankStr``): plain ``min_length=1`` accepts ``" "``.
@@ -535,6 +540,20 @@ class GradingResponse:
     annotations: tuple[GradingAnnotationCandidate, ...]
     descriptor: ProviderDescriptor
     latency_seconds: float
+    #: What the provider says the answer image it was given actually shows
+    #: (Issue #136), or ``None`` if it reported nothing --
+    #: `domain.ai_grading.AIGradingResult.answer_image`, carried through
+    #: rather than dropped here, because it is the one part of the response
+    #: that says whether the *rest* of it is about the right piece of paper.
+    #: Defaulted so a caller that predates this field (and every test that
+    #: builds a response by hand) still constructs a valid one, exactly as
+    #: an old recorded dataset does.
+    #:
+    #: Named ``..._finding`` and not ``answer_image`` on purpose: on the
+    #: *request* side that name already means the image bytes themselves
+    #: (`GradingRequest.answer_image`), and one name for both the picture and
+    #: the verdict on the picture would be a trap.
+    answer_image_finding: AnswerImageFinding | None = None
 
 
 def grading_response_from_result(
@@ -575,6 +594,7 @@ def grading_response_from_result(
             )
     return GradingResponse(
         question_id=question_id,
+        answer_image_finding=result.answer_image_finding,
         recognition_text=result.recognition.text,
         recognition_confidence=result.recognition.confidence,
         score=result.grading.score,

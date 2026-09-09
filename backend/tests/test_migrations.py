@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0016"
+    assert current_revision(db_url) == "0017"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0016"
+    assert current_revision(db_url) == "0017"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0016"
+    assert current_revision(db_url) == "0017"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0016"
+    assert current_revision(db_url) == "0017"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0016"
+    assert current_revision(db_url) == "0017"
 
 
 _CHILD_TABLES = (
@@ -701,6 +701,97 @@ def test_state_check_constraints_reject_unknown_values(db_url: str, bad_insert: 
 
         with pytest.raises(IntegrityError):
             conn.execute(text(bad_insert))
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_a_grade_cannot_be_stored_for_an_image_that_is_not_the_answer(db_url: str) -> None:
+    """DB-level mirror of `GradeResult.__post_init__` (Issue #136, migration
+    0017).
+
+    A grade row produced from a crop the grading AI itself said is not this
+    question's answer is the defect this Issue removes: on screen it reads
+    "0 / 20 点・採点信頼度 100%", exactly like a correct 0. The pipeline
+    never writes one -- and a later code path must not be able to either,
+    which is what makes this a database rule rather than only a validation
+    (AGENTS.md "Architecture").
+
+    Enforced by a trigger rather than a CHECK constraint, and asserted here
+    through both the INSERT and the UPDATE path because a trigger, unlike a
+    CHECK, only covers the statements it names. Why a trigger at all is in
+    migration 0017's docstring: a CHECK would mean rebuilding
+    ``grade_results``, which reorders how SQLite applies cascades and breaks
+    deleting a test.
+
+    ``blank`` is stored, because a question a student genuinely left empty
+    is an ordinary answer sheet and its 0 may well be right; how often that
+    happens is the number that decides whether it should stop a grade too.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO submissions "
+                "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, created_at) "
+                "VALUES ('s', 't', 'submissions/s/source.pdf', '" + ("4" * 64) + "', 1, "
+                "'unprocessed', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        def _insert_grade(row_id: str, finding: str) -> None:
+            conn.execute(
+                text(
+                    "INSERT INTO grade_results "
+                    "(id, submission_id, question_id, source, awarded, maximum, "
+                    "confidence, criteria, context, answer_image_finding, created_at) "
+                    f"VALUES ('{row_id}', 's', 'q', 'ai', 0, 5, 1.0, '[]', '[]', "
+                    f"'{finding}', '2026-01-01')"
+                )
+            )
+
+        with pytest.raises(IntegrityError):
+            _insert_grade("g-not-the-answer", "not_the_answer")
+        conn.rollback()
+
+        with pytest.raises(IntegrityError):
+            _insert_grade("g-nonsense", "probably")
+        conn.rollback()
+
+        _insert_grade("g-blank", "blank")
+        _insert_grade("g-answer", "answer")
+        conn.commit()
+        stored = conn.execute(
+            text("SELECT answer_image_finding FROM grade_results ORDER BY id")
+        ).fetchall()
+        assert [row[0] for row in stored] == ["answer", "blank"]
+
+        # A trigger covers only the statements it names, so the UPDATE path
+        # is its own assertion: a stored row must not be able to become
+        # ``not_the_answer`` after the fact either.
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "UPDATE grade_results SET answer_image_finding = 'not_the_answer' "
+                    "WHERE id = 'g-blank'"
+                )
+            )
+        conn.rollback()
     finally:
         conn.close()
         engine.dispose()

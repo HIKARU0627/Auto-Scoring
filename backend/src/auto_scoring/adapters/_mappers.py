@@ -37,6 +37,7 @@ from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
     AnswerImage,
+    AnswerImageFinding,
     AnswerImageStatus,
     BoundingBox,
     CriterionOutcome,
@@ -354,6 +355,7 @@ def grade_to_row(result: GradeResult) -> GradeResultRow:
         prompt_version=result.prompt_version,
         dependency_graph_version=result.dependency_graph_version,
         context=[_context_entry_to_json(c) for c in result.context],
+        answer_image_finding=result.answer_image_finding,
         created_at=result.created_at,
     )
 
@@ -374,6 +376,11 @@ def grade_from_row(row: GradeResultRow) -> GradeResult:
         prompt_version=row.prompt_version,
         dependency_graph_version=row.dependency_graph_version,
         context=tuple(_context_entry_from_json(c) for c in row.context),
+        answer_image_finding=(
+            None
+            if row.answer_image_finding is None
+            else AnswerImageFinding(row.answer_image_finding)
+        ),
         created_at=row.created_at,
     )
 

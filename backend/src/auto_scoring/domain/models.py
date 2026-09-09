@@ -315,6 +315,46 @@ class AnswerImageStatus(StrEnum):
     NEEDS_REVIEW = "needs_review"
 
 
+class AnswerImageFinding(StrEnum):
+    """What the grading AI reports it actually saw in the answer image it was
+    given -- as distinct from the score it awarded (Issue #136).
+
+    Three values, not a boolean, and the reason is the whole point. On the
+    real re-run that produced this Issue, 7 of the 14 questions that got a
+    grade were a **wrong** 0 with confidence 1.00, and the AI's own rationale
+    already said so in two different ways:
+
+    * 2 said the image it was given is not this question's answer at all
+      (one described a header field, one described another question's
+      label) -- :attr:`NOT_THE_ANSWER`;
+    * 4 said only that the answer is blank -- :attr:`BLANK`.
+
+    Collapsing those into one "something is wrong" flag would put the same
+    flag on a genuinely unanswered question, which is a real thing a student
+    does and a correct 0. So the two claims stay separate values, and only
+    :attr:`NOT_THE_ANSWER` currently stops a grade
+    (`jobs.grading_processor`): a crop that does not show this question's
+    answer is a *detection* failure, and no score derived from it means
+    anything. :attr:`BLANK` is recorded and otherwise left alone until the
+    frequency of genuinely unanswered questions has been measured -- see
+    docs/ai-grading-pipeline.md.
+
+    ``None`` (the field's absence) is its own, fourth state everywhere this
+    appears: the provider did not report anything. It is never read as
+    :attr:`ANSWER` -- that would be vouching for a crop nothing looked at.
+    """
+
+    #: The image shows this question's answer area, with an answer in it.
+    ANSWER = "answer"
+    #: The image shows this question's answer area, and nothing is written
+    #: in it. A grade produced from this may well be a correct 0.
+    BLANK = "blank"
+    #: The image does not show this question's answer area at all (it shows
+    #: another question, a header, a label, or the margin). Nothing graded
+    #: from it can be trusted.
+    NOT_THE_ANSWER = "not_the_answer"
+
+
 # --------------------------------------------------------------------------- #
 # State machines
 # --------------------------------------------------------------------------- #
@@ -713,6 +753,25 @@ class GradeResult:
     prompt_version: str | None = None
     dependency_graph_version: int | None = None
     context: tuple[GradeResultContextEntry, ...] = ()
+    #: What the grading AI said it saw in the answer image (Issue #136), or
+    #: ``None`` when it reported nothing -- a human-confirmed row, a provider
+    #: that ignored the field, or a grade recorded before this Issue.
+    #:
+    #: Recorded so "how often is a question genuinely unanswered?" can be
+    #: counted from data already on disk, instead of costing another full
+    #: real-material run to find out. That number is what decides whether
+    #: `AnswerImageFinding.BLANK` should also stop a grade; without it the
+    #: decision has nothing to stand on.
+    #:
+    #: Never `AnswerImageFinding.NOT_THE_ANSWER`: a grade must not exist for
+    #: an image the grader itself said is not this question's answer -- that
+    #: is precisely the "0点・確信度 1.00" this Issue removes, and a
+    #: contradictory response (not the answer, yet a score above 0) must not
+    #: be resolved in favour of the score. `jobs.grading_processor` routes
+    #: that case to a human instead; this invariant, and the matching DB
+    #: trigger (`db.orm`, migration ``0017``), are what keep a later code
+    #: path from quietly persisting one anyway.
+    answer_image_finding: AnswerImageFinding | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("GradeResult.id", self.id)
@@ -732,6 +791,11 @@ class GradeResult:
         if self.dependency_graph_version is not None and self.dependency_graph_version < 1:
             raise DomainError("GradeResult.dependency_graph_version must be >= 1")
         _require_unique("GradeResult.context question_ids", [c.question_id for c in self.context])
+        if self.answer_image_finding is AnswerImageFinding.NOT_THE_ANSWER:
+            raise DomainError(
+                "GradeResult.answer_image_finding must not be 'not_the_answer': a grade "
+                "cannot be recorded for an image the grader said is not this question's answer"
+            )
 
 
 _ANCHORED_KINDS = frozenset({AnnotationKind.UNDERLINE, AnnotationKind.BOX})

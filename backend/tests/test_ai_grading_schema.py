@@ -16,7 +16,11 @@ from auto_scoring.domain.ai_grading import (
     describe_schema_violation,
     parse_ai_grading_result,
 )
-from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
+from auto_scoring.domain.models import (
+    COMMENT_TRUNCATION_MARK,
+    MAX_COMMENT_CHARS,
+    AnswerImageFinding,
+)
 
 _VALID: dict[str, object] = {
     "recognition": {"text": "光合成によって酸素が発生する", "confidence": 0.9},
@@ -51,6 +55,43 @@ def test_valid_payload_parses() -> None:
     assert result.criteria[0].index == 1
     assert result.grading.score == 4
     assert result.criteria[0].result == "pass"
+
+
+def test_the_three_answer_image_findings_parse_as_themselves() -> None:
+    """Issue #136: what the model says the crop *shows*, kept apart from the
+    score it gave the crop.
+
+    Three values rather than one "something is wrong" flag, because
+    "this is not the answer" and "the answer is blank" are claims about
+    different things: the first says the crop is wrong, the second describes
+    an ordinary answer sheet whose 0 may well be correct. Collapsing them
+    would put the same flag on both.
+    """
+    assert _parse({"answerImage": "answer"}).answer_image_finding is AnswerImageFinding.ANSWER
+    assert _parse({"answerImage": "blank"}).answer_image_finding is AnswerImageFinding.BLANK
+    assert (
+        _parse({"answerImage": "not_the_answer"}).answer_image_finding
+        is AnswerImageFinding.NOT_THE_ANSWER
+    )
+
+
+def test_an_absent_or_null_answer_image_is_not_read_as_a_verdict() -> None:
+    """Absence is its own state, not "the crop was fine" (Issue #136).
+
+    Every dataset recorded before this field existed omits it, and a
+    provider may return ``null`` for "I cannot tell". Reading either as
+    `AnswerImageFinding.ANSWER` would vouch for a crop nothing looked at --
+    the exact claim this Issue stopped the pipeline from inventing.
+    """
+    assert _parse().answer_image_finding is None
+    assert _parse({"answerImage": None}).answer_image_finding is None
+
+
+def test_an_answer_image_value_outside_the_fixed_set_is_rejected() -> None:
+    """A value nobody defined must not become a fourth behaviour by
+    accident: the response is a schema violation, the same as any other."""
+    with pytest.raises(ValidationError):
+        _parse({"answerImage": "maybe"})
 
 
 def test_recognition_and_grading_confidence_are_independent_fields() -> None:

@@ -12,6 +12,7 @@ from auto_scoring.domain.models import (
     MAX_TEST_SUBJECT_LENGTH,
     Annotation,
     AnnotationKind,
+    AnswerImageFinding,
     DomainError,
     GradeResult,
     GradeResultContextEntry,
@@ -284,6 +285,35 @@ def test_grade_result_accepts_the_full_ai_metadata_triple() -> None:
     assert grade.provider == "gemini"
     assert grade.model == "gemini-2.5-flash"
     assert grade.prompt_version == "v1"
+
+
+def test_grade_result_refuses_to_exist_for_an_image_that_is_not_the_answer() -> None:
+    """Issue #136: a score computed from a crop the grader itself said is not
+    this question's answer must not be storable at all.
+
+    That row is the whole defect -- on screen it is "0 / 20 点・採点信頼度
+    100%", indistinguishable from a correct 0. `jobs.grading_processor`
+    routes the case to a human instead of building one; this invariant (and
+    the matching DB trigger, migration 0017) is what stops a later code path
+    from building one anyway.
+    """
+    with pytest.raises(DomainError):
+        make_grade(answer_image_finding=AnswerImageFinding.NOT_THE_ANSWER)
+
+
+def test_grade_result_records_the_other_answer_image_findings() -> None:
+    """``blank`` is storable and changes nothing about the grade: a question
+    a student left empty is an ordinary answer sheet. It is kept so the
+    frequency of that case can be counted from stored data later."""
+    assert (
+        make_grade(answer_image_finding=AnswerImageFinding.BLANK).answer_image_finding
+        is AnswerImageFinding.BLANK
+    )
+    assert (
+        make_grade(answer_image_finding=AnswerImageFinding.ANSWER).answer_image_finding
+        is AnswerImageFinding.ANSWER
+    )
+    assert make_grade().answer_image_finding is None
 
 
 def test_grade_result_rejects_non_positive_dependency_graph_version() -> None:

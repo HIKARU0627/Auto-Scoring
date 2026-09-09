@@ -43,5 +43,30 @@ def test_strict_schema_still_has_the_expected_top_level_shape() -> None:
         "comment",
         "rationale",
         "annotations",
+        "answerImage",
     }
     assert set(schema["required"]) == set(schema["properties"])
+
+
+def test_strict_schema_asks_every_provider_what_the_answer_image_shows() -> None:
+    """``answerImage`` (Issue #136) reaches a provider as a required field
+    whose candidate values are written down, and whose fourth option is
+    ``null``.
+
+    Both halves matter. Required, because a provider that simply omits the
+    field leaves the pipeline where it was before this Issue -- grading an
+    image nobody checked. Nullable, because the alternative to "I cannot
+    tell" would be a model picking one of the three anyway, and one of the
+    three stops the grade.
+    """
+    schema: dict[str, Any] = strict_ai_grading_result_schema(criterion_count=3)
+    assert "answerImage" in schema["required"]
+
+    finding = schema["properties"]["answerImage"]
+    types = {branch.get("type") for branch in finding["anyOf"]}
+    assert "null" in types
+
+    refs = [branch["$ref"] for branch in finding["anyOf"] if "$ref" in branch]
+    assert len(refs) == 1
+    definition = schema["$defs"][refs[0].rsplit("/", 1)[-1]]
+    assert set(definition["enum"]) == {"answer", "blank", "not_the_answer"}
