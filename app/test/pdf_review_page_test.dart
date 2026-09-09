@@ -12,6 +12,8 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
+import 'package:auto_scoring_app/features/review_queue/submission_queue_page.dart';
 
 import 'app_harness.dart';
 
@@ -206,6 +208,7 @@ AppDependencies _dependencies({
   ApproveReview? approveReview,
   UndoReview? undoReview,
   List<SubmissionResponse>? queueSubmissions,
+  GetTest? getTest,
 }) {
   final questions = [
     q1,
@@ -218,6 +221,14 @@ AppDependencies _dependencies({
   ];
   return AppDependencies(
     getSubmission: (submissionId) async => submission ?? _submission(),
+    // 「答案キューへ」で移った先の答案キュー画面が引くもの。既定は
+    // 「未接続」のまま -- 添削レビュー画面自身はテストを引かない (Issue #160)。
+    getTest:
+        getTest ??
+        (testId) async => throw SidecarApiException(
+          SidecarErrorKind.unavailable,
+          'sidecar is not connected',
+        ),
     // 添削レビュー画面は答案キューを引いて「何枚目か」「次はどれか」を出す
     // (Issue #113)。既定は空 -- キューが引けない画面も成立しなければならない。
     listSubmissions: (testId) async =>
@@ -5559,6 +5570,57 @@ void main() {
 
       expect(find.textContaining('このテストの答案はすべて確認しました'), findsOneWidget);
       expect(find.text('答案キューへ'), findsOneWidget);
+    });
+
+    testWidgets('「答案キューへ」で移ったキューからも、戻る導線が残る (Issue #160)', (tester) async {
+      // **ここが行き止まりだった。** このスナックバーは `context.go` で
+      // 移っており、`go` は積んであるスタックを丸ごと捨てる。着いた答案キューに
+      // アプリバーの戻る矢印が無く、Escape も Alt+Left も効かず、実機再検証 #5
+      // では**アプリを再起動するまでホームへ戻れなかった**。
+      //
+      // 同じ画面へ入る他の2つの入口 (ホームのテストカード、テスト一覧) は
+      // `push` で入るので戻れる。**入口によって戻れたり戻れなかったりしては
+      // ならない** -- 利用者は自分がどう来たかを覚えていないといけなくなる。
+      // 残る2つの入口は `submission_queue_page_test.dart` で見ている。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          queueSubmissions: queueOf(['sub-1']),
+          getTest: (testId) async => TestResponse(
+            (b) => b
+              ..id = testId
+              ..name = '物理 第1回'
+              ..status = 'ready'
+              ..createdAt = DateTime.utc(2026, 1, 1),
+          ),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await approveAfterReadingMaterial(tester);
+
+      // 押す対象が本当に出ていること。これを言わずに進むと、スナックバーが
+      // 出ていなくても後続が通ってしまう。
+      expect(find.text('答案キューへ'), findsOneWidget);
+
+      await tester.tap(find.text('答案キューへ'));
+      await tester.pumpAndSettle();
+
+      // 着いた先が答案キューであること (肯定形) を先に言ってから、そこに
+      // 戻る導線があることを見る。
+      expect(find.byType(SubmissionQueuePage), findsOneWidget);
+      expect(find.byKey(const Key('queue-row-sub-1')), findsOneWidget);
+      expect(find.byType(BackButton), findsOneWidget);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      // 戻れた先は、来た画面そのもの。
+      expect(find.byType(PdfReviewPage), findsOneWidget);
     });
 
     testWidgets('AppBarに何枚目かが出る', (tester) async {
