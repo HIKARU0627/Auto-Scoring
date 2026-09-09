@@ -306,6 +306,7 @@ def grading_response(
     grading_confidence: float = _ABOVE_THRESHOLD,
     recognition_confidence: float = _ABOVE_THRESHOLD,
     annotations: tuple[GradingAnnotationCandidate, ...] = (),
+    criterion_ids: tuple[str, ...] | None = None,
 ) -> GradingResponse:
     """A well-formed response for ``request``.
 
@@ -313,6 +314,12 @@ def grading_response(
     registered rubric -- `GradingJobProcessor` rejects a response whose
     criteria do not, and hand-written ids would silently drift as the fixture
     changes.
+
+    ``criterion_ids`` overrides `_criterion_ids`' single-criterion default,
+    which describes the rubric a `RUBRIC` *region* produces. A rubric built
+    from a confirmed 採点基準 draft instead (Issue #103) has one criterion
+    per extracted clause, so a caller on that path states its own ids --
+    see `tests/test_e2e_intake_to_export.py`.
     """
     return GradingResponse(
         question_id=request.question_id,
@@ -330,7 +337,7 @@ def grading_response(
                 confidence=_ABOVE_THRESHOLD,
                 rationale="観点を満たしている。",
             )
-            for criterion_id in _criterion_ids(request)
+            for criterion_id in (criterion_ids or _criterion_ids(request))
         ),
         annotations=annotations,
         descriptor=_DESCRIPTOR,
