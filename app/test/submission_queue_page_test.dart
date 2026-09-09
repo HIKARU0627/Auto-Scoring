@@ -268,4 +268,134 @@ void main() {
     expect(find.byKey(const Key('queue-error')), findsOneWidget);
     expect(find.text('再読み込み'), findsOneWidget);
   });
+
+  group('PDF出力 (Issue #137)', () {
+    // 全問承認した答案はホームの「レビューを続ける」から消える (Issue #112)。
+    // #113 でこの一覧から開き直せるようになったが、**出力ボタンは添削レビュー
+    // 画面にしか無かった**ので、成果物である採点済みPDFへ到達するには
+    // 一覧 -> レビュー画面 と2枚めくる必要があった。ここはその近道である。
+
+    testWidgets('確定し終えた答案の行から、レビュー画面を開かずに出力できる', (tester) async {
+      var requestedFor = <String>[];
+      await pumpAppAt(
+        tester,
+        AppRoutes.submissionQueue('t1'),
+        dependencies: AppDependencies(
+          getTest: (_) async => buildTest(),
+          listSubmissions: (_) async => [
+            buildSubmission(id: 'done', state: 'reviewed', studentLabel: '答案A'),
+          ],
+          listReviewProgress: (_) async => [
+            buildProgress(id: 'done', total: 3, confirmed: 3),
+          ],
+          requestExport: (submissionId) async {
+            requestedFor.add(submissionId);
+            // `reuse_existing` -- ジョブを起票せずに既存の出力を返す枝。
+            // ポーリングを回さずに済むので、ここで見たい「押すと出力が始まる」
+            // だけを見られる。
+            return ExportRequestResponse(
+              (b) => b
+                ..decision = 'reuse_existing'
+                ..export_ = ExportResponse(
+                  (e) => e
+                    ..id = 'export-1'
+                    ..submissionId = submissionId
+                    ..jobId = 'job-1'
+                    ..filePath = 'exports/答案A_corrected.pdf'
+                    ..fileSha256 = 'a' * 64
+                    ..createdAt = DateTime.utc(2026, 3, 1),
+                ).toBuilder(),
+            );
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // **先に画面が描けていることを言う。** これが無いと、以下の
+      // `findsOneWidget` は「行が1つも無い」ときに何も守らない。
+      expect(find.byKey(const Key('queue-row-done')), findsOneWidget);
+
+      final exportButton = find.byKey(const Key('queue-export-done'));
+      expect(exportButton, findsOneWidget);
+
+      await tester.tap(exportButton);
+      await tester.pumpAndSettle();
+
+      // 出力が始まり、行から開いた添削レビュー画面はどこにも出ていない。
+      expect(requestedFor, ['done']);
+      expect(find.byKey(const Key('export-dialog-success')), findsOneWidget);
+      expect(find.text('保存先: exports/答案A_corrected.pdf'), findsOneWidget);
+      // 添削レビュー画面へは行っていない。出力はこの一覧の上で完結する。
+      expect(find.text('添削レビュー'), findsNothing);
+      expect(find.text('答案キュー'), findsOneWidget);
+    });
+
+    testWidgets('状態が動いていなくても、全問確定していれば出力できる', (tester) async {
+      // Issue #112 より前に採点し終えた答案は、全設問が確定したまま
+      // `ai_processed` に残っている (遡って直すマイグレーションは無い)。
+      // サイドカーはこれを出力するので、**画面が状態を見て隠してはいけない**。
+      await pumpAppAt(
+        tester,
+        AppRoutes.submissionQueue('t1'),
+        dependencies: deps(
+          submissions: [
+            buildSubmission(
+              id: 'legacy',
+              state: 'ai_processed',
+              studentLabel: '答案B',
+            ),
+          ],
+          progress: [buildProgress(id: 'legacy', total: 3, confirmed: 3)],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('queue-row-legacy')), findsOneWidget);
+      expect(find.byKey(const Key('queue-export-legacy')), findsOneWidget);
+    });
+
+    testWidgets('確定していない答案には出力を出さない', (tester) async {
+      // 押しても必ず 409 で断られるボタンは、出さないほうがよい。開く導線
+      // (`onTap`) は残っているので、行き止まりにはならない。
+      await pumpAppAt(
+        tester,
+        AppRoutes.submissionQueue('t1'),
+        dependencies: deps(
+          submissions: [
+            buildSubmission(id: 'half', state: 'ai_processed', day: 2),
+          ],
+          progress: [buildProgress(id: 'half', total: 5, confirmed: 4)],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // **行が描けていることを先に言う。** これが無ければ次の findsNothing は
+      // 画面が真っ白でも通る。
+      expect(find.byKey(const Key('queue-row-half')), findsOneWidget);
+      expect(find.byKey(const Key('queue-progress-half')), findsOneWidget);
+      expect(find.byKey(const Key('queue-export-half')), findsNothing);
+    });
+
+    testWidgets('進捗が引けなかった答案には出力を出さない', (tester) async {
+      // 0 / 0 を「全部確定した」と読むと、確認済みの答案にすら押せないボタンが
+      // 並ぶ。分からないときは出さない。
+      await pumpAppAt(
+        tester,
+        AppRoutes.submissionQueue('t1'),
+        dependencies: deps(
+          submissions: [
+            buildSubmission(id: 'done', state: 'reviewed', studentLabel: '答案A'),
+          ],
+          listReviewProgress: (_) async => throw SidecarApiException(
+            SidecarErrorKind.unavailable,
+            '進捗を取得できません',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('queue-row-done')), findsOneWidget);
+      expect(find.byKey(const Key('queue-export-done')), findsNothing);
+    });
+  });
 }
