@@ -415,14 +415,10 @@ class _SubmissionProgress extends StatelessWidget {
           children: [
             Row(
               children: [
-                Expanded(
-                  child: Text(
-                    '確認済み $done / $total',
-                    style: context.texts.bodyMedium,
-                  ),
-                ),
-                // 押せることを形でも示す。InkWell の波紋だけに頼ると、
-                // 触ってみるまで押せると分からない。
+                Text('確認済み $done / $total', style: context.texts.bodyMedium),
+                // **数のすぐ隣に置く。** 押せることは形でも示さないと、InkWell の
+                // 波紋だけでは触ってみるまで分からない。カードの右端へ寄せると
+                // 数から600px以上離れ、別の部品に見えてしまう（実機で確認）。
                 Icon(
                   Icons.chevron_right,
                   size: AppIconSize.inline,
