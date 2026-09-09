@@ -224,6 +224,15 @@ GitHub Issue [#114](https://github.com/HIKARU0627/Auto-Scoring/issues/114)。
 注入する。「注入しない姿」を走らせるテストが1つも無かった。
 `backend/tests/test_e2e_ocr_unavailable_chain.py` がその穴を塞ぐ。
 
+> **「OCRが直れば全部流れる」という意味ではない。** 本Issueが言えるのは
+> **OCRが無いことでは連鎖が止まらなくなった**ことだけである。実データでの試走では
+> 別の理由で止まる設問が観測されている（採点providerの恒久失敗 —
+> [#117](https://github.com/HIKARU0627/Auto-Scoring/issues/117) /
+> [#121](https://github.com/HIKARU0627/Auto-Scoring/issues/121)、
+> 回答欄の検出ずれで余白がAIへ渡る —
+> [#122](https://github.com/HIKARU0627/Auto-Scoring/issues/122)）。
+> それらは本Issueの範囲外である。
+
 ### 8.2 `usable` の意味を3状態にした
 
 **これは新しい判断ではなく、Issue #95 決定10 の反映漏れの回収である。**
@@ -338,6 +347,16 @@ project / location / processor id は互いに整合していなければなら�
 - `test_e2e_ocr_unavailable_chain.py`: **出荷される合成**（OCR未注入＋scripted AI）で
   依存エッジのあるDAGを流し、**`/resume` を一度も呼ばずに**全設問が succeeded / usable に
   なること、OCR側の `RecognitionResult` が1行も書かれないこと
+- `test_e2e_intake_to_export.py`（Issue #116 が書いたもの）の該当2本を新しい現実へ
+  書き換え、**失われる被覆を3本目として足した**。#116 は「いまこうなる」を正しく
+  写しており、変えたのは本Issueのほうである:
+  - `..._every_question_still_reaches_export_by_hand`: `usable` の期待を False → **True**
+  - `..._stays_blocked_until_a_human_resumes_it` →
+    `..._a_dependent_question_still_runs_without_a_human`（**名前が事実と逆になるため改名**）
+  - **新規** `test_an_ocr_reading_it_could_not_trust_still_blocks_until_a_human_resumes_it`:
+    OCRが読んだうえで低Confidenceだった場合は**従来どおり止まり、`resume` で初めて動く**。
+    「この端末にOCRが無い」を緩めたことで「OCRが読めなかった」まで緩んでいないことを、
+    2本を並べて走らせて示す
 - **変異させて確認した**（値ではなく直した性質を固定できているかの検査）:
   `usable=True` を `False` に戻すと5件、`confidence=0.0` の行を書き戻すと2件、
   OCR項を常に外すと4件が落ちる
