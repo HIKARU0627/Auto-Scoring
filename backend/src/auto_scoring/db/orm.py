@@ -383,15 +383,20 @@ class ReviewRow(Base):
         ),
         # Mirrors `Review.__post_init__`: a row written outside the domain
         # (repair, import, direct SQL) could otherwise persist an
-        # ``approved``/``modified`` row with no AI grade to confirm, a
-        # ``modified`` row with no human grade recording what it was
-        # modified *to*, a ``regrade_requested`` row with no record of which
-        # `Job` it queued, or an ``undone`` row with nothing to say what it
-        # undid -- each of which `Review`'s own constructor already rejects,
-        # so a row like that would only ever surface as a hydration crash on
-        # the next read of this question's history.
+        # ``approved`` row with no AI grade to confirm, a ``modified`` row
+        # with no human grade recording what it was modified *to*, a
+        # ``regrade_requested`` row with no record of which `Job` it queued,
+        # or an ``undone`` row with nothing to say what it undid -- each of
+        # which `Review`'s own constructor already rejects, so a row like
+        # that would only ever surface as a hydration crash on the next read
+        # of this question's history.
+        #
+        # ``modified`` is deliberately *not* on the first of those since
+        # Issue #118: see `Review`'s own docstring. The constraint name is
+        # kept (renaming it would mean recreating the table for nothing) but
+        # what it now says is "approved requires an AI grade".
         CheckConstraint(
-            "action NOT IN ('approved', 'modified') OR ai_grade_result_id IS NOT NULL",
+            "action != 'approved' OR ai_grade_result_id IS NOT NULL",
             name="ck_reviews_confirmed_requires_ai_grade",
         ),
         CheckConstraint(

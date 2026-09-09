@@ -105,6 +105,7 @@ Class | Method | HTTP request | Description
 [*ReviewApi*](doc/ReviewApi.md) | [**approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost**](doc/ReviewApi.md#approvesubmissionssubmissionidquestionsquestionidreviewapprovepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/approve | Approve
 [*ReviewApi*](doc/ReviewApi.md) | [**editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost**](doc/ReviewApi.md#editsubmissionssubmissionidquestionsquestionidrevieweditpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/edit | Edit
 [*ReviewApi*](doc/ReviewApi.md) | [**getSourcePdfSubmissionsSubmissionIdSourcePdfGet**](doc/ReviewApi.md#getsourcepdfsubmissionssubmissionidsourcepdfget) | **GET** /submissions/{submission_id}/source-pdf | Get Source Pdf
+[*ReviewApi*](doc/ReviewApi.md) | [**gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost**](doc/ReviewApi.md#grademanuallysubmissionssubmissionidquestionsquestionidreviewgradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/grade | Grade Manually
 [*ReviewApi*](doc/ReviewApi.md) | [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](doc/ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
 [*ReviewApi*](doc/ReviewApi.md) | [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](doc/ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
 [*ReviewApi*](doc/ReviewApi.md) | [**listQuestionsTestsTestIdQuestionsGet**](doc/ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
@@ -169,6 +170,7 @@ Class | Method | HTTP request | Description
  - [IntakeTemplateModel](doc/IntakeTemplateModel.md)
  - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)
+ - [ManualGradeRequest](doc/ManualGradeRequest.md)
  - [ManualRecognitionRequest](doc/ManualRecognitionRequest.md)
  - [MaterialRole](doc/MaterialRole.md)
  - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)

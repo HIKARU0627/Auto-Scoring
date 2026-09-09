@@ -1563,6 +1563,108 @@
         "title": "JobResponse",
         "type": "object"
       },
+      "ManualGradeRequest": {
+        "description": "A grade a person enters for a question the AI never graded (Issue\n#118).\n\nThe same fields as `EditReviewRequest` minus ``expected_ai_grade_id``:\nthere is no AI attempt to pin this decision to, and the server refuses\n(409) if one turns out to exist -- see\n`adapters.review_actions.grade_question_manually`.",
+        "properties": {
+          "annotations": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AnnotationEditRequest"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Annotations"
+          },
+          "comment": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "confidence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "criteria": {
+            "items": {
+              "$ref": "#/components/schemas/CriterionOutcomeRequest"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "expected_version": {
+            "minimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "recognized_text": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recognized Text"
+          },
+          "score_awarded": {
+            "minimum": 0.0,
+            "title": "Score Awarded",
+            "type": "integer"
+          },
+          "score_maximum": {
+            "minimum": 0.0,
+            "title": "Score Maximum",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version",
+          "score_awarded",
+          "score_maximum"
+        ],
+        "title": "ManualGradeRequest",
+        "type": "object"
+      },
       "ManualRecognitionRequest": {
         "properties": {
           "text": {
@@ -4132,6 +4234,73 @@
           }
         ],
         "summary": "Edit",
+        "tags": [
+          "review"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/questions/{question_id}/review/grade": {
+      "post": {
+        "description": "Record a person's own grade for a question with no AI grade at all\n(Issue #118) -- the way out of a permanently-failed grading job,\nwhich by design leaves no `GradeResult` behind (Issue #97).\n\n409 when an AI grade does exist: that is the ``edit``/``approve``\ncase, and this route must not quietly set aside an attempt the\nreviewer has not seen.",
+        "operationId": "grade_manually_submissions__submission_id__questions__question_id__review_grade_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualGradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewActionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Grade Manually",
         "tags": [
           "review"
         ]

@@ -29,6 +29,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         IntakePlanResponse,
         IntakeRuleModel,
         IntakeTemplateModel,
+        ManualGradeRequest,
         MaterialRole,
         PlannedFileModel,
         PlannedGroupModel,
@@ -1365,6 +1366,64 @@ class SidecarApiClient {
             submissionId: submissionId,
             questionId: questionId,
             editReviewRequest: request,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// A human's own grade for a question the AI never graded at all
+  /// (Issue #118) -- the way out of a permanently failed grading job, which
+  /// by design leaves no `GradeResult` behind (Issue #97).
+  ///
+  /// Deliberately separate from [editReview] rather than a relaxed version
+  /// of it: the server refuses this ([SidecarErrorKind.conflict]) if an AI
+  /// grade *does* exist, so a regrade that lands between this screen loading
+  /// and the save arriving surfaces as a conflict instead of quietly
+  /// recording a grade that ignores an attempt the reviewer never saw.
+  ///
+  /// See [editReview] for [expectedVersion]. Unlike [editReview], omitting
+  /// [annotations] records none -- there is no AI attempt whose marks could
+  /// be carried forward.
+  Future<ReviewActionResponse> gradeManually(
+    String submissionId,
+    String questionId, {
+    required int expectedVersion,
+    required int scoreAwarded,
+    required int scoreMaximum,
+    double confidence = 1.0,
+    List<CriterionOutcomeRequest> criteria = const [],
+    String? rationale,
+    String? comment,
+    String? recognizedText,
+    List<AnnotationEditRequest>? annotations,
+    String? note,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final request =
+          ManualGradeRequest(
+            (b) => b
+              ..expectedVersion = expectedVersion
+              ..scoreAwarded = scoreAwarded
+              ..scoreMaximum = scoreMaximum
+              ..confidence = confidence
+              ..criteria.replace(criteria)
+              ..rationale = rationale
+              ..comment = comment
+              ..recognizedText = recognizedText
+              ..note = note,
+          ).rebuild(
+            (b) =>
+                annotations == null ? b : (b..annotations.replace(annotations)),
+          );
+      final response = await _reviewApi
+          .gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost(
+            submissionId: submissionId,
+            questionId: questionId,
+            manualGradeRequest: request,
             cancelToken: cancelToken,
           );
       return _requireBody(response);

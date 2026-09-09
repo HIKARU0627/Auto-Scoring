@@ -28,6 +28,7 @@ from auto_scoring.domain.models import (
     JobKind,
     JobState,
     NormalizedRect,
+    ReviewAction,
     Score,
 )
 from auto_scoring.domain.pdf_engine import PdfEngine
@@ -250,6 +251,80 @@ async def test_generates_an_annotated_pdf_and_records_the_export(
         store.submission_source_pdf_path("sub-1").stat().st_size
         == (store.root / "submissions" / "sub-1" / "source.pdf").stat().st_size
     )
+
+
+async def test_exports_a_question_a_person_graded_after_ai_failed(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #118, and the reason this test exists at all: a question the AI
+    never graded has no AI `GradeResult` and no AI annotations, so *every*
+    downstream consumer of "the confirmed grade" has to work from the human
+    row alone.
+
+    Export is the one that fails silently -- it does not raise, it just
+    draws a page with nothing on it (Issue #120: dropping the SCORE region
+    from the screen broke PDF output without a single failing test). So the
+    assertion here is not "it succeeded" but "the score is on the page".
+    """
+    # Latin glyphs, not `japanese_font`'s Japanese ones: the whole assertion
+    # here is that the *score* reaches the page, so the font has to be able
+    # to draw one (tests/font_support.py -- coverage differs per face).
+    install_font_covering(monkeypatch, "3/5")
+    source_path = store.submission_source_pdf_path("sub-1")
+    _write_source_pdf(source_path)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(
+            make_question(
+                score_area=NormalizedRect(x=0.8, y=0.0, width=0.18, height=0.06),
+                comment_area=NormalizedRect(x=0.05, y=0.85, width=0.9, height=0.12),
+            )
+        )
+        uow.submissions.add(make_submission())
+        # No AI grade and no AI annotation: the grading job failed
+        # permanently, so Issue #97 wrote neither.
+        uow.grades.add(
+            make_grade(
+                id="grade-human",
+                source=GradingSource.HUMAN,
+                score=Score(awarded=3, maximum=5),
+            )
+        )
+        uow.annotations.add(
+            Annotation(
+                id="anno-score",
+                submission_id="sub-1",
+                question_id="q-1",
+                source=GradingSource.HUMAN,
+                kind=AnnotationKind.SCORE,
+                created_at=at(),
+            )
+        )
+        uow.reviews.add(
+            make_review(
+                action=ReviewAction.MODIFIED,
+                ai_grade_result_id=None,
+                human_grade_result_id="grade-human",
+            )
+        )
+        uow.commit()
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export = uow.exports.get(export_id(job))
+    assert export is not None
+    output_path = store.root / export.file_path
+    assert "3/5" in _extracted_text(output_path)
+
+
+def _extracted_text(path: Path) -> str:
+    return "".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
 
 
 async def test_refuses_when_a_question_has_no_confirmed_review(

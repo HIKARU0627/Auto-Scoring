@@ -216,6 +216,21 @@ Future<ReviewActionResponse> _unavailableEditReview(
   String? note,
 }) async => _unavailable();
 
+Future<ReviewActionResponse> _unavailableGradeManually(
+  String submissionId,
+  String questionId, {
+  required int expectedVersion,
+  required int scoreAwarded,
+  required int scoreMaximum,
+  double confidence = 1.0,
+  List<CriterionOutcomeRequest> criteria = const [],
+  String? rationale,
+  String? comment,
+  String? recognizedText,
+  List<AnnotationEditRequest>? annotations,
+  String? note,
+}) async => _unavailable();
+
 Future<ReviewActionResponse> _unavailableRejectReview(
   String submissionId,
   String questionId, {
@@ -537,6 +552,26 @@ typedef EditReview =
       String? note,
     });
 
+/// A human's own grade for a question the AI never graded at all
+/// (Issue #118). Throws `SidecarErrorKind.conflict` if an AI grade does
+/// exist -- that is [EditReview]/[ApproveReview]'s case -- see
+/// `SidecarApiClient.gradeManually`.
+typedef GradeManually =
+    Future<ReviewActionResponse> Function(
+      String submissionId,
+      String questionId, {
+      required int expectedVersion,
+      required int scoreAwarded,
+      required int scoreMaximum,
+      double confidence,
+      List<CriterionOutcomeRequest> criteria,
+      String? rationale,
+      String? comment,
+      String? recognizedText,
+      List<AnnotationEditRequest>? annotations,
+      String? note,
+    });
+
 /// Records that the AI's current proposal is unusable (Issue #22 "reject").
 typedef RejectReview =
     Future<ReviewActionResponse> Function(
@@ -681,6 +716,7 @@ class AppDependencies {
     this.startGrading = _unavailableStartGrading,
     this.listReviews = _unavailableListReviews,
     this.editReview = _unavailableEditReview,
+    this.gradeManually = _unavailableGradeManually,
     this.rejectReview = _unavailableRejectReview,
     this.regradeReview = _unavailableRegradeReview,
     this.approveReview = _unavailableApproveReview,
@@ -747,6 +783,7 @@ class AppDependencies {
       startGrading = client.startGrading,
       listReviews = client.listReviews,
       editReview = client.editReview,
+      gradeManually = client.gradeManually,
       rejectReview = client.rejectReview,
       regradeReview = client.regradeReview,
       approveReview = client.approveReview,
@@ -806,6 +843,7 @@ class AppDependencies {
   final StartGrading startGrading;
   final ListReviews listReviews;
   final EditReview editReview;
+  final GradeManually gradeManually;
   final RejectReview rejectReview;
   final RegradeReview regradeReview;
   final ApproveReview approveReview;

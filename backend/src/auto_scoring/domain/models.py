@@ -785,6 +785,17 @@ class Review:
     other, and never physically removes the row it names (append-only, same
     as every other table here); see
     ``domain.review_workflow.effective_latest_review``.
+
+    ``ai_grade_result_id`` is *the AI attempt this decision was made
+    against*, and is required only for ``APPROVED`` -- there is nothing to
+    approve without one. A ``MODIFIED`` row may leave it unset (Issue #118):
+    when AI grading failed permanently there is no `GradeResult` at all
+    (Issue #97 deliberately writes none rather than a fabricated one), and a
+    person still has to be able to grade the question. Such a row is
+    therefore also the *record* that they did -- "confirmed, with no AI
+    proposal behind it" -- which is what the review screen reads to say so.
+    ``human_grade_result_id`` stays required for ``MODIFIED`` either way, so
+    no confirmed row can be silent about what it decided.
     """
 
     id: str
@@ -805,11 +816,8 @@ class Review:
         _require_non_empty("Review.question_id", self.question_id)
         if self.version < 1:
             raise DomainError("Review.version must be >= 1")
-        if (
-            self.action in (ReviewAction.APPROVED, ReviewAction.MODIFIED)
-            and not self.ai_grade_result_id
-        ):
-            raise DomainError(f"{self.action} review must reference the AI grade result")
+        if self.action is ReviewAction.APPROVED and not self.ai_grade_result_id:
+            raise DomainError("approved review must reference the AI grade result")
         if self.action is ReviewAction.MODIFIED and not self.human_grade_result_id:
             raise DomainError("modified review must reference the human grade result")
         if self.action is ReviewAction.REGRADE_REQUESTED and not self.regrade_job_id:

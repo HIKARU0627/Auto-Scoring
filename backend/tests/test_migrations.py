@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0015"
+    assert current_revision(db_url) == "0016"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0015"
+    assert current_revision(db_url) == "0016"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0015"
+    assert current_revision(db_url) == "0016"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0015"
+    assert current_revision(db_url) == "0016"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0015"
+    assert current_revision(db_url) == "0016"
 
 
 _CHILD_TABLES = (
@@ -701,6 +701,84 @@ def test_state_check_constraints_reject_unknown_values(db_url: str, bad_insert: 
 
         with pytest.raises(IntegrityError):
             conn.execute(text(bad_insert))
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_reviews_check_constraints_track_who_needs_an_ai_grade(db_url: str) -> None:
+    """DB-level mirror of `Review.__post_init__` after Issue #118.
+
+    ``approved`` still cannot exist without an AI grade -- there would be
+    nothing to approve. ``modified`` can: a person grading a question whose
+    AI attempt failed permanently has no AI row to have corrected, and
+    fabricating one is exactly what Issue #97 refuses to do. The human grade
+    stays required either way, so no ``modified`` row can be silent about
+    what it decided.
+    """
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    conn = engine.connect()
+    try:
+        conn.execute(
+            text(
+                "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO submissions "
+                "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, created_at) "
+                "VALUES ('s', 't', 'submissions/s/source.pdf', '" + ("3" * 64) + "', 1, "
+                "'unprocessed', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO grade_results "
+                "(id, submission_id, question_id, source, awarded, maximum, "
+                "confidence, criteria, context, created_at) "
+                "VALUES ('g-human', 's', 'q', 'human', 3, 5, 1.0, '[]', '[]', '2026-01-01')"
+            )
+        )
+        conn.commit()
+
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO reviews "
+                    "(id, submission_id, question_id, action, version, created_at) "
+                    "VALUES ('rv-approved', 's', 'q', 'approved', 1, '2026-01-01')"
+                )
+            )
+        conn.rollback()
+
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO reviews "
+                    "(id, submission_id, question_id, action, version, created_at) "
+                    "VALUES ('rv-modified', 's', 'q', 'modified', 1, '2026-01-01')"
+                )
+            )
+        conn.rollback()
+
+        conn.execute(
+            text(
+                "INSERT INTO reviews "
+                "(id, submission_id, question_id, action, version, human_grade_result_id, "
+                "created_at) "
+                "VALUES ('rv-manual', 's', 'q', 'modified', 1, 'g-human', '2026-01-01')"
+            )
+        )
+        conn.commit()
     finally:
         conn.close()
         engine.dispose()

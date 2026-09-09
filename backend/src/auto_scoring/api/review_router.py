@@ -24,6 +24,9 @@ Endpoints:
   outcomes, and rationale (§10, §19, §35-5).
 * ``GET /submissions/{submission_id}/questions/{question_id}/annotations``
   -- every `Annotation` recorded for the question, for the PDF overlay.
+* ``POST .../review/{edit,grade,reject,regrade,approve,undo}`` -- the
+  reviewer's decisions (Issue #22; ``grade`` added by Issue #118 for a
+  question the AI never graded at all).
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.review_actions import (
+    AiGradeAlreadyExistsError,
     AiGradeChangedError,
     AnnotationInput,
     CriterionInput,
@@ -44,6 +48,7 @@ from auto_scoring.adapters.review_actions import (
     QuestionMismatchError,
     approve_question,
     edit_question,
+    grade_question_manually,
     regrade_question,
     reject_question,
     undo_last_review,
@@ -299,6 +304,28 @@ class EditReviewRequest(BaseModel):
     note: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
 
 
+class ManualGradeRequest(BaseModel):
+    """A grade a person enters for a question the AI never graded (Issue
+    #118).
+
+    The same fields as `EditReviewRequest` minus ``expected_ai_grade_id``:
+    there is no AI attempt to pin this decision to, and the server refuses
+    (409) if one turns out to exist -- see
+    `adapters.review_actions.grade_question_manually`.
+    """
+
+    expected_version: int = Field(ge=0)
+    score_awarded: int = Field(ge=0)
+    score_maximum: int = Field(ge=0)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    criteria: list[CriterionOutcomeRequest] = Field(default_factory=list)
+    rationale: str | None = None
+    comment: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
+    recognized_text: str | None = Field(default=None, max_length=MAX_RECOGNIZED_TEXT_LENGTH)
+    annotations: list[AnnotationEditRequest] | None = None
+    note: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
+
+
 class ReasonedReviewRequest(BaseModel):
     expected_version: int = Field(ge=0)
     reason: str | None = Field(default=None, max_length=MAX_COMMENT_CHARS)
@@ -485,6 +512,65 @@ def build_review_router(
                 # `score_awarded > score_maximum`, an unrecognized criterion
                 # outcome, an out-of-page annotation rect) -- a malformed
                 # client request, not a server fault (P2 review).
+                raise HTTPException(422, detail=str(error)) from error
+        return ReviewActionResponse(
+            review=ReviewResponse.from_domain(result.review),
+            grade=GradeResultResponse.from_domain(result.grade),
+            recognition=(
+                RecognitionResponseSlim.from_domain(result.recognition)
+                if result.recognition is not None
+                else None
+            ),
+            annotations=[AnnotationResponse.from_domain(a) for a in result.annotations],
+            submission_state=result.submission.state.value,
+        )
+
+    @router.post(
+        "/submissions/{submission_id}/questions/{question_id}/review/grade",
+        response_model=ReviewActionResponse,
+        status_code=201,
+    )
+    def grade_manually(
+        submission_id: str, question_id: str, request: ManualGradeRequest
+    ) -> ReviewActionResponse:
+        """Record a person's own grade for a question with no AI grade at all
+        (Issue #118) -- the way out of a permanently-failed grading job,
+        which by design leaves no `GradeResult` behind (Issue #97).
+
+        409 when an AI grade does exist: that is the ``edit``/``approve``
+        case, and this route must not quietly set aside an attempt the
+        reviewer has not seen.
+        """
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            try:
+                result = grade_question_manually(
+                    uow,
+                    submission_id=submission_id,
+                    question_id=question_id,
+                    expected_version=request.expected_version,
+                    score_awarded=request.score_awarded,
+                    score_maximum=request.score_maximum,
+                    confidence=request.confidence,
+                    criteria=[c.to_domain() for c in request.criteria],
+                    rationale=request.rationale,
+                    comment=request.comment,
+                    recognized_text=request.recognized_text,
+                    annotations=(
+                        None
+                        if request.annotations is None
+                        else [a.to_domain() for a in request.annotations]
+                    ),
+                    note=request.note,
+                    now=datetime.now(UTC).replace(tzinfo=None),
+                )
+            except (LookupError, QuestionMismatchError) as error:
+                raise HTTPException(404, detail=str(error)) from error
+            except AiGradeAlreadyExistsError as error:
+                raise HTTPException(409, detail=str(error)) from error
+            except ReviewVersionConflict as error:
+                raise _version_conflict(error) from error
+            except (DomainError, ValueError) as error:
+                # Same boundary as `edit` -- see its own handler.
                 raise HTTPException(422, detail=str(error)) from error
         return ReviewActionResponse(
             review=ReviewResponse.from_domain(result.review),

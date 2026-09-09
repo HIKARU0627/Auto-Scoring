@@ -45,6 +45,7 @@ doc/IntakeTemplateModel.md
 doc/JobResponse.md
 doc/JobsApi.md
 doc/LocationInner.md
+doc/ManualGradeRequest.md
 doc/ManualRecognitionRequest.md
 doc/MaterialRole.md
 doc/NormalizedBBoxModel.md
@@ -143,6 +144,7 @@ lib/src/model/intake_rule_model.dart
 lib/src/model/intake_template_model.dart
 lib/src/model/job_response.dart
 lib/src/model/location_inner.dart
+lib/src/model/manual_grade_request.dart
 lib/src/model/manual_recognition_request.dart
 lib/src/model/material_role.dart
 lib/src/model/normalized_b_box_model.dart

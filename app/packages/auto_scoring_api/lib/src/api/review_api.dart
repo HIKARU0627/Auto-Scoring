@@ -15,6 +15,7 @@ import 'package:auto_scoring_api/src/model/approve_review_request.dart';
 import 'package:auto_scoring_api/src/model/edit_review_request.dart';
 import 'package:auto_scoring_api/src/model/grade_result_response.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
+import 'package:auto_scoring_api/src/model/manual_grade_request.dart';
 import 'package:auto_scoring_api/src/model/question_response.dart';
 import 'package:auto_scoring_api/src/model/reasoned_review_request.dart';
 import 'package:auto_scoring_api/src/model/review_action_response.dart';
@@ -335,6 +336,124 @@ class ReviewApi {
     }
 
     return Response<Uint8List>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Grade Manually
+  /// Record a person&#39;s own grade for a question with no AI grade at all (Issue #118) -- the way out of a permanently-failed grading job, which by design leaves no &#x60;GradeResult&#x60; behind (Issue #97).  409 when an AI grade does exist: that is the &#x60;&#x60;edit&#x60;&#x60;/&#x60;&#x60;approve&#x60;&#x60; case, and this route must not quietly set aside an attempt the reviewer has not seen.
+  ///
+  /// Parameters:
+  /// * [submissionId]
+  /// * [questionId]
+  /// * [manualGradeRequest]
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ReviewActionResponse] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ReviewActionResponse>>
+      gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost({
+    required String submissionId,
+    required String questionId,
+    required ManualGradeRequest manualGradeRequest,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path =
+        r'/submissions/{submission_id}/questions/{question_id}/review/grade'
+            .replaceAll(
+                '{' r'submission_id' '}',
+                encodeQueryParameter(
+                        _serializers, submissionId, const FullType(String))
+                    .toString())
+            .replaceAll(
+                '{' r'question_id' '}',
+                encodeQueryParameter(
+                        _serializers, questionId, const FullType(String))
+                    .toString());
+    final _options = Options(
+      method: r'POST',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'HTTPBearer',
+          },
+        ],
+        ...?extra,
+      },
+      contentType: 'application/json',
+      validateStatus: validateStatus,
+    );
+
+    dynamic _bodyData;
+
+    try {
+      const _type = FullType(ManualGradeRequest);
+      _bodyData =
+          _serializers.serialize(manualGradeRequest, specifiedType: _type);
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _options.compose(
+          _dio.options,
+          _path,
+        ),
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final _response = await _dio.request<Object>(
+      _path,
+      data: _bodyData,
+      options: _options,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ReviewActionResponse? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null
+          ? null
+          : _serializers.deserialize(
+              rawResponse,
+              specifiedType: const FullType(ReviewActionResponse),
+            ) as ReviewActionResponse;
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ReviewActionResponse>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

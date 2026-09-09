@@ -59,13 +59,14 @@ version を持たせていない（それらは元々 append-only で、`Review`
 
 ## 3. 各操作の意味
 
-| 操作    | Review.action       | 追加で作る行                                                           | AI値が未生成でも可 |
-| ------- | ------------------- | ---------------------------------------------------------------------- | ------------------ |
-| approve | `approved`          | なし（`ai_grade_result_id` を確定として参照）                          | 不可（要AI grade） |
-| edit    | `modified`          | 人間ソースの `GradeResult`（+任意で `RecognitionResult`/`Annotation`） | 不可（要AI grade） |
-| reject  | `rejected`          | なし                                                                   | 可                 |
-| regrade | `regrade_requested` | 新規 `Job`（kind=GRADING, `dependency_graph_version=NULL`）            | 可                 |
-| undo    | `undone`            | なし（`undone_review_id` で対象を指すのみ）                            | -                  |
+| 操作    | Review.action       | 追加で作る行                                                           | AI値が未生成でも可            |
+| ------- | ------------------- | ---------------------------------------------------------------------- | ----------------------------- |
+| approve | `approved`          | なし（`ai_grade_result_id` を確定として参照）                          | 不可（要AI grade）            |
+| edit    | `modified`          | 人間ソースの `GradeResult`（+任意で `RecognitionResult`/`Annotation`） | 不可（要AI grade）            |
+| grade   | `modified`          | 人間ソースの `GradeResult`（+任意で `RecognitionResult`/`Annotation`） | **AI grade が無い場合のみ可** |
+| reject  | `rejected`          | なし                                                                   | 可                            |
+| regrade | `regrade_requested` | 新規 `Job`（kind=GRADING, `dependency_graph_version=NULL`）            | 可                            |
+| undo    | `undone`            | なし（`undone_review_id` で対象を指すのみ）                            | -                             |
 
 - **edit は同じ操作で確定する**: 既存の Flutter 画面には元々「修正してから
   別途承認する」という2段階の UI がなかったため、`edit_question` は
@@ -76,6 +77,63 @@ version を持たせていない（それらは元々 append-only で、`Review`
   設問は、まず regrade でやり直すか、そのまま reject する。
 - **reject/regrade は AI grade を要求しない**: AI が全く処理できなかった
   設問（例: 恒久的な失敗）でも記録・再判定できる必要があるため。
+
+### 3.1 grade（人が最初から点数を入れる） — Issue #118
+
+**問題**: AI 採点が permanent 失敗すると `GradeResult` は作られない
+（Issue #97 の意図的な決定。**誤った採点結果を残さないためであり、これは維持する**）。
+ところが人の操作は上表のとおりすべて AI の行を経由していた -- approve は確定し、
+edit は訂正し、どちらも `NoAiGradeYetError` で 409 になる。したがって
+**AI が採点できなかった設問は人も採点できず、答案がそこで詰んでいた**。
+実機検証（2026-09-09、実データ × 実 Vertex AI）で発生した。
+
+「AI が提案し、人が確定する」は、**AI が外したときに人が引き取れて初めて成立する**。
+
+**決定**: `edit` を緩めるのではなく、**別の経路**を足す。
+
+- **AI grade が既に存在する場合は 409 で拒否する**（`AiGradeAlreadyExistsError`）。
+  「AI が何も出していない」ことを呼び出し側が主張し、サーバが確かめる形にする。
+  レビュー画面を開いてから保存が届くまでの間に再判定が着地した場合も、
+  `edit`/`approve` の `expected_ai_grade_id` と同じく**衝突として表面化する** --
+  人が見ていない AI の試行を黙って無視した採点を記録しない。
+- **`ReviewAction.MODIFIED` を再利用する**（6つ目の action を作らない）。
+  「この設問は確定済み」を読む側 -- `all_questions_confirmed` と
+  それが門番をする `Submission.REVIEWED`、`domain.pdf_export` の出力ゲート、
+  `resolve_effective_grade`、画面の `deriveQuestionStatus` -- は
+  **すでに全員、人間 grade を伴う `modified` 行を正しく扱っている**。
+  新しい値を足せば、その全員に1つずつ教え直す必要が出る。
+- **`ai_grade_result_id` は `NULL`**。この列の意味は
+  **「この決定が土台にした AI の試行」**であり、土台が無かったのだから
+  `NULL` が正しい記録である。そして
+  **`modified` かつ `ai_grade_result_id IS NULL` が「人が最初から採点した」の記録**
+  になる（Issue #118 受入5）。API は既に `ReviewResponse.ai_grade_result_id`
+  を返しているので、新しいフィールドは足していない。
+  `human_grade_result_id` は従来どおり必須なので、確定行が
+  「何を決めたのか」を持たないことは依然ありえない。
+- **不変条件と DB CHECK を狭めた**（migration `0016_manual_grade_without_ai`）:
+  `ck_reviews_confirmed_requires_ai_grade` は
+  `action != 'approved' OR ai_grade_result_id IS NOT NULL` になった。
+  approve は今までどおり AI grade を要求する（承認する対象が無いのだから当然）。
+- **画面側**: AI が終了して grade を出さなかった設問に
+  「AIはこの設問を採点できませんでした」（`Job.last_error` 付き）を出し、
+  **「点数を入力 (G)」と「再判定 (R)」を並べて**出す。
+  `last_error` は provider 名・例外クラス名・HTTP status だけで組み立てられており
+  （Issue #97 レビュー4回目）、答案本文を含みえないので画面に出してよい。
+- **`deriveQuestionStatus` の優先順位を1点だけ変えた**（`core/question_status.dart`）。
+  従来は「キューが先、人が後」を全状態に適用していたが、
+  **停止済みの Job（failed / cancelled / succeeded かつ usable=false）については、
+  その Job より後に記録された人の決定が勝つ**。そうしないと、
+  答案自体は `REVIEWED`（確認済み）なのに、レール・DAG・インスペクタの3箇所が
+  「失敗」と言い続けることになり、Issue #84 がこの関数を1箇所に集約して
+  防いだはずの食い違いがそのまま再発する。
+  Job より**前**の決定は従来どおり Job が勝つ（再提出は新しい Job を作る）。
+
+**対象外**: `edit` と同じく、この経路も Annotation の図形的な編集は扱わない
+（§5）。criterion ごとの判定はダイアログで入力できるようにしたが、
+これは `edit` 側には無い -- `edit` には土台となる AI の判定があり、
+そのまま持ち越すのが既定だからである（`_showEditDialog` の
+`carriedCriteria`）。
+
 - **regrade は新しい `Job` を作る**が、`dependency_graph_version` は
   `NULL` のままにする（自動DAGスケジューリングの冪等キー
   `uq_jobs_submission_question_graph_version` と衝突させないため -- SQLite
@@ -188,6 +246,7 @@ regrade/approve/undo のどれが呼ばれた後でも同じトランザクシ�
 
 `business-rules-and-evaluation-data.md` §2 (16) の決定表に統合済み。
 Issue #22 で新規に決定/実装したのは `R`（再判定）と `Ctrl+Z`（Undo）。
+Issue #118 で `G`（点数を入力）を追加した。
 Enter/E/X/↑↓ は Issue #21 の実装をそのまま踏襲。IME変換中・テキスト入力
 フォーカス中は全ショートカット無効（`_shortcutBindings` が空マップを返す）。
 
@@ -198,6 +257,8 @@ Enter/E/X/↑↓ は Issue #21 の実装をそのまま踏襲。IME変換中・�
 - `GET /submissions/{sid}/questions/{qid}/reviews` -- 履歴全件（古い順）。
   配列長が次のリクエストの `expected_version`。
 - `POST .../review/edit`
+- `POST .../review/grade` -- AI 採点が無い設問に人が点数を入れる（Issue #118、§3.1）。
+  AI grade が存在する場合は 409。
 - `POST .../review/reject`
 - `POST .../review/regrade`
 - `POST .../review/approve`
@@ -205,8 +266,8 @@ Enter/E/X/↑↓ は Issue #21 の実装をそのまま踏襲。IME変換中・�
 
 いずれも `expected_version` を必須で受け取り、成功時は
 `ReviewActionResponse`（新しい `Review` 行 + 副産物 + 同期後の
-`submission_state`）を201で返す。バージョン不一致・AI grade未生成・
-undo対象なしは409。
+`submission_state`）を201で返す。バージョン不一致・AI grade未生成
+（`edit`/`approve`）・AI grade が既にある（`grade`）・undo対象なしは409。
 
 ## 9. 検証経路
 

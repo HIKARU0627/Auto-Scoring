@@ -52,6 +52,7 @@ import 'package:auto_scoring_api/src/model/intake_rule_model.dart';
 import 'package:auto_scoring_api/src/model/intake_template_model.dart';
 import 'package:auto_scoring_api/src/model/job_response.dart';
 import 'package:auto_scoring_api/src/model/location_inner.dart';
+import 'package:auto_scoring_api/src/model/manual_grade_request.dart';
 import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 import 'package:auto_scoring_api/src/model/material_role.dart';
 import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
@@ -132,6 +133,7 @@ part 'serializers.g.dart';
   IntakeTemplateModel,
   JobResponse,
   LocationInner,
+  ManualGradeRequest,
   ManualRecognitionRequest,
   MaterialRole,
   NormalizedBBoxModel,

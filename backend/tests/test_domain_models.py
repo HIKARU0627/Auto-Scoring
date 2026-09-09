@@ -337,6 +337,26 @@ def test_modified_review_must_reference_both_results() -> None:
         )
 
 
+def test_modified_review_may_omit_the_ai_grade_it_corrected() -> None:
+    """Issue #118: a person grading a question AI could not grade at all has
+    no AI grade to have corrected, and inventing one would be exactly the
+    fabricated result Issue #97 refuses to persist.
+
+    ``APPROVED`` still requires one -- there is nothing to approve otherwise
+    -- so this is not "the invariant went away", it is "``ai_grade_result_id``
+    means *the AI attempt this correction was based on*, and sometimes there
+    was none". A ``modified`` row with it unset is the record of that, and
+    the one the review screen reads to say so.
+    """
+    review = make_review(
+        action=ReviewAction.MODIFIED,
+        ai_grade_result_id=None,
+        human_grade_result_id="grade-human",
+    )
+    assert review.ai_grade_result_id is None
+    assert review.human_grade_result_id == "grade-human"
+
+
 def test_review_version_must_be_positive() -> None:
     with pytest.raises(DomainError):
         make_review(version=0)

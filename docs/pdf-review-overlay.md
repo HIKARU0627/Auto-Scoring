@@ -14,7 +14,8 @@ Flutter側の添削レビュー画面（`app/lib/features/pdf_review/`）と、�
 - `PdfReviewPage`（`app/lib/features/pdf_review/pdf_review_page.dart`）:
   Material 3 の Navigation Rail（設問一覧）+ `pdfrx` PDF viewer + Inspector
   （AI認識文字・点数・根拠・採点基準・Recognition/Grading Confidence・
-  設問コメント）+ action bar（修正/却下/承認して次へ）。
+  設問コメント）+ action bar（修正/却下/承認して次へ、AIが採点できなかった
+  設問では 点数を入力 も -- §2.13.1）。
 - `backend/src/auto_scoring/api/review_router.py`: 既存の
   `RecognitionResult`/`GradeResult`/`Annotation`/`Question`/`Rubric`
   domain・repository（Issue #11 で実装済み）を読み取り専用でHTTPへ公開する
@@ -418,6 +419,33 @@ DAGパネルは既にそこから未訪問の設問を描いている。レー�
 状態の語はレールでは幅が足りないので、tooltip と semantics label に載せている
 （`問2 要確認`）。アイコンの形だけで意味を当てさせない（Issue #25）。
 
+### 2.13.1 AIが採点できなかった設問（Issue #118）
+
+**症状**: AI 採点が permanent 失敗した設問で、インスペクタは
+「まだAI結果がありません」とだけ出し、action bar の 承認 も 修正 も
+サーバ側で 409 になる。**その設問はそこで詰み、答案1枚が止まる。**
+実機検証で発生した。
+
+**画面側の決定**:
+
+- **何が起きたかを言う。** AI が終了して grade を出さなかった設問
+  （`_aiProducedNoGrade`: Job が terminal で、AI の `GradeResult` が無い）
+  では、インスペクタの先頭に `AppErrorBanner`（`retryable: false`）で
+  「AIはこの設問を採点できませんでした」と、`Job.last_error` を出す。
+  `last_error` は provider 名・例外クラス名・HTTP status だけで組み立てられて
+  いる（Issue #97 レビュー4回目）ので、答案本文が混ざりえない。
+- **そこから進める道を2つ並べる。** 「点数を入力 (G)」と「再判定 (R)」。
+  一過性の provider 障害ならもう一度で済むので、**再判定を人力採点に
+  置き換えない**。
+- **「点数を入力」は該当設問にだけ出す。** どこでも出すと、AI の判断を直す
+  「修正」と役割が重なった2つのボタンになる。
+- **Job が queued/running/blocked のあいだは出さない。** これから grade が
+  出るかもしれない設問で人力採点を勧めるのは、パイプラインと競争させることに
+  なる。Job が1つも無い設問（未処理）も対象外 -- そこは「採点を開始」の仕事。
+- **停止した Job は、その後に記録された人の決定に負ける**
+  （`deriveQuestionStatus`、[review-edit-history.md](./review-edit-history.md) §3.1）。
+  そうしないと、答案自体は確認済みなのに §2.13 の3箇所が「失敗」と言い続ける。
+
 ### 2.14 縦の配分は「判断材料 > 進捗」で決める（Issue #85）
 
 Issue #71 の多視点UI評価で、5体中4体が独立に同じことを指摘した。**1280x720
@@ -576,6 +604,11 @@ Issue #85 の受入条件は「判断材料が画面外にある状態のまま�
 - **却下・再判定・修正・元に戻すはゲートしない。** 却下と再判定は「AIの結果を
   採らない」方向の操作で、見えていない材料を正しいと確定してしまう事故が
   起きない。元に戻すは復帰手段であり、いかなる理由でも塞がない。
+- **点数を入力（Issue #118）もゲートしない。** このゲートが防いでいるのは
+  「**AIの判断**を、その根拠を見ずに正しいと確定してしまうこと」である。
+  点数を入力が出るのは AI が判断を出さなかった設問だけで、そこには確定して
+  しまう AI の判断が無い。人は答案画像そのものを見て自分で採点しており、
+  スクロール外に隠れている「見落としたはずの根拠」も存在しない。
 
 #### 末尾が見えているかは、どの契機で測り直すか（レビュー3回目 P2）
 

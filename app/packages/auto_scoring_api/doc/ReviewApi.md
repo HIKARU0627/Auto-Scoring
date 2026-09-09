@@ -12,6 +12,7 @@ Method | HTTP request | Description
 [**approveSubmissionsSubmissionIdQuestionsQuestionIdReviewApprovePost**](ReviewApi.md#approvesubmissionssubmissionidquestionsquestionidreviewapprovepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/approve | Approve
 [**editSubmissionsSubmissionIdQuestionsQuestionIdReviewEditPost**](ReviewApi.md#editsubmissionssubmissionidquestionsquestionidrevieweditpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/edit | Edit
 [**getSourcePdfSubmissionsSubmissionIdSourcePdfGet**](ReviewApi.md#getsourcepdfsubmissionssubmissionidsourcepdfget) | **GET** /submissions/{submission_id}/source-pdf | Get Source Pdf
+[**gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost**](ReviewApi.md#grademanuallysubmissionssubmissionidquestionsquestionidreviewgradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/grade | Grade Manually
 [**listAnnotationsSubmissionsSubmissionIdQuestionsQuestionIdAnnotationsGet**](ReviewApi.md#listannotationssubmissionssubmissionidquestionsquestionidannotationsget) | **GET** /submissions/{submission_id}/questions/{question_id}/annotations | List Annotations
 [**listGradesSubmissionsSubmissionIdQuestionsQuestionIdGradesGet**](ReviewApi.md#listgradessubmissionssubmissionidquestionsquestionidgradesget) | **GET** /submissions/{submission_id}/questions/{question_id}/grades | List Grades
 [**listQuestionsTestsTestIdQuestionsGet**](ReviewApi.md#listquestionsteststestidquestionsget) | **GET** /tests/{test_id}/questions | List Questions
@@ -149,6 +150,53 @@ Name | Type | Description  | Notes
 
  - **Content-Type**: Not defined
  - **Accept**: application/pdf, application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost**
+> ReviewActionResponse gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost(submissionId, questionId, manualGradeRequest)
+
+Grade Manually
+
+Record a person's own grade for a question with no AI grade at all (Issue #118) -- the way out of a permanently-failed grading job, which by design leaves no `GradeResult` behind (Issue #97).  409 when an AI grade does exist: that is the ``edit``/``approve`` case, and this route must not quietly set aside an attempt the reviewer has not seen.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getReviewApi();
+final String submissionId = submissionId_example; // String | 
+final String questionId = questionId_example; // String | 
+final ManualGradeRequest manualGradeRequest = ; // ManualGradeRequest | 
+
+try {
+    final response = api.gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost(submissionId, questionId, manualGradeRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling ReviewApi->gradeManuallySubmissionsSubmissionIdQuestionsQuestionIdReviewGradePost: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **submissionId** | **String**|  | 
+ **questionId** | **String**|  | 
+ **manualGradeRequest** | [**ManualGradeRequest**](ManualGradeRequest.md)|  | 
+
+### Return type
+
+[**ReviewActionResponse**](ReviewActionResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

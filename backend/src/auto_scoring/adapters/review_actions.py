@@ -11,9 +11,9 @@ Every function:
    (raises `ReviewVersionConflict` -- caught by the caller as 409 -- if the
    client's ``expected_version`` is already stale).
 2. Performs its own action-specific writes (a new human `GradeResult`/
-   `RecognitionResult`/`Annotation` set for `edit_question`; a fresh `Job`
-   for `regrade_question`; nothing extra for `reject_question`/
-   `approve_question`/`undo_last_review`).
+   `RecognitionResult`/`Annotation` set for `edit_question` and
+   `grade_question_manually`; a fresh `Job` for `regrade_question`; nothing
+   extra for `reject_question`/`approve_question`/`undo_last_review`).
 3. Appends the new `Review` row and re-syncs the submission's
    `SubmissionState` (`_sync_submission_review_state`) in the *same*
    transaction, then commits -- all through `_finalize_review`.
@@ -81,6 +81,28 @@ class NoAiGradeYetError(Exception):
             f"{submission_id!r}:{question_id!r} has no AI grade yet; wait for AI processing "
             "or request a regrade first"
         )
+
+
+class AiGradeAlreadyExistsError(Exception):
+    """`grade_question_manually` refused: this question *does* have an AI
+    grade, so it is not the "AI produced nothing" case that route exists for
+    (Issue #118).
+
+    Recording a from-scratch human grade here would silently set aside an AI
+    attempt the reviewer may never have seen -- the same hazard
+    `AiGradeChangedError` guards on ``edit``/``approve``, which is why the
+    answer is the same: reload, look at the attempt, and approve or correct
+    it.
+    """
+
+    def __init__(self, submission_id: str, question_id: str, *, ai_grade_id: str) -> None:
+        super().__init__(
+            f"{submission_id!r}:{question_id!r} already has an AI grade ({ai_grade_id!r}); "
+            "reload and approve or edit it instead"
+        )
+        self.submission_id = submission_id
+        self.question_id = question_id
+        self.ai_grade_id = ai_grade_id
 
 
 class NothingToUndoError(Exception):
@@ -503,6 +525,153 @@ def edit_question(
             based_on_created_at=ai_grade.created_at,
             now=now,
         )
+    submission = _finalize_review(uow, review, submission, expected_version=expected_version)
+
+    return EditResult(
+        review=review,
+        grade=grade,
+        recognition=recognition,
+        annotations=tuple(new_annotations),
+        submission=submission,
+    )
+
+
+def grade_question_manually(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    submission_id: str,
+    question_id: str,
+    expected_version: int,
+    score_awarded: int,
+    score_maximum: int,
+    confidence: float = 1.0,
+    criteria: Sequence[CriterionInput] = (),
+    rationale: str | None = None,
+    comment: str | None = None,
+    recognized_text: str | None = None,
+    annotations: Sequence[AnnotationInput] | None = None,
+    note: str | None = None,
+    now: datetime,
+) -> EditResult:
+    """A human's grade for a question the AI never graded -- Issue #118.
+
+    **The gap this fills.** When AI grading fails permanently no
+    `GradeResult` is written at all: Issue #97 decided that deliberately, so
+    that nothing that looks like a grade exists unless something actually
+    produced one, and that decision is not revisited here. But every way a
+    person could record their own decision went through the AI's row --
+    `approve_question` confirms it, `edit_question` corrects it, both raise
+    `NoAiGradeYetError` without one -- so a question the AI could not grade
+    could not be graded by a person either, and the answer sheet stopped
+    there. On a Friday afternoon with forty of them on the desk, that is the
+    whole stack stopping.
+
+    **A separate route, not a relaxed `edit_question`.** Refuses
+    (`AiGradeAlreadyExistsError`) if an AI grade *does* exist, so "the AI
+    produced nothing" stays something the caller asserts and the server
+    checks, rather than something inferred from an omitted
+    ``expected_ai_grade_id``. A regrade landing between the screen loading
+    and this call arriving therefore surfaces as a conflict, exactly like a
+    stale ``expected_ai_grade_id`` does on the other two routes (Issue #22
+    P1 review), instead of quietly recording a grade that ignores an attempt
+    nobody saw.
+
+    Records `ReviewAction.MODIFIED` with ``ai_grade_result_id=None``: the
+    field means *the AI attempt this decision was made against*, and there
+    was none. That is what makes the history say "a person graded this from
+    scratch" rather than "a person corrected something" -- see
+    `domain.models.Review`. Reusing ``MODIFIED`` rather than adding a sixth
+    `ReviewAction` is deliberate: every consumer of "this question is
+    confirmed" (`domain.review_workflow.all_questions_confirmed` and the
+    `Submission.REVIEWED` transition it gates, `domain.pdf_export`'s export
+    gate, `resolve_effective_grade`, the review screen's own status
+    vocabulary) already treats a ``MODIFIED`` row with a human grade exactly
+    the way this one needs to be treated, and a new value would have to be
+    taught to each of them one at a time.
+
+    Annotations behave like `edit_question`'s explicit-list case and unlike
+    its default: there is no AI attempt whose marks could be carried
+    forward, so omitting ``annotations`` records none rather than copying
+    anything.
+    """
+    submission, question = _load_submission_and_question(
+        uow, submission_id=submission_id, question_id=question_id
+    )
+    if score_maximum != question.points:
+        # Same trust-boundary check as `edit_question` -- see its comment.
+        raise ScoreOutOfRange(
+            f"score_maximum {score_maximum} does not match question {question_id!r}'s "
+            f"registered points ({question.points})"
+        )
+    existing_ai_grade = uow.grades.latest(submission_id, question_id, GradingSource.AI)
+    if existing_ai_grade is not None:
+        raise AiGradeAlreadyExistsError(
+            submission_id, question_id, ai_grade_id=existing_ai_grade.id
+        )
+    version, _existing = _next_version(
+        uow,
+        submission_id=submission_id,
+        question_id=question_id,
+        expected_version=expected_version,
+    )
+
+    grade = GradeResult(
+        id=str(uuid4()),
+        submission_id=submission_id,
+        question_id=question_id,
+        source=GradingSource.HUMAN,
+        score=Score(awarded=score_awarded, maximum=score_maximum),
+        confidence=confidence,
+        criteria=tuple(
+            CriterionResult(criterion_id=c.criterion_id, outcome=c.outcome, confidence=c.confidence)
+            for c in criteria
+        ),
+        rationale=rationale,
+        comment=comment,
+        created_at=now,
+    )
+    recognition: RecognitionResult | None = None
+    if recognized_text is not None:
+        recognition = RecognitionResult(
+            id=str(uuid4()),
+            submission_id=submission_id,
+            question_id=question_id,
+            source=GradingSource.HUMAN,
+            text=recognized_text,
+            confidence=1.0,
+            created_at=now,
+        )
+    new_annotations = [
+        Annotation(
+            id=str(uuid4()),
+            submission_id=submission_id,
+            question_id=question_id,
+            source=GradingSource.HUMAN,
+            kind=a.kind,
+            rect=a.rect,
+            anchor_text=a.anchor_text,
+            comment=a.comment,
+            created_at=now,
+        )
+        for a in annotations or ()
+    ]
+    review = Review(
+        id=str(uuid4()),
+        submission_id=submission_id,
+        question_id=question_id,
+        action=ReviewAction.MODIFIED,
+        version=version,
+        ai_grade_result_id=None,
+        human_grade_result_id=grade.id,
+        note=note,
+        created_at=now,
+    )
+
+    uow.grades.add(grade)
+    if recognition is not None:
+        uow.recognitions.add(recognition)
+    for annotation in new_annotations:
+        uow.annotations.add(annotation)
     submission = _finalize_review(uow, review, submission, expected_version=expected_version)
 
     return EditResult(
