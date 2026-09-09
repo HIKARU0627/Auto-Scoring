@@ -41,6 +41,7 @@ from auto_scoring.domain.dependency_graph import DependencyGraphStatus, Dependen
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     AnnotationKind,
+    AnswerImageFinding,
     AnswerImageStatus,
     ErrorCategory,
     GradingSource,
@@ -339,7 +340,77 @@ class GradeResultRow(Base):
     #: {question_id, recognition_result_id, grade_result_id}. Empty for a
     #: question with no prerequisite.
     context: Mapped[list[dict[str, Any]]] = _json_list()
+    #: What the grading AI reported the answer image shows (Issue #136).
+    #: ``NULL`` for a human-confirmed row, a provider that reported nothing,
+    #: and every row written before this column existed. Stored so the
+    #: frequency of genuinely unanswered questions can be counted from data
+    #: already on disk -- that number is what decides whether ``blank``
+    #: should stop a grade too (docs/ai-grading-pipeline.md).
+    answer_image_finding: Mapped[AnswerImageFinding | None] = mapped_column(
+        _enum(AnswerImageFinding), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+#: A grade may not exist for an image the grading AI itself said is not this
+#: question's answer (Issue #136) -- the invariant
+#: `domain.models.GradeResult.__post_init__` states, held by the database as
+#: well, because a score that looks ordinary while the crop behind it was
+#: wrong is the entire failure that Issue removes (AGENTS.md "Architecture":
+#: guarantee important invariants with real constraints).
+#:
+#: **A trigger, not a ``CheckConstraint``, and the reason is measured.**
+#: SQLite cannot add a CHECK to an existing table, so a migration adding one
+#: must rebuild ``grade_results`` -- which moves it to the end of
+#: ``sqlite_master``, behind ``reviews``. Deleting a test then aborts with
+#: ``ck_reviews_confirmed_requires_ai_grade`` (Issue #118): the cascade is
+#: applied in schema order, so the grade rows go first and
+#: ``reviews.ai_grade_result_id``'s ``ON DELETE SET NULL`` blanks an
+#: ``approved`` review's grade reference while that row still exists.
+#: ``ADD COLUMN`` needs no rebuild, so expressing this rule as a trigger
+#: leaves every other table's schema untouched. The same reason the
+#: dependency-graph triggers above exist: what has to be enforced does not
+#: fit a CHECK on this table as it stands. See migration ``0017``.
+#:
+#: It rejects any value other than ``answer``/``blank``/``NULL``, so it also
+#: carries the "known value" half that a migrated database would otherwise
+#: lack (a freshly created one has the enum's own unnamed ``CHECK ... IN``).
+_ANSWER_IMAGE_FINDING_GRADABLE_MESSAGE = (
+    "grade_results.answer_image_finding must be NULL, ''answer'' or ''blank''"
+)
+
+_answer_image_finding_gradable_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_grade_results_answer_image_finding_gradable_insert
+    BEFORE INSERT ON grade_results
+    FOR EACH ROW
+    WHEN NEW.answer_image_finding IS NOT NULL
+        AND NEW.answer_image_finding NOT IN ('answer', 'blank')
+    BEGIN
+        SELECT RAISE(ABORT, '{_ANSWER_IMAGE_FINDING_GRADABLE_MESSAGE}');
+    END;
+    """
+)
+
+_answer_image_finding_gradable_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_grade_results_answer_image_finding_gradable_update
+    BEFORE UPDATE OF answer_image_finding ON grade_results
+    FOR EACH ROW
+    WHEN NEW.answer_image_finding IS NOT NULL
+        AND NEW.answer_image_finding NOT IN ('answer', 'blank')
+    BEGIN
+        SELECT RAISE(ABORT, '{_ANSWER_IMAGE_FINDING_GRADABLE_MESSAGE}');
+    END;
+    """
+)
+
+event.listen(
+    GradeResultRow.__table__, "after_create", _answer_image_finding_gradable_insert_trigger
+)
+event.listen(
+    GradeResultRow.__table__, "after_create", _answer_image_finding_gradable_update_trigger
+)
 
 
 class AnnotationRow(Base):

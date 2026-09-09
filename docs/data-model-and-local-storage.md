@@ -73,6 +73,14 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > 追加した AI 追跡用の列。人間確定行は全て `NULL`/空のまま。詳細は
 > [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)。
 >
+> `GradeResult` の `answer_image_finding`（マイグレーション
+> `0017_grade_result_answer_image_finding`）は Issue #136 で追加した、採点 AI が
+> 「渡された画像に何が写っていたか」を報告する列（`answer` / `blank`、報告が
+> 無ければ `NULL`）。**無記入がどれくらいの頻度で来るかを、実データでの再検証を
+> もう一度回さずに数えられるようにするために保存している。** `not_the_answer` は
+> DB のトリガで保存できない——解答でない画像から作った点数は、点数として確定させない
+> （[`ai-grading-pipeline.md`](./ai-grading-pipeline.md)）。
+>
 > `Review` の `version`（同時実行制御用トークン、
 > `uq_reviews_submission_question_version` で一意制約）/ `regrade_job_id` /
 > `undone_review_id`、および `action` の `regrade_requested` / `undone` 追加

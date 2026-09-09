@@ -130,6 +130,27 @@ NEARLY_BLANK_INK_COVERAGE = 0.002
 #: ``no_answer_area_defined`` / ``answer_area_zero_area`` vocabulary.
 NEARLY_BLANK_CROP_REASON = "crop_nearly_blank"
 
+#: `AnswerImage.reason` for a crop the *grading AI itself* reported is not
+#: this question's answer (Issue #136, `domain.models.AnswerImageFinding.
+#: NOT_THE_ANSWER`). Same vocabulary, same contract, one difference in
+#: timing: every other reason here is decided before the question is graded,
+#: and this one can only be known from the grading response --
+#: `jobs.grading_processor` writes it, intake never does.
+#:
+#: Why the crop's own record and not just the failed `Job`: a job's
+#: ``last_error`` is the last attempt's diagnosis, while this is a durable
+#: property of the crop. Recording it here means the next attempt skips the
+#: provider entirely (`jobs.recognition_processor` /
+#: `jobs.grading_processor` both stop on `AnswerImageStatus.NEEDS_REVIEW`),
+#: and "how often does the detector hand grading the wrong region?" can be
+#: counted later without re-running anything.
+#:
+#: This exact string also reaches the review screen inside the job's
+#: ``last_error`` (`jobs.grading_processor._crop_not_the_answer`), where the
+#: app matches on it to say what to fix -- `app/lib/core/
+#: grading_failure_reason.dart` holds the other half.
+NOT_THE_ANSWER_CROP_REASON = "crop_not_the_answer"
+
 
 def is_nearly_blank_crop(ink_coverage: float) -> bool:
     """Whether a cropped answer image holds so little ink that sending it to

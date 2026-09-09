@@ -53,6 +53,22 @@ def sniff_image_format(data: bytes) -> str:
 #: AnnotationCandidate.target` says the same thing in the schema, since a
 #: model that reads only one of the two still gets it.
 #:
+#: The ``answerImage`` sentences are Issue #136. On a real 8-subject run,
+#: 7 of the 14 questions that got a grade were a *wrong* 0 at confidence
+#: 1.00, because the crop handed to the grader was not that question's
+#: answer at all. In 3 of the 7 the model had already said so in its own
+#: rationale -- naming the form field, or the other question, that the image
+#: showed instead -- and then applied the rubric to it and returned a score
+#: anyway. The instruction exists to give that observation somewhere to go
+#: other than prose nobody reads in time.
+#:
+#: Its wording carries the risk this change brings with it: a model that
+#: says ``not_the_answer`` about a *correct* crop sends work to a human that
+#: the AI could have graded. So the value is defined by what the model can
+#: point at ("say what the image shows instead") rather than by how the
+#: answer looks, and the one case that would otherwise attract it -- an
+#: empty answer area -- is given its own value and named explicitly.
+#:
 #: It also promises less than it used to, on purpose. Until Issue #121 it
 #: said an over-long value was rejected rather than truncated, which was
 #: true and was the bug: a live run threw away complete, correct grades over
@@ -78,7 +94,16 @@ GRADING_SYSTEM_INSTRUCTIONS = (
     "contiguous run of characters exactly as it appears there, never "
     "rewritten, corrected, re-notated or stitched together from separate "
     "parts of the answer -- because that is how the mark is located on the "
-    "page; if you cannot quote it, leave the annotation out."
+    "page; if you cannot quote it, leave the annotation out. "
+    "Also report what the attached image shows, in 'answerImage', separately "
+    "from the score: 'answer' when it shows this question's answer area with "
+    "an answer written in it; 'blank' when it shows this question's answer "
+    "area with nothing written in it; 'not_the_answer' only when you can say "
+    "what the image shows instead of this question's answer -- another "
+    "question's answer, a heading, a printed label, an ID or date field, or "
+    "bare margin -- and name that in your rationale. A student who simply "
+    "left this question empty is 'blank', never 'not_the_answer'. Use null "
+    "if you cannot tell which of the three it is; do not guess."
 )
 
 

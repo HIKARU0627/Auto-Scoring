@@ -157,6 +157,26 @@ class AnswerImageRepository(Protocol):
     def add(self, image: AnswerImage) -> None: ...
     def list_for_submission(self, submission_id: str) -> list[AnswerImage]: ...
 
+    def mark_needs_review(self, submission_id: str, question_id: str, reason: str) -> None:
+        """Move one already-recorded crop to `AnswerImageStatus.NEEDS_REVIEW`
+        with ``reason``, or do nothing if no such row exists.
+
+        The one thing about a crop that cannot always be decided when it is
+        made (Issue #136): the grading AI can report that the image it was
+        given is not this question's answer at all, and that arrives after
+        intake has long finished. The verdict belongs on the crop's own row
+        all the same -- it is a property of the crop, not of the attempt
+        that discovered it -- and putting it there is what makes the next
+        attempt skip the provider (`jobs.recognition_processor` and
+        `jobs.grading_processor` both stop on ``NEEDS_REVIEW``).
+
+        Narrow on purpose: not a general "update this row". A crop's
+        ``image_path``/``page`` are written once by intake and re-derived
+        wholesale by ``replace_for_submission`` on a retry; only this one
+        status-and-reason transition is ever applied in place.
+        """
+        ...
+
     def replace_for_submission(self, submission_id: str, images: Sequence[AnswerImage]) -> None:
         """Delete any answer images already recorded for ``submission_id`` and
         insert ``images`` in their place -- a retry re-runs the whole

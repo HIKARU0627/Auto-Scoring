@@ -44,6 +44,7 @@ from auto_scoring.domain.grading_context import (
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
 from auto_scoring.domain.models import (
     Annotation,
+    AnswerImageFinding,
     AnswerImageStatus,
     CriterionResult,
     ErrorCategory,
@@ -60,6 +61,7 @@ from auto_scoring.domain.review_workflow import (
     resolve_effective_grade,
     resolve_effective_recognition,
 )
+from auto_scoring.domain.submission_intake import NOT_THE_ANSWER_CROP_REASON
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor, recognition_result_id
@@ -130,6 +132,15 @@ class GradingJobProcessor:
     missing answer image -- a human must register the missing material, not
     have the AI guess it (AGENTS.md "Verification": "読めない文字や判断不能
     を推測で補完しない").
+
+    A fourth "nothing to grade" case can only be recognized *after* the
+    call: the grader reports that the image it was given is not this
+    question's answer (`AnswerImageFinding.NOT_THE_ANSWER`, Issue #136).
+    That response produces no `GradeResult` at all -- see
+    `_crop_is_not_the_answer` -- because a score computed from the wrong
+    piece of paper is indistinguishable on screen from a correct one, which
+    is how half of one real run's grades came to be wrong 0s at confidence
+    1.00.
     """
 
     def __init__(
@@ -172,7 +183,21 @@ class GradingJobProcessor:
                 # was persisted", which used to stand in for it: since Issue
                 # #114 an absent row also means "this host has no OCR", and
                 # that one must go on to grade.
-                return recognition_outcome
+                #
+                # ``usable=False`` explicitly, rather than passing
+                # ``recognition_outcome`` through (Issue #136). Until this
+                # Issue a crop could only be NEEDS_REVIEW from intake --
+                # before any OCR row existed -- so the recognition half
+                # always reported ``usable=False`` here anyway. Now a crop
+                # can be flagged *after* it has been read and graded
+                # (`_crop_is_not_the_answer`), and on the next attempt the
+                # recognition half finds its own earlier, confident row and
+                # reports ``usable=True``. Passing that on would release a
+                # dependent question onto a prerequisite that has no grade
+                # at all, on the strength of having been read clearly --
+                # which is precisely what "the crop cannot be trusted"
+                # denies.
+                return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=False)
 
             recognition = uow.recognitions.get(recognition_result_id(job))
             # An absent row therefore means only that no OCR reading exists
@@ -315,6 +340,27 @@ class GradingJobProcessor:
             # construction instead of caught after the fact.
             return self._failed(ErrorCategory.PERMANENT, "returned a mismatched response")
 
+        if response.answer_image_finding is AnswerImageFinding.NOT_THE_ANSWER:
+            # The grader says the image it was given is not this question's
+            # answer (Issue #136). Nothing derived from it can be believed --
+            # including the score, and including a score above 0: a response
+            # that says both is contradictory, and there is no reading of it
+            # under which the number is worth keeping. So no `GradeResult` is
+            # written at all, and the question goes to a human.
+            #
+            # This is the failure this Issue exists for. On a real 8-subject
+            # run, 7 of the 14 grades produced were 0 点 at confidence 1.00
+            # against a crop that was not that question's answer, and the
+            # screen showed them exactly like a correct 0. A grade row is
+            # what makes them look alike; not writing one is what stops it.
+            #
+            # Deliberately *not* the same as "the crop looks blank"
+            # (`AnswerImageFinding.BLANK`, `is_nearly_blank_crop`): a blank
+            # answer area is an ordinary thing a student produces and its 0
+            # may well be right. Only the claim that the image shows
+            # something else acts here.
+            return self._crop_is_not_the_answer(job, question_id)
+
         now = self._clock.now()
         grade = GradeResult(
             id=grade_result_id(job),
@@ -336,6 +382,12 @@ class GradingJobProcessor:
             prompt_version=response.descriptor.prompt_version,
             dependency_graph_version=graph.version,
             context=context_entries,
+            # Only ever ``answer``/``blank``/``None`` here: the
+            # ``not_the_answer`` case returned above without producing a
+            # grade, and `GradeResult` plus the DB trigger both refuse to
+            # store it. ``blank`` is recorded and otherwise
+            # ignored on purpose -- see `AnswerImageFinding`.
+            answer_image_finding=response.answer_image_finding,
             created_at=now,
         )
         # The grader's own recognition reading (Issue #20 review, P1): a
@@ -378,6 +430,38 @@ class GradingJobProcessor:
                 and response.recognition_confidence >= self._recognition.confidence_threshold
                 and response.grading_confidence >= self._settings.confidence_threshold
             ),
+        )
+
+    def _crop_is_not_the_answer(self, job: Job, question_id: str) -> ProcessingResult:
+        """Record the grader's verdict on the crop, and fail the job.
+
+        Two records, because they answer two different questions:
+
+        * the crop's own row moves to `AnswerImageStatus.NEEDS_REVIEW` with
+          `NOT_THE_ANSWER_CROP_REASON` -- a durable property of that crop, in
+          the same vocabulary intake already writes when *it* can tell the
+          crop is unusable. It is also what makes a re-run cost nothing:
+          both this processor and `jobs.recognition_processor` stop on a
+          NEEDS_REVIEW image without calling any provider, and the same
+          image would only earn the same verdict again.
+        * the job fails ``PERMANENT`` -- retrying re-sends the identical
+          bytes to the identical model, so there is nothing to retry. This
+          is the same treatment a missing rubric or model answer already
+          gets: the AI cannot proceed until a person fixes the material.
+          `Job.last_error` carries the reason to the review screen (the
+          message is this method's own literals -- no provider text, no
+          student content), where the app matches on it to say *what* to
+          fix: the 回答欄 the crop came from, not the score.
+        """
+        with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+            uow.answer_images.mark_needs_review(
+                job.submission_id, question_id, NOT_THE_ANSWER_CROP_REASON
+            )
+            uow.commit()
+        return self._failed(
+            ErrorCategory.PERMANENT,
+            "reported that the answer image is not this question's answer "
+            f"({NOT_THE_ANSWER_CROP_REASON})",
         )
 
     def _failed(
