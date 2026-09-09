@@ -156,6 +156,34 @@ unprocessed → ai_processing → ai_processed → (問題なければそのま�
 「生徒が書いていない」は区別できない。**どちらも人が見るべきもの**なので、
 画面は両方の可能性を書き、どちらかを断定しない。
 
+#### 閾値では足りなかった。切り出しの理由は採点後にも足される（Issue #136）
+
+**上の閾値は「明白な余白」しか拾えない。それは設計どおりで、そして足りない。**
+#122 のあとの実機再検証（8教科）で切り出し 14 件のインク比率を正誤付きで測ると、
+**正しい切り出しと誤った切り出しが完全に交互に並ぶ**（0.0148正 / 0.0170誤 /
+0.0216正 / 0.0225正 / 0.0235誤 …）。誤りを拾う閾値にすると正しい切り出しを弾く。
+理由は 2 つ:
+
+1. 空欄にも**印刷罫線がある**（想定どおり）
+2. **正しい切り出しでも、余白の多い計算欄は 0.015 前後しかない**（想定外。
+   #122 の実測 3 枚にこの形が入っていなかった）
+
+`crop_nearly_blank` は 14 件中 **0 件**で発火した。**したがって
+`NEARLY_BLANK_INK_COVERAGE` の調整でこの問題は解けない。** 画素だけで
+「答案でないもの」を分離できる保証は無い、というのがこの測定の結論である。
+
+代わりに Issue #136 が足したのが `crop_not_the_answer` で、これは**採点 AI 自身が
+「渡された画像はこの設問の解答ではない」と報告したとき**に立つ。理由語の語彙も、
+`AnswerImageStatus.NEEDS_REVIEW` の契約も、採点を止める挙動もここと同じだが、
+**決まるタイミングだけが違う**——取込ではなく `jobs/grading_processor.py` が書く。
+設計は [`ai-grading-pipeline.md`](./ai-grading-pipeline.md)「解答でない画像から
+作った点数を、点数として確定させない」にある。
+
+`Submission.review_reason` には**足さない**。あの文字列は取込が答案 1 枚について
+書いた記録で、採点中に書き換えると「取込が置いた場所へ戻す」下の対応関係
+（Issue #112）が崩れる。設問 1 件の話は設問の側——`AnswerImage.reason` と、
+その設問の Job——に置く。
+
 **この `review_reason` は、取込のあと下流でも判別子として使われる**（Issue #112）。
 `needs_review` は取込が立てた旗であり、**理由の無い `needs_review` は作らない**
 （`mark_intake_outcome` はどの分岐でも状態と理由を対で書く。`ai_processed` なら
@@ -244,15 +272,15 @@ simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡
 
 設問ごとに切り出した回答欄画像 1 件を表す（`submission_id` + `question_id` で一意）。
 
-| フィールド      | 型                     | 説明                                                          |
-| --------------- | ---------------------- | ------------------------------------------------------------- |
-| `id`            | str                    | 主キー                                                        |
-| `submission_id` | str (FK)               |                                                               |
-| `question_id`   | str (FK)               |                                                               |
-| `page`          | int                    | 1始まりページ番号（`Question.page` と一致）                   |
-| `image_path`    | str                    | `app-data/` からの相対パス                                    |
-| `status`        | `ok` \| `needs_review` | 切り出し成功可否（§6.2 の「回答欄検出失敗」に対応）           |
-| `reason`        | str?                   | `needs_review` のときのみ必須（例: `no_answer_area_defined`） |
+| フィールド      | 型                     | 説明                                                                                                      |
+| --------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
+| `id`            | str                    | 主キー                                                                                                    |
+| `submission_id` | str (FK)               |                                                                                                           |
+| `question_id`   | str (FK)               |                                                                                                           |
+| `page`          | int                    | 1始まりページ番号（`Question.page` と一致）                                                               |
+| `image_path`    | str                    | `app-data/` からの相対パス                                                                                |
+| `status`        | `ok` \| `needs_review` | 切り出し成功可否（§6.2 の「回答欄検出失敗」に対応）                                                       |
+| `reason`        | str?                   | `needs_review` のときのみ必須（例: `no_answer_area_defined`、`crop_nearly_blank`、`crop_not_the_answer`） |
 
 `Question.answer_area` が未設定（テスト登録がまだ回答欄を確定していない）場合は、
 `status=needs_review, reason="no_answer_area_defined"` とし、`image_path` は

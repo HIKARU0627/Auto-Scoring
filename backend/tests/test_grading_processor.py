@@ -38,6 +38,7 @@ from auto_scoring.domain.job_execution import ProcessingOutcome
 from auto_scoring.domain.job_scheduling import plan_submission_jobs
 from auto_scoring.domain.models import (
     AnnotationKind,
+    AnswerImageFinding,
     AnswerImageStatus,
     CriterionOutcome,
     ErrorCategory,
@@ -46,8 +47,10 @@ from auto_scoring.domain.models import (
     ReviewAction,
     RubricCriterion,
     Score,
+    find_answer_image,
 )
 from auto_scoring.domain.ocr import BoundingBox, ConfidenceBand, OcrResult, OcrToken
+from auto_scoring.domain.submission_intake import NOT_THE_ANSWER_CROP_REASON
 from auto_scoring.jobs.grading_processor import (
     GradingJobProcessor,
     grade_result_id,
@@ -156,9 +159,11 @@ def _response(
     recognition_confidence: float = 0.95,
     criteria: tuple[GradingCriterionOutcome, ...] = _DEFAULT_RUBRIC_CRITERIA,
     annotations: tuple[GradingAnnotationCandidate, ...] = (),
+    answer_image_finding: AnswerImageFinding | None = None,
 ) -> GradingResponse:
     return GradingResponse(
         question_id=question_id,
+        answer_image_finding=answer_image_finding,
         recognition_text="模範的な解答",
         recognition_confidence=recognition_confidence,
         score=score,
@@ -431,6 +436,166 @@ async def test_needs_review_answer_image_skips_grading_entirely(
     assert ai_provider.calls == []
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_a_crop_the_grader_says_is_not_the_answer_produces_no_grade(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #136, the whole point of it.
+
+    On a real 8-subject run, 7 of the 14 grades produced were 0 点 at
+    confidence 1.00 against a crop that was not that question's answer, and
+    the review screen showed them exactly like a correct 0. The grade row is
+    what makes the two look alike, so when the grader itself reports the
+    image is not this question's answer, no grade row is written.
+    """
+    _seed(session_factory, store)
+    ai_provider.script(
+        _response(
+            score=0,
+            grading_confidence=1.0,
+            answer_image_finding=AnswerImageFinding.NOT_THE_ANSWER,
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    # Retrying re-sends identical bytes to an identical model: there is
+    # nothing a second attempt could learn.
+    assert result.error_category is ErrorCategory.PERMANENT
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_a_crop_the_grader_says_is_not_the_answer_is_flagged_for_a_human(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """The verdict lands on the crop's own row, in intake's vocabulary.
+
+    Two things follow from that, and both are asserted here: the reason
+    reaches the review screen through the job's ``last_error`` (which is how
+    the app knows to send the reviewer to the 回答欄, not to the score box),
+    and a second attempt spends no provider call, because the crop is now
+    `AnswerImageStatus.NEEDS_REVIEW` like any other untrusted one.
+    """
+    _seed(session_factory, store)
+    ai_provider.script(_response(answer_image_finding=AnswerImageFinding.NOT_THE_ANSWER))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_message is not None
+    assert NOT_THE_ANSWER_CROP_REASON in result.error_message
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        images = uow.answer_images.list_for_submission("sub-1")
+    image = find_answer_image(images, "q-1")
+    assert image is not None
+    assert image.status is AnswerImageStatus.NEEDS_REVIEW
+    assert image.reason == NOT_THE_ANSWER_CROP_REASON
+
+    # The re-run: same job, and the provider is not called a second time.
+    assert len(ai_provider.calls) == 1
+    second = await processor.process(job)
+    assert second.outcome is ProcessingOutcome.SUCCEEDED
+    assert second.usable is False
+    assert len(ai_provider.calls) == 1
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_not_the_answer_wins_over_a_score_the_same_response_awarded(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """A response that says both things is contradictory, and the score is
+    not the half to believe.
+
+    Nothing observed on real material has produced this combination -- every
+    such response scored 0 -- but leaving it undecided would mean the answer
+    comes from whichever branch happened to run first. A score derived from
+    an image the grader says is not this question's answer is worth no more
+    at 5/5 than at 0/5.
+    """
+    _seed(session_factory, store)
+    ai_provider.script(_response(score=5, answer_image_finding=AnswerImageFinding.NOT_THE_ANSWER))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_a_blank_answer_area_is_still_graded_and_the_finding_is_recorded(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """ "The answer is blank" is not "this is not the answer" (Issue #136).
+
+    A student who leaves a question empty is an ordinary answer sheet, and
+    its 0 may well be correct -- so ``blank`` changes nothing about how the
+    grade is produced today. It is *stored*, though: whether ``blank``
+    should also stop a grade depends on how often questions are genuinely
+    unanswered, and that number has to be countable from data already on
+    disk rather than costing another full run on real material.
+    """
+    _seed(session_factory, store)
+    ai_provider.script(
+        _response(score=0, grading_confidence=1.0, answer_image_finding=AnswerImageFinding.BLANK)
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        history = uow.grades.history("sub-1", "q-1")
+        images = uow.answer_images.list_for_submission("sub-1")
+    assert len(history) == 1
+    assert history[0].answer_image_finding is AnswerImageFinding.BLANK
+    # And the crop is left alone: nothing about it was found wanting.
+    image = find_answer_image(images, "q-1")
+    assert image is not None
+    assert image.status is AnswerImageStatus.OK
+
+
+async def test_a_provider_that_reports_no_finding_grades_exactly_as_before(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Absence is not a claim (Issue #136).
+
+    A provider that ignores ``answerImage`` -- and every response recorded
+    before the field existed -- must keep behaving the way it does today,
+    not be credited with having vouched for the crop.
+    """
+    _seed(session_factory, store)
+    ai_provider.script(_response(answer_image_finding=None))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is True
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        history = uow.grades.history("sub-1", "q-1")
+    assert len(history) == 1
+    assert history[0].answer_image_finding is None
 
 
 async def test_schema_violation_fails_permanently_without_persisting_a_grade(

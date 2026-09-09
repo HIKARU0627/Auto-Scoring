@@ -47,6 +47,7 @@ from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     Annotation,
     AnswerImage,
+    AnswerImageStatus,
     Export,
     GradeResult,
     GradingSource,
@@ -297,6 +298,21 @@ class SqlAlchemyAnswerImageRepository:
             .order_by(AnswerImageRow.page, AnswerImageRow.question_id)
         )
         return [m.answer_image_from_row(row) for row in rows]
+
+    def mark_needs_review(self, submission_id: str, question_id: str, reason: str) -> None:
+        # A plain UPDATE rather than read-modify-write: nothing else about
+        # the row is being changed, and the ``status``/``reason`` pair the
+        # DB CHECK constraint requires to agree is set in the same
+        # statement.
+        self._session.execute(
+            update(AnswerImageRow)
+            .where(
+                AnswerImageRow.submission_id == submission_id,
+                AnswerImageRow.question_id == question_id,
+            )
+            .values(status=AnswerImageStatus.NEEDS_REVIEW, reason=reason)
+        )
+        self._session.flush()
 
     def replace_for_submission(self, submission_id: str, images: Sequence[AnswerImage]) -> None:
         self._session.execute(
