@@ -10,6 +10,7 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 import 'app_harness.dart';
@@ -688,6 +689,60 @@ void main() {
       semantics.dispose();
     },
   );
+
+  testWidgets('高い確信度に緑チェックを付けない -- 印が付くのは低だけ (Issue #156)', (tester) async {
+    // 実機再検証 #4 の実測: AI採点12件すべてが採点信頼度 >= 0.95 で、
+    // 緑チェックも12件すべてに付いていた。その12件には誤った0点5件が
+    // 含まれ、AI自身が「空白」と申告した3件(3件とも切り出しの誤り)は
+    // ちょうど 1.00 だった。確信度は正誤を分けていない以上、
+    // 「見なくてよい」と読める印を score の隣に置いてはいけない。
+    final dependencies = _dependencies(
+      pdfBytes: _pocA4PortraitPdf(),
+      q1: _question(),
+      recognitions: [_recognition(confidence: 0.55)],
+      grades: [_grade(confidence: 0.97)],
+    );
+
+    await _pumpReview(tester, dependencies);
+    await tester.pump();
+    await _settlePdf(tester);
+
+    // 肯定形から。画面が描けていなければ以下の否定形は何も守らない。
+    expect(find.byKey(const Key('review-score')), findsOneWidget);
+    expect(find.text('採点信頼度: 97% (高)'), findsOneWidget);
+    expect(find.text('OCR文字認識信頼度: 55% (低)'), findsOneWidget);
+
+    final high = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('review-grading-confidence')),
+        matching: find.byType(Icon),
+      ),
+    );
+    final low = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('review-recognition-confidence')),
+        matching: find.byType(Icon),
+      ),
+    );
+    expect(
+      high.icon,
+      isNot(Icons.check_circle),
+      reason:
+          '高 must not carry a tick: it vouches for a score nothing '
+          'verified',
+    );
+    expect(
+      low.icon,
+      Icons.warning_amber,
+      reason:
+          '低 keeps its mark -- it is the one level that says a person '
+          'is needed',
+    );
+    // 色でも太鼓判を押さない。低だけが自分の色を持つ。
+    final context = tester.element(find.byKey(const Key('review-score')));
+    expect(high.color, AppStatusTone.neutral.color(context));
+    expect(low.color, AppStatusTone.attention.color(context));
+  });
 
   testWidgets('routes an annotation with no target Bounding Box to the comment '
       'fallback area instead of dropping it', (tester) async {

@@ -631,7 +631,6 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     (job) => job.state == 'blocked' && job.blockedOnQuestionId == questionId,
   );
 
-
   /// The words for [_questionStatus], with a blocked question naming the
   /// prerequisite it is waiting on -- the same string the DAG node prints,
   /// via the same `core` rule.
@@ -3288,6 +3287,22 @@ class _ProvenanceLabel extends StatelessWidget {
 /// Numeric confidence + a textual level label + a distinct icon, so
 /// Recognition/Grading Confidence is never distinguished by color alone
 /// (Issue #21 acceptance criteria).
+///
+/// **Only 低 is marked** (Issue #156). 高 used to carry `check_circle` in
+/// [AppStatusTone.success], and 実機再検証 #4 measured what that green tick
+/// was worth: all 12 AI grades came back at 採点信頼度 ≥ 0.95, so the tick was
+/// on all 12 -- including all 5 of the wrong zeros, and including the 3
+/// questions the grader itself reported as 空白 (every one of which was a bad
+/// crop) at exactly 1.00. Confidence did not separate a right zero from a
+/// wrong one, so it must not be drawn as though it had: a green check beside
+/// a score reads as 「見なくてよい」 on the one screen whose entire job is to
+/// get a person to look.
+///
+/// The number itself stays. It does not license approval (簡易設計書 §25.2
+/// forbids deriving 確認済み from it at all), but it is still the hint for
+/// which question to open first (§8.2・§10) -- and a reviewer who wants to
+/// judge the reading has it, next to the reading. What is removed is the
+/// affirmation, not the fact.
 class _ConfidenceBadge extends StatelessWidget {
   const _ConfidenceBadge({
     super.key,
@@ -3301,17 +3316,18 @@ class _ConfidenceBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final level = ConfidenceLevel.of(confidence);
+    // 中と高は同じ無彩色の目盛りアイコンで、区別は数値と「中」「高」の語が
+    // 付ける。高だけ別のアイコンを与えれば、色を外しても「高は良い印」が
+    // 残ってしまう -- Issue #156 で外したのは色ではなく、太鼓判そのもの。
     final icon = switch (level) {
-      ConfidenceLevel.high => Icons.check_circle,
-      ConfidenceLevel.medium => Icons.info_outline,
+      ConfidenceLevel.high || ConfidenceLevel.medium => Icons.straighten,
       ConfidenceLevel.low => Icons.warning_amber,
     };
     // 低Confidence は「人間が見ないと決められない」の代表例なので、この画面で
     // 強調色を使ってよい数少ない場所。中/高は進行中と同じく無彩色に置く --
     // 全部に色を付ければ、どれも目立たなくなる。
     final tone = switch (level) {
-      ConfidenceLevel.high => AppStatusTone.success,
-      ConfidenceLevel.medium => AppStatusTone.neutral,
+      ConfidenceLevel.high || ConfidenceLevel.medium => AppStatusTone.neutral,
       ConfidenceLevel.low => AppStatusTone.attention,
     };
     final color = tone.color(context);
