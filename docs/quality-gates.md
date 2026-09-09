@@ -3,16 +3,16 @@
 Local commands and GitHub Actions run the same checks. Each check is a `scripts`
 entry in `package.json`, invoked as `pnpm run <script>`.
 
-| Gate               | Command                  | CI step (`.github/workflows/ci.yml`) |
-| ------------------ | ------------------------ | ------------------------------------ |
-| Agent skill mirror | `pnpm run skills:check`  | Check agent skill mirrors            |
-| Formatting         | `pnpm run format:check`  | Check formatting                     |
-| OpenAPI contract   | `pnpm run openapi:check` | OpenAPI contract                     |
-| Lint               | `pnpm run lint`          | Lint                                 |
-| Typecheck          | `pnpm run typecheck`     | Typecheck                            |
-| Test               | `pnpm run test`          | Test                                 |
-| Build              | `pnpm run build`         | Build                                |
-| Everything         | `pnpm run check`         | (all of the above)                   |
+| Gate               | Command                  | CI job / step (`.github/workflows/ci.yml`)    |
+| ------------------ | ------------------------ | --------------------------------------------- |
+| Agent skill mirror | `pnpm run skills:check`  | App → Check agent skill mirrors               |
+| Formatting         | `pnpm run format:check`  | App → Check formatting                        |
+| OpenAPI contract   | `pnpm run openapi:check` | App → OpenAPI contract                        |
+| Lint               | `pnpm run lint`          | App → Lint (`:app`), Backend → Lint           |
+| Typecheck          | `pnpm run typecheck`     | App → Typecheck (`:app`), Backend → Typecheck |
+| Test               | `pnpm run test`          | App → Test (`:app`), Backend → Test           |
+| Build              | `pnpm run build`         | App → Build (`:app`), Backend → Build         |
+| Everything         | `pnpm run check`         | (all of the above, across both jobs)          |
 
 `openapi:check` regenerates `backend/openapi/openapi.json` and the Dart client
 in `app/packages/auto_scoring_api/` and fails on any git diff. It needs `uv`,
@@ -32,6 +32,43 @@ See [`sidecar-api.md`](./sidecar-api.md) §4.
 
 `format` / `format:check` stay on Prettier for the repo-level files; `app/` and
 `backend/` are in `.prettierignore` because Dart and Ruff own their formatting.
+
+## CI のジョブ構成と、必須チェック `Quality`
+
+CI は 4 ジョブ。`app` と `backend` が実作業、`quality` は**判定を集約するだけ**の
+ジョブで、`package` は独立。`needs` で繋がっているのは `quality` だけなので、
+`app` / `backend` / `package` は同時に走る。**待ち時間は和ではなく最大値。**
+
+| ジョブ    | 表示名            | 中身                                                               | ツールチェーン                    |
+| --------- | ----------------- | ------------------------------------------------------------------ | --------------------------------- |
+| `app`     | App               | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
+| `backend` | Backend           | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
+| `quality` | **Quality**       | 上 2 つの結果を判定するだけ                                        | なし（ubuntu）                    |
+| `package` | Package (Windows) | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
+
+### 置き場所の理由
+
+- **`openapi:check` は `app` に置く。** `dart` が要る（Dart クライアントを再生成する）
+  ので、Flutter SDK を復元済みのジョブでしか動かない。`backend` に置くと 1.7 GB の
+  SDK をもう一度復元することになり、何も得しない。
+- **`backend` には Flutter SDK も `pnpm install` も入れない。** どのステップも
+  `dart` にも node 依存にも触らないため。SDK 復元を省くだけで約 1.6 分減り、
+  このジョブが全体の所要を決めるので、そのまま全体に効く。
+- **`backend` は `windows-latest` のまま。** Linux ランナーなら約 3 倍速いが、
+  これは Windows 専用製品で、サイドカーのパス・ファイル I/O の挙動は
+  「Linux では通り、先生の実機で落ちる」の典型。速さのために出荷先の検証を
+  やめることはしない。
+
+### `Quality` が必須チェックである以上、外してはいけない 2 点
+
+`main` の ruleset が要求する status check の context は **`Quality` の 1 つだけ**。
+この名前のチェックが消えると、以後すべての PR がマージ不能になる。したがって
+**実作業のジョブは別名にし、集約ジョブに `name: Quality` を付ける。**
+
+集約ジョブには **`if: always()` が必須**で、`needs` の各 `result` を明示的に
+判定して失敗させること。`needs` が失敗すると依存ジョブは **skipped** になり、
+**GitHub は skipped の必須チェックを成功として扱う。** ここを外すと、ビルドが
+赤いままマージゲートだけが緑に見える。到達したこと自体は何の成功の証拠でもない。
 
 ## git hooks vs CI
 
