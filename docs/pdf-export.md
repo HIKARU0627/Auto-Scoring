@@ -408,8 +408,34 @@ ExportJobProcessor})`を組み立てて`JobQueueService`へ渡す。`job_process
 
 | メソッド | パス                                   | 用途                                                                       |
 | -------- | -------------------------------------- | -------------------------------------------------------------------------- |
-| POST     | `/submissions/{submission_id}/export`  | §1のフロー。409（未確認設問）/ 200（`reuse_existing`）/ 202（新規job投入） |
+| POST     | `/submissions/{submission_id}/export`  | §1のフロー。409（拒否・§8.1）/ 200（`reuse_existing`）/ 202（新規job投入） |
 | GET      | `/submissions/{submission_id}/exports` | 成功したExport一覧（保存先表示・出力履歴）                                 |
+
+### 8.1 409は1種類ではない（Issue #150）
+
+`POST .../export` は2つの理由で 409 を返す。**本文の `detail.code` がどちらかを名乗る**
+（`api.export_router.ExportConflictCode`）。
+
+| `detail.code`           | 意味                                         | 利用者の直し方                             |
+| ----------------------- | -------------------------------------------- | ------------------------------------------ |
+| `unconfirmed_questions` | 未確認の設問がある（Issue #23）              | `question_ids` の設問を確定させる          |
+| `no_room_for_score`     | 点数を書ける場所が無い（#120／#150、§2.2.2） | **確定では解消しない。**ページに余白が無い |
+
+**なぜコードが要るか。** #120 が2つ目の 409 を足したとき、本文の形は1つ目と同じ
+`{message, question_ids}` のままだった。Dart 側は 409 が1種類だった頃に書かれており、
+`SidecarErrorKind.conflict` に潰して Issue #23 の文言
+「未確認の設問があるため出力できません」を**両方に**出していた。
+実機再検証 #4 では、**全問を確定させ終えた利用者に「確定させろ」と表示していた。**
+画面の指示は役に立たないどころか**従いようがない**（その作業は既に済んでいる）。
+
+コードを本文に入れたのは、`detail` が両方の 409 が既に対象設問を載せている場所であり、
+FastAPI が dict の `detail` をそのまま通すからである。`HTTPException.detail` は OpenAPI に
+型が出ないので**生成された Dart クライアントは影響を受けない**。`SidecarApiClient` が
+`detail.question_ids` と同じ経路で生の本文から読む。
+
+**知らないコードを推測で既知の文言に寄せてはいけない。**Dart 側は未知のコードなら
+サイドカーの `message` をそのまま出す（`export_dialog.dart` の `_refusalDetail`）。
+そっけない理由の方が、嘘の直し方よりましである。
 
 進捗・再試行は新規エンドポイントを作らず、Issue #18で実装済みの
 `GET /jobs/{job_id}` / `POST /jobs/{job_id}/retry` /
@@ -418,15 +444,18 @@ ExportJobProcessor})`を組み立てて`JobQueueService`へ渡す。`job_process
 
 ## 9. Flutter側
 
-`app/lib/features/pdf_review/export_dialog.dart`の`ExportDialog`が
+`app/lib/core/widgets/export_dialog.dart`の`ExportDialog`が（Issue #137で`features/pdf_review/`から移動）
 「出力実行→進捗→保存先表示/再試行」の全ライフサイクルを1つのdialogで
 完結させる。添削レビュー画面（`pdf_review_page.dart`）のAppBarへ
 「PDF出力」ボタン（`review-export-button`）を追加し、このdialogを開くだけ。
 
 - 出力要求（`AppDependencies.requestExport`）が409を返した場合、
-  `SidecarApiException.unconfirmedQuestionIds`（新設フィールド、
-  `sidecar_api_client.dart`の`_translate`が409レスポンスの
-  `detail.question_ids`から抽出する）を読み、未確認設問一覧を表示する。
+  `SidecarApiException.conflictCode` / `conflictQuestionIds`
+  （`sidecar_api_client.dart`の`_translate`が409レスポンスの
+  `detail.code` / `detail.question_ids`から抽出する）を読み、
+  **拒否の種別ごとの見出しと直し方**、および対象設問一覧を表示する（§8.1）。
+  Issue #150 まではフィールド名が `unconfirmedQuestionIds` で、種別を持たず、
+  常に「未確認の設問がある」と表示していた。
 - `decision: reuse_existing`ならjobを一切pollせず即座に保存先を表示する。
 - 新規job投入時は`GET /jobs/{id}`（`AppDependencies.getJob`、新設）を
   1秒間隔でpollし、`succeeded`になったら`listExports`で該当jobの

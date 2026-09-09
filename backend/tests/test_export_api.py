@@ -24,6 +24,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
+from auto_scoring.api.export_router import ExportConflictCode
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
@@ -129,7 +130,9 @@ def test_export_refuses_and_names_unconfirmed_questions(
     response = client.post("/submissions/sub-1/export", headers=_AUTH)
 
     assert response.status_code == 409
-    assert response.json()["detail"]["question_ids"] == ["q-1"]
+    detail = response.json()["detail"]
+    assert detail["code"] == ExportConflictCode.UNCONFIRMED_QUESTIONS.value
+    assert detail["question_ids"] == ["q-1"]
 
 
 @pytest.mark.usefixtures("score_font")

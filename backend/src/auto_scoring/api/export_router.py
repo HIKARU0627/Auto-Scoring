@@ -12,6 +12,8 @@ Endpoints:
   question is not yet confirmed, naming which; otherwise decide
   (`domain.pdf_export.decide_reexport`) whether to hand back the latest
   successful export as-is or queue a new ``Job`` (kind=``EXPORT``).
+  Every 409 body carries a ``detail.code`` naming *which* refusal it is
+  (`ExportConflictCode`) -- see that enum for why.
   Progress/retry reuse the existing job endpoints (`api.jobs_router`): poll
   ``GET /jobs/{job_id}`` (or list ``GET /submissions/{submission_id}/jobs``),
   and ``POST /jobs/{job_id}/retry`` if it fails.
@@ -22,6 +24,7 @@ Endpoints:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -45,6 +48,39 @@ def _as_utc(value: datetime) -> datetime:
     """See `api.jobs_router._as_utc` for why a naive (DB-stored) UTC
     timestamp must be marked as such at this boundary."""
     return value.replace(tzinfo=UTC)
+
+
+class ExportConflictCode(StrEnum):
+    """Which of this endpoint's refusals a 409 body is (Issue #150).
+
+    ``POST .../export`` has had two different 409s since Issue #120, and
+    both carried the same ``{message, question_ids}`` shape with nothing to
+    tell them apart. The Flutter client had been written when there was only
+    one, so it rendered *both* under Issue #23's fixed wording, "未確認の設問が
+    あるため出力できません" -- and in the live run a reviewer who had already
+    confirmed every question was told to go and confirm them. The screen's
+    instruction was not merely unhelpful, it was unfollowable: the work it
+    asked for was already done, so nothing the reviewer could do would
+    change the outcome.
+
+    The code goes in the body rather than in a new status code or header
+    because `detail` is where both refusals already put their operands, and
+    FastAPI passes a dict `detail` through untouched. It is not in the
+    OpenAPI schema (`HTTPException.detail` is untyped there), so the
+    generated Dart client is unaffected; `SidecarApiClient` reads it out of
+    the raw error body next to `detail.question_ids`, which reaches Dart the
+    same way and for the same reason.
+    """
+
+    #: Issue #23: at least one question has no confirmed review yet.
+    #: ``question_ids`` names them; confirming them makes the export possible.
+    UNCONFIRMED_QUESTIONS = "unconfirmed_questions"
+    #: Issue #120/#150: at least one question's score cannot be written
+    #: anywhere -- neither at its own `Question.score_area` nor in its page's
+    #: fallback band. ``question_ids`` names them. **Confirming changes
+    #: nothing here**; the page itself has no room, so this is not something
+    #: the reviewer can resolve from the review screen.
+    NO_ROOM_FOR_SCORE = "no_room_for_score"
 
 
 class ExportResponse(BaseModel):
@@ -124,6 +160,7 @@ def build_export_router(
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     detail={
+                        "code": ExportConflictCode.UNCONFIRMED_QUESTIONS.value,
                         "message": "one or more questions are not yet confirmed",
                         "question_ids": sorted(missing),
                     },
@@ -140,6 +177,7 @@ def build_export_router(
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     detail={
+                        "code": ExportConflictCode.NO_ROOM_FOR_SCORE.value,
                         "message": "one or more questions have no area to write the score in",
                         "question_ids": sorted(unplaceable),
                     },

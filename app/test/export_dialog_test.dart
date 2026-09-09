@@ -124,16 +124,72 @@ void main() {
         SidecarErrorKind.conflict,
         'one or more questions are not yet confirmed',
         statusCode: 409,
-        unconfirmedQuestionIds: const ['q-1', 'q-2'],
+        conflictCode: 'unconfirmed_questions',
+        conflictQuestionIds: const ['q-1', 'q-2'],
       ),
     );
 
     await _pumpDialog(tester, dependencies);
     await tester.pump();
 
-    expect(find.byKey(const Key('export-dialog-unconfirmed')), findsOneWidget);
+    expect(find.byKey(const Key('export-dialog-refused')), findsOneWidget);
+    expect(find.text('未確認の設問があるため出力できません:'), findsOneWidget);
     expect(find.text('・q-1'), findsOneWidget);
     expect(find.text('・q-2'), findsOneWidget);
+  });
+
+  testWidgets(
+    'a no-room-for-score refusal is not shown as an unconfirmed one',
+    (tester) async {
+      // Issue #150 の再現。全問を確定させ終えた利用者に、#120 の「点数を書く
+      // 場所が無い」の 409 を Issue #23 の「未確認の設問がある」の文言で見せて
+      // いた。**確定は済んでいるので、画面の指示どおりに動いても何も変わらない。**
+      // 見出しだけでなく「確定させると出力できます」が出ないことまで見る --
+      // 直し方の指示こそが嘘だった部分だからである。
+      final dependencies = AppDependencies(
+        requestExport: (submissionId) async => throw SidecarApiException(
+          SidecarErrorKind.conflict,
+          'one or more questions have no area to write the score in',
+          statusCode: 409,
+          conflictCode: 'no_room_for_score',
+          conflictQuestionIds: const ['q-3'],
+        ),
+      );
+
+      await _pumpDialog(tester, dependencies);
+      await tester.pump();
+
+      expect(find.byKey(const Key('export-dialog-refused')), findsOneWidget);
+      expect(find.text('・q-3'), findsOneWidget);
+      expect(find.text('点数を書き込める場所が無い設問があるため出力できません:'), findsOneWidget);
+      expect(find.textContaining('確定操作では解消しません'), findsOneWidget);
+      expect(find.textContaining('未確認の設問'), findsNothing);
+      expect(find.textContaining('確定させると出力できます'), findsNothing);
+    },
+  );
+
+  testWidgets('a 409 whose code this build does not know falls back to the '
+      'sidecar\'s own message', (tester) async {
+    // 知らないコードで最も近い既知の文言を選ぶと、#150 と同じ「嘘の直し方」を
+    // 別の形で作ることになる。推測せずサイドカーの説明を出すこと。
+    final dependencies = AppDependencies(
+      requestExport: (submissionId) async => throw SidecarApiException(
+        SidecarErrorKind.conflict,
+        'some future refusal',
+        statusCode: 409,
+        conflictCode: 'a_code_from_a_newer_sidecar',
+        conflictQuestionIds: const ['q-9'],
+      ),
+    );
+
+    await _pumpDialog(tester, dependencies);
+    await tester.pump();
+
+    expect(find.byKey(const Key('export-dialog-refused')), findsOneWidget);
+    expect(find.text('・q-9'), findsOneWidget);
+    expect(find.text('some future refusal'), findsOneWidget);
+    expect(find.textContaining('未確認の設問'), findsNothing);
+    expect(find.textContaining('確定'), findsNothing);
   });
 
   testWidgets('a failed export shows a retry action that requeues the job', (
