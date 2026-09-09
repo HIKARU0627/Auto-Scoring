@@ -131,10 +131,10 @@ void main() {
     expect(find.text('3 / 5 問 確定'), findsOneWidget);
   });
 
-  testWidgets('AI採点が失敗した答案は、そうと分かる', (tester) async {
-    // 「自分が後回しにした答案」と「AIが失敗して手が出ない答案」は読み分けられ
-    // なければならない。前者は自分で戻ってくるが、後者は放っておくと永久に
-    // 終わらない (Issue #118)。
+  testWidgets('AIが採点できなかった答案は、そうと分かる', (tester) async {
+    // その答案だけは、AIの提案を確認するのではなく自分で点数を入れる必要がある
+    // (Issue #118 の「点数を入力」)。残り3枚が「見るだけ」なのか「1問ずつ採点」
+    // なのかで、残り時間の見積もりがまるで違う。
     await pumpAppAt(
       tester,
       AppRoutes.submissionQueue('t1'),
@@ -160,8 +160,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('queue-stuck-stuck')), findsOneWidget);
-    expect(find.byKey(const Key('queue-stuck-fine')), findsNothing);
+    expect(find.byKey(const Key('queue-manual-grade-stuck')), findsOneWidget);
+    expect(find.byKey(const Key('queue-manual-grade-fine')), findsNothing);
   });
 
   testWidgets('行をタップするとその答案の添削レビューへ行く', (tester) async {

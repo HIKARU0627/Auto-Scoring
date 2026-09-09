@@ -227,15 +227,20 @@ class _QueueRow extends StatelessWidget {
               Text('$position / $total', style: context.textRoles.uiLabel),
               Text(visual.label, style: context.textRoles.uiLabel),
               if (entry.totalQuestions > 0) _ProgressChip(entry: entry),
-              // AI採点が失敗した設問を抱えた答案は、人の手ではまだ確定できない
-              // (Issue #118)。**「自分が後回しにした答案」と読み分けられなければ、
-              // 金曜の午後の終わりに「残り3枚」の中身が分からなくなる。**
-              if (entry.isStuck)
+              // この答案だけは、AIの提案を確認するのではなく**自分で点数を
+              // 入れる**必要がある (Issue #118 の「点数を入力」)。残り3枚が
+              // 「見るだけ」なのか「1問ずつ採点する」なのかで、残り時間の
+              // 見積もりがまるで違う。
+              //
+              // 文言は添削レビュー画面の `review-ai-grading-failed` と同じ語に
+              // 揃えてある -- 一覧で読んだことと、開いた先で読むことが別の言葉に
+              // なってはいけない (Issue #84)。
+              if (entry.needsManualGrading)
                 _Marker(
-                  key: Key('queue-stuck-${entry.id}'),
-                  icon: Icons.error_outline,
-                  tone: AppStatusTone.danger,
-                  label: 'AI採点が失敗した設問があります',
+                  key: Key('queue-manual-grade-${entry.id}'),
+                  icon: Icons.edit_note,
+                  tone: AppStatusTone.attention,
+                  label: 'AIが採点できなかった設問があります',
                 ),
             ],
           ),

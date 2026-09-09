@@ -155,9 +155,10 @@ void main() {
       expect(queue.entryFor('untouched')!.isPartiallyReviewed, isFalse);
     });
 
-    test('AI採点が失敗した答案は「詰んでいる」と分かる', () {
-      // 後回しにした答案は自分で戻ってくるが、こちらは放っておくと永久に
-      // 終わらない (Issue #118)。残り3枚の中身を読み分けるための区別である。
+    test('AIが採点できなかった答案は、手を動かす量が違うと分かる', () {
+      // ほかの答案はAIの提案を確認するだけだが、これは1問ずつ自分で点数を入れる
+      // (Issue #118 の「点数を入力」)。残り3枚が「見るだけ」なのか「自分で採点」
+      // なのかで、金曜の午後の残り時間の見積もりがまるで違う。
       final queue = ReviewQueue.from(
         submissions: [
           sub(id: 'stuck', state: 'ai_processed', day: 1),
@@ -169,8 +170,8 @@ void main() {
         ],
       );
 
-      expect(queue.entryFor('stuck')!.isStuck, isTrue);
-      expect(queue.entryFor('fine')!.isStuck, isFalse);
+      expect(queue.entryFor('stuck')!.needsManualGrading, isTrue);
+      expect(queue.entryFor('fine')!.needsManualGrading, isFalse);
     });
 
     test('進捗が取れなくても一覧は成立する', () {
