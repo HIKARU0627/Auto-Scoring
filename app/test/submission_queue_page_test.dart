@@ -4,6 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
+import 'package:auto_scoring_app/features/home/home_page.dart';
+import 'package:auto_scoring_app/features/review_queue/submission_queue_page.dart';
+import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
 
 import 'app_harness.dart';
 
@@ -396,6 +399,65 @@ void main() {
 
       expect(find.byKey(const Key('queue-row-done')), findsOneWidget);
       expect(find.byKey(const Key('queue-export-done')), findsNothing);
+    });
+  });
+
+  group('入口が違っても、同じように戻れる (Issue #160)', () {
+    // **この画面には入口が3つある。** ホームのテストカード、テスト一覧、そして
+    // 添削レビューの「答案キューへ」(`docs/review-queue.md` §8)。実機再検証 #5
+    // では3つ目だけがアプリバーの戻る矢印を出さず、Escape も Alt+Left も効かず、
+    // **アプリを再起動するまでホームへ戻れなかった**。
+    //
+    // 3つ目 (スナックバー) の分は添削レビュー画面を組み立てないと再現しないので
+    // `pdf_review_page_test.dart` の「Issue #113」グループにある。入口を増やした
+    // ときに検査が抜けるのを止めるのは `navigation_stack_lint_test.dart`。
+
+    /// ホームとテスト一覧の両方から入れるだけの、1テスト・1答案の構成。
+    AppDependencies entryDeps() => AppDependencies(
+      listTestRegistrations: () async => [buildTest()],
+      getTest: (_) async => buildTest(),
+      listSubmissions: (_) async => [
+        buildSubmission(id: 'todo', state: 'ai_processed', studentLabel: '答案A'),
+      ],
+      listReviewProgress: (_) async => [buildProgress(id: 'todo')],
+    );
+
+    testWidgets('ホームのテストカードから入っても、ホームへ戻れる', (tester) async {
+      await pumpAppAt(tester, AppRoutes.home, dependencies: entryDeps());
+      await tester.pumpAndSettle();
+
+      // 押す対象が本当に出ていること。これを言わずに進むと、タップが空振り
+      // したときに「戻れた」ではなく「まだホームに居る」で緑になる。
+      expect(find.byKey(const Key('home-open-queue-t1')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('home-open-queue-t1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SubmissionQueuePage), findsOneWidget);
+      expect(find.byType(BackButton), findsOneWidget);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomePage), findsOneWidget);
+    });
+
+    testWidgets('テスト一覧から入っても、テスト一覧へ戻れる', (tester) async {
+      await pumpAppAt(tester, AppRoutes.testList, dependencies: entryDeps());
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('test-list-tile-t1')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('test-list-tile-t1')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SubmissionQueuePage), findsOneWidget);
+      expect(find.byType(BackButton), findsOneWidget);
+
+      await tester.tap(find.byType(BackButton));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TestListPage), findsOneWidget);
     });
   });
 }

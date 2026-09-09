@@ -1652,8 +1652,18 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
               ? null
               : SnackBarAction(
                   label: '答案キューへ',
+                  // **`go` ではなく `push`。** `go` は積んであるスタックを丸ごと
+                  // 捨てるので、着いた答案キューには戻る先が残らない --
+                  // アプリバーの戻る矢印が消え、Escape も Alt+Left も効かず、
+                  // **アプリを再起動するまでホームへ戻れなかった**
+                  // (Issue #160、実機再検証 #5)。
+                  //
+                  // 同じ画面へ入る他の2つの入口 (ホームのテストカード、
+                  // テスト一覧) は `push` である。入口によって戻れたり
+                  // 戻れなかったりする画面は、来た道を利用者に覚えさせる
+                  // (`docs/review-queue.md` §8.2)。
                   onPressed: () =>
-                      context.go(AppRoutes.submissionQueue(widget.testId)),
+                      context.push(AppRoutes.submissionQueue(widget.testId)),
                 ),
         ),
       );
