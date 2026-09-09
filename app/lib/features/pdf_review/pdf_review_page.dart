@@ -2916,6 +2916,34 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             key: const Key('review-score'),
             style: context.textRoles.score,
           ),
+          // 採点AI自身が「渡された画像に何が写っていたか」として申告した区分
+          // (Issue #136)。**点数は、それが何の画像から出たかを言わない。**
+          // 実機再検証 #4 では `blank` 申告の3件が3件とも切り出しの誤りで、
+          // 採点信頼度はちょうど 1.00 -- 数字の側から正しい0点と見分ける材料は
+          // 一つも無く、AI自身のこの申告だけが残っていた (Issue #156)。
+          //
+          // **旗ではなく本文**である。アイコンも強調色も付けないのは、これが
+          // 「確認せよ」という指示ではなく「AIはこう言った」という事実だから
+          // で、`blank` は本当の無記入 -- つまり正しい0点 -- でもあり得る
+          // (#136 が `not_the_answer` と別の値に分けた理由そのもの)。だから
+          // 文面もAIの申告と、そこから確実に言える両義性までで止め、切り出しが
+          // 誤っているとは言わない。人が見るべき現物は #122 が既にこの上に
+          // 出しているので、そこへ案内するだけでよい。
+          //
+          // `not_the_answer` はここに来ない (採点が `GradeResult` を作らずに
+          // 失敗するので `aiGrade` が存在しない)。`answer` と null も出さない
+          // -- 出せば全設問に文が付き、#156 が畳んだ「常時点いている旗」を
+          // 別の形で作り直すことになる。
+          if (aiGrade.answerImageFinding == AnswerImageFinding.blank) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'AIは「解答欄に何も書かれていない」と報告しました。'
+              '本当に無記入ならこの0点は正しく、切り出しがずれていても'
+              '同じ0点になります。上の画像を確かめてください。',
+              key: const Key('review-answer-image-blank'),
+              style: context.textRoles.gradingComment,
+            ),
+          ],
           const SizedBox(height: AppSpacing.xs),
           _ConfidenceBadge(
             key: const Key('review-grading-confidence'),

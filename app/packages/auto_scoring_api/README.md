@@ -136,6 +136,7 @@ Class | Method | HTTP request | Description
  - [AnalyzeRequest](doc/AnalyzeRequest.md)
  - [AnnotationEditRequest](doc/AnnotationEditRequest.md)
  - [AnnotationResponse](doc/AnnotationResponse.md)
+ - [AnswerImageFinding](doc/AnswerImageFinding.md)
  - [AnswerLayoutResponse](doc/AnswerLayoutResponse.md)
  - [ApproveReviewRequest](doc/ApproveReviewRequest.md)
  - [AttributionProposalResponse](doc/AttributionProposalResponse.md)

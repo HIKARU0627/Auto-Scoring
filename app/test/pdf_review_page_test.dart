@@ -87,6 +87,7 @@ GradeResultResponse _grade({
   String? rationale = '理由の説明が不足しています。',
   String? comment,
   List<CriterionResultResponse> criteria = const [],
+  AnswerImageFinding? answerImageFinding,
   DateTime? createdAt,
 }) => GradeResultResponse(
   (b) => b
@@ -101,6 +102,7 @@ GradeResultResponse _grade({
     ..rationale = rationale
     ..comment = comment
     ..criteria.replace(criteria)
+    ..answerImageFinding = answerImageFinding
     ..createdAt = createdAt ?? DateTime.utc(2026, 1, 1),
 );
 
@@ -742,6 +744,63 @@ void main() {
     final context = tester.element(find.byKey(const Key('review-score')));
     expect(high.color, AppStatusTone.neutral.color(context));
     expect(low.color, AppStatusTone.attention.color(context));
+  });
+
+  testWidgets('AIが「解答欄は空白」と申告した0点は、その申告を本文で伴う (Issue #156)', (tester) async {
+    // Issue #136 が保存していた `answer_image_finding` を画面へ通す。
+    // 0点は「採点できた」ではなく「点を与えられなかった」で、切り出しが
+    // 誤っていても正しくても同じ数字になる -- 見分ける材料はAI自身の
+    // この申告しか残っていない。
+    final dependencies = _dependencies(
+      pdfBytes: _pocA4PortraitPdf(),
+      q1: _question(),
+      grades: [
+        _grade(
+          awarded: 0,
+          confidence: 1.0,
+          answerImageFinding: AnswerImageFinding.blank,
+        ),
+      ],
+    );
+
+    await _pumpReview(tester, dependencies);
+    await tester.pump();
+    await _settlePdf(tester);
+
+    expect(find.text('0 / 5 点'), findsOneWidget);
+    final notice = find.byKey(const Key('review-answer-image-blank'));
+    expect(notice, findsOneWidget);
+    final text = tester.widget<Text>(notice).data!;
+    expect(text, contains('解答欄に何も書かれていない'));
+    // 両義性まで言って止める。切り出しが誤っているとは言わない --
+    // `blank` は本当の無記入(正しい0点)でもあり得る (#136)。
+    expect(text, contains('本当に無記入ならこの0点は正しく'));
+  });
+
+  testWidgets('`answer` 申告と申告なしの点数には何も足さない (Issue #156)', (tester) async {
+    // 全設問に文が付けば、#156 が畳んだ「常時点いている旗」を別の形で
+    // 作り直すだけになる。実測12件のうち `blank` は3件で、残り9件は
+    // ここを通る。
+    for (final finding in [null, AnswerImageFinding.answer]) {
+      final dependencies = _dependencies(
+        pdfBytes: _pocA4PortraitPdf(),
+        q1: _question(),
+        grades: [
+          _grade(awarded: 0, confidence: 1.0, answerImageFinding: finding),
+        ],
+      );
+
+      await _pumpReview(tester, dependencies);
+      await tester.pump();
+      await _settlePdf(tester);
+
+      expect(find.text('0 / 5 点'), findsOneWidget, reason: '$finding');
+      expect(
+        find.byKey(const Key('review-answer-image-blank')),
+        findsNothing,
+        reason: '$finding',
+      );
+    }
   });
 
   testWidgets('routes an annotation with no target Bounding Box to the comment '

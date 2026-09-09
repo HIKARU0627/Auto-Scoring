@@ -61,6 +61,7 @@ from auto_scoring.domain.models import (
     TERMINAL_JOB_STATES,
     Annotation,
     AnnotationKind,
+    AnswerImageFinding,
     CriterionOutcome,
     DomainError,
     GradeResult,
@@ -193,6 +194,21 @@ class GradeResultResponse(BaseModel):
     # AIの総評コメント(簡易設計書 §16.5「コメント」、
     # docs/ai-grading-pipeline.md「GradeResultのAI追跡情報とcontextの記録」)。
     comment: str | None = None
+    #: 採点AIが「渡された画像に何が写っていたか」として申告した区分
+    #: (`AnswerImageFinding`、Issue #136)。点数とは別の主張なので別の欄で運ぶ。
+    #:
+    #: Issue #136 はこれを保存するところまでで、**画面へ出す経路が無かった**。
+    #: 出す理由は実機再検証 #4 の実測にある: 0点になった設問のうち、AI自身が
+    #: `blank`(解答欄に何も書かれていない)と申告した3件は**3件とも切り出しの
+    #: 誤り**で、しかも採点信頼度はちょうど 1.00 だった。数字の側からは正しい
+    #: 0点と見分けが付かず、見分けが付く材料はAI自身のこの申告しか残っていない。
+    #:
+    #: `not_the_answer` はここに現れない。その申告を受けた採点は `GradeResult`
+    #: を作らずにジョブごと失敗する(`jobs.grading_processor`)ので、そもそも
+    #: 点数が存在しない -- `GradeResult.__post_init__` がそれを不変条件として
+    #: 持っている。`None` は「providerが何も申告しなかった」で、`answer` とは
+    #: 別物である(誰も見ていない切り出しを保証したことにしない)。
+    answer_image_finding: AnswerImageFinding | None = None
     created_at: datetime
 
     @classmethod
@@ -219,6 +235,7 @@ class GradeResultResponse(BaseModel):
             ],
             rationale=grade.rationale,
             comment=grade.comment,
+            answer_image_finding=grade.answer_image_finding,
             created_at=grade.created_at.replace(tzinfo=UTC),
         )
 

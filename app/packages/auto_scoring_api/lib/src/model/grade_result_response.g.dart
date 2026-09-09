@@ -8,6 +8,8 @@ part of 'grade_result_response.dart';
 
 class _$GradeResultResponse extends GradeResultResponse {
   @override
+  final AnswerImageFinding? answerImageFinding;
+  @override
   final String? comment;
   @override
   final num confidence;
@@ -33,7 +35,8 @@ class _$GradeResultResponse extends GradeResultResponse {
       (GradeResultResponseBuilder()..update(updates))._build();
 
   _$GradeResultResponse._(
-      {this.comment,
+      {this.answerImageFinding,
+      this.comment,
       required this.confidence,
       required this.createdAt,
       required this.criteria,
@@ -57,6 +60,7 @@ class _$GradeResultResponse extends GradeResultResponse {
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
     return other is GradeResultResponse &&
+        answerImageFinding == other.answerImageFinding &&
         comment == other.comment &&
         confidence == other.confidence &&
         createdAt == other.createdAt &&
@@ -72,6 +76,7 @@ class _$GradeResultResponse extends GradeResultResponse {
   @override
   int get hashCode {
     var _$hash = 0;
+    _$hash = $jc(_$hash, answerImageFinding.hashCode);
     _$hash = $jc(_$hash, comment.hashCode);
     _$hash = $jc(_$hash, confidence.hashCode);
     _$hash = $jc(_$hash, createdAt.hashCode);
@@ -89,6 +94,7 @@ class _$GradeResultResponse extends GradeResultResponse {
   @override
   String toString() {
     return (newBuiltValueToStringHelper(r'GradeResultResponse')
+          ..add('answerImageFinding', answerImageFinding)
           ..add('comment', comment)
           ..add('confidence', confidence)
           ..add('createdAt', createdAt)
@@ -106,6 +112,11 @@ class _$GradeResultResponse extends GradeResultResponse {
 class GradeResultResponseBuilder
     implements Builder<GradeResultResponse, GradeResultResponseBuilder> {
   _$GradeResultResponse? _$v;
+
+  AnswerImageFinding? _answerImageFinding;
+  AnswerImageFinding? get answerImageFinding => _$this._answerImageFinding;
+  set answerImageFinding(AnswerImageFinding? answerImageFinding) =>
+      _$this._answerImageFinding = answerImageFinding;
 
   String? _comment;
   String? get comment => _$this._comment;
@@ -157,6 +168,7 @@ class GradeResultResponseBuilder
   GradeResultResponseBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
+      _answerImageFinding = $v.answerImageFinding;
       _comment = $v.comment;
       _confidence = $v.confidence;
       _createdAt = $v.createdAt;
@@ -190,6 +202,7 @@ class GradeResultResponseBuilder
     try {
       _$result = _$v ??
           _$GradeResultResponse._(
+            answerImageFinding: answerImageFinding,
             comment: comment,
             confidence: BuiltValueNullFieldError.checkNotNull(
                 confidence, r'GradeResultResponse', 'confidence'),

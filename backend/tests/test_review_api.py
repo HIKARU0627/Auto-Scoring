@@ -22,6 +22,7 @@ from auto_scoring.api.app import create_app
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
+    AnswerImageFinding,
     AnswerImageStatus,
     CriterionOutcome,
     CriterionResult,
@@ -182,6 +183,46 @@ def test_list_grades_returns_ai_and_human_grades_with_dual_confidence(
     assert [c["criterion_id"] for c in ai["criteria"]] == ["c-1", "c-2"]
     assert body[1]["source"] == "human"
     assert body[1]["score"]["awarded"] == 5
+
+
+def test_list_grades_carries_what_the_ai_reported_seeing_in_the_image(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """`GradeResult.answer_image_finding` (Issue #136) reaches the screen.
+
+    Issue #136 recorded the grader's own report of *what was in the picture*
+    but stopped at the database, so the review screen could not tell a 0 the
+    AI explained from one it did not. On 実機再検証 #4 that mattered: the three
+    grades reported ``blank`` were three bad crops, each at grading confidence
+    1.00 -- nothing on the number side separated them from a correct 0, and
+    this field was the only thing that did (Issue #156).
+
+    ``None`` stays ``None`` rather than becoming ``answer``: the fourth state
+    is "the provider said nothing", and answering for it would vouch for a
+    crop nobody looked at.
+    """
+    _seed_question_and_submission(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.grades.add(
+            make_grade(
+                id="grade-blank",
+                score=Score(awarded=0, maximum=5),
+                confidence=1.0,
+                answer_image_finding=AnswerImageFinding.BLANK,
+                created_at=at(0),
+            )
+        )
+        uow.grades.add(make_grade(id="grade-unreported", created_at=at(60)))
+        uow.commit()
+
+    response = client.get("/submissions/sub-1/questions/q-1/grades", headers=_AUTH)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [g["id"] for g in body] == ["grade-blank", "grade-unreported"]
+    assert body[0]["score"]["awarded"] == 0
+    assert body[0]["answer_image_finding"] == "blank"
+    assert body[1]["answer_image_finding"] is None
 
 
 def test_list_annotations_is_empty_before_any_annotation(client: TestClient) -> None:

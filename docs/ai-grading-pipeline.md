@@ -429,6 +429,14 @@ SELECT answer_image_finding, COUNT(*) FROM grade_results GROUP BY answer_image_f
 **未決事項**: この数字が出たら、`blank` も人へ回すかを決める。分岐を 1 つ足すだけで
 拾える形にしてある。
 
+> **更新（Issue #156）: 分岐は今も足していないが、画面には出す。**
+> `GradeResultResponse.answer_image_finding` として API に載せ、添削レビュー画面が
+> `blank` のときだけ本文で伝える（[pdf-review-overlay.md](./pdf-review-overlay.md)
+> §2.3.2）。実機再検証 #4 で `blank` と記録された 3 件は**3 件とも切り出しの誤り**で、
+> 本当の無記入は 0 件、しかも採点信頼度は 1.00 だった。**採点の分岐を変えずに、
+> AI が既に言っていたことを人へ渡すだけ**なので、上の「頻度を測ってから決める」は
+> そのまま生きている——`blank` を人へ回すかどうかは、まだ決めていない。
+
 #### この変更が持ち込むリスク
 
 **モデルが正しい切り出しに対して `not_the_answer` と言い始めると、本当に採点できた

@@ -3,6 +3,7 @@
 //
 
 // ignore_for_file: unused_element
+import 'package:auto_scoring_api/src/model/answer_image_finding.dart';
 import 'package:auto_scoring_api/src/model/score_value_response.dart';
 import 'package:built_collection/built_collection.dart';
 import 'package:auto_scoring_api/src/model/criterion_result_response.dart';
@@ -14,6 +15,7 @@ part 'grade_result_response.g.dart';
 /// GradeResultResponse
 ///
 /// Properties:
+/// * [answerImageFinding]
 /// * [comment]
 /// * [confidence]
 /// * [createdAt]
@@ -27,6 +29,10 @@ part 'grade_result_response.g.dart';
 @BuiltValue()
 abstract class GradeResultResponse
     implements Built<GradeResultResponse, GradeResultResponseBuilder> {
+  @BuiltValueField(wireName: r'answer_image_finding')
+  AnswerImageFinding? get answerImageFinding;
+  // enum answerImageFindingEnum {  answer,  blank,  not_the_answer,  };
+
   @BuiltValueField(wireName: r'comment')
   String? get comment;
 
@@ -86,6 +92,13 @@ class _$GradeResultResponseSerializer
     GradeResultResponse object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
+    if (object.answerImageFinding != null) {
+      yield r'answer_image_finding';
+      yield serializers.serialize(
+        object.answerImageFinding,
+        specifiedType: const FullType.nullable(AnswerImageFinding),
+      );
+    }
     if (object.comment != null) {
       yield r'comment';
       yield serializers.serialize(
@@ -166,6 +179,14 @@ class _$GradeResultResponseSerializer
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
+        case r'answer_image_finding':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(AnswerImageFinding),
+          ) as AnswerImageFinding?;
+          if (valueDes == null) continue;
+          result.answerImageFinding = valueDes;
+          break;
         case r'comment':
           final valueDes = serializers.deserialize(
             value,

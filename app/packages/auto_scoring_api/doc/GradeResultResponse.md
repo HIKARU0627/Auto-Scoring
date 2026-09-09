@@ -8,6 +8,7 @@ import 'package:auto_scoring_api/api.dart';
 ## Properties
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**answerImageFinding** | [**AnswerImageFinding**](AnswerImageFinding.md) |  | [optional] 
 **comment** | **String** |  | [optional] 
 **confidence** | **num** |  | 
 **createdAt** | [**DateTime**](DateTime.md) |  | 
