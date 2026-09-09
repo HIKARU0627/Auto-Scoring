@@ -9,22 +9,27 @@ walks the whole path with detection supplying the coordinates and asserts the
 thing that actually matters at the end: the submission's answer image is a
 *crop of the confirmed area*, not the whole page.
 
-Merge order is #101 -> #103 -> #105. This branch has neither of the first two,
-so the two things they contribute are supplied here the way those Issues
-supply them: the questions are written as `Question` rows (what
-``/criteria/confirm`` does) and their points come from a `SCORE` region (the
-pre-Issue-#103 path `build_questions_and_rubrics` still supports). Neither
-substitution touches the part under test -- the answer-area coordinates and
-the gate they open.
+Everything the walk needs now comes from the endpoint that owns it. This
+module was written while #101 and #103 were still unmerged, and stood in for
+them by inserting `Question` rows and a CONFIRMED `DependencyGraph` straight
+into the database; both are merged, so the substitution is gone and the
+questions and the graph are produced by ``/criteria/*`` and
+``/dependency-graph/*`` here (Issue #116). The 採点基準 is typed in rather
+than extracted -- ``PUT /criteria`` is the hand-entry path Issue #95
+決定 8 requires to exist, and using it means this module needs no scripted
+extraction provider at all. The only external service substituted is the
+answer-area detector.
+
+The path this module walks is joined to grading, review and export in
+`test_e2e_intake_to_export.py`; what it asserts on its own is the answer-area
+half: the coordinates, and the ``ready`` gate they open.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,8 +44,6 @@ from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionRequest,
     parse_answer_area_detection,
 )
-from auto_scoring.domain.dependency_graph import DependencyGraph, DependencyGraphStatus
-from auto_scoring.domain.models import Question
 from auto_scoring.domain.pdf_intake import IntakeLimits
 
 _TOKEN = "answer-area-flow-token"
@@ -111,42 +114,59 @@ def _session_factory(data_root: Path) -> sessionmaker[Session]:
     return build_session_factory(create_sqlite_engine(sqlite_url(data_root / "database.sqlite")))
 
 
-def _confirmed_graph(test_id: str) -> DependencyGraph:
-    """The other half of the `ready` gate (Issue #26), confirmed directly --
-    this test is about the profile half."""
-    now = datetime(2026, 1, 1)
-    return DependencyGraph(
-        id=f"{test_id}:v1",
-        test_id=test_id,
-        version=1,
-        question_ids=frozenset({f"{test_id}:問1"}),
-        edges=(),
-        unresolved=(),
-        status=DependencyGraphStatus.CONFIRMED,
-        created_at=now,
-        confirmed_at=now,
+def _confirm_criteria(client: TestClient, test_id: str) -> None:
+    """The test's one question, its points and its 採点基準, typed in by a
+    reviewer and confirmed (Issue #103).
+
+    This is what writes the `Question` row detection then reads: an answer
+    area can only be assigned to a question that is already confirmed.
+    """
+    saved = client.put(
+        f"/tests/{test_id}/criteria",
+        headers=_auth(),
+        json={
+            "questions": [
+                {
+                    "number": "問1",
+                    "points": 10,
+                    "model_answer": "問1の模範解答",
+                    "criteria": [{"description": "要点に触れている", "kind": "add", "points": 10}],
+                    "source_pages": [],
+                    "note": None,
+                }
+            ],
+            "declared_total_points": 10,
+        },
     )
+    assert saved.status_code == 200, saved.text
+    confirmed = client.post(
+        f"/tests/{test_id}/criteria/confirm",
+        headers=_auth(),
+        json={"revision": saved.json()["revision"]},
+    )
+    assert confirmed.status_code == 200, confirmed.text
 
 
-def _region(**overrides: Any) -> dict[str, Any]:
-    region = {
-        "region_id": "r",
-        "kind": "answer_area",
-        "page_index": 0,
-        "bbox": {"x0": 0.0, "y0": 0.0, "x1": 0.5, "y1": 0.1},
-        "label": "問1",
-        "confirmed": False,
-        "text": None,
-    }
-    region.update(overrides)
-    return region
+def _confirm_dependency_graph(client: TestClient, test_id: str) -> None:
+    """The other half of the `ready` gate (Issue #26). One question, so the
+    real analyzer has no edge to find and there is none to confirm."""
+    analyzed = client.post(
+        f"/tests/{test_id}/dependency-graph/analyze", headers=_auth(), json={"overrides": []}
+    )
+    assert analyzed.status_code == 200, analyzed.text
+    confirmed = client.post(
+        f"/tests/{test_id}/dependency-graph/confirm",
+        headers=_auth(),
+        json={"version": analyzed.json()["version"], "edges": []},
+    )
+    assert confirmed.status_code == 200, confirmed.text
 
 
 def test_registration_reaches_ready_and_crops_each_answer_to_its_area(
     client: TestClient, data_root: Path
 ) -> None:
-    # 1. A test exists. (With Issue #101 this comes from the folder import;
-    #    the two PDFs here are only what this branch's `POST /tests` asks for.)
+    # 1. A test exists. The folder import (Issue #101) is what produces this
+    #    call in the app; the 採点基準PDF is its one required upload.
     created = client.post(
         "/tests",
         headers=_auth(),
@@ -156,13 +176,9 @@ def test_registration_reaches_ready_and_crops_each_answer_to_its_area(
     assert created.status_code == 201, created.text
     test_id = created.json()["id"]
 
-    # 2. Its questions are confirmed. (With Issue #103 this is
-    #    `/criteria/confirm`; the row it writes is what detection reads.)
-    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
-        uow.questions.add(
-            Question(id=f"{test_id}:問1", test_id=test_id, number="問1", page=1, points=10)
-        )
-        uow.commit()
+    # 2. Its 配点と採点基準 are confirmed (Issue #103). The `Question` row
+    #    that writes is what detection reads.
+    _confirm_criteria(client, test_id)
 
     # 3. The reviewer picks one answer sheet and detects the answer areas.
     assert (
@@ -179,25 +195,13 @@ def test_registration_reaches_ready_and_crops_each_answer_to_its_area(
     assert body["undetected_question_numbers"] == []
     assert body["unassigned_region_ids"] == []
 
-    # 4. The reviewer confirms. The SCORE region is this branch's stand-in for
-    #    the confirmed 採点基準 (see the module docstring); the ANSWER_AREA is
-    #    the one under test, kept exactly as detected.
+    # 4. The reviewer confirms. The ANSWER_AREA is the one under test, kept
+    #    exactly as detected; the points and the 採点基準 come from step 2.
     detected_area = next(region for region in body["regions"] if region["kind"] == "answer_area")
     saved = client.put(
         f"/tests/{test_id}/profile",
         headers=_auth(),
-        json={
-            "regions": [
-                detected_area,
-                _region(region_id="question-1", kind="question", text="問1"),
-                _region(
-                    region_id="score-1",
-                    kind="score",
-                    text="10点",
-                    bbox={"x0": 0.8, "y0": 0.0, "x1": 0.9, "y1": 0.1},
-                ),
-            ]
-        },
+        json={"regions": [detected_area]},
     )
     assert saved.status_code == 200, saved.text
     confirmed = client.post(
@@ -208,9 +212,7 @@ def test_registration_reaches_ready_and_crops_each_answer_to_its_area(
     assert confirmed.status_code == 200, confirmed.text
 
     # 5. The dependency graph -- the other half of the `ready` gate (Issue #26).
-    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
-        uow.dependency_graphs.save(_confirmed_graph(test_id))
-        uow.commit()
+    _confirm_dependency_graph(client, test_id)
 
     # 6. The gate opens. This is the whole point of Issue #105: before it,
     #    `profile_confirmed` was unreachable for a real test.
@@ -263,12 +265,7 @@ def test_one_confirmed_layout_serves_every_later_answer_of_that_test(
         files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
     )
     test_id = created.json()["id"]
-    with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
-        uow.questions.add(
-            Question(id=f"{test_id}:問1", test_id=test_id, number="問1", page=1, points=10)
-        )
-        uow.dependency_graphs.save(_confirmed_graph(test_id))
-        uow.commit()
+    _confirm_criteria(client, test_id)
 
     client.put(
         f"/tests/{test_id}/answer-layout",
@@ -279,24 +276,14 @@ def test_one_confirmed_layout_serves_every_later_answer_of_that_test(
     saved = client.put(
         f"/tests/{test_id}/profile",
         headers=_auth(),
-        json={
-            "regions": [
-                next(r for r in body["regions"] if r["kind"] == "answer_area"),
-                _region(region_id="question-1", kind="question", text="問1"),
-                _region(
-                    region_id="score-1",
-                    kind="score",
-                    text="10点",
-                    bbox={"x0": 0.8, "y0": 0.0, "x1": 0.9, "y1": 0.1},
-                ),
-            ]
-        },
+        json={"regions": [next(r for r in body["regions"] if r["kind"] == "answer_area")]},
     )
     client.post(
         f"/tests/{test_id}/profile/confirm",
         headers=_auth(),
         json={"revision": saved.json()["revision"]},
     )
+    _confirm_dependency_graph(client, test_id)
     client.post(f"/tests/{test_id}/complete-registration", headers=_auth())
 
     # Three different students, one confirmed layout, no further human step.
