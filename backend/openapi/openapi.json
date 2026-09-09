@@ -2683,8 +2683,8 @@
             "title": "Confirmed Questions",
             "type": "integer"
           },
-          "failed_questions": {
-            "title": "Failed Questions",
+          "manual_grading_questions": {
+            "title": "Manual Grading Questions",
             "type": "integer"
           },
           "submission_id": {
@@ -2700,7 +2700,7 @@
           "submission_id",
           "total_questions",
           "confirmed_questions",
-          "failed_questions"
+          "manual_grading_questions"
         ],
         "title": "SubmissionReviewProgressResponse",
         "type": "object"

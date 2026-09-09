@@ -1143,14 +1143,27 @@ def test_manual_grading_can_be_undone_back_to_unconfirmed(
 # --------------------------------------------------------------------------- #
 
 
-def _seed_two_question_test(session_factory: sessionmaker[Session]) -> None:
+def _seed_two_question_test(
+    session_factory: sessionmaker[Session], *, ai_graded: tuple[str, ...] = ("q-1", "q-2")
+) -> None:
+    """2設問のテストと答案1件。
+
+    ``ai_graded`` に挙げた設問にだけ AI 採点を置く。**AI が何も出さなかった設問**を
+    作るためのつまみで、それが Issue #118 の「点数を入力」が要る形である。
+    """
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.tests.add(make_test())
         uow.questions.add(make_question(id="q-1", number="1"))
         uow.questions.add(make_question(id="q-2", number="2"))
         uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
-        uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
-        uow.grades.add(make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI))
+        for question_id in ai_graded:
+            uow.grades.add(
+                make_grade(
+                    id=f"grade-{question_id}",
+                    question_id=question_id,
+                    source=GradingSource.AI,
+                )
+            )
         uow.commit()
 
 
@@ -1180,21 +1193,21 @@ def test_review_progress_counts_confirmed_questions(
             "submission_id": "sub-1",
             "total_questions": 2,
             "confirmed_questions": 1,
-            "failed_questions": 0,
+            "manual_grading_questions": 0,
         }
     ]
 
 
-def test_review_progress_counts_questions_whose_latest_job_failed(
+def test_review_progress_counts_questions_a_person_must_grade_themselves(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    """答案が「詰んでいる」ことは、この数にしか出ない。
+    """人が自分で点数を入れる設問の数 (Issue #118 の「点数を入力」)。
 
-    AI 採点が失敗した設問は、人が確定する手段がまだ無い (Issue #118)。金曜の午後の
-    終わりに「残り3枚」を見たとき、**自分が後回しにした答案と、AI が失敗して手が
-    出ない答案は読み分けられなければならない**。
+    ほかの答案が AI の提案を確認するだけで済むのに対し、この答案は1問ずつ自分で
+    採点する。**金曜の午後の終わりに「残り3枚」を見たとき、それが「見るだけ」なのか
+    「自分で採点する」なのかで、残り時間の見積もりがまるで違う。**
     """
-    _seed_two_question_test(session_factory)
+    _seed_two_question_test(session_factory, ai_graded=("q-2",))
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         uow.jobs.add(
             make_job(id="job-q1", question_id="q-1", state=JobState.FAILED, created_at=at(10))
@@ -1202,7 +1215,65 @@ def test_review_progress_counts_questions_whose_latest_job_failed(
         uow.commit()
 
     body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
-    assert body[0]["failed_questions"] == 1
+    assert body[0]["manual_grading_questions"] == 1
+
+
+def test_review_progress_counts_a_finished_question_that_produced_no_ai_grade(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """**「ジョブが失敗した」を数えるのでは足りない。**
+
+    設問が人の手に渡る道は失敗だけではない。ほぼ余白の切り出しを AI へ送らない
+    (Issue #122)、OCR の無い端末 (Issue #114) -- どちらもジョブは ``SUCCEEDED``
+    で終わり、`GradeResult` を残さない。**講師にとっては同じこと**で、その設問は
+    自分で採点するしかない。
+
+    この形を取りこぼすと、一覧が「0」と言っているのに開いた先が「点数を入力」を
+    出す。それは Issue #84 そのものである。
+    """
+    _seed_two_question_test(session_factory, ai_graded=("q-2",))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            make_job(id="job-q1", question_id="q-1", state=JobState.SUCCEEDED, created_at=at(10))
+        )
+        uow.commit()
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body[0]["manual_grading_questions"] == 1
+
+
+def test_review_progress_does_not_count_a_question_the_ai_did_grade(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """AI が採点した設問は、人が確認するだけでよい。"""
+    _seed_two_question_test(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            make_job(id="job-q1", question_id="q-1", state=JobState.SUCCEEDED, created_at=at(10))
+        )
+        uow.commit()
+        # `_seed_two_question_test` が q-1 にも AI 採点を置いている。
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body[0]["manual_grading_questions"] == 0
+
+
+def test_review_progress_does_not_count_a_question_still_being_processed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """まだ動いている設問は、人の仕事ではない。
+
+    実行中のジョブはこれから採点結果を出すかもしれない。ここで数えると、待って
+    いれば済むものを「自分で採点する」と読ませることになる。
+    """
+    _seed_two_question_test(session_factory, ai_graded=("q-2",))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            make_job(id="job-q1", question_id="q-1", state=JobState.RUNNING, created_at=at(10))
+        )
+        uow.commit()
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body[0]["manual_grading_questions"] == 0
 
 
 def test_review_progress_reads_only_the_latest_job_of_a_question(
@@ -1228,7 +1299,7 @@ def test_review_progress_reads_only_the_latest_job_of_a_question(
         uow.commit()
 
     body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
-    assert body[0]["failed_questions"] == 0
+    assert body[0]["manual_grading_questions"] == 0
 
 
 def test_review_progress_is_empty_for_a_test_with_no_answers(

@@ -1020,6 +1020,17 @@ def find_answer_image(images: Sequence[AnswerImage], question_id: str) -> Answer
     return max(matches, key=lambda image: image.created_at)
 
 
+#: `JobState`s past which nothing still running could produce a grade.
+#:
+#: ``FAILED`` is here even though the queue's own retry policy can move it back
+#: to ``QUEUED``: from the reviewer's side it has stopped, and a retry that
+#: revives it will simply move the question on again. Mirrored on the client as
+#: `_PdfReviewPageState._terminalJobStates` -- the two must agree, because the
+#: same question must not offer 「点数を入力」 on one screen and be counted as
+#: still-running on the other (Issue #84).
+TERMINAL_JOB_STATES = frozenset({JobState.SUCCEEDED, JobState.FAILED, JobState.CANCELLED})
+
+
 def latest_job_for_question(jobs: Sequence[Job], question_id: str) -> Job | None:
     """The `Job` that describes where ``question_id`` currently stands.
 

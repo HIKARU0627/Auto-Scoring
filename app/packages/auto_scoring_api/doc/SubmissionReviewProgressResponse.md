@@ -9,7 +9,7 @@ import 'package:auto_scoring_api/api.dart';
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **confirmedQuestions** | **int** |  | 
-**failedQuestions** | **int** |  | 
+**manualGradingQuestions** | **int** |  | 
 **submissionId** | **String** |  | 
 **totalQuestions** | **int** |  | 
 

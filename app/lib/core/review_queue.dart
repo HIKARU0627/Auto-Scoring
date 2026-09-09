@@ -24,7 +24,7 @@ class ReviewQueueEntry {
     required this.submission,
     required this.totalQuestions,
     required this.confirmedQuestions,
-    required this.failedQuestions,
+    required this.manualGradingQuestions,
   });
 
   final SubmissionResponse submission;
@@ -48,7 +48,7 @@ class ReviewQueueEntry {
   /// **Issue #118 が入る前は、この数は「詰んだ」を意味していた** -- AI が
   /// 失敗した設問に人が点数を入れる経路が無く、その答案は本当に終わらなかった。
   /// いまは終わらせられる。**意味が変わったので、名前も文言もそこに合わせてある。**
-  final int failedQuestions;
+  final int manualGradingQuestions;
 
   String get id => submission.id;
 
@@ -60,7 +60,7 @@ class ReviewQueueEntry {
       HomeWorkBucket.of(submission.state) == HomeWorkBucket.needsReview;
 
   /// AIが採点できなかった設問を抱えている -- 人が自分で点数を入れる必要がある。
-  bool get needsManualGrading => failedQuestions > 0;
+  bool get needsManualGrading => manualGradingQuestions > 0;
 
   /// 済んでいないが、1問以上は確定している。
   ///
@@ -92,7 +92,8 @@ class ReviewQueue {
           totalQuestions: progressById[submission.id]?.totalQuestions ?? 0,
           confirmedQuestions:
               progressById[submission.id]?.confirmedQuestions ?? 0,
-          failedQuestions: progressById[submission.id]?.failedQuestions ?? 0,
+          manualGradingQuestions:
+              progressById[submission.id]?.manualGradingQuestions ?? 0,
         ),
     ]);
   }

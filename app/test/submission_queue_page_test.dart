@@ -41,13 +41,13 @@ void main() {
     required String id,
     int total = 5,
     int confirmed = 0,
-    int failed = 0,
+    int manualGrading = 0,
   }) => SubmissionReviewProgressResponse(
     (b) => b
       ..submissionId = id
       ..totalQuestions = total
       ..confirmedQuestions = confirmed
-      ..failedQuestions = failed,
+      ..manualGradingQuestions = manualGrading,
   );
 
   AppDependencies deps({
@@ -153,7 +153,7 @@ void main() {
           ),
         ],
         progress: [
-          buildProgress(id: 'stuck', failed: 1),
+          buildProgress(id: 'stuck', manualGrading: 1),
           buildProgress(id: 'fine'),
         ],
       ),

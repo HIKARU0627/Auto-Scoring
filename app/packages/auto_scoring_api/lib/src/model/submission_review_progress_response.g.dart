@@ -11,7 +11,7 @@ class _$SubmissionReviewProgressResponse
   @override
   final int confirmedQuestions;
   @override
-  final int failedQuestions;
+  final int manualGradingQuestions;
   @override
   final String submissionId;
   @override
@@ -23,7 +23,7 @@ class _$SubmissionReviewProgressResponse
 
   _$SubmissionReviewProgressResponse._(
       {required this.confirmedQuestions,
-      required this.failedQuestions,
+      required this.manualGradingQuestions,
       required this.submissionId,
       required this.totalQuestions})
       : super._();
@@ -41,7 +41,7 @@ class _$SubmissionReviewProgressResponse
     if (identical(other, this)) return true;
     return other is SubmissionReviewProgressResponse &&
         confirmedQuestions == other.confirmedQuestions &&
-        failedQuestions == other.failedQuestions &&
+        manualGradingQuestions == other.manualGradingQuestions &&
         submissionId == other.submissionId &&
         totalQuestions == other.totalQuestions;
   }
@@ -50,7 +50,7 @@ class _$SubmissionReviewProgressResponse
   int get hashCode {
     var _$hash = 0;
     _$hash = $jc(_$hash, confirmedQuestions.hashCode);
-    _$hash = $jc(_$hash, failedQuestions.hashCode);
+    _$hash = $jc(_$hash, manualGradingQuestions.hashCode);
     _$hash = $jc(_$hash, submissionId.hashCode);
     _$hash = $jc(_$hash, totalQuestions.hashCode);
     _$hash = $jf(_$hash);
@@ -61,7 +61,7 @@ class _$SubmissionReviewProgressResponse
   String toString() {
     return (newBuiltValueToStringHelper(r'SubmissionReviewProgressResponse')
           ..add('confirmedQuestions', confirmedQuestions)
-          ..add('failedQuestions', failedQuestions)
+          ..add('manualGradingQuestions', manualGradingQuestions)
           ..add('submissionId', submissionId)
           ..add('totalQuestions', totalQuestions))
         .toString();
@@ -79,10 +79,10 @@ class SubmissionReviewProgressResponseBuilder
   set confirmedQuestions(int? confirmedQuestions) =>
       _$this._confirmedQuestions = confirmedQuestions;
 
-  int? _failedQuestions;
-  int? get failedQuestions => _$this._failedQuestions;
-  set failedQuestions(int? failedQuestions) =>
-      _$this._failedQuestions = failedQuestions;
+  int? _manualGradingQuestions;
+  int? get manualGradingQuestions => _$this._manualGradingQuestions;
+  set manualGradingQuestions(int? manualGradingQuestions) =>
+      _$this._manualGradingQuestions = manualGradingQuestions;
 
   String? _submissionId;
   String? get submissionId => _$this._submissionId;
@@ -101,7 +101,7 @@ class SubmissionReviewProgressResponseBuilder
     final $v = _$v;
     if ($v != null) {
       _confirmedQuestions = $v.confirmedQuestions;
-      _failedQuestions = $v.failedQuestions;
+      _manualGradingQuestions = $v.manualGradingQuestions;
       _submissionId = $v.submissionId;
       _totalQuestions = $v.totalQuestions;
       _$v = null;
@@ -129,10 +129,10 @@ class SubmissionReviewProgressResponseBuilder
               confirmedQuestions,
               r'SubmissionReviewProgressResponse',
               'confirmedQuestions'),
-          failedQuestions: BuiltValueNullFieldError.checkNotNull(
-              failedQuestions,
+          manualGradingQuestions: BuiltValueNullFieldError.checkNotNull(
+              manualGradingQuestions,
               r'SubmissionReviewProgressResponse',
-              'failedQuestions'),
+              'manualGradingQuestions'),
           submissionId: BuiltValueNullFieldError.checkNotNull(submissionId,
               r'SubmissionReviewProgressResponse', 'submissionId'),
           totalQuestions: BuiltValueNullFieldError.checkNotNull(totalQuestions,

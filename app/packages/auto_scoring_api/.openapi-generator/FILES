@@ -187,4 +187,3 @@ lib/src/model/update_profile_request.dart
 lib/src/model/validation_error.dart
 lib/src/serializers.dart
 pubspec.yaml
-test/submission_review_progress_response_test.dart

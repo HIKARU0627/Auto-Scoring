@@ -31,6 +31,7 @@ Endpoints:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Response
@@ -57,12 +58,14 @@ from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.models import (
     MAX_COMMENT_CHARS,
     MAX_RECOGNIZED_TEXT_LENGTH,
+    TERMINAL_JOB_STATES,
     Annotation,
     AnnotationKind,
     CriterionOutcome,
     DomainError,
     GradeResult,
-    JobState,
+    GradingSource,
+    Job,
     NormalizedRect,
     Question,
     RecognitionResult,
@@ -72,6 +75,8 @@ from auto_scoring.domain.models import (
 from auto_scoring.domain.review_workflow import (
     ReviewVersionConflict,
     count_confirmed_questions,
+    effective_latest_review,
+    is_confirmed,
 )
 from auto_scoring.jobs.queue import JobQueueService
 
@@ -92,12 +97,22 @@ class SubmissionReviewProgressResponse(BaseModel):
     submission_id: str
     total_questions: int
     confirmed_questions: int
-    #: Questions whose *latest* job failed (`latest_job_for_question`). A
-    #: reviewer cannot confirm these until Issue #118 lands, so an answer
-    #: carrying one is stuck rather than merely unfinished -- 「自分が後回しに
-    #: した答案」と「AIが失敗して手が出ない答案」は、金曜の午後の終わりに
-    #: 読み分けられなければならない。
-    failed_questions: int
+    #: Questions the reviewer will have to grade themselves: the pipeline has
+    #: stopped on them (`TERMINAL_JOB_STATES`) without producing an AI grade,
+    #: and nobody has confirmed them yet. This is the count 「点数を入力」
+    #: (Issue #118) exists for.
+    #:
+    #: **Not "the job failed".** A question can end up here without any failure
+    #: -- a crop that was never worth sending to the AI, a host with no OCR
+    #: (Issue #114) -- and what matters to the reviewer is the same either way:
+    #: this answer needs them to produce N grades by hand rather than confirm N
+    #: proposals. 金曜の午後の終わりに「残り3枚」を見たとき、それが「見るだけ」
+    #: なのか「1問ずつ自分で採点する」なのかで、残り時間の見積もりがまるで違う。
+    #:
+    #: Deliberately the server-side twin of the client's `_canGradeManually`
+    #: (`pdf_review_page.dart`): 一覧が0と言っているのに開いた先が
+    #: 「点数を入力」を出す、は起きてはならない (Issue #84)。
+    manual_grading_questions: int
 
 
 class NormalizedRectResponse(BaseModel):
@@ -412,6 +427,37 @@ def _version_conflict(error: ReviewVersionConflict) -> HTTPException:
     return HTTPException(409, detail=str(error))
 
 
+def _needs_manual_grading(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    submission_id: str,
+    question_id: str,
+    jobs: Sequence[Job],
+    reviews: Sequence[Review],
+) -> bool:
+    """Whether this question is one the reviewer has to grade themselves.
+
+    Three conditions, and all three are the client's (`_canGradeManually` in
+    `pdf_review_page.dart`) restated on the server:
+
+    1. The pipeline has stopped on it (`TERMINAL_JOB_STATES`). A question still
+       queued or running may yet produce a grade, so it is not the reviewer's
+       job *yet*. A question with no job at all has not even been asked.
+    2. The AI produced no grade. Issue #97 deliberately persists nothing when
+       grading fails, and Issue #122 will stop sending crops that are almost
+       blank at all -- **neither leaves a `GradeResult` behind**, which is
+       exactly why "the job failed" is the wrong thing to count.
+    3. Nobody has confirmed it yet -- including by having already graded it
+       manually. This counts *remaining* work, not work that once existed.
+    """
+    job = latest_job_for_question(jobs, question_id)
+    if job is None or job.state not in TERMINAL_JOB_STATES:
+        return False
+    if uow.grades.latest(submission_id, question_id, GradingSource.AI) is not None:
+        return False
+    return not is_confirmed(effective_latest_review(reviews))
+
+
 def build_review_router(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
@@ -476,11 +522,16 @@ def build_review_router(
                         confirmed_questions=count_confirmed_questions(
                             question_ids, reviews_by_question
                         ),
-                        failed_questions=sum(
+                        manual_grading_questions=sum(
                             1
                             for question_id in question_ids
-                            if (job := latest_job_for_question(jobs, question_id)) is not None
-                            and job.state is JobState.FAILED
+                            if _needs_manual_grading(
+                                uow,
+                                submission_id=submission.id,
+                                question_id=question_id,
+                                jobs=jobs,
+                                reviews=reviews_by_question[question_id],
+                            )
                         ),
                     )
                 )

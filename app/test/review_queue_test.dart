@@ -26,13 +26,13 @@ void main() {
     required String id,
     int total = 5,
     int confirmed = 0,
-    int failed = 0,
+    int manualGrading = 0,
   }) => SubmissionReviewProgressResponse(
     (b) => b
       ..submissionId = id
       ..totalQuestions = total
       ..confirmedQuestions = confirmed
-      ..failedQuestions = failed,
+      ..manualGradingQuestions = manualGrading,
   );
 
   group('並び順', () {
@@ -165,7 +165,7 @@ void main() {
           sub(id: 'fine', state: 'ai_processed', day: 2),
         ],
         progress: [
-          progress(id: 'stuck', failed: 1),
+          progress(id: 'stuck', manualGrading: 1),
           progress(id: 'fine'),
         ],
       );

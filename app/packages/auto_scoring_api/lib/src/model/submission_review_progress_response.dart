@@ -12,7 +12,7 @@ part 'submission_review_progress_response.g.dart';
 ///
 /// Properties:
 /// * [confirmedQuestions]
-/// * [failedQuestions]
+/// * [manualGradingQuestions]
 /// * [submissionId]
 /// * [totalQuestions]
 @BuiltValue()
@@ -23,8 +23,8 @@ abstract class SubmissionReviewProgressResponse
   @BuiltValueField(wireName: r'confirmed_questions')
   int get confirmedQuestions;
 
-  @BuiltValueField(wireName: r'failed_questions')
-  int get failedQuestions;
+  @BuiltValueField(wireName: r'manual_grading_questions')
+  int get manualGradingQuestions;
 
   @BuiltValueField(wireName: r'submission_id')
   String get submissionId;
@@ -67,9 +67,9 @@ class _$SubmissionReviewProgressResponseSerializer
       object.confirmedQuestions,
       specifiedType: const FullType(int),
     );
-    yield r'failed_questions';
+    yield r'manual_grading_questions';
     yield serializers.serialize(
-      object.failedQuestions,
+      object.manualGradingQuestions,
       specifiedType: const FullType(int),
     );
     yield r'submission_id';
@@ -114,12 +114,12 @@ class _$SubmissionReviewProgressResponseSerializer
           ) as int;
           result.confirmedQuestions = valueDes;
           break;
-        case r'failed_questions':
+        case r'manual_grading_questions':
           final valueDes = serializers.deserialize(
             value,
             specifiedType: const FullType(int),
           ) as int;
-          result.failedQuestions = valueDes;
+          result.manualGradingQuestions = valueDes;
           break;
         case r'submission_id':
           final valueDes = serializers.deserialize(
