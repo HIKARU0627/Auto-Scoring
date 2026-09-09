@@ -4,7 +4,7 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 
 /// 「PDFを選ぶボタン + 選んだファイル名」の1行。
 ///
-/// テスト登録画面 (模範解答/採点マニュアル) and 答案取込画面 both need it, and
+/// 資料取込画面 (採点基準/答案/添削資料) and テスト設定画面 both need it, and
 /// both had built it by hand with slightly different gaps.
 ///
 /// The file name is shown next to the button rather than replacing its label,
