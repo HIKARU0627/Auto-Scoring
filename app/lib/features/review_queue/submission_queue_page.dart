@@ -9,6 +9,7 @@ import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/review_queue.dart';
+import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
 
 /// 答案キュー画面 (Issue #113)。
@@ -208,6 +209,9 @@ class _QueueRow extends StatelessWidget {
   final int total;
   final VoidCallback onOpen;
 
+  String? get _reasonSummary =>
+      describeReviewReason(entry.submission.reviewReason);
+
   @override
   Widget build(BuildContext context) {
     final visual = SubmissionStatusVisual.of(entry.submission.state);
@@ -244,16 +248,18 @@ class _QueueRow extends StatelessWidget {
                 ),
             ],
           ),
-          if (entry.submission.reviewReason != null) ...[
+          // **生の `review_reason` は出さない。** あれは
+          // `answer_area_undefined:q-1;crop_nearly_blank:q-2,q-3` という
+          // ワイヤ形式で、講師に読ませるものではない (Issue #122 が
+          // `core/submission_review_reason.dart` を置いた理由そのもの)。
+          // 知らない旗しか無ければ何も出さない -- 状態ラベルだけで足りる。
+          if (_reasonSummary case final summary?) ...[
             const SizedBox(height: AppSpacing.xs),
-            Text(
-              entry.submission.reviewReason!,
-              style: context.textRoles.uiLabel,
-            ),
+            Text(summary, style: context.textRoles.uiLabel),
           ],
         ],
       ),
-      isThreeLine: entry.submission.reviewReason != null,
+      isThreeLine: _reasonSummary != null,
       onTap: onOpen,
     );
   }

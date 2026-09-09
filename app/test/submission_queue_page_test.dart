@@ -105,7 +105,35 @@ void main() {
     // ラベルは `SubmissionStatusVisual` のもの。この画面が独自の語を作らない。
     expect(find.text('要確認'), findsOneWidget);
     // 取込が何を見つけたのかを出す。「要確認」だけでは何を見ればいいか分からない。
-    expect(find.text('answer_area_undefined:q-2'), findsOneWidget);
+    // **ただし生のワイヤ形式は出さない** -- `answer_area_undefined:q-2` は
+    // 講師に読ませるものではない (Issue #122 の `submission_review_reason.dart`)。
+    expect(find.text('回答欄が確定できない設問が1問あります'), findsOneWidget);
+    expect(find.textContaining('answer_area_undefined'), findsNothing);
+  });
+
+  testWidgets('知らない理由には何も言わない', (tester) async {
+    // 新しいサイドカーがこのビルドの知らない旗を立てたとき、当てずっぽうの
+    // ラベルを付けると実際とは違うことを講師に読ませることになる。
+    await pumpAppAt(
+      tester,
+      AppRoutes.submissionQueue('t1'),
+      dependencies: deps(
+        submissions: [
+          buildSubmission(
+            id: 'odd',
+            state: 'needs_review',
+            studentLabel: '答案A',
+            reviewReason: 'something_new_we_do_not_know:q-1',
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 状態ラベルは出る。理由の行は出ない。
+    expect(find.text('要確認'), findsOneWidget);
+    expect(find.textContaining('something_new'), findsNothing);
+    expect(find.textContaining('あります'), findsNothing);
   });
 
   testWidgets('途中まで確定した答案が、手つかずと区別できる', (tester) async {
