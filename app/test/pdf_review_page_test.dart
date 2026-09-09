@@ -5286,6 +5286,73 @@ void main() {
         ),
     ];
 
+    /// 判断材料を最後まで表示してから承認する。
+    ///
+    /// Issue #85 のゲートがあるので、**スクロールせずに承認はできない** --
+    /// 押しても「この下にまだ判断材料があります」と言われるだけである。
+    /// #122 で切り出し画像が先頭に入り、材料はさらに縦に伸びた。
+    Future<void> approveAfterReadingMaterial(WidgetTester tester) async {
+      for (var page = 0; page < 40; page++) {
+        final reveal = find.byKey(const Key('review-reveal-material-button'));
+        if (reveal.evaluate().isEmpty) break;
+        await tester.tap(reveal);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const Key('review-approve-button')));
+      await tester.pump();
+      await _settlePdf(tester);
+    }
+
+    testWidgets('最後の設問を確定すると、次の答案へ進む', (tester) async {
+      // **この Issue の受入条件2そのもの。** これまでは「最後の設問です」と
+      // 出て止まり、ホームへ戻るしかなかった。40枚だとその往復だけで80回の
+      // 操作になる。
+      //
+      // 設問は1問だけなので、最初の設問がそのまま最後の設問である。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          queueSubmissions: queueOf(['sub-1', 'sub-2']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await approveAfterReadingMaterial(tester);
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(
+        find.byKey(const ValueKey('pdf-review/test-1/sub-2')),
+        findsOneWidget,
+      );
+      // 行き止まりの文言は、もう出さない。
+      expect(find.textContaining('最後の設問です'), findsNothing);
+    });
+
+    testWidgets('次の答案が無ければ、終わったと言ってキューへ戻せる', (tester) async {
+      // 「最後の設問です」で止めるのと、「すべて確認しました」と言うのとでは、
+      // 講師にとって全く違う話である。
+      await _pumpReview(
+        tester,
+        _dependencies(
+          pdfBytes: _pocA4PortraitPdf(),
+          q1: _question(),
+          grades: [_grade()],
+          queueSubmissions: queueOf(['sub-1']),
+        ),
+      );
+      await tester.pump();
+      await _settlePdf(tester);
+
+      await approveAfterReadingMaterial(tester);
+
+      expect(find.textContaining('このテストの答案はすべて確認しました'), findsOneWidget);
+      expect(find.text('答案キューへ'), findsOneWidget);
+    });
+
     testWidgets('AppBarに何枚目かが出る', (tester) async {
       // 40枚を流す作業で「あと何枚か」が見えないのは、終わりの見えない作業を
       // させることになる (受入5)。
@@ -5313,6 +5380,10 @@ void main() {
       await tester.pump();
       await _settlePdf(tester);
 
+      // **先に「画面が描けている」ことを言う。** これが無いと、画面が出て
+      // いなくても `findsNothing` は通ってしまい、何も検査していないテストが
+      // 緑のまま残る (Issue #129 が5箇所で見つけた形)。
+      expect(find.textContaining('添削レビュー'), findsOneWidget);
       expect(find.textContaining('件目'), findsNothing);
     });
 
