@@ -14,6 +14,7 @@ into, mirroring `jobs.recognition_processor`'s own place in the architecture.
 
 from __future__ import annotations
 
+import logging
 from asyncio import to_thread
 from collections.abc import Sequence
 from pathlib import Path
@@ -62,6 +63,8 @@ from auto_scoring.domain.review_workflow import (
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor, recognition_result_id
+
+logger = logging.getLogger(__name__)
 
 
 def grade_result_id(job: Job) -> str:
@@ -397,6 +400,14 @@ class GradingJobProcessor:
         diagnosis = _diagnosis(failure, provider_name=self._ai_provider.name)
         if diagnosis:
             message = f"{message} [{diagnosis}]"
+        # The same string, to the log as well as to `Job.last_error` (Issue
+        # #121). `FallbackAIProvider` already logs one line per link it falls
+        # through, but a host configured with a single provider never builds
+        # a chain at all -- and that is exactly the shape the live run had,
+        # which is why a whole afternoon of permanent failures left no trace
+        # in the sidecar log. Safe by construction: `message` is this
+        # method's own literals plus `_diagnosis`.
+        logger.warning("%s", message)
         return ProcessingResult(
             outcome=ProcessingOutcome.FAILED,
             error_category=category,
@@ -420,6 +431,7 @@ def _diagnosis(failure: ProviderFailure | None, *, provider_name: str) -> str:
             provider=provider_name,
             error=type(failure).__name__,
             status_code=failure.status_code,
+            detail=failure.detail,
         ),
     )
     return "; ".join(str(attempt) for attempt in attempts)

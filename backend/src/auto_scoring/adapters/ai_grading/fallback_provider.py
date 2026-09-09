@@ -132,6 +132,7 @@ class FallbackAIProvider:
                     provider=provider.name,
                     error=type(exc).__name__,
                     status_code=exc.status_code,
+                    detail=exc.detail,
                 )
                 attempts.append(attempt)
                 # WARNING, and only the `ProviderAttempt`: never the

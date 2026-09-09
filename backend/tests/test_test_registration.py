@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import pytest
 
+from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaQuestion
+from auto_scoring.domain.models import NormalizedRect
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
 from auto_scoring.domain.test_registration import (
     CrossPageRegionError,
@@ -32,6 +34,14 @@ def _region(
         confirmed=True,
         text=text,
     )
+
+
+def _rect(bbox: NormalizedBBox) -> NormalizedRect:
+    return NormalizedRect(x=bbox.x0, y=bbox.y0, width=bbox.x1 - bbox.x0, height=bbox.y1 - bbox.y0)
+
+
+def _draft_with_one_question() -> CriteriaDraft:
+    return CriteriaDraft(test_id="test-1", questions=(CriteriaQuestion(number="1", points=5),))
 
 
 def test_builds_one_question_from_its_regions() -> None:
@@ -285,3 +295,89 @@ def test_an_annotation_area_on_a_different_page_than_its_question_is_rejected() 
 
     with pytest.raises(CrossPageRegionError):
         build_questions_and_rubrics("test-1", regions)
+
+
+# --------------------------------------------------------------------------- #
+# Issue #120: where the score and the comment go when nobody placed them
+# --------------------------------------------------------------------------- #
+
+_ANSWER_BBOX = NormalizedBBox(x0=0.1, y0=0.2, x1=0.9, y1=0.5)
+
+
+def _new_path_regions() -> list[Region]:
+    """What the #101 → #103 → #105 path actually confirms: a question and its
+    answer box. Issue #103 removed `SCORE` / `RUBRIC` / `MODEL_ANSWER` from
+    the screen so the 配点 has exactly one input, and `ANNOTATION_AREA` was
+    never on it either -- so neither region exists on this path.
+    """
+    return [
+        _region(RegionKind.QUESTION, "1", text="問1"),
+        Region(
+            region_id="answer_area-1",
+            kind=RegionKind.ANSWER_AREA,
+            page_index=0,
+            bbox=_ANSWER_BBOX,
+            label="1",
+            confirmed=True,
+        ),
+        _region(RegionKind.SCORE, "1", text="5点"),
+    ]
+
+
+def test_a_question_with_no_score_region_still_gets_somewhere_to_write() -> None:
+    """Issue #120: `score_area`/`comment_area` came only from `SCORE`/
+    `ANNOTATION_AREA` regions, which the current registration path never
+    produces -- so every question registered through it had nowhere to draw,
+    and the export ran to success while writing nothing at all.
+
+    The answer box is the one coordinate this path always confirms, so it is
+    what the two areas are derived from when nobody placed them by hand.
+    """
+    regions = [r for r in _new_path_regions() if r.kind is not RegionKind.SCORE]
+
+    questions, _ = build_questions_and_rubrics(
+        "test-1", regions, criteria=_draft_with_one_question()
+    )
+
+    question = questions[0]
+    assert question.answer_area is not None
+    assert question.score_area is not None, "the score had nowhere to go"
+    assert question.comment_area is not None, "the comment had nowhere to go"
+    # Derived side by side, not on top of each other: two marks drawn from
+    # the same rect would overlap and both be illegible.
+    score, comment = question.score_area, question.comment_area
+    assert score.x >= comment.x + comment.width - 1e-9
+    assert score.width > 0 and comment.width > 0
+
+
+def test_a_hand_placed_score_region_still_wins_over_the_derived_one() -> None:
+    """The pre-#101 path (a hand-written `PUT /profile` carrying `SCORE` /
+    `ANNOTATION_AREA` regions) is still supported and still authoritative --
+    deriving is the fallback for a question nobody placed, never an override.
+    """
+    regions = [*_new_path_regions(), _region(RegionKind.ANNOTATION_AREA, "1")]
+
+    questions, _ = build_questions_and_rubrics("test-1", regions)
+
+    question = questions[0]
+    assert question.score_area == _rect(_BBOX)
+    assert question.comment_area == _rect(_BBOX)
+
+
+def test_a_question_with_no_answer_area_gets_no_derived_areas() -> None:
+    """A question that exists only in the 採点基準 draft has no coordinates at
+    all, so there is nothing to derive from -- and inventing a rect would put
+    the score at a guessed spot on the page. It stays unplaceable, and
+    `domain.pdf_export.unplaceable_question_ids` is what makes that visible
+    before an export runs.
+    """
+    questions, _ = build_questions_and_rubrics(
+        "test-1",
+        [_region(RegionKind.QUESTION, "1", text="問1")],
+        criteria=_draft_with_one_question(),
+    )
+
+    question = questions[0]
+    assert question.answer_area is None
+    assert question.score_area is None
+    assert question.comment_area is None

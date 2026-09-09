@@ -79,6 +79,7 @@ import pytest
 from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
+from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionOutput,
@@ -92,10 +93,13 @@ from auto_scoring.domain.criteria_extraction import (
     ExtractedCriterionOutput,
     ExtractedQuestionOutput,
 )
+from auto_scoring.domain.models import NormalizedRect
 from auto_scoring.domain.pdf_intake import IntakeLimits
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from auto_scoring.jobs.settings import QueueSettings
+from tests.font_support import install_font_covering
+from tests.pdf_ink import has_red_within
 from tests.test_e2e_acceptance import (
     ScriptedAIProvider,
     ScriptedOCRProvider,
@@ -138,10 +142,6 @@ _DECLARED_TOTAL_POINTS = 20
 #: distinguishable, exactly as a real handwritten answer would be.
 _MARKER_XY = (60, 700)
 _ANSWER_AREA = (0.05, 0.10, 0.60, 0.25)
-#: 点数配置領域 / コメント配置候補領域. Detection reports answer areas only,
-#: so these are the regions the reviewer draws by hand on the same sheet.
-_SCORE_AREA = (0.70, 0.03, 0.90, 0.09)
-_COMMENT_AREA = (0.05, 0.30, 0.90, 0.42)
 
 #: The folder the reviewer picked, as the app's own scan would list it. The
 #: names follow the default template's `01_`/`02_`/`03_` rules, so planning
@@ -438,33 +438,23 @@ def _confirm_criteria(client: TestClient, test_id: str) -> None:
     assert confirmed.json()["totals"]["is_complete"] is True
 
 
-def _region(
-    *,
-    region_id: str,
-    kind: str,
-    label: str,
-    page_index: int,
-    bbox: tuple[float, float, float, float],
-) -> dict[str, Any]:
-    x0, y0, x1, y1 = bbox
-    return {
-        "region_id": region_id,
-        "kind": kind,
-        "page_index": page_index,
-        "bbox": {"x0": x0, "y0": y0, "x1": x1, "y1": y1},
-        "label": label,
-        "confirmed": False,
-        "text": None,
-    }
-
-
 def _confirm_answer_layout(client: TestClient, test_id: str) -> None:
     """Issue #105: upload one answer sheet, detect the answer areas on it,
-    add the 点数/コメント配置領域 by hand, and confirm.
+    and confirm exactly what came back.
 
-    Detection reports answer areas and nothing else, so the other two kinds
-    are the reviewer's own drawing -- which is also why this keeps the
-    detected regions exactly as they came back rather than rebuilding them.
+    **Nothing is added by hand.** Until Issue #120 this helper also drew a
+    `score` and an `annotation_area` region per question, described as "the
+    reviewer's own drawing" -- but Issue #103 removed both from the profile
+    screen so that the 配点 would have exactly one input, and a real reviewer
+    on this path cannot draw either one. Injecting them over the raw API gave
+    every question a `score_area` that no real registration would have, and
+    that is why this module could report the new path green while the live
+    run exported a PDF with nothing written on it (Issue #120).
+
+    A fixture that reaches a state the product cannot reach is not a
+    shortcut; it is the test agreeing with itself. What detection returns is
+    all there is, and `domain.annotation_layout.derive_mark_areas` is what
+    has to turn that into somewhere to write.
     """
     uploaded = client.put(
         f"/tests/{test_id}/answer-layout",
@@ -483,28 +473,7 @@ def _confirm_answer_layout(client: TestClient, test_id: str) -> None:
     answer_areas = [region for region in body["regions"] if region["kind"] == "answer_area"]
     assert {region["label"] for region in answer_areas} == {number for number, _ in _QUESTIONS}
 
-    regions: list[dict[str, Any]] = list(answer_areas)
-    for number, page_index in _QUESTIONS:
-        regions.append(
-            _region(
-                region_id=f"score-{number}",
-                kind="score",
-                label=number,
-                page_index=page_index,
-                bbox=_SCORE_AREA,
-            )
-        )
-        regions.append(
-            _region(
-                region_id=f"comment-{number}",
-                kind="annotation_area",
-                label=number,
-                page_index=page_index,
-                bbox=_COMMENT_AREA,
-            )
-        )
-
-    saved = client.put(f"/tests/{test_id}/profile", headers=_AUTH, json={"regions": regions})
+    saved = client.put(f"/tests/{test_id}/profile", headers=_AUTH, json={"regions": answer_areas})
     assert saved.status_code == 200, saved.text
     confirmed = client.post(
         f"/tests/{test_id}/profile/confirm",
@@ -698,6 +667,7 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
     ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One pass over the whole path Issues #101, #103 and #105 built.
 
@@ -754,12 +724,32 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
 
     _approve_every_question(client, test_id, submission_id)
 
+    # The score is the thing the export has to draw; the glyphs it needs are
+    # digits and a slash (`domain.pdf_export._score_text`).
+    install_font_covering(monkeypatch, "0123456789/")
+
     source = data_root / "submissions" / submission_id / "source.pdf"
     before = _digest(source.read_bytes())
     exported = _export(client, submission_id)
     output = data_root / exported["file_path"]
     assert output.exists() and output != source
     assert _digest(source.read_bytes()) == before, "the original PDF was modified"
+
+    # Issue #120: this test used to stop one line above, and that line
+    # compares two `Path` objects -- true of any two different filenames,
+    # including a byte-for-byte copy of the answer sheet. Which is exactly
+    # what the live run produced: a 202, a succeeded job, and a PDF with no
+    # score and no comment anywhere on it, because this path never set
+    # `Question.score_area`. The confirmed score has to be visible on the
+    # page for this path to be finished.
+    engine = PdfiumPypdfEngine()
+    for question in client.get(f"/tests/{test_id}/questions", headers=_AUTH).json():
+        score_area = question["score_area"]
+        assert score_area is not None, f"{question['id']} had nowhere to write its score"
+        rendered = engine.render_page_png(output, question["page"] - 1, scale=2.0)
+        assert has_red_within(rendered, NormalizedRect(**score_area)), (
+            f"nothing was drawn in {question['id']}'s score area"
+        )
 
 
 def test_export_is_refused_until_every_question_of_the_new_path_is_confirmed(
@@ -821,6 +811,7 @@ def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
     ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No OCR adapter, no dependencies between questions.
 
@@ -862,6 +853,7 @@ def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
 
         # Nothing was auto-confirmed: every question still needs the reviewer.
         _approve_every_question(client, test_id, submission_id)
+        install_font_covering(monkeypatch, "0123456789/")
         exported = _export(client, submission_id)
         assert (data_root / exported["file_path"]).exists()
 

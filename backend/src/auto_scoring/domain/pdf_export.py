@@ -57,6 +57,28 @@ def unconfirmed_question_ids(
     ]
 
 
+def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
+    """Every question with nowhere to draw its score -- no `score_area`, and
+    none derivable from an answer box either (Issue #120).
+
+    The twin of `unconfirmed_question_ids`, for the other way an export can
+    come out blank. That one is about a human not having decided the grade
+    yet; this one is about the page not having a place to put it. Both name
+    the specific questions so the caller can show them, and both run
+    *before* the job is queued: the live run's export succeeded, produced a
+    file byte-for-byte identical to the answer sheet, and said nothing --
+    which is the outcome this refuses.
+
+    Only `score_area` is checked, not `comment_area`. The score is drawn for
+    every question (`build_export_marks`), so a missing `score_area` always
+    means something confirmed is missing from the page. A missing
+    ``comment_area`` only matters when an annotation actually needed to fall
+    back to it, and since Issue #120 both are derived from the same answer
+    box -- a question that has one has the other.
+    """
+    return [question.id for question in questions if question.score_area is None]
+
+
 def review_version_snapshot(
     question_ids: Iterable[str], reviews_by_question: Mapping[str, Sequence[Review]]
 ) -> tuple[QuestionReviewVersion, ...]:
@@ -136,21 +158,28 @@ def build_export_marks(
     (``docs/pdf-review-overlay.md`` §2.12), so a re-graded question's export
     never mixes marks from two different attempts.
 
-    A `SCORE`-kind annotation's drawn text is always the confirmed ``grade``'s
-    own score (``awarded/maximum``), never `Annotation.comment` -- an AI
-    candidate's free-text score label could disagree with (or simply predate,
-    after a human edit) the score actually confirmed; the confirmed
-    `GradeResult` is the single source of truth for that number
-    (``docs/pdf-export.md`` "SCOREの描画文字列").
+    The score is drawn for every question that has a ``score_area``, from the
+    confirmed ``grade`` itself (``awarded/maximum``) -- **not** from a
+    `SCORE`-kind `Annotation`, which is skipped. The rule that the number
+    comes from the confirmed `GradeResult` and never from an AI candidate's
+    free-text label is unchanged (``docs/pdf-export.md`` "SCOREの描画文字列");
+    what changed in Issue #120 is that it no longer waits for a proposal that
+    may never arrive. Nothing in this repository creates a `SCORE` annotation,
+    and in the live run no provider proposed one, so every exported PDF came
+    out with no score written on it at all.
+
+    A question with no ``score_area`` draws no score rather than one at a
+    guessed position; `unplaceable_question_ids` refuses the export before it
+    can reach that state.
 
     An annotation `domain.annotation_layout.resolve_annotation_rect` cannot
     place anywhere (no rect, no matching OCR box, not a fixed-position kind)
     falls back to ``question.comment_area`` (simplified-design-spec.md
     §12.4); one still unresolved after that (no `comment_area` registered
-    either) is skipped -- there is nowhere left to draw it. `pdf_export.md`
-    records this as a known gap: test registration is expected to always set
-    a `comment_area` (`docs/test-registration.md`), so this should not occur
-    against real, fully-registered tests.
+    either) is skipped -- there is nowhere left to draw it. Since Issue #120
+    both areas are derived from the confirmed answer box when nobody placed
+    them (`domain.annotation_layout.derive_mark_areas`), so a question that
+    reaches an export has both or neither.
 
     A `COMMENT`-kind annotation that falls back this way is never drawn as
     its own mark: `PdfEngine.render_annotations` draws every mark
@@ -167,9 +196,20 @@ def build_export_marks(
     attempt_annotations = annotations_for_attempt(annotations, grade.created_at)
     attempt_recognitions = recognitions_up_to_attempt(recognitions, grade.created_at)
     marks: list[AnnotationMark] = []
+    if question.score_area is not None:
+        marks.append(
+            AnnotationMark(
+                kind=AnnotationKind.SCORE, rect=question.score_area, text=_score_text(grade)
+            )
+        )
     fallback_comment_texts: list[str] = []
     fallback_comment_rect: NormalizedRect | None = None
     for annotation in attempt_annotations:
+        # Its text and its rect would both be this mark's (§2.1: the number
+        # comes from the confirmed grade, the position from `score_area`),
+        # so drawing it too would just stack the same string on itself.
+        if annotation.kind is AnnotationKind.SCORE:
+            continue
         rect = resolve_annotation_rect(
             annotation, question=question, recognitions=attempt_recognitions
         )
@@ -178,7 +218,7 @@ def build_export_marks(
             rect = question.comment_area
         if rect is None:
             continue
-        text = _score_text(grade) if annotation.kind is AnnotationKind.SCORE else annotation.comment
+        text = annotation.comment
         if used_fallback_rect and annotation.kind is AnnotationKind.COMMENT:
             fallback_comment_texts.append(text or "")
             fallback_comment_rect = rect
@@ -202,4 +242,5 @@ __all__ = [
     "decide_reexport",
     "review_version_snapshot",
     "unconfirmed_question_ids",
+    "unplaceable_question_ids",
 ]

@@ -62,8 +62,43 @@ MAX_TEST_NAME_LENGTH = 200
 MAX_TEST_SUBJECT_LENGTH = 200
 
 #: Upper bound for a single annotation comment, in characters
-#: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字").
+#: (business-rules-and-evaluation-data.md §2 (6): "全角 120 文字"). Mirrored
+#: as DB CHECK constraints (`migrations/versions/0012_grade_result_ai_metadata.py`,
+#: `0013_review_history_edit.py`), so it is a real limit on what can be
+#: stored, not only a validation rule.
 MAX_COMMENT_CHARS = 120
+
+#: Appended by `truncate_comment` to a comment it had to cut, so the cut is
+#: visible in every place the comment is later shown (review screen, exported
+#: PDF) rather than silently changing the text. The same character the PDF
+#: engine already uses for text that overflows its mark's rect
+#: (`adapters.pdf.pdfium_pypdf_engine._ELLIPSIS`) -- one truncation mark for
+#: the whole project, not a second vocabulary.
+COMMENT_TRUNCATION_MARK = "…"
+
+
+def truncate_comment(text: str) -> str:
+    """``text`` cut down to fit `MAX_COMMENT_CHARS`, marked as cut.
+
+    Issue #121: an AI response whose score, criterion ids and question id
+    were all correct was discarded whole because one comment ran 147
+    characters against the 120-character cap. Raising the cap does not fix
+    that -- while a cap exists, a response will exceed it -- so an over-long
+    comment is cut here instead of costing the grade it came with. The
+    caller decides *whether* a given comment is allowed to be cut; a
+    human-entered one still is not (`api.review_router` rejects it at the
+    request boundary, where the person can shorten it themselves).
+
+    Trailing whitespace on the kept prefix is dropped before the mark, so a
+    cut in the middle of a space does not read as "…" floating away from the
+    text. The result is therefore *at most* `MAX_COMMENT_CHARS`, not always
+    exactly it.
+    """
+    if len(text) <= MAX_COMMENT_CHARS:
+        return text
+    kept = text[: MAX_COMMENT_CHARS - len(COMMENT_TRUNCATION_MARK)].rstrip()
+    return kept + COMMENT_TRUNCATION_MARK
+
 
 #: Same reasoning as ``MAX_STUDENT_LABEL_LENGTH``: a human's manual-entry
 #: recognition text (Issue #19, ``POST .../recognitions``) is the other new

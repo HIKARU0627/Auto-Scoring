@@ -13,9 +13,10 @@ from pydantic import ValidationError
 
 from auto_scoring.domain.ai_grading import (
     AIGradingResult,
+    describe_schema_violation,
     parse_ai_grading_result,
 )
-from auto_scoring.domain.models import MAX_COMMENT_CHARS
+from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
 
 _VALID: dict[str, object] = {
     "questionId": "q1",
@@ -92,9 +93,62 @@ def test_empty_rationale_is_rejected() -> None:
         _parse({"rationale": ""})
 
 
-def test_comment_over_character_cap_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        _parse({"comment": "あ" * (MAX_COMMENT_CHARS + 1)})
+#: The comment length a live Vertex AI run actually returned for a
+#: long-answer question (Issue #121: 147 and 157 characters, against a cap
+#: of 120). Used verbatim so these tests fix the behaviour at the size that
+#: really occurred, not at an arbitrary cap+1.
+_OVER_CAP_LENGTH = 147
+
+
+def test_over_long_comment_is_truncated_not_rejected() -> None:
+    """Issue #121: a comment over the cap must never cost the grade.
+
+    The live run's failures were complete, ``finishReason: STOP`` responses
+    whose score, criterion ids and question id were all correct -- discarded
+    whole because one comment ran 147 characters. The response is trusted;
+    only its comment is too long, so the comment is what gives.
+    """
+    over_long = "あ" * _OVER_CAP_LENGTH
+    result = _parse({"comment": over_long})
+
+    # The grade itself survives intact -- the whole point of the change.
+    assert result.grading.score == 4
+    assert result.grading.max_score == 5
+    assert result.question_id == "q1"
+    assert result.criteria[0].id == "c1"
+
+    assert len(result.comment) <= MAX_COMMENT_CHARS
+    assert result.comment.endswith(COMMENT_TRUNCATION_MARK)
+    assert over_long.startswith(result.comment.removesuffix(COMMENT_TRUNCATION_MARK))
+
+
+def test_over_long_annotation_comment_is_truncated_not_rejected() -> None:
+    """The field the live run actually failed on: ``annotations.0.comment``
+    (Issue #121's recorded ``loc``), not the top-level ``comment``."""
+    over_long = "い" * _OVER_CAP_LENGTH
+    result = _parse({"annotations": [{"target": "行く", "type": "comment", "comment": over_long}]})
+
+    assert result.grading.score == 4
+    annotation_comment = result.annotations[0].comment
+    assert annotation_comment is not None
+    assert len(annotation_comment) <= MAX_COMMENT_CHARS
+    assert annotation_comment.endswith(COMMENT_TRUNCATION_MARK)
+
+
+def test_comment_at_the_cap_is_left_exactly_as_sent() -> None:
+    """Truncation must not touch a comment that already fits: a response
+    ending in a real ellipsis stays distinguishable from a truncated one
+    only if the mark is never added to text that did not need cutting."""
+    at_cap = "う" * MAX_COMMENT_CHARS
+    assert _parse({"comment": at_cap}).comment == at_cap
+
+
+def test_blank_comment_is_still_rejected() -> None:
+    """Truncating an over-long comment does not weaken the other end: a
+    comment with nothing in it still has nothing to display."""
+    for blank in ("", "   "):
+        with pytest.raises(ValidationError):
+            _parse({"comment": blank})
 
 
 def test_unknown_extra_field_is_rejected_not_ignored() -> None:
@@ -236,3 +290,61 @@ def test_snake_case_max_score_is_rejected_not_populated_by_name() -> None:
     payload["grading"] = grading
     with pytest.raises(ValidationError):
         parse_ai_grading_result(json.dumps(payload))
+
+
+# --------------------------------------------------------------------------- #
+# describe_schema_violation (Issue #121: which field, and why -- never a value)
+# --------------------------------------------------------------------------- #
+
+
+def _violation(overrides: dict[str, object] | None = None, remove: list[str] | None = None) -> str:
+    with pytest.raises(ValidationError) as caught:
+        _parse(overrides, remove)
+    return describe_schema_violation(caught.value)
+
+
+def test_violation_names_the_field_and_the_reason() -> None:
+    """Issue #121: ``Job.last_error`` stopped at "[gemini SchemaViolation]",
+    so identifying the cause needed the provider response captured by hand.
+    The field path and pydantic's own error code are both fixed literals of
+    this schema, so both can be said out loud."""
+    assert _violation(remove=["rationale"]) == "rationale: missing"
+
+
+def test_violation_names_a_nested_field_by_its_full_path() -> None:
+    """The live failure's own ``loc``: the offending comment was inside
+    ``annotations[0]``, not at the top level, and a summary that said only
+    "comment" would have pointed at the wrong field."""
+    summary = _violation(
+        {"annotations": [{"target": "行く", "type": "underline", "comment": "  "}]}
+    )
+    assert summary == "annotations.0.comment: string_too_short"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "remove", "secret"),
+    [
+        ({"comment": ""}, None, ""),
+        ({"rationale": "生徒の答案から写した文字列"}, ["comment"], "生徒の答案から写した文字列"),
+        ({"grading": {"score": 6, "maxScore": 5, "confidence": 0.5}}, None, "6"),
+    ],
+)
+def test_violation_never_echoes_the_value_that_failed(
+    overrides: dict[str, object], remove: list[str] | None, secret: str
+) -> None:
+    """``str(ValidationError)`` embeds each error's ``input_value``, which at
+    this boundary can be OCR'd student answer text (AGENTS.md "Security").
+    The summary is built from ``loc`` and ``type`` only -- never ``input``."""
+    summary = _violation(overrides, remove)
+    assert summary
+    if secret:
+        assert secret not in summary
+
+
+def test_violation_hides_an_unexpected_field_s_own_name() -> None:
+    """``extra_forbidden``'s ``loc`` *is* the offending key, copied verbatim
+    from the provider's response -- the one path segment that is not a
+    literal of this schema, so it is the one that gets replaced."""
+    summary = _violation({"生徒の答案らしき文字列": "x"})
+    assert "生徒の答案らしき文字列" not in summary
+    assert summary.endswith("extra_forbidden")

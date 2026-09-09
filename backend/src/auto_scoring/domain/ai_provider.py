@@ -64,18 +64,32 @@ class ProviderAttempt:
       records, so the two can be read together.
     * ``status_code`` -- the HTTP status number, or ``None`` where there was
       no response (a timeout, a transport error, a non-HTTP transport).
+    * ``detail`` -- a further diagnosis assembled the same way, or ``None``.
+      The one producer today is
+      `domain.ai_grading.describe_schema_violation`, which names the schema
+      fields that failed and pydantic's code for each: both are literals of
+      this repository's own model definitions, and the one ``loc`` segment
+      that is not (an ``extra_forbidden`` error's offending key) is replaced
+      there before it can reach this field. Added for Issue #121, where a
+      whole class of permanent failures reached the operator as
+      ``[gemini SchemaViolation]`` and could only be explained by capturing
+      the provider's response by hand.
 
     Nothing else may be added: not an exception message, a response body, a
-    URL, or a header.
+    URL, or a header. ``detail`` is not a loophole for those -- it holds a
+    string built from literals, and a caller that has only free text to put
+    there has nothing to put there.
     """
 
     provider: str
     error: str
     status_code: int | None = None
+    detail: str | None = None
 
     def __str__(self) -> str:
         status = "" if self.status_code is None else f" status={self.status_code}"
-        return f"{self.provider} {self.error}{status}"
+        detail = "" if self.detail is None else f" {self.detail}"
+        return f"{self.provider} {self.error}{status}{detail}"
 
 
 class ProviderFailure(Exception):
@@ -87,16 +101,27 @@ class ProviderFailure(Exception):
     `adapters.ai_grading.fallback_provider.FallbackAIProvider` when a chain
     is exhausted, so the *intermediate* links are not lost behind the last
     one ("Vertex was 403 so it fell through to OpenRouter, which was 401").
+
+    ``detail`` carries whatever further diagnosis the raising adapter could
+    assemble safely (see :class:`ProviderAttempt`); ``None`` when there is
+    none.
     """
 
     def __init__(
         self,
         *args: object,
         status_code: int | None = None,
+        detail: str | None = None,
         attempts: Sequence[ProviderAttempt] = (),
     ) -> None:
         super().__init__(*args)
         self.status_code = status_code
+        #: See `ProviderAttempt.detail` -- the same rule about what may be
+        #: put here. Kept off the exception *message*, which callers
+        #: deliberately never read (`jobs.grading_processor._failed`), so a
+        #: diagnosis an adapter vouched for is not mixed back in with one it
+        #: did not.
+        self.detail = detail
         self.attempts: tuple[ProviderAttempt, ...] = tuple(attempts)
 
 

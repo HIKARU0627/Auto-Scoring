@@ -127,9 +127,11 @@ offending key itself, copied verbatim from the untrusted mapping -- a
 misplaced note accidentally left as a JSON key could carry real student
 text straight into an otherwise "sanitized" message. Only the final ``loc``
 segment of such an error is ever untrusted; it is replaced with a fixed
-placeholder rather than echoed (code review finding). An unrecognized
-``recorded`` input-variant key is rejected the same way, without echoing
-the key itself (see below).
+placeholder rather than echoed (code review finding). That rule now lives in
+``domain.ai_grading.describe_schema_violation``, shared with the live
+``AIProvider`` adapters, which needed the same summary for the same reason
+(Issue #121). An unrecognized ``recorded`` input-variant key is rejected the
+same way, without echoing the key itself (see below).
 
 ``input.answer_image_ref`` is required and non-blank: every grading call is
 supposed to receive the cropped answer-region image alongside the OCR text
@@ -280,7 +282,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from auto_scoring.domain.ai_grading import parse_ai_grading_result
+from auto_scoring.domain.ai_grading import describe_schema_violation, parse_ai_grading_result
 from auto_scoring.domain.ai_grading_metrics import (
     GradingGroundTruth,
     GradingInputRecord,
@@ -463,45 +465,6 @@ class _InvalidRecordedCell(Exception):
     at once, which cannot both be true of the same call attempt."""
 
 
-#: Placeholder standing in for an ``extra_forbidden`` error's own ``loc``
-#: segment (see ``_sanitize_validation_error``) -- never the real key.
-_REDACTED_FIELD_LABEL = "<unexpected field>"
-
-
-def _sanitize_validation_error(exc: ValidationError) -> str:
-    """Summarize a ``pydantic.ValidationError`` without the value that failed.
-
-    ``str(exc)`` (and so any f-string embedding it, or any default traceback
-    printed for a chained exception) includes each error's raw
-    ``input_value`` -- for ``GradingInputRecord`` that can be real, manually
-    transcribed student answer text (``ocr_clean`` / ``ocr_noisy``). That
-    text must never reach a raised message, a log, or a terminal/CI
-    traceback (AGENTS.md "Security"; code review finding). Only the
-    dotted field path and pydantic's error type code are kept -- never
-    ``error["input"]``.
-
-    The dotted field path itself is not always safe to echo verbatim
-    either: for an ``extra_forbidden`` error (a model's ``extra="forbid"``
-    rejecting an unrecognized key), pydantic's ``loc`` for that error is
-    exactly the offending key itself, copied verbatim from the untrusted
-    ``--dataset`` mapping -- e.g. a stray note accidentally left as a JSON
-    key could carry real student text or a secret straight into this
-    "sanitized" message (code review finding). Every other segment of
-    ``loc`` leading up to it (a known schema field name, or a tuple/list
-    index) is safe, since those come from this module's own model
-    definitions, not from the untrusted input -- only the final segment of
-    an ``extra_forbidden`` error's ``loc`` is replaced with a fixed
-    placeholder.
-    """
-    parts = []
-    for error in exc.errors():
-        loc = list(error["loc"])
-        if error["type"] == "extra_forbidden" and loc:
-            loc[-1] = _REDACTED_FIELD_LABEL
-        parts.append(f"{'.'.join(str(p) for p in loc)}: {error['type']}")
-    return "; ".join(parts) if parts else "validation failed"
-
-
 def _descriptor_from_cell(
     cell: dict[str, Any], *, provider: str, path: Path | str
 ) -> ProviderDescriptor:
@@ -528,7 +491,7 @@ def _descriptor_from_cell(
     except ValidationError as exc:
         raise _InvalidDescriptor(
             f"{path}: provider {provider!r} has an invalid 'descriptor' "
-            f"({_sanitize_validation_error(exc)})"
+            f"({describe_schema_violation(exc)})"
         ) from None
 
 
@@ -543,7 +506,7 @@ def _validated_measurement(
     by mistake -- that text must not reach a raised exception, a chained
     traceback, or a log line any more than a ``ValidationError``'s raw input
     value may (AGENTS.md "Security"; code review finding; mirrors
-    ``_sanitize_validation_error``). Only the field name and the offending
+    ``domain.ai_grading.describe_schema_violation``). Only the field name and the offending
     value's type (never its content) are reported.
     """
     if value is None:
@@ -798,7 +761,7 @@ def _load_ground_truth(raw: dict[str, Any], *, path: Path | str) -> GradingGroun
         return GradingGroundTruth.from_mapping(raw["ground_truth"])
     except ValidationError as exc:
         raise _InvalidGroundTruth(
-            f"{path}: invalid 'ground_truth' block ({_sanitize_validation_error(exc)})"
+            f"{path}: invalid 'ground_truth' block ({describe_schema_violation(exc)})"
         ) from None
 
 
@@ -826,7 +789,7 @@ def _load_input_record(
         input_record = GradingInputRecord.from_mapping(raw["input"])
     except ValidationError as exc:
         raise _InvalidInput(
-            f"{path}: invalid 'input' block ({_sanitize_validation_error(exc)})"
+            f"{path}: invalid 'input' block ({describe_schema_violation(exc)})"
         ) from None
     try:
         validate_input_matches_truth(input_record, truth)

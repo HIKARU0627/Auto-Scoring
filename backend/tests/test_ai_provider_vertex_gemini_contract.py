@@ -24,6 +24,7 @@ from auto_scoring.domain.ai_provider import (
     ProviderUnavailable,
     SchemaViolation,
 )
+from auto_scoring.domain.models import COMMENT_TRUNCATION_MARK, MAX_COMMENT_CHARS
 
 from .test_ai_provider_contract import _VALID_REQUEST, AIProviderContract
 
@@ -311,3 +312,85 @@ def test_a_corrupt_compressed_body_does_not_stop_the_chain() -> None:
 
     with pytest.raises(ProviderUnavailable):
         _make_provider(_corrupt_gzip).grade(_VALID_REQUEST)
+
+
+# --------------------------------------------------------------------------- #
+# Issue #121: a long comment must not cost the grade it came with
+# --------------------------------------------------------------------------- #
+
+
+def _over_long_comment_response(*, comment_chars: int) -> dict[str, object]:
+    """The shape the live run actually returned for a long-answer question:
+    ``finishReason: STOP``, complete JSON, correct score/criterion id/question
+    id -- and one annotation comment of 147 characters against a 120-character
+    cap. Every one of those was discarded whole.
+    """
+    content = json.dumps(
+        {
+            "questionId": _VALID_REQUEST.question_id,
+            "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
+            "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
+            "criteria": [{"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
+            "comment": "コメント",
+            "rationale": "根拠",
+            "annotations": [{"target": "行く", "type": "comment", "comment": "あ" * comment_chars}],
+        }
+    )
+    return {
+        "modelVersion": "gemini-2.5-flash-001",
+        "candidates": [
+            {
+                "finishReason": "STOP",
+                "content": {"role": "model", "parts": [{"text": content}]},
+            }
+        ],
+    }
+
+
+def test_an_over_long_annotation_comment_still_grades() -> None:
+    provider = _make_provider(
+        lambda request: httpx.Response(200, json=_over_long_comment_response(comment_chars=147))
+    )
+
+    response = provider.grade(_VALID_REQUEST)
+
+    assert response.score == 4
+    assert response.max_score == 5
+    assert response.criteria[0].criterion_id == "c1"
+    annotation_comment = response.annotations[0].comment
+    assert annotation_comment is not None
+    assert len(annotation_comment) <= MAX_COMMENT_CHARS
+    assert annotation_comment.endswith(COMMENT_TRUNCATION_MARK)
+
+
+def test_a_schema_violation_reports_the_field_and_reason_but_not_the_value() -> None:
+    """Issue #121: the live run's `Job.last_error` stopped at
+    ``[gemini SchemaViolation]``, so the cause could only be found by
+    capturing the provider's response by hand. The field path and pydantic's
+    code are literals of this project's own schema; the value never is."""
+    student_text = "答案から写した文字列"
+    content = json.dumps(
+        {
+            "questionId": _VALID_REQUEST.question_id,
+            "recognition": {"text": _OCR_TEXT, "confidence": 0.9},
+            "grading": {"score": 4, "maxScore": 5, "confidence": 0.8},
+            "criteria": [{"id": "c1", "result": "pass", "confidence": 0.9, "rationale": "根拠"}],
+            "comment": "コメント",
+            "rationale": "根拠",
+            "annotations": [{"target": "行く", "type": student_text}],
+        }
+    )
+    provider = _make_provider(
+        lambda request: httpx.Response(
+            200,
+            json={"candidates": [{"content": {"role": "model", "parts": [{"text": content}]}}]},
+        )
+    )
+
+    with pytest.raises(SchemaViolation) as caught:
+        provider.grade(_VALID_REQUEST)
+
+    assert caught.value.detail is not None
+    assert caught.value.detail.startswith("annotations.0.type: ")
+    assert student_text not in caught.value.detail
+    assert student_text not in str(caught.value)

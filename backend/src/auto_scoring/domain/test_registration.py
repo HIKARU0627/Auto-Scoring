@@ -40,6 +40,7 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 
+from auto_scoring.domain.annotation_layout import derive_mark_areas
 from auto_scoring.domain.criteria_extraction import (
     CriteriaDraft,
     CriteriaQuestion,
@@ -517,6 +518,14 @@ def build_questions_and_rubrics(
                     )
                 )
 
+        answer_area = _union_bbox(answer_regions) if answer_regions else None
+        # Issue #120: a question nobody placed a `SCORE`/`ANNOTATION_AREA`
+        # region for still needs somewhere to draw its score and comment --
+        # see `derive_mark_areas` for why that is derived from the answer box
+        # rather than left `None` (the export used to succeed while writing
+        # nothing) and why a hand-placed region still wins.
+        derived = derive_mark_areas(answer_area)
+
         questions.append(
             Question(
                 id=question_id,
@@ -530,11 +539,17 @@ def build_questions_and_rubrics(
                 # actually knows it.
                 scoring_method=scoring_method,
                 model_answer=model_answer,
-                answer_area=_union_bbox(answer_regions) if answer_regions else None,
+                answer_area=answer_area,
                 # First-wins, unlike `answer_area` above -- see `_union_bbox`.
-                score_area=_bbox_to_rect(score_regions[0].bbox) if score_regions else None,
+                score_area=(
+                    _bbox_to_rect(score_regions[0].bbox)
+                    if score_regions
+                    else (derived[0] if derived is not None else None)
+                ),
                 comment_area=(
-                    _bbox_to_rect(annotation_regions[0].bbox) if annotation_regions else None
+                    _bbox_to_rect(annotation_regions[0].bbox)
+                    if annotation_regions
+                    else (derived[1] if derived is not None else None)
                 ),
             )
         )
