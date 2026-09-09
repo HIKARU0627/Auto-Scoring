@@ -84,6 +84,14 @@ Class | Method | HTTP request | Description
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**listVersionsTestsTestIdDependencyGraphVersionsGet**](doc/DependencyGraphApi.md#listversionsteststestiddependencygraphversionsget) | **GET** /tests/{test_id}/dependency-graph/versions | List Versions
 [*ExportApi*](doc/ExportApi.md) | [**listExportsSubmissionsSubmissionIdExportsGet**](doc/ExportApi.md#listexportssubmissionssubmissionidexportsget) | **GET** /submissions/{submission_id}/exports | List Exports
 [*ExportApi*](doc/ExportApi.md) | [**requestExportSubmissionsSubmissionIdExportPost**](doc/ExportApi.md#requestexportsubmissionssubmissionidexportpost) | **POST** /submissions/{submission_id}/export | Request Export
+[*IntakeApi*](doc/IntakeApi.md) | [**attributeAnswerIntakeAttributePost**](doc/IntakeApi.md#attributeanswerintakeattributepost) | **POST** /intake/attribute | Attribute Answer
+[*IntakeApi*](doc/IntakeApi.md) | [**classificationAvailabilityIntakeClassificationAvailabilityGet**](doc/IntakeApi.md#classificationavailabilityintakeclassificationavailabilityget) | **GET** /intake/classification-availability | Classification Availability
+[*IntakeApi*](doc/IntakeApi.md) | [**classifyMaterialIntakeClassifyPost**](doc/IntakeApi.md#classifymaterialintakeclassifypost) | **POST** /intake/classify | Classify Material
+[*IntakeApi*](doc/IntakeApi.md) | [**getIntakeCostIntakeCostGet**](doc/IntakeApi.md#getintakecostintakecostget) | **GET** /intake-cost | Get Intake Cost
+[*IntakeApi*](doc/IntakeApi.md) | [**listTemplatesIntakeTemplatesGet**](doc/IntakeApi.md#listtemplatesintaketemplatesget) | **GET** /intake-templates | List Templates
+[*IntakeApi*](doc/IntakeApi.md) | [**planIntakeIntakePlanPost**](doc/IntakeApi.md#planintakeintakeplanpost) | **POST** /intake/plan | Plan Intake
+[*IntakeApi*](doc/IntakeApi.md) | [**saveIntakeCostIntakeCostPut**](doc/IntakeApi.md#saveintakecostintakecostput) | **PUT** /intake-cost | Save Intake Cost
+[*IntakeApi*](doc/IntakeApi.md) | [**saveTemplatesIntakeTemplatesPut**](doc/IntakeApi.md#savetemplatesintaketemplatesput) | **PUT** /intake-templates | Save Templates
 [*JobsApi*](doc/JobsApi.md) | [**cancelJobJobsJobIdCancelPost**](doc/JobsApi.md#canceljobjobsjobidcancelpost) | **POST** /jobs/{job_id}/cancel | Cancel Job
 [*JobsApi*](doc/JobsApi.md) | [**createSubmissionJobsSubmissionsSubmissionIdJobsPost**](doc/JobsApi.md#createsubmissionjobssubmissionssubmissionidjobspost) | **POST** /submissions/{submission_id}/jobs | Create Submission Jobs
 [*JobsApi*](doc/JobsApi.md) | [**getJobJobsJobIdGet**](doc/JobsApi.md#getjobjobsjobidget) | **GET** /jobs/{job_id} | Get Job
@@ -103,15 +111,18 @@ Class | Method | HTTP request | Description
 [*ReviewApi*](doc/ReviewApi.md) | [**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](doc/ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
 [*ReviewApi*](doc/ReviewApi.md) | [**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](doc/ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
 [*ReviewApi*](doc/ReviewApi.md) | [**undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost**](doc/ReviewApi.md#undosubmissionssubmissionidquestionsquestionidreviewundopost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/undo | Undo
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**addMaterialsTestsTestIdMaterialsPost**](doc/TestRegistrationApi.md#addmaterialsteststestidmaterialspost) | **POST** /tests/{test_id}/materials | Add Materials
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**completeRegistrationTestsTestIdCompleteRegistrationPost**](doc/TestRegistrationApi.md#completeregistrationteststestidcompleteregistrationpost) | **POST** /tests/{test_id}/complete-registration | Complete Registration
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**confirmProfileTestsTestIdProfileConfirmPost**](doc/TestRegistrationApi.md#confirmprofileteststestidprofileconfirmpost) | **POST** /tests/{test_id}/profile/confirm | Confirm Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**createTestTestsPost**](doc/TestRegistrationApi.md#createtesttestspost) | **POST** /tests | Create Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**deleteTestTestsTestIdDelete**](doc/TestRegistrationApi.md#deletetestteststestiddelete) | **DELETE** /tests/{test_id} | Delete Test
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**detectAnswerAreasTestsTestIdAnswerLayoutDetectPost**](doc/TestRegistrationApi.md#detectanswerareasteststestidanswerlayoutdetectpost) | **POST** /tests/{test_id}/answer-layout/detect | Detect Answer Areas
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getAnswerLayoutPdfTestsTestIdAnswerLayoutPdfGet**](doc/TestRegistrationApi.md#getanswerlayoutpdfteststestidanswerlayoutpdfget) | **GET** /tests/{test_id}/answer-layout/pdf | Get Answer Layout Pdf
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getAnswerLayoutTestsTestIdAnswerLayoutGet**](doc/TestRegistrationApi.md#getanswerlayoutteststestidanswerlayoutget) | **GET** /tests/{test_id}/answer-layout | Get Answer Layout
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getProfileTestsTestIdProfileGet**](doc/TestRegistrationApi.md#getprofileteststestidprofileget) | **GET** /tests/{test_id}/profile | Get Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getTestTestsTestIdGet**](doc/TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listMaterialsTestsTestIdMaterialsGet**](doc/TestRegistrationApi.md#listmaterialsteststestidmaterialsget) | **GET** /tests/{test_id}/materials | List Materials
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listTestRegistrationsTestRegistrationsGet**](doc/TestRegistrationApi.md#listtestregistrationstestregistrationsget) | **GET** /test-registrations | List Test Registrations
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**updateProfileTestsTestIdProfilePut**](doc/TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**uploadAnswerLayoutTestsTestIdAnswerLayoutPut**](doc/TestRegistrationApi.md#uploadanswerlayoutteststestidanswerlayoutput) | **PUT** /tests/{test_id}/answer-layout | Upload Answer Layout
@@ -124,7 +135,11 @@ Class | Method | HTTP request | Description
  - [AnnotationResponse](doc/AnnotationResponse.md)
  - [AnswerLayoutResponse](doc/AnswerLayoutResponse.md)
  - [ApproveReviewRequest](doc/ApproveReviewRequest.md)
+ - [AttributionProposalResponse](doc/AttributionProposalResponse.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
+ - [ClassificationAvailabilityResponse](doc/ClassificationAvailabilityResponse.md)
+ - [ClassificationEstimateModel](doc/ClassificationEstimateModel.md)
+ - [ClassificationNeed](doc/ClassificationNeed.md)
  - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
  - [ConfirmCriteriaRequest](doc/ConfirmCriteriaRequest.md)
  - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
@@ -147,12 +162,20 @@ Class | Method | HTTP request | Description
  - [GradeResultResponse](doc/GradeResultResponse.md)
  - [GradingAvailabilityResponse](doc/GradingAvailabilityResponse.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
+ - [IntakeCostModel](doc/IntakeCostModel.md)
+ - [IntakePlanResponse](doc/IntakePlanResponse.md)
+ - [IntakeRuleModel](doc/IntakeRuleModel.md)
+ - [IntakeTemplateModel](doc/IntakeTemplateModel.md)
  - [JobResponse](doc/JobResponse.md)
  - [LocationInner](doc/LocationInner.md)
  - [ManualRecognitionRequest](doc/ManualRecognitionRequest.md)
+ - [MaterialRole](doc/MaterialRole.md)
  - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)
  - [NormalizedRectResponse](doc/NormalizedRectResponse.md)
  - [PageFormatModel](doc/PageFormatModel.md)
+ - [PlanRequest](doc/PlanRequest.md)
+ - [PlannedFileModel](doc/PlannedFileModel.md)
+ - [PlannedGroupModel](doc/PlannedGroupModel.md)
  - [ProfileResponse](doc/ProfileResponse.md)
  - [QuestionResponse](doc/QuestionResponse.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
@@ -161,13 +184,20 @@ Class | Method | HTTP request | Description
  - [RecognitionResponseSlim](doc/RecognitionResponseSlim.md)
  - [RegionKind](doc/RegionKind.md)
  - [RegionModel](doc/RegionModel.md)
+ - [Requirement](doc/Requirement.md)
  - [ReviewActionResponse](doc/ReviewActionResponse.md)
  - [ReviewResponse](doc/ReviewResponse.md)
+ - [RoleProposalResponse](doc/RoleProposalResponse.md)
+ - [RoleSource](doc/RoleSource.md)
  - [RubricCriterionResponse](doc/RubricCriterionResponse.md)
+ - [RuleScope](doc/RuleScope.md)
+ - [SaveTemplatesRequest](doc/SaveTemplatesRequest.md)
+ - [ScannedFileModel](doc/ScannedFileModel.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [ScoreValueResponse](doc/ScoreValueResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
+ - [TestMaterialResponse](doc/TestMaterialResponse.md)
  - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)
  - [UndoReviewRequest](doc/UndoReviewRequest.md)

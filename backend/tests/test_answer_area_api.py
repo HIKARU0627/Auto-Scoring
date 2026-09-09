@@ -137,14 +137,19 @@ def _session_factory(data_root: Path) -> sessionmaker[Session]:
 
 
 def _register_test(client: TestClient) -> str:
+    """Register a test the way Issue #101 does it: the 採点基準PDF and nothing
+    else.
+
+    Deliberately **no** ``reference`` material -- that is the state every real
+    test is in (there is no model-answer PDF), and it is the state in which
+    `analyze_profile` answers 409 and the 回答欄 path is the only way to a
+    confirmed profile.
+    """
     response = client.post(
         "/tests",
         headers=_auth(),
         data={"name": "模擬 第1回", "subject": "模擬"},
-        files={
-            "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-            "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-        },
+        files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
     )
     assert response.status_code == 201, response.text
     return response.json()["id"]  # type: ignore[no-any-return]

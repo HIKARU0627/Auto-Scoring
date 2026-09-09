@@ -12,7 +12,11 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnnotationResponse.serializer)
       ..add(AnswerLayoutResponse.serializer)
       ..add(ApproveReviewRequest.serializer)
+      ..add(AttributionProposalResponse.serializer)
       ..add(BoundingBoxResponse.serializer)
+      ..add(ClassificationAvailabilityResponse.serializer)
+      ..add(ClassificationEstimateModel.serializer)
+      ..add(ClassificationNeed.serializer)
       ..add(CompleteRegistrationResponse.serializer)
       ..add(ConfirmCriteriaRequest.serializer)
       ..add(ConfirmProfileRequest.serializer)
@@ -35,12 +39,20 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(GradeResultResponse.serializer)
       ..add(GradingAvailabilityResponse.serializer)
       ..add(HTTPValidationError.serializer)
+      ..add(IntakeCostModel.serializer)
+      ..add(IntakePlanResponse.serializer)
+      ..add(IntakeRuleModel.serializer)
+      ..add(IntakeTemplateModel.serializer)
       ..add(JobResponse.serializer)
       ..add(LocationInner.serializer)
       ..add(ManualRecognitionRequest.serializer)
+      ..add(MaterialRole.serializer)
       ..add(NormalizedBBoxModel.serializer)
       ..add(NormalizedRectResponse.serializer)
       ..add(PageFormatModel.serializer)
+      ..add(PlanRequest.serializer)
+      ..add(PlannedFileModel.serializer)
+      ..add(PlannedGroupModel.serializer)
       ..add(ProfileResponse.serializer)
       ..add(QuestionResponse.serializer)
       ..add(QuestionTextOverride.serializer)
@@ -49,13 +61,20 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(RecognitionResponseSlim.serializer)
       ..add(RegionKind.serializer)
       ..add(RegionModel.serializer)
+      ..add(Requirement.serializer)
       ..add(ReviewActionResponse.serializer)
       ..add(ReviewResponse.serializer)
+      ..add(RoleProposalResponse.serializer)
+      ..add(RoleSource.serializer)
       ..add(RubricCriterionResponse.serializer)
+      ..add(RuleScope.serializer)
+      ..add(SaveTemplatesRequest.serializer)
+      ..add(ScannedFileModel.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
       ..add(ScoreValueResponse.serializer)
       ..add(SubmissionResponse.serializer)
+      ..add(TestMaterialResponse.serializer)
       ..add(TestResponse.serializer)
       ..add(TestSummary.serializer)
       ..add(UndoReviewRequest.serializer)
@@ -124,6 +143,13 @@ Serializers _$serializers = (Serializers().toBuilder()
               BuiltList, const [const FullType(DependencyProvision)]),
           () => ListBuilder<DependencyProvision>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(IntakeRuleModel)]),
+          () => ListBuilder<IntakeRuleModel>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(IntakeTemplateModel)]),
+          () => ListBuilder<IntakeTemplateModel>())
+      ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(LocationInner)]),
           () => ListBuilder<LocationInner>())
       ..addBuilderFactory(
@@ -142,6 +168,15 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(BuiltList, const [const FullType(String)]),
           () => ListBuilder<String>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(PlannedFileModel)]),
+          () => ListBuilder<PlannedFileModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(MaterialRole)]),
+          () => ListBuilder<MaterialRole>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(PlannedGroupModel)]),
+          () => ListBuilder<PlannedGroupModel>())
+      ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(QuestionTextOverride)]),
           () => ListBuilder<QuestionTextOverride>())
@@ -152,6 +187,9 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(
               BuiltList, const [const FullType(RubricCriterionResponse)]),
           () => ListBuilder<RubricCriterionResponse>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(ScannedFileModel)]),
+          () => ListBuilder<ScannedFileModel>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ValidationError)]),
           () => ListBuilder<ValidationError>()))

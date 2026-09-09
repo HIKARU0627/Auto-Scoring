@@ -399,10 +399,6 @@ def _intake_http_exception(exc: PdfIntakeError | MaterialIntakeError) -> HTTPExc
     return HTTPException(status_code, detail=str(exc))
 
 
-def _intake_http_exception(exc: PdfIntakeError) -> HTTPException:
-    return _intake_http_exception(exc)
-
-
 def build_test_registration_router(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
@@ -806,20 +802,25 @@ def build_test_registration_router(
                 # which means this analysis frequently has nothing to derive
                 # a layout from.
                 #
-                # Deriving the layout from the answers instead is the right
-                # fix and is deliberately *not* done here (Issue #95
-                # decision 2, scheduled separately). Until it is, say so:
-                # the reviewer draws the regions by hand on the same screen,
-                # which works today. Silently analysing the criteria PDF's
-                # own geometry instead would produce a profile bound to a
-                # page layout no submission has, and every later crop would
-                # be taken from the wrong coordinates.
+                # Deriving the layout from the answers instead is what Issue
+                # #105 added, and it is now the normal path: `PUT
+                # /answer-layout` + `/answer-layout/detect` take the page
+                # geometry from a real answer sheet, which every test has.
+                # This endpoint stays for tests that *do* carry a
+                # reference PDF (migration 0015 gives every pre-Issue-#101
+                # test one), and says where to go otherwise.
+                #
+                # Silently analysing the criteria PDF's own geometry instead
+                # would produce a profile bound to a page layout no
+                # submission has, and every later crop would be taken from
+                # the wrong coordinates.
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     detail=(
-                        "自動解析には、回答欄の位置が分かる参考資料 (模範解答PDF など) が"
+                        "この解析には、回答欄の位置が分かる参考資料 (模範解答PDF など) が"
                         "必要です。この教材には登録されていません。"
-                        "領域は画面上で手動で追加してください。"
+                        "回答欄は答案そのものから決めてください。"
+                        "答案を取り込んで「回答欄を自動検出」するか、画面上で手動追加できます。"
                     ),
                 )
             try:

@@ -153,6 +153,7 @@ class LocalFileStore:
         with cannot address a file outside the store root.
         """
         return self._resolve(*stored_path.split("/"))
+
     def test_answer_layout_pdf_path(self, test_id: str) -> Path:
         """The reference student answer sheet a test's answer areas were laid
         out against (Issue #105).

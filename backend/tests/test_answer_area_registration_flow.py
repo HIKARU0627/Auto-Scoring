@@ -151,10 +151,7 @@ def test_registration_reaches_ready_and_crops_each_answer_to_its_area(
         "/tests",
         headers=_auth(),
         data={"name": "模擬 第1回"},
-        files={
-            "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-            "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-        },
+        files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
     )
     assert created.status_code == 201, created.text
     test_id = created.json()["id"]
@@ -263,10 +260,7 @@ def test_one_confirmed_layout_serves_every_later_answer_of_that_test(
         "/tests",
         headers=_auth(),
         data={"name": "模擬 第1回"},
-        files={
-            "model_answer": ("model-answer.pdf", _pdf_bytes(), "application/pdf"),
-            "manual": ("manual.pdf", _pdf_bytes(), "application/pdf"),
-        },
+        files={"criteria": ("02_criteria.pdf", _pdf_bytes(), "application/pdf")},
     )
     test_id = created.json()["id"]
     with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
