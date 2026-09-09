@@ -79,6 +79,7 @@ import pytest
 from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
+from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionOutput,
@@ -92,10 +93,13 @@ from auto_scoring.domain.criteria_extraction import (
     ExtractedCriterionOutput,
     ExtractedQuestionOutput,
 )
+from auto_scoring.domain.models import NormalizedRect
 from auto_scoring.domain.pdf_intake import IntakeLimits
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
 from auto_scoring.jobs.settings import QueueSettings
+from tests.font_support import install_font_covering
+from tests.pdf_ink import has_red_within
 from tests.test_e2e_acceptance import (
     ScriptedAIProvider,
     ScriptedOCRProvider,
@@ -698,6 +702,7 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
     ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One pass over the whole path Issues #101, #103 and #105 built.
 
@@ -754,12 +759,32 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
 
     _approve_every_question(client, test_id, submission_id)
 
+    # The score is the thing the export has to draw; the glyphs it needs are
+    # digits and a slash (`domain.pdf_export._score_text`).
+    install_font_covering(monkeypatch, "0123456789/")
+
     source = data_root / "submissions" / submission_id / "source.pdf"
     before = _digest(source.read_bytes())
     exported = _export(client, submission_id)
     output = data_root / exported["file_path"]
     assert output.exists() and output != source
     assert _digest(source.read_bytes()) == before, "the original PDF was modified"
+
+    # Issue #120: this test used to stop one line above, and that line
+    # compares two `Path` objects -- true of any two different filenames,
+    # including a byte-for-byte copy of the answer sheet. Which is exactly
+    # what the live run produced: a 202, a succeeded job, and a PDF with no
+    # score and no comment anywhere on it, because this path never set
+    # `Question.score_area`. The confirmed score has to be visible on the
+    # page for this path to be finished.
+    engine = PdfiumPypdfEngine()
+    for question in client.get(f"/tests/{test_id}/questions", headers=_AUTH).json():
+        score_area = question["score_area"]
+        assert score_area is not None, f"{question['id']} had nowhere to write its score"
+        rendered = engine.render_page_png(output, question["page"] - 1, scale=2.0)
+        assert has_red_within(rendered, NormalizedRect(**score_area)), (
+            f"nothing was drawn in {question['id']}'s score area"
+        )
 
 
 def test_export_is_refused_until_every_question_of_the_new_path_is_confirmed(
@@ -821,6 +846,7 @@ def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
     ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No OCR adapter, no dependencies between questions.
 
@@ -862,6 +888,7 @@ def test_without_an_ocr_service_every_question_still_reaches_export_by_hand(
 
         # Nothing was auto-confirmed: every question still needs the reviewer.
         _approve_every_question(client, test_id, submission_id)
+        install_font_covering(monkeypatch, "0123456789/")
         exported = _export(client, submission_id)
         assert (data_root / exported["file_path"]).exists()
 

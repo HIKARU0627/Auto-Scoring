@@ -1224,7 +1224,7 @@ def _reviewed_answer(
 
 
 def test_exporting_a_fully_reviewed_answer_never_touches_the_original_pdf(
-    client: TestClient, data_root: Path
+    client: TestClient, data_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Acceptance scenario 5, and section 2 (15)'s hardest rule: the original
     answer PDF is never written to, replaced, or deleted.
@@ -1233,6 +1233,10 @@ def test_exporting_a_fully_reviewed_answer_never_touches_the_original_pdf(
     afterwards, and by confirming the export landed on a different path.
     """
     _, submission_id = _reviewed_answer(client, data_root, annotations=_circle_annotation())
+    # Since Issue #120 every export draws the confirmed score, so one really
+    # has to be drawable here -- digits and a slash
+    # (`domain.pdf_export._score_text`).
+    install_font_covering(monkeypatch, "0123456789/")
     source = data_root / "submissions" / submission_id / "source.pdf"
     assert source.exists(), source
     before = _digest(source.read_bytes())
@@ -1390,6 +1394,7 @@ def test_job_and_review_state_survive_an_app_restart(
     data_root: Path,
     ocr_provider: ScriptedOCRProvider,
     ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Acceptance scenario 6, first half: a clean restart.
 
@@ -1422,6 +1427,8 @@ def test_job_and_review_state_survive_an_app_restart(
         # And the restarted app can carry the work forward from where the
         # reviewer left off, not merely display it.
         _confirm_question(restarted, submission_id, second, annotations=_circle_annotation())
+        # Since Issue #120 the export also draws the confirmed score.
+        install_font_covering(monkeypatch, "0123456789/")
         exported = _export(restarted, submission_id)
         carried = data_root / exported["file_path"]
         # A real export produced *after* the restart -- the ○ confirmed

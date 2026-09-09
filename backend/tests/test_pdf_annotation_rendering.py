@@ -25,6 +25,7 @@ from auto_scoring.adapters.pdf.pdfium_pypdf_engine import (
 from auto_scoring.domain.models import AnnotationKind, NormalizedRect
 from auto_scoring.domain.pdf_engine import AnnotationMark
 from tests.font_support import install_font_covering
+from tests.pdf_ink import has_red_within, redness_bbox
 
 _A4_W, _A4_H = 595.0, 842.0
 
@@ -46,33 +47,6 @@ def _write_pdf_with_mediabox_offset(path: Path, *, offset: tuple[float, float]) 
     page.mediabox = RectangleObject((left, bottom, left + _A4_W, bottom + _A4_H))
     with path.open("wb") as handle:
         writer.write(handle)
-
-
-def _redness_bbox(png_bytes: bytes) -> tuple[int, int, int, int] | None:
-    with Image.open(BytesIO(png_bytes)) as image:
-        rgb = image.convert("RGB")
-    red, green, _ = rgb.split()
-    redness = ImageChops.subtract(red, green).point(lambda v: 255 if v > 60 else 0)
-    return redness.getbbox()
-
-
-def _has_red_within(png_bytes: bytes, rect: NormalizedRect, *, margin: float = 0.03) -> bool:
-    """Whether any reddish pixel exists inside ``rect`` (expanded by
-    ``margin`` on every side, to absorb rasterization/stroke-width slop) --
-    checked on a crop of just that region, so multiple marks elsewhere on
-    the same page never affect this rect's own result.
-    """
-    with Image.open(BytesIO(png_bytes)) as image:
-        rgb = image.convert("RGB")
-    width, height = rgb.size
-    left = max(0, int((rect.x - margin) * width))
-    top = max(0, int((rect.y - margin) * height))
-    right = min(width, int((rect.x + rect.width + margin) * width))
-    bottom = min(height, int((rect.y + rect.height + margin) * height))
-    cropped = rgb.crop((left, top, right, bottom))
-    red, green, _ = cropped.split()
-    redness = ImageChops.subtract(red, green).point(lambda v: 255 if v > 60 else 0)
-    return redness.getbbox() is not None
 
 
 def _redness_extent_within(
@@ -121,7 +95,7 @@ def test_each_shape_kind_draws_within_its_target_rect(kind: AnnotationKind, tmp_
 
     assert engine.page_count(destination) == 1
     png = engine.render_page_png(destination, 0, scale=2.0)
-    assert _has_red_within(png, rect), f"{kind} mark not found within its target rect"
+    assert has_red_within(png, rect), f"{kind} mark not found within its target rect"
 
 
 def test_source_pdf_is_never_modified(tmp_path: Path) -> None:
@@ -180,8 +154,8 @@ def test_score_and_long_japanese_comment_text_render_within_their_rects(
     )
 
     png = engine.render_page_png(destination, 0, scale=2.0)
-    assert _has_red_within(png, score_rect)
-    assert _has_red_within(png, comment_rect)
+    assert has_red_within(png, score_rect)
+    assert has_red_within(png, comment_rect)
     # Reparsable -- Issue #23 acceptance: "出力PDFを再読込できる".
     reread = PdfReader(str(destination))
     assert len(reread.pages) == 1
@@ -201,8 +175,8 @@ def test_marks_land_only_on_their_own_page_in_a_multi_page_document(tmp_path: Pa
     assert engine.page_count(destination) == 2
     first_page_png = engine.render_page_png(destination, 0, scale=2.0)
     second_page_png = engine.render_page_png(destination, 1, scale=2.0)
-    assert _redness_bbox(first_page_png) is None
-    assert _has_red_within(second_page_png, rect)
+    assert redness_bbox(first_page_png) is None
+    assert has_red_within(second_page_png, rect)
 
 
 def test_a_mark_still_lands_correctly_on_a_rotated_page(tmp_path: Path) -> None:
@@ -217,7 +191,7 @@ def test_a_mark_still_lands_correctly_on_a_rotated_page(tmp_path: Path) -> None:
     )
 
     png = engine.render_page_png(destination, 0, scale=2.0)
-    assert _has_red_within(png, rect)
+    assert has_red_within(png, rect)
 
 
 @pytest.mark.parametrize("rotation", [90, 180, 270])
@@ -276,7 +250,7 @@ def test_a_mark_lands_correctly_on_a_page_with_a_non_zero_mediabox_origin(tmp_pa
     )
 
     png = engine.render_page_png(destination, 0, scale=2.0)
-    assert _has_red_within(png, rect)
+    assert has_red_within(png, rect)
 
 
 def test_a_page_with_no_marks_is_left_untouched(tmp_path: Path) -> None:
@@ -290,7 +264,7 @@ def test_a_page_with_no_marks_is_left_untouched(tmp_path: Path) -> None:
     assert engine.page_count(destination) == 2
     for page_index in range(2):
         png = engine.render_page_png(destination, page_index, scale=1.5)
-        assert _redness_bbox(png) is None
+        assert redness_bbox(png) is None
 
 
 def test_missing_japanese_font_fails_clearly_when_a_comment_is_drawn(
@@ -344,4 +318,4 @@ def test_missing_japanese_font_does_not_affect_pure_shape_marks(
     )
 
     png = engine.render_page_png(destination, 0, scale=2.0)
-    assert _has_red_within(png, rect)
+    assert has_red_within(png, rect)
