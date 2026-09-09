@@ -116,6 +116,8 @@ jobs:
       - name: Restore Python environment
         run: uv sync --locked
         working-directory: backend
+      - name: Deliberate failure (Issue #129 verification, to be reverted)
+        run: exit 1
       - name: Lint
         run: pnpm lint:backend
       - name: Typecheck
