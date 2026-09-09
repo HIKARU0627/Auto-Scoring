@@ -14,6 +14,7 @@ import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/grading_kickoff.dart';
+import 'package:auto_scoring_app/core/material_read_ranges.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
@@ -355,7 +356,6 @@ const String _materialBottom = '#bottom';
 /// How much of a row may be missing before it still counts as covered, as a
 /// fraction of that row's height. A rounding allowance, not a licence to skip
 /// -- at a 2525px 根拠 this is under three pixels.
-const double _materialCoverEpsilon = 0.001;
 
 class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// The sidecar operations this screen was opened against, captured once in
@@ -1244,12 +1244,8 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     return _materialRowIds(question, review).every(_isRowCovered);
   }
 
-  bool _isRowCovered(String id) {
-    final ranges = _materialSeenRanges[id];
-    if (ranges == null || ranges.length != 1) return false;
-    return ranges.single.$1 <= _materialCoverEpsilon &&
-        ranges.single.$2 >= 1 - _materialCoverEpsilon;
-  }
+  bool _isRowCovered(String id) =>
+      materialRowIsCovered(_materialSeenRanges[id]);
 
   /// The rows the Inspector is showing for [question] right now, in the order
   /// they are drawn.
@@ -1337,12 +1333,12 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
         // A row shorter than a hair is covered the moment any of it shows.
         final merged = rowHeight <= _materialReadEpsilon
             ? const [(0.0, 1.0)]
-            : _mergedRanges(
+            : mergeMaterialRange(
                 existing,
                 (visibleTop - top) / rowHeight,
                 (visibleBottom - top) / rowHeight,
               );
-        if (!_sameRanges(existing, merged)) updated[id] = merged;
+        if (!sameMaterialRanges(existing, merged)) updated[id] = merged;
       }
       firstUnreadY ??= _firstGapY(updated[id] ?? existing, top, rowHeight);
     }
@@ -1367,51 +1363,14 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     double rowHeight,
   ) {
     if (ranges.isNotEmpty &&
-        ranges.first.$1 <= _materialCoverEpsilon &&
-        ranges.first.$2 >= 1 - _materialCoverEpsilon) {
+        ranges.first.$1 <= materialCoverEpsilon &&
+        ranges.first.$2 >= 1 - materialCoverEpsilon) {
       return null;
     }
-    final gapStart = ranges.isEmpty || ranges.first.$1 > _materialCoverEpsilon
+    final gapStart = ranges.isEmpty || ranges.first.$1 > materialCoverEpsilon
         ? 0.0
         : ranges.first.$2;
     return top + gapStart * rowHeight;
-  }
-
-  /// [ranges] with `[start, end]` merged in, kept sorted and non-overlapping.
-  static List<(double, double)> _mergedRanges(
-    List<(double, double)> ranges,
-    double start,
-    double end,
-  ) {
-    final merged = <(double, double)>[];
-    var lower = start;
-    var upper = end;
-    for (final range in ranges) {
-      if (range.$2 < lower - _materialCoverEpsilon) {
-        merged.add(range);
-      } else if (range.$1 > upper + _materialCoverEpsilon) {
-        // Everything from here on is beyond the new range; flush it first.
-        merged.add((lower, upper));
-        lower = double.nan;
-        merged.add(range);
-      } else {
-        lower = math.min(lower, range.$1);
-        upper = math.max(upper, range.$2);
-      }
-    }
-    if (!lower.isNaN) {
-      merged.add((lower, upper));
-    }
-    merged.sort((a, b) => a.$1.compareTo(b.$1));
-    return merged;
-  }
-
-  static bool _sameRanges(List<(double, double)> a, List<(double, double)> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
   }
 
   /// Brings the next screenful of unread 判断材料 into view.
