@@ -283,12 +283,81 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('他3件を見る'), findsOneWidget);
-    // 新しい順に上限ぶんだけ。いちばん古いものは載らない。
-    expect(find.byKey(const Key('home-test-card-t0')), findsNothing);
+    // どれも答案が無く、順位が並ぶので、残るのは新しい順に上限ぶん。
     expect(
       find.byKey(Key('home-test-card-t${HomeDashboard.maxTests + 2}')),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('home-test-card-t0')), findsNothing);
+  });
+
+  testWidgets('溢れたテストの要確認が、カードにも帯にも出る (Issue #151)', (tester) async {
+    // 実機再検証 #4 の再現。11教科を登録し、**溢れた2教科にだけ**要確認がある。
+    // 以前のホームは `createdAt` の新しい順に8件だけ答案を読んでいたので、
+    // この2教科はカードに出ず、しかも「要確認が2件あります」の数にも
+    // 入らなかった -- 利用者から見ると仕事が残っていないように見える。
+    //
+    // 溢れる側を**いちばん古い**日付にしてある。1件だけだと順序のあやで
+    // たまたま拾えてしまうので、2件にしてある (実機で溢れたのも2教科)。
+    const flaggedNames = ['化学', '古漢'];
+    final flagged = [
+      for (final (index, name) in flaggedNames.indexed)
+        buildTest(id: 'flagged-$index', name: name, createdDay: index + 1),
+    ];
+    final settled = [
+      for (var index = 0; index < 9; index++)
+        buildTest(
+          id: 'settled-$index',
+          name: 'テスト$index',
+          createdDay: index + 10,
+        ),
+    ];
+    final fetched = <String>[];
+    await pumpAppAt(
+      tester,
+      AppRoutes.home,
+      dependencies: AppDependencies(
+        listTestRegistrations: () async => [...settled, ...flagged],
+        listSubmissions: (testId) async {
+          fetched.add(testId);
+          return testId.startsWith('flagged-')
+              ? [
+                  buildSubmission(
+                    id: 's-$testId',
+                    testId: testId,
+                    state: 'needs_review',
+                  ),
+                ]
+              : [
+                  buildSubmission(
+                    id: 's-$testId',
+                    testId: testId,
+                    state: 'exported',
+                  ),
+                ];
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 溢れた2教科の答案を、そもそも読みに行っていること。ここが8件で
+    // 打ち切られていたのが原因なので、最初に押さえる。
+    expect(fetched, containsAll(flagged.map((test) => test.id)));
+
+    // カードに出る。
+    for (final test in flagged) {
+      expect(
+        find.byKey(Key('home-test-card-${test.id}')),
+        findsOneWidget,
+        reason: '${test.name} のカードが出ていない',
+      );
+    }
+    // 出ているのは上限ぶんで、押し出されたのは片付いたテストのほう。
+    expect(find.text('他3件を見る'), findsOneWidget);
+
+    // 帯の数字が2件を数えている。**カードが出ないことは見れば分かるが、
+    // 数字が足りないことは誰にも見えない。**
+    expect(find.text('要確認の答案が2件あります'), findsOneWidget);
   });
 
   testWidgets('取得に失敗したら、その旨と再試行を出す', (tester) async {

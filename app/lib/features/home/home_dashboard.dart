@@ -76,12 +76,24 @@ class HomeTestProgress {
   /// 古いテストの要確認が新しいテストの通常レビューに負ける。要確認を先に
   /// 開くという §2.1 の優先順位はテストをまたいでも成り立たなければならず、
   /// [HomeDashboard._resumeTarget] はこの並びを信じて先頭から探す。
+  ///
+  /// [HomeDashboard._pickVisible] もこの並びを信じて、[settledOrder] より前を
+  /// カードから落とさない (Issue #151)。段を増やすときは、その段が「手が要る」
+  /// 側なのかを決めてから足すこと。
   int get order {
     if (countOf(HomeWorkBucket.needsReview) > 0) return 0;
     if (countOf(HomeWorkBucket.intakeDone) > 0) return 1;
     if (isDraft || countOf(HomeWorkBucket.failed) > 0) return 2;
-    return 3;
+    return settledOrder;
   }
+
+  /// [order] の最下段 -- **ホームから促すことが何も無いテスト**。
+  ///
+  /// 「片付いた」とは言わない。答案が1件も取り込まれていないテストもここに
+  /// 来るし、`ai_processed` のまま止まった答案は [HomeWorkBucket.intakeDone]
+  /// なので、そもそもここには来ない。言えるのは「この画面から開く候補が無い」
+  /// までである (§3.1)。
+  static const int settledOrder = 3;
 
   static Map<HomeWorkBucket, int> _countByBucket(
     List<SubmissionResponse> submissions,
@@ -158,33 +170,50 @@ class HomeNextAction {
 }
 
 /// ホーム画面1枚ぶんのデータ。
+///
+/// **[tests] は全テストである。数える対象と、カードに並べる対象を分けてある**
+/// (Issue #151)。以前はホームが「新しい順に8件」だけ答案を読み、その8件の上で
+/// 件数も「次の一手」も決めていた。溢れたテストの要確認は帯の数に入らず、
+/// カードも出ないので、**利用者から見ると仕事が残っていないように見えた** --
+/// カードが出ないことは見れば分かるが、数が3件足りないことは誰にも見えない。
 class HomeDashboard {
-  const HomeDashboard({required this.tests, required this.hiddenTestCount});
+  const HomeDashboard._({required this.tests, required this.visibleTests});
 
-  /// ホームが答案まで読みに行くテストの上限。
+  /// カードとして並べるテストの本数の目安。
   ///
-  /// 2つの理由がある。(1) 内訳は `listSubmissions` をテストごとに呼んで
-  /// 数えるので、上限が無いとホームを開くたびにテストの数だけリクエストが
-  /// 出る。(2) そもそもホームは「最近使用したテスト」を見せる画面で
-  /// (簡易設計書 §16.1)、去年のテストまで並べる場所ではない。
+  /// ホームは「最近使用したテスト」を見せる画面で (簡易設計書 §16.1)、去年の
+  /// テストまで並べる場所ではない。ただし**これは上限ではなく、片付いている
+  /// テストを切る位置である** -- 手が要るテストは何件あっても隠さない
+  /// ([visibleTests])。
   ///
-  /// 溢れたぶんは「テスト一覧」から辿れる。ホーム側にもその件数を出す。
+  /// 数を大きくするだけでは同じ事故が再発する。11件へ広げても、手が要るテストが
+  /// 12件あれば12件目はまた消える。**原因は上限の値ではなく、上限を新しさで
+  /// 切っていたことにある。**
   static const int maxTests = 8;
 
-  /// 表示順に並んだテスト。人間待ちのものが先、その中では新しい順。
+  /// 表示順に並んだ**全テスト**。人間待ちのものが先、その中では新しい順。
+  ///
+  /// 件数 ([count])、「次の一手」([nextAction])、レビューの再開先
+  /// ([_resumeTarget]) は、いずれもこの全件の上で決まる。
   final List<HomeTestProgress> tests;
 
-  /// [maxTests] に入らなかったテストの数。
-  final int hiddenTestCount;
+  /// カードとして実際に並べるテスト。[tests] の先頭からの連続した一部。
+  final List<HomeTestProgress> visibleTests;
 
-  /// 直近 [maxTests] 件のテストと、その答案から組み立てる。
+  /// カードに並べなかったテストの数。
+  ///
+  /// **「数えていないテスト」ではない。** 答案は全件読んでいるので、ここに
+  /// 入るのは [HomeTestProgress.order] が最下段のテスト -- ホームから開く
+  /// 答案が1件も無いものだけである。
+  int get hiddenTestCount => tests.length - visibleTests.length;
+
+  /// 全テストと、その答案から組み立てる。
   ///
   /// [submissionsByTestId] は [tests] と同じテストを覆っていることを前提に
   /// する (呼び出し側が両方を1回のロードで揃える)。
   factory HomeDashboard.from({
     required List<TestResponse> tests,
     required Map<String, List<SubmissionResponse>> submissionsByTestId,
-    required int hiddenTestCount,
   }) {
     final progress =
         [
@@ -198,10 +227,33 @@ class HomeDashboard {
           if (byOrder != 0) return byOrder;
           return b.test.createdAt.compareTo(a.test.createdAt);
         });
-    return HomeDashboard(tests: progress, hiddenTestCount: hiddenTestCount);
+    return HomeDashboard._(
+      tests: List.unmodifiable(progress),
+      visibleTests: List.unmodifiable(_pickVisible(progress)),
+    );
   }
 
-  bool get isEmpty => tests.isEmpty && hiddenTestCount == 0;
+  /// カードに出す範囲を、件数ではなく**手が要るかどうか**で切る。
+  ///
+  /// [tests] は [HomeTestProgress.order] 順に並んでいて、最下段
+  /// ([HomeTestProgress.settledOrder]) は「ホームから開く答案が無いテスト」で
+  /// ある。したがって先頭からその境目までが「手が要るテスト」で、**そこは
+  /// 何件あっても全部出す**。[maxTests] が削るのは、その後ろの片付いた尾だけ。
+  ///
+  /// **これが Issue #151 の核心である。** 新しい順に8件取ると、どの8件が残るかは
+  /// 取込順に依存し、要確認を抱えたテストが理由もなく落ちる。手が要るものを
+  /// 先に確保すれば、落ちるのは「落ちても困らないもの」だけになる。
+  static List<HomeTestProgress> _pickVisible(List<HomeTestProgress> ordered) {
+    final settledFrom = ordered.indexWhere(
+      (test) => test.order == HomeTestProgress.settledOrder,
+    );
+    if (settledFrom < 0) return ordered;
+    return ordered
+        .take(settledFrom < maxTests ? maxTests : settledFrom)
+        .toList();
+  }
+
+  bool get isEmpty => tests.isEmpty;
 
   int count(HomeWorkBucket bucket) =>
       tests.fold(0, (sum, test) => sum + test.countOf(bucket));
@@ -236,17 +288,6 @@ class HomeDashboard {
     return null;
   }
 
-  /// 集計の範囲を明示する但し書き。載せきれなかったテストが無ければ空。
-  ///
-  /// [tests] はホームが答案まで読んだテストで、[hiddenTestCount] 件ぶんは
-  /// `listSubmissions` を呼んでいない (§5)。したがって件数も「ありません」も
-  /// **この範囲の話でしかない**。範囲を書かずに数だけ出すと全体の数として
-  /// 読まれるし、「レビュー待ちはありません」に至っては、読んでいないテストの
-  /// 不在まで断定することになる。
-  String get _loadedScopeNote => hiddenTestCount == 0
-      ? ''
-      : '（数えたのは直近${tests.length}件のテストで、ほかに$hiddenTestCount件あります）';
-
   /// 次の一手。上から順に「人間にしかできないこと」「待っていれば進むこと」
   /// 「まだ何も無いなら始めること」。
   ///
@@ -277,7 +318,6 @@ class HomeDashboard {
         detail: isFlagged
             ? '人の確認が必要と判定された答案から開きます'
                   '${awaiting > 0 ? '（ほかに取込済みが$awaiting件）' : ''}'
-                  '$_loadedScopeNote'
             // **「AI採点は開始済み」とは言わない。** 起票を試みるのは答案取込
             // 画面だが、409や通信断で失敗しうるし、この仕組みより前に
             // 取り込まれた答案には一度も行われていない。どちらも
@@ -286,7 +326,7 @@ class HomeDashboard {
             // (§3.1、review round 1 P2-1)。開けば添削レビュー画面が答える。
             : '取込と回答欄の抽出は終わっています。'
                   'AI採点とレビューがどこまで進んだかはホームでは分かりません。'
-                  'テストごとに、取込の古い順に開きます$_loadedScopeNote',
+                  'テストごとに、取込の古い順に開きます',
         actionLabel: 'レビューを続ける',
         route: AppRoutes.pdfReview(
           testId: test.test.id,
@@ -309,7 +349,7 @@ class HomeDashboard {
         // ホームは下流の有無を取得していないので、どちらになるか分からない。
         detail:
             '答案取込画面で対象のテストを選ぶと、失敗した答案が一覧に出ます'
-            '（${failed.test.name}）$_loadedScopeNote',
+            '（${failed.test.name}）',
         actionLabel: '答案取込を開く',
         route: AppRoutes.intake,
       );
@@ -338,9 +378,7 @@ class HomeDashboard {
         // 取込の結果は3通りある (回答欄が揃えば `ai_processed`、ページや回答欄が
         // 足りなければ `needs_review`、失敗すれば `error`)。「レビュー待ちに
         // なります」と1つに決めない。
-        detail:
-            '終わると取込済み・要確認・取込失敗のいずれかになります'
-            '$_loadedScopeNote',
+        detail: '終わると取込済み・要確認・取込失敗のいずれかになります',
         // 行き先が無い唯一の分岐。押せるものが「更新」しか無い状態を、
         // 押せないボタンではなく押せるボタンで表す。
         actionLabel: '最新の状況に更新',
@@ -350,28 +388,25 @@ class HomeDashboard {
       return HomeNextAction(
         icon: Icons.upload_file,
         tone: AppStatusTone.success,
-        // ここだけは見出しそのものが「無い」と言うので、範囲を見出しに書く。
-        // 説明文の但し書きに逃がすと、読まれる前に「片付いた」と受け取られる。
         // 「レビュー待ちはありません」とは言えない -- レビューが済んだか
         // どうかを `state` から読めないので (§3.1)。言えるのは「この画面から
         // 開く候補が無い」ことだけである。
-        headline: hiddenTestCount == 0
-            ? 'いま開く答案はありません'
-            : '直近${tests.length}件のテストに、いま開く答案はありません',
-        detail: hiddenTestCount == 0
-            // 「問題がなければ」を外さない。回答欄が揃わなかった答案は
-            // 要確認として止まり、起票そのものが失敗することもある
-            // (`docs/job-queue.md`「起票のタイミング」)。
-            ? '次の答案を取り込むと、回答欄の抽出まで自動で行われ、'
-                  '問題がなければAI採点もそのまま始まります'
-            : 'ほかに$hiddenTestCount件のテストがあり、そちらの答案は数えていません',
+        //
+        // **範囲の但し書きはもう要らない** (Issue #151)。[tests] は全テストで、
+        // カードに載らなかったぶんも答案まで数えてある。以前はここが
+        // 「直近N件のテストに…ありません」だった -- 数えていないテストの不在を
+        // 断定しないためだったが、いまは数えていないテストが無い。
+        headline: 'いま開く答案はありません',
+        // 「問題がなければ」を外さない。回答欄が揃わなかった答案は
+        // 要確認として止まり、起票そのものが失敗することもある
+        // (`docs/job-queue.md`「起票のタイミング」)。
+        detail:
+            '次の答案を取り込むと、回答欄の抽出まで自動で行われ、'
+            '問題がなければAI採点もそのまま始まります',
         actionLabel: '答案を取り込む',
         route: AppRoutes.intake,
       );
     }
-    // ここは [tests] が空の分岐なので、[hiddenTestCount] も必ず 0 である
-    // (載せる上限は先頭から取るため、テストが1件でもあれば [tests] に入る)。
-    // つまり「1件も無い」と言い切ってよい唯一の不在の主張。
     return const HomeNextAction(
       icon: Icons.add_task,
       tone: AppStatusTone.neutral,

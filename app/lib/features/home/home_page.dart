@@ -45,30 +45,34 @@ class _HomePageState extends ConsumerState<HomePage> {
     _dashboardFuture = _load();
   }
 
-  /// テストの一覧と、そのそれぞれの答案を1回ぶんまとめて読む。
+  /// **全テストの答案を読む** (Issue #151)。
   ///
-  /// `listSubmissions` はテストごとのAPIなので、これは 1 + N リクエストに
-  /// なる。N は [HomeDashboard.maxTests] で頭打ちにしてある。相手はローカルの
-  /// サイドカー (SQLite) で、まとめて取る集計APIを足すのは新しいバックエンド
-  /// APIになるため、この Issue では取らない選択をした
+  /// `listSubmissions` はテストごとのAPIなので、これは 1 + テスト数 の
+  /// リクエストになる。**以前は8件で頭打ちにしていたが、それをやめた** --
+  /// 読まなかったテストの要確認は帯の件数から抜け落ち、しかも抜けたことが
+  /// 画面のどこにも出なかった。カードを絞るのは [HomeDashboard.visibleTests]
+  /// の仕事で、取得を絞る仕事ではない。
+  ///
+  /// 相手はローカルのサイドカー (SQLite) なので、塾の実資料の規模 (11教科 =
+  /// 12リクエスト) では素直に払える。まとめて取る集計API (`GET /dashboard`)
+  /// は足していない -- テストが数百件に届いたときが、その検討時点になる
   /// (`docs/home-dashboard.md` §5)。
   Future<HomeDashboard> _load() async {
-    final all = await _dependencies.listTestRegistrations();
-    final recent = [...all]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final shown = recent.take(HomeDashboard.maxTests).toList();
-    // Future.wait: N件を直列に待つとテスト8件ぶんの往復が積み上がる。1件でも
+    final tests = await _dependencies.listTestRegistrations();
+    // Future.wait: 直列に待つとテストの数だけ往復が積み上がる。1件でも
     // 失敗したらこの Future 全体が失敗し、画面はエラーバナーと再試行を出す
     // -- 個々の失敗を握り潰して欠けた内訳を正しい数字として見せるより、
     // 取れていないことを言うほうがよい。
     final submissions = await Future.wait(
-      shown.map((test) => _dependencies.listSubmissions(test.id)),
+      tests.map((test) => _dependencies.listSubmissions(test.id)),
     );
+    // 並べ替えはしない。[HomeDashboard.from] が「手が要る順、同順ではテストの
+    // 新しい順」に並べる。ここで新しい順に整えると、その前段だけが二重になる。
     return HomeDashboard.from(
-      tests: shown,
+      tests: tests,
       submissionsByTestId: {
-        for (final (index, test) in shown.indexed) test.id: submissions[index],
+        for (final (index, test) in tests.indexed) test.id: submissions[index],
       },
-      hiddenTestCount: all.length - shown.length,
     );
   }
 
@@ -195,7 +199,7 @@ class _DashboardBody extends StatelessWidget {
           onOpen: onOpen,
           onRefresh: onRefresh,
         ),
-        if (dashboard.tests.isNotEmpty) ...[
+        if (dashboard.visibleTests.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.xl),
           _SectionHeader(
             title: 'テストの進み具合',
@@ -203,7 +207,7 @@ class _DashboardBody extends StatelessWidget {
             onOpen: onOpen,
           ),
           const SizedBox(height: AppSpacing.sm),
-          for (final test in dashboard.tests) ...[
+          for (final test in dashboard.visibleTests) ...[
             _TestProgressCard(progress: test, onOpen: onOpen),
             const SizedBox(height: AppSpacing.md),
           ],
@@ -297,8 +301,10 @@ class _SectionHeader extends StatelessWidget {
     return Row(
       children: [
         Expanded(child: Text(title, style: context.texts.titleMedium)),
-        // ホームは直近 [HomeDashboard.maxTests] 件しか載せない。溢れた件数を
-        // 言わないと「もう無い」と読めてしまうので、隠した数をここで出す。
+        // カードに載せなかったテストの数。**答案は全件数えてあり、ここに
+        // 入るのはホームから開く答案が無いテストだけである** (Issue #151) が、
+        // 黙って消すと「もう無い」と読めてしまうので数を出す。行き先の
+        // テスト一覧からは、そのテストの答案キューへ直接入れる。
         // 0件のときは下の入口行にある「テスト一覧」と同じ行き先なので出さない。
         if (hiddenTestCount > 0)
           TextButton(
