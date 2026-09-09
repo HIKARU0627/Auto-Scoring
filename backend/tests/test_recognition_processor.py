@@ -1,8 +1,10 @@
 """Tests for `auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`
 (Issue #19), against a real on-disk SQLite database and `LocalFileStore`, with
-a scriptable fake `OCRProvider` -- no real OCR service is called (the service
-decision A names in business-rules-and-evaluation-data.md section 3 (A),
-Google Document AI, has no adapter yet).
+a scriptable fake `OCRProvider` -- no real OCR service is called. The shipped
+adapter for the service decision A names (Google Document AI,
+business-rules-and-evaluation-data.md section 3 (A)) has its own tests in
+``test_document_ai_provider.py``; this file is about what the processor does
+with whatever a provider returns or raises.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from auto_scoring.domain.ocr import (
     OCRServerError,
     OCRTimeoutError,
     OcrToken,
+    OCRUnavailable,
 )
 from auto_scoring.jobs.recognition_processor import RecognitionJobProcessor
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
@@ -162,6 +165,72 @@ async def test_needs_review_answer_image_skips_the_provider(
     assert provider.calls == []  # never spent an external call on an untrusted crop
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.recognitions.history("sub-1", "q-1") == []
+
+
+async def test_a_host_with_no_ocr_records_no_reading_and_does_not_block(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """Issue #114. "This machine has no OCR" is a third case, distinct from
+    both "read it and was unsure" (low confidence, still persisted, still
+    blocks) and "the call failed" (FAILED, retried).
+
+    Two things are asserted because both were wrong before:
+
+    * **No `RecognitionResult` is written.** The deleted ``NullOCRProvider``
+      wrote one at ``confidence=0.0``, which design section 8.1.4 forbids
+      ("読めていないものに数値を与えない") and which is indistinguishable in
+      review from an OCR that looked and found nothing.
+    * **``usable`` is True**, meaning "no OCR term to gate on". It was False,
+      which made every question on such a host `BLOCKED` for its dependents
+      until a human pressed /resume on each one -- while design section 24
+      says "OCR失敗: **採点は止めない。**"
+    """
+    _seed(session_factory, store)
+    provider.script(OCRUnavailable("no OCR provider is configured: X is not set"))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is True
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.recognitions.history("sub-1", "q-1") == []
+
+
+async def test_an_unreadable_reading_still_blocks_even_though_no_ocr_does_not(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """The pair that makes the distinction real (Issue #114 acceptance 8).
+
+    An OCR that read the crop and got nothing out of it is the case
+    business-rules-and-evaluation-data.md section 4.4 was written for, and
+    Issue #114 deliberately left it alone: the row exists, the confidence is
+    real, and the dependent question waits for a human. Only the *absence of
+    a provider* stops gating.
+    """
+    _seed(session_factory, store)
+    provider.script(
+        OcrResult(
+            text="",
+            tokens=(_token("", 0.0, ConfidenceBand.LOW),),
+            provider="scripted",
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is False
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        # The row is what tells the two cases apart afterwards.
+        assert len(uow.recognitions.history("sub-1", "q-1")) == 1
 
 
 async def test_missing_question_id_fails_permanently_without_calling_the_provider(

@@ -47,6 +47,7 @@ from auto_scoring.domain.ocr import (
     OCRServerError,
     OCRTimeoutError,
     OcrToken,
+    OCRUnavailable,
     overall_confidence,
 )
 from auto_scoring.jobs.clock import Clock, SystemClock
@@ -124,6 +125,23 @@ class RecognitionJobProcessor:
     ever raising -- a low-confidence/unreadable read is a completed
     recognition, not a processing failure (`domain.ocr.OcrToken`'s own
     docstring: an unreadable span is still returned, never dropped).
+
+    **A host with no OCR at all is a third case, not a low-confidence read**
+    (Issue #114). `domain.ocr.OCRUnavailable` yields ``SUCCEEDED`` with no
+    `RecognitionResult` persisted and ``usable=True``, which for this half
+    means "there is no OCR term to gate on" rather than "the reading was
+    good": design section 24 requires grading to carry on without a reading,
+    and section 8.1.4 forbids inventing a confidence number for one. The
+    two cases stay distinguishable afterwards by whether a
+    `RecognitionResult` row exists at all -- which is the point (Issue #114
+    acceptance 8: "本当に読めなかった" and "読む道具が無い" are different
+    facts).
+
+    That ``usable=True`` is only sound because this processor is always
+    composed into `jobs.grading_processor.GradingJobProcessor`, which ANDs
+    it with the grading half; it is never the queue's processor on its own
+    (`api.app.create_app`). Running it standalone on a host with no OCR
+    would release a dependent question against nothing at all.
 
     ``ProcessingOutcome.FAILED`` is reserved for the provider not producing a
     result at all (`domain.ocr.OCRProviderError` and its subclasses):
@@ -206,6 +224,23 @@ class RecognitionJobProcessor:
         # `auto_scoring.jobs.queue`'s own rule for `JobProcessor.process`.
         try:
             result = await to_thread(self._provider.recognize, image_bytes, language=_LANGUAGE)
+        except OCRUnavailable:
+            # This host has no OCR at all (Issue #114). Not a failure: design
+            # section 24 says grading carries on without a reading ("OCR失敗:
+            # **採点は止めない。**"), and section 8.1.4 forbids writing a
+            # confidence number for something nothing read. So no
+            # `RecognitionResult` is persisted, and ``usable`` is True --
+            # meaning "there is no OCR term to gate on here", not "the
+            # reading was good". `jobs.grading_processor.GradingJobProcessor`
+            # -- the only processor this one is composed into -- then decides
+            # the question entirely from the grading half, which is exactly
+            # what business-rules-and-evaluation-data.md section 4.3 calls
+            # for once OCR text is no longer guaranteed to exist.
+            #
+            # Listed before the sibling clauses below because `OCRUnavailable`
+            # descends from `OCRProviderError` too; it is the one member of
+            # that hierarchy that does not mean "this call failed".
+            return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
         except OCRTimeoutError:
             return self._failed(ErrorCategory.TIMEOUT, "timed out")
         except OCRRateLimitedError:
