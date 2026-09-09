@@ -481,6 +481,19 @@ def _seed_submission(
             source_pdf_sha256=hashlib.sha256(stored.read_bytes()).hexdigest(),
             page_count=1,
             state=state,
+            # Paired with the state, because intake pairs them: every branch that
+            # picks `NEEDS_REVIEW` picks a reason with it, and a clean intake
+            # writes `None` (`adapters/submission_intake.py`). Issue #112 made
+            # that pairing load-bearing -- it is how an un-confirm tells "intake
+            # flagged this" from "intake was fine" -- so seeding a
+            # `needs_review` without a reason would put the demo data in a state
+            # intake cannot produce, and the screens would then behave
+            # differently here than they do for real.
+            review_reason=(
+                "answer_area_undefined:" + question_ids[1]
+                if state is SubmissionState.NEEDS_REVIEW
+                else None
+            ),
             student_label=student_label,
             original_filename="demo-answer.pdf",
             created_at=created_at,
