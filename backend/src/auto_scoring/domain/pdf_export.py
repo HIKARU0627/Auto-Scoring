@@ -208,6 +208,36 @@ def _score_text(grade: GradeResult) -> str:
     return f"{grade.score.awarded}/{grade.score.maximum}"
 
 
+def _fallback_score_text(question: Question, grade: GradeResult) -> str:
+    """The margin strip's line for one question: **the score first, then the
+    question it belongs to.**
+
+    The number has to be there at all because a bare ``4/5`` in a margin
+    belongs to nothing -- this mark is nowhere near the answer, which is the
+    whole reason it exists (`fallback_score_areas`).
+
+    It comes *second* because of what happens when the line does not fit.
+    `adapters.pdf.pdfium_pypdf_engine._draw_text` wraps to the rect's width
+    and, when even the 6pt floor leaves more lines than the rect can hold,
+    keeps the first ones and ends the last with an ellipsis. Whatever is last
+    in this string is therefore what gets eaten. The strip is 3% of the page
+    wide -- about 18pt, three Japanese characters -- and `domain.
+    test_registration` lets a `number` be up to
+    ``_MAX_QUESTION_NUMBER_BYTES`` (40) bytes, which measures at nine wrapped
+    lines for a 40-character ASCII label. With the number first, that label
+    would push the score off the end and the export would still report
+    success: a confirmed grade lost, with nothing on the paper to say so
+    (Issue #121's failure again).
+
+    Score first makes the truncation land on the label instead, where it is
+    both survivable and *visible* -- the reader sees ``4/5 第一問設問三…``
+    and still has the number that matters. No cap is applied to the number
+    here on purpose: the engine's own ellipsis already says "there was more",
+    and a second, silent truncation of our own would say nothing.
+    """
+    return f"{_score_text(grade)} {question.number}"
+
+
 #: The symbol put at the head of a shape-kind annotation's note line, so a
 #: reader of the margin band can tell which note belongs to the ``×`` on the
 #: answer and which to the ``○`` (Issue #141). `AnnotationKind.COMMENT` has
@@ -434,7 +464,7 @@ def build_export_marks(
             AnnotationMark(
                 kind=AnnotationKind.SCORE,
                 rect=fallback_score_area,
-                text=f"{question.number} {_score_text(grade)}",
+                text=_fallback_score_text(question, grade),
             )
         )
     notes: list[str] = []

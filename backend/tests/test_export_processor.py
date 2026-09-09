@@ -311,8 +311,71 @@ async def test_a_question_with_no_score_area_has_its_score_written_in_the_margin
     # 肯定形が先: 通常の経路 (`score_area` のある設問) が生きていることを言って
     # から、余白帯の行を見る。前者が死ぬと後者だけでは気づけない。
     assert placed.count("4/5") == 2
-    assert "問24/5" in placed
+    assert "4/5問2" in placed
     assert "…" not in placed
+
+
+async def test_a_long_question_number_never_eats_the_margin_score(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """余白帯の行が長すぎて切り詰められるとき、**消えるのは番号であって点数では
+    ないこと。**
+
+    `_draw_text` は入り切らない行を省略記号で打ち切るので、**行の末尾にあるものが
+    食われる。** 帯の幅はページの3%（A4で約18pt）しかなく、`Question.number` は
+    `test_registration._MAX_QUESTION_NUMBER_BYTES`（40バイト）まで許される。
+    番号を先に置くと、40文字のASCII番号は9行に折り返して点数を枠外へ押し出し、
+    **確定した点数が消えたまま出力は成功を返す**（Issue #121 と同じ形）。
+
+    ここでは1ページに18件（帯の容量ぴったり、つまり1件あたりの高さが最小になる条件）を
+    並べ、そのうち1件に上限いっぱいの番号を与える。容量を1件でも増やせば 409 に
+    なるので、これが「切り詰めが実際に起こりうる最小の高さ」である。
+    """
+    long_number = "Q" + "1234567890" * 3 + "123456789"  # 40 bytes, the limit
+    assert len(long_number.encode()) == 40
+    _write_source_pdf(store.submission_source_pdf_path("sub-1"))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.submissions.add(make_submission())
+        for index in range(18):
+            question_id = f"q-{index:02d}"
+            uow.questions.add(
+                make_question(
+                    id=question_id,
+                    number=long_number if index == 0 else f"問{index:02d}",
+                    score_area=None,
+                )
+            )
+            uow.grades.add(make_grade(id=f"grade-{index:02d}", question_id=question_id))
+            uow.reviews.add(
+                make_review(
+                    id=f"review-{index:02d}",
+                    question_id=question_id,
+                    ai_grade_result_id=f"grade-{index:02d}",
+                )
+            )
+        uow.commit()
+    install_font_covering(monkeypatch, "問0123456789/Q")
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export = uow.exports.get(export_id(job))
+        assert export is not None
+    placed = "".join(drawn_text(store.root / export.file_path).split())
+    # 肯定形が先: 18件ぶんの点数がすべて紙に乗っていること。ここが死ぬと下の
+    # 「切り詰めは番号側に起きた」は、何も描かれていなくても真になる。
+    assert placed.count("4/5") == 18
+    # そして切り詰めは実際に起きている（起きない条件で測っても意味がない）。
+    assert "…" in placed
+    # それでも消えたのは番号の末尾で、点数ではない。
+    assert long_number not in placed
+    assert "4/5Q1234" in placed
 
 
 async def test_exports_a_question_a_person_graded_after_ai_failed(
