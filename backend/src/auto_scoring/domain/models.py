@@ -1020,6 +1020,28 @@ def find_answer_image(images: Sequence[AnswerImage], question_id: str) -> Answer
     return max(matches, key=lambda image: image.created_at)
 
 
+def latest_job_for_question(jobs: Sequence[Job], question_id: str) -> Job | None:
+    """The `Job` that describes where ``question_id`` currently stands.
+
+    A question accumulates jobs: a 再判定 request, a re-submission under a newer
+    confirmed graph version, and a retry after a failure each add one
+    (`reissue_job_for_graph_version`, `adapters.review_actions.regrade_question`).
+    **Only the newest of them says anything about now** -- an old ``failed`` row
+    sitting behind a newer ``succeeded`` one describes an attempt that has since
+    been superseded.
+
+    This is deliberately the same rule the review screen already draws with
+    (`app/lib/core/question_status.dart`'s ``_latestJobFor`` +
+    ``deriveQuestionStatus``). Issue #84 was three places on that screen deriving
+    one question's state separately and disagreeing; a *server* that counted
+    these differently would be the fourth.
+    """
+    matches = [job for job in jobs if job.question_id == question_id]
+    if not matches:
+        return None
+    return max(matches, key=lambda job: job.created_at)
+
+
 def reissue_job_for_graph_version(
     job: Job, *, new_version: int, new_id: str, at: datetime
 ) -> tuple[Job, Job]:

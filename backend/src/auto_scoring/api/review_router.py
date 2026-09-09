@@ -62,13 +62,42 @@ from auto_scoring.domain.models import (
     CriterionOutcome,
     DomainError,
     GradeResult,
+    JobState,
     NormalizedRect,
     Question,
     RecognitionResult,
     Review,
+    latest_job_for_question,
 )
-from auto_scoring.domain.review_workflow import ReviewVersionConflict
+from auto_scoring.domain.review_workflow import (
+    ReviewVersionConflict,
+    count_confirmed_questions,
+)
 from auto_scoring.jobs.queue import JobQueueService
+
+
+class SubmissionReviewProgressResponse(BaseModel):
+    """How far one answer has got, counted per question (Issue #113).
+
+    **Counts only.** 答案キュー needs three numbers per row and nothing else; the
+    row's own状態 already comes from `SubmissionResponse.state`, and anything
+    richer belongs to the screen that opens the answer.
+
+    Why it exists at all: `GET /submissions/{id}/questions/{qid}/reviews` is
+    per-question, so a 40-answer test would cost 200 requests to draw one list
+    -- the same shape ホーム画面 already refuses for jobs
+    (`docs/home-dashboard.md` §4). One request for the whole test instead.
+    """
+
+    submission_id: str
+    total_questions: int
+    confirmed_questions: int
+    #: Questions whose *latest* job failed (`latest_job_for_question`). A
+    #: reviewer cannot confirm these until Issue #118 lands, so an answer
+    #: carrying one is stuck rather than merely unfinished -- 「自分が後回しに
+    #: した答案」と「AIが失敗して手が出ない答案」は、金曜の午後の終わりに
+    #: 読み分けられなければならない。
+    failed_questions: int
 
 
 class NormalizedRectResponse(BaseModel):
@@ -416,6 +445,46 @@ def build_review_router(
                 )
                 responses.append(QuestionResponse.from_domain(question, criteria))
         return responses
+
+    @router.get(
+        "/tests/{test_id}/review-progress",
+        response_model=list[SubmissionReviewProgressResponse],
+    )
+    def list_review_progress(test_id: str) -> list[SubmissionReviewProgressResponse]:
+        """Per-question review progress for every answer of one test.
+
+        Ordered by the answers' own ``created_at``, the order every other list
+        of a test's answers already uses (`SubmissionRepository.list_for_test`),
+        so the client never has to re-sort to line this up with
+        `GET /tests/{id}/submissions`.
+        """
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            if uow.tests.get(test_id) is None:
+                raise HTTPException(404, detail=f"test {test_id!r} not found")
+            question_ids = [question.id for question in uow.questions.list_for_test(test_id)]
+            progress = []
+            for submission in uow.submissions.list_for_test(test_id):
+                reviews_by_question = {
+                    question_id: uow.reviews.history(submission.id, question_id)
+                    for question_id in question_ids
+                }
+                jobs = uow.jobs.list_for_submission(submission.id)
+                progress.append(
+                    SubmissionReviewProgressResponse(
+                        submission_id=submission.id,
+                        total_questions=len(question_ids),
+                        confirmed_questions=count_confirmed_questions(
+                            question_ids, reviews_by_question
+                        ),
+                        failed_questions=sum(
+                            1
+                            for question_id in question_ids
+                            if (job := latest_job_for_question(jobs, question_id)) is not None
+                            and job.state is JobState.FAILED
+                        ),
+                    )
+                )
+        return progress
 
     @router.get(
         "/submissions/{submission_id}/source-pdf",

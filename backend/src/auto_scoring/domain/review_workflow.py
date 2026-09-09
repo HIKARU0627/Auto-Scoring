@@ -152,6 +152,27 @@ def all_questions_confirmed(
     )
 
 
+def count_confirmed_questions(
+    question_ids: Iterable[str], reviews_by_question: Mapping[str, Sequence[Review]]
+) -> int:
+    """How many of ``question_ids`` currently have a confirmed effective review.
+
+    `all_questions_confirmed` answers "is this submission finished"; this
+    answers "how far in is it", which is what 答案キュー shows per row so a
+    reviewer who stopped halfway can see they stopped halfway (Issue #113).
+
+    **Same rule, one predicate** (`is_confirmed` over `effective_latest_review`),
+    so the count can never disagree with the completion it counts towards -- a
+    row reading 5/5 and a submission that is not 確認済み would be two answers to
+    one question.
+    """
+    return sum(
+        1
+        for question_id in question_ids
+        if is_confirmed(effective_latest_review(reviews_by_question.get(question_id, ())))
+    )
+
+
 def resolve_effective_grade(
     reviews: Sequence[Review], grades: Sequence[GradeResult]
 ) -> GradeResult | None:

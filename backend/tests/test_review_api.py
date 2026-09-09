@@ -25,6 +25,7 @@ from auto_scoring.domain.models import (
     CriterionOutcome,
     CriterionResult,
     GradingSource,
+    JobState,
     NormalizedRect,
     Score,
     SubmissionState,
@@ -33,6 +34,7 @@ from tests.support import (
     at,
     make_annotation_comment,
     make_grade,
+    make_job,
     make_question,
     make_rubric,
     make_submission,
@@ -1134,3 +1136,148 @@ def test_manual_grading_can_be_undone_back_to_unconfirmed(
     assert undone.json()["submission_state"] == "ai_processed"
     grades = client.get("/submissions/sub-1/questions/q-1/grades", headers=_AUTH).json()
     assert [g["source"] for g in grades] == ["human"]
+
+
+# --------------------------------------------------------------------------- #
+# GET /tests/{test_id}/review-progress (Issue #113)
+# --------------------------------------------------------------------------- #
+
+
+def _seed_two_question_test(session_factory: sessionmaker[Session]) -> None:
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="1"))
+        uow.questions.add(make_question(id="q-2", number="2"))
+        uow.submissions.add(make_submission(state=SubmissionState.AI_PROCESSED))
+        uow.grades.add(make_grade(id="grade-q1", question_id="q-1", source=GradingSource.AI))
+        uow.grades.add(make_grade(id="grade-q2", question_id="q-2", source=GradingSource.AI))
+        uow.commit()
+
+
+def test_review_progress_counts_confirmed_questions(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #113: 途中まで確定した答案が「未着手」に見えないようにするための数。
+
+    答案の `state` が動くのは全設問が確定したときだけ (Issue #112) なので、3/5 まで
+    やった答案は一覧では未着手と区別がつかない。その穴をこの数が埋める。
+    """
+    _seed_two_question_test(session_factory)
+    assert (
+        client.get("/tests/test-1/review-progress", headers=_AUTH).json()[0]["confirmed_questions"]
+        == 0
+    )
+
+    client.post(
+        "/submissions/sub-1/questions/q-1/review/approve",
+        headers=_AUTH,
+        json={"expected_version": 0},
+    )
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body == [
+        {
+            "submission_id": "sub-1",
+            "total_questions": 2,
+            "confirmed_questions": 1,
+            "failed_questions": 0,
+        }
+    ]
+
+
+def test_review_progress_counts_questions_whose_latest_job_failed(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """答案が「詰んでいる」ことは、この数にしか出ない。
+
+    AI 採点が失敗した設問は、人が確定する手段がまだ無い (Issue #118)。金曜の午後の
+    終わりに「残り3枚」を見たとき、**自分が後回しにした答案と、AI が失敗して手が
+    出ない答案は読み分けられなければならない**。
+    """
+    _seed_two_question_test(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            make_job(id="job-q1", question_id="q-1", state=JobState.FAILED, created_at=at(10))
+        )
+        uow.commit()
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body[0]["failed_questions"] == 1
+
+
+def test_review_progress_reads_only_the_latest_job_of_a_question(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A superseded failure is not a failure.
+
+    A question accumulates jobs -- a 再判定, a retry, a re-submission under a newer
+    graph version. **Only the newest says anything about now.** This is the same
+    rule 添削レビュー画面 draws with (`core/question_status.dart`'s
+    ``_latestJobFor``); counting it differently here would make the queue and the
+    review screen say opposite things about one question, which is exactly what
+    Issue #84 was.
+    """
+    _seed_two_question_test(session_factory)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.jobs.add(
+            make_job(id="job-old", question_id="q-1", state=JobState.FAILED, created_at=at(10))
+        )
+        uow.jobs.add(
+            make_job(id="job-new", question_id="q-1", state=JobState.SUCCEEDED, created_at=at(20))
+        )
+        uow.commit()
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+    assert body[0]["failed_questions"] == 0
+
+
+def test_review_progress_is_empty_for_a_test_with_no_answers(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.commit()
+
+    response = client.get("/tests/test-1/review-progress", headers=_AUTH)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_review_progress_404s_for_an_unknown_test(client: TestClient) -> None:
+    assert client.get("/tests/no-such-test/review-progress", headers=_AUTH).status_code == 404
+
+
+def test_review_progress_answers_a_whole_test_in_one_request(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The reason this endpoint exists: **one** request for 40 answers.
+
+    Drawing the same list from `.../reviews` would take one request per
+    (answer, question) -- 200 for this test's shape. That is the cost ホーム画面
+    already refuses to pay for jobs (`docs/home-dashboard.md` §4/§5), and a
+    40-answer queue is where it would actually hurt.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        for number in range(1, 6):
+            uow.questions.add(make_question(id=f"q-{number}", number=str(number)))
+        for index in range(40):
+            uow.submissions.add(
+                make_submission(
+                    id=f"sub-{index:03d}",
+                    created_at=at(index),
+                    # `(test_id, source_pdf_sha256)` is unique -- it is the intake
+                    # dedupe key, so 40 answers of one test are 40 distinct PDFs.
+                    source_pdf_sha256=f"{index:064d}",
+                )
+            )
+        uow.commit()
+
+    body = client.get("/tests/test-1/review-progress", headers=_AUTH).json()
+
+    assert len(body) == 40
+    assert {row["total_questions"] for row in body} == {5}
+    # 取込順で返る -- クライアントが並べ直さなくても `GET /tests/{id}/submissions`
+    # と行が対応する。
+    assert [row["submission_id"] for row in body] == [f"sub-{i:03d}" for i in range(40)]
