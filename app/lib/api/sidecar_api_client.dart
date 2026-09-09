@@ -649,7 +649,8 @@ class SidecarApiClient {
         // than shifting every role by one.
         materials: BuiltList<MultipartFile>(extras),
         materialRoles: BuiltList<String>([
-          for (final material in materials) material.role.name,
+          for (final material in materials)
+            _materialRoleWireValue(material.role),
         ]),
         name: name,
         subject: subject,
@@ -690,7 +691,8 @@ class SidecarApiClient {
             testId: testId,
             materials: BuiltList<MultipartFile>(files),
             materialRoles: BuiltList<String>([
-              for (final material in materials) material.role.name,
+              for (final material in materials)
+                _materialRoleWireValue(material.role),
             ]),
             cancelToken: cancelToken,
           );
@@ -1782,6 +1784,24 @@ class SidecarApiClient {
     }
   }
 }
+
+/// The value the sidecar knows [role] by -- `annotation_resource`, not the
+/// Dart constant's name `annotationResource`.
+///
+/// `material_roles` is a repeated multipart *form* field, so the generated
+/// client types it `BuiltList<String>` and serializes each element as a plain
+/// string: the `wireName` mapping [MaterialRole.serializer] carries never gets
+/// a chance to run. Passing `role.name` therefore sent enum-constant names the
+/// sidecar rejects with 422 `unknown material role`, which left every subject
+/// unimportable from the screen while the type checker, the linter and the
+/// whole test suite stayed green (Issue #139).
+///
+/// Goes through the generated serializer rather than a hand-written table:
+/// a second copy of the mapping would split again the next time a role is
+/// added. [standardSerializers] is the same instance [AutoScoringApi] hands
+/// the generated APIs, so this produces exactly what a typed field would.
+String _materialRoleWireValue(MaterialRole role) =>
+    standardSerializers.serializeWith(MaterialRole.serializer, role)! as String;
 
 /// FastAPI's `{"detail": "..."}` (or our own `{"detail": {"message": "..."}}`
 /// shape for structured errors) -- pulls the human-readable text out so

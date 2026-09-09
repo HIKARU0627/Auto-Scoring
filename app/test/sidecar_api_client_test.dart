@@ -205,6 +205,71 @@ void main() {
     },
   );
 
+  test(
+    'material roles cross the boundary as wire names, not enum names',
+    () async {
+      final connection = await ensureSidecar();
+      final client = SidecarApiClient(connection);
+      addTearDown(client.close);
+
+      // The roles `IntakePage._importGroup` can attach to a test. It never
+      // sends `studentAnswer` (that becomes a submission) or `ignore` (filtered
+      // out before the request is built), so those two do not cross here.
+      const attachable = {
+        MaterialRole.gradingCriteria,
+        MaterialRole.annotationResource,
+        MaterialRole.annotationSample,
+        MaterialRole.reference,
+      };
+
+      // A real PDF, copied per material: the sidecar parses every PDF it is
+      // handed (pypdf *and* pdfium) before storing it, so a stub header would
+      // be rejected before the role is ever looked at. Identical bytes are
+      // fine -- materials are de-duplicated by (role, content), and every role
+      // here is distinct.
+      final pdf = await File('test/fixtures/a4-portrait.pdf').readAsBytes();
+      var copies = 0;
+      Future<String> materialCopy() async {
+        final file = File('${tempDir!.path}/material-role-${copies++}.pdf');
+        await file.writeAsBytes(pdf);
+        return file.path;
+      }
+
+      // Both call sites build `material_roles` by hand, so both are
+      // exercised. `createTest` is the one real material hit first, because
+      // every subject folder has a 添削資料 (Issue #139).
+      //
+      // `gradingCriteria` is not among the extras: the criteria file travels
+      // as its own parameter and is what lands under that role.
+      final extras = attachable.where(
+        (role) => role != MaterialRole.gradingCriteria,
+      );
+      final registered = await client.createTest(
+        name: 'material role wire names',
+        criteriaPath: await materialCopy(),
+        materials: [
+          for (final role in extras) (role: role, path: await materialCopy()),
+        ],
+      );
+      // Round-tripping through the sidecar is the whole point: it rejects a
+      // role it does not know with 422 `unknown material role`, which is what
+      // `role.name` (`annotationResource` rather than `annotation_resource`)
+      // hit for every subject in the real material. The response side is
+      // typed, so what comes back is proof the right rows were written.
+      final stored = await client.listMaterials(registered.id);
+      expect({for (final material in stored) material.role}, attachable);
+
+      final attached = await client.addMaterials(
+        registered.id,
+        materials: [
+          for (final role in attachable)
+            (role: role, path: await materialCopy()),
+        ],
+      );
+      expect({for (final material in attached) material.role}, attachable);
+    },
+  );
+
   test('a sidecar that is not running surfaces as unavailable', () async {
     final connection = await ensureSidecar();
 
