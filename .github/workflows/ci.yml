@@ -14,9 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Quality
-    # Runs on Windows so `pnpm build` can produce the Flutter Windows debug
+  # `pnpm test` ran `test:app && test:backend` back to back, so the two halves
+  # -- 7.9 and 7.7 minutes on this runner -- were serial for no reason other
+  # than living in one job (Issue #129). They are split here so the wall clock
+  # is the longer of the two rather than their sum. Everything else is placed
+  # by which toolchain it needs, so neither job installs one it does not use.
+  app:
+    name: App
+    # Runs on Windows so `build:app` can produce the Flutter Windows debug
     # build (needs Visual Studio, present on GitHub-hosted windows runners).
     runs-on: windows-latest
     timeout-minutes: 30
@@ -42,6 +47,8 @@ jobs:
           flutter-version: 3.41.4
           channel: stable
           cache: true
+      # `openapi:check` exports the schema from the FastAPI app before it
+      # regenerates the Dart client, so this job needs Python too.
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -55,22 +62,100 @@ jobs:
       - name: Restore Python environment
         run: uv sync --locked
         working-directory: backend
+      # Repository-wide gates. Prettier covers both stacks and the skill
+      # mirror is not stack-specific, so they run once, here, rather than
+      # being duplicated into the backend job.
       - name: Check agent skill mirrors
         run: pnpm skills:check
       - name: Check formatting
         run: pnpm format:check
       - name: OpenAPI contract
         # Regenerates the schema + Dart client and fails on any drift. Needs
-        # uv, dart, and Java (openapi-generator) — all present on the runner.
+        # uv, dart, and Java (openapi-generator) -- all present on the runner.
+        # Kept in this job because `dart` only exists where the Flutter SDK
+        # was restored; running it in the backend job would mean restoring
+        # that 1.7 GB SDK a second time to save nothing.
         run: pnpm openapi:check
       - name: Lint
-        run: pnpm lint
+        run: pnpm lint:app
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm typecheck:app
       - name: Test
-        run: pnpm test
+        run: pnpm test:app
       - name: Build
-        run: pnpm build
+        run: pnpm build:app
+
+  backend:
+    name: Backend
+    # Windows like the job it was split out of: this is a Windows-only
+    # product, and the sidecar's path and file-I/O behaviour is exactly the
+    # kind of thing that passes on Linux and fails on the machine a teacher
+    # actually runs. Moving these tests to a faster Linux runner would cut
+    # the job roughly threefold and quietly stop testing the platform we
+    # ship on, so it is not done here.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: Enable pnpm
+        run: corepack enable
+      # Deliberately no Setup Flutter and no `pnpm install`: nothing below
+      # touches dart or a node dependency, and skipping the Flutter SDK
+      # restore alone takes ~1.6 minutes off this job -- the one that now
+      # decides the wall clock.
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.7"
+          enable-cache: true
+      - name: Restore Python environment
+        run: uv sync --locked
+        working-directory: backend
+      - name: Lint
+        run: pnpm lint:backend
+      - name: Typecheck
+        run: pnpm typecheck:backend
+      - name: Test
+        run: pnpm test:backend
+      - name: Build
+        run: pnpm build:backend
+
+  quality:
+    name: Quality
+    # The context main's ruleset requires, kept under its original name so
+    # splitting the work above stays invisible to branch protection. It holds
+    # the verdict for `app` + `backend`, which is exactly what the single
+    # Quality job used to cover -- `package` was never a required check and
+    # is not made into one here.
+    needs: [app, backend]
+    # `if: always()` is load-bearing. Without it, a failing `needs` leaves
+    # this job *skipped*, and GitHub counts a skipped required check as a
+    # pass -- the build would be red while the merge gate showed green. The
+    # same reason the results are asserted explicitly below: reaching this
+    # step is not evidence that anything succeeded.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify every quality job succeeded
+        shell: bash
+        run: |
+          echo "app=${{ needs.app.result }}"
+          echo "backend=${{ needs.backend.result }}"
+          failed=0
+          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}"; do
+            if [ "$result" != "success" ]; then failed=1; fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::A quality job did not succeed."
+            exit 1
+          fi
+          echo "All quality jobs succeeded."
 
   package:
     name: Package (Windows)

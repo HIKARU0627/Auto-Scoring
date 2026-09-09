@@ -416,13 +416,58 @@ Future<void> _pumpReview(WidgetTester tester, AppDependencies dependencies) =>
 /// wall-clock async work pdfium's FFI calls run on -- see
 /// `Pdfrx.cacheDirectoryPath` below for why the platform-channel half of
 /// that startup path needs sidestepping under `flutter test` too.
+///
+/// Stops as soon as the viewer reports its pages instead of always sleeping
+/// out the cap. The load itself finishes in ~220 ms, so waiting the full 25
+/// steps every time cost 2.5 s on each of this file's ~120 calls -- five
+/// minutes per CI run spent idle, and the single longest pole in `pnpm test`
+/// (Issue #129). The 25 steps stay as a *timeout*, so a slower machine keeps
+/// exactly the headroom it had before.
 Future<void> _settlePdf(WidgetTester tester) async {
   await tester.runAsync(() async {
+    var framesSinceReady = 0;
     for (var i = 0; i < 25; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
+      // `isReady` flips when pdfium has parsed the document, which is a frame
+      // earlier than the overlays laid out from those pages reach the tree --
+      // so give it two more before handing back.
+      if (_pdfPagesAreReady(tester) && ++framesSinceReady == 3) return;
     }
   });
+}
+
+/// Advances past the screen's 3-second background poll and lets the fetch it
+/// starts land.
+///
+/// The poll is a `Timer.periodic` created inside the test, so it runs on the
+/// *fake* clock and only `tester.pump(duration)` moves it -- the real-time
+/// `Future.delayed` these call sites used to wait on never advanced it by a
+/// single tick. What actually fired the poll was the old `_settlePdf`, which
+/// pumped 2.5 fake seconds on every call as a side effect of its fixed wait.
+/// Now that it stops as soon as the PDF is ready, the tests that mean to
+/// exercise the poll have to say so (Issue #129).
+Future<void> _settlePoll(WidgetTester tester) async {
+  await tester.runAsync(() async {
+    // 5 fake seconds, comfortably past one 3-second tick, in steps small
+    // enough that the fetch each tick starts is awaited rather than raced.
+    for (var i = 0; i < 25; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+  });
+}
+
+/// Whether the screen's [PdfViewer] has finished parsing its document.
+///
+/// False while no viewer is mounted at all, which is the right answer for the
+/// callers whose PDF future never completes: they wait out the full cap, just
+/// as every caller used to.
+bool _pdfPagesAreReady(WidgetTester tester) {
+  final viewers = find.byType(PdfViewer).evaluate();
+  if (viewers.isEmpty) return false;
+  final controller = (viewers.first.widget as PdfViewer).controller;
+  return controller != null && controller.isReady;
 }
 
 /// Pumps [times] frames without advancing the clock, to let a chain of
@@ -1288,11 +1333,7 @@ void main() {
 
     // The next (silent, background) poll succeeds.
     submissionState = 'ai_processed';
-    await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(seconds: 4));
-    });
-    await tester.pump();
-    await _settlePdf(tester);
+    await _settlePoll(tester);
 
     expect(
       find.byKey(const Key('review-question-error')),
@@ -1399,11 +1440,7 @@ void main() {
       // AI work finishes in the background -- no submission-state change,
       // no manual refresh, just the recognition becoming available.
       recognitionAvailable = true;
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(seconds: 4));
-      });
-      await tester.pump();
-      await _settlePdf(tester);
+      await _settlePoll(tester);
 
       expect(
         find.text('光合成によって酸素が発生する'),
@@ -1641,11 +1678,7 @@ void main() {
     // no submission-state change, no manual refresh, just the job
     // finally producing a grade.
     gradeAvailable = true;
-    await tester.runAsync(() async {
-      await Future<void>.delayed(const Duration(seconds: 4));
-    });
-    await tester.pump();
-    await _settlePdf(tester);
+    await _settlePoll(tester);
 
     expect(
       find.text('4 / 5 点'),
@@ -1839,11 +1872,7 @@ void main() {
       // The new attempt's AI provider call finishes in the background --
       // no manual refresh.
       newGradeAvailable = true;
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(seconds: 4));
-      });
-      await tester.pump();
-      await _settlePdf(tester);
+      await _settlePoll(tester);
 
       expect(
         find.text('5 / 5 点'),
@@ -2436,16 +2465,12 @@ void main() {
       expect(find.byKey(const Key('edit-dialog-save')), findsOneWidget);
 
       // A regrade completes in the background while the dialog is still
-      // open -- the background poll (a real `Timer.periodic`, needing
-      // real wall-clock time like `_settlePdf` below) picks up the fresh
-      // AI attempt and mutates the very same `QuestionReviewState` the
-      // dialog was opened against, in place.
+      // open -- the background poll (a `Timer.periodic` on the fake test
+      // clock, which only `tester.pump(duration)` advances) picks up the
+      // fresh AI attempt and mutates the very same `QuestionReviewState`
+      // the dialog was opened against, in place.
       regradeCompleted = true;
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(seconds: 4));
-      });
-      await tester.pump();
-      await _settlePdf(tester);
+      await _settlePoll(tester);
 
       // Save without changing anything -- must submit the concurrency
       // tokens the dialog was actually opened with (matching the stale
