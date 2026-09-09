@@ -39,16 +39,13 @@ void main() {
       ..createdAt = DateTime.utc(2026, 2, createdDay),
   );
 
-  HomeDashboard build(
-    Map<TestResponse, List<SubmissionResponse>> work, {
-    int hiddenTestCount = 0,
-  }) => HomeDashboard.from(
-    tests: work.keys.toList(),
-    submissionsByTestId: {
-      for (final entry in work.entries) entry.key.id: entry.value,
-    },
-    hiddenTestCount: hiddenTestCount,
-  );
+  HomeDashboard build(Map<TestResponse, List<SubmissionResponse>> work) =>
+      HomeDashboard.from(
+        tests: work.keys.toList(),
+        submissionsByTestId: {
+          for (final entry in work.entries) entry.key.id: entry.value,
+        },
+      );
 
   group('HomeWorkBucket', () {
     test('答案の7状態をホームが数える5つへ畳む', () {
@@ -160,7 +157,7 @@ void main() {
       );
 
       expect(progress.resumableSubmission, isNull);
-      expect(progress.order, 3);
+      expect(progress.order, HomeTestProgress.settledOrder);
     });
   });
 
@@ -210,6 +207,151 @@ void main() {
         'draft',
         'failed',
       ]);
+    });
+  });
+
+  group('カードの絞り込み (Issue #151)', () {
+    test('手が要るテストは、上限を超えていてもカードに残る', () {
+      // 実機で起きたのはこれである。11教科のうち2教科が「新しい順に8件」から
+      // 溢れ、そのうち古漢の要確認1件はホームのどこにも出なかった。
+      //
+      // 溢れる側を**古い**日付にしてあるのが要点。新しさで切る実装なら、この
+      // 3件が真っ先に落ちる。
+      final flagged = [
+        for (var index = 0; index < 3; index++)
+          buildTest(id: 'flagged-$index', createdDay: index + 1),
+      ];
+      final settled = [
+        for (var index = 0; index < 9; index++)
+          buildTest(id: 'settled-$index', createdDay: index + 10),
+      ];
+      final dashboard = build({
+        for (final test in flagged)
+          test: [
+            buildSubmission(
+              id: 's-${test.id}',
+              testId: test.id,
+              state: 'needs_review',
+            ),
+          ],
+        for (final test in settled)
+          test: [
+            buildSubmission(
+              id: 's-${test.id}',
+              testId: test.id,
+              state: 'exported',
+            ),
+          ],
+      });
+
+      // まず、絞り込みが実際に効いていること。全12件が載るなら、下の
+      // 「要確認が残る」は何も言っていないことになる。
+      expect(dashboard.tests, hasLength(12));
+      expect(dashboard.visibleTests, hasLength(HomeDashboard.maxTests));
+      expect(dashboard.hiddenTestCount, 12 - HomeDashboard.maxTests);
+
+      final visibleIds = dashboard.visibleTests.map((t) => t.test.id).toList();
+      expect(visibleIds, containsAll(flagged.map((t) => t.id)));
+
+      // 落ちたのは、ホームから開く答案が無いテストだけである。
+      final hidden = dashboard.tests.skip(dashboard.visibleTests.length);
+      expect(hidden, isNotEmpty);
+      expect(
+        hidden.map((t) => t.order),
+        everyElement(HomeTestProgress.settledOrder),
+      );
+    });
+
+    test('手が要るテストが上限を超えたら、譲るのは上限のほう', () {
+      // 上限の値を大きくするだけでは同じ事故が再発する。**カードの本数を
+      // 守ることより、手が要るテストを見せることが優先される。**
+      final flagged = [
+        for (var index = 0; index < HomeDashboard.maxTests + 2; index++)
+          buildTest(id: 'flagged-$index', createdDay: index + 1),
+      ];
+      final dashboard = build({
+        for (final test in flagged)
+          test: [
+            buildSubmission(
+              id: 's-${test.id}',
+              testId: test.id,
+              state: 'needs_review',
+            ),
+          ],
+        buildTest(id: 'settled', createdDay: 99): [
+          buildSubmission(
+            id: 's-settled',
+            testId: 'settled',
+            state: 'exported',
+          ),
+        ],
+      });
+
+      expect(dashboard.visibleTests, hasLength(HomeDashboard.maxTests + 2));
+      expect(
+        dashboard.visibleTests.map((t) => t.test.id),
+        containsAll(flagged.map((t) => t.id)),
+      );
+      expect(dashboard.hiddenTestCount, 1);
+    });
+
+    test('カードに載らなかったテストの答案も、件数に入る', () {
+      // **これが一番静かな壊れ方である。** カードが出ないことは見れば分かるが、
+      // 帯の数字が3件足りないことは誰にも見えない。
+      //
+      // 処理中の答案しか持たないテストは [HomeTestProgress.settledOrder] --
+      // ホームから開く候補が無いのでカードの尾から落ちる。**落ちても数には
+      // 残らなければならない。**
+      final settled = [
+        for (var index = 0; index < HomeDashboard.maxTests; index++)
+          buildTest(id: 'settled-$index', createdDay: index + 10),
+      ];
+      final processing = [
+        for (var index = 0; index < 3; index++)
+          buildTest(id: 'processing-$index', createdDay: index + 1),
+      ];
+      final dashboard = build({
+        for (final test in settled)
+          test: [
+            buildSubmission(
+              id: 's-${test.id}',
+              testId: test.id,
+              state: 'exported',
+            ),
+          ],
+        for (final test in processing)
+          test: [
+            buildSubmission(
+              id: 's-${test.id}',
+              testId: test.id,
+              state: 'ai_processing',
+            ),
+          ],
+      });
+
+      // 先に、3件が本当にカードから落ちていること。載っているなら、下の
+      // 件数は「見えているものを数えた」だけで通ってしまう。
+      expect(dashboard.visibleTests, hasLength(HomeDashboard.maxTests));
+      expect(dashboard.hiddenTestCount, 3);
+      final visibleIds = dashboard.visibleTests.map((t) => t.test.id).toSet();
+      expect(
+        visibleIds.intersection(processing.map((t) => t.id).toSet()),
+        isEmpty,
+      );
+
+      expect(dashboard.count(HomeWorkBucket.processing), 3);
+      expect(dashboard.nextAction.headline, '処理中の答案が3件あります');
+    });
+
+    test('テストが上限以下なら、1件も隠さない', () {
+      final tests = [
+        for (var index = 0; index < HomeDashboard.maxTests; index++)
+          buildTest(id: 't$index', createdDay: index + 1),
+      ];
+      final dashboard = build({for (final test in tests) test: const []});
+
+      expect(dashboard.visibleTests, hasLength(HomeDashboard.maxTests));
+      expect(dashboard.hiddenTestCount, 0);
     });
   });
 
@@ -426,35 +568,43 @@ void main() {
       expect(dashboard.nextAction.route, AppRoutes.intake);
     });
 
-    test('載せきれなかったテストがあるとき、不在も件数も範囲を明示する', () {
-      // 直近8件が片付いていても、答案を取得していないテストに開くべき答案が
-      // 残っているかどうかは分からない。「ありません」と言い切れない。
-      final settled = buildTest(id: 't1');
+    test('カードに載らないテストがあっても、範囲の但し書きを付けない', () {
+      // 答案は全テストぶん読んである (Issue #151)。以前はここが
+      // 「直近N件のテストに、いま開く答案はありません」で、数えていない
+      // テストの不在を断定しないための但し書きだった。**数えていないテストが
+      // 無くなったので、但し書きも消える。**
+      final settled = [
+        for (var index = 0; index < HomeDashboard.maxTests + 4; index++)
+          buildTest(id: 't$index', createdDay: index + 1),
+      ];
       final dashboard = build({
-        settled: [buildSubmission(id: 's1', testId: 't1', state: 'exported')],
-      }, hiddenTestCount: 4);
+        for (final test in settled)
+          test: [
+            buildSubmission(
+              id: 's-${test.id}',
+              testId: test.id,
+              state: 'exported',
+            ),
+          ],
+      });
+
+      // 先に、この構成が実際に「カードから溢れている」ことを言う。溢れて
+      // いなければ、下の否定形は何も検査しない。
+      expect(dashboard.hiddenTestCount, 4);
 
       final action = dashboard.nextAction;
-      expect(action.headline, '直近1件のテストに、いま開く答案はありません');
-      expect(action.detail, contains('ほかに4件'));
+      expect(action.headline, 'いま開く答案はありません');
+      expect(action.detail, isNot(contains('数えていません')));
+      expect(action.detail, isNot(contains('数えたのは')));
     });
 
-    test('載せきれなかったテストがあるとき、件数にも範囲の但し書きが付く', () {
-      final test = buildTest(id: 't1');
-      final dashboard = build({
-        test: [buildSubmission(id: 's1', testId: 't1', state: 'needs_review')],
-      }, hiddenTestCount: 2);
-
-      expect(dashboard.nextAction.detail, contains('ほかに2件'));
-    });
-
-    test('全テストを載せているときは範囲の但し書きを付けない', () {
+    test('件数に範囲の但し書きを付けない', () {
       final test = buildTest(id: 't1');
       final dashboard = build({
         test: [buildSubmission(id: 's1', testId: 't1', state: 'needs_review')],
       });
 
-      expect(dashboard.nextAction.detail, isNot(contains('ほかに1件')));
+      expect(dashboard.nextAction.headline, contains('1件'));
       expect(dashboard.nextAction.detail, isNot(contains('数えたのは')));
     });
 
