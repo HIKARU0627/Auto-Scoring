@@ -6,6 +6,11 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from auto_scoring.adapters.pdf.pdfium_pypdf_engine import (
+    _LINE_HEIGHT_FACTOR,
+    _MIN_FONT_SIZE_PT,
+)
+from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaQuestion
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
@@ -30,6 +35,8 @@ from auto_scoring.domain.pdf_export import (
     unconfirmed_question_ids,
     unplaceable_question_ids,
 )
+from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
+from auto_scoring.domain.test_registration import build_questions_and_rubrics
 
 _NOW = datetime(2026, 1, 1)
 
@@ -669,3 +676,144 @@ class TestUnplaceableQuestionIds:
 
         assert len(fallback_score_areas(crowded)) == 18
         assert named == ["q-18"]
+
+
+class TestTheScoreNeverLandsOnTheAnswer:
+    """Issue #159: 得点欄が生徒の筆跡の上に印字される。
+
+    実機再検証 #5 の計測 —— 回答欄を持つ16設問のうち **14件**で、#120 が導出した
+    「回答欄の真下の帯」が元答案のインクの上に載っていた（白紙は 0.0015%、最悪の
+    設問は 16.5%）。うち **6件**は**次の設問の回答欄の中**に入っていた。
+    「回答欄の真下」が空なのは紙がそこに何も置いていないときだけで、複数設問の
+    ある紙はそこに次の設問を置く。**縦書き固有ではなかった。**
+
+    ここは登録経路（`build_questions_and_rubrics`）から出力時の解決
+    （`fallback_score_areas`）まで通して測る。`Question` を手で組み立てて
+    `score_area=None` を置いたのでは、**製品が到達しない状態をフィクスチャで
+    作ってテストが自分に同意する**だけになる（`test_e2e_intake_to_export` が
+    同じ罠を明記している）。
+    """
+
+    @staticmethod
+    def _questions(*boxes: NormalizedBBox) -> list[Question]:
+        """`boxes` を回答欄に持つ設問群を、実際の登録経路で作る。
+
+        #101 → #103 → #105 の経路が確定するのは設問と回答欄だけで、
+        `SCORE`/`ANNOTATION_AREA` region は出てこない。
+        """
+        regions: list[Region] = []
+        for index, box in enumerate(boxes):
+            label = str(index + 1)
+            regions.append(
+                Region(
+                    region_id=f"question-{label}",
+                    kind=RegionKind.QUESTION,
+                    page_index=0,
+                    bbox=box,
+                    label=label,
+                    confirmed=True,
+                    text=f"問{label}",
+                )
+            )
+            regions.append(
+                Region(
+                    region_id=f"answer_area-{label}",
+                    kind=RegionKind.ANSWER_AREA,
+                    page_index=0,
+                    bbox=box,
+                    label=label,
+                    confirmed=True,
+                )
+            )
+        draft = CriteriaDraft(
+            test_id="test-1",
+            questions=tuple(
+                CriteriaQuestion(number=str(index + 1), points=5) for index in range(len(boxes))
+            ),
+        )
+        questions, _ = build_questions_and_rubrics("test-1", regions, criteria=draft)
+        return questions
+
+    @staticmethod
+    def _score_rect(question: Question, questions: list[Question]) -> NormalizedRect:
+        """その設問の点数が**実際に描かれる**矩形。
+
+        自前の `score_area` があればそれ、無ければ出力時に割り当てられる余白
+        スロット（`build_export_marks` が使う順序と同じ）。**どちらを通ったかを
+        問わない**のは、#159 が言っているのが「点数がどこに落ちるか」であって
+        「どの関数が返したか」ではないからである。片方だけを見るテストは、
+        導出が復活したときに「スロットが無い」と落ちて、**重なっていること自体は
+        一度も評価しない。**
+        """
+        if question.score_area is not None:
+            return question.score_area
+        slot = fallback_score_areas(questions).get(question.id)
+        assert slot is not None, f"{question.id} は点数を書く場所が無い"
+        return slot
+
+    def test_the_score_never_overlaps_any_answer_box_on_its_page(self) -> None:
+        """6/16 が次の設問の回答欄に入っていた件。**縦に積んだ回答欄**という、
+        実機で最も多かった形で測る。直す前は1問目の点数が2問目の回答欄に
+        丸ごと入る。"""
+        stacked = self._questions(
+            NormalizedBBox(x0=0.08, y0=0.20, x1=0.92, y1=0.45),
+            NormalizedBBox(x0=0.08, y0=0.45, x1=0.92, y1=0.70),
+            NormalizedBBox(x0=0.08, y0=0.70, x1=0.92, y1=0.95),
+        )
+        answer_boxes = [question.answer_area for question in stacked]
+        assert all(box is not None for box in answer_boxes), "回答欄が確定していない"
+
+        for question in stacked:
+            score = self._score_rect(question, stacked)
+            for index, box in enumerate(answer_boxes):
+                assert box is not None
+                assert _overlap(score, box) == 0.0, (
+                    f"{question.id} の点数が設問{index + 1}の回答欄に重なっている"
+                )
+
+    def test_the_score_of_a_vertical_answer_column_goes_to_the_margin(self) -> None:
+        """縦書きの回答欄（縦に長く横に狭い一列）。#159 が報告した形。
+
+        一列しかないので**矩形どうしは交差しない** —— 実機で重なっていたのは
+        「真下の帯」が同じマス目の続き、つまり紙のインクだったからで、それは
+        domain からは見えない。ここで固定できるのは「点数の位置が回答欄の形から
+        導かれていないこと」の方である: 実測で空だと確かめた左余白帯の中に入る。
+        """
+        (question,) = self._questions(NormalizedBBox(x0=0.797, y0=0.222, x1=0.843, y1=0.457))
+        score = self._score_rect(question, [question])
+
+        assert question.answer_area is not None
+        assert score.x + score.width <= 0.035, "点数が左余白帯の外にある"
+        assert score.x + score.width <= question.answer_area.x, "点数が回答欄より右にある"
+
+    def test_the_score_never_breaks_the_minimum_font_size(self) -> None:
+        """Issue #133: 縦書きで導出された得点欄が最小フォントサイズを下回る。
+
+        実機の該当設問は `score_area.width = 0.0031`（A4縦で約1.8pt）で、6pt の
+        全角1文字すら幅に入らない。`_draw_text` はフォントを下限で止めるので、
+        点数は1行1文字に潰れる。
+
+        余白帯のスロットは幅も高さも固定なので、**回答欄の形に関係なく**下限を
+        割らない。#159 の変更で自動的にそうなるが、「たまたま」ではないことを
+        ここで固定する —— `_MIN_FONT_SIZE_PT` を上げれば、このテストが先に落ちる。
+        """
+        (question,) = self._questions(
+            # #133 を起こす形: 幅がページの1.6%しかない縦一列。
+            NormalizedBBox(x0=0.638, y0=0.236, x1=0.654, y1=0.960)
+        )
+        score = self._score_rect(question, [question])
+
+        # このプロジェクトが扱う最小のページ = A4横の短辺 (595pt)。
+        # 正規化された幅・高さはそこで最も小さい実寸になる。
+        shortest_page_pt = 595.0
+        assert score.width * shortest_page_pt >= _MIN_FONT_SIZE_PT, "全角1文字が幅に入らない"
+        assert score.height * shortest_page_pt >= _MIN_FONT_SIZE_PT * _LINE_HEIGHT_FACTOR, (
+            "1行が高さに入らない"
+        )
+
+
+def _overlap(first: NormalizedRect, second: NormalizedRect) -> float:
+    """2つの矩形が重なっている面積（正規化）。"""
+    width = min(first.x + first.width, second.x + second.width) - max(first.x, second.x)
+    height = min(first.y + first.height, second.y + second.height) - max(first.y, second.y)
+    return max(0.0, width) * max(0.0, height)

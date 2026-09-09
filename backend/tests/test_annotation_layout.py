@@ -14,7 +14,7 @@ import pytest
 
 from auto_scoring.domain.annotation_layout import (
     annotations_for_attempt,
-    derive_mark_areas,
+    derive_comment_area,
     recognitions_up_to_attempt,
     resolve_annotation_rect,
 )
@@ -326,27 +326,27 @@ class TestAttemptScoping:
 
 
 # --------------------------------------------------------------------------- #
-# derive_mark_areas (Issue #120)
+# derive_comment_area (Issue #120, narrowed to the comment by Issue #159)
 # --------------------------------------------------------------------------- #
 
 
-def test_derived_areas_sit_in_the_band_below_the_answer_box() -> None:
+def test_derived_comment_area_sits_in_the_band_below_the_answer_box() -> None:
     """The convention: a human's red pen goes under the answer, not over it."""
     answer = NormalizedRect(x=0.1, y=0.2, width=0.8, height=0.3)
 
-    derived = derive_mark_areas(answer)
+    comment = derive_comment_area(answer)
 
-    assert derived is not None
-    score, comment = derived
-    for area in (score, comment):
-        assert area.y >= answer.y + answer.height, "an area overlapped the student's answer"
-        assert area.height > 0
+    assert comment is not None
+    assert comment.y >= answer.y + answer.height, "the band overlapped the student's answer"
+    assert comment.height > 0
     assert comment.x == answer.x
-    assert score.x + score.width == pytest.approx(answer.x + answer.width)
-    assert comment.x + comment.width == pytest.approx(score.x), "the two areas overlap"
+    assert comment.width == pytest.approx(answer.width), (
+        "the band is the comment's whole width -- Issue #159 took the score's "
+        "share of it away rather than leaving the share unused"
+    )
 
 
-def test_derived_areas_stay_on_the_page_when_the_answer_box_reaches_the_bottom() -> None:
+def test_derived_comment_area_stays_on_the_page_when_the_answer_box_reaches_the_bottom() -> None:
     """An answer box running to the bottom edge leaves no band under it. Ink
     over the answer is worse than ink beside it, and both beat a PDF with
     nothing on it -- so the answer area itself is used, and never a rect
@@ -354,19 +354,17 @@ def test_derived_areas_stay_on_the_page_when_the_answer_box_reaches_the_bottom()
     """
     answer = NormalizedRect(x=0.05, y=0.1, width=0.9, height=0.9)
 
-    derived = derive_mark_areas(answer)
+    comment = derive_comment_area(answer)
 
-    assert derived is not None
-    score, comment = derived
-    for area in (score, comment):
-        assert area.y + area.height <= 1.0
-        assert area.x + area.width <= 1.0
-        assert area.height > 0
+    assert comment is not None
+    assert comment.y + comment.height <= 1.0
+    assert comment.x + comment.width <= 1.0
+    assert comment.height > 0
 
 
 def test_no_answer_box_means_no_derived_area() -> None:
-    """Nothing to derive from: inventing a rect would put the score at a
+    """Nothing to derive from: inventing a rect would put the comment at a
     guessed spot on someone's answer sheet."""
-    assert derive_mark_areas(None) is None
-    assert derive_mark_areas(NormalizedRect(x=0.1, y=0.1, width=0.0, height=0.2)) is None
-    assert derive_mark_areas(NormalizedRect(x=0.1, y=0.1, width=0.2, height=0.0)) is None
+    assert derive_comment_area(None) is None
+    assert derive_comment_area(NormalizedRect(x=0.1, y=0.1, width=0.0, height=0.2)) is None
+    assert derive_comment_area(NormalizedRect(x=0.1, y=0.1, width=0.2, height=0.0)) is None

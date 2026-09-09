@@ -94,6 +94,7 @@ from auto_scoring.domain.criteria_extraction import (
     ExtractedQuestionOutput,
 )
 from auto_scoring.domain.models import NormalizedRect
+from auto_scoring.domain.pdf_export import _FALLBACK_SCORE_STRIP
 from auto_scoring.domain.pdf_intake import IntakeLimits
 from auto_scoring.jobs.grading_settings import GradingSettings
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
@@ -453,7 +454,7 @@ def _confirm_answer_layout(client: TestClient, test_id: str) -> None:
 
     A fixture that reaches a state the product cannot reach is not a
     shortcut; it is the test agreeing with itself. What detection returns is
-    all there is, and `domain.annotation_layout.derive_mark_areas` is what
+    all there is, and `domain.pdf_export.fallback_score_areas` is what
     has to turn that into somewhere to write.
     """
     uploaded = client.put(
@@ -742,13 +743,30 @@ def test_a_folder_becomes_a_graded_reviewed_and_exported_answer(
     # score and no comment anywhere on it, because this path never set
     # `Question.score_area`. The confirmed score has to be visible on the
     # page for this path to be finished.
+    #
+    # Issue #159 moved *where* that has to be visible. The score used to be
+    # drawn in a `score_area` derived from the answer box, and the live
+    # measurement found that band on the student's own writing for fourteen
+    # of sixteen questions. So the assertion is now the pair: the score is in
+    # the page's left margin strip, and there is no red inside the answer box
+    # at all. Both halves are needed -- "no ink on the answer" alone passes
+    # for a page nothing was drawn on, which is the Issue #120 failure.
     engine = PdfiumPypdfEngine()
     for question in client.get(f"/tests/{test_id}/questions", headers=_AUTH).json():
-        score_area = question["score_area"]
-        assert score_area is not None, f"{question['id']} had nowhere to write its score"
+        answer_area = question["answer_area"]
+        assert answer_area is not None, f"{question['id']} lost its answer box"
         rendered = engine.render_page_png(output, question["page"] - 1, scale=2.0)
-        assert has_red_within(rendered, NormalizedRect(**score_area)), (
-            f"nothing was drawn in {question['id']}'s score area"
+        assert has_red_within(rendered, _FALLBACK_SCORE_STRIP), (
+            f"nothing was drawn in {question['id']}'s margin strip"
+        )
+        assert not has_red_within(rendered, NormalizedRect(**answer_area), margin=0.0), (
+            f"{question['id']}'s ink landed on the student's answer"
+        )
+        # Last, not first: the two ink assertions above are what this test is
+        # for, and a `score_area` check ahead of them would short-circuit
+        # before either one ever ran.
+        assert question["score_area"] is None, (
+            f"{question['id']} still has a derived score area (Issue #159)"
         )
 
 
