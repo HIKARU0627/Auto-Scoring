@@ -267,6 +267,201 @@ void main() {
       });
     }
 
+    test('a box still matches despite the line break the OCR leaves on its '
+        'text -- Document AI slices a token out of the page text, so the '
+        'detected break travels with it (Issue #141)', () {
+      final wordBox = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.1
+          ..y = 0.2
+          ..width = 0.3
+          ..height = 0.1,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '酸素'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([('酸素\n', wordBox)]),
+        ],
+      );
+
+      expect(resolved?.x, wordBox.x);
+      expect(resolved?.y, wordBox.y);
+      expect(resolved?.width, wordBox.width);
+      expect(resolved?.height, wordBox.height);
+    });
+
+    test('an anchor spanning several boxes resolves to their union -- an OCR '
+        'box is one token, so 葉緑体で arrives as 葉緑体 + で', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '葉緑体で'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '葉緑体',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.20
+                  ..width = 0.08
+                  ..height = 0.04,
+              ),
+            ),
+            (
+              'で',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.18
+                  ..y = 0.21
+                  ..width = 0.04
+                  ..height = 0.03,
+              ),
+            ),
+          ]),
+        ],
+      );
+
+      expect(resolved?.x, closeTo(0.10, 1e-9));
+      expect(resolved?.y, closeTo(0.20, 1e-9));
+      expect(resolved?.width, closeTo(0.12, 1e-9));
+      expect(resolved?.height, closeTo(0.04, 1e-9));
+    });
+
+    test('a full-width anchor matches the ASCII the OCR read', () {
+      final wordBox = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.4
+          ..y = 0.1
+          ..width = 0.05
+          ..height = 0.03,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'circle', anchorText: '\uFF41'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([('a\n', wordBox)]),
+        ],
+      );
+
+      expect(resolved?.x, wordBox.x);
+      expect(resolved?.width, wordBox.width);
+    });
+
+    test('the shortest run containing the anchor wins -- the tightest rect is '
+        'the one about the words the mark is for', () {
+      final tight = NormalizedRectResponse(
+        (b) => b
+          ..x = 0.50
+          ..y = 0.20
+          ..width = 0.04
+          ..height = 0.03,
+      );
+
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '酸素'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '酸',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.20
+                  ..width = 0.02
+                  ..height = 0.03,
+              ),
+            ),
+            (
+              '素',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.12
+                  ..y = 0.20
+                  ..width = 0.02
+                  ..height = 0.03,
+              ),
+            ),
+            ('酸素', tight),
+          ]),
+        ],
+      );
+
+      expect(resolved?.x, tight.x);
+      expect(resolved?.width, tight.width);
+    });
+
+    test('a run that reads far more than the anchor is refused -- the rect '
+        'drawn is the run\'s, not the anchor\'s', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: 'の'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '光合成は葉緑体で行われる',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.1
+                  ..y = 0.2
+                  ..width = 0.8
+                  ..height = 0.04,
+              ),
+            ),
+          ]),
+        ],
+      );
+
+      expect(resolved, isNull);
+    });
+
+    test('boxes that are not consecutive do not match -- a model joining two '
+        'different sub-answers into one anchor names no run on the page', () {
+      final resolved = resolveAnnotationRect(
+        annotation: annotation(kind: 'cross', anchorText: '水デンプン'),
+        questionAnswerArea: null,
+        recognitions: [
+          recognitionWithBoxes([
+            (
+              '水\n',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.20
+                  ..width = 0.04
+                  ..height = 0.03,
+              ),
+            ),
+            (
+              'b\n',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.30
+                  ..width = 0.04
+                  ..height = 0.03,
+              ),
+            ),
+            (
+              'デンプン',
+              NormalizedRectResponse(
+                (b) => b
+                  ..x = 0.10
+                  ..y = 0.40
+                  ..width = 0.08
+                  ..height = 0.03,
+              ),
+            ),
+          ]),
+        ],
+      );
+
+      expect(resolved, isNull);
+    });
+
     test('no kind falls back to the score_area when its anchor matched '
         'nothing -- the position is unknown, so nothing on the answer may '
         'claim to know it (Issue #141, simplified-design-spec §12.4)', () {

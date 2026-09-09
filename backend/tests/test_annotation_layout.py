@@ -149,6 +149,106 @@ class TestResolveAnnotationRect:
 
         assert resolved == _rect(0.5, 0.5, 0.1, 0.1)
 
+    def test_a_box_matches_despite_the_line_break_ocr_leaves_on_its_text(self) -> None:
+        """Issue #141: Document AI slices a token's text straight out of the
+        page text, so the detected break travels with it. Against the old
+        ``box.text == anchor_text`` that trailing newline alone was enough to
+        leave a perfectly-read word unplaced -- and in the live run none of
+        the fourteen annotations was placed at all."""
+        box_rect = _rect(0.1, 0.2, 0.3, 0.1)
+        annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="酸素", rect=None)
+        recognition = _recognition(boxes=(BoundingBox(text="酸素\n", rect=box_rect),))
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved == box_rect
+
+    def test_an_anchor_spanning_several_boxes_resolves_to_their_union(self) -> None:
+        """An OCR box is one *token*: ``葉緑体で`` arrives as ``葉緑体`` + ``で``, so
+        no single box could ever equal an anchor of more than one token."""
+        annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="葉緑体で", rect=None)
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="葉緑体", rect=_rect(0.10, 0.20, 0.08, 0.04)),
+                BoundingBox(text="で", rect=_rect(0.18, 0.21, 0.04, 0.03)),
+            )
+        )
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved is not None
+        assert resolved.x == pytest.approx(0.10)
+        assert resolved.y == pytest.approx(0.20)
+        assert resolved.width == pytest.approx(0.12)
+        assert resolved.height == pytest.approx(0.04)
+
+    def test_a_full_width_anchor_matches_the_ascii_the_ocr_read(self) -> None:
+        box_rect = _rect(0.4, 0.1, 0.05, 0.03)
+        annotation = _annotation(kind=AnnotationKind.CIRCLE, anchor_text="\uff41", rect=None)
+        recognition = _recognition(boxes=(BoundingBox(text="a\n", rect=box_rect),))
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved == box_rect
+
+    def test_the_shortest_run_containing_the_anchor_wins(self) -> None:
+        """A short anchor is contained in many longer runs; the tightest one
+        is the only one whose rect is about the words the mark is for."""
+        annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="酸素", rect=None)
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="酸", rect=_rect(0.10, 0.20, 0.02, 0.03)),
+                BoundingBox(text="素", rect=_rect(0.12, 0.20, 0.02, 0.03)),
+                BoundingBox(text="酸素", rect=_rect(0.50, 0.20, 0.04, 0.03)),
+            )
+        )
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved == _rect(0.50, 0.20, 0.04, 0.03)
+
+    def test_a_run_that_reads_far_more_than_the_anchor_is_refused(self) -> None:
+        """The rect drawn is the run's, not the anchor's. Letting a
+        one-character anchor match a whole line would put a ``×`` across all
+        of it -- Issue #141's own symptom, in miniature."""
+        annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="の", rect=None)
+        recognition = _recognition(
+            boxes=(BoundingBox(text="光合成は葉緑体で行われる", rect=_rect(0.1, 0.2, 0.8, 0.04)),)
+        )
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved is None
+
+    def test_boxes_that_are_not_consecutive_do_not_match(self) -> None:
+        """The live run had a model join two different sub-answers into one
+        anchor. They are not adjacent on the page, so there is no run
+        covering both, and nothing may be drawn from them."""
+        annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="水デンプン", rect=None)
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="水\n", rect=_rect(0.10, 0.20, 0.04, 0.03)),
+                BoundingBox(text="b\n", rect=_rect(0.10, 0.30, 0.04, 0.03)),
+                BoundingBox(text="デンプン", rect=_rect(0.10, 0.40, 0.08, 0.03)),
+            )
+        )
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved is None
+
     @pytest.mark.parametrize(
         "kind",
         [
