@@ -143,6 +143,14 @@ Issue #15時点で保存された `profile.json`（`text` キーが無い）も�
 **PDF から読んだ件数ぶんの `RubricCriterion`** になる。region 側は座標だけを担う。
 詳細は [`criteria-extraction.md`](./criteria-extraction.md) §6。
 
+**Issue #120 以降**: `score_area`/`comment_area` は、`SCORE`/`ANNOTATION_AREA`
+region が無いとき **`answer_area` から導出される**
+（`domain.annotation_layout.derive_mark_areas`）。#103 が `SCORE` 領域を画面から
+外した結果、新経路で登録したテストは両方とも `None` になり、添削済み PDF が
+無記入のまま出力されていた。手で置いた region があればそちらが優先される点は
+変わらない。導出の規約と、それでも決まらないとき出力前に断ることは
+[`pdf-export.md`](./pdf-export.md) §2.2.1。
+
 ### Profile確認は一方向・一度きり
 
 `Profile.confirm()` はPoC 4から一方向（DRAFT→CONFIRMED）。Issue #16のAPI

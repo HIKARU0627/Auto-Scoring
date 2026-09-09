@@ -136,3 +136,69 @@ def _crop_relative_to_page(box: BoundingBox, answer_area: NormalizedRect) -> Nor
         width=rect.width * answer_area.width,
         height=rect.height * answer_area.height,
     )
+
+
+#: Share of the derived band's width given to the score, at its right end --
+#: the rest is the comment's. See `derive_mark_areas`.
+_DERIVED_SCORE_WIDTH_SHARE = 0.2
+
+#: A derived band shorter than this (page-normalized) has no room for legible
+#: text, so `derive_mark_areas` falls back onto the answer area itself rather
+#: than producing a sliver nothing can be read in.
+_MIN_DERIVED_BAND_HEIGHT = 0.02
+
+
+def derive_mark_areas(
+    answer_area: NormalizedRect | None,
+) -> tuple[NormalizedRect, NormalizedRect] | None:
+    """``(score_area, comment_area)`` derived from where a question's answer
+    box is, or ``None`` when there is no box to derive from (Issue #120).
+
+    `Question.score_area`/`comment_area` used to come only from a `SCORE` /
+    `ANNOTATION_AREA` region, which a human placed on the profile screen.
+    Issue #103 took that screen away on purpose -- the 配点 must have exactly
+    one input -- and the registration path built by Issues #101/#103/#105
+    produces neither region. So every question registered through it had
+    ``None`` for both, `build_export_marks` had nowhere to draw, and the
+    export ran to success while writing nothing at all: a 添削済み PDF byte
+    for byte the same as the answer sheet it came from.
+
+    Deriving is what closes that without reopening #103's decision: nothing
+    is added to any screen, and a hand-placed region still wins
+    (`domain.test_registration.build_questions_and_rubrics` only falls back
+    to this). It is deliberately not a detection either -- the real material
+    does print a 得点欄 on some subjects (observed during Issue #105), but
+    not demonstrably on all of them, so a rule that needs one cannot be the
+    floor. Detecting it later fills `Question.score_area` in with something
+    better and changes nothing here or downstream.
+
+    **The convention.** The band directly *below* the answer box, as tall as
+    the box or as much of the page as is left, whichever is less: that is
+    where a human's red pen goes, and it does not cover what the student
+    wrote. The score takes the right `_DERIVED_SCORE_WIDTH_SHARE` of it and
+    the comment the rest, so the two never overlap -- `PdfEngine.
+    render_annotations` draws every mark from its own rect and would
+    otherwise stack them illegibly on top of one another. A box that reaches
+    the bottom of the page leaves no band, and there the answer area itself
+    is used: ink over the answer is worse than ink beside it, and both are
+    better than a PDF with nothing on it.
+    """
+    if answer_area is None or answer_area.width <= 0 or answer_area.height <= 0:
+        return None
+    band = _band_below(answer_area)
+    score_width = band.width * _DERIVED_SCORE_WIDTH_SHARE
+    comment = NormalizedRect(x=band.x, y=band.y, width=band.width - score_width, height=band.height)
+    score = NormalizedRect(
+        x=band.x + comment.width, y=band.y, width=score_width, height=band.height
+    )
+    return score, comment
+
+
+def _band_below(answer_area: NormalizedRect) -> NormalizedRect:
+    """The strip under ``answer_area``, or ``answer_area`` itself when the
+    page has no usable room left below it."""
+    top = answer_area.y + answer_area.height
+    height = min(answer_area.height, 1.0 - top)
+    if height < _MIN_DERIVED_BAND_HEIGHT:
+        return answer_area
+    return NormalizedRect(x=answer_area.x, y=top, width=answer_area.width, height=height)
