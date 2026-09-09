@@ -24,6 +24,19 @@ library;
 /// string is `domain.submission_intake.NEARLY_BLANK_CROP_REASON`.
 const String nearlyBlankCropReason = 'crop_nearly_blank';
 
+/// 取込が回答欄を確定できなかったときに記録する理由。
+///
+/// [nearlyBlankCropReason] と同じく、**定数としてパーサの隣に置く**。この文字列は
+/// サイドカーの `adapters.submission_intake._SUBMISSION_REASON_BY_IMAGE_REASON` が
+/// 書くもので、`no_answer_area_defined` と `answer_area_zero_area` の両方がここへ
+/// 畳まれる。
+///
+/// 手で書いた文字列をあちこちに散らすと、次にサイドカー側が綴りを変えたとき
+/// **型検査もリンタもテストも通ったまま、画面からだけ静かに消える**
+/// (`docs/sidecar-api.md` §4 が Issue #139 で記録した罠の、読む側の版)。
+/// 1か所に置けば、直す場所も1か所で済む。
+const String answerAreaUndefinedReason = 'answer_area_undefined';
+
 /// The question ids [reviewReason] flags with [reason].
 ///
 /// Returns an empty set for `null`, for a reason that is not present, and
@@ -84,6 +97,6 @@ String? describeReviewReason(String? reviewReason) {
 /// 設問idを取らないものは、ここでは扱わない -- 件数として数えられないものを
 /// 「N問」と言うわけにはいかない。
 const Map<String, String> _reasonLabels = {
-  'answer_area_undefined': '回答欄が確定できない設問',
+  answerAreaUndefinedReason: '回答欄が確定できない設問',
   nearlyBlankCropReason: '切り出しがほぼ余白の設問',
 };
