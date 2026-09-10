@@ -20,6 +20,7 @@ import 'package:auto_scoring_app/core/submission_confirmation.dart';
 import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
 import 'package:auto_scoring_app/features/pdf_review/answer_crop_view.dart';
 import 'package:auto_scoring_app/features/pdf_review/confidence_badge.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart'
@@ -489,6 +490,7 @@ class _SubmissionConfirmPageState extends ConsumerState<SubmissionConfirmPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const BackOrHomeButton(),
         title: Text(_answerName()),
         actions: [
           if (_submission case final submission?)
