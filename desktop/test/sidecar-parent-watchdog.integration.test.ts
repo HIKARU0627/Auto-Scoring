@@ -166,7 +166,8 @@ describe("Linux CI Parent Process Watchdog Integration (Acceptance 4, UG-01)", (
           "--port", "0",
           "--handshake-file", process.argv[2],
           "--app-data-dir", process.argv[3],
-        ], { stdio: "ignore" });
+        ], { stdio: "ignore", detached: true });
+        child.unref();
         fs.writeFileSync(process.argv[4], String(child.pid), "utf8");
         setInterval(() => {}, 1000);
         `,
