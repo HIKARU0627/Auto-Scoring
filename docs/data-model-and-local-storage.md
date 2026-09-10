@@ -148,10 +148,80 @@ Job:
 | ------------------------------- | ----------------------------------------------------------------------------------- |
 | 配点範囲外の得点                | domain: `Score.__post_init__`。DB: `CHECK (awarded BETWEEN 0 AND maximum)`          |
 | 0〜1 を外れた正規化座標         | domain: `NormalizedRect.__post_init__`（rect は DB 上は JSON のため DB 制約は無し） |
-| 孤児 record（親が存在しない子） | DB: 全 FK に `ON DELETE CASCADE`、接続ごとに `PRAGMA foreign_keys=ON`               |
+| 孤児 record（親が存在しない子） | DB: FK の `ON DELETE`（§4.1）、接続ごとに `PRAGMA foreign_keys=ON`                  |
 | 不正な状態遷移                  | domain の状態機械（上記§3）+ DB の `CHECK` 列                                       |
 | 設問番号の重複                  | DB: `UNIQUE (test_id, number)`                                                      |
 | ルーブリック行の重複順序        | domain（重複 id/position を拒否）+ DB `UNIQUE (rubric_id, position)`                |
+
+### 4.1 `Review` が指す行の削除（Issue #149）
+
+`reviews` は4本の参照を持ち、それぞれ1つの action について `CHECK` が必須にしている。
+
+| 列                      | 必須になる action   | 意味                         |
+| ----------------------- | ------------------- | ---------------------------- |
+| `ai_grade_result_id`    | `approved`          | 承認した AI の採点行         |
+| `human_grade_result_id` | `modified`          | 人が決めた点数を持つ採点行   |
+| `regrade_job_id`        | `regrade_requested` | 再判定として投入した `Job`   |
+| `undone_review_id`      | `undone`            | 取り消した対象の `Review` 行 |
+
+**決定: この4本はすべて `ON DELETE CASCADE`。`SET NULL` ではない。**
+
+`SET NULL` は、指し先が消えるときに **review 行がまだ存在したまま書き換える**。
+その瞬間に同じ行の `CHECK` に当たり、削除ごと abort する。当たるかどうかを決めていたのは
+SQLite がテーブルを辿る順序 = `sqlite_master` 上の並び順で、これは誰も設計していない値
+（最後のマイグレーションが残した並び）でしかない。Issue #136 でその反転が実測されている:
+`grade_results` を `batch_alter_table` で作り直す（SQLite で `CHECK` を足す唯一の方法）と
+そのテーブルが `reviews` の後ろへ移り、8回中8回 green だったものが 6回中6回 red になった。
+
+さらに `undone_review_id` は `reviews` 自身を指すため、**どの並び順でも救われない**。
+0017 の時点で、`undone` の review を1行でも持つテストは `DELETE FROM tests` が
+できなかった（`purge_test` が失敗した）。並び順の問題ではなく、既に壊れていた。
+
+`CASCADE` は書き換えられた中間行を **そもそも作らない**。review は指し先の行についての
+決定なのだから、指し先が消えれば決定も消える — これがどの並び順でも成り立つ。
+
+**実測**（4テーブル相当の縮小スキーマ、`reviews` を先に作る / 後に作るの両順序 ×
+「採点行を単体で削除」「job を単体で削除」「review を単体で削除」「`DELETE FROM tests`」）:
+
+| 案                     | 結果          |
+| ---------------------- | ------------- |
+| `SET NULL`（現状）     | 8/8 red       |
+| `RESTRICT`             | 8/8 red       |
+| `CHECK` をトリガへ移す | 8/8 red       |
+| **`CASCADE`（採用）**  | **8/8 green** |
+
+**捨てた案と、捨てた理由:**
+
+- **`RESTRICT`**: 参照されている採点行を消せなくなるだけでなく、`DELETE FROM tests`
+  自体が両方の並び順で落ちる。SQLite の `RESTRICT` は即時判定なので、同じ文の中で
+  あとから消えるはずの子行があっても待ってくれない。並び順依存を消すどころか、
+  削除経路を全部塞ぐ。
+- **`CHECK` をトリガへ移す**: トリガは同じ `SET NULL` の UPDATE で発火するので、
+  何も変わらない（実測でも `CHECK` 版と同じ 8/8 red）。「カスケード中の中間状態だけ
+  見逃す」書き方も、トリガからは「カスケード由来の UPDATE」と「人が列を空にした
+  UPDATE」を区別できないため、結局 invariant を捨てることになる。
+- **`approved` が AI 採点を要求するのをやめる（#118 の再検討）**: 不要だった。
+  #118 が決めたのは「`modified` は AI 採点なしでもよい（AI が落ちた設問を人が引き取る）」
+  であり、「`approved` は承認する対象が要る」はそのまま正しい
+  （[`review-edit-history.md`](./review-edit-history.md) §3.1）。`CASCADE` はこの規則を
+  弱めない — **むしろ強める**。`SET NULL` の下では `rejected` などの行が指していた
+  採点行を黙って `NULL` に書き換えられていたが、`CASCADE` ではそもそも
+  「指し先を失った review 行」が存在しえない。
+
+**制約を弱めていないことの確認**（AGENTS.md「Security / Verification」）:
+`CHECK` は4本とも文言のまま残っている。変えたのは FK の `ON DELETE` 動作だけで、
+`Review.__post_init__`（domain）も従来どおり同じ規則を検査する。
+
+**失われる履歴について**: `CASCADE` は「採点行を消したら、その採点行を承認/修正した
+review 行も消える」を意味する。現行コードに `grade_results` / `jobs` / `reviews` を
+単体で削除する経路は無く（削除は `purge.py` の test / submission 単位と
+`QuestionRepository.delete_for_test` だけで、いずれも review 行ごと cascade する）、
+既存の経路で失われるものは何も増えない。削除操作自体は `operation_log` に残る（§5）。
+
+検査は `backend/tests/test_delete_cascade_order.py`（並び順に依存しない形 +
+`batch_alter_table` で各テーブルを末尾へ動かした場合）と
+`test_migrations.py::test_upgrade_repairs_a_review_history_that_could_not_be_deleted`
+（0017 で赤 → `head` で緑を1つのテスト内で押さえる）。
 
 ## 5. `app-data/` のファイル保存規則
 
@@ -226,6 +296,12 @@ app-data/
     `0003`〜`0005` を `0005`〜`0007` へ振り直した。
   - `0014_exports` — `exports` テーブルを追加（Issue #23、成功した
     添削済みPDF出力の記録。`job_id` に一意制約）。
+  - `0018_review_reference_cascade` — `reviews` の4本の参照を `ON DELETE SET NULL`
+    から `ON DELETE CASCADE` へ変更（Issue #149、§4.1）。データ移行は不要
+    （`SET NULL` の下では孤児行が作れないため）だが、コピー後に
+    `PRAGMA foreign_key_check(reviews)` で孤児が無いことを確かめてから終わる。
+    復旧: 変更は `reviews` 1テーブルに閉じており、`downgrade` が同じコピーで
+    `SET NULL` に戻す（並び順依存も一緒に戻る）。
 - スキーマを変更したら `db/orm.py` を直し、`uv run alembic revision --autogenerate`
   で新しい revision を作る。`alembic.command.check`（`test_head_schema_matches_orm_metadata`）
   が ORM とマイグレーション履歴の乖離を検出する。
