@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+import openpyxl
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -34,6 +35,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyGraph,
     DependencyProvision,
 )
+from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.job_execution import ProcessingOutcome
 from auto_scoring.domain.job_scheduling import plan_submission_jobs
 from auto_scoring.domain.models import (
@@ -51,6 +53,7 @@ from auto_scoring.domain.models import (
 )
 from auto_scoring.domain.ocr import BoundingBox, ConfidenceBand, OcrResult, OcrToken
 from auto_scoring.domain.submission_intake import NOT_THE_ANSWER_CROP_REASON
+from auto_scoring.domain.test_material import TestMaterial
 from auto_scoring.jobs.grading_processor import (
     GradingJobProcessor,
     grade_result_id,
@@ -300,6 +303,110 @@ async def test_grading_request_includes_the_ocr_text_and_answer_image(
     assert request.answer_image == _IMAGE_BYTES
     assert request.question_id == "q-1"
     assert request.max_score == 5
+
+
+def _register_annotation_resource(
+    session_factory: sessionmaker[Session], store: LocalFileStore, rows: list[list[str]]
+) -> None:
+    """Attach a 添削資料 Excel to the seeded test, the way Issue #101's intake
+    does. The workbook is written here from invented strings -- the real
+    material may not enter this repository (``AGENTS.md`` "Security")."""
+    stored_path = "tests/test-1/03_annotation.xlsx"
+    path = store.resolve_stored_path(stored_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    for row in rows:
+        sheet.append(row)
+    workbook.save(path)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.test_materials.add(
+            TestMaterial(
+                id="material-1",
+                test_id="test-1",
+                role=MaterialRole.ANNOTATION_RESOURCE,
+                stored_path=stored_path,
+                sha256="0" * 64,
+                size_bytes=path.stat().st_size,
+                original_filename=None,
+                created_at=at(),
+            )
+        )
+        uow.commit()
+
+
+_CATALOG_ROWS = [
+    ["架空の講座名"],
+    ["回数", "問題番号", "生徒の誤り方・現状", "採点基準", "赤入れ案"],
+    ["第1回", "問1", "架空の誤答A", "3点減", "架空の赤入れA"],
+]
+
+
+async def test_a_registered_excel_annotation_resource_reaches_the_grading_call(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #106 end to end: the 添削資料 catalogue is on the request the
+    provider is called with, so the grading prompt can carry it."""
+    _seed(session_factory, store)
+    _register_annotation_resource(session_factory, store, _CATALOG_ROWS)
+    ai_provider.script(_response())
+
+    await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
+
+    (entry,) = ai_provider.calls[0].error_catalog
+    assert entry.mistake == "架空の誤答A"
+    assert entry.deduction == "3点減"
+    assert entry.red_ink == "架空の赤入れA"
+
+
+async def test_grading_proceeds_without_a_catalogue_and_says_why(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """添削資料 is optional but recommended (Issue #95 decision 3), so a file
+    whose columns are not recognized must not fail the job -- and must not be
+    indistinguishable from having registered nothing either."""
+    _seed(session_factory, store)
+    _register_annotation_resource(
+        session_factory, store, [["日付", "担当"], ["2026-09-10", "架空の氏名"]]
+    )
+    ai_provider.script(_response())
+
+    with caplog.at_level(logging.WARNING):
+        result = await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert ai_provider.calls[0].error_catalog == ()
+    assert any(
+        "no catalogue could be read" in record.getMessage()
+        and "no_header_row" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_a_test_with_no_annotation_resource_sends_an_empty_catalogue(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """The ordinary case, pinned so Issue #106 cannot start requiring a
+    材料 that the required-input list (business-rules section 2 (18)) does not
+    require."""
+    _seed(session_factory, store)
+    ai_provider.script(_response())
+
+    result = await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert ai_provider.calls[0].error_catalog == ()
 
 
 async def test_low_grading_confidence_is_not_usable_but_still_persisted(

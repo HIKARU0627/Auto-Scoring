@@ -22,6 +22,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from auto_scoring.adapters.excel_error_catalog import annotation_resource_catalog
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_provider import (
@@ -306,6 +307,14 @@ class GradingJobProcessor:
             rubric_text, criterion_ids = build_rubric_prompt(
                 question.scoring_method, rubric.criteria
             )
+            # Issue #106. Optional-but-recommended material (Issue #95
+            # decision 3), so a test without a readable one is graded
+            # anyway -- `annotation_resource_catalog` logs *why* it got
+            # nothing rather than letting "no 添削資料 registered" and "the
+            # registered one's columns were not understood" look alike.
+            catalog = annotation_resource_catalog(
+                self._store, uow.test_materials.list_for_test(submission.test_id)
+            )
 
         request = GradingRequest(
             question_id=question_id,
@@ -317,6 +326,7 @@ class GradingJobProcessor:
             criterion_ids=criterion_ids,
             max_score=question.points,
             prerequisite_context=prerequisite_context,
+            error_catalog=() if catalog is None else catalog.entries,
         )
 
         # The provider call happens outside the transaction above (and, via
