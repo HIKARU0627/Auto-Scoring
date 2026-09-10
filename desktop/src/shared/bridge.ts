@@ -16,6 +16,12 @@
  * the rule is enforced rather than merely written down here.
  */
 
+import type { ScannedFolder } from "./folder-scan.js";
+import type {
+  SidecarMultipartRequest,
+  SidecarMultipartResponse,
+} from "./sidecar-upload.js";
+
 /** Identifies this build to the renderer. Placeholder surface for Phase 2. */
 export interface AppInfo {
   /** The `version` field of `desktop/package.json`. */
@@ -70,6 +76,11 @@ export interface AutoScoringBridge {
   getSidecarStatus(): Promise<SidecarStatus>;
   restartSidecar(): Promise<void>;
   onSidecarStatusChange(callback: (status: SidecarStatus) => void): () => void;
+  chooseFolder(): Promise<string | null>;
+  scanFolder(directoryPath: string): Promise<ScannedFolder>;
+  sidecarMultipartUpload(
+    request: SidecarMultipartRequest,
+  ): Promise<SidecarMultipartResponse>;
 }
 
 /** IPC channel names. One place, so main and preload cannot drift apart. */
@@ -78,6 +89,9 @@ export const IpcChannel = {
   getSidecarStatus: "auto-scoring:get-sidecar-status",
   restartSidecar: "auto-scoring:restart-sidecar",
   sidecarStatusChanged: "auto-scoring:sidecar-status-changed",
+  chooseFolder: "auto-scoring:choose-folder",
+  scanFolder: "auto-scoring:scan-folder",
+  sidecarMultipartUpload: "auto-scoring:sidecar-multipart-upload",
 } as const;
 
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];

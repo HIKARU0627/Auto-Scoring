@@ -2,6 +2,7 @@ import type { JSX } from "react";
 
 import { AppRoutes } from "../core/app-routes.js";
 import { HomePage } from "../features/home/HomePage.js";
+import { IntakePage } from "../features/intake/IntakePage.js";
 import { TestSettingsPage } from "../features/test-settings/TestSettingsPage.js";
 import { ShellScreen } from "./ShellScreen.js";
 import { matchRoutePattern } from "./router.js";
@@ -41,7 +42,7 @@ export const ROUTE_TABLE: readonly RouteDefinition[] = [
   },
   {
     pattern: AppRoutes.intake,
-    render: () => <PlaceholderScreen title="資料取込" />,
+    render: () => <IntakePage />,
   },
   {
     pattern: AppRoutes.settings,

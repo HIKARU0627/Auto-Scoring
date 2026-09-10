@@ -100,7 +100,7 @@ describe("home escape meta test (INV-201-05)", () => {
       initialStack: [AppRoutes.home, AppRoutes.testList, AppRoutes.intake],
     });
 
-    await screen.findByText("資料取込");
+    await screen.findByText("資料の取込");
     fireEvent.click(screen.getByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
     await screen.findByText("テスト一覧");
     expect(screen.queryByText("まだテストが登録されていません")).toBeNull();
