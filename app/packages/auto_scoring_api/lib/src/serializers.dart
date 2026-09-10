@@ -48,6 +48,7 @@ import 'package:auto_scoring_api/src/model/criterion_result_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
+import 'package:auto_scoring_api/src/model/document_pages_response.dart';
 import 'package:auto_scoring_api/src/model/edit_review_request.dart';
 import 'package:auto_scoring_api/src/model/export_refusal_reason.dart';
 import 'package:auto_scoring_api/src/model/export_request_response.dart';
@@ -68,6 +69,7 @@ import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 import 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
 import 'package:auto_scoring_api/src/model/ocr_availability_response.dart';
 import 'package:auto_scoring_api/src/model/page_format_model.dart';
+import 'package:auto_scoring_api/src/model/page_geometry_response.dart';
 import 'package:auto_scoring_api/src/model/plan_request.dart';
 import 'package:auto_scoring_api/src/model/planned_file_model.dart';
 import 'package:auto_scoring_api/src/model/planned_group_model.dart';
@@ -141,6 +143,7 @@ part 'serializers.g.dart';
   DependencyEdgeModel,
   DependencyGraphResponse,
   DependencyProvision,
+  DocumentPagesResponse,
   EditReviewRequest,
   ExportRefusalReason,
   ExportRequestResponse,
@@ -161,6 +164,7 @@ part 'serializers.g.dart';
   NormalizedRectResponse,
   OcrAvailabilityResponse,
   PageFormatModel,
+  PageGeometryResponse,
   PlanRequest,
   PlannedFileModel,
   PlannedGroupModel,
@@ -275,6 +279,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(AnnotationResponse)]),
         () => ListBuilder<AnnotationResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(PageGeometryResponse)]),
+        () => ListBuilder<PageGeometryResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(SubmissionReviewProgressResponse)]),

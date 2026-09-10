@@ -95,6 +95,11 @@ product root に足す必要もない。
 案 B で描画 API（`GET /pages/{n}/render` 等）が要る場合、**本 Issue では実装しない**。
 OpenAPI の変更は最高責任者の承認事項であり、必要な API 形状は別 Issue で起票する。
 
+**起票と実装は済んでいる**: Issue #207 が形を承認され、`api.page_image_router` として
+実装された（`GET /submissions/{id}/pages{,/{n}/image}` と
+`GET /tests/{id}/answer-layout/pages{,/{n}/image}`）。renderer が守る規則
+（正規化座標は画像の画素寸法だけから作る）は [`sidecar-api.md`](./sidecar-api.md) §7。
+
 ## 残存リスク
 
 - **実答案 PDF では未測定。** fixture は合成 PDF 9 種のみ（PoC 3 と同じ 9 種、上記
@@ -110,12 +115,12 @@ OpenAPI の変更は最高責任者の承認事項であり、必要な API 形�
 
 ## 撤去または昇格の条件
 
-| パス                                     | 扱い                                                                                   |
-| ---------------------------------------- | -------------------------------------------------------------------------------------- |
-| `desktop-poc/issue_202_pdf_coordinates/` | PoC 完了後も repro 用に保持。プロダクトから import しない                              |
-| `docs/poc-6-pdf-coordinates/`            | 証跡として保持                                                                         |
-| `docs/poc-6-pdf-coordinates.md`          | Electron PDF 表示方式の決定記録として昇格（`docs/frontend-migration.md` Phase 1 参照） |
-| 案 B 採用時の sidecar render API         | 別 Issue（Phase 2 土台）で昇格                                                         |
+| パス                                     | 扱い                                                                                    |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `desktop-poc/issue_202_pdf_coordinates/` | PoC 完了後も repro 用に保持。プロダクトから import しない                               |
+| `docs/poc-6-pdf-coordinates/`            | 証跡として保持                                                                          |
+| `docs/poc-6-pdf-coordinates.md`          | Electron PDF 表示方式の決定記録として昇格（`docs/frontend-migration.md` Phase 1 参照）  |
+| 案 B 採用時の sidecar render API         | **昇格済み** —— Issue #207 で `api.page_image_router` として実装（`sidecar-api.md` §7） |
 
 ## スコープ外
 

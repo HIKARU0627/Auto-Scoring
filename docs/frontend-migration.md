@@ -111,6 +111,10 @@ Issue #201 で司令塔が挙げた 10 項目（網羅ではない。詳細は�
 
 - `desktop/` の骨格（Electron main / preload / renderer、Vite、TS strict）
 - OpenAPI から TS クライアント生成をパイプラインに組み込む（`pnpm run openapi:generate` の兄弟として。#102 のアトミック生成の作法を踏襲）
+- **済**: 案 B のページ画像・ページ幾何エンドポイント（Issue #207、`api.page_image_router`）。
+  renderer は生の PDF を受け取らず、正規化座標は受け取った画像の画素寸法だけから作る ——
+  規則は [`sidecar-api.md`](./sidecar-api.md) §7、引き取り対象としての整理は
+  [`frontend-invariants.md`](./frontend-invariants.md) §5.1（MIG-01〜MIG-03）
 - デザイントークンと基本コンポーネント
 - ホーム画面 1 枚 + そのテスト（不変条件移植の手本）
 
@@ -143,6 +147,17 @@ Issue #201 で司令塔が挙げた 10 項目（網羅ではない。詳細は�
 3. **強制終了しても次回の起動が失敗しないこと。Windows 実機で確認するまで cut-over しない。**
 4. Windows での配布物（electron-builder + PyInstaller サイドカー）が動く
 5. 司令塔の承認
+
+#### cut-over のときに合わせて判断する項目
+
+完了条件ではなく、**cut-over の作業で必ず一度は開いて判断する**もの。判断せずに済ませると、
+理由が古いままの API が残る（#111 → #138 の形）。
+
+- **生の PDF を返す 2 本を消すか** —— `GET /submissions/{id}/source-pdf` と
+  `GET /tests/{id}/answer-layout/pdf`（Issue #207）。cut-over まで Flutter アプリが使うので
+  残してある。**cut-over 後に残る用途は無い**（回答欄検出・配点抽出・PDF 出力はいずれも
+  保存済みファイルを直接開く）。両エンドポイントの OpenAPI description がこの項目を
+  Issue #201 として参照しているので、**別の cut-over Issue を切ったら参照先も直すこと**。
 
 #### 3 の確認手順と、それが必須条件である理由（最高責任者の決定、2026-09-10）
 

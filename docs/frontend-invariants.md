@@ -144,6 +144,25 @@ Issue #201 の「守るべき不変条件」10 項目は **INV-201-01〜10** と
 | INV-070 | レール・DAG・Inspector で同一語・アイコン                     | #84          | `pdf_review_page_test.dart:3962`     | 同一設問が別状態に見える   |
 | INV-071 | Issue #22: edit/reject/regrade/approve/undo 一連が通る        | #22          | `pdf_review_page_test.dart:2103`     | 編集履歴・並行性バグ       |
 
+### 5.1 移行後の座標の作り方（Issue #207 / PoC 6 案 B）
+
+上の INV-050〜INV-063 は、**Flutter が pdfrx で PDF を描いていた前提**の上に立っている。
+移行後はその前提が無くなる。renderer は PDF を描かず、サイドカーが pypdfium2 で描いた
+ページ画像を表示する。引き取り先の規則は次の 3 つ。
+
+| ID     | 移行後の不変条件                                                                        | 出どころ | 根拠のテスト                                                          | 壊れると                                      |
+| ------ | --------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------- | --------------------------------------------- |
+| MIG-01 | 正規化座標は**受け取った画像の画素寸法だけ**で割って作る（`click_px ÷ image_width_px`） | #207     | `backend/tests/test_page_image_api.py`（画素寸法 = 表示ページ×scale） | 案 B が消した二重解釈が renderer 側で復活する |
+| MIG-02 | `/pages` の `displayed_*` を座標計算に使わない。枠取り・ページ送り・回転の把握に限る    | #207     | 同上 + OpenAPI description（4 本）                                    | 幾何と画像の丸めが割れ、ズームごとにずれる    |
+| MIG-03 | renderer は**生の PDF バイト列を受け取らない**。app-data の所有はサイドカーのまま       | #207     | `test_page_image_api.py` / `sidecar-api.md` §7.5                      | 描画経路が 2 つに戻り、座標バグも 2 組に戻る  |
+
+契約の全体は [`sidecar-api.md`](./sidecar-api.md) §7。画面ごとの現れ方は
+[`pdf-review-overlay.md`](./pdf-review-overlay.md) §3.1 と
+[`answer-area-detection.md`](./answer-area-detection.md) §2。
+
+**実答案 PDF での座標往復は未測定**（PoC 6 の残存リスク）。最高責任者の実機検証 Issue #6 の
+結果が出るまで、回答欄エディタと添削レビューのオーバーレイには着手しない（#202 の決定）。
+
 ---
 
 ## 6. デザイントークン・アクセシビリティ

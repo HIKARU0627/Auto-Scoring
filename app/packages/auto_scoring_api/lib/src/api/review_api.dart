@@ -268,7 +268,7 @@ class ReviewApi {
   }
 
   /// Get Source Pdf
-  ///
+  /// The original, unmodified answer PDF&#39;s raw bytes (§13.1: 元PDF自体は 直接編集しない).  **Used by the Flutter 添削レビュー screen until the Electron cut-over**, and by nothing else -- it renders the PDF itself with &#x60;pdfrx&#x60; and draws the annotation overlay on top.  The new UI does not receive raw PDF bytes. PoC 6 (&#x60;docs/poc-6-pdf-coordinates.md&#x60;) put the rasterization in the sidecar, so that the pdfium which draws the page is the same one that performs the coordinate transform; the Electron screen reads &#x60;&#x60;GET /submissions/{submission_id}/pages&#x60;&#x60; and &#x60;&#x60;.../pages/{page_index}/image&#x60;&#x60; (&#x60;api.page_image_router&#x60;) instead, and app-data stays owned by the sidecar.  **After the cut-over there is no known caller left** -- the export path opens the stored file directly rather than going through HTTP. **Whether to delete this endpoint (and &#x60;&#x60;GET /tests/{test_id}/answer-layout/pdf&#x60;&#x60;, kept for the same reason) is decided at cut-over, tracked in Issue #201.**
   ///
   /// Parameters:
   /// * [submissionId]

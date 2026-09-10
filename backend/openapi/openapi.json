@@ -1285,6 +1285,29 @@
         "title": "DependencyProvision",
         "type": "string"
       },
+      "DocumentPagesResponse": {
+        "description": "Every page of one stored document, in order.",
+        "properties": {
+          "page_count": {
+            "description": "Number of pages. Valid page_index values are 0 to page_count - 1.",
+            "title": "Page Count",
+            "type": "integer"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageGeometryResponse"
+            },
+            "title": "Pages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "page_count",
+          "pages"
+        ],
+        "title": "DocumentPagesResponse",
+        "type": "object"
+      },
       "EditReviewRequest": {
         "properties": {
           "annotations": {
@@ -2038,6 +2061,39 @@
           "height_pt"
         ],
         "title": "PageFormatModel",
+        "type": "object"
+      },
+      "PageGeometryResponse": {
+        "description": "One page's layout, as pdfium displays it.\n\n``displayed_width`` / ``displayed_height`` are\n`domain.pdf_geometry.PageGeometry`'s own properties: ``CropBox``\nintersected with ``MediaBox``, with ``/Rotate`` applied -- the same values\nthe annotation export transforms coordinates against.\n\n**Not a basis for coordinates**; see `_COORDINATE_RULE`.",
+        "properties": {
+          "displayed_height": {
+            "description": "Height in PDF points of the page as pdfium displays it (CropBox\u2229MediaBox, after /Rotate). For sizing a placeholder, not for dividing a click position.",
+            "title": "Displayed Height",
+            "type": "number"
+          },
+          "displayed_width": {
+            "description": "Width in PDF points of the page as pdfium displays it (CropBox\u2229MediaBox, after /Rotate). For sizing a placeholder, not for dividing a click position.",
+            "title": "Displayed Width",
+            "type": "number"
+          },
+          "page_index": {
+            "description": "0-based index of this page.",
+            "title": "Page Index",
+            "type": "integer"
+          },
+          "rotation": {
+            "description": "The page's /Rotate, reduced to 0, 90, 180 or 270.",
+            "title": "Rotation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "page_index",
+          "displayed_width",
+          "displayed_height",
+          "rotation"
+        ],
+        "title": "PageGeometryResponse",
         "type": "object"
       },
       "PlanRequest": {
@@ -4327,6 +4383,143 @@
         ]
       }
     },
+    "/submissions/{submission_id}/pages": {
+      "get": {
+        "description": "Page count, displayed size and rotation of the answer PDF, for laying the viewer out **before** the page images arrive, and for paging.\n\n**A normalized coordinate is built from the returned image's own pixel size,\nand from nothing else** (`normalized_x = click_px / image_width_px`). pdfium\ndrew the displayed page into those pixels, so that division cannot disagree\nwith this sidecar's coordinate transform.\n\nDo **not** divide by the `displayed_width` / `displayed_height` reported by\n`GET .../pages`. The image's pixel size is rounded up independently\n(`ceil(displayed x scale)`), so a coordinate taken from the geometry and an\nimage rounded separately is the double interpretation PoC 6 removed. The\ngeometry endpoint is for layout before the image arrives (aspect-ratio\nplaceholders), for paging, and for knowing the rotation.",
+        "operationId": "list_submission_pages_submissions__submission_id__pages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentPagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Submission Pages",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
+    "/submissions/{submission_id}/pages/{page_index}/image": {
+      "get": {
+        "description": "One page of the answer PDF, rasterized by the same pdfium that performs the coordinate transform (PoC 6, approach B).\n\n**A normalized coordinate is built from the returned image's own pixel size,\nand from nothing else** (`normalized_x = click_px / image_width_px`). pdfium\ndrew the displayed page into those pixels, so that division cannot disagree\nwith this sidecar's coordinate transform.\n\nDo **not** divide by the `displayed_width` / `displayed_height` reported by\n`GET .../pages`. The image's pixel size is rounded up independently\n(`ceil(displayed x scale)`), so a coordinate taken from the geometry and an\nimage rounded separately is the double interpretation PoC 6 removed. The\ngeometry endpoint is for layout before the image arrives (aspect-ratio\nplaceholders), for paging, and for knowing the rotation.",
+        "operationId": "get_submission_page_image_submissions__submission_id__pages__page_index__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "0-based page index.",
+            "in": "path",
+            "name": "page_index",
+            "required": true,
+            "schema": {
+              "description": "0-based page index.",
+              "minimum": 0,
+              "title": "Page Index",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.",
+            "in": "query",
+            "name": "scale",
+            "required": false,
+            "schema": {
+              "default": 2.0,
+              "description": "Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.",
+              "enum": [
+                1.0,
+                2.0,
+                3.5
+              ],
+              "title": "Scale",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The page, rasterized at the requested scale.",
+            "headers": {
+              "ETag": {
+                "description": "Identifies (document contents, page, scale). Send it back as If-None-Match to get a 304 instead of a re-render.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's If-None-Match matches; the image is unchanged."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Submission Page Image",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
     "/submissions/{submission_id}/questions/{question_id}/annotations": {
       "get": {
         "operationId": "list_annotations_submissions__submission_id__questions__question_id__annotations_get",
@@ -5137,6 +5330,7 @@
     },
     "/submissions/{submission_id}/source-pdf": {
       "get": {
+        "description": "The original, unmodified answer PDF's raw bytes (\u00a713.1: \u5143PDF\u81ea\u4f53\u306f\n\u76f4\u63a5\u7de8\u96c6\u3057\u306a\u3044).\n\n**Used by the Flutter \u6dfb\u524a\u30ec\u30d3\u30e5\u30fc screen until the Electron\ncut-over**, and by nothing else -- it renders the PDF itself with\n`pdfrx` and draws the annotation overlay on top.\n\nThe new UI does not receive raw PDF bytes. PoC 6\n(`docs/poc-6-pdf-coordinates.md`) put the rasterization in the sidecar,\nso that the pdfium which draws the page is the same one that performs\nthe coordinate transform; the Electron screen reads\n``GET /submissions/{submission_id}/pages`` and\n``.../pages/{page_index}/image`` (`api.page_image_router`) instead, and\napp-data stays owned by the sidecar.\n\n**After the cut-over there is no known caller left** -- the export path\nopens the stored file directly rather than going through HTTP.\n**Whether to delete this endpoint (and\n``GET /tests/{test_id}/answer-layout/pdf``, kept for the same reason)\nis decided at cut-over, tracked in Issue #201.**",
         "operationId": "get_source_pdf_submissions__submission_id__source_pdf_get",
         "parameters": [
           {
@@ -5524,9 +5718,146 @@
         ]
       }
     },
+    "/tests/{test_id}/answer-layout/pages": {
+      "get": {
+        "description": "Page count, displayed size and rotation of the test's answer sheet, for laying the answer-area editor out **before** the page images arrive, and for paging.\n\n**A normalized coordinate is built from the returned image's own pixel size,\nand from nothing else** (`normalized_x = click_px / image_width_px`). pdfium\ndrew the displayed page into those pixels, so that division cannot disagree\nwith this sidecar's coordinate transform.\n\nDo **not** divide by the `displayed_width` / `displayed_height` reported by\n`GET .../pages`. The image's pixel size is rounded up independently\n(`ceil(displayed x scale)`), so a coordinate taken from the geometry and an\nimage rounded separately is the double interpretation PoC 6 removed. The\ngeometry endpoint is for layout before the image arrives (aspect-ratio\nplaceholders), for paging, and for knowing the rotation.",
+        "operationId": "list_answer_layout_pages_tests__test_id__answer_layout_pages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentPagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Answer Layout Pages",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
+    "/tests/{test_id}/answer-layout/pages/{page_index}/image": {
+      "get": {
+        "description": "One page of the test's answer sheet, rasterized by the same pdfium that performs the coordinate transform (PoC 6, approach B).\n\n**A normalized coordinate is built from the returned image's own pixel size,\nand from nothing else** (`normalized_x = click_px / image_width_px`). pdfium\ndrew the displayed page into those pixels, so that division cannot disagree\nwith this sidecar's coordinate transform.\n\nDo **not** divide by the `displayed_width` / `displayed_height` reported by\n`GET .../pages`. The image's pixel size is rounded up independently\n(`ceil(displayed x scale)`), so a coordinate taken from the geometry and an\nimage rounded separately is the double interpretation PoC 6 removed. The\ngeometry endpoint is for layout before the image arrives (aspect-ratio\nplaceholders), for paging, and for knowing the rotation.",
+        "operationId": "get_answer_layout_page_image_tests__test_id__answer_layout_pages__page_index__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "0-based page index.",
+            "in": "path",
+            "name": "page_index",
+            "required": true,
+            "schema": {
+              "description": "0-based page index.",
+              "minimum": 0,
+              "title": "Page Index",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.",
+            "in": "query",
+            "name": "scale",
+            "required": false,
+            "schema": {
+              "default": 2.0,
+              "description": "Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.",
+              "enum": [
+                1.0,
+                2.0,
+                3.5
+              ],
+              "title": "Scale",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The page, rasterized at the requested scale.",
+            "headers": {
+              "ETag": {
+                "description": "Identifies (document contents, page, scale). Send it back as If-None-Match to get a 304 instead of a re-render.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's If-None-Match matches; the image is unchanged."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Answer Layout Page Image",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
     "/tests/{test_id}/answer-layout/pdf": {
       "get": {
-        "description": "The stored answer sheet's bytes, for the overlay editor to draw on.\n\nReturned as a PDF rather than page images: the app already renders\nPDFs with `pdfrx` and places normalized overlays on them\n(`features/pdf_review`), so serving pictures would mean a second\nrendering path and a second set of coordinate bugs.",
+        "description": "The stored answer sheet's raw bytes.\n\n**Used by the Flutter answer-area editor until the Electron\ncut-over**, and by nothing else. It renders the PDF itself with\n`pdfrx` and places normalized overlays on the result\n(`features/pdf_review`).\n\nThis endpoint used to justify itself with that rendering path -- \"the\napp already renders PDFs with pdfrx, so serving pictures would mean a\nsecond rendering path and a second set of coordinate bugs\". **Issue\n#201 removes that premise**: Electron has no `pdfrx`, and PoC 6\n(`docs/poc-6-pdf-coordinates.md`) chose the opposite arrangement --\nthe sidecar rasterizes and the renderer displays the picture, so there\nis exactly one rendering path and it is the one that also does the\ncoordinate transform. The new UI uses\n`api.page_image_router` (``GET /tests/{test_id}/answer-layout/pages``\nand ``.../pages/{page_index}/image``) and **never receives raw PDF\nbytes**: app-data stays owned by the sidecar.\n\n**After the cut-over there is no known caller left.** Nothing outside\nthe Flutter app reads it: answer-area detection, criteria extraction\nand PDF export all open the stored file directly. It is kept rather\nthan deleted here only because the Flutter app still runs.\n\n**Whether to delete this endpoint (and\n``GET /submissions/{submission_id}/source-pdf``, kept for the same\nreason) is decided at cut-over, tracked in Issue #201.** There is no\nseparate cut-over Issue yet; when one is split out, move the item and\nupdate this reference. Leaving a reason behind that has stopped being\ntrue is the failure this repository has repeated (#111 -> #138).",
         "operationId": "get_answer_layout_pdf_tests__test_id__answer_layout_pdf_get",
         "parameters": [
           {
