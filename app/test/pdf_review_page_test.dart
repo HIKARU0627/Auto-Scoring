@@ -4208,8 +4208,11 @@ void main() {
         tester,
         questionId: 'q-3',
         number: '3',
-        // A blocked question names its prerequisite in all three places.
-        label: '問2 待ち',
+        // A blocked question names its prerequisite in all three places --
+        // and, since Issue #86, says whether that prerequisite is going to
+        // release on its own. 問2 here is 要確認, so it will not: 問3 moves
+        // when a person looks at 問2, not when the queue gets round to it.
+        label: '問2 確認待ち',
       );
       expectAllThreeSay(tester, questionId: 'q-4', number: '4', label: 'AI処理中');
 

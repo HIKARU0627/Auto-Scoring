@@ -24,6 +24,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/dag_failure_guidance.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
 
@@ -78,30 +79,66 @@ List<List<String>>? dependencyExecutionLayers(
   return layers;
 }
 
-/// The three buckets the panel header summarises a submission into, so that
-/// collapsing the diagram still answers 「まだ動いているのか」.
+/// The buckets the panel header summarises a submission into, so that
+/// collapsing the diagram still answers 「まだ動いているのか」 -- and, since
+/// Issue #86, 「私が呼ばれているのか」.
 ///
 /// Coarser than [QuestionStatus] on purpose: the header is one line, and the
-/// node itself carries the precise state.
+/// node itself carries the precise state. But it was **too** coarse. 失敗 and
+/// 要確認 were both counted as 完了, so a submission whose 問2 had failed and
+/// one whose 問2 was merely waiting for a person to look at it produced the
+/// identical header 「実行中 0 ・ 待機 2 ・ 完了 3」, and collapsing the panel
+/// -- which leaves nothing but that line -- took the failure off the screen
+/// altogether.
+///
+/// So the two states that mean **a person is needed** get their own bucket
+/// each. Not one shared bucket: 要確認 and 失敗 are the two screens the Issue
+/// asks to tell apart, and folding them together would have reproduced the
+/// identical string one level up.
 enum DagNodeProgress {
   /// Nothing has started, or something has to happen elsewhere first:
   /// 未処理・前提待ち・実行待ち, and a 再判定 request no job has answered yet.
-  waiting('待機'),
+  waiting('待機', 'これから動くもの'),
 
   /// An OCR/AI provider call is in flight.
-  running('実行中'),
+  running('実行中', 'いまAIが処理しているもの'),
 
-  /// The pipeline is done with this question, whatever the outcome --
-  /// including 失敗 and 要確認, which are finished results a human now has to
-  /// deal with rather than work still in progress.
-  settled('完了');
+  /// The queue finished, judged its own result not good enough to release
+  /// what depends on it, and something is actually stuck behind it. Ends
+  /// when a person looks.
+  needsCheck('要確認', '人が確認するまで下流が進まないもの'),
 
-  const DagNodeProgress(this.label);
+  /// The job did not complete. **Ends only when a person does something** --
+  /// which is the difference from every other bucket, and the reason it is
+  /// counted separately rather than as one more finished question.
+  failed('失敗', '人が対応するまで進まないもの'),
+
+  /// The pipeline is done with this question and nothing is being asked of
+  /// the reviewer by the *pipeline*: 採点済み・承認済み・却下・中止.
+  settled('完了', 'AI処理が終わり、人を待っていないもの');
+
+  const DagNodeProgress(this.label, this.meaning);
 
   final String label;
+
+  /// What the label actually counts, for the header's tooltip.
+  ///
+  /// 「完了」 on its own does not say *which* completion it means. That was
+  /// one of the five independent evaluations behind Issue #86 -- `codex`,
+  /// `ambiguous-completion-count`: 「「完了」がどの段階の完了を指すか、件数の
+  /// ラベルだけでは分からない」. A count whose unit is ambiguous is not a
+  /// count.
+  final String meaning;
+
+  /// Whether this bucket means 「人が動くまで進まない」.
+  ///
+  /// [DagNodeProgress.waiting] is deliberately not one of these: it will
+  /// clear on its own. That is the whole distinction Issue #86 is about.
+  bool get needsAPerson =>
+      this == DagNodeProgress.needsCheck || this == DagNodeProgress.failed;
 }
 
-/// Which of the three buckets the collapsed header counts a status in.
+/// Which bucket the collapsed header counts a status in.
 ///
 /// An extension rather than a member of [QuestionStatus]: the buckets exist
 /// for this panel's one-line header, and the vocabulary in
@@ -118,8 +155,12 @@ extension DagNodeProgressOf on QuestionStatus {
     QuestionStatus.queued ||
     QuestionStatus.regradeRequested => DagNodeProgress.waiting,
     QuestionStatus.running => DagNodeProgress.running,
-    QuestionStatus.needsCheck ||
-    QuestionStatus.failed ||
+    QuestionStatus.needsCheck => DagNodeProgress.needsCheck,
+    QuestionStatus.failed => DagNodeProgress.failed,
+    // 中止 stays in 完了. A cancelled job is one a person or a re-submission
+    // stopped on purpose, and a re-submission creates the replacement in the
+    // same breath -- so it is not a question sitting there wanting something
+    // (`docs/job-queue.md`).
     QuestionStatus.cancelled ||
     QuestionStatus.graded ||
     QuestionStatus.rejected ||
@@ -142,12 +183,26 @@ bool releasesDependents(JobResponse? job) => job?.usable ?? false;
 /// print on the node, and the state it is in.
 @immutable
 class DagQuestion {
-  const DagQuestion({
+  /// [lastError] and [errorCode] are `Job.last_error` / `Job.error_code`.
+  ///
+  /// Note what happens to them: they are read by the constructor and
+  /// **never stored**. What is kept is [failure], the Japanese wording
+  /// `dagFailureGuidance` chose. So no part of the diagram -- node, layout,
+  /// header -- can reach the raw diagnosis, which names the provider, the
+  /// exception class and the HTTP status it got back and is not a sentence
+  /// to put in front of a reviewer (AGENTS.md «Security», Issue #86). Making
+  /// that structural rather than a rule beats remembering it at every
+  /// `Text`.
+  DagQuestion({
     required this.id,
     required this.label,
     required this.status,
     this.blockedOnQuestionId,
-  });
+    String? lastError,
+    String? errorCode,
+  }) : failure = status == QuestionStatus.failed
+           ? dagFailureGuidance(errorCode: errorCode, lastError: lastError)
+           : null;
 
   final String id;
 
@@ -160,6 +215,10 @@ class DagQuestion {
   /// on. A join point has several prerequisites but the queue only records
   /// one, which is enough to answer 「何待ちか」.
   final String? blockedOnQuestionId;
+
+  /// Why this question failed and what the reviewer can do about it -- or
+  /// `null` for a question that has not failed.
+  final DagFailureGuidance? failure;
 }
 
 /// A laid-out node: a [DagQuestion] plus where it sits on the canvas.
@@ -169,7 +228,7 @@ class DagNode {
     required this.question,
     required this.layer,
     required this.rect,
-    this.waitingForLabel,
+    this.waitingOn,
   });
 
   final DagQuestion question;
@@ -181,23 +240,40 @@ class DagNode {
   /// Where to draw it, in canvas pixels.
   final Rect rect;
 
-  /// The 設問番号 of [DagQuestion.blockedOnQuestionId], resolved against the
-  /// other nodes -- so a node can say 「問2 待ち」 instead of showing an
-  /// opaque id, or nothing at all.
-  final String? waitingForLabel;
+  /// The prerequisite this node is waiting on, resolved against the other
+  /// nodes by [resolveQuestionWait] -- so a node can say 「問2 待ち」 instead
+  /// of an opaque id, and 「問2 失敗で停止」 instead of a wait that will
+  /// never end (Issue #86).
+  final QuestionWait? waitingOn;
 
   String get id => question.id;
 
   QuestionStatus get status => question.status;
 
+  /// Why this question failed and what to do about it, in words that are
+  /// safe to show. `null` unless [status] is [QuestionStatus.failed].
+  DagFailureGuidance? get failure => question.failure;
+
   /// The line of text under the 設問番号 inside the node. Shared with the
   /// rail and the Inspector through [QuestionStatus.labelWaitingFor], so the
   /// three never name the same state differently (Issue #84).
-  String get statusLabel => status.labelWaitingFor(waitingForLabel);
+  String get statusLabel => status.labelWaitingFor(waitingOn);
 
   /// What a screen reader announces for this node. Never colour-dependent
   /// and never icon-dependent (Issue #25).
-  String get semanticsLabel => '問${question.label} $statusLabel';
+  ///
+  /// A stopped node says the consequence out loud rather than leaving it to
+  /// be inferred from 「停止」: a reviewer listening to the diagram gets the
+  /// same 「これは自分が動くまで進まない」 the sighted one reads off the
+  /// header (Issue #86).
+  String get semanticsLabel {
+    final consequence = switch (waitingOn?.status) {
+      QuestionStatus.failed when status == QuestionStatus.blocked =>
+        '。人が対応するまで進みません',
+      _ => '',
+    };
+    return '問${question.label} $statusLabel$consequence';
+  }
 }
 
 /// A laid-out dependency edge, with the two points to draw it between.
@@ -355,6 +431,72 @@ class DagMetrics {
   }
 }
 
+/// One failed question, as the header has to state it: which question, what
+/// happened, what to do, and **what is stuck behind it** (Issue #86).
+///
+/// The last of those is the part a count cannot carry. 「失敗 1」 says a
+/// question needs a person; 「問3・問5 は進みません」 says what it costs to
+/// leave it, and that is the sentence that gets a failure dealt with before
+/// the reviewer walks away from the screen.
+@immutable
+class DagFailure {
+  const DagFailure({
+    required this.openQuestionId,
+    required this.questionLabels,
+    required this.guidance,
+    required this.stalledQuestionLabels,
+  });
+
+  /// The question the header's button opens -- the first of
+  /// [questionLabels], since they all end in the same place: the Inspector,
+  /// where the diagnosis and both ways out are.
+  final String openQuestionId;
+
+  /// The 設問番号 (`QuestionResponse.number`) of every question that failed
+  /// this way.
+  ///
+  /// A list rather than one, because the failure a reviewer actually meets is
+  /// **the whole answer sheet at once**: one dead provider fails every
+  /// question of the submission, and a notice per question would push a
+  /// twelve-line header in front of the diagram it is describing and the PDF
+  /// underneath it. One line per *reason* is bounded by
+  /// [DagFailureGuidance.values], and it is also the truer sentence -- the
+  /// twelve say the same thing and have the same way out.
+  final List<String> questionLabels;
+
+  final DagFailureGuidance guidance;
+
+  /// The 設問番号 of every question the queue is holding behind these,
+  /// including those several links down the chain -- 問5 blocked on 問3
+  /// blocked on a failed 問2 is stuck there just as much as 問3 is
+  /// ([resolveQuestionWait]).
+  final List<String> stalledQuestionLabels;
+
+  /// 「問2 が失敗しました。」 plus, when something is stuck behind it, what
+  /// that is. One sentence, because the header has room for one.
+  String get headline {
+    final failed = _name(questionLabels);
+    final stalled = _name(stalledQuestionLabels);
+    return stalled.isEmpty
+        ? '$failed が失敗しました。'
+        : '$failed が失敗し、$stalled は人が対応するまで進みません。';
+  }
+
+  /// 「問1・問2・問3」, and 「問1・問2・問3・問4・問5 ほか7件」 once naming
+  /// them all would stop being a sentence and start being a list.
+  ///
+  /// The cap is what keeps this line a line. A 12設問 test whose provider is
+  /// down would otherwise spell out all twelve twice over -- once as the
+  /// failures, once as what they are holding up.
+  static String _name(List<String> labels) {
+    if (labels.isEmpty) return '';
+    const shown = 5;
+    final named = labels.take(shown).map((n) => '問$n').join('・');
+    final rest = labels.length - shown;
+    return rest > 0 ? '$named ほか$rest件' : named;
+  }
+}
+
 /// Everything the 添削レビュー panel needs to paint one submission's progress.
 @immutable
 class DependencyDagLayout {
@@ -376,6 +518,87 @@ class DependencyDagLayout {
   /// still moving.
   int countWhere(bool Function(QuestionStatus) test) =>
       nodes.where((n) => test(n.status)).length;
+
+  /// How many questions are in each [DagNodeProgress] bucket. Every node is
+  /// in exactly one, so the values always add up to `nodes.length`.
+  Map<DagNodeProgress, int> get progressCounts => {
+    for (final progress in DagNodeProgress.values)
+      progress: nodes.where((n) => n.status.progress == progress).length,
+  };
+
+  /// The one line the header shows, and the only thing left on screen once
+  /// the panel is collapsed.
+  ///
+  /// 実行中・待機・完了 are always printed, zero included: 「実行中 0」 is an
+  /// answer to 「まだ動いているのか」 and a missing bucket is not.
+  /// 要確認 and 失敗 appear **only when they are not zero**, which is what
+  /// makes the failed screen and the merely-blocked screen read differently
+  /// at a glance instead of sharing one string (Issue #86). Printing them at
+  /// 0 alongside everything else would put the same five labels on every
+  /// screen forever, and `docs/dependency-dag-progress-view.md` §1.3 has
+  /// already paid for that lesson once: 常時点いている旗は、旗として働かない.
+  ///
+  /// Computed here rather than in the widget so the exact string is fixed by
+  /// a unit test with no render tree (Issue #126).
+  String get progressSummary {
+    final counts = progressCounts;
+    return [
+      for (final progress in const [
+        DagNodeProgress.running,
+        DagNodeProgress.waiting,
+        DagNodeProgress.needsCheck,
+        DagNodeProgress.failed,
+        DagNodeProgress.settled,
+      ])
+        if (!progress.needsAPerson || counts[progress]! > 0)
+          '${progress.label} ${counts[progress]}',
+    ].join(' ・ ');
+  }
+
+  /// What each label in [progressSummary] counts, for the header's tooltip.
+  ///
+  /// Every bucket, including the ones the summary is currently leaving out at
+  /// zero: the legend answers 「その数字は何の数か」, and that question does
+  /// not stop being asked because today's answer happens to be none.
+  static String get progressLegend => [
+    for (final progress in DagNodeProgress.values)
+      '${progress.label}: ${progress.meaning}',
+  ].join('\n');
+
+  /// The failed questions, each with what a reviewer can do about it and
+  /// which other questions are stuck behind it.
+  ///
+  /// Lives on the layout rather than being dug out of [nodes] by the panel
+  /// because the header shows it **whether the diagram is open or not** --
+  /// a collapsed panel is exactly where the failure used to vanish (Issue
+  /// #86) -- and because "which questions is this one holding up" is a walk
+  /// over the queue's blocking chain, which is the sort of thing that
+  /// belongs where a test can reach it without a widget.
+  /// Grouped by [DagFailureGuidance], in the order the questions appear, so
+  /// the header holds at most one line per distinct reason however many
+  /// questions failed. See [DagFailure.questionLabels].
+  List<DagFailure> get failures {
+    final grouped = <DagFailureGuidance, List<DagNode>>{};
+    for (final node in nodes) {
+      if (node.failure case final failure?) {
+        grouped.putIfAbsent(failure, () => []).add(node);
+      }
+    }
+    return [
+      for (final MapEntry(key: guidance, value: failed) in grouped.entries)
+        DagFailure(
+          openQuestionId: failed.first.id,
+          questionLabels: [for (final node in failed) node.question.label],
+          guidance: guidance,
+          stalledQuestionLabels: [
+            for (final other in nodes)
+              if (other.status == QuestionStatus.blocked &&
+                  failed.any((n) => n.id == other.waitingOn?.questionId))
+                other.question.label,
+          ],
+        ),
+    ];
+  }
 
   Set<String> get satisfiedEdgeKeys => {
     for (final edge in edges)
@@ -449,10 +672,16 @@ DependencyDagLayout? buildDependencyDagLayout({
         question: byId[id]!,
         layer: layerIndex,
         rect: grid.rectAt(layerIndex, row),
-        waitingForLabel: switch (byId[id]!.blockedOnQuestionId) {
-          final blockedOn? => byId[blockedOn]?.label,
-          null => null,
-        },
+        // Follows the queue's own `blocked_on` chain rather than reading one
+        // hop of it, so a question stuck three links behind a failure names
+        // the failure instead of naming the next question in the queue --
+        // which is also waiting and can do nothing about it (Issue #86).
+        waitingOn: resolveQuestionWait(
+          id,
+          blockedOn: (q) => byId[q]?.blockedOnQuestionId,
+          statusOf: (q) => byId[q]?.status ?? QuestionStatus.pending,
+          numberOf: (q) => byId[q]?.label,
+        ),
       );
       nodes.add(node);
       nodeById[id] = node;

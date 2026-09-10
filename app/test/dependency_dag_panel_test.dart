@@ -38,6 +38,53 @@ DependencyDagLayout _layout({
   releasedQuestionIds: released,
 )!;
 
+/// Issue #86 のスクリーンショットと同じ形。問1・問2・問4 が並列、問3 は
+/// 問2 待ち、問5 は問3 待ち。[q2] を入れ替えると「要確認で止まっている画面」
+/// と「失敗した画面」になる。
+DependencyDagLayout _stalled({
+  required QuestionStatus q2,
+  String? lastError,
+  String? errorCode,
+}) => buildDependencyDagLayout(
+  questions: [
+    DagQuestion(id: 'q1', label: '1', status: QuestionStatus.approved),
+    DagQuestion(
+      id: 'q2',
+      label: '2',
+      status: q2,
+      lastError: lastError,
+      errorCode: errorCode,
+    ),
+    DagQuestion(
+      id: 'q3',
+      label: '3',
+      status: QuestionStatus.blocked,
+      blockedOnQuestionId: 'q2',
+    ),
+    DagQuestion(id: 'q4', label: '4', status: QuestionStatus.graded),
+    DagQuestion(
+      id: 'q5',
+      label: '5',
+      status: QuestionStatus.blocked,
+      blockedOnQuestionId: 'q3',
+    ),
+  ],
+  edges: [_edge('q1', 'q3'), _edge('q2', 'q3'), _edge('q3', 'q5')],
+  releasedQuestionIds: const {'q1'},
+)!;
+
+/// 畳んでいるかどうかに関わらず、いま画面に出ている全部の文字。
+List<String> _visibleText(WidgetTester tester) => [
+  for (final text in tester.widgetList<Text>(find.byType(Text)))
+    text.data ?? text.textSpan?.toPlainText() ?? '',
+];
+
+String _summaryOf(WidgetTester tester) =>
+    tester.widget<Text>(find.byKey(const Key('dag-summary'))).data!;
+
+String _nodeStatusOf(WidgetTester tester, String id) =>
+    tester.widget<Text>(find.byKey(Key('dag-node-status-$id'))).data!;
+
 Future<void> _pumpPanel(
   WidgetTester tester,
   DependencyDagLayout layout, {
@@ -96,6 +143,21 @@ String? _focusedNodeId() {
     return true;
   });
   return id;
+}
+
+/// Whether the keyboard focus is currently inside the widget carrying [key].
+bool _focusIsInside(Key key) {
+  final context = FocusManager.instance.primaryFocus?.context;
+  if (context == null) return false;
+  var found = false;
+  context.visitAncestorElements((element) {
+    if (element.widget.key == key) {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
 }
 
 void main() {
@@ -422,5 +484,229 @@ void main() {
     await tester.drag(scrollable, const Offset(-400, 0));
     await tester.pump();
     expect(find.byKey(const Key('dag-node-q3')), findsOneWidget);
+  });
+
+  // ------------------------------------------------------------------ //
+  // Issue #86: 失敗が要約から漏れ、下流の「待ち」が恒久停止を隠していた。
+  //
+  // 直す前のこのパネルを、同じ組み立ての答案で実測した結果:
+  //
+  //   要確認: summary="実行中 0 ・ 待機 2 ・ 完了 3" q3="問2 待ち" q5="問3 待ち"
+  //   失敗  : summary="実行中 0 ・ 待機 2 ・ 完了 3" q3="問2 待ち" q5="問3 待ち"
+  //   畳んだあと、画面に「失敗」の語: 0 箇所
+  //
+  // 要約が同一だったのは 失敗 も 要確認 も `DagNodeProgress.settled`(完了)
+  // に畳まれていたから、ラベルが同一だったのは `labelWaitingFor` が前提の
+  // 番号だけを見ていたからである。
+  // ------------------------------------------------------------------ //
+  group('Issue #86: 失敗を画面から消さない', () {
+    testWidgets('要確認で止まった画面と、失敗した画面は、ヘッダーの文字列が違う', (tester) async {
+      await _pumpPanel(tester, _stalled(q2: QuestionStatus.needsCheck));
+      final blocked = _summaryOf(tester);
+
+      await _pumpPanel(tester, _stalled(q2: QuestionStatus.failed));
+      final failed = _summaryOf(tester);
+
+      // 実際の文字列を両方固定してから、違うことを言う。「どちらも空に
+      // なった」では緑にならない。
+      expect(blocked, '実行中 0 ・ 待機 2 ・ 要確認 1 ・ 完了 2');
+      expect(failed, '実行中 0 ・ 待機 2 ・ 失敗 1 ・ 完了 2');
+      expect(blocked, isNot(failed));
+    });
+
+    testWidgets('パネルを畳んでも、失敗が画面に残る', (tester) async {
+      final selected = <String>[];
+      await _pumpPanel(
+        tester,
+        _stalled(q2: QuestionStatus.failed, errorCode: 'server_error'),
+        onQuestionSelected: selected.add,
+      );
+
+      await tester.tap(find.byKey(const Key('dag-toggle-button')));
+      await tester.pumpAndSettle();
+
+      // 図そのものは消える -- 畳む目的はPDFビューアに縦を返すことなので。
+      expect(find.byKey(const Key('dag-node-q2')), findsNothing);
+      // 失敗のほうは残る。件数も、何が起きたかも、次の一手も、そこへ行く
+      // ボタンも。
+      expect(_summaryOf(tester), contains('失敗 1'));
+      expect(find.byKey(const Key('dag-failure-q2')), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('dag-failure-headline-q2')))
+            .data,
+        '問2 が失敗し、問3・問5 は人が対応するまで進みません。',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const Key('dag-failure-next-q2'))).data,
+        allOf(contains('再判定'), contains('点数を入力')),
+      );
+
+      // 畳んだままでも、そこから失敗した設問へ行ける。
+      await tester.tap(find.byKey(const Key('dag-failure-open-q2')));
+      await tester.pump();
+      expect(selected, ['q2']);
+    });
+
+    testWidgets('下流の「待ち」が、上流の理由で変わる', (tester) async {
+      await _pumpPanel(tester, _stalled(q2: QuestionStatus.needsCheck));
+      final blockedQ3 = _nodeStatusOf(tester, 'q3');
+      final blockedQ5 = _nodeStatusOf(tester, 'q5');
+
+      await _pumpPanel(tester, _stalled(q2: QuestionStatus.failed));
+      final failedQ3 = _nodeStatusOf(tester, 'q3');
+      final failedQ5 = _nodeStatusOf(tester, 'q5');
+
+      expect(blockedQ3, '問2 確認待ち');
+      expect(failedQ3, '問2 失敗で停止');
+      expect(blockedQ3, isNot(failedQ3));
+      // 問5 は問3 待ちだが、問3 にできることは何も無い。動ける場所を名指す。
+      expect(blockedQ5, '問2 確認待ち');
+      expect(failedQ5, '問2 失敗で停止');
+      expect(blockedQ5, isNot(failedQ5));
+    });
+
+    testWidgets('失敗したノードから、理由と次にできることへ行ける', (tester) async {
+      final selected = <String>[];
+      await _pumpPanel(
+        tester,
+        _stalled(
+          q2: QuestionStatus.failed,
+          errorCode: 'permanent',
+          lastError:
+              "gemini AI provider reported that the answer image is not "
+              "this question's answer (crop_not_the_answer)",
+        ),
+        onQuestionSelected: selected.add,
+      );
+
+      // 理由と次の一手が、この失敗に合っている -- 回答欄がずれているときに
+      // 「もう一度AIに任せる」と書いたら、同じ結果を待たせることになる。
+      final next = tester
+          .widget<Text>(find.byKey(const Key('dag-failure-next-q2')))
+          .data!;
+      expect(next, contains('回答欄'));
+      expect(next, isNot(contains('もう一度')));
+
+      // ノードそのものからも同じところへ行ける（クリックでもキーボードでも、
+      // 既存の設問選択と同じ経路）。
+      await tester.tap(find.byKey(const Key('dag-node-q2')));
+      await tester.pump();
+      expect(selected, ['q2']);
+    });
+
+    testWidgets('生の last_error は画面に出ない', (tester) async {
+      await _pumpPanel(
+        tester,
+        _stalled(
+          q2: QuestionStatus.failed,
+          errorCode: 'server_error',
+          lastError:
+              'gemini AI provider returned a malformed response '
+              '[vertex-ai/gemini-2.5-pro SchemaViolation, '
+              'https://aiplatform.googleapis.com 503]',
+        ),
+      );
+
+      final shown = _visibleText(tester).join('\n');
+      for (final fragment in [
+        'gemini',
+        'vertex-ai',
+        'SchemaViolation',
+        'https://',
+        '503',
+      ]) {
+        expect(shown, isNot(contains(fragment)), reason: '$fragment が漏れている');
+      }
+      // 黙ったのではない: 分類に応じた日本語は出ている。
+      expect(shown, contains('AIとの通信が最後まで通らず'));
+    });
+
+    testWidgets('答案ごと落ちても、ヘッダーが画面を食い尽くさない', (tester) async {
+      // provider が1つ落ちれば、その答案の設問は全部同じ理由で落ちる。設問
+      // ごとに告知を出すと、説明している当の図とその下のPDFを、ヘッダが
+      // 押しのけることになる。
+      final layout = buildDependencyDagLayout(
+        questions: [
+          for (var i = 1; i <= 8; i++)
+            DagQuestion(
+              id: 'q$i',
+              label: '$i',
+              status: QuestionStatus.failed,
+              errorCode: 'server_error',
+            ),
+        ],
+        edges: const [],
+        releasedQuestionIds: const {},
+      )!;
+      await _pumpPanel(tester, layout, size: const Size(700, 720));
+
+      final notices = find.byWidgetPredicate(
+        (w) => w.key.toString().contains('dag-failure-open-'),
+      );
+      expect(notices, findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('dag-failure-headline-q1')))
+            .data,
+        '問1・問2・問3・問4・問5 ほか3件 が失敗しました。',
+      );
+    });
+
+    testWidgets('要約の数字が何の数かを、ヘッダーが言える', (tester) async {
+      // 「完了 2」は何個かは言うが、何の2個かは言わない。5体のうち1体が
+      // まさにそこを指摘している (codex ambiguous-completion-count)。
+      await _pumpPanel(tester, _stalled(q2: QuestionStatus.failed));
+
+      final tooltip = tester.widget<Tooltip>(
+        find.ancestor(
+          of: find.byKey(const Key('dag-summary')),
+          matching: find.byType(Tooltip),
+        ),
+      );
+      expect(tooltip.message, contains('完了: AI処理が終わり、人を待っていないもの'));
+      expect(tooltip.message, contains('失敗: 人が対応するまで進まないもの'));
+      // 0件で要約から消えているバケツも、凡例には残る。「その数字は何の数か」
+      // は、今日の答えがゼロでも問われる。
+      expect(_summaryOf(tester), isNot(contains('要確認')));
+      expect(tooltip.message, contains('要確認: 人が確認するまで下流が進まないもの'));
+    });
+
+    testWidgets('失敗していない答案には、失敗の告知が出ない', (tester) async {
+      await _pumpPanel(tester, _stalled(q2: QuestionStatus.needsCheck));
+
+      expect(find.byKey(const Key('dag-failure-q2')), findsNothing);
+      expect(_summaryOf(tester), isNot(contains('失敗')));
+    });
+
+    testWidgets('狭幅・ダーク・キーボードのみでも壊れない', (tester) async {
+      final selected = <String>[];
+      // Issue #88 と同じ基準の狭幅。
+      await _pumpPanel(
+        tester,
+        _stalled(q2: QuestionStatus.failed, errorCode: 'timeout'),
+        size: const Size(700, 720),
+        brightness: Brightness.dark,
+        onQuestionSelected: selected.add,
+      );
+
+      expect(tester.takeException(), isNull);
+      // 色に依らない: アイコン・日本語の1文・名前のあるボタン。
+      expect(find.byIcon(QuestionStatus.failed.icon), findsWidgets);
+      expect(find.byKey(const Key('dag-failure-headline-q2')), findsOneWidget);
+
+      // キーボードだけで「問2 を開く」まで届く。
+      var reached = false;
+      for (var i = 0; i < 12 && !reached; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        reached = _focusIsInside(const Key('dag-failure-open-q2'));
+      }
+      expect(reached, isTrue, reason: 'Tab だけで「問2 を開く」に届かない');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(selected, ['q2']);
+    });
   });
 }
