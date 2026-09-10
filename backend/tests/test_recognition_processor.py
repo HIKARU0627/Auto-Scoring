@@ -116,16 +116,26 @@ async def test_high_confidence_result_is_usable_and_persisted(
     assert history[0].boxes[0].rect.x == pytest.approx(0.1)
 
 
-async def test_low_confidence_result_is_not_usable_but_still_persisted(
+async def test_one_unreadable_span_records_where_it_is_without_stopping_the_question(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
     provider: _ScriptedOCRProvider,
     processor: RecognitionJobProcessor,
 ) -> None:
+    """Issue #158. This reading used to come back ``usable=False``, because
+    the gate was the worst span's confidence and one span was unreadable.
+
+    What the reader gets instead is *which* span: the persisted boxes say
+    which part of the answer the reading is missing, and the row keeps the
+    worst span's confidence as a number to show. The question is not stopped
+    for it -- a longer answer contains more spans, so "one of them was
+    unreadable" is a fact about length, not about whether this answer was
+    read (docs/ocr-recognition-pipeline.md §9).
+    """
     _seed(session_factory, store)
     provider.script(
         OcrResult(
-            text="?",
+            text="?光",
             tokens=(
                 _token("?", 0.12, ConfidenceBand.LOW),
                 _token("光", 0.9, ConfidenceBand.HIGH, x=0.4),
@@ -138,10 +148,56 @@ async def test_low_confidence_result_is_not_usable_but_still_persisted(
     result = await processor.process(job)
 
     assert result.outcome is ProcessingOutcome.SUCCEEDED
-    assert result.usable is False  # worst-token confidence gates the whole question
+    assert result.usable is True
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         history = uow.recognitions.history("sub-1", "q-1")
+    # Display only, and no longer compared against anything.
     assert history[0].confidence == pytest.approx(0.12)
+    boxes = history[0].boxes
+    assert [box.unreadable for box in boxes] == [True, False]
+    assert boxes[0].rect.x == pytest.approx(0.1)  # where to look on the crop
+
+
+@pytest.mark.parametrize("spans", [1, 2, 3, 8, 20])
+async def test_the_same_handwriting_stays_usable_however_much_was_written(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+    spans: int,
+) -> None:
+    """The property, at the boundary that actually decides a question.
+
+    Every span is drawn from one fixed mixture of qualities, so a longer
+    reading here is a longer answer in the same hand. Under the old rule the
+    minimum fell with each extra draw and the question flipped to unusable at
+    the third span; nothing about the reading's *quality* changed at that
+    point. A single example cannot hold this down -- it is the shape of the
+    curve, not one point on it, that Issue #158 is about.
+    """
+    qualities = (
+        (0.97, ConfidenceBand.HIGH),
+        (0.85, ConfidenceBand.MEDIUM),
+        (0.62, ConfidenceBand.LOW),
+    )
+    _seed(session_factory, store)
+    provider.script(
+        OcrResult(
+            text="x" * spans,
+            tokens=tuple(
+                # Laid out left to right; `_token`'s own width is 0.2, so the
+                # last box has to start well inside the page.
+                _token("x", *qualities[index % len(qualities)], x=index * (0.7 / spans))
+                for index in range(spans)
+            ),
+            provider=provider.name,
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.usable is True
 
 
 async def test_needs_review_answer_image_skips_the_provider(
@@ -231,6 +287,65 @@ async def test_an_unreadable_reading_still_blocks_even_though_no_ocr_does_not(
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         # The row is what tells the two cases apart afterwards.
         assert len(uow.recognitions.history("sub-1", "q-1")) == 1
+
+
+async def test_a_reading_with_no_tokens_at_all_is_not_usable(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """The provider answered and returned nothing to read.
+
+    docs/ocr-recognition-pipeline.md §8.5 left this case stopping the
+    question deliberately -- it is "the OCR genuinely could not read this",
+    not "this host has no OCR" -- and Issue #158 did not loosen it: with no
+    tokens there is no readable span.
+    """
+    _seed(session_factory, store)
+    provider.script(OcrResult(text="", tokens=(), provider=provider.name))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is False
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert len(uow.recognitions.history("sub-1", "q-1")) == 1
+
+
+async def test_reprocessing_a_reading_with_nothing_readable_still_does_not_release_it(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """The crash-recovery path reads the verdict back off the persisted
+    spans, so those spans have to carry which ones were unreadable.
+
+    Without that, a reading nothing could be got out of would stop the
+    question when it was recognized and release it when the job was retried
+    after a crash -- the same reading, two answers.
+    """
+    _seed(session_factory, store)
+    provider.script(
+        OcrResult(
+            text="??",
+            tokens=(
+                _token("?", 0.12, ConfidenceBand.LOW),
+                _token("?", 0.20, ConfidenceBand.LOW, x=0.4),
+            ),
+            provider=provider.name,
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    first = await processor.process(job)
+    second = await processor.process(job)
+
+    assert first.usable is False
+    assert second.usable is False
+    assert provider.calls == [_IMAGE_BYTES]
 
 
 async def test_missing_question_id_fails_permanently_without_calling_the_provider(
@@ -331,6 +446,42 @@ async def test_timeout_never_carries_a_retry_after(
         assert uow.recognitions.history("sub-1", "q-1") == []
 
 
+async def test_reprocessing_recomputes_usable_from_the_persisted_spans(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """The crash-recovery path must answer the same question the fresh path
+    does (Issue #158).
+
+    The row here carries a low `RecognitionResult.confidence` -- the worst
+    span's -- but records a readable span next to the unreadable one. Reading
+    the outcome back off that number, as this path used to, would make the
+    same reading usable when it was recognized and unusable when the job was
+    retried after a crash.
+    """
+    _seed(session_factory, store)
+    provider.script(
+        OcrResult(
+            text="?光",
+            tokens=(
+                _token("?", 0.12, ConfidenceBand.LOW),
+                _token("光", 0.9, ConfidenceBand.HIGH, x=0.4),
+            ),
+            provider=provider.name,
+        )
+    )
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    first = await processor.process(job)
+    second = await processor.process(job)
+
+    assert first.usable is True
+    assert second.usable is True
+    assert provider.calls == [_IMAGE_BYTES]
+
+
 async def test_confidence_threshold_is_configurable(
     session_factory: sessionmaker[Session], store: LocalFileStore, provider: _ScriptedOCRProvider
 ) -> None:
@@ -345,7 +496,11 @@ async def test_confidence_threshold_is_configurable(
 
     result = await strict_processor.process(job)
 
-    assert result.usable is False  # 0.96 < the configured 0.99 threshold
+    # The reading's only span scores below the configured threshold, so
+    # nothing in it was readable. The threshold still comes from the single
+    # configured place (business rules §3.1 (C)); Issue #158 changed what it
+    # is compared against -- each span, not one aggregate for the answer.
+    assert result.usable is False
 
 
 async def test_bounding_box_at_the_page_edge_is_clamped_not_rejected(

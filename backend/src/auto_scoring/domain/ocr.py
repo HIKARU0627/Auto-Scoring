@@ -271,17 +271,105 @@ class OCRUnavailable(OCRProviderError):
     """
 
 
-def overall_confidence(result: OcrResult) -> float:
-    """One scalar confidence for ``result``, for `RecognitionResult.confidence`
-    and the needs-review threshold check (business-rules-and-evaluation-
-    data.md section 3 (C)).
+@dataclass(frozen=True)
+class UnreadableSpans:
+    """Which spans of one reading came back unreadable, and where they are.
 
-    The minimum of every token's confidence, not an average: one unreadable
-    span must be enough to flag the whole question for review even if every
-    other span was read cleanly (Issue #19 acceptance: "決定済みConfidence
-    閾値未満はneeds_reviewとし自動確定しない" -- an average could hide exactly
-    the low-confidence span this rule exists to catch). ``0.0`` when nothing
-    was recognized at all (no tokens), matching
+    This is what a gate may look at; a single aggregated confidence is not
+    (Issue #158). :func:`lowest_token_confidence` -- the minimum over every
+    token, which `RecognitionResult.confidence` used to be compared against a
+    threshold -- falls as a student writes more, because the minimum of more
+    draws from the same handwriting is lower. It therefore measures **how long
+    the answer is**, not whether it was read: on the 15 recorded readings of
+    2026-09-09 the readings with 5 tokens or fewer were all above the
+    threshold and the ones with 9 tokens or more were all below it, while a
+    correct 6/6 answer scored 0.422 and a wrong 0-point one 0.726
+    (docs/ocr-recognition-pipeline.md section 9).
+
+    ``indices`` are positions into ``OcrResult.tokens``, ascending, so the
+    caller can recover each unreadable span's own box and show a human
+    *where* the reading is missing. The count carries no threshold of its own:
+    it grows with length for exactly the same reason the minimum falls, so
+    comparing it against a number would rebuild the defect one level up
+    (section 9). Only :attr:`nothing_readable` -- "not one span of this crop
+    came back readable" -- is length-invariant, and that is the single fact
+    the recognition half of a job gates on.
+    """
+
+    token_count: int
+    indices: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.token_count < 0:
+            raise ValueError(f"token_count must not be negative, got {self.token_count!r}")
+        previous = -1
+        for index in self.indices:
+            if not previous < index < self.token_count:
+                raise ValueError(
+                    "indices must be ascending positions within token_count, "
+                    f"got {self.indices!r} for {self.token_count} tokens"
+                )
+            previous = index
+
+    @property
+    def count(self) -> int:
+        """How many spans could not be read."""
+        return len(self.indices)
+
+    @property
+    def readable_count(self) -> int:
+        return self.token_count - self.count
+
+    @property
+    def nothing_readable(self) -> bool:
+        """True when no span of this reading was readable -- including when
+        the provider returned no tokens at all.
+
+        Unchanged by adding more spans of the same quality, in either
+        direction: a reading that has one readable span keeps it however much
+        else is written, and a reading that has none cannot gain one by being
+        longer. That is the whole reason this, and not a score, is what
+        `auto_scoring.jobs.recognition_processor.RecognitionJobProcessor`
+        gates on.
+        """
+        return self.readable_count == 0
+
+
+def unreadable_spans(result: OcrResult, *, minimum_confidence: float) -> UnreadableSpans:
+    """The spans of ``result`` the provider scored below ``minimum_confidence``.
+
+    ``minimum_confidence`` is passed in rather than taken from
+    :data:`_MEDIUM_BAND_MINIMUM` or any other literal here: the one number a
+    decision may be made against is
+    `auto_scoring.jobs.recognition_settings.RecognitionSettings.
+    confidence_threshold`, read from the single configured place
+    (business-rules-and-evaluation-data.md section 3.1 (C)). The bands above
+    remain presentation-only, and `OcrResult.has_low_confidence` stays a
+    report rather than a gate.
+    """
+    return UnreadableSpans(
+        token_count=len(result.tokens),
+        indices=tuple(
+            index
+            for index, token in enumerate(result.tokens)
+            if token.confidence < minimum_confidence
+        ),
+    )
+
+
+def lowest_token_confidence(result: OcrResult) -> float:
+    """The confidence of the least-confident token. **Display only.**
+
+    Persisted as `RecognitionResult.confidence` and shown next to the reading
+    so a reviewer can see how sure the provider was about its worst span. It
+    is deliberately no longer compared against a threshold to decide anything
+    (Issue #158): being a minimum, it falls as the answer gets longer, so a
+    gate built on it stops long answers regardless of how well they were read
+    -- see :class:`UnreadableSpans`. It was called ``overall_confidence``,
+    which is what invited reading it as a verdict on the whole reading; the
+    name now says which single token it reports.
+
+    ``0.0`` when nothing was recognized at all (no tokens), matching
     ``auto_scoring.domain.ocr_metrics.evaluate_sample``'s own "failed" case.
     """
     if not result.tokens:

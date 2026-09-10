@@ -48,7 +48,7 @@ import hashlib
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -283,19 +283,34 @@ DEFAULT_ANSWER_TEXT = "光合成は葉緑体で行われ、水と二酸化炭素
 
 
 def ocr_result(*, text: str, confidence: float) -> OcrResult:
+    """A reading of one span. ``confidence`` is therefore the whole reading's."""
+    return ocr_result_of_spans([(text, confidence)])
+
+
+def ocr_result_of_spans(spans: Sequence[tuple[str, float]]) -> OcrResult:
+    """A reading made of several spans, each scored on its own.
+
+    Real readings look like this -- Document AI returns one token per word --
+    and it is the only shape in which "part of this answer could not be read"
+    can be scripted at all. Since Issue #158 that difference decides whether
+    the question stops: a reading with one unreadable span among readable
+    ones does not, one with nothing readable does.
+    """
+    width = 0.8 / len(spans)
     return OcrResult(
-        text=text,
-        tokens=(
+        text="".join(text for text, _ in spans),
+        tokens=tuple(
             OcrToken(
                 text=text,
-                bounding_box=BoundingBox(0.1, 0.1, 0.6, 0.1),
+                bounding_box=BoundingBox(0.1 + index * width, 0.1, width, 0.1),
                 confidence=confidence,
                 band=(
                     ConfidenceBand.HIGH
                     if confidence >= _CONFIDENCE_THRESHOLD
                     else ConfidenceBand.LOW
                 ),
-            ),
+            )
+            for index, (text, confidence) in enumerate(spans)
         ),
         provider="e2e-scripted-ocr",
     )
