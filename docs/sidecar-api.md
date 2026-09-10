@@ -87,7 +87,42 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 再現性を優先してコミットする。生成する JSON とマニフェストの改行も LF に固定する。
 差分が出た場合は `pnpm run openapi:generate` で再生成してコミットする。
 
-## 5. テスト
+## 5. 設定エンドポイントと、資格情報の見える範囲（Issue #96）
+
+`/settings/api-keys` は利用者自身の API キーを扱う。`GET` / `PUT {slot_id}` /
+`DELETE {slot_id}` / `POST {slot_id}/verify` の 4 本で、いずれも他の保護
+エンドポイントと同じく Bearer トークンを要求する。
+
+**どの応答にもキーは載らない。** 保存済みかどうか・どこから読んだか
+（`credential_store` / `environment` / `none`）・どのモデルを使うか・
+どこでキーを発行するかだけを返す。保存直後の応答にも載らない。画面が
+表示できない値は、スクリーンショットからも問い合わせのやり取りからも
+漏れない。
+
+**保存したキーは、その場でログ秘匿の対象に入る。** 起動時に組んだ
+`configuration_secrets` はプロセス開始時の設定しか知らないので、あとから
+入力されたキーは `api.secret_redaction.SecretRegistry` に足す。フィルタは
+レコードごとに registry を読むので、追加は即座に効く。
+
+### 5.1 実効 environment を重ねる場所
+
+サイドカーは起動時に、資格情報ストアの値を `os.environ` の**コピー**へ
+重ねた 1 つの dict を作り、4 つの provider ファクトリ（採点・配点抽出・
+回答欄検出・OCR）と取込の役割判定へ渡す
+（`adapters.credentials.api_keys.ApiKeySettings.effective_environment`）。
+
+**`os.environ` 自体は書き換えない。** 書き換えると、このプロセスが起こす
+子プロセスがそのキーを継承する。`codex app-server` transport は
+`subprocess.Popen(..., env=_minimal_environment())` で最小限の環境を明示的に
+組んで渡しており、そこへ OpenRouter のキーが混ざる理由は無い。コピーに
+重ねる方式なら、この性質が実装の副作用ではなく設計として保たれる
+（`test_sidecar.py::test_run_layers_a_stored_key_over_the_environment_without_writing_to_it`）。
+
+重ねる規則は環境ごとに優先順位が違う。API キーは資格情報ストアが勝ち、
+`AUTO_SCORING_AI_GRADING_TRANSPORT` は環境変数が勝つ。理由と全体像は
+[`windows-distribution.md`](./windows-distribution.md) §9.1。
+
+## 6. テスト
 
 | レイヤ  | テスト                                                                | 対象                                                                                                                                   |
 | ------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -97,5 +132,9 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 | Flutter | `app/test/sidecar_api_client_test.dart`（tag: `sidecar`）             | 実サイドカーを起動し health check・保護 API（正トークン 200 / 誤トークン 401）・未起動時 `unavailable`・材料の役割が wire 名で渡ること |
 | Flutter | `app/test/sidecar_supervisor_test.dart`                               | プロセス監督の状態遷移全部（`SidecarPlatform` を fake 化。時計も fake なので起動 timeout も一瞬で検証）                                |
 | Flutter | `app/test/sidecar_supervisor_integration_test.dart`（tag: `sidecar`） | 実サイドカーに対して動的ポート・handshake 削除・通常終了・crash からの再起動・二重起動拒否                                             |
+
+| Python | `backend/tests/test_credentials.py` | 資格情報ストアの読み書き、バックエンドが無い環境での縮退、実効 environment の重ね方、疎通確認の 5 通りの結果 |
+| Python | `backend/tests/test_api_key_settings.py` | 設定エンドポイント。値を返さないこと、保存したキーがログから消えること（変異で確認）、キー未設定でも採点以外が動くこと |
+| Flutter | `app/test/api_key_tab_test.dart` | 設定画面の「API キー」タブ。値を再表示しないこと、出どころの表示、疎通結果の出し分け、保存後の再起動導線 |
 
 `flutter test -x sidecar` で実サイドカー起動テストを除外できる（`uv` 不要の環境向け）。
