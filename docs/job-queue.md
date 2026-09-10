@@ -121,6 +121,54 @@ Submission・同じQuestionのJobを二重に作ろうとすると`IntegrityErro
 `ErrorCategory`を受け取るだけ。cancelは「エラー」ではないため`ErrorCategory`
 に含めない（`error_code`は`NULL`のまま、`last_error`に理由を残す）。
 
+### 429は他の失敗と区別する: 待ち方も上限も別にする（Issue #153）
+
+実機再検証 #4 で429を2回踏み、英語(2)の採点は**3回の再試行を5秒以内に使い切って**
+人に回った。そのあと画面から再判定すると成功している。**待てば通るものを、
+待たずに諦めていた。**旧既定（`initial_backoff_seconds=1.0`・`max_attempts=3`）
+では3回とも同じ混雑に当たるだけで、待ち時間そのものが短すぎた。
+
+`ErrorCategory.RATE_LIMITED`はtimeout/5xxと同じbackoff・同じ`max_attempts`には
+もう乗らない。
+
+- **待ち方。** `Retry-After`ヘッダがあれば秒数形式・HTTP-date形式どちらも必ず
+  尊重する（`adapters.ai_grading._http.parse_retry_after_seconds` /
+  `adapters.ocr.document_ai_provider._parse_retry_after_seconds`。ポートが2つ
+  あるため意図的に重複させている -- 既存の`CONVERTIBLE_HTTP_ERRORS`重複と同じ
+  理由）。無い・壊れている・負値・過去の日付なら`None`にして指数backoffへ
+  フォールバックする(`RetryPolicy.rate_limited_delay_seconds`)。無ければ
+  既定 初期5秒・×2・上限60秒。ヘッダから読んだ値はそのまま使い、jitterを
+  掛けない(providerが指定した値であり、こちらの推測ではないため)。ヘッダが無い
+  ときだけ"equal jitter"(半分固定+半分だけ`[0, 1)`のjitterを掛ける)を使う --
+  jitterの乱数は`domain.retry_policy.RetryPolicy`が生成せず
+  `jobs.queue.JobQueueService`が注入する(`random_source`引数、既定
+  `random.random`)。`RetryPolicy`はこれまでどおりclock・randomness・I/Oを
+  一切持たない純粋な計算のまま。
+- **再試行の上限。** 回数(`max_attempts`)ではなく経過時間で決める。
+  `RetryPolicy.rate_limited_budget_seconds`(既定120秒)に対し、**ジッター無しの
+  名目backoff累積**が達するまで再試行し続ける(名目値は5,10,20,40,60,60...と
+  積み上がり、120秒に達するのは6回目の失敗時点)。ジッターや実際に尊重した
+  `Retry-After`の値そのものは累積計算に使わない -- どちらも非決定的/provider
+  依存で、`Job`に新しい列を足さずに(この波では`db/`・`api/`はIssue #142が
+  schemaを持つため変更しない)再起動をまたいで再現できる唯一の計算がこの
+  名目値だからである。ただし**単発の`Retry-After`が予算全体(120秒)を超える
+  場合は、待たずに直ちに諦める**(`RetryPolicy.should_retry`)。待てば通る
+  かもしれない範囲を超えて1回の指示に丸ごと従うのは、この機構の目的
+  (人に渡るまでの時間を守る)に反するため。
+- **諦めたときの見え方。** 既存の`ErrorCategory.RATE_LIMITED`と`Job.last_error`
+  の失敗メッセージがそのまま「AIプロバイダの混雑(429)」であることを表す --
+  新しい語彙は増やしていない。
+- **`Retry-After`をキューまで運ぶ経路。** `ProviderRateLimitedError`/
+  `OCRRateLimitedError`(いずれも既存の例外階層)に`retry_after_seconds`を
+  追加し、`ProcessingResult`にも同名のoptionalフィールドを追加した(いずれも
+  default `None`の追加のみで既存呼び出し側に影響しない)。`domain/ai_provider.py`・
+  `domain/ocr.py`・`domain/job_execution.py`はこのIssueの当初のownership外
+  だったが、この経路を通す以外の設計が無かったため、着手前にCommanderへ確認
+  の上でownershipへ追加してもらった。
+- **意図的に変えていないもの。** timeout/5xxの`max_attempts`・backoff・
+  `RetryPolicy.delay_seconds`は一切変更していない。`Job.max_attempts`の永続化
+  列・意味も変えていない(RATE_LIMITEDはこの列を見なくなっただけ)。
+
 ### 何もしなかったJobは、そう書く: `ProcessingResult.skipped_reason`（#164）
 
 `JobProcessor`が「やることが無い」と判断して終わる経路がある。回答欄が無いので
@@ -177,7 +225,8 @@ worker 4本が同時に飛ぶ状態は誰も通していない。必要なら別
 `max_attempts=3`（既存の
 `Job.max_attempts`既定と一致）、指数backoff
 （`initial_backoff_seconds=1.0`、`backoff_multiplier=2.0`、
-`max_backoff_seconds=30.0`）。
+`max_backoff_seconds=30.0`）。**この段落の`max_attempts`/backoffはtimeout・5xx
+専用。**`ErrorCategory.RATE_LIMITED`は別の設定を持つ（[Issue #153](https://github.com/HIKARU0627/Auto-Scoring/issues/153)、後述「429は他の失敗と区別する」）。
 
 Confidence閾値（business-rules-and-evaluation-data.md §3 (C)。固定値を置かず
 設定値のまま運用調整すると確定、既定0.80）は`QueueSettings`に含めない -- 本Issoueのキューは`usable`という既に判定済みの
@@ -335,15 +384,35 @@ OpenAPIスキーマも生成クライアントも変わらない
 ## 検証
 
 - `backend/tests/test_retry_policy.py`: `ErrorCategory`の分類、指数backoffの
-  決定的な計算（fakeを使わず純粋関数）。
+  決定的な計算（fakeを使わず純粋関数）。Issue #153で
+  `rate_limited_delay_seconds`/`should_retry`のRATE_LIMITED分岐（`max_attempts`
+  を無視すること、名目累積が予算を超えたら諦めること、`Retry-After`が予算を
+  超えたら即座に諦めること、jitterが`[0,1)`範囲外なら拒否すること、capが
+  jitter適用前にかかること）を追加。
 - `backend/tests/test_job_scheduling.py`: `evaluate_readiness`の分岐・合流・
   独立・複数ページDAGでの決定的なunit test（DBなし）。
 - `backend/tests/test_job_queue.py`: `FakeClock`/`FakeJobProcessor`を注入した
-  `JobQueueService`のasync test -- 並列数の上限、429/timeoutでのretryと
-  backoff、最大retry回数超過後のFAILED終端、cancel（QUEUED/RUNNING両方）、
-  crashからの再起動回復（RUNNINGのまま残ったJobをQUEUEDへ戻し、重複せず1回
-  だけ完了させる）、A→BとCが独立なDAGでB がAより前に開始しないこと、分岐/
-  合流DAGでの解放順。
+  `JobQueueService`のasync test -- 並列数の上限、timeoutでのretryとbackoff、
+  最大retry回数超過後のFAILED終端、cancel（QUEUED/RUNNING両方）、crashからの
+  再起動回復（RUNNINGのまま残ったJobをQUEUEDへ戻し、重複せず1回だけ完了させ
+  る）、A→BとCが独立なDAGでB がAより前に開始しないこと、分岐/合流DAGでの解放
+  順。Issue #153で追加: RATE_LIMITEDが`max_attempts=3`を超えて5秒を優に超える
+  累積待ち時間の後まで再試行し続けること（直す前の実装に対して赤くなることを
+  確認済み -- 3回・3.0秒で`FAILED`していた）、予算(120秒)を使い切ったら
+  `RATE_LIMITED`のまま諦めること、`ProcessingResult.retry_after_seconds`が
+  実際のsleep時間として使われること（`random_source`にjitterを寄せても
+  上書きされないことで確認）、単発の`Retry-After`が予算を超えたら1回も
+  待たずに諦めること。
+- `backend/tests/test_job_execution.py`（新規、Issue #153）:
+  `ProcessingResult.retry_after_seconds`はFAILED/RATE_LIMITED以外に付けると
+  拒否されることのunit test。
+- `backend/tests/test_http_retry_classification.py`（新規、Issue #153）:
+  `adapters.ai_grading._http.parse_retry_after_seconds`の秒数形式/HTTP-date
+  形式/欠落/不正値/過去日時のunit testと、`raise_classified_unavailable`が
+  429のときだけ`ProviderRateLimitedError.retry_after_seconds`へ運ぶこと
+  （5xx・timeout・他の4xxには一切現れないことも確認）。
+  `adapters.ocr.document_ai_provider`側の同等の3ケースは
+  `test_document_ai_provider.py`に追加した。
 - `backend/tests/test_jobs_api.py`: 上記APIをTestClient経由で検証（実SQLite）。
 - 起票を呼ぶ側（Issue #80）は Flutter 側にある。`app/test/grading_kickoff_test.dart`
   （409を2種類に分けず、404は再試行を勧めない文言）、
