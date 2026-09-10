@@ -25,8 +25,8 @@ from auto_scoring.domain.answer_area_detection import (
     UnassignedAnswerAreaError,
     ensure_answer_areas_confirmable,
     missing_question_numbers,
-    reading_order_conflicts,
     parse_answer_area_detection,
+    reading_order_conflicts,
     regions_from_detection,
     unassigned_answer_area_ids,
 )
