@@ -11,15 +11,17 @@ GitHub Issue [#202](https://github.com/HIKARU0627/Auto-Scoring/issues/202)（親
 
 ## 結論（先に）
 
-- **案 B（pypdfium2 ビットマップ）を採用**。案 A も 9 fixture × 5 点 = 45 測点すべて
-  PASS（worst 0.0002、viewport Δ 0 pt）だが、案 B は座標契約と同一 pdfium エンジンが
-  「表示するページ」を定義するため二重解釈リスクがない。40 ページ転送 ≈ 0.36 MiB、
-  scale 2.0 再描画中央値 21 ms/ページも許容範囲。
+- **案 B（pypdfium2 ビットマップ）を採用**。理由は実測精度の差ではない —
+  worst 往復誤差 0.0002（案 A）と 0.0005（案 B）はどちらも許容誤差 0.004 の
+  1/8 以下で、45 測点は案 A と案 B を精度で分離していない。採用理由は
+  [§ 決定](#決定) の対比（観測されなかった／構造的に起こりえない）による。
+  40 ページ転送 ≈ 0.36 MiB、scale 2.0 再描画中央値 21 ms/ページも許容範囲。
 - 往復許容誤差 **0.004**（PoC 3 と同じ）。分母: **9 fixtures ×
   5 点 = 45 測点**。
-- 案 A worst 往復誤差: **0.0002**
-  （viewport 最大 Δ: 0.0000 pt）。
+- 案 A worst 往復誤差: **0.0002**（viewport 最大 Δ: 0.0000 pt）。
+  **案 A も全 45 測点 PASS。**
 - 案 B worst 往復誤差: **0.0005**（pdfium、PoC 3 再確認）。
+- **残存リスク**: 実答案 PDF は未測定。詳細は [§ 残存リスク](#残存リスク)。
 
 ## repro command
 
@@ -77,15 +79,34 @@ uv run python ../desktop-poc/issue_202_pdf_coordinates/report.py
 
 **案 B（pypdfium2 ビットマップ）を採用**。
 
-案 A も合成 fixture 45 測点すべて許容内（往復 worst 0.0002、viewport 完全一致）だが、
-採用理由は実測による座標精度ではなく **エンジン単一化**: サイドカーの
-`PdfiumPypdfEngine` が座標変換（`page_geometry`）と raster 化の双方で pdfium を使うため、
-将来の pdf.js アップデートや Electron renderer 差分で契約がずれる余地を残さない。
-性能面（40 ページ ≈ 0.36 MiB、scale 2.0 で 21 ms/ページ）
-も許容可能。pdf.js を product root に足す必要もない。
+案 A も合成 fixture 45 測点すべて許容内（往復 worst 0.0002、viewport 完全一致）であり、
+実測は案 A と案 B を精度で分離していない。worst 往復誤差 0.0002 と 0.0005 の差は
+雑音であって信号ではない — 実測が示したのは「案 A が座標契約を壊すという懸念の
+否定」であって、案 B の優位ではない。
+
+採用理由は次の対比にある。案 A は「9 つの合成 fixture では食い違いが観測されなかった」。
+案 B は「食い違いが構造的に起こりえない」。同じ pdfium が raster 化と座標変換の
+両方を担うので、pdf.js の更新でも renderer の差分でも契約はずれない。サイドカーの
+`PdfiumPypdfEngine` が座標変換（`page_geometry`）と raster 化の双方で pdfium を使う
+ため、将来の pdf.js アップデートや Electron renderer 差分で契約がずれる余地を残さ
+ない。性能面（40 ページ ≈ 0.36 MiB、scale 2.0 で 21 ms/ページ）も許容可能。pdf.js を
+product root に足す必要もない。
 
 案 B で描画 API（`GET /pages/{n}/render` 等）が要る場合、**本 Issue では実装しない**。
-必要な API 形状は Phase 2 の `desktop/` 土台 Issue で起票する。
+OpenAPI の変更は最高責任者の承認事項であり、必要な API 形状は別 Issue で起票する。
+
+## 残存リスク
+
+- **実答案 PDF では未測定。** fixture は合成 PDF 9 種のみ（PoC 3 と同じ 9 種、上記
+  「期待値」参照）。実答案 PDF 特有の構造（スキャン由来の注釈レイヤ、UserUnit 等）で
+  座標契約が同じ許容誤差内に収まるかは本 PoC の対象外。
+- **実答案 PDF での一致は最高責任者の実機検証 Issue #6 で測る。** 本 worktree・本
+  PoC では実データを扱わない。
+- **回答欄エディタと採点レビューのオーバーレイ（人が座標を置く・確定する画面）は、
+  Issue #6 の測定結果が出るまで着手しない。** 座標のずれが実害になるのはこれらの
+  画面からであり、そこを通すと以降の画面をすべて未検証の前提の上に積むことになる
+  ため。Issue #122 は合成では出ず実データで出たずれだった — 合成 fixture の PASS が
+  実データでも成立する保証にはならない。
 
 ## 撤去または昇格の条件
 
