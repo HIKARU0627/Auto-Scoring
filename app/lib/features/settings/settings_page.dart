@@ -6,6 +6,7 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/material_role_labels.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
 import 'package:auto_scoring_app/features/settings/api_key_tab.dart';
 
 /// 設定画面 (Issue #101, Issue #96).
@@ -144,6 +145,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       length: 2,
       child: Scaffold(
         appBar: AppBar(
+          leading: const BackOrHomeButton(),
           title: const Text('設定'),
           bottom: const TabBar(
             tabs: [

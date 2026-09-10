@@ -12,6 +12,7 @@ import 'package:auto_scoring_app/core/intake_attribution.dart';
 import 'package:auto_scoring_app/core/intake_review.dart';
 import 'package:auto_scoring_app/core/material_role_labels.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
 
 /// 資料取込画面 — the single flow that replaced テスト登録 and 答案取込
 /// (Issue #101).
@@ -797,6 +798,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const BackOrHomeButton(),
         title: const Text('資料の取込'),
         actions: [
           IconButton(

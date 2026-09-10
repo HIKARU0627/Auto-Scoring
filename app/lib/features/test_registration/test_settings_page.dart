@@ -13,6 +13,7 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:auto_scoring_app/core/region_edit_validation.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
 import 'package:auto_scoring_app/features/test_registration/answer_area_editor.dart';
 
 /// テスト設定画面 (simplified-design-specification.md §16.3, Issue #16).
@@ -696,7 +697,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_test?.name ?? 'テスト設定')),
+      appBar: AppBar(
+        leading: const BackOrHomeButton(),
+        title: Text(_test?.name ?? 'テスト設定'),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(

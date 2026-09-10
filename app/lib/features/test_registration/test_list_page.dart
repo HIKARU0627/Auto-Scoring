@@ -7,6 +7,7 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
 
 /// テスト一覧画面 (Issue #16).
 ///
@@ -85,7 +86,10 @@ class _TestListPageState extends ConsumerState<TestListPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('テスト一覧')),
+      appBar: AppBar(
+        leading: const BackOrHomeButton(),
+        title: const Text('テスト一覧'),
+      ),
       body: RefreshIndicator(
         onRefresh: _reload,
         child: FutureBuilder<List<TestResponse>>(
