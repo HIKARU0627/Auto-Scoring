@@ -1,0 +1,12 @@
+{
+  "name": "poc-7-sidecar-lifecycle",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "probe": "node src/probe_runner.mjs",
+    "probe:orphans": "node src/orphan_simulation.mjs",
+    "probe:flake": "node src/flaky_reproduction.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
