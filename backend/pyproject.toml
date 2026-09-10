@@ -19,6 +19,16 @@ dependencies = [
     "keyring>=25.7.0",
     "numpy>=2.0",
     "opencv-python-headless>=4.10,<5.0",
+    # 添削資料 Excel catalogues of 誤答パターン → 減点量 → 赤入れ案 (Issue
+    # #106, `adapters/excel_error_catalog.py`). The real material is 6 `.xls`
+    # and 1 `.xlsx`, which are two unrelated formats: the standard library
+    # reads neither (`zipfile` opens an `.xlsx` container but not
+    # SpreadsheetML; nothing in it touches `.xls`'s OLE2/BIFF binary), and no
+    # declared dependency does either. openpyxl is the `.xlsx` half and
+    # refuses `.xls` by design; xlrd 2.x is the `.xls` half and refuses
+    # `.xlsx`. Neither replaces the other, and dropping `.xls` would drop 6 of
+    # the 7 files.
+    "openpyxl>=3.1,<4.0",
     "pydantic>=2.9,<3.0",
     "pypdf>=6.16",
     "pypdfium2>=5.13",
@@ -28,6 +38,8 @@ dependencies = [
     # license issue, unlike PyMuPDF -- docs/poc-3-pdf-coordinates.md).
     "reportlab>=4.2,<5.0",
     "sqlalchemy>=2.0,<3.0",
+    # See the openpyxl note above -- the `.xls` half of the same pair.
+    "xlrd>=2.0,<3.0",
 ]
 
 [project.scripts]
@@ -78,7 +90,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # typos for their ASCII lookalikes. RUF001-003 flags them as confusable by
 # default, and the ASCII characters it suggests are the wrong glyphs for text
 # set in Japanese.
-allowed-confusables = ["×", "＿", "（", "）"]
+# Also 〇: one of the ◎/〇/△ rating symbols the real 添削資料 print in their
+# 重要度/頻度 columns (Issue #106). Like the four above it is the glyph the
+# material actually uses, not a typo for the Latin "O" ruff suggests.
+allowed-confusables = ["×", "＿", "（", "）", "〇"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's parameter-default idiom (`file: UploadFile = File(...)`) intentionally
@@ -106,6 +121,13 @@ ignore_missing_imports = true
 # reportlab ships no inline types; pin the boundary here (only
 # adapters/pdf/pdfium_pypdf_engine.py imports it).
 module = ["reportlab.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Neither Excel library ships a py.typed marker; pin the boundary here (only
+# adapters/excel_error_catalog.py imports them, and it hands the domain plain
+# strings, so nothing untyped travels further than that module).
+module = ["openpyxl.*", "xlrd.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
