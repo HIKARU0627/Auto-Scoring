@@ -348,7 +348,13 @@ void main() {
 
     // A proposal arrived -- and the batch is *still* unimportable, which is
     // the whole point. Being right is not what makes it safe.
-    expect(find.byKey(const Key('intake-unconfirmed-notice')), findsOneWidget);
+    // 取り込めない理由は `DisabledActionReason` が `ActionRequirement` の id で
+    // 出す。画面が自分の文言を持たなくなったので、キーもそちらへ移った
+    // (Issue #88)。
+    expect(
+      find.byKey(const Key('disabled-reason-intake-proposal-unconfirmed')),
+      findsOneWidget,
+    );
     expect(
       tester
           .widget<FilledButton>(find.byKey(const Key('intake-import')))
@@ -1133,7 +1139,7 @@ void main() {
       expect(classifyCalls, 1);
       // The cached answer arrives as a proposal that still needs confirming.
       expect(
-        find.byKey(const Key('intake-unconfirmed-notice')),
+        find.byKey(const Key('disabled-reason-intake-proposal-unconfirmed')),
         findsOneWidget,
       );
       await tester.tap(find.byKey(const Key('intake-confirm-all')));

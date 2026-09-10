@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/action_requirements.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/material_role_labels.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
+import 'package:auto_scoring_app/core/widgets/disabled_action_reason.dart';
 import 'package:auto_scoring_app/features/settings/api_key_tab.dart';
 
 /// 設定画面 (Issue #101, Issue #96).
@@ -171,6 +173,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       return const Center(child: Text('取込の型がありません。'));
     }
     final template = _templates[_selected];
+    // 無効にしている条件と、無効の理由は同じ1つの計算から出す (Issue #88)。
+    final saving = whileRunningRequirements(running: _saving);
     // The list scrolls; the cost field and the save button do not. A save
     // action that has to be scrolled to is a save action people forget to
     // press, and the rule list grows with the template.
@@ -208,7 +212,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   const SizedBox(width: AppSpacing.md),
                   OutlinedButton.icon(
                     key: const Key('settings-add-template'),
-                    onPressed: _saving ? null : _addTemplate,
+                    onPressed: saving.isEmpty ? _addTemplate : null,
                     icon: const Icon(Icons.add),
                     label: const Text('型を追加'),
                   ),
@@ -273,10 +277,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               const SizedBox(height: AppSpacing.sm),
               FilledButton.icon(
                 key: const Key('settings-save'),
-                onPressed: _saving ? null : _save,
+                onPressed: saving.isEmpty ? _save : null,
                 icon: const Icon(Icons.save),
                 label: const Text('保存する'),
               ),
+              // 保存中、この画面には進捗表示が無い。灰色のボタンだけが残って
+              // 「壊れた」と読める状態だったので、理由を出す (Issue #88)。
+              // 「型を追加」も同じ条件で無効になるので、同じ1文で足りる。
+              DisabledActionReason(requirements: saving),
             ],
           ),
         ),
