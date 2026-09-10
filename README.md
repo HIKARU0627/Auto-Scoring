@@ -148,16 +148,16 @@ The same gates run as git hooks (`.githooks/`) and in GitHub Actions on
 Specification and technology docs are written in Japanese; the operational docs
 below are in English.
 
-| Document                                                                        | Contents                                                  |
-| ------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| [simplified-design-specification.md](./docs/simplified-design-specification.md) | The specification of record (Japanese)                    |
-| [technology-stack.md](./docs/technology-stack.md)                               | Technology decisions and rejected alternatives (Japanese) |
-| [sidecar-api.md](./docs/sidecar-api.md)                                         | Handshake, auth, OpenAPI → Dart generation                |
-| [data-model-and-local-storage.md](./docs/data-model-and-local-storage.md)       | Entities, SQLite, `app-data/` layout                      |
-| [windows-distribution.md](./docs/windows-distribution.md)                       | Packaging, sidecar lifecycle, recovery, signing           |
-| [mvp-acceptance.md](./docs/mvp-acceptance.md)                                   | §31 implementation items mapped to the tests proving them |
-| [quality-gates.md](./docs/quality-gates.md)                                     | Gates, git hooks, CI                                      |
-| [ade-setup.md](./docs/ade-setup.md)                                             | Issue → worktree → PR operations                          |
+| Document                                                                        | Contents                                                   |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| [simplified-design-specification.md](./docs/simplified-design-specification.md) | The specification of record (Japanese)                     |
+| [technology-stack.md](./docs/technology-stack.md)                               | Technology decisions and rejected alternatives (Japanese)  |
+| [sidecar-api.md](./docs/sidecar-api.md)                                         | Handshake, auth, OpenAPI → Dart generation                 |
+| [data-model-and-local-storage.md](./docs/data-model-and-local-storage.md)       | Entities, SQLite, `app-data/` layout                       |
+| [windows-distribution.md](./docs/windows-distribution.md)                       | Packaging, sidecar lifecycle, recovery, signing            |
+| [mvp-acceptance.md](./docs/mvp-acceptance.md)                                   | §31 implementation items mapped to the tests proving them  |
+| [quality-gates.md](./docs/quality-gates.md)                                     | Gates, git hooks, CI                                       |
+| [agent-orchestration.md](./docs/agent-orchestration.md)                         | Running several agents in parallel: roles, units, recovery |
 
 The full index, including the PoC records (Japanese handwriting OCR, AI grading,
 PDF coordinates, multi-layout profiles), is [`docs/README.md`](./docs/README.md).
@@ -176,8 +176,10 @@ one shared contract:
 - The `review-ready` skill takes finished work to a reviewable state —
   readability pass → `pnpm run check` → atomic commits → push → PR change
   summary. Merging stays a human step.
-- One issue → one worktree → one branch → one PR
-  ([`docs/ade-setup.md`](./docs/ade-setup.md)).
+- Work is coordinated through Orca Orchestration: one issue = one task = one
+  active dispatch = one worktree = one branch = one PR, with ownership and
+  completion held in orchestration state rather than in a conversation
+  ([`docs/agent-orchestration.md`](./docs/agent-orchestration.md)).
 - Agent commits and pushes are attributed to a dedicated GitHub App bot rather
   than a personal account
   ([`docs/ai-agent-git-attribution.md`](./docs/ai-agent-git-attribution.md)).

@@ -4,7 +4,8 @@ Windows 上の Orca クライアントから、別 PC（Ubuntu）で動く Orca 
 開発するための構築・運用手順。Windows 側のメモリ消費を下げることが目的で、
 Auto-Scoring アプリの機能とは独立したインフラ設定である（GitHub Issue #47）。
 
-Orca 自体の運用フロー（Issue → worktree → PR）は [ade-setup.md](./ade-setup.md)、
+Orca 自体の運用フロー（役割・Task単位・完了判定）は
+[agent-orchestration.md](./agent-orchestration.md)、
 品質 gate は [quality-gates.md](./quality-gates.md) が正本。本書はその実行場所を
 リモートへ移すための追加手順だけを扱う。
 
@@ -434,7 +435,7 @@ MainPID は `orca-serve-runner` 自身（bash）で、`orca-ide` はその子。
    秘密鍵はリポジトリに置かない（`AGENTS.md`「Security」、
    [ai-agent-git-attribution.md](./ai-agent-git-attribution.md)）。
 4. **開発ツールチェーン** — Ubuntu 側に `pwsh` / `uv` / `flutter` / `pnpm` が無い。
-   [ade-setup.md](./ade-setup.md)「必要環境」の導入が必要。Node.js は v18.19.1 で、
+   [agent-orchestration.md](./agent-orchestration.md) §7.1「必要環境」の導入が必要。Node.js は v18.19.1 で、
    `package.json` の `engines.node >=24.14.0` に満たないため更新も要る。
    **ただしツールを揃えても `pnpm run check` は Ubuntu では完走しない**（§8）。
    3・4 が終わるまで、リモートランタイムで扱えるのは Auto-Scoring 以外のリポジトリに限る。

@@ -13,12 +13,48 @@
   `docs/` — `docs/simplified-design-specification.md` and
   `docs/technology-stack.md`. Implementation decisions and operational
   procedures live in `docs/`.
-- One GitHub Issue → one worktree → one branch → one PR, all for a single change
-  of purpose. Do not mix unrelated changes; split anything out of scope into its
-  own Issue.
+- One GitHub Issue is one change of purpose. Do not mix unrelated changes; split
+  anything out of scope into its own Issue. How that maps onto worktrees,
+  branches, and PRs is «Roles and work units» below.
 - If a spec is missing, do not decide it in code alone. Record the decision or
   the open question in the relevant doc first. When behaviour, configuration, or
   operations change, update the related docs in the same PR.
+
+## Roles and work units
+
+Settle your role before anything else. Getting it wrong means either taking over
+someone else's task or waiting on work nobody is doing.
+
+| Situation                                                                     | Role       | Do this                                                                    |
+| ----------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------- |
+| Your prompt carries an injected preamble with Task and Dispatch IDs           | Worker     | The preamble is authoritative, plus «Worker rules» below                   |
+| A human asked you to run several Issues in parallel, supervise, or coordinate | Commander  | `docs/agent-orchestration.md` §3                                           |
+| A human handed you one Issue directly — no preamble, no request to supervise  | Solo agent | Work that Issue. Create no Run/Task/Dispatch and send no lifecycle message |
+
+```text
+1 GitHub Issue = 1 Orca Task = 1 active Dispatch = 1 worktree = 1 branch = 1 PR
+```
+
+Ownership and completion live in Orca's orchestration state, not in a
+conversation. An agent going idle is not a completed task, and a `worker_done`
+is a claim to be verified, not a verdict. Orca's CLI flags change with the app:
+run `orca skills get orchestration --full` before mutating orchestration state
+instead of writing commands from memory. Repository-specific policy — which
+files actually collide here, how to pick an agent, what a task spec must
+contain, how to recover — is in
+[`docs/agent-orchestration.md`](./docs/agent-orchestration.md).
+
+### Worker rules
+
+- Do only the assigned task. Carve anything out of scope into its own Issue.
+- Ask a blocking question through the preamble's `ask` command. A local prompt
+  the coordinator cannot see stalls the whole run.
+- Tell the Commander before changing anything shared across tasks — the OpenAPI
+  schema, `app/lib/core/`, or a spec document under `docs/`.
+- Send `worker_done` exactly once per dispatch, on failure as well as success,
+  carrying both IDs, an explicit outcome, a short summary, and any gate you could
+  not run with the reason. Never leave a failure implied by prose alone.
+- After `worker_done`, end the turn and idle. Do not pick up new work yourself.
 
 ## Architecture
 
@@ -54,6 +90,9 @@
   needs the Flutter SDK (`app/.fvmrc`) and `uv` on PATH; restore deps with
   `pnpm run bootstrap` (or `flutter pub get` in `app/` and `uv sync --locked`
   in `backend/`). See `docs/quality-gates.md`.
+- `build:app` is `flutter build windows --debug` and cannot pass on Linux
+  (`docs/orca-remote-environment.md` §8). Run every gate you can, and report the
+  ones you could not run with the reason rather than claiming a full green.
 - UI changes: check desktop and mobile, keyboard, focus, and non-colour-dependent
   states. Data/schema changes: include migration, constraints, indexes, a
   recovery procedure, and integration tests in the same PR.
