@@ -189,7 +189,13 @@ jobs:
       # Python. `--filter` keeps this to `desktop/`'s own dependency tree, the
       # mirror image of the app/backend jobs skipping the Electron binary.
       - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile --filter @auto-scoring/desktop
+        # Root package carries openapi-typescript (TS 6) for `openapi:check:ts`;
+        # desktop carries the runtime `openapi-fetch` client.
+        run: pnpm install --frozen-lockfile --filter auto-scoring --filter @auto-scoring/desktop
+      - name: TypeScript OpenAPI contract
+        # Regenerates desktop/src/renderer/api/generated from the committed
+        # schema and fails on drift. No uv/dart/Java -- reads openapi.json only.
+        run: pnpm openapi:check:ts
       - name: Typecheck
         run: pnpm typecheck:desktop
       - name: Test
