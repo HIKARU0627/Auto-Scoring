@@ -26,12 +26,14 @@ from auto_scoring.adapters.answer_area_detection._prompt import (
 from auto_scoring.domain.answer_area_detection import (
     MAX_NOTE_CHARS,
     UNASSIGNED_QUESTION_LABEL,
+    AnswerAreaDetectionError,
     AnswerAreaDetectionOutput,
     AnswerAreaDetectionRequest,
     parse_answer_area_detection,
     question_number_choices,
 )
 from auto_scoring.domain.answer_area_snapping import PageRuling
+from auto_scoring.domain.profile import NormalizedBBox
 
 _NUMBERS = ("Q1", "Q2", "Q3")
 
@@ -212,3 +214,99 @@ def _keywords(node: object) -> set[str]:
         for item in node:
             found |= _keywords(item)
     return found
+
+
+class TestMeasuredBoxesInThePrompt:
+    """Issue #164's first half, in the prompt.
+
+    The pattern is the one this module already documents for the question
+    number and for the ruling: state it where it can be read, enforce it
+    where it can be enforced. What is new is that offering *both* lists at
+    once measurably makes the answer worse, which is why the ruling section
+    now stands aside.
+    """
+
+    def _request(
+        self,
+        *,
+        pages: int = 1,
+        boxes: tuple[tuple[NormalizedBBox, ...], ...] = (),
+        rulings: tuple[PageRuling, ...] = (),
+    ) -> AnswerAreaDetectionRequest:
+        return AnswerAreaDetectionRequest(
+            page_images=tuple(b"png" for _ in range(pages)),
+            question_numbers=_NUMBERS,
+            page_boxes=boxes,
+            page_rulings=rulings,
+        )
+
+    def test_the_measured_boxes_are_listed_with_their_indexes(self) -> None:
+        content = build_answer_area_user_content(
+            self._request(boxes=((NormalizedBBox(x0=0.81, y0=0.25, x1=0.86, y1=0.48),),))
+        )
+
+        assert "box 0" in content
+        assert "0.8100" in content
+
+    def test_a_page_with_no_measured_box_is_listed_as_such(self) -> None:
+        """Left out, "this page has no printed box" would read as an
+        oversight -- the same reason the ruling section lists an unruled
+        page."""
+        content = build_answer_area_user_content(
+            self._request(
+                pages=2,
+                boxes=((NormalizedBBox(x0=0.1, y0=0.2, x1=0.3, y1=0.4),), ()),
+            )
+        )
+
+        assert "no printed box measured" in content
+
+    def test_the_ruling_stands_aside_for_a_page_whose_boxes_were_measured(self) -> None:
+        """Measured, and the reason this is not just tidiness: with both
+        lists in front of it the model went back to assembling a rectangle
+        out of line numbers -- on one subject it answered with a rectangle
+        covering the blank half of the page for a question whose box was in
+        the list it had just been given. Three runs of the real material
+        with the ruling withheld put that subject's boxes exactly on the
+        printed ones every time.
+        """
+        content = build_answer_area_user_content(
+            self._request(
+                boxes=((NormalizedBBox(x0=0.1, y0=0.2, x1=0.3, y1=0.4),),),
+                rulings=(PageRuling(vertical=(0.5,), horizontal=(0.5,)),),
+            )
+        )
+
+        assert "Measured ruling" not in content
+
+    def test_the_ruling_is_still_offered_for_a_page_with_no_measured_box(self) -> None:
+        """One measured subject's answer space is an open region under
+        「考え方・計算過程」 with no printed border anywhere. Nothing can be
+        chosen for it, so Issue #122's repair is all there is."""
+        content = build_answer_area_user_content(
+            self._request(
+                pages=2,
+                boxes=((NormalizedBBox(x0=0.1, y0=0.2, x1=0.3, y1=0.4),), ()),
+                rulings=(PageRuling(vertical=(0.5,)), PageRuling(vertical=(0.7,))),
+            )
+        )
+
+        assert "Measured ruling" in content
+        assert "Page 2 vertical lines" in content
+        assert "Page 1 vertical lines" not in content
+
+    def test_the_instructions_tell_the_model_to_choose_rather_than_estimate(self) -> None:
+        assert "measured" in ANSWER_AREA_SYSTEM_INSTRUCTIONS
+        assert "box_indexes" in ANSWER_AREA_SYSTEM_INSTRUCTIONS
+        assert "questions_not_on_these_pages" in ANSWER_AREA_SYSTEM_INSTRUCTIONS
+
+    def test_a_box_list_that_does_not_cover_every_page_is_refused(self) -> None:
+        """An index is positional and per page. Resolved against the wrong
+        page's list it produces a perfectly plausible rectangle on the wrong
+        part of the paper -- silently."""
+        with pytest.raises(AnswerAreaDetectionError):
+            AnswerAreaDetectionRequest(
+                page_images=(b"png", b"png"),
+                question_numbers=_NUMBERS,
+                page_boxes=((NormalizedBBox(x0=0.1, y0=0.2, x1=0.3, y1=0.4),),),
+            )

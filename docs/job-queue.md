@@ -121,6 +121,28 @@ Submission・同じQuestionのJobを二重に作ろうとすると`IntegrityErro
 `ErrorCategory`を受け取るだけ。cancelは「エラー」ではないため`ErrorCategory`
 に含めない（`error_code`は`NULL`のまま、`last_error`に理由を残す）。
 
+### 何もしなかったJobは、そう書く: `ProcessingResult.skipped_reason`（#164）
+
+`JobProcessor`が「やることが無い」と判断して終わる経路がある。回答欄が無いので
+切り出す画像が無い、切り出しが信用できない、といった場合で、`SUCCEEDED` /
+`usable=False`を返す。**これは失敗ではない。**壊れていないし、retryしても同じで、
+その設問はすでに添削レビュー画面で人の前に出ている。
+
+しかし**理由を書いていなかった。**実機再検証 #5 で測ると、採点Job **37件中23件**が
+`state=succeeded` / `usable=0` / `last_error=NULL` / **0.013秒**で、キューの上では
+実際に採点した Job と見分けが付かなかった。
+
+`ProcessingResult.skipped_reason`を`last_error`に書く。`error_code`は`NULL`のまま
+（retry対象ではない）。値は`AnswerImage.reason`の固定語彙
+（`no_answer_area_defined` / `answer_area_zero_area` / `crop_nearly_blank` /
+`crop_not_the_answer`）で、自由文言ではなく、答案から読んだものは一切入らない。
+`app/lib/core/grading_failure_reason.dart`がすでに`last_error`から同じ語彙を
+読んでいる。
+
+`skipped_reason`と`usable=True`は同時に立てられない（`__post_init__`が拒否する）。
+「何もしていない」と「後続の設問を解放してよい」が両立すると、採点結果の無い
+前提条件の上に依存設問が走り出す。
+
 ### クラッシュ回復: `RUNNING`を`QUEUED`または`FAILED`へ
 
 起動時、`RUNNING`のまま残っているJob（プロセスがkillされ、worker側の

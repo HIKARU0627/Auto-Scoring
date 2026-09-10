@@ -34,7 +34,7 @@ module builds go into a DRAFT `domain.profile.Profile`, which
 deletes and re-assigns them on the overlay editor and only then confirms.
 Two states are deliberately made visible rather than resolved by guessing:
 
-* a question with no box at all (:func:`undetected_question_numbers`) --
+* a question with no box at all (:func:`missing_question_numbers`) --
   derived, never stored, so it cannot go stale as the reviewer edits;
 * a box whose question the model could not name
   (:data:`UNASSIGNED_QUESTION_LABEL`). That one *blocks* confirmation
@@ -155,7 +155,28 @@ class DetectedBBoxOutput(BaseModel):
 
 
 class DetectedAnswerAreaOutput(BaseModel):
-    """One answer box as the model reported it."""
+    """One answer box as the model reported it: normally a *choice* among the
+    boxes measured off the page, and only otherwise a rectangle of its own.
+
+    **Why a choice.** Issue #122 established that the model does not measure a
+    coordinate, it returns a stereotype, and handed it the printed rules to
+    copy from instead. Issue #164 measured that on the real sheets and found
+    the rules are not enough: a box whose sides are too short to be a rule is
+    not in the list at all (so its edges are invented anyway), and where the
+    list is complete nothing in it says *which* pair of values bounds a box --
+    on one subject the pair chosen bounded the blank paper between two answer
+    columns, and the crop taken from it was graded 0. Whole boxes are just as
+    measurable as rules (`adapters.image.ink.measure_page_boxes`), so the
+    model picks one instead of describing one, and the geometry stops being
+    its problem.
+
+    **Why ``bbox`` survives.** Not every answer space has a printed border.
+    One measured subject gives each question a bordered 答え欄 plus an open
+    region under 「考え方・計算過程」 with no border anywhere; nothing can be
+    chosen for the second, and dropping it would drop half of what the
+    student wrote. So exactly one of the two must be given, which
+    :meth:`_exactly_one_location` enforces.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -167,25 +188,67 @@ class DetectedAnswerAreaOutput(BaseModel):
     #: :data:`UNASSIGNED_QUESTION_LABEL`. Checked against the actual
     #: candidate set in :func:`parse_answer_area_detection`.
     question_number: _NonBlankStr
-    bbox: DetectedBBoxOutput
+    #: Indexes into this page's `AnswerAreaDetectionRequest.page_boxes`.
+    #: Several when one question's answer space is several printed boxes
+    #: (sub-items a / b / c, or the 90 cells of a 原稿用紙 grid); they are
+    #: unioned by :func:`regions_from_detection`.
+    box_indexes: list[int] = Field(default_factory=list)
+    #: Only for an answer space with no printed border. ``None`` whenever
+    #: ``box_indexes`` is given.
+    bbox: DetectedBBoxOutput | None = None
     note: str | None = Field(default=None, max_length=MAX_NOTE_CHARS)
+
+    @pydantic_model_validator(mode="after")
+    def _exactly_one_location(self) -> DetectedAnswerAreaOutput:
+        if bool(self.box_indexes) == (self.bbox is not None):
+            raise ValueError(
+                "an area must give either box_indexes or bbox, never both and never neither"
+            )
+        return self
 
 
 class AnswerAreaDetectionOutput(BaseModel):
     """The full structured output for one answer sheet.
 
-    Deliberately has no "pages I could not read" field, unlike
-    ``domain.criteria_extraction.CriteriaExtractionOutput``. There, a skipped
-    page silently costs a question nobody knows about. Here the question set
-    is already known before the call, so a skipped page shows up by itself as
-    those questions having no box (:func:`undetected_question_numbers`) --
-    a second, self-reported channel would add a way for the two to disagree
-    without adding a guarantee.
+    **``questions_not_on_these_pages`` is the whole of Issue #164's second
+    half.** A question with no box used to have exactly one possible reading,
+    "detection missed it", and that reading was wrong far more often than it
+    was right: measured over the real material, the registered answer sheet
+    is *one page* of a longer one (measured: page 1 of 9, 1 of 2, 2 of 4, 2 of
+    5, 1 of 5) while the 採点基準 the question list comes from covers the whole
+    assignment. 26 of the 37 questions in that measurement had no answer space
+    on the registered page **because the paper does not have one**, and
+    counting them as detection failures is what produced the "27% detection
+    rate" this Issue was opened for.
+
+    The two cases need opposite things from the person looking at the screen:
+    a question the model missed needs a box drawn, and a question that is not
+    on the sheet needs the 採点基準 or the registered sheet fixed. So the model
+    is asked to say which it is, and the answer is kept
+    (`domain.profile.Profile.absent_question_numbers`) rather than derived --
+    it cannot be derived, which is exactly the problem.
+
+    A question in **both** lists is a ``ValidationError``: the two readings
+    are contradictory and there is no way to choose between them.
+
+    A question in **neither** is not, and deliberately so. The prompt asks
+    for every question to be accounted for (and over eight measured runs of
+    the real material it always was), but a response that omits one still
+    carries every box it did find, and rejecting the whole thing would cost
+    the reviewer all of them to punish an omission. An unaccounted question
+    reads as "the model did not say", which is what
+    :func:`missing_question_numbers` already calls *undetected* -- the
+    conservative half of the split, where the reviewer is asked to look.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     areas: list[DetectedAnswerAreaOutput] = Field(max_length=MAX_DETECTED_AREAS)
+    #: Questions the model looked for and could not find an answer space for
+    #: anywhere on the attached pages -- see this class's docstring.
+    questions_not_on_these_pages: list[_NonBlankStr] = Field(
+        default_factory=list, max_length=MAX_DETECTED_AREAS
+    )
 
     @pydantic_model_validator(mode="after")
     def _within_candidate_set(self, info: ValidationInfo) -> AnswerAreaDetectionOutput:
@@ -214,12 +277,38 @@ class AnswerAreaDetectionOutput(BaseModel):
                     f"{len(unknown)} question number(s) are not in this test's confirmed "
                     "question set"
                 )
+            # The sentinel means "I found a box and could not attribute it",
+            # which is a statement about a box. There is no box here.
+            absent_unknown = sorted(
+                {*self.questions_not_on_these_pages} - (allowed - {UNASSIGNED_QUESTION_LABEL})
+            )
+            if absent_unknown:
+                raise ValueError(
+                    f"{len(absent_unknown)} question number(s) reported as not on these pages "
+                    "are not in this test's confirmed question set"
+                )
         if isinstance(page_count, int):
             over = sorted({area.page for area in self.areas if area.page > page_count})
             if over:
                 raise ValueError(
                     f"{len(over)} area(s) reference a page beyond the document's {page_count}"
                 )
+        both = sorted(
+            {area.question_number for area in self.areas} & {*self.questions_not_on_these_pages}
+        )
+        if both:
+            raise ValueError(
+                f"{len(both)} question(s) are reported both with an answer area and as not "
+                "being on these pages"
+            )
+        boxes_per_page = context.get("boxes_per_page")
+        if isinstance(boxes_per_page, tuple):
+            for area in self.areas:
+                available = (
+                    boxes_per_page[area.page - 1] if area.page - 1 < len(boxes_per_page) else 0
+                )
+                if any(not 0 <= index < available for index in area.box_indexes):
+                    raise ValueError("an area chose a box index that was not offered for its page")
         return self
 
 
@@ -228,6 +317,7 @@ def parse_answer_area_detection(
     *,
     question_numbers: Sequence[str],
     page_count: int,
+    boxes_per_page: Sequence[int] = (),
 ) -> AnswerAreaDetectionOutput:
     """Parse and validate one provider's raw JSON response.
 
@@ -251,6 +341,7 @@ def parse_answer_area_detection(
         context={
             "allowed_numbers": frozenset(question_numbers) | {UNASSIGNED_QUESTION_LABEL},
             "page_count": page_count,
+            "boxes_per_page": tuple(boxes_per_page),
         },
     )
 
@@ -291,6 +382,7 @@ def regions_from_detection(
     *,
     existing_regions: Sequence[Region] = (),
     page_rulings: Sequence[PageRuling] = (),
+    page_boxes: Sequence[Sequence[NormalizedBBox]] = (),
 ) -> tuple[Region, ...]:
     """Build the profile's new region set from a validated detection.
 
@@ -361,14 +453,15 @@ def regions_from_detection(
         areas = grouped[key]
         notes = [area.note.strip() for area in areas if area.note and area.note.strip()]
         ruling = page_rulings[page - 1] if page - 1 < len(page_rulings) else PageRuling()
-        snapped = [snap_bbox_to_ruling(area.bbox.to_domain(), ruling) for area in areas]
-        shift = max((box.largest_shift for box in snapped), default=0.0)
+        boxes = page_boxes[page - 1] if page - 1 < len(page_boxes) else ()
+        located = [_locate(area, boxes=boxes, ruling=ruling) for area in areas]
+        shift = max((shifted for _, shifted in located), default=0.0)
         regions.append(
             Region(
                 region_id=f"answer-area-{index}",
                 kind=RegionKind.ANSWER_AREA,
                 page_index=page - 1,
-                bbox=_union([box.bbox for box in snapped]),
+                bbox=_union([bbox for bbox, _ in located]),
                 label=number,
                 confirmed=False,
                 text=_merged_note(len(areas), notes, snap_shift=shift),
@@ -377,23 +470,66 @@ def regions_from_detection(
     return tuple(regions)
 
 
+def _locate(
+    area: DetectedAnswerAreaOutput,
+    *,
+    boxes: Sequence[NormalizedBBox],
+    ruling: PageRuling,
+) -> tuple[NormalizedBBox, float]:
+    """One reported area's rectangle, and how far this module had to move it.
+
+    A chosen box needs no repair and reports a shift of ``0.0``: it *is* the
+    printed box, measured off the same raster the crop will be taken from. A
+    rectangle the model described itself is still snapped onto the printed
+    ruling, which is all Issue #122's repair was ever able to do -- and the
+    reviewer is still told when that moved it.
+
+    An out-of-range index cannot reach here: `parse_answer_area_detection`
+    rejects the whole response for one, rather than quietly dropping the box
+    (a partial region set looks exactly like a complete one on the overlay).
+    """
+    if area.box_indexes:
+        return _union([boxes[index] for index in area.box_indexes]), 0.0
+    assert area.bbox is not None  # `_exactly_one_location` leaves no third case
+    snapped = snap_bbox_to_ruling(area.bbox.to_domain(), ruling)
+    return snapped.bbox, snapped.largest_shift
+
+
 # --------------------------------------------------------------------------- #
 # What the reviewer has to be shown, and what stops a confirm
 # --------------------------------------------------------------------------- #
-def undetected_question_numbers(
-    regions: Sequence[Region], question_numbers: Iterable[str]
-) -> tuple[str, ...]:
-    """The confirmed questions that have no `ANSWER_AREA` region.
+def missing_question_numbers(
+    regions: Sequence[Region],
+    question_numbers: Iterable[str],
+    absent_question_numbers: Iterable[str] = (),
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The questions with no `ANSWER_AREA` region, split into the two cases a
+    person has to act on differently (Issue #164).
 
-    Derived on every read, never stored. A stored copy would be correct only
-    until the reviewer's next edit -- and the one moment it matters is
-    immediately after they draw the missing box, where a stale list would
-    still be telling them the question is undetected (the same reasoning
-    `domain.criteria_extraction.criteria_totals` follows for its own
-    unknown-count).
+    Returns ``(undetected, absent)``:
+
+    * **undetected** -- the sheet should have an answer space for this
+      question and none was found. The reviewer draws the box.
+    * **absent** -- detection reported that this question has no answer space
+      anywhere on the registered sheet. The reviewer fixes the 採点基準 or
+      registers the right sheet; drawing a box would invent one.
+
+    ``absent_question_numbers`` is what detection actually said
+    (`Profile.absent_question_numbers`), and a number in it only counts as
+    absent while it is still a confirmed question with no region -- so a
+    reviewer who draws the box anyway (they can see the page; the model
+    cannot be right about everything) moves it out of both lists without
+    anything having to be un-stored.
     """
     covered = {region.label for region in regions if region.kind is RegionKind.ANSWER_AREA}
-    return tuple(number for number in question_numbers if number not in covered)
+    reported_absent = set(absent_question_numbers)
+    undetected: list[str] = []
+    absent: list[str] = []
+    for number in question_numbers:
+        if number in covered:
+            continue
+        (absent if number in reported_absent else undetected).append(number)
+    return tuple(undetected), tuple(absent)
 
 
 def unassigned_answer_area_ids(regions: Sequence[Region]) -> tuple[str, ...]:
@@ -448,6 +584,14 @@ class AnswerAreaDetectionRequest:
     from. Never empty: a caller with no confirmed questions has nothing to
     offer as choices, and must stop before building this.
 
+    ``page_boxes`` is the printed boxes on each page, measured from the very
+    images being attached (`adapters.image.ink.measure_page_boxes`), and is
+    what a reported area normally *chooses* rather than describes. One entry
+    per page, in the order the prompt numbers them; empty means "not
+    measured", and the prompt then offers nothing to choose from. A page with
+    no printed box at all is a normal page and is listed as such -- see
+    `DetectedAnswerAreaOutput`.
+
     ``page_rulings`` is where the long printed lines actually run on each
     page, measured from the very images being attached
     (`adapters.image.ink.measure_page_ruling`). Issue #122 measured that the
@@ -462,6 +606,7 @@ class AnswerAreaDetectionRequest:
     page_images: tuple[bytes, ...]
     question_numbers: tuple[str, ...]
     page_rulings: tuple[PageRuling, ...] = ()
+    page_boxes: tuple[tuple[NormalizedBBox, ...], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.page_images:
@@ -471,6 +616,15 @@ class AnswerAreaDetectionRequest:
         if self.page_rulings and len(self.page_rulings) != len(self.page_images):
             raise AnswerAreaDetectionError(
                 "AnswerAreaDetectionRequest.page_rulings must be empty or have one entry "
+                "per page image"
+            )
+        if self.page_boxes and len(self.page_boxes) != len(self.page_images):
+            # An index is only meaningful against the list its page was
+            # offered, so a shifted list would attach a question to another
+            # page's box -- silently, and with a perfectly plausible
+            # rectangle.
+            raise AnswerAreaDetectionError(
+                "AnswerAreaDetectionRequest.page_boxes must be empty or have one entry "
                 "per page image"
             )
         if any(not image for image in self.page_images):

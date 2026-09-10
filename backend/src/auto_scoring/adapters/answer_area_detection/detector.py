@@ -71,6 +71,7 @@ def _parse_or_violate(
             text,
             question_numbers=request.question_numbers,
             page_count=len(request.page_images),
+            boxes_per_page=[len(boxes) for boxes in request.page_boxes],
         )
     except ValidationError:
         raise SchemaViolation(

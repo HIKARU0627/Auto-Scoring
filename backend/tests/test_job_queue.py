@@ -409,6 +409,46 @@ async def test_dependent_question_never_starts_before_its_prerequisite_completes
     assert "qc" in order  # independent question ran too
 
 
+async def test_a_job_that_did_nothing_says_so_on_its_own_row(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """Issue #164. A processor that finds nothing to do keeps SUCCEEDED --
+    nothing is wrong and nothing is retryable -- but `last_error` is the one
+    field the queue, the API and the screen already read for "why is this job
+    like this". Left NULL, doing nothing looked exactly like doing the work:
+    23 of one real run's 37 grading jobs were succeeded / usable=0 /
+    last_error NULL / 0.013 seconds.
+
+    ``error_code`` stays NULL, which is what keeps this out of the retry
+    path.
+    """
+    _seed(session_factory, question_ids=["qa"])
+    processor = FakeJobProcessor()
+    processor.script(
+        "sub-1",
+        "qa",
+        [
+            ProcessingResult(
+                outcome=ProcessingOutcome.SUCCEEDED,
+                usable=False,
+                skipped_reason="no_answer_area_defined",
+            )
+        ],
+    )
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.SUCCEEDED)
+        job = service.get_job(job_id)
+        assert job is not None
+        assert job.last_error == "no_answer_area_defined"
+        assert job.error_code is None
+    finally:
+        await service.shutdown()
+
+
 async def test_merge_point_waits_for_every_prerequisite_and_locks_on_unusable_result(
     session_factory: sessionmaker[Session], clock: Clock
 ) -> None:

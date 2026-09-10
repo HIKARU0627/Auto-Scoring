@@ -147,3 +147,56 @@ def test_a_profile_rejects_a_duplicate_id_at_confirm_time_too() -> None:
     draft = Profile.from_candidates("p1", "t1", _SIGNATURE, [_region("q1")])
     with pytest.raises(ValueError, match="distinct ids"):
         draft.confirm([_region("q1", confirmed=True), _region("q1", confirmed=True)])
+
+
+class TestAbsentQuestionNumbers:
+    """What detection said about questions the paper has no space for
+    (Issue #164).
+
+    Stored, unlike everything else about "this question has no region",
+    because it cannot be derived: a question with no `ANSWER_AREA` is either
+    one detection missed or one the paper does not have, and nothing in the
+    region set tells the two apart.
+    """
+
+    def _profile(self, **kwargs: object) -> Profile:
+        return Profile(
+            profile_id="p-1",
+            format_id="f-1",
+            signature=FormatSignature(pages=(PageFormat(width_pt=595.0, height_pt=842.0),)),
+            regions=(),
+            status=ProfileStatus.DRAFT,
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def test_it_survives_a_save_and_reload(self) -> None:
+        original = self._profile(absent_question_numbers=("問3", "問4"))
+
+        assert Profile.from_dict(original.to_dict()).absent_question_numbers == ("問3", "問4")
+
+    def test_a_profile_saved_before_this_field_existed_still_loads(self) -> None:
+        data = self._profile().to_dict()
+        del data["absent_question_numbers"]
+
+        assert Profile.from_dict(data).absent_question_numbers == ()
+
+    def test_a_profile_that_never_ran_detection_claims_nothing(self) -> None:
+        """Defaulting to "every question is on the sheet" would tell a
+        reviewer who drew every box by hand that the paper is missing
+        nothing -- true by accident, and false the moment it is not."""
+        assert self._profile().absent_question_numbers == ()
+
+    def test_confirming_carries_it_through(self) -> None:
+        """The grading side reads it after confirmation, so losing it at the
+        confirm step would put the distinction back where it was."""
+        region = Region(
+            region_id="r-1",
+            kind=RegionKind.ANSWER_AREA,
+            page_index=0,
+            bbox=NormalizedBBox(x0=0.1, y0=0.1, x1=0.5, y1=0.5),
+            label="問1",
+            confirmed=True,
+        )
+        draft = self._profile(absent_question_numbers=("問3",))
+
+        assert draft.confirm([region]).absent_question_numbers == ("問3",)

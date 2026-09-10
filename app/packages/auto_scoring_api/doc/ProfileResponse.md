@@ -8,6 +8,7 @@ import 'package:auto_scoring_api/api.dart';
 ## Properties
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**absentQuestionNumbers** | **BuiltList&lt;String&gt;** |  | 
 **pages** | [**BuiltList&lt;PageFormatModel&gt;**](PageFormatModel.md) |  | 
 **questionNumbers** | **BuiltList&lt;String&gt;** |  | 
 **regions** | [**BuiltList&lt;RegionModel&gt;**](RegionModel.md) |  | 

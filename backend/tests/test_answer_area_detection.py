@@ -24,10 +24,10 @@ from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionRequest,
     UnassignedAnswerAreaError,
     ensure_answer_areas_confirmable,
+    missing_question_numbers,
     parse_answer_area_detection,
     regions_from_detection,
     unassigned_answer_area_ids,
-    undetected_question_numbers,
 )
 from auto_scoring.domain.answer_area_snapping import PageRuling
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
@@ -54,6 +54,21 @@ def _area(
 def _parse(areas: list[dict[str, object]], *, page_count: int = 2) -> AnswerAreaDetectionOutput:
     return parse_answer_area_detection(
         json.dumps({"areas": areas}), question_numbers=_NUMBERS, page_count=page_count
+    )
+
+
+def _parse_with_boxes(
+    areas: list[dict[str, object]],
+    *,
+    absent: list[str] | None = None,
+    page_count: int = 1,
+) -> AnswerAreaDetectionOutput:
+    """Parse against the one page of measured boxes `_MEASURED` describes."""
+    return parse_answer_area_detection(
+        json.dumps({"areas": areas, "questions_not_on_these_pages": absent or []}),
+        question_numbers=_NUMBERS,
+        page_count=page_count,
+        boxes_per_page=[len(_MEASURED[0])],
     )
 
 
@@ -268,7 +283,7 @@ class TestRegionsFromDetection:
 class TestVisibleGaps:
     def test_undetected_lists_questions_with_no_box(self) -> None:
         regions = regions_from_detection(_parse([_area(number="Q2")]))
-        assert undetected_question_numbers(regions, _NUMBERS) == ("Q1", "Q3")
+        assert missing_question_numbers(regions, _NUMBERS)[0] == ("Q1", "Q3")
 
     def test_undetected_follows_an_edit_rather_than_a_stored_value(self) -> None:
         """The one moment this matters is right after the reviewer draws the
@@ -285,11 +300,11 @@ class TestVisibleGaps:
                 label="Q1",
             ),
         )
-        assert undetected_question_numbers(drawn, _NUMBERS) == ("Q3",)
+        assert missing_question_numbers(drawn, _NUMBERS)[0] == ("Q3",)
 
     def test_an_unassigned_box_does_not_cover_a_question(self) -> None:
         regions = regions_from_detection(_parse([_area(number=UNASSIGNED_QUESTION_LABEL)]))
-        assert undetected_question_numbers(regions, _NUMBERS) == _NUMBERS
+        assert missing_question_numbers(regions, _NUMBERS)[0] == _NUMBERS
 
     def test_unassigned_ids_name_the_boxes_that_block_a_confirm(self) -> None:
         regions = regions_from_detection(
@@ -315,7 +330,7 @@ class TestVisibleGaps:
         Stop what goes wrong quietly; let through what goes wrong loudly.
         """
         regions = regions_from_detection(_parse([_area(number="Q2")]))
-        assert undetected_question_numbers(regions, _NUMBERS)
+        assert missing_question_numbers(regions, _NUMBERS)[0]
         ensure_answer_areas_confirmable(regions)
 
 
@@ -415,3 +430,196 @@ class TestRequest:
             AnswerAreaDetectionRequest(
                 page_images=(b"png",), question_numbers=(UNASSIGNED_QUESTION_LABEL,)
             )
+
+
+def _chosen(
+    *,
+    page: int = 1,
+    number: str = "Q1",
+    indexes: list[int] | None = None,
+    note: str | None = None,
+) -> dict[str, object]:
+    """One area that *chooses* measured boxes rather than describing one."""
+    return {
+        "page": page,
+        "question_number": number,
+        "box_indexes": indexes if indexes is not None else [0],
+        "bbox": None,
+        "note": note,
+    }
+
+
+_MEASURED = (
+    (
+        NormalizedBBox(x0=0.810, y0=0.252, x1=0.859, y1=0.480),
+        NormalizedBBox(x0=0.668, y0=0.252, x1=0.716, y1=0.480),
+        NormalizedBBox(x0=0.525, y0=0.252, x1=0.573, y1=0.480),
+    ),
+)
+
+
+class TestChoosingAMeasuredBox:
+    """Issue #164's first half: the model picks a measured box instead of
+    describing a rectangle.
+
+    Measured on the five real subjects with five or more questions: asked for
+    coordinates it put one subject's box on the blank paper between two
+    answer columns (graded 0, approved), clipped another's crops to the first
+    of two answer rows, and returned five sub-boxes spaced exactly 0.047
+    apart for a column whose sub-boxes it could see. Given the same page's
+    measured boxes to choose from, the two worst subjects went from 0 of 2
+    correctly attributed questions to 2 of 2, stable over three runs.
+    """
+
+    def test_a_chosen_box_becomes_the_region_verbatim(self) -> None:
+        output = _parse_with_boxes([_chosen(indexes=[0])])
+
+        regions = regions_from_detection(output, page_boxes=_MEASURED)
+
+        assert regions[0].bbox == _MEASURED[0][0]
+
+    def test_several_chosen_boxes_are_unioned_into_one_region(self) -> None:
+        """One measured subject gives 問一 three separate columns; the region
+        that gets cropped and sent for grading is a single rectangle."""
+        output = _parse_with_boxes([_chosen(indexes=[0, 1, 2])])
+
+        regions = regions_from_detection(output, page_boxes=_MEASURED)
+
+        assert len(regions) == 1
+        assert regions[0].bbox.x0 == pytest.approx(0.525)
+        assert regions[0].bbox.x1 == pytest.approx(0.859)
+
+    def test_a_chosen_box_is_never_reported_as_moved(self) -> None:
+        """Snapping's note tells the reviewer the rectangle on screen is not
+        the one the model reported. A chosen box *is* the printed box, so
+        saying it moved would be false -- and would train the reviewer to
+        ignore the note in the case where it is true."""
+        output = _parse_with_boxes([_chosen(indexes=[0])])
+
+        regions = regions_from_detection(
+            output,
+            page_boxes=_MEASURED,
+            page_rulings=(PageRuling(vertical=(0.5, 0.9), horizontal=(0.1, 0.9)),),
+        )
+
+        assert regions[0].text is None or SNAPPED_NOTE_PREFIX not in regions[0].text
+
+    def test_a_described_rectangle_is_still_snapped_onto_the_ruling(self) -> None:
+        """Issue #122's repair, unchanged, for the one case that still needs
+        it: an answer space with no printed border anywhere."""
+        output = _parse_with_boxes([_area(bbox=(0.1013, 0.2, 0.6, 0.4))])
+
+        regions = regions_from_detection(
+            output,
+            page_boxes=_MEASURED,
+            page_rulings=(PageRuling(vertical=(0.1000,), horizontal=()),),
+        )
+
+        assert regions[0].bbox.x0 == pytest.approx(0.1000)
+
+    def test_an_area_that_gives_both_a_choice_and_a_rectangle_is_rejected(self) -> None:
+        """Two answers to "where is it" is not more information than one; it
+        is a response nobody can act on, and picking either silently would
+        make the other one unfalsifiable."""
+        area = _chosen(indexes=[0])
+        area["bbox"] = {"x0": 0.1, "y0": 0.2, "x1": 0.6, "y1": 0.4}
+
+        with pytest.raises(ValidationError):
+            _parse_with_boxes([area])
+
+    def test_an_area_that_gives_neither_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            _parse_with_boxes([_chosen(indexes=[])])
+
+    def test_a_box_index_that_was_not_offered_is_rejected(self) -> None:
+        """An index is positional. Resolved against a shorter list it is an
+        `IndexError` on a good day and another page's rectangle on a bad one,
+        and there is no reading of "box 7" that is safe when six were
+        offered."""
+        with pytest.raises(ValidationError):
+            _parse_with_boxes([_chosen(indexes=[7])])
+
+
+class TestQuestionsNotOnThesePages:
+    """Issue #164's second half.
+
+    Measured over the real material: the registered answer sheet is one page
+    of a longer one (page 1 of 9, 1 of 2, 2 of 4, 2 of 5, 1 of 5) while the
+    採点基準 the question list comes from covers the whole assignment. 26 of
+    that run's 37 questions had no answer space on the registered page
+    because the paper has none, and counting them as detection failures is
+    what produced this Issue's "27% detection rate".
+    """
+
+    def test_the_reported_absences_are_kept(self) -> None:
+        output = _parse_with_boxes([_chosen()], absent=["Q2", "Q3"])
+
+        assert output.questions_not_on_these_pages == ["Q2", "Q3"]
+
+    def test_a_question_outside_the_candidate_set_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            _parse_with_boxes([_chosen()], absent=["Q9"])
+
+    def test_the_unassigned_sentinel_cannot_be_reported_absent(self) -> None:
+        """The sentinel says "I found a box and could not attribute it",
+        which is a statement about a box. There is no box here."""
+        with pytest.raises(ValidationError):
+            _parse_with_boxes([_chosen()], absent=[UNASSIGNED_QUESTION_LABEL])
+
+    def test_a_question_both_located_and_reported_absent_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            _parse_with_boxes([_chosen(number="Q2")], absent=["Q2"])
+
+    def test_a_question_in_neither_list_is_accepted_and_reads_as_undetected(self) -> None:
+        """Rejecting the whole response would cost the reviewer every box it
+        did find, to punish an omission. "The model did not say" is the
+        conservative half of the split."""
+        output = _parse_with_boxes([_chosen(number="Q1")], absent=["Q2"])
+        regions = regions_from_detection(output, page_boxes=_MEASURED)
+
+        undetected, absent = missing_question_numbers(
+            regions, _NUMBERS, output.questions_not_on_these_pages
+        )
+
+        assert undetected == ("Q3",)
+        assert absent == ("Q2",)
+
+
+class TestMissingQuestionsAreSplitByCause:
+    """The distinction is the point: a question the model missed needs a box
+    drawn, and a question that is not on the sheet needs the 採点基準 or the
+    registered sheet fixed. Telling the reviewer to do the first when the
+    second is true is how this Issue's reporter came to measure the wrong
+    denominator."""
+
+    def _region(self, label: str) -> Region:
+        return Region(
+            region_id=f"answer-area-{label}",
+            kind=RegionKind.ANSWER_AREA,
+            page_index=0,
+            bbox=NormalizedBBox(x0=0.1, y0=0.2, x1=0.6, y1=0.4),
+            label=label,
+        )
+
+    def test_a_question_with_a_region_is_in_neither_list(self) -> None:
+        undetected, absent = missing_question_numbers([self._region("Q1")], _NUMBERS, ["Q2", "Q3"])
+
+        assert "Q1" not in undetected and "Q1" not in absent
+
+    def test_a_reported_absence_the_reviewer_drew_anyway_leaves_both_lists(self) -> None:
+        """Derived on every read against the current region set, so nothing
+        has to be un-stored when the reviewer -- who can see the page, and is
+        not obliged to believe the model -- draws the box themselves."""
+        undetected, absent = missing_question_numbers([self._region("Q2")], _NUMBERS, ["Q2"])
+
+        assert absent == ()
+        assert undetected == ("Q1", "Q3")
+
+    def test_without_a_detection_run_every_missing_question_is_undetected(self) -> None:
+        """A profile whose boxes were all drawn by hand has nothing stored,
+        and must not read as "the paper has no answer space for any of
+        these"."""
+        undetected, absent = missing_question_numbers([], _NUMBERS)
+
+        assert undetected == _NUMBERS
+        assert absent == ()

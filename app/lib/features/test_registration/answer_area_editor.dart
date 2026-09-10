@@ -50,6 +50,7 @@ class AnswerAreaEditor extends StatefulWidget {
     required this.regions,
     required this.questionNumbers,
     required this.undetectedQuestionNumbers,
+    required this.absentQuestionNumbers,
     required this.onRegionsChanged,
     required this.readOnly,
     this.pdfBytes,
@@ -71,6 +72,23 @@ class AnswerAreaEditor extends StatefulWidget {
   final List<String> questionNumbers;
 
   final List<String> undetectedQuestionNumbers;
+
+  /// Questions detection reported as having no answer space anywhere on this
+  /// sheet (Issue #164).
+  ///
+  /// Kept apart from [undetectedQuestionNumbers] because the two ask the
+  /// reviewer for opposite things: an undetected question needs its box
+  /// drawn, and an absent one needs the 採点基準 or the registered sheet
+  /// fixed -- drawing a box for it would invent one. Measured on the real
+  /// material, the absent case is by far the more common of the two (26 of
+  /// 37 questions in one run), and showing both under one "not found"
+  /// heading is what led this Issue's reporter to measure the wrong
+  /// denominator.
+  ///
+  /// Still editable: a number listed here is drawn as a chip like any other,
+  /// because the reviewer can see the page and the model is not always
+  /// right. Drawing the box takes it out of both lists.
+  final List<String> absentQuestionNumbers;
 
   /// The answer sheet itself. `null` renders the pages as empty outlines at
   /// the right shape -- which is what a reviewer sees before uploading a
@@ -295,7 +313,8 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
         style: context.texts.bodyMedium,
       );
     }
-    if (undetected.isEmpty) {
+    final absent = widget.absentQuestionNumbers;
+    if (undetected.isEmpty && absent.isEmpty) {
       return Row(
         key: const Key('answer-area-all-detected'),
         children: [
@@ -318,24 +337,62 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
       key: const Key('answer-area-undetected'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (undetected.isNotEmpty)
+          _buildMissingGroup(
+            context,
+            keyPrefix: 'answer-area-undetected',
+            icon: Icons.error_outline,
+            // Named as "not found", never as "none exists": the boxes are
+            // on the page, this run did not locate them.
+            message:
+                '回答欄が見つからなかった設問が${undetected.length}件あります。'
+                '答案には回答欄があるはずなので、下の設問名を押して枠を引いてください。'
+                'このまま確定もできますが、その設問は答案のページ全体を採点に送り、'
+                '要確認として人の目に回ります。',
+            numbers: undetected,
+          ),
+        if (undetected.isNotEmpty && absent.isNotEmpty)
+          const SizedBox(height: AppSpacing.md),
+        if (absent.isNotEmpty)
+          _buildMissingGroup(
+            context,
+            keyPrefix: 'answer-area-absent',
+            icon: Icons.description_outlined,
+            // The opposite instruction from the group above, and the reason
+            // the two are not one list: nothing is wrong with the detection
+            // here, and drawing a box would invent an answer space the paper
+            // does not have.
+            message:
+                'この答案に回答欄が無いと判定された設問が${absent.length}件あります。'
+                '採点基準はこの答案より広い範囲を含んでいることがあります。'
+                '登録した答案か採点基準のどちらかを見直してください。'
+                '答案に回答欄があるのに挙がっている場合は、設問名を押して枠を引けます。',
+            numbers: absent,
+          ),
+      ],
+    );
+  }
+
+  Widget _buildMissingGroup(
+    BuildContext context, {
+    required String keyPrefix,
+    required IconData icon,
+    required String message,
+    required List<String> numbers,
+  }) {
+    return Column(
+      key: Key('$keyPrefix-group'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         Row(
           children: [
             Icon(
-              Icons.error_outline,
+              icon,
               size: AppIconSize.dense,
               color: AppStatusTone.attention.color(context),
             ),
             const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Text(
-                // Named as "not found", never as "none exists": the boxes are
-                // on the page, this run did not locate them.
-                '回答欄が見つからなかった設問が${undetected.length}件あります。'
-                'このまま確定もできますが、その設問は答案のページ全体を採点に送り、'
-                '要確認として人の目に回ります。',
-                style: context.texts.bodyMedium,
-              ),
-            ),
+            Expanded(child: Text(message, style: context.texts.bodyMedium)),
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
@@ -343,9 +400,9 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
           spacing: AppSpacing.sm,
           runSpacing: AppSpacing.xs,
           children: [
-            for (final number in undetected)
+            for (final number in numbers)
               ActionChip(
-                key: Key('answer-area-undetected-$number'),
+                key: Key('$keyPrefix-$number'),
                 avatar: const Icon(
                   Icons.edit_outlined,
                   size: AppIconSize.inline,

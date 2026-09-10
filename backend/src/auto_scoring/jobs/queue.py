@@ -1130,7 +1130,17 @@ class JobQueueService:
 
             if result.outcome is ProcessingOutcome.SUCCEEDED:
                 done = current.transitioned_to(
-                    JobState.SUCCEEDED, updated_at=now, usable=result.usable
+                    JobState.SUCCEEDED,
+                    updated_at=now,
+                    usable=result.usable,
+                    # A skipped job is not a failed one, so it keeps
+                    # SUCCEEDED -- but `last_error` is the one field the
+                    # queue, the API and the screen already read for "why is
+                    # this job like this", and leaving it NULL is what made
+                    # doing nothing indistinguishable from doing the work
+                    # (Issue #164). `error_code` stays NULL: nothing here is
+                    # retryable.
+                    error=result.skipped_reason,
                 )
                 try:
                     uow.jobs.save(done, expected_state=JobState.RUNNING)
@@ -1143,6 +1153,7 @@ class JobQueueService:
                         "state": "succeeded",
                         "latency_seconds": latency,
                         "usable": result.usable,
+                        "skipped_reason": result.skipped_reason,
                     },
                 )
                 newly_queued: list[str] = []

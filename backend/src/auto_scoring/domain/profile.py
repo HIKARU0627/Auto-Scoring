@@ -216,6 +216,24 @@ class Profile:
     #: attestation instead (Issue #16 review round 8). Defaults to `1` so
     #: a profile saved before this field existed still loads.
     revision: int = 1
+    #: Question numbers that answer-area detection reported as having no
+    #: answer space anywhere on this document (Issue #164).
+    #:
+    #: **Stored, unlike everything else about "this question has no region",
+    #: because it cannot be derived.** A question with no `ANSWER_AREA`
+    #: region is either one detection missed or one the paper does not have,
+    #: and the two need opposite things from the reviewer -- draw the box, or
+    #: fix the 採点基準. Nothing in the region set distinguishes them; only the
+    #: detection response did, and only at the moment it arrived.
+    #:
+    #: Kept as *numbers*, not region ids, for the same reason
+    #: `domain.answer_area_detection.missing_question_numbers` re-derives the
+    #: split on every read: a reviewer who draws the box anyway drops the
+    #: question out of both lists without this having to be rewritten.
+    #: Defaults to empty so a profile saved before this field existed still
+    #: loads, and so a profile that never ran detection says nothing rather
+    #: than claiming every question is on the sheet.
+    absent_question_numbers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         duplicate_ids = _duplicate_region_ids(self.regions)
@@ -242,6 +260,7 @@ class Profile:
         format_id: str,
         signature: FormatSignature,
         regions: Sequence[Region],
+        absent_question_numbers: Sequence[str] = (),
     ) -> Profile:
         """Save auto-detected candidates. Always DRAFT; forces every region unconfirmed.
 
@@ -250,7 +269,14 @@ class Profile:
         to callers to remember.
         """
         unconfirmed = tuple(replace(region, confirmed=False) for region in regions)
-        return cls(profile_id, format_id, signature, unconfirmed, ProfileStatus.DRAFT)
+        return cls(
+            profile_id,
+            format_id,
+            signature,
+            unconfirmed,
+            ProfileStatus.DRAFT,
+            absent_question_numbers=tuple(absent_question_numbers),
+        )
 
     def confirm(self, reviewed_regions: Sequence[Region]) -> Profile:
         """Human review step: replace the candidate regions with the reviewed set.
@@ -282,6 +308,7 @@ class Profile:
             "signature": self.signature.to_dict(),
             "regions": [region.to_dict() for region in self.regions],
             "revision": self.revision,
+            "absent_question_numbers": list(self.absent_question_numbers),
         }
 
     @classmethod
@@ -300,4 +327,7 @@ class Profile:
             regions=regions,
             status=ProfileStatus(data["status"]),
             revision=int(data.get("revision", 1)),
+            absent_question_numbers=tuple(
+                str(number) for number in data.get("absent_question_numbers", ())
+            ),
         )

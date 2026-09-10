@@ -56,7 +56,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.atomic import FinalizationError
-from auto_scoring.adapters.image.ink import measure_page_ruling
+from auto_scoring.adapters.image.ink import measure_page_boxes, measure_page_ruling
 from auto_scoring.adapters.local.criteria_store import CriteriaStore
 from auto_scoring.adapters.local.profile_store import ProfileStore
 from auto_scoring.adapters.local_storage import LocalFileStore
@@ -73,9 +73,9 @@ from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetector,
     UnconfiguredAnswerAreaDetector,
     ensure_answer_areas_confirmable,
+    missing_question_numbers,
     regions_from_detection,
     unassigned_answer_area_ids,
-    undetected_question_numbers,
 )
 from auto_scoring.domain.criteria_extraction import CriteriaDraft, CriteriaStatus
 from auto_scoring.domain.dependency_graph import can_start_submission_processing
@@ -306,13 +306,24 @@ class ProfileResponse(BaseModel):
     #: (`domain.answer_area_detection`). Empty until the 採点基準 has been
     #: confirmed, which is what makes the questions exist at all.
     question_numbers: list[str]
-    #: Questions with no `ANSWER_AREA` region. **Derived on every response,
-    #: never stored** -- a stored copy would still be listing a question as
-    #: undetected in the one moment it matters, immediately after the reviewer
-    #: draws its box. Shown, but does not block confirming: see
-    #: `domain.answer_area_detection`'s module docstring for why this is
-    #: treated differently from Issue #103's unknown 配点.
+    #: Questions with no `ANSWER_AREA` region that detection did **not** say
+    #: were absent from the sheet: the box should be there and was not found.
+    #: **Derived on every response, never stored** -- a stored copy would
+    #: still be listing a question as undetected in the one moment it
+    #: matters, immediately after the reviewer draws its box. Shown, but does
+    #: not block confirming: see `domain.answer_area_detection`'s module
+    #: docstring for why this is treated differently from Issue #103's
+    #: unknown 配点.
     undetected_question_numbers: list[str]
+    #: Questions detection reported as having no answer space anywhere on the
+    #: registered sheet (Issue #164). Also has no region, and also does not
+    #: block confirming -- but it asks the reviewer for the opposite action:
+    #: drawing a box would invent one, and what needs fixing is the 採点基準 or
+    #: the registered sheet. Derived from the same region set as
+    #: `undetected_question_numbers`, against what detection stored
+    #: (`Profile.absent_question_numbers`), so a reviewer who draws the box
+    #: anyway drops it out of both lists.
+    absent_question_numbers: list[str]
     #: Region ids of detected boxes that still have no question assigned.
     #: These *do* block confirming (`ensure_answer_areas_confirmable`) --
     #: `build_questions_and_rubrics` would ignore them without a word.
@@ -320,6 +331,9 @@ class ProfileResponse(BaseModel):
 
     @classmethod
     def from_domain(cls, profile: Profile, *, question_numbers: Sequence[str]) -> ProfileResponse:
+        undetected, absent = missing_question_numbers(
+            profile.regions, question_numbers, profile.absent_question_numbers
+        )
         return cls(
             test_id=profile.format_id,
             status=profile.status.value,
@@ -327,9 +341,8 @@ class ProfileResponse(BaseModel):
             regions=[RegionModel.from_domain(region) for region in profile.regions],
             revision=profile.revision,
             question_numbers=list(question_numbers),
-            undetected_question_numbers=list(
-                undetected_question_numbers(profile.regions, question_numbers)
-            ),
+            undetected_question_numbers=list(undetected),
+            absent_question_numbers=list(absent),
             unassigned_region_ids=list(unassigned_answer_area_ids(profile.regions)),
         )
 
@@ -1388,6 +1401,7 @@ def build_test_registration_router(
                 # afterwards lands on the same values (Issue #122). Outside
                 # the pdfium lock: this is OpenCV over bytes already in hand.
                 page_rulings = tuple(measure_page_ruling(image) for image in page_images)
+                page_boxes = tuple(measure_page_boxes(image) for image in page_images)
             except Exception as exc:
                 raise HTTPException(
                     422, detail=f"could not read the stored answer sheet: {type(exc).__name__}"
@@ -1406,6 +1420,7 @@ def build_test_registration_router(
                         page_images=page_images,
                         question_numbers=tuple(numbers),
                         page_rulings=page_rulings,
+                        page_boxes=page_boxes,
                     )
                 )
             except SchemaViolation as exc:
@@ -1439,8 +1454,16 @@ def build_test_registration_router(
                     test_id,
                     signature,
                     regions_from_detection(
-                        output, existing_regions=carried, page_rulings=page_rulings
+                        output,
+                        existing_regions=carried,
+                        page_rulings=page_rulings,
+                        page_boxes=page_boxes,
                     ),
+                    # Replaced outright, never merged with a previous run's:
+                    # this is what *this* response said about *these* pages,
+                    # and a question the previous run called absent may be one
+                    # this run found.
+                    absent_question_numbers=output.questions_not_on_these_pages,
                 )
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc

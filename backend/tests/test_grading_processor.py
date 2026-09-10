@@ -438,6 +438,39 @@ async def test_needs_review_answer_image_skips_grading_entirely(
         assert uow.grades.history("sub-1", "q-1") == []
 
 
+async def test_a_skipped_grading_says_on_its_own_row_why_it_did_nothing(
+    session_factory: sessionmaker[Session],
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #164's acceptance criterion 2: stop finishing in 0.013 seconds
+    with nothing to show for it.
+
+    Measured on one real run, **23 of 37 grading jobs** were
+    ``succeeded`` / ``usable=0`` / ``last_error`` NULL, every one of them
+    because the question had no answer area, and none of them
+    distinguishable on the queue from work that was actually done. The value
+    is `AnswerImage.reason`'s fixed vocabulary -- the same strings
+    `app/lib/core/grading_failure_reason.dart` already reads off
+    ``last_error`` -- so nothing from the paper reaches it.
+    """
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(model_answer="模範解答"))
+        uow.rubrics.add(make_rubric())
+        uow.submissions.add(make_submission())
+        uow.answer_images.add(
+            make_answer_image(
+                status=AnswerImageStatus.NEEDS_REVIEW, reason="no_answer_area_defined"
+            )
+        )
+        uow.commit()
+    _confirm_graph(session_factory, question_ids=["q-1"])
+
+    result = await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
+
+    assert result.skipped_reason == "no_answer_area_defined"
+
+
 async def test_a_crop_the_grader_says_is_not_the_answer_produces_no_grade(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,

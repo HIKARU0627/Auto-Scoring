@@ -8,6 +8,8 @@ part of 'profile_response.dart';
 
 class _$ProfileResponse extends ProfileResponse {
   @override
+  final BuiltList<String> absentQuestionNumbers;
+  @override
   final BuiltList<PageFormatModel> pages;
   @override
   final BuiltList<String> questionNumbers;
@@ -28,7 +30,8 @@ class _$ProfileResponse extends ProfileResponse {
       (ProfileResponseBuilder()..update(updates))._build();
 
   _$ProfileResponse._(
-      {required this.pages,
+      {required this.absentQuestionNumbers,
+      required this.pages,
       required this.questionNumbers,
       required this.regions,
       required this.revision,
@@ -48,6 +51,7 @@ class _$ProfileResponse extends ProfileResponse {
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
     return other is ProfileResponse &&
+        absentQuestionNumbers == other.absentQuestionNumbers &&
         pages == other.pages &&
         questionNumbers == other.questionNumbers &&
         regions == other.regions &&
@@ -61,6 +65,7 @@ class _$ProfileResponse extends ProfileResponse {
   @override
   int get hashCode {
     var _$hash = 0;
+    _$hash = $jc(_$hash, absentQuestionNumbers.hashCode);
     _$hash = $jc(_$hash, pages.hashCode);
     _$hash = $jc(_$hash, questionNumbers.hashCode);
     _$hash = $jc(_$hash, regions.hashCode);
@@ -76,6 +81,7 @@ class _$ProfileResponse extends ProfileResponse {
   @override
   String toString() {
     return (newBuiltValueToStringHelper(r'ProfileResponse')
+          ..add('absentQuestionNumbers', absentQuestionNumbers)
           ..add('pages', pages)
           ..add('questionNumbers', questionNumbers)
           ..add('regions', regions)
@@ -91,6 +97,12 @@ class _$ProfileResponse extends ProfileResponse {
 class ProfileResponseBuilder
     implements Builder<ProfileResponse, ProfileResponseBuilder> {
   _$ProfileResponse? _$v;
+
+  ListBuilder<String>? _absentQuestionNumbers;
+  ListBuilder<String> get absentQuestionNumbers =>
+      _$this._absentQuestionNumbers ??= ListBuilder<String>();
+  set absentQuestionNumbers(ListBuilder<String>? absentQuestionNumbers) =>
+      _$this._absentQuestionNumbers = absentQuestionNumbers;
 
   ListBuilder<PageFormatModel>? _pages;
   ListBuilder<PageFormatModel> get pages =>
@@ -140,6 +152,7 @@ class ProfileResponseBuilder
   ProfileResponseBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
+      _absentQuestionNumbers = $v.absentQuestionNumbers.toBuilder();
       _pages = $v.pages.toBuilder();
       _questionNumbers = $v.questionNumbers.toBuilder();
       _regions = $v.regions.toBuilder();
@@ -171,6 +184,7 @@ class ProfileResponseBuilder
     try {
       _$result = _$v ??
           _$ProfileResponse._(
+            absentQuestionNumbers: absentQuestionNumbers.build(),
             pages: pages.build(),
             questionNumbers: questionNumbers.build(),
             regions: regions.build(),
@@ -186,6 +200,8 @@ class ProfileResponseBuilder
     } catch (_) {
       late String _$failedField;
       try {
+        _$failedField = 'absentQuestionNumbers';
+        absentQuestionNumbers.build();
         _$failedField = 'pages';
         pages.build();
         _$failedField = 'questionNumbers';
