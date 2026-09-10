@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 import pytest
@@ -26,11 +28,18 @@ from auto_scoring.domain.models import (
     ReviewAction,
     Score,
 )
+from auto_scoring.domain.pdf_engine import AnnotationMark
 from auto_scoring.domain.pdf_export import (
+    _NOTE_PAGE_LINE_HEIGHT_PT,
+    _NOTE_PAGE_MARGIN,
+    NoteEntry,
     ReexportDecision,
+    _wrapped_line_count,
     build_export_marks,
+    build_note_pages,
     decide_reexport,
     fallback_score_areas,
+    note_page_heading,
     review_version_snapshot,
     unconfirmed_question_ids,
     unplaceable_question_ids,
@@ -219,7 +228,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[annotation],
             recognitions=[],
-        )
+        ).marks
 
         assert len(marks) == 1
         assert marks[0].text == "3/5"
@@ -240,7 +249,7 @@ class TestBuildExportMarks:
             grade=_grade(score=Score(awarded=3, maximum=5)),
             annotations=[],
             recognitions=[],
-        )
+        ).marks
 
         assert [(mark.kind, mark.rect, mark.text) for mark in marks] == [
             (AnnotationKind.SCORE, score_area, "3/5")
@@ -264,7 +273,7 @@ class TestBuildExportMarks:
             grade=_grade(score=Score(awarded=3, maximum=5)),
             annotations=[annotation],
             recognitions=[],
-        )
+        ).marks
 
         assert [mark.kind for mark in marks] == [AnnotationKind.SCORE]
         assert marks[0].text == "3/5"
@@ -275,9 +284,9 @@ class TestBuildExportMarks:
         mark at a guessed spot on someone's answer sheet."""
         marks = build_export_marks(
             question=_question(), grade=_grade(), annotations=[], recognitions=[]
-        )
+        ).marks
 
-        assert marks == []
+        assert marks == ()
 
     def test_comment_kind_draws_the_annotation_s_own_comment_text(self) -> None:
         grade = _grade()
@@ -296,7 +305,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[annotation],
             recognitions=[],
-        )
+        ).marks
 
         assert len(marks) == 1
         assert marks[0].text == "理由の説明が不足しています。"
@@ -321,7 +330,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[annotation],
             recognitions=[],
-        )
+        ).marks
 
         assert marks[0].rect == comment_area
 
@@ -360,7 +369,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[first, second],
             recognitions=[],
-        )
+        ).marks
 
         notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
         assert [note.text for note in notes] == ["誤字があります。", "根拠が不足しています。"]
@@ -394,7 +403,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[annotation],
             recognitions=[recognition],
-        )
+        ).marks
 
         shape = next(mark for mark in marks if mark.kind is AnnotationKind.CROSS)
         note = next(mark for mark in marks if mark.kind is AnnotationKind.COMMENT)
@@ -429,7 +438,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[annotation],
             recognitions=[recognition],
-        )
+        ).marks
 
         notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
         assert [note.rect for note in notes] == [comment_area]
@@ -456,7 +465,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[annotation],
             recognitions=[recognition],
-        )
+        ).marks
 
         assert [mark.kind for mark in marks] == [AnnotationKind.CIRCLE]
 
@@ -486,7 +495,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=annotations,
             recognitions=[],
-        )
+        ).marks
 
         notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
         assert [note.text for note in notes] == ["コメント0", "ほか3件は余白に収まらず未表示"]
@@ -514,14 +523,21 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=annotations,
             recognitions=[],
-        )
+        ).marks
 
         notes = [mark for mark in marks if mark.kind is AnnotationKind.COMMENT]
         assert [note.text for note in notes] == ["ほか3件は余白に収まらず未表示"]
 
-    def test_a_mark_with_no_resolvable_position_at_all_is_skipped_not_crashed_on(
+    def test_a_note_with_no_band_to_go_in_is_handed_back_rather_than_dropped(
         self,
     ) -> None:
+        """Issue #161: a question with no ``comment_area`` -- since #161 that
+        is every question registered by detection -- draws nothing on the
+        answer sheet and hands its notes to the caller for an appended note
+        page instead. Before #161 this same case silently returned no marks
+        at all, and the comment was lost with the export still reporting
+        success (Issue #121's shape).
+        """
         grade = _grade()
         annotation = Annotation(
             id="a1",
@@ -533,14 +549,24 @@ class TestBuildExportMarks:
             created_at=_NOW,
         )
 
-        marks = build_export_marks(
-            question=_question(comment_area=None),
+        exported = build_export_marks(
+            # With an answer box, without a band. That is what every question
+            # registered by detection looks like since Issue #161, and it is
+            # the combination the assertion below is about: an answer box is
+            # a rect something *could* be drawn on, so "nothing was drawn"
+            # says something. Against a question with no coordinates at all
+            # it would pass no matter what this function did.
+            question=_question(
+                comment_area=None,
+                answer_area=NormalizedRect(x=0.1, y=0.2, width=0.8, height=0.3),
+            ),
             grade=grade,
             annotations=[annotation],
             recognitions=[],
         )
 
-        assert marks == []
+        assert exported.marks == (), "nothing may be drawn on the answer sheet"
+        assert exported.unplaced_notes == ("コメント",)
 
     def test_only_annotations_and_recognitions_from_the_grade_s_own_attempt_are_used(
         self,
@@ -594,7 +620,7 @@ class TestBuildExportMarks:
             grade=grade,
             annotations=[stale_annotation, current_annotation],
             recognitions=[stale_recognition, current_recognition],
-        )
+        ).marks
 
         assert len(marks) == 1
         assert marks[0].rect == NormalizedRect(x=0.5, y=0.5, width=0.1, height=0.1)
@@ -817,3 +843,164 @@ def _overlap(first: NormalizedRect, second: NormalizedRect) -> float:
     width = min(first.x + first.width, second.x + second.width) - max(first.x, second.x)
     height = min(first.y + first.height, second.y + second.height) - max(first.y, second.y)
     return max(0.0, width) * max(0.0, height)
+
+
+# --------------------------------------------------------------------------- #
+# build_note_pages (Issue #161)
+# --------------------------------------------------------------------------- #
+
+#: A4 portrait, the commonest of the real answer sheets.
+_A4_WIDTH_PT = 595.0
+_A4_HEIGHT_PT = 842.0
+
+_HEADING = note_page_heading(test_name="日本史添削", submission_id="sub-1")
+
+
+def _note_pages(
+    entries: Sequence[NoteEntry],
+    *,
+    width: float = _A4_WIDTH_PT,
+    height: float = _A4_HEIGHT_PT,
+) -> list[tuple[AnnotationMark, ...]]:
+    return build_note_pages(entries, heading=_HEADING, page_width_pt=width, page_height_pt=height)
+
+
+def _entry(text: str, *, page: int = 1, number: str = "問1") -> NoteEntry:
+    return NoteEntry(page=page, question_number=number, text=text)
+
+
+def _rects_intersect(first: NormalizedRect, second: NormalizedRect) -> bool:
+    """Whether two page-normalized rects share any area at all.
+
+    Touching edges are not an intersection: `_note_page_marks` stacks each
+    line's rect directly onto the previous one's bottom edge, which is
+    exactly right and must not read as an overlap.
+    """
+    return (
+        first.x < second.x + second.width
+        and second.x < first.x + first.width
+        and first.y < second.y + second.height
+        and second.y < first.y + first.height
+    )
+
+
+class TestBuildNotePages:
+    def test_an_answer_with_no_notes_gets_no_note_page(self) -> None:
+        """Every export appending a near-empty sheet would cost one sheet of
+        paper per submission for nothing -- forty answers, forty sheets."""
+        assert _note_pages([]) == []
+
+    def test_every_note_page_names_the_test_and_the_answer_it_belongs_to(self) -> None:
+        """A note page is a physically separate sheet. Staples come out and
+        printers collate wrongly, so each sheet has to be identifiable on its
+        own -- not only the first one.
+        """
+        pages = _note_pages([_entry("コメント" * 20) for _ in range(200)])
+
+        assert len(pages) > 1, "the fixture was meant to overflow onto a second page"
+        for page in pages:
+            assert page[0].text == _HEADING
+
+    def test_the_heading_carries_no_personal_data(self) -> None:
+        """The answer sheet may print a student's name; this sheet does not
+        reprint it, and never names the uploaded file (free text a user can
+        type anything into). Only the test name and the opaque submission id
+        (`AGENTS.md` "Security").
+        """
+        heading = note_page_heading(test_name="現代文添削", submission_id="abc123")
+
+        assert "現代文添削" in heading
+        assert "abc123" in heading
+
+    def test_a_note_line_names_the_page_and_question_it_is_about(self) -> None:
+        """The cost of moving the notes off the answer is that the shape and
+        the sentence about it are no longer side by side. This is what pays
+        it back: the reference leads every line.
+        """
+        (page,) = _note_pages([_entry("説明が不足しています。", page=2, number="問3")])
+
+        (line,) = [mark for mark in page if mark.text != _HEADING]
+        assert line.text == "第2頁 問3 説明が不足しています。"
+        assert line.text.startswith("第2頁 問3"), "the reference must lead, not trail"
+
+    def test_notes_that_do_not_fit_one_page_start_another_rather_than_being_cut(self) -> None:
+        """Issue #121 threw a confirmed grade away over a long comment and
+        reported success. The same shape is available here -- keep the notes
+        that fit, drop the rest, hand back a plausible-looking page -- so
+        this fixes the count: every note is on some page, whole.
+        """
+        entries = [_entry(f"コメント{index:03d}" + "あ" * 40) for index in range(120)]
+
+        pages = _note_pages(entries)
+
+        assert len(pages) > 1
+        drawn = [mark.text for page in pages for mark in page if mark.text != _HEADING]
+        for entry in entries:
+            assert f"第1頁 問1 {entry.text}" in drawn
+
+    def test_every_note_gets_room_for_its_own_longest_possible_wrap(self) -> None:
+        """The promise that nothing is ellipsis-truncated rests entirely on
+        each rect being at least as tall as the note's worst-case wrap
+        (`_chars_per_line`). Checked here in points, against the same 12pt
+        line box `adapters.pdf.pdfium_pypdf_engine._draw_text` is handed.
+        """
+        entries = [_entry("あ" * length) for length in (1, 40, 119)]
+
+        (page,) = _note_pages(entries)
+
+        usable_width_pt = _A4_WIDTH_PT * (1.0 - 2.0 * _NOTE_PAGE_MARGIN)
+        for mark in page:
+            needed = _wrapped_line_count(mark.text or "", usable_width_pt)
+            room_pt = mark.rect.height * _A4_HEIGHT_PT
+            assert room_pt >= needed * _NOTE_PAGE_LINE_HEIGHT_PT
+
+    def test_no_two_marks_on_a_note_page_overlap(self) -> None:
+        """Marks are drawn independently from their own top-left corner, so
+        two rects that intersect are two blocks of prose printed over each
+        other -- both illegible, export still reporting success (the same
+        failure `_stacked_rects` exists to prevent on the answer sheet).
+        """
+        (page,) = _note_pages([_entry("あ" * length) for length in (10, 80, 119, 5)])
+
+        for first, second in itertools.combinations(page, 2):
+            assert not _rects_intersect(first.rect, second.rect), (
+                f"{first.text!r} and {second.text!r} were drawn on top of each other"
+            )
+
+    def test_every_mark_stays_inside_the_page(self) -> None:
+        """A rect running past the bottom edge is a note nobody will ever
+        read, and it is silent -- the export still succeeds.
+        """
+        pages = _note_pages([_entry("あ" * 100) for _ in range(300)])
+
+        for page in pages:
+            for mark in page:
+                assert mark.rect.y >= 0.0
+                assert mark.rect.y + mark.rect.height <= 1.0
+                assert mark.rect.x + mark.rect.width <= 1.0
+
+    def test_a_landscape_answer_gets_landscape_notes(self) -> None:
+        """The wider sheet wraps the same note into fewer lines. Sizing from
+        the answer rather than a fixed A4 is what keeps the printed result
+        one uniform stack of paper.
+        """
+        entry = _entry("あ" * 119)
+
+        (portrait,) = _note_pages([entry])
+        (landscape,) = _note_pages([entry], width=_A4_HEIGHT_PT, height=_A4_WIDTH_PT)
+
+        assert landscape[-1].rect.height * _A4_WIDTH_PT < portrait[-1].rect.height * _A4_HEIGHT_PT
+
+    def test_a_note_too_long_for_a_whole_page_is_split_across_pages_not_cut(self) -> None:
+        """Unreachable on a real answer sheet (`models.MAX_COMMENT_CHARS`
+        caps a note at four A4 lines against about sixty per page), but the
+        alternative if it ever happens is the engine's ellipsis eating the
+        end of a sentence with nothing to say it did.
+        """
+        pages = _note_pages([_entry("あ" * 400)], width=200.0, height=200.0)
+
+        assert len(pages) > 1
+        rebuilt = "".join(
+            mark.text or "" for page in pages for mark in page if mark.text != _HEADING
+        )
+        assert rebuilt == "第1頁 問1 " + "あ" * 400

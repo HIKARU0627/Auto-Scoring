@@ -32,10 +32,11 @@ from auto_scoring.domain.models import (
     Score,
 )
 from auto_scoring.domain.pdf_engine import PdfEngine
+from auto_scoring.domain.pdf_export import _NOTE_PAGE_FONT_SIZE_PT
 from auto_scoring.domain.pdf_geometry import PageGeometry
 from auto_scoring.jobs.export_processor import ExportJobProcessor, export_id
 from tests.font_support import install_font_covering
-from tests.pdf_content import drawn_text
+from tests.pdf_content import drawn_font_sizes, drawn_text
 from tests.support import at, make_grade, make_question, make_review, make_submission, make_test
 
 #: The comment every export-ready fixture below stamps on the page. Named
@@ -784,3 +785,119 @@ async def test_a_new_export_for_a_different_submission_does_not_reuse_a_path_res
     assert export_b.file_path == "exports/答案A_corrected_2.pdf"
     path_b = store.root / export_b.file_path
     assert path_b.exists()
+
+
+async def test_a_question_with_no_comment_area_has_its_notes_written_on_an_appended_page(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #161 本体の受入。**注釈コメントが生徒の筆跡の上に印字されず、かつ
+    紙のどこかに読める大きさで乗ること。**
+
+    #141 は「位置の特定できない注釈のコメント文を `comment_area` へ逃がす」
+    設計だった。実機再検証 #5 で、その `comment_area` 自体が回答欄の上に
+    かかっていた (最悪 19.1%、白紙は 0.0015%)。#159 が点数側を左余白帯へ
+    移したが、コメントは文なので幅3%の帯には入らない (最長の注釈で42行)。
+    実答案8教科を測り直しても、文が入るだけの空白は答案上に無かった。
+    そこで注釈は答案から降り、末尾の注釈ページへ出る。
+
+    見るのは「ファイルが出来た」でも「インクがある」でもなく、
+    `tests.pdf_content.drawn_text` が**どのページから何の字を読み出すか**である。
+    肯定形と否定形を対で置く: 注釈ページに文が有ること (これが落ちれば
+    「何も描かれていない」という #141 の状態に戻ったと分かる) と、
+    答案ページにその文が無いこと。
+    """
+    note = "理由の説明が不足しています。"
+    _write_source_pdf(store.submission_source_pdf_path("sub-1"))
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        # 検出で登録された設問がこうなる: #159 で `score_area` が、#161 で
+        # `comment_area` が、どちらも答案枠から導出されなくなった。
+        uow.questions.add(
+            make_question(
+                number="問1",
+                # 回答欄はある。#161 で導出をやめたのは、この枠から
+                # `comment_area` を作ることであって、枠の検出ではない。
+                # 枠が無い設問で「答案に何も描かれていない」と言っても、
+                # 描く先が元から無いだけで何の保証にもならない。
+                answer_area=NormalizedRect(x=0.1, y=0.2, width=0.8, height=0.3),
+                score_area=None,
+                comment_area=None,
+            )
+        )
+        uow.submissions.add(make_submission())
+        uow.grades.add(make_grade())
+        uow.annotations.add(
+            Annotation(
+                id="anno-comment",
+                submission_id="sub-1",
+                question_id="q-1",
+                source=GradingSource.AI,
+                kind=AnnotationKind.COMMENT,
+                comment=note,
+                created_at=at(),
+            )
+        )
+        uow.reviews.add(make_review())
+        uow.commit()
+    install_font_covering(monkeypatch, note + "第頁問注釈一覧答案ID4/5")
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export = uow.exports.get(export_id(job))
+        assert export is not None
+    output_path = store.root / export.file_path
+    assert len(PdfReader(str(output_path)).pages) == 2, "注釈ページが足されていない"
+
+    notes_page = "".join(drawn_text(output_path, 1).split())
+    assert note in notes_page, "注釈ページに文が無い"
+    assert "第1頁問1" in notes_page, "どの設問の注釈か読み取れない"
+    # 空白を落として突き合わせているので、テスト名側からも落とす。
+    assert "".join(make_test().name.split()) in notes_page, "注釈ページ単体でどの答案か分からない"
+    assert "…" not in notes_page, "注釈が切り詰められた"
+    assert min(drawn_font_sizes(output_path, 1)) >= _NOTE_PAGE_FONT_SIZE_PT
+
+    answer_page = "".join(drawn_text(output_path, 0).split())
+    assert note not in answer_page, "文が生徒の答案の上に印字された"
+    # 否定形だけでは「全部描かれていない」と区別できない。点数は答案側の
+    # 余白帯 (#150/#159) に乗り続けていること。
+    assert "4/5問1" in answer_page
+
+
+async def test_an_answer_with_no_notes_does_not_grow_a_sheet_of_paper(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """注釈が無い答案に注釈ページを足さないこと。40枚あれば40枚増える。"""
+    _write_source_pdf(store.submission_source_pdf_path("sub-1"), pages=2)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(
+            make_question(
+                number="問1",
+                answer_area=NormalizedRect(x=0.1, y=0.2, width=0.8, height=0.3),
+                score_area=None,
+                comment_area=None,
+            )
+        )
+        uow.submissions.add(make_submission())
+        uow.grades.add(make_grade())
+        uow.reviews.add(make_review())
+        uow.commit()
+    install_font_covering(monkeypatch, "問1 4/5")
+    job = _seed_export_job(session_factory)
+    processor = ExportJobProcessor(session_factory, store, PdfiumPypdfEngine(), Lock())
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        export = uow.exports.get(export_id(job))
+        assert export is not None
+    assert len(PdfReader(str(store.root / export.file_path)).pages) == 2

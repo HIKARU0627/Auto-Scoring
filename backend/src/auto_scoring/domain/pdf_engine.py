@@ -94,6 +94,7 @@ class PdfEngine(Protocol):
         source: Path,
         destination: Path,
         marks: Mapping[int, Sequence[AnnotationMark]],
+        note_pages: Sequence[Sequence[AnnotationMark]] = (),
     ) -> None:
         """Write ``source`` to ``destination`` with each page's confirmed
         annotations drawn as real glyphs (Issue #23): a stroked circle/cross/
@@ -105,5 +106,13 @@ class PdfEngine(Protocol):
         ``marks`` maps a 0-based page index to the marks to draw on it, all
         already resolved to page-normalized rects (`domain.pdf_export.
         build_export_marks`). The source file is never modified (§35-4).
+
+        ``note_pages`` are **blank pages appended after the source's own**,
+        one per element, each carrying that element's marks in the same
+        page-normalized space (Issue #161: `domain.pdf_export.
+        build_note_pages`). They exist because the answer sheet was measured
+        and has nowhere to put a sentence -- see that function. An empty
+        ``note_pages`` appends nothing, so an answer with no annotation
+        notes comes out with exactly the page count it went in with.
         """
         ...

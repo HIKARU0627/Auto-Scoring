@@ -131,12 +131,47 @@ def drawn_paths(source: Path, page_index: int = 0) -> list[DrawnPath]:
     return paths
 
 
-def drawn_text(source: Path) -> str:
-    """Every character the export placed, across all pages.
+def drawn_text(source: Path, page_index: int | None = None) -> str:
+    """Every character the export placed -- on ``page_index``, or across all
+    pages when it is ``None``.
 
     Uses the font's ToUnicode map (`PdfReader`'s own extraction), so a comment
     that came out as ``notdef`` boxes, or as the wrong string, is visible as
     such rather than as "there is ink here".
+
+    The per-page form is what Issue #161 needs on both sides of one
+    assertion: the note text has to be on the appended note page *and* not
+    on the answer sheet, and "no text anywhere" would satisfy only the
+    second half while looking like a pass.
     """
     reader = PdfReader(str(source))
-    return "\n".join(page.extract_text() for page in reader.pages)
+    pages = reader.pages if page_index is None else [reader.pages[page_index]]
+    return "\n".join(page.extract_text() for page in pages)
+
+
+def drawn_font_sizes(source: Path, page_index: int) -> list[float]:
+    """The point size each string on ``page_index`` was actually drawn at,
+    in the order they were drawn.
+
+    Read from the content stream's own ``Tf`` operands rather than inferred
+    from the mark rects, because the size a rect asks for and the size
+    `adapters.pdf.pdfium_pypdf_engine._draw_text` settles on are different
+    things: that function shrinks a point at a time until the wrapped lines
+    fit and stops at a 6pt floor. "The note is legible" is a claim about the
+    second number, so this reports the second number.
+
+    `_draw_mark_in_place` only ever translates and rotates the canvas (never
+    scales), so the ``Tf`` operand is the size on the paper.
+    """
+    reader = PdfReader(str(source))
+    contents = reader.pages[page_index].get_contents()
+    if contents is None:
+        return []
+    sizes: list[float] = []
+    current = 0.0
+    for operands, operator in ContentStream(contents, reader).operations:
+        if operator == b"Tf":
+            current = float(operands[1])
+        elif operator in (b"Tj", b"TJ", b"'", b'"'):
+            sizes.append(current)
+    return sizes

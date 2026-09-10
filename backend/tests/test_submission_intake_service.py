@@ -987,8 +987,9 @@ class _RenderFailingPdfEngine:
         source: Path,
         destination: Path,
         marks: Mapping[int, Sequence[AnnotationMark]],
+        note_pages: Sequence[Sequence[AnnotationMark]] = (),
     ) -> None:
-        self._delegate.render_annotations(source, destination, marks)
+        self._delegate.render_annotations(source, destination, marks, note_pages)
 
 
 def test_a_render_failure_is_reported_as_pdf_corrupted_not_an_unhandled_error(

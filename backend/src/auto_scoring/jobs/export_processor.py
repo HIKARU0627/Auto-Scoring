@@ -28,11 +28,15 @@ from auto_scoring.domain.models import (
     QuestionReviewVersion,
     Review,
     Submission,
+    Test,
 )
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_export import (
+    NoteEntry,
     build_export_marks,
+    build_note_pages,
     fallback_score_areas,
+    note_page_heading,
     review_version_snapshot,
     unconfirmed_question_ids,
 )
@@ -140,6 +144,7 @@ class ExportJobProcessor:
             if submission is None:
                 return self._failed("submission not found")
 
+            test = uow.tests.get(submission.test_id)
             questions = uow.questions.list_for_test(submission.test_id)
             question_ids = [question.id for question in questions]
             reviews_by_question = {
@@ -184,6 +189,7 @@ class ExportJobProcessor:
             fallback_areas = fallback_score_areas(questions)
 
             marks_by_page: dict[int, list[AnnotationMark]] = {}
+            note_entries: list[NoteEntry] = []
             for question in questions:
                 grades = uow.grades.history(job.submission_id, question.id)
                 grade = resolve_effective_grade(reviews_by_question[question.id], grades)
@@ -196,19 +202,24 @@ class ExportJobProcessor:
                     continue
                 annotations = uow.annotations.list_for(job.submission_id, question.id)
                 recognitions = uow.recognitions.history(job.submission_id, question.id)
-                marks = build_export_marks(
+                exported = build_export_marks(
                     question=question,
                     grade=grade,
                     annotations=annotations,
                     recognitions=recognitions,
                     fallback_score_area=fallback_areas.get(question.id),
                 )
-                marks_by_page.setdefault(question.page - 1, []).extend(marks)
+                marks_by_page.setdefault(question.page - 1, []).extend(exported.marks)
+                note_entries.extend(
+                    NoteEntry(page=question.page, question_number=question.number, text=note)
+                    for note in exported.unplaced_notes
+                )
 
             source_path = self._store.root / submission.source_pdf_path
 
             try:
-                data = self._render_and_verify(source_path, marks_by_page)
+                note_pages = self._build_note_pages(source_path, note_entries, submission, test)
+                data = self._render_and_verify(source_path, marks_by_page, note_pages)
             except ExportGenerationError as error:
                 return self._failed(str(error))
 
@@ -313,8 +324,50 @@ class ExportJobProcessor:
             staged.add(destination, data)
         return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
 
+    def _build_note_pages(
+        self,
+        source_path: Path,
+        note_entries: list[NoteEntry],
+        submission: Submission,
+        test: Test | None,
+    ) -> list[tuple[AnnotationMark, ...]]:
+        """The appended note pages this export needs, or none at all (Issue
+        #161).
+
+        Sized from the source's *first* page, because that is the sheet the
+        notes will be printed and stapled behind; `domain.pdf_export.
+        build_note_pages` needs real points to know how many lines fit and
+        the domain has no PDF library to ask.
+
+        ``test`` may be ``None`` only if the row vanished between the
+        submission's registration and this export -- unreachable through the
+        API, which is why it does not fail the export: the heading falls
+        back to the test's id, which still identifies the sheet, and the
+        notes themselves are what matters.
+        """
+        if not note_entries:
+            return []
+        try:
+            geometry = self._engine.page_geometry(source_path, 0)
+        except Exception as error:
+            raise ExportGenerationError(
+                f"PDF generation failed: {type(error).__name__}: {error}"
+            ) from error
+        return build_note_pages(
+            note_entries,
+            heading=note_page_heading(
+                test_name=test.name if test is not None else submission.test_id,
+                submission_id=submission.id,
+            ),
+            page_width_pt=geometry.displayed_width,
+            page_height_pt=geometry.displayed_height,
+        )
+
     def _render_and_verify(
-        self, source_path: Path, marks_by_page: dict[int, list[AnnotationMark]]
+        self,
+        source_path: Path,
+        marks_by_page: dict[int, list[AnnotationMark]],
+        note_pages: list[tuple[AnnotationMark, ...]],
     ) -> bytes:
         """Render into a scratch temp file (outside ``app-data/``, per
         ``docs/answer-intake-and-preprocessing.md`` §1's same convention),
@@ -323,12 +376,20 @@ class ExportJobProcessor:
         `_generate`'s publish step. A generation or verification failure
         here leaves the source PDF and every prior successful export
         completely untouched (Issue #23 acceptance).
+
+        The page-count check counts the appended note pages too (Issue
+        #161). It is still an equality and not a floor: "the source's pages,
+        plus exactly the note pages we asked for" is what catches a render
+        that dropped or duplicated a page, and an inequality either way is
+        the bug it was put here to find.
         """
-        expected_pages = self._engine.page_count(source_path)
+        expected_pages = self._engine.page_count(source_path) + len(note_pages)
         with tempfile.TemporaryDirectory(prefix="auto-scoring-export-") as scratch:
             candidate_path = Path(scratch) / "candidate.pdf"
             try:
-                self._engine.render_annotations(source_path, candidate_path, marks_by_page)
+                self._engine.render_annotations(
+                    source_path, candidate_path, marks_by_page, note_pages
+                )
                 actual_pages = self._engine.page_count(candidate_path)
             except Exception as error:
                 raise ExportGenerationError(

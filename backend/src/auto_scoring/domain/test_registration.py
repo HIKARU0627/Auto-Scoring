@@ -40,7 +40,6 @@ import re
 from collections import defaultdict
 from collections.abc import Sequence
 
-from auto_scoring.domain.annotation_layout import derive_comment_area
 from auto_scoring.domain.criteria_extraction import (
     CriteriaDraft,
     CriteriaQuestion,
@@ -519,12 +518,6 @@ def build_questions_and_rubrics(
                 )
 
         answer_area = _union_bbox(answer_regions) if answer_regions else None
-        # Issue #120: a question nobody placed an `ANNOTATION_AREA` region for
-        # still needs somewhere to draw its comment -- see
-        # `derive_comment_area` for why that is derived from the answer box
-        # rather than left `None` (the export used to succeed while writing
-        # nothing) and why a hand-placed region still wins.
-        derived_comment_area = derive_comment_area(answer_area)
 
         questions.append(
             Question(
@@ -553,10 +546,25 @@ def build_questions_and_rubrics(
                 # place on these sheets measured empty rather than assumed to
                 # be. A hand-placed region still wins, as it always did.
                 score_area=(_bbox_to_rect(score_regions[0].bbox) if score_regions else None),
+                # Issue #161: neither is `comment_area` any more, and for
+                # the same reason measured the same way. Issue #120 derived
+                # it as the band directly below the answer box, and the live
+                # re-verification found that band on inked page content for
+                # fourteen of the sixteen answer-box questions -- the worst
+                # at 19.1%, against 0.0015% for blank paper. A comment is
+                # prose, so it covers more of the student's writing than the
+                # score ever did.
+                #
+                # Unlike the score, it has no margin strip to fall back to:
+                # the same measurement found no blank region on any of the
+                # eight subjects' pages wide enough to set prose in without
+                # overlapping the answer (`domain.pdf_export.
+                # build_note_pages`). A question nobody placed an
+                # `ANNOTATION_AREA` region for therefore leaves this `None`
+                # and has its notes written on an appended note page. A
+                # hand-placed region still wins, as it always did.
                 comment_area=(
-                    _bbox_to_rect(annotation_regions[0].bbox)
-                    if annotation_regions
-                    else derived_comment_area
+                    _bbox_to_rect(annotation_regions[0].bbox) if annotation_regions else None
                 ),
             )
         )

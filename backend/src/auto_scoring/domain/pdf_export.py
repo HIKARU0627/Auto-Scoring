@@ -14,13 +14,17 @@ Two concerns live here:
   anything changed since the last successful one (`decide_reexport`).
 * Layout: `build_export_marks` turns one question's confirmed grade +
   annotations into the resolved, page-normalized `AnnotationMark` instructions
-  `domain.pdf_engine.PdfEngine.render_annotations` draws.
+  `domain.pdf_engine.PdfEngine.render_annotations` draws, plus the note lines
+  that have nowhere on the answer sheet to go; `build_note_pages` lays those
+  out on appended pages of their own (Issue #161).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
+from math import ceil
 
 from auto_scoring.domain.annotation_layout import (
     annotations_for_attempt,
@@ -40,6 +44,40 @@ from auto_scoring.domain.models import (
 )
 from auto_scoring.domain.pdf_engine import AnnotationMark
 from auto_scoring.domain.review_workflow import effective_latest_review, is_confirmed
+
+
+@dataclass(frozen=True, kw_only=True)
+class NoteEntry:
+    """One annotation note waiting for a place on an appended note page.
+
+    ``page`` is the **1-based** page of the answer sheet the question sits
+    on and ``question_number`` its `Question.number`: together they are how
+    a reader holding a physically separate sheet finds what the note is
+    about (`_note_entry_line`).
+    """
+
+    page: int
+    question_number: str
+    text: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class QuestionExport:
+    """What one question contributes to the exported PDF (Issue #161).
+
+    Two different destinations, which is why this is a pair and not one
+    list: ``marks`` are drawn onto the answer sheet itself, on the page the
+    question is on; ``unplaced_notes`` have no rect on that sheet at all and
+    go to an appended note page (`build_note_pages`).
+
+    ``unplaced_notes`` is empty whenever the question has a ``comment_area``
+    -- a human placed an ``ANNOTATION_AREA`` region, and their band is where
+    the notes go, exactly as before. It carries every note when there is
+    none, which since Issue #161 is every question registered by detection.
+    """
+
+    marks: tuple[AnnotationMark, ...]
+    unplaced_notes: tuple[str, ...]
 
 
 def unconfirmed_question_ids(
@@ -134,9 +172,9 @@ def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
     Only `score_area` is checked, not `comment_area`. The score is drawn for
     every question (`build_export_marks`), so a missing `score_area` always
     means something confirmed is missing from the page. A missing
-    ``comment_area`` only matters when an annotation actually needed to fall
-    back to it, and since Issue #120 both are derived from the same answer
-    box -- a question that has one has the other.
+    ``comment_area`` cannot cost anything at all since Issue #161: the notes
+    that used to depend on one now go to an appended note page
+    (`build_note_pages`), which every export can always produce.
     """
     placeable = fallback_score_areas(questions)
     return [
@@ -356,7 +394,7 @@ def _stacked_rects(
     )
 
 
-def _note_marks(comment_area: NormalizedRect | None, notes: Sequence[str]) -> list[AnnotationMark]:
+def _note_marks(comment_area: NormalizedRect, notes: Sequence[str]) -> list[AnnotationMark]:
     """The margin-band marks for ``notes``, stacked inside ``comment_area``.
 
     **The overflow policy** (Issue #141): when the band cannot hold every
@@ -368,12 +406,13 @@ def _note_marks(comment_area: NormalizedRect | None, notes: Sequence[str]) -> li
     them and look finished. Counting what did not fit costs one line and
     makes the loss visible to the person holding the paper.
 
-    An unregistered ``comment_area`` (``None``) leaves nowhere to write at
-    all, and the notes are dropped -- `unplaceable_question_ids` refuses an
-    export before it can reach that state for any question that has a
-    ``score_area``, and since Issue #120 a question has both or neither.
+    Only reached for a question that *has* a band, i.e. one a human placed
+    an ``ANNOTATION_AREA`` region for. Since Issue #161 every other question
+    has none, and `build_export_marks` routes its notes to an appended note
+    page (`build_note_pages`) rather than passing ``None`` here to be
+    silently dropped -- which is what this function used to accept.
     """
-    if not notes or comment_area is None:
+    if not notes:
         return []
     rects = _stacked_rects(comment_area, len(notes), _MIN_NOTE_HEIGHT)
     if len(rects) < len(notes):
@@ -385,6 +424,241 @@ def _note_marks(comment_area: NormalizedRect | None, notes: Sequence[str]) -> li
     ]
 
 
+#: The font size (pt) an appended note page is laid out for, and the line box
+#: (pt) one wrapped line of it gets.
+#:
+#: **These two numbers are what stops a note from being silently shrunk or
+#: cut**, and they are picked against `adapters.pdf.pdfium_pypdf_engine.
+#: _draw_text`'s actual behaviour rather than being a wish. That function
+#: starts at ``min(14, max(6, rect_height_pt))``, steps down one point at a
+#: time while the wrapped lines do not fit, and -- if even its 6pt floor
+#: leaves too many -- keeps the ones that fit and ends the last with an
+#: ellipsis.
+#:
+#: Give a note ``n`` line boxes of 12pt and the sizes it tries are
+#: ``min(14, 12n)``, one less, one less again: for every ``n`` that sequence
+#: contains exactly ``10.0``, because both ``12`` and ``14`` are a whole
+#: number of points above it. `_wrapped_line_count` is measured at 10pt and
+#: over-estimates (see there), so 10pt always fits in ``12n`` line boxes, so
+#: the descent stops at 10pt or above and never reaches the ellipsis branch.
+#: A note is drawn at **at least 10pt, always** -- not "6pt if it has to",
+#: which is the size at which the reader is handed a blur instead of a
+#: sentence.
+_NOTE_PAGE_FONT_SIZE_PT = 10.0
+_NOTE_PAGE_LINE_HEIGHT_PT = 12.0
+
+#: Page-normalized margin kept on all four sides of a note page. A note that
+#: runs into the printer's own unprintable margin is as lost as one that was
+#: cut.
+_NOTE_PAGE_MARGIN = 0.06
+
+
+def _chars_per_line(width_pt: float) -> int:
+    """How many characters of a note line are *guaranteed* to fit across
+    ``width_pt`` at `_NOTE_PAGE_FONT_SIZE_PT`.
+
+    One character per point of font size, i.e. one em each. That is the
+    width of a full-width Japanese glyph and an over-estimate for every
+    other character the export can draw -- Latin, digits and punctuation are
+    all narrower in the proportional gothic faces `adapters.pdf.
+    pdfium_pypdf_engine._JAPANESE_FONT_CANDIDATES` names -- so the engine's
+    real wrap always produces this many lines or fewer.
+
+    Over-estimating is the point. `_draw_text` is what actually wraps, and
+    this module never sees its font metrics: the domain is framework-free
+    (`AGENTS.md` "Architecture") and cannot measure a glyph. An estimate
+    that could come out *under* the truth would hand the engine a rect one
+    line too short and get the note ellipsis-truncated -- Issue #121's
+    failure in miniature -- while one that comes out over wastes a few
+    points of paper and cannot lose a character.
+    """
+    return max(1, int(width_pt // _NOTE_PAGE_FONT_SIZE_PT))
+
+
+def _wrapped_line_count(text: str, width_pt: float) -> int:
+    return max(1, ceil(len(text) / _chars_per_line(width_pt)))
+
+
+def _note_entry_line(entry: NoteEntry) -> str:
+    """One note page line: **where it belongs first, then what it says.**
+
+    The opposite order to `_fallback_score_text`, for the opposite reason.
+    That line puts its score first because the margin strip is narrow enough
+    to truncate and whatever is last is what gets eaten. A note page
+    truncates nothing (`_NOTE_PAGE_FONT_SIZE_PT`), so nothing needs
+    protecting by position, and the reference can go where it is actually
+    useful: at the head of every line, so a reader holding a sheet that is
+    physically separate from the answer can find the question a note is
+    about without having to read the note first.
+    """
+    return f"第{entry.page}頁 {entry.question_number} {entry.text}"
+
+
+def note_page_heading(*, test_name: str, submission_id: str) -> str:
+    """The line every appended note page carries, naming what it belongs to.
+
+    A note page is a separate sheet of paper. Staples come out, printers
+    collate wrongly, and a sheet of sentences with no answer beside it is
+    unattributable -- so the sheet has to say, on its own, which test and
+    which submission it came from.
+
+    **It deliberately adds no personal data.** Not the student's name, not
+    the uploaded filename (which is free text a user may well have typed a
+    name into): only the test's own name and the submission id, which is the
+    same opaque handle the app and `Export` rows use. Whatever the answer
+    sheet already prints about the student stays the answer sheet's --
+    reprinting it here would put it somewhere it was not before, on a sheet
+    that can be separated from the answer, for no gain (`AGENTS.md`
+    "Security").
+    """
+    return f"注釈一覧　{test_name}　答案ID {submission_id}"
+
+
+def build_note_pages(
+    entries: Sequence[NoteEntry],
+    *,
+    heading: str,
+    page_width_pt: float,
+    page_height_pt: float,
+) -> list[tuple[AnnotationMark, ...]]:
+    """``entries`` laid out on as many appended note pages as they need --
+    one `AnnotationMark` tuple per page, in order (Issue #161).
+
+    **Why the notes leave the answer sheet at all.** Issue #141 moved every
+    annotation's comment off the student's writing and into its question's
+    ``comment_area`` band, on the understanding that the band was empty
+    paper. It was not: the live re-verification measured that derived band
+    on inked content for fourteen of sixteen answer-box questions, the worst
+    at 19.1% against 0.0015% for blank paper. Issue #159 fixed the score
+    half of the same defect by moving scores to a margin strip that had been
+    *measured* empty. A comment cannot follow it there -- the strip is 3% of
+    the page, about 18pt, and the real material's longest note needs 42
+    wrapped lines in it.
+
+    So those pages were measured again, for anywhere else prose could go,
+    and there is nowhere. Across the eight subjects' answer sheets the
+    widest truly-blank vertical strip is 4.0-7.5% of the page width (0.0% on
+    two of them), which turns one page's notes into 18-63% of its height;
+    the tallest blank full-width horizontal strip is 2.7-5.6% of the height,
+    and on six of the eight it is the top margin above the header rather
+    than the bottom, while the notes themselves need 3.6-11.5%. Take the
+    width and the notes overlap the answer; avoid the overlap and they get
+    cut. An appended page is the only placement that is neither.
+
+    **What that costs.** One extra sheet per answer that has notes, and a
+    reference one step more indirect: the shape on the answer and the
+    sentence about it are no longer side by side. `_note_entry_line` is what
+    makes the second cost payable -- every line names its page and question
+    -- and ``heading`` is what keeps the sheet identifiable once a stapler
+    or a printer has separated it from the answer it belongs to.
+
+    **An answer with no notes gets no page.** Appending a near-empty sheet
+    to every export would cost a sheet of paper per submission for nothing,
+    and forty answers is forty sheets.
+
+    **Nothing here is ever truncated.** A page holds as many whole notes as
+    fit and the rest start a new one (`_paginate`). The only thing that may
+    be cut is ``heading``, and only on a page too small to hold it *and* a
+    note: it repeats what the app already knows, and a note does not.
+    """
+    if not entries:
+        return []
+    usable = 1.0 - 2.0 * _NOTE_PAGE_MARGIN
+    width_pt = page_width_pt * usable
+    line_height = _NOTE_PAGE_LINE_HEIGHT_PT / page_height_pt
+    capacity = max(1, int(usable / line_height))
+    heading_lines = min(_wrapped_line_count(heading, width_pt), capacity - 1) if capacity > 1 else 0
+    body_capacity = capacity - heading_lines
+    return [
+        _note_page_marks(
+            heading=heading if heading_lines else None,
+            heading_lines=heading_lines,
+            lines=lines,
+            width=usable,
+            line_height=line_height,
+        )
+        for lines in _paginate(entries, width_pt=width_pt, body_capacity=body_capacity)
+    ]
+
+
+def _paginate(
+    entries: Sequence[NoteEntry], *, width_pt: float, body_capacity: int
+) -> list[list[tuple[str, int]]]:
+    """``entries`` grouped into pages of at most ``body_capacity`` wrapped
+    lines, each line paired with the number of them it takes.
+
+    A note never straddles a page boundary while a whole one would still fit
+    on the next page: reading half a sentence, turning the sheet over and
+    reading the rest is exactly the reading cost this change exists to
+    avoid. The exception is a note that cannot fit on an *empty* page at all
+    -- only reachable on a page far smaller than any answer sheet, since an
+    A4 note page holds about sixty lines and `models.MAX_COMMENT_CHARS` caps
+    one note at four. That one is sliced into page-sized pieces rather than
+    cut short: `_chars_per_line` times ``body_capacity`` is, by the same
+    over-estimate, a character count guaranteed to fit.
+    """
+    slice_size = _chars_per_line(width_pt) * body_capacity
+    pages: list[list[tuple[str, int]]] = []
+    current: list[tuple[str, int]] = []
+    used = 0
+    for entry in entries:
+        text = _note_entry_line(entry)
+        for start in range(0, len(text), slice_size):
+            piece = text[start : start + slice_size]
+            needed = _wrapped_line_count(piece, width_pt)
+            if current and used + needed > body_capacity:
+                pages.append(current)
+                current, used = [], 0
+            current.append((piece, needed))
+            used += needed
+    if current:
+        pages.append(current)
+    return pages
+
+
+def _note_page_marks(
+    *,
+    heading: str | None,
+    heading_lines: int,
+    lines: Sequence[tuple[str, int]],
+    width: float,
+    line_height: float,
+) -> tuple[AnnotationMark, ...]:
+    """One note page's marks, stacked from its top margin downwards.
+
+    Every line gets its own rect, for the reason `_stacked_rects` gives
+    every band note one: `PdfEngine.render_annotations` draws each mark from
+    its own top-left corner, so a single joined string would be re-wrapped
+    and re-shrunk as one block, and one long note could push the rest off
+    the bottom of the page.
+    """
+    marks: list[AnnotationMark] = []
+    top = _NOTE_PAGE_MARGIN
+    if heading is not None:
+        marks.append(
+            AnnotationMark(
+                kind=AnnotationKind.COMMENT,
+                rect=NormalizedRect(
+                    x=_NOTE_PAGE_MARGIN, y=top, width=width, height=heading_lines * line_height
+                ),
+                text=heading,
+            )
+        )
+        top += heading_lines * line_height
+    for text, needed in lines:
+        marks.append(
+            AnnotationMark(
+                kind=AnnotationKind.COMMENT,
+                rect=NormalizedRect(
+                    x=_NOTE_PAGE_MARGIN, y=top, width=width, height=needed * line_height
+                ),
+                text=text,
+            )
+        )
+        top += needed * line_height
+    return tuple(marks)
+
+
 def build_export_marks(
     *,
     question: Question,
@@ -392,8 +666,8 @@ def build_export_marks(
     annotations: Sequence[Annotation],
     recognitions: Sequence[RecognitionResult],
     fallback_score_area: NormalizedRect | None = None,
-) -> list[AnnotationMark]:
-    """The resolved `AnnotationMark` list to draw for one question's
+) -> QuestionExport:
+    """The resolved marks to draw for one question's
     confirmed attempt: its effective ``grade`` (per `domain.review_workflow.
     resolve_effective_grade`) together with that question's *full*
     ``annotations``/``recognitions`` history -- this function itself scopes
@@ -442,13 +716,24 @@ def build_export_marks(
     anchored COMMENT-kind annotation used to do.
 
     A `COMMENT`-kind annotation therefore never draws a shape at all -- it
-    has none -- and contributes only its band line. A line whose annotation
+    has none -- and contributes only its note line. A line whose annotation
     could not be placed says so (`_UNPLACED_SUFFIX`), so an unplaced mark is
     visibly unplaced rather than absent. Each note gets its own
     slice of the band rather than every note sharing one rect: marks are
     drawn independently from their own top-left corner, so two notes on one
     rect would land on top of one another, both illegible, while the export
     still reported success (P2 review, round 5).
+
+    **Where the notes go when there is no band** (Issue #161). A question
+    with no ``comment_area`` -- since Issue #161 that is every question
+    registered by detection, because the band used to be derived from the
+    answer box and was measured sitting on the student's own writing -- has
+    its notes handed back in `QuestionExport.unplaced_notes` instead of
+    drawn. `build_note_pages` puts them on an appended page. They are
+    deliberately *not* dropped and *not* squeezed into the score's margin
+    strip: dropping is Issue #121's failure, and the strip is three
+    characters wide, so prose in it is an ellipsis with a few words in front
+    of it.
     """
     attempt_annotations = annotations_for_attempt(annotations, grade.created_at)
     attempt_recognitions = recognitions_up_to_attempt(recognitions, grade.created_at)
@@ -482,15 +767,21 @@ def build_export_marks(
         note = _note_text(annotation, placed=rect is not None)
         if note is not None:
             notes.append(note)
+    if question.comment_area is None:
+        return QuestionExport(marks=tuple(marks), unplaced_notes=tuple(notes))
     marks.extend(_note_marks(question.comment_area, notes))
-    return marks
+    return QuestionExport(marks=tuple(marks), unplaced_notes=())
 
 
 __all__ = [
+    "NoteEntry",
+    "QuestionExport",
     "ReexportDecision",
     "build_export_marks",
+    "build_note_pages",
     "decide_reexport",
     "fallback_score_areas",
+    "note_page_heading",
     "review_version_snapshot",
     "unconfirmed_question_ids",
     "unplaceable_question_ids",

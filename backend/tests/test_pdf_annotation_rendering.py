@@ -19,15 +19,27 @@ from pypdf.generic import NameObject, NumberObject, RectangleObject
 
 import auto_scoring.adapters.pdf.pdfium_pypdf_engine as engine_module
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import (
+    _ELLIPSIS,
     JapaneseFontNotFoundError,
     PdfiumPypdfEngine,
 )
-from auto_scoring.domain.models import AnnotationKind, NormalizedRect
+from auto_scoring.domain.models import MAX_COMMENT_CHARS, AnnotationKind, NormalizedRect
 from auto_scoring.domain.pdf_engine import AnnotationMark
+from auto_scoring.domain.pdf_export import (
+    _NOTE_PAGE_FONT_SIZE_PT,
+    NoteEntry,
+    build_note_pages,
+    note_page_heading,
+)
 from tests.font_support import install_font_covering
+from tests.pdf_content import drawn_font_sizes, drawn_text
 from tests.pdf_ink import has_red_within, redness_bbox
 
 _A4_W, _A4_H = 595.0, 842.0
+
+#: A mark rect well inside the page, for tests whose subject is the note
+#: page rather than where an answer-sheet mark lands.
+_RECT = NormalizedRect(x=0.3, y=0.3, width=0.2, height=0.1)
 
 
 def _write_pdf(path: Path, *, pages: int = 1, rotation: int = 0) -> None:
@@ -319,3 +331,112 @@ def test_missing_japanese_font_does_not_affect_pure_shape_marks(
 
     png = engine.render_page_png(destination, 0, scale=2.0)
     assert has_red_within(png, rect)
+
+
+# --------------------------------------------------------------------------- #
+# Appended note pages (Issue #161)
+# --------------------------------------------------------------------------- #
+
+
+def _note_page_for(text: str) -> tuple[AnnotationMark, ...]:
+    """One note page's worth of marks, laid out by the domain itself, so
+    this file tests the engine against the geometry production really hands
+    it rather than against a rect invented here."""
+    return build_note_pages(
+        [NoteEntry(page=1, question_number="問1", text=text)],
+        heading=note_page_heading(test_name="日本史添削", submission_id="sub-1"),
+        page_width_pt=_A4_W,
+        page_height_pt=_A4_H,
+    )[0]
+
+
+def test_note_pages_are_appended_after_the_answer_and_carry_the_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #161's whole point, in one assertion pair: the sentence is on
+    the appended sheet **and** it is not on the answer sheet.
+
+    Both halves are needed. "The note is not on the answer" alone passes
+    just as well when the export drew nothing anywhere, which is the state
+    Issue #141 was filed about.
+    """
+    note = "理由の説明が不足しています。"
+    install_font_covering(monkeypatch, note + "第頁問日本史添削")
+    source = tmp_path / "source.pdf"
+    _write_pdf(source)
+    destination = tmp_path / "out.pdf"
+
+    engine = PdfiumPypdfEngine()
+    engine.render_annotations(
+        source,
+        destination,
+        {0: [AnnotationMark(kind=AnnotationKind.CROSS, rect=_RECT)]},
+        [_note_page_for(note)],
+    )
+
+    assert engine.page_count(destination) == 2, "the note page was not appended"
+    assert note in drawn_text(destination, 1)
+    assert note not in drawn_text(destination, 0), "prose was drawn over the answer"
+
+
+def test_the_answer_page_keeps_its_own_size_and_the_note_page_matches_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A note page that came out A4 behind a landscape answer is two
+    different sheets of paper in one stapled bundle."""
+    install_font_covering(monkeypatch, "第頁問日本史添削")
+    source = tmp_path / "source.pdf"
+    _write_pdf(source, rotation=90)
+    destination = tmp_path / "out.pdf"
+
+    engine = PdfiumPypdfEngine()
+    engine.render_annotations(source, destination, {}, [_note_page_for("コメント")])
+
+    answer = engine.page_geometry(destination, 0)
+    notes = engine.page_geometry(destination, 1)
+    assert (notes.displayed_width, notes.displayed_height) == (
+        answer.displayed_width,
+        answer.displayed_height,
+    )
+
+
+def test_a_note_is_drawn_at_a_size_a_student_can_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_draw_text` shrinks a point at a time down to a 6pt floor and then
+    truncates with an ellipsis. Neither may happen to a note: the domain
+    sizes every rect so that the descent stops at
+    `domain.pdf_export._NOTE_PAGE_FONT_SIZE_PT`, and this reads the ``Tf``
+    the content stream actually carries to prove it did.
+
+    A comment at `models.MAX_COMMENT_CHARS` is the worst case the model
+    permits, so it is the one measured.
+    """
+    note = "あ" * MAX_COMMENT_CHARS
+    install_font_covering(monkeypatch, note + "第頁問日本史添削")
+    source = tmp_path / "source.pdf"
+    _write_pdf(source)
+    destination = tmp_path / "out.pdf"
+
+    engine = PdfiumPypdfEngine()
+    engine.render_annotations(source, destination, {}, [_note_page_for(note)])
+
+    sizes = drawn_font_sizes(destination, 1)
+    assert sizes, "nothing was drawn on the note page at all"
+    assert min(sizes) >= _NOTE_PAGE_FONT_SIZE_PT
+    assert _ELLIPSIS not in drawn_text(destination, 1), "a note was cut short"
+
+
+def test_no_note_pages_means_the_page_count_does_not_change(tmp_path: Path) -> None:
+    """Condition on the fix: an answer with no annotation notes must not
+    grow a sheet of paper. Forty answers would be forty sheets."""
+    source = tmp_path / "source.pdf"
+    _write_pdf(source, pages=2)
+    destination = tmp_path / "out.pdf"
+
+    engine = PdfiumPypdfEngine()
+    engine.render_annotations(
+        source, destination, {0: [AnnotationMark(kind=AnnotationKind.CIRCLE, rect=_RECT)]}
+    )
+
+    assert engine.page_count(destination) == 2

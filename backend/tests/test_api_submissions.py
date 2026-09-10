@@ -372,8 +372,9 @@ class _SlowPdfEngine:
         source: Path,
         destination: Path,
         marks: Mapping[int, Sequence[AnnotationMark]],
+        note_pages: Sequence[Sequence[AnnotationMark]] = (),
     ) -> None:
-        self._delegate.render_annotations(source, destination, marks)
+        self._delegate.render_annotations(source, destination, marks, note_pages)
 
 
 def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) -> None:
