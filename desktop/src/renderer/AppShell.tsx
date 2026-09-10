@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 
+import type { SidecarConnectionInfo } from "../shared/sidecar-upload.js";
 import type { SidecarClient } from "./api/client.js";
 import { SidecarApiProvider } from "./api/SidecarApiProvider.js";
 import { AppRoutes } from "./core/app-routes.js";
@@ -19,13 +20,15 @@ function SidecarConnectionPlaceholder(): JSX.Element {
 
 export function AppShell({
   client,
+  connection = null,
   initialStack = [AppRoutes.home],
 }: {
   client: SidecarClient | null;
+  connection?: SidecarConnectionInfo | null;
   initialStack?: readonly string[];
 }): JSX.Element {
   return (
-    <SidecarApiProvider client={client}>
+    <SidecarApiProvider client={client} connection={connection}>
       <RouterProvider initialStack={initialStack}>
         {client === null ? <SidecarConnectionPlaceholder /> : <RouteOutlet />}
       </RouterProvider>
