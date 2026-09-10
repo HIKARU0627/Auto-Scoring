@@ -73,3 +73,21 @@ real provider. Results and how to read them:
 uv run python poc/issue_25_queue_throughput/report.py
 uv run python poc/issue_25_queue_throughput/report.py --answers 6 --latency 1.0
 ```
+
+## Issue #130 -- scan-to-scan drift of the same printed form (`issue_130_scan_drift/`)
+
+Measures how far the printed ruling of one answer form moves between two
+separate scans of it, split into rotation, translation and scale -- the
+systematic error behind detecting answer areas on one document and cropping
+them out of another. Result, denominator, decision and the removal/promotion
+condition: [`docs/poc-5-scan-to-scan-drift.md`](../../docs/poc-5-scan-to-scan-drift.md).
+
+```bash
+# From backend/. Synthetic only -- calibrates the probe against known
+# transforms, so the real numbers can be read against its own error. No data.
+uv run python poc/issue_130_scan_drift/report.py --self-test
+
+# Against the licensed grading material (kept outside this repository; the
+# path is an argument, never a default). Prints counts and displacements only.
+uv run python poc/issue_130_scan_drift/report.py --data "<local grading-material dir>"
+```
