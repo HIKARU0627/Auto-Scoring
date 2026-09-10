@@ -62,6 +62,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import combinations
 from typing import Annotated, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo
@@ -530,6 +531,103 @@ def missing_question_numbers(
             continue
         (absent if number in reported_absent else undetected).append(number)
     return tuple(undetected), tuple(absent)
+
+
+#: Aspect ratio (height / width) at or above which a page's answer areas are
+#: read as vertical, right-to-left Japanese.
+#:
+#: **Measured, not chosen** (Issue #171). The median aspect ratio of the
+#: answer areas on each of the 8 registered real answer sheets:
+#:
+#: ==============  =========================================
+#: horizontal (6)  0.18, 0.21, 0.23, 0.24, 0.35, 0.46
+#: vertical (2)    5.76, 8.91
+#: ==============  =========================================
+#:
+#: Twelve times apart, with nothing in between. The threshold sits in the
+#: empty band, and 2 vertical sheets is a small sample -- so what the tests
+#: pin is the *property* (a column of writing is far taller than it is wide,
+#: a ruled line of writing is far wider than it is tall), never this number.
+VERTICAL_ASPECT_RATIO = 2.0
+
+
+def _reading_key(region: Region, *, vertical: bool) -> tuple[float, float]:
+    """Where a region falls in reading order on its page.
+
+    Vertical Japanese reads right to left, so the rightmost column comes
+    first; horizontal reads top to bottom, then left to right.
+    """
+    if vertical:
+        return (-region.bbox.x1, region.bbox.y0)
+    return (region.bbox.y0, region.bbox.x0)
+
+
+def _reads_vertically(regions: Sequence[Region]) -> bool:
+    ratios = sorted(
+        (region.bbox.y1 - region.bbox.y0) / (region.bbox.x1 - region.bbox.x0)
+        for region in regions
+        if region.bbox.x1 > region.bbox.x0
+    )
+    if not ratios:
+        return False
+    return ratios[len(ratios) // 2] >= VERTICAL_ASPECT_RATIO
+
+
+def reading_order_conflicts(
+    regions: Sequence[Region], question_numbers: Sequence[str]
+) -> tuple[tuple[str, str], ...]:
+    """Pairs of questions whose boxes sit in the opposite order to their
+    numbers, on the page they share (Issue #171).
+
+    **Why this is worth a check of its own.** Detection can put both boxes
+    exactly on the printed columns and still attribute each to the *other*
+    question. Measured on the real material, one subject does this every
+    time: on a vertical, right-to-left sheet the model pairs each printed
+    question label with the neighbouring column rather than its own. Nothing
+    else notices -- every question has a box, so no question is undetected,
+    the screen says so, and the two answers are then graded against each
+    other's rubric. In one real run that produced 0/10 and 0/20, both at high
+    confidence, both approved by a person.
+
+    **Why order, and not the printed labels.** Reading the labels needs OCR,
+    which would send the whole page to a second vendor and change the basis
+    `docs/answer-area-detection.md` §3 gives for sending it to one. The
+    order is already in hand: question numbers are a sequence, and boxes on
+    paper are laid out in reading order. Measured over the 8 registered
+    sheets, the true arrangement matches the declared question order on every
+    one of them, and this check fires on exactly the subject that is wrong
+    and none of the seven that are right.
+
+    **This names a suspicion; it does not repair one.** The returned pair is
+    "these two are in the opposite order to their numbers" -- which of the
+    two boxes is the misplaced one is not decidable from the geometry, and
+    re-labelling by reading order would be acting on an 8-sheet rule of
+    thumb, which is how Issue #122's "consistently 0.035 to the right" went
+    wrong.
+
+    Checked per page: a question order spanning two pages says nothing about
+    where on either page the boxes sit. A page with fewer than two attributed
+    answer areas has no order to contradict.
+    """
+    rank = {number: index for index, number in enumerate(question_numbers)}
+    by_page: dict[int, list[Region]] = {}
+    for region in regions:
+        if region.kind is not RegionKind.ANSWER_AREA or region.label not in rank:
+            continue
+        by_page.setdefault(region.page_index, []).append(region)
+
+    conflicts: list[tuple[str, str]] = []
+    for page in sorted(by_page):
+        on_page = by_page[page]
+        if len(on_page) < 2:
+            continue
+        vertical = _reads_vertically(on_page)
+        placed = sorted(on_page, key=lambda region: _reading_key(region, vertical=vertical))
+        position = {region.label: index for index, region in enumerate(placed)}
+        for first, second in combinations(sorted(on_page, key=lambda r: rank[r.label]), 2):
+            if position[first.label] > position[second.label]:
+                conflicts.append((first.label, second.label))
+    return tuple(conflicts)
 
 
 def unassigned_answer_area_ids(regions: Sequence[Region]) -> tuple[str, ...]:

@@ -197,6 +197,11 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(BuiltList, const [const FullType(String)]),
           () => ListBuilder<String>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [
+            const FullType(BuiltList, const [const FullType(String)])
+          ]),
+          () => ListBuilder<BuiltList<String>>())
+      ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(RegionModel)]),
           () => ListBuilder<RegionModel>())
       ..addBuilderFactory(

@@ -11,6 +11,7 @@ Name | Type | Description | Notes
 **absentQuestionNumbers** | **BuiltList&lt;String&gt;** |  | 
 **pages** | [**BuiltList&lt;PageFormatModel&gt;**](PageFormatModel.md) |  | 
 **questionNumbers** | **BuiltList&lt;String&gt;** |  | 
+**readingOrderConflicts** | [**BuiltList&lt;BuiltList&lt;String&gt;&gt;**](BuiltList.md) |  | 
 **regions** | [**BuiltList&lt;RegionModel&gt;**](RegionModel.md) |  | 
 **revision** | **int** |  | 
 **status** | **String** |  | 

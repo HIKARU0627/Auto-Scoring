@@ -25,6 +25,7 @@ from auto_scoring.domain.answer_area_detection import (
     UnassignedAnswerAreaError,
     ensure_answer_areas_confirmable,
     missing_question_numbers,
+    reading_order_conflicts,
     parse_answer_area_detection,
     regions_from_detection,
     unassigned_answer_area_ids,
@@ -623,3 +624,131 @@ class TestMissingQuestionsAreSplitByCause:
 
         assert undetected == _NUMBERS
         assert absent == ()
+
+
+class TestReadingOrderConflicts:
+    """The one detection failure that looks like success (Issue #171).
+
+    Measured on the real material: on a vertical, right-to-left sheet the
+    model puts both boxes exactly on the printed columns and then attributes
+    each to the *other* question -- every run, three for three. Nothing else
+    notices, because every question has a box: the screen says every question
+    has an answer area, and the two answers are graded against each other's
+    rubric. One real run produced 0/10 and 0/20 that way, both at high
+    confidence, both approved by a person.
+
+    The geometry below is the measured position of each subject's answer
+    areas, normalized, taken from the eight registered answer sheets.
+    """
+
+    def _regions(self, *placed: tuple[str, float, float, float, float]) -> list[Region]:
+        return [
+            Region(
+                region_id=f"answer-area-{index}",
+                kind=RegionKind.ANSWER_AREA,
+                page_index=0,
+                bbox=NormalizedBBox(x0=x0, y0=y0, x1=x1, y1=y1),
+                label=label,
+            )
+            for index, (label, x0, y0, x1, y1) in enumerate(placed)
+        ]
+
+    def test_a_vertical_sheet_read_right_to_left_is_quiet_when_correct(self) -> None:
+        """問一's column is the one further right on a right-to-left sheet."""
+        regions = self._regions(
+            ("問一", 0.798, 0.270, 0.843, 0.671),
+            ("問二", 0.639, 0.270, 0.703, 0.720),
+        )
+
+        assert reading_order_conflicts(regions, ("問一", "問二", "問三")) == ()
+
+    def test_the_measured_swap_is_named(self) -> None:
+        """The same two columns, attributed the other way round -- which is
+        what the real detector returns for this subject."""
+        regions = self._regions(
+            ("問一", 0.639, 0.270, 0.703, 0.720),
+            ("問二", 0.798, 0.270, 0.843, 0.671),
+        )
+
+        assert reading_order_conflicts(regions, ("問一", "問二", "問三")) == (("問一", "問二"),)
+
+    def test_a_horizontal_sheet_reads_top_to_bottom(self) -> None:
+        regions = self._regions(
+            ("問6", 0.181, 0.357, 0.840, 0.493),
+            ("問7", 0.178, 0.509, 0.837, 0.602),
+        )
+
+        assert reading_order_conflicts(regions, ("問5", "問6", "問7")) == ()
+
+    def test_a_horizontal_sheet_swapped_is_named(self) -> None:
+        regions = self._regions(
+            ("問6", 0.178, 0.509, 0.837, 0.602),
+            ("問7", 0.181, 0.357, 0.840, 0.493),
+        )
+
+        assert reading_order_conflicts(regions, ("問5", "問6", "問7")) == (("問6", "問7"),)
+
+    def test_questions_that_are_not_adjacent_in_the_list_still_compare(self) -> None:
+        """One measured subject has only its 3rd and 4th questions on the
+        registered page. Their *relative* order is what this checks; the gap
+        between their numbers says nothing."""
+        regions = self._regions(
+            ("設問Ａ (3)", 0.136, 0.278, 0.830, 0.446),
+            ("設問Ｂ (1)", 0.139, 0.620, 0.832, 0.787),
+        )
+        numbers = ("設問Ａ (1)", "設問Ａ (2)", "設問Ａ (3)", "設問Ｂ (1)", "設問Ｂ (2)")
+
+        assert reading_order_conflicts(regions, numbers) == ()
+
+    def test_one_answer_area_on_a_page_has_no_order_to_contradict(self) -> None:
+        regions = self._regions(("問1", 0.016, 0.244, 0.962, 0.463))
+
+        assert reading_order_conflicts(regions, ("問1", "問2")) == ()
+
+    def test_pages_are_checked_apart(self) -> None:
+        """A question order spanning two pages says nothing about where on
+        either page the boxes sit."""
+        regions = self._regions(("問二", 0.1, 0.6, 0.9, 0.8))
+        regions.append(
+            Region(
+                region_id="answer-area-1",
+                kind=RegionKind.ANSWER_AREA,
+                page_index=1,
+                bbox=NormalizedBBox(x0=0.1, y0=0.2, x1=0.9, y1=0.4),
+                label="問一",
+            )
+        )
+
+        assert reading_order_conflicts(regions, ("問一", "問二")) == ()
+
+    def test_a_region_naming_no_confirmed_question_is_ignored(self) -> None:
+        """An unassigned box has no number, so it has no place in the order.
+        It blocks the confirm on its own account
+        (`ensure_answer_areas_confirmable`)."""
+        regions = self._regions(
+            (UNASSIGNED_QUESTION_LABEL, 0.798, 0.270, 0.843, 0.671),
+            ("問一", 0.639, 0.270, 0.703, 0.720),
+        )
+
+        assert reading_order_conflicts(regions, ("問一", "問二")) == ()
+
+    def test_writing_direction_comes_from_the_shape_of_the_answer_areas(self) -> None:
+        """A column of vertical writing is far taller than it is wide; a
+        ruled line of horizontal writing is far wider than it is tall.
+        Measured over the eight sheets the two never come close: 0.18-0.46
+        against 5.76-8.91.
+
+        This is the property, not the number. Boxes of the same *positions*
+        read in opposite orders depending only on their shape.
+        """
+        tall = self._regions(
+            ("問一", 0.639, 0.270, 0.703, 0.720),
+            ("問二", 0.798, 0.270, 0.843, 0.671),
+        )
+        wide = self._regions(
+            ("問一", 0.400, 0.270, 0.900, 0.300),
+            ("問二", 0.100, 0.500, 0.900, 0.530),
+        )
+
+        assert reading_order_conflicts(tall, ("問一", "問二")) == (("問一", "問二"),)
+        assert reading_order_conflicts(wide, ("問一", "問二")) == ()

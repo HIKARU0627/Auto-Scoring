@@ -14,6 +14,8 @@ class _$ProfileResponse extends ProfileResponse {
   @override
   final BuiltList<String> questionNumbers;
   @override
+  final BuiltList<BuiltList<String>> readingOrderConflicts;
+  @override
   final BuiltList<RegionModel> regions;
   @override
   final int revision;
@@ -33,6 +35,7 @@ class _$ProfileResponse extends ProfileResponse {
       {required this.absentQuestionNumbers,
       required this.pages,
       required this.questionNumbers,
+      required this.readingOrderConflicts,
       required this.regions,
       required this.revision,
       required this.status,
@@ -54,6 +57,7 @@ class _$ProfileResponse extends ProfileResponse {
         absentQuestionNumbers == other.absentQuestionNumbers &&
         pages == other.pages &&
         questionNumbers == other.questionNumbers &&
+        readingOrderConflicts == other.readingOrderConflicts &&
         regions == other.regions &&
         revision == other.revision &&
         status == other.status &&
@@ -68,6 +72,7 @@ class _$ProfileResponse extends ProfileResponse {
     _$hash = $jc(_$hash, absentQuestionNumbers.hashCode);
     _$hash = $jc(_$hash, pages.hashCode);
     _$hash = $jc(_$hash, questionNumbers.hashCode);
+    _$hash = $jc(_$hash, readingOrderConflicts.hashCode);
     _$hash = $jc(_$hash, regions.hashCode);
     _$hash = $jc(_$hash, revision.hashCode);
     _$hash = $jc(_$hash, status.hashCode);
@@ -84,6 +89,7 @@ class _$ProfileResponse extends ProfileResponse {
           ..add('absentQuestionNumbers', absentQuestionNumbers)
           ..add('pages', pages)
           ..add('questionNumbers', questionNumbers)
+          ..add('readingOrderConflicts', readingOrderConflicts)
           ..add('regions', regions)
           ..add('revision', revision)
           ..add('status', status)
@@ -114,6 +120,13 @@ class ProfileResponseBuilder
       _$this._questionNumbers ??= ListBuilder<String>();
   set questionNumbers(ListBuilder<String>? questionNumbers) =>
       _$this._questionNumbers = questionNumbers;
+
+  ListBuilder<BuiltList<String>>? _readingOrderConflicts;
+  ListBuilder<BuiltList<String>> get readingOrderConflicts =>
+      _$this._readingOrderConflicts ??= ListBuilder<BuiltList<String>>();
+  set readingOrderConflicts(
+          ListBuilder<BuiltList<String>>? readingOrderConflicts) =>
+      _$this._readingOrderConflicts = readingOrderConflicts;
 
   ListBuilder<RegionModel>? _regions;
   ListBuilder<RegionModel> get regions =>
@@ -155,6 +168,7 @@ class ProfileResponseBuilder
       _absentQuestionNumbers = $v.absentQuestionNumbers.toBuilder();
       _pages = $v.pages.toBuilder();
       _questionNumbers = $v.questionNumbers.toBuilder();
+      _readingOrderConflicts = $v.readingOrderConflicts.toBuilder();
       _regions = $v.regions.toBuilder();
       _revision = $v.revision;
       _status = $v.status;
@@ -187,6 +201,7 @@ class ProfileResponseBuilder
             absentQuestionNumbers: absentQuestionNumbers.build(),
             pages: pages.build(),
             questionNumbers: questionNumbers.build(),
+            readingOrderConflicts: readingOrderConflicts.build(),
             regions: regions.build(),
             revision: BuiltValueNullFieldError.checkNotNull(
                 revision, r'ProfileResponse', 'revision'),
@@ -206,6 +221,8 @@ class ProfileResponseBuilder
         pages.build();
         _$failedField = 'questionNumbers';
         questionNumbers.build();
+        _$failedField = 'readingOrderConflicts';
+        readingOrderConflicts.build();
         _$failedField = 'regions';
         regions.build();
 

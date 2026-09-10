@@ -51,6 +51,7 @@ class AnswerAreaEditor extends StatefulWidget {
     required this.questionNumbers,
     required this.undetectedQuestionNumbers,
     required this.absentQuestionNumbers,
+    required this.readingOrderConflicts,
     required this.onRegionsChanged,
     required this.readOnly,
     this.pdfBytes,
@@ -89,6 +90,22 @@ class AnswerAreaEditor extends StatefulWidget {
   /// because the reviewer can see the page and the model is not always
   /// right. Drawing the box takes it out of both lists.
   final List<String> absentQuestionNumbers;
+
+  /// Pairs of question numbers whose boxes sit in the opposite order to
+  /// their numbers on the page they share (Issue #171).
+  ///
+  /// The one failure on this screen that looks like success: every question
+  /// has a box, so nothing is undetected and the banner above says so, while
+  /// two questions have each other's answer. Measured on the real material
+  /// it happened every run on one subject and produced two grades of 0 at
+  /// high confidence, both approved by a person.
+  ///
+  /// Shown, never acted on: which of the two boxes is the misplaced one is
+  /// not decidable from the geometry, so the app offers the swap and the
+  /// reviewer decides. It does not block confirming -- the check is a
+  /// measured rule of thumb over 8 answer sheets, and a wrong flag must not
+  /// be able to make a correct profile unconfirmable.
+  final List<List<String>> readingOrderConflicts;
 
   /// The answer sheet itself. `null` renders the pages as empty outlines at
   /// the right shape -- which is what a reviewer sees before uploading a
@@ -296,6 +313,10 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildUndetectedBanner(context),
+        if (widget.readingOrderConflicts.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.md),
+          _buildReadingOrderWarning(context),
+        ],
         if (!widget.readOnly) ...[
           const SizedBox(height: AppSpacing.md),
           _buildDrawToolbar(context),
@@ -309,6 +330,81 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
         _buildRegionList(context),
       ],
     );
+  }
+
+  Widget _buildReadingOrderWarning(BuildContext context) {
+    return Column(
+      key: const Key('answer-area-reading-order'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.swap_vert,
+              size: AppIconSize.dense,
+              color: AppStatusTone.attention.color(context),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                // Says what was observed, not what is wrong: the geometry
+                // cannot say which of the two boxes moved.
+                '設問の並び順と、回答欄の位置の順序が食い違っています。'
+                '回答欄が入れ替わっていると、それぞれ相手の解答が採点されます。'
+                '答案を見て、正しければそのまま進んでください。',
+                style: context.texts.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        for (final pair in widget.readingOrderConflicts)
+          if (pair.length == 2)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${pair[0]} と ${pair[1]}',
+                      style: context.texts.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton.icon(
+                    key: Key('answer-area-swap-${pair[0]}-${pair[1]}'),
+                    onPressed: widget.readOnly
+                        ? null
+                        : () => _swapLabels(pair[0], pair[1]),
+                    icon: const Icon(
+                      Icons.swap_horiz,
+                      size: AppIconSize.inline,
+                    ),
+                    label: const Text('回答欄を入れ替える'),
+                  ),
+                ],
+              ),
+            ),
+      ],
+    );
+  }
+
+  /// Move each of the two questions onto the other's boxes.
+  ///
+  /// A relabel, not a move: the rectangles stay exactly where the page
+  /// prints them, which is the half detection got right. Nothing is saved
+  /// until the reviewer saves, so pressing it twice is its own undo.
+  void _swapLabels(String first, String second) {
+    _emit([
+      for (final region in widget.regions)
+        if (region.kind == RegionKind.answerArea && region.label == first)
+          region.rebuild((b) => b.label = second)
+        else if (region.kind == RegionKind.answerArea && region.label == second)
+          region.rebuild((b) => b.label = first)
+        else
+          region,
+    ]);
   }
 
   Widget _buildUndetectedBanner(BuildContext context) {
