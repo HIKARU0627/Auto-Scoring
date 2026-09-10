@@ -189,6 +189,37 @@ class TestMeasuredBoxes:
         assert boxes[0].y0 == pytest.approx(0.27, abs=0.01)
         assert boxes[0].y1 == pytest.approx(0.67, abs=0.01)
 
+    def test_the_smallest_real_answer_box_is_still_found(self) -> None:
+        """0.031 x 0.022 of the page -- the size one measured subject prints
+        for a one-word answer, and the box `_BOX_SIDE_RUN` exists to reach.
+
+        At `measure_page_ruling`'s own run length this box disappears
+        entirely, and with it the difference between the two functions: on
+        the real sheets, raising the threshold that far loses 4 of the 16
+        candidates on one subject and 1 of 5 on another.
+        """
+        image = _blank_page()
+        self._draw_box(image, x0=0.092, y0=0.250, x1=0.123, y1=0.272)
+
+        boxes = measure_page_boxes(_encode(image))
+
+        assert len(boxes) == 1
+        assert boxes[0].x1 == pytest.approx(0.123, abs=0.01)
+
+    def test_the_printed_rule_between_two_cells_does_not_split_them(self) -> None:
+        """The rule itself is not part of either cell, so two stacked cells
+        come out of the contour pass with the rule's own width of blank
+        between them. Bridging less than that turns one answer space into
+        two, and then the reviewer is offered half of it."""
+        image = _blank_page()
+        self._draw_box(image, x0=0.30, y0=0.30, x1=0.60, y1=0.40, width=5)
+        self._draw_box(image, x0=0.30, y0=0.40, x1=0.60, y1=0.50, width=5)
+
+        boxes = measure_page_boxes(_encode(image))
+
+        assert len(boxes) == 1
+        assert boxes[0].y1 == pytest.approx(0.50, abs=0.01)
+
     def test_touching_cells_are_one_box(self) -> None:
         """A 原稿用紙 grid is one place to write, not 90 of them.
 
