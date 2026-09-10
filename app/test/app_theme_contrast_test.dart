@@ -145,6 +145,111 @@ void main() {
       );
     });
 
+    test('$name: a disabled button can be found and read', () {
+      // Issue #88 受入条件2。**目で見て決めない。** Material の既定
+      // (`onSurface` を 12%/38% で重ねる) は、このアプリの静かなランプの上では
+      // 数値が出ない -- 下の `Material の既定では足りない` がその実測で、ここは
+      // 上書きした3色が足りていることの実測である。役割の分担は
+      // `core/design/app_color_schemes.dart` の `AppDisabledButtonColors`。
+      final surfaces = <String, Color>{
+        'surface': scheme.surface,
+        'surfaceContainerLow': scheme.surfaceContainerLow,
+        'surfaceContainerHigh': scheme.surfaceContainerHigh,
+        'surfaceContainerHighest': scheme.surfaceContainerHighest,
+      };
+      for (final surface in surfaces.entries) {
+        // 境界線。「ボタンがそこにある」を持つのはこれなので、1.4.11 の 3:1。
+        expect(
+          contrast(scheme.disabledButtonOutline, surface.value),
+          greaterThanOrEqualTo(aaNonText),
+          reason: 'disabled outline on ${surface.key}',
+        );
+        // ラベル。読む文字なので 4.5:1。どのカードの上でも読めること。
+        expect(
+          contrast(scheme.disabledButtonLabel, surface.value),
+          greaterThanOrEqualTo(aaText),
+          reason: 'disabled label on ${surface.key}',
+        );
+      }
+      // ラベルは自分の板の上でも読める。
+      expect(
+        contrast(scheme.disabledButtonLabel, scheme.disabledButtonContainer),
+        greaterThanOrEqualTo(aaText),
+        reason: 'disabled label on its own container',
+      );
+      // そして**有効なときより静か**であること。数値が有効と並ぶと、押せない
+      // ボタンが押せるボタンに見える。色だけで「押せない」を伝えてはいないが
+      // (理由の文がそれをする)、色が逆を言ってしまってもいけない。
+      expect(
+        contrast(scheme.disabledButtonLabel, scheme.surfaceContainerLow),
+        lessThan(contrast(scheme.onSurface, scheme.surfaceContainerLow)),
+        reason: 'disabled label must be quieter than body text',
+      );
+    });
+
+    test('$name: Material の既定では足りない', () {
+      // この上書きが何を直したのかを数値で残す。ここが `aaNonText` を超える日が
+      // 来たら、それは Material が既定を変えた日であり、上書きを見直す合図で
+      // ある -- 「なんとなく入れた上書き」にしないための1本。
+      final defaultOutline = Color.alphaBlend(
+        scheme.onSurface.withValues(alpha: 0.12),
+        scheme.surfaceContainerLow,
+      );
+      expect(
+        contrast(defaultOutline, scheme.surfaceContainerLow),
+        lessThan(aaNonText),
+        reason:
+            'Material の既定の無効枠 (onSurface 12%) はカードの上で見つからない。'
+            'これが #88 受入条件2 の「ボタンであることすら判別しにくい」である',
+      );
+    });
+
+    test('$name: the theme actually hands those colours to every button', () {
+      // 色を定義しただけでは何も変わらない。3種類のボタンのテーマが無効状態で
+      // 実際にその色を返すことまで見る -- `_buttonStyle` の上書きを外すと、
+      // 上の2本は通ったままここだけが落ちる。
+      final theme = brightness == Brightness.light
+          ? AppTheme.light()
+          : AppTheme.dark();
+      const disabled = <WidgetState>{WidgetState.disabled};
+      final styles = <String, ButtonStyle?>{
+        'filled': theme.filledButtonTheme.style,
+        'outlined': theme.outlinedButtonTheme.style,
+        'text': theme.textButtonTheme.style,
+      };
+      for (final entry in styles.entries) {
+        final style = entry.value;
+        expect(style, isNotNull, reason: entry.key);
+        expect(
+          style!.foregroundColor?.resolve(disabled),
+          scheme.disabledButtonLabel,
+          reason: '${entry.key}: disabled label',
+        );
+        expect(
+          style.iconColor?.resolve(disabled),
+          scheme.disabledButtonLabel,
+          reason: '${entry.key}: disabled icon',
+        );
+        expect(
+          style.backgroundColor?.resolve(disabled),
+          scheme.disabledButtonContainer,
+          reason: '${entry.key}: disabled container',
+        );
+        expect(
+          style.side?.resolve(disabled)?.color,
+          scheme.disabledButtonOutline,
+          reason: '${entry.key}: disabled outline',
+        );
+        // 有効のときは `null` を返して Material の既定へ落とす。ここが値を
+        // 返し始めると、3種類のボタンの既定を書き写したことになる。
+        expect(
+          style.backgroundColor?.resolve(const <WidgetState>{}),
+          isNull,
+          reason: '${entry.key}: enabled state must fall through to Material',
+        );
+      }
+    });
+
     test('$name: an outline can be found against the surface it bounds', () {
       expect(
         contrast(scheme.outline, scheme.surface),

@@ -79,11 +79,15 @@ class AppTheme {
       // Every button gets the same height and radius so a row of them reads as
       // one control strip -- the 添削レビュー action bar mixes filled and
       // outlined buttons and they must line up exactly.
-      filledButtonTheme: FilledButtonThemeData(style: _buttonStyle(textTheme)),
-      outlinedButtonTheme: OutlinedButtonThemeData(
-        style: _buttonStyle(textTheme),
+      filledButtonTheme: FilledButtonThemeData(
+        style: _buttonStyle(textTheme, colorScheme),
       ),
-      textButtonTheme: TextButtonThemeData(style: _buttonStyle(textTheme)),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: _buttonStyle(textTheme, colorScheme),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: _buttonStyle(textTheme, colorScheme),
+      ),
 
       inputDecorationTheme: InputDecorationThemeData(
         filled: true,
@@ -197,7 +201,19 @@ class AppTheme {
 
   /// Shared by filled/outlined/text buttons so they are interchangeable in a
   /// row without any of them changing the row's height.
-  static ButtonStyle _buttonStyle(TextTheme textTheme) {
+  ///
+  /// 無効のときの3色も一緒に当てる (Issue #88)。**上書きするのは無効のときだけ**
+  /// で、有効・ホバー・フォーカス・押下は `null` を返して Material の既定へ
+  /// 落とす -- `ButtonStyleButton` は解決した*値*について
+  /// `widget ?? theme ?? default` を取るので、ここが状態ごとに `null` を返せば
+  /// その状態だけ既定が使われる。3種類のボタンの既定を書き写さずに、無効だけを
+  /// 差し替えられるのはそのためである。
+  static ButtonStyle _buttonStyle(TextTheme textTheme, ColorScheme colors) {
+    WidgetStateProperty<T?> whenDisabled<T>(T value) =>
+        WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled) ? value : null,
+        );
+
     return ButtonStyle(
       textStyle: WidgetStatePropertyAll(textTheme.labelLarge),
       padding: const WidgetStatePropertyAll(
@@ -209,6 +225,13 @@ class AppTheme {
       shape: const WidgetStatePropertyAll(
         RoundedRectangleBorder(borderRadius: AppRadius.mdAll),
       ),
+      backgroundColor: whenDisabled(colors.disabledButtonContainer),
+      foregroundColor: whenDisabled(colors.disabledButtonLabel),
+      iconColor: whenDisabled(colors.disabledButtonLabel),
+      // `TextButton` にも枠が付く。有効なときの見た目より目立つのは承知の上で、
+      // 枠の無い無効なテキストボタンは文章と見分けが付かない -- 「押せない
+      // ボタンとして判別できる」(受入条件2) を満たすのはこの線である。
+      side: whenDisabled(BorderSide(color: colors.disabledButtonOutline)),
     );
   }
 }
