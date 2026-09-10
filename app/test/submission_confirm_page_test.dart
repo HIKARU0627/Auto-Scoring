@@ -339,6 +339,48 @@ void main() {
 
       expect(approved, ['q-1', 'q-2']);
     });
+
+    testWidgets('別のボタンにフォーカスした Enter は、そのボタンのものである', (tester) async {
+      // Enter はページ全体で「確定」に束ねてある。キー入力はフォーカスの位置から
+      // 上へ伝わるので、束ね直さないと**後回しにしようとした人が答案を確定する**。
+      final approved = <String>[];
+      await pumpConfirm(
+        tester,
+        deps(
+          numbers: const ['1'],
+          approveReview:
+              (
+                _,
+                questionId, {
+                required expectedVersion,
+                expectedAiGradeId,
+                note,
+              }) async {
+                approved.add(questionId);
+                return actionResponse(questionId);
+              },
+        ),
+      );
+      await scrollThroughMaterial(tester);
+      expect(confirmEnabled(tester), isTrue);
+
+      // Tab で送る -- キーボードだけの人が実際にそうするのと同じ道である。
+      final defer = find.byKey(const Key('confirm-defer-button'));
+      var focused = false;
+      for (var i = 0; i < 60 && !focused; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pumpAndSettle();
+        focused = _isWithin(tester, FocusManager.instance.primaryFocus, defer);
+      }
+      expect(focused, isTrue, reason: 'Tab で後回しボタンへ到達できていない');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(approved, isEmpty);
+      // 後回しの行き先が無いので、そう言うだけで終わる。確定はしていない。
+      expect(find.text('ほかに確認できる答案がありません'), findsOneWidget);
+    });
   });
 
   group('部分失敗を隠さない', () {
@@ -654,6 +696,20 @@ void main() {
       expect(find.text('1 / 2 件目 ・ 確定済み 0 / 1 問'), findsOneWidget);
     });
   });
+}
+
+/// [node] のフォーカスが [ancestor] の中にあるか。
+bool _isWithin(WidgetTester tester, FocusNode? node, Finder ancestor) {
+  final context = node?.context;
+  if (context == null) return false;
+  final target = tester.element(ancestor);
+  var found = false;
+  context.visitAncestorElements((element) {
+    if (element != target) return true;
+    found = true;
+    return false;
+  });
+  return found;
 }
 
 extension on AppDependencies {

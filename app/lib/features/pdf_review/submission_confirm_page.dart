@@ -717,11 +717,13 @@ class _SubmissionConfirmPageState extends ConsumerState<SubmissionConfirmPage> {
               spacing: AppSpacing.md,
               runSpacing: AppSpacing.sm,
               children: [
-                OutlinedButton.icon(
-                  key: const Key('confirm-defer-button'),
-                  onPressed: _confirming ? null : _deferSubmission,
-                  icon: const Icon(Icons.low_priority),
-                  label: const Text('後回し (S)'),
+                _EnterActivates(
+                  child: OutlinedButton.icon(
+                    key: const Key('confirm-defer-button'),
+                    onPressed: _confirming ? null : _deferSubmission,
+                    icon: const Icon(Icons.low_priority),
+                    label: const Text('後回し (S)'),
+                  ),
                 ),
                 if (confirmation.blocker == SubmissionConfirmBlock.unreached)
                   OutlinedButton.icon(
@@ -896,20 +898,22 @@ class _QuestionCard extends StatelessWidget {
             const SizedBox(height: AppSpacing.sm),
             Align(
               alignment: AlignmentDirectional.centerEnd,
-              child: OutlinedButton.icon(
-                key: Key('confirm-open-${question.id}'),
-                onPressed: onOpen,
-                icon: const Icon(Icons.edit_outlined),
-                // AI が採点できなかった設問では、あちらで最初に押すのは
-                // 「点数を入力」である。ラベルを分けるのは、開いた先で何を
-                // するかが違うからである (Issue #118)。
-                label: Text(
-                  material != null &&
-                          material.hasLoaded &&
-                          material.latestAiGrade == null &&
-                          !material.isConfirmed
-                      ? '点数を入力する'
-                      : 'この設問を詳しく見る・直す',
+              child: _EnterActivates(
+                child: OutlinedButton.icon(
+                  key: Key('confirm-open-${question.id}'),
+                  onPressed: onOpen,
+                  icon: const Icon(Icons.edit_outlined),
+                  // AI が採点できなかった設問では、あちらで最初に押すのは
+                  // 「点数を入力」である。ラベルを分けるのは、開いた先で何を
+                  // するかが違うからである (Issue #118)。
+                  label: Text(
+                    material != null &&
+                            material.hasLoaded &&
+                            material.latestAiGrade == null &&
+                            !material.isConfirmed
+                        ? '点数を入力する'
+                        : 'この設問を詳しく見る・直す',
+                  ),
                 ),
               ),
             ),
@@ -1092,6 +1096,27 @@ String _criterionLabel(String? outcome) => switch (outcome) {
   null => '未評価',
   _ => outcome,
 };
+
+/// Enter を、**この子ウィジェットのためのものに戻す**。
+///
+/// この画面は Enter をページ全体で「確定（未到達が残っていれば未到達へ送る）」に
+/// 束ねている。キー入力はフォーカスのある位置から上へ伝わるので、そのままだと
+/// **後回しボタンにフォーカスして Enter を押した人が、答案を確定してしまう**。
+/// フォーカスに近い位置で束ね直すと、そちらが先に処理して押した本人のボタンが
+/// 動く（添削レビュー画面が「続きを表示」に同じことをしている）。
+class _EnterActivates extends StatelessWidget {
+  const _EnterActivates({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Shortcuts(
+    shortcuts: const <ShortcutActivator, Intent>{
+      SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+    },
+    child: child,
+  );
+}
 
 /// 「表示済み」/「未表示」。
 ///
