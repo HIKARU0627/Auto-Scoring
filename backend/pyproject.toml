@@ -16,6 +16,7 @@ dependencies = [
     # an indirect dependency via fastapi[standard]/starlette's TestClient,
     # declared directly because `adapters/ai_grading/` imports it.
     "httpx>=0.28,<1.0",
+    "keyring>=25.7.0",
     "numpy>=2.0",
     "opencv-python-headless>=4.10,<5.0",
     "pydantic>=2.9,<3.0",
