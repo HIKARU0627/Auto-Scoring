@@ -1,3 +1,4 @@
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 /**
@@ -6,6 +7,7 @@ import { defineConfig } from "vite";
  * preload and gain nothing from being bundled.
  */
 export default defineConfig({
+  plugins: [tailwindcss()],
   // Electron loads the built page from the filesystem with `loadFile`, so the
   // asset URLs have to be relative rather than rooted at `/`.
   base: "./",
