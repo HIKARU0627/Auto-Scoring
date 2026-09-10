@@ -12,8 +12,6 @@ import { buildTest } from "./support/mock-sidecar-client.js";
 const skipped: Record<string, string> = {
   [AppRoutes.starting]:
     "Not a screen: startup overlay placeholder while the sidecar is unusable.",
-  [AppRoutes.submissionQueuePattern]:
-    "Submission queue. Follow-up Issue #192 (same wave as Flutter home_escape_test.dart).",
   [AppRoutes.pdfReviewPattern]:
     "PDF review. Follow-up Issue #192 (same wave as Flutter home_escape_test.dart).",
 };
@@ -23,6 +21,7 @@ const covered = new Set<string>([
   AppRoutes.settings,
   AppRoutes.testList,
   AppRoutes.testSettingsPattern,
+  AppRoutes.submissionQueuePattern,
   AppRoutes.submissionConfirmPattern,
 ]);
 
