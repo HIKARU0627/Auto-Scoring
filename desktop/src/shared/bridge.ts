@@ -24,14 +24,60 @@ export interface AppInfo {
   readonly platform: string;
 }
 
+/**
+ * Why a sidecar is not available.
+ *
+ * Mirrors `core/sidecar_supervisor.dart` (SidecarFailure):
+ * - executableMissing: Binary not found on disk.
+ * - alreadyRunning: Another process holds app-data lock (exit code 3).
+ * - exitedDuringStartup: Process exited before handshake/health succeeded.
+ * - startupTimedOut: Process did not become healthy within 60s.
+ * - crashed: Process terminated after having been ready.
+ */
+export type SidecarFailure =
+  | "executableMissing"
+  | "alreadyRunning"
+  | "exitedDuringStartup"
+  | "startupTimedOut"
+  | "crashed";
+
+/** Loopback connection details from the sidecar handshake. */
+export interface SidecarConnectionInfo {
+  readonly host: string;
+  readonly port: number;
+  readonly token: string;
+}
+
+/**
+ * The current state of the Python sidecar.
+ *
+ * The token is only present in the ready state, never in failed/error states
+ * (INV-036).
+ */
+export type SidecarStatus =
+  | { readonly kind: "starting" }
+  | { readonly kind: "ready"; readonly connection: SidecarConnectionInfo }
+  | {
+      readonly kind: "failed";
+      readonly failure: SidecarFailure;
+      readonly exitCode: number | null;
+    }
+  | { readonly kind: "stopped" };
+
 /** Everything the preload script exposes on `window.autoScoring`. */
 export interface AutoScoringBridge {
   getAppInfo(): Promise<AppInfo>;
+  getSidecarStatus(): Promise<SidecarStatus>;
+  restartSidecar(): Promise<void>;
+  onSidecarStatusChange(callback: (status: SidecarStatus) => void): () => void;
 }
 
 /** IPC channel names. One place, so main and preload cannot drift apart. */
 export const IpcChannel = {
   getAppInfo: "auto-scoring:get-app-info",
+  getSidecarStatus: "auto-scoring:get-sidecar-status",
+  restartSidecar: "auto-scoring:restart-sidecar",
+  sidecarStatusChanged: "auto-scoring:sidecar-status-changed",
 } as const;
 
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];
