@@ -1,0 +1,4 @@
+# Scratch dirs from `scripts/openapi-ts.mjs` atomic generation. A killed run
+# must never leave debris in `git status` (Issue #102, #228).
+src/renderer/api/.api-generated-*
+src/renderer/api/generated.generate-backup
