@@ -3,6 +3,7 @@ import {
   IpcChannel,
   type AppInfo,
   type AutoScoringBridge,
+  type SidecarStatus,
 } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type {
@@ -25,6 +26,24 @@ import type {
 const bridge: AutoScoringBridge = {
   getAppInfo: (): Promise<AppInfo> =>
     ipcRenderer.invoke(IpcChannel.getAppInfo) as Promise<AppInfo>,
+  getSidecarStatus: (): Promise<SidecarStatus> =>
+    ipcRenderer.invoke(IpcChannel.getSidecarStatus) as Promise<SidecarStatus>,
+  restartSidecar: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannel.restartSidecar) as Promise<void>,
+  onSidecarStatusChange: (
+    callback: (status: SidecarStatus) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: SidecarStatus,
+    ) => {
+      callback(status);
+    };
+    ipcRenderer.on(IpcChannel.sidecarStatusChanged, listener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannel.sidecarStatusChanged, listener);
+    };
+  },
   chooseFolder: (): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannel.chooseFolder) as Promise<string | null>,
   scanFolder: (directoryPath: string): Promise<ScannedFolder> =>

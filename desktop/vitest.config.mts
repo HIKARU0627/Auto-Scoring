@@ -11,6 +11,8 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
+    testTimeout: 60000,
+    hookTimeout: 60000,
     projects: [
       {
         test: {
@@ -30,6 +32,8 @@ export default defineConfig({
           environment: "node",
           include: ["test/*.test.ts"],
           globals: false,
+          testTimeout: 60000,
+          hookTimeout: 60000,
         },
       },
     ],

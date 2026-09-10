@@ -61,13 +61,13 @@ CI は 5 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は*
 だけ**のジョブで、`package` は独立。`needs` で繋がっているのは `quality` だけなので、
 `app` / `backend` / `desktop` / `package` は同時に走る。**待ち時間は和ではなく最大値。**
 
-| ジョブ    | 表示名            | 中身                                                               | ツールチェーン                            |
-| --------- | ----------------- | ------------------------------------------------------------------ | ----------------------------------------- |
-| `app`     | App               | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node                   |
-| `backend` | Backend           | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**）         |
-| `desktop` | Desktop           | `:desktop` の typecheck/test/build + Playwright (Electron)         | Node のみ（**Flutter SDK も uv も無し**） |
-| `quality` | **Quality**       | 上 3 つの結果を判定するだけ                                        | なし（ubuntu）                            |
-| `package` | Package (Windows) | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node                   |
+| ジョブ    | 表示名            | 中身                                                               | ツールチェーン                    |
+| --------- | ----------------- | ------------------------------------------------------------------ | --------------------------------- |
+| `app`     | App               | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
+| `backend` | Backend           | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
+| `desktop` | Desktop           | `:desktop` の typecheck/test/build + Playwright (Electron)         | uv + Node（**Flutter SDK なし**） |
+| `quality` | **Quality**       | 上 3 つの結果を判定するだけ                                        | なし（ubuntu）                    |
+| `package` | Package (Windows) | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
 
 ### 置き場所の理由
 
@@ -85,6 +85,10 @@ CI は 5 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は*
   パス・プロセス起動・ウィンドウ生成という**まさに OS で挙動が割れる層**で、
   Playwright は実際にウィンドウを開く。Linux ランナー + Xvfb でも「動く」が、
   それは出荷しない構成を検証していることになる。
+- **`desktop` に `uv` を入れる。** サイドカーのライフサイクル制御（Issue #234）の
+  結合テスト（起動・handshake・通常終了・親プロセス監視）が実バイナリを起動して検証するため、
+  `backend/.venv` のサイドカー実行可能ファイルが必要になる。Flutter SDK は不要なので
+  入れない。
 - **`pnpm install` は `--filter` で絞る。** `desktop/` はワークスペースの別
   パッケージ（`pnpm-workspace.yaml`）なので、素の `pnpm install` は `app` /
   `backend` / `package` ジョブにも Electron のバイナリ（約 100 MB）を落としてくる。

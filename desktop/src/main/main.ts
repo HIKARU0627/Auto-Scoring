@@ -1,20 +1,29 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as path from "node:path";
-import { IpcChannel, type AppInfo } from "../shared/bridge.js";
+import {
+  IpcChannel,
+  type AppInfo,
+  type SidecarStatus,
+} from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "../shared/sidecar-upload.js";
 import { scanDirectory } from "./folder-scan.js";
+import {
+  resolveSidecarExecutable,
+  sidecarExecutableCandidates,
+} from "./sidecar-paths";
+import { SidecarSupervisor } from "./sidecar-supervisor";
 import { sidecarMultipartUpload } from "./sidecar-upload.js";
 
 /**
  * Entry point of the Electron main process.
  *
- * Phase 2-1 (Issue #217) is the skeleton only: it opens one window with a
- * placeholder renderer. No screen, no sidecar supervision (that follows PoC 7 /
- * Issue #203), no API client.
+ * Supervised Python sidecar lifecycle (Issue #234):
+ * Spawns the sidecar, performs handshake, probes health, handles normal
+ * shutdown before exit, supports restart, and arms parent PID watchdog.
  */
 
 /** Compiled by `tsc` to `out/main/main.js`, so the siblings are one level up. */
@@ -28,6 +37,16 @@ const RENDERER_INDEX = path.join(__dirname, "..", "renderer", "index.html");
  * shipped, and the packaged build has no dev server to point at.
  */
 const devServerUrl = process.env["VITE_DEV_SERVER_URL"];
+
+let supervisor: SidecarSupervisor | null = null;
+
+function notifySidecarStatus(status: SidecarStatus): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(IpcChannel.sidecarStatusChanged, status);
+    }
+  }
+}
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
@@ -73,6 +92,14 @@ ipcMain.handle(IpcChannel.getAppInfo, (): AppInfo => {
   return { version: app.getVersion(), platform: process.platform };
 });
 
+ipcMain.handle(IpcChannel.getSidecarStatus, (): SidecarStatus => {
+  return supervisor?.status ?? { kind: "starting" };
+});
+
+ipcMain.handle(IpcChannel.restartSidecar, async (): Promise<void> => {
+  await supervisor?.restart();
+});
+
 ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory"],
@@ -98,6 +125,22 @@ ipcMain.handle(
 );
 
 void app.whenReady().then(() => {
+  const isWindows = process.platform === "win32";
+  const candidates = sidecarExecutableCandidates({
+    resolvedExecutable: process.execPath,
+    workingDirectory: process.cwd(),
+    isWindows,
+  });
+  const executablePath = resolveSidecarExecutable(candidates);
+
+  supervisor = new SidecarSupervisor({
+    executablePath,
+    onStatusChange: (status) => {
+      notifySidecarStatus(status);
+    },
+  });
+
+  void supervisor.start();
   createWindow();
 
   // macOS keeps the process alive with no windows; clicking the dock icon has
@@ -109,8 +152,37 @@ void app.whenReady().then(() => {
   });
 });
 
+let isQuitting = false;
+
+// INV-031: Terminate sidecar before window/app exit
+app.on("before-quit", (event) => {
+  if (!isQuitting && supervisor) {
+    event.preventDefault();
+    isQuitting = true;
+    supervisor.shutdown().finally(() => {
+      app.quit();
+    });
+  }
+});
+
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
+  }
+});
+
+process.on("SIGINT", () => {
+  if (supervisor) {
+    void supervisor.shutdown().finally(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
+});
+
+process.on("SIGTERM", () => {
+  if (supervisor) {
+    void supervisor.shutdown().finally(() => process.exit(0));
+  } else {
+    process.exit(0);
   }
 });
