@@ -24,9 +24,9 @@ from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionRequest,
     UnassignedAnswerAreaError,
     ensure_answer_areas_confirmable,
+    missing_question_numbers,
     parse_answer_area_detection,
     regions_from_detection,
-    missing_question_numbers,
     unassigned_answer_area_ids,
 )
 from auto_scoring.domain.answer_area_snapping import PageRuling
