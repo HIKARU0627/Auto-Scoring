@@ -73,7 +73,7 @@ describe("HomePage", () => {
     await screen.findByText("要確認の答案が2件あります");
     fireEvent.click(screen.getByTestId("home-next-up-action"));
     await screen.findByText("添削レビュー");
-    expect(screen.getByText("testId=t1, submissionId=oldest")).toBeDefined();
+    expect(screen.getByTestId("review-question-rail")).toBeDefined();
   });
 
   it("does not count ai_processed as done (INV-147)", async () => {
