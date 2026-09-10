@@ -4,18 +4,20 @@
  * Uses the generated OpenAPI client only — no hand-written fetch.
  */
 
-import type { SidecarClient } from "./client.js";
 import type { components } from "./generated/schema.js";
 import { ReviewQueue } from "../core/review-queue.js";
+import type { SidecarClient } from "./client.js";
 
 export type TestResponse = components["schemas"]["TestResponse"];
 export type SubmissionResponse = components["schemas"]["SubmissionResponse"];
 export type SubmissionReviewProgressResponse =
   components["schemas"]["SubmissionReviewProgressResponse"];
-export type ExportRequestResponse =
-  components["schemas"]["ExportRequestResponse"];
-export type ExportResponse = components["schemas"]["ExportResponse"];
-export type JobResponse = components["schemas"]["JobResponse"];
+export type {
+  ExportRequestResponse,
+  ExportResponse,
+  JobResponse,
+} from "./export-data.js";
+export { getJob, requestSubmissionExport } from "./export-data.js";
 
 export class SubmissionQueueDataError extends Error {
   constructor(message: string) {
@@ -93,46 +95,4 @@ export async function loadSubmissionQueueData(
       progress,
     }),
   };
-}
-
-/**
- * Requests PDF export for a single submission (INV-145).
- */
-export async function requestSubmissionExport(
-  client: SidecarClient,
-  submissionId: string,
-): Promise<ExportRequestResponse> {
-  const response = await client.POST("/submissions/{submission_id}/export", {
-    params: { path: { submission_id: submissionId } },
-  });
-
-  if (response.error !== undefined || response.data === undefined) {
-    const msg =
-      typeof response.error === "object" &&
-      response.error !== null &&
-      "message" in response.error
-        ? String(response.error.message)
-        : "PDF出力の要求に失敗しました";
-    throw new SubmissionQueueDataError(msg);
-  }
-
-  return response.data;
-}
-
-/**
- * Polls job status for export jobs.
- */
-export async function getJob(
-  client: SidecarClient,
-  jobId: string,
-): Promise<JobResponse> {
-  const response = await client.GET("/jobs/{job_id}", {
-    params: { path: { job_id: jobId } },
-  });
-
-  if (response.error !== undefined || response.data === undefined) {
-    throw new SubmissionQueueDataError("ジョブ状態の取得に失敗しました");
-  }
-
-  return response.data;
 }

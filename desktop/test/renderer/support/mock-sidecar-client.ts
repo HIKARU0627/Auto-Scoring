@@ -2,8 +2,12 @@ import { vi } from "vitest";
 
 import type { SidecarClient } from "../../../src/renderer/api/client.js";
 import type {
+  BulkExportResponse,
   ExportRequestResponse,
+  ExportResponse,
   JobResponse,
+} from "../../../src/renderer/api/export-data.js";
+import type {
   SubmissionResponse,
   SubmissionReviewProgressResponse,
   TestResponse,
@@ -16,8 +20,18 @@ export interface MockSidecarHandlers {
   listReviewProgress?: (
     testId: string,
   ) => Promise<SubmissionReviewProgressResponse[]>;
-  requestExport?: (submissionId: string) => Promise<ExportRequestResponse>;
+  requestExport?: (
+    submissionId: string,
+  ) => Promise<ExportRequestResponse | { status: number; body: unknown }>;
   getJob?: (jobId: string) => Promise<JobResponse>;
+  listExports?: (submissionId: string) => Promise<ExportResponse[]>;
+  retryJob?: (jobId: string) => Promise<JobResponse>;
+  cancelJob?: (jobId: string) => Promise<JobResponse>;
+  requestBulkExport?: (
+    testId: string,
+    submissionIds: readonly string[],
+  ) => Promise<BulkExportResponse>;
+  getExportFile?: (exportId: string) => Promise<Uint8Array>;
 }
 
 export function buildTest(input: {
@@ -162,6 +176,57 @@ export function createMockSidecarClient(
             ? await handlers.listReviewProgress(testId)
             : [];
           return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/submissions/{submission_id}/exports") {
+        const submissionId = init?.params?.path?.submission_id;
+        if (submissionId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing submission id" },
+          };
+        }
+        try {
+          const data = handlers.listExports
+            ? await handlers.listExports(submissionId)
+            : [];
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/exports/{export_id}/file") {
+        const exportId = init?.params?.path?.export_id;
+        if (exportId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing export id" },
+          };
+        }
+        try {
+          const bytes = handlers.getExportFile
+            ? await handlers.getExportFile(exportId)
+            : new Uint8Array([1]);
+          const blob = new Blob([Uint8Array.from(bytes)], {
+            type: "application/pdf",
+          });
+          return { data: blob, response: new Response(), error: undefined };
         } catch (err) {
           return {
             data: undefined,
@@ -344,7 +409,24 @@ export function createMockSidecarClient(
         try {
           if (handlers.requestExport) {
             const data = await handlers.requestExport(submissionId);
-            return { data, response: new Response(), error: undefined };
+            if (
+              typeof data === "object" &&
+              data !== null &&
+              "status" in data &&
+              "body" in data
+            ) {
+              const conflict = data as { status: number; body: unknown };
+              return {
+                data: undefined,
+                response: new Response(null, { status: conflict.status }),
+                error: conflict.body,
+              };
+            }
+            return {
+              data: data as ExportRequestResponse,
+              response: new Response(),
+              error: undefined,
+            };
           }
           return {
             data: {
@@ -361,6 +443,112 @@ export function createMockSidecarClient(
             response: new Response(),
             error: undefined,
           };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/jobs/{job_id}/retry") {
+        const jobId = init?.params?.path?.job_id;
+        if (jobId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing job id" },
+          };
+        }
+        try {
+          const data = handlers.retryJob
+            ? await handlers.retryJob(jobId)
+            : ({
+                id: jobId,
+                kind: "export",
+                state: "queued",
+                attempts: 0,
+                max_attempts: 3,
+                submission_id: "s1",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              } as JobResponse);
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/jobs/{job_id}/cancel") {
+        const jobId = init?.params?.path?.job_id;
+        if (jobId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing job id" },
+          };
+        }
+        try {
+          const data = handlers.cancelJob
+            ? await handlers.cancelJob(jobId)
+            : ({
+                id: jobId,
+                kind: "export",
+                state: "cancelled",
+                attempts: 0,
+                max_attempts: 3,
+                submission_id: "s1",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              } as JobResponse);
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/tests/{test_id}/export") {
+        const testId = init?.params?.path?.test_id;
+        if (testId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing test id" },
+          };
+        }
+        try {
+          const body = init?.body as { submission_ids?: string[] } | undefined;
+          const submissionIds = body?.submission_ids ?? [];
+          const data = handlers.requestBulkExport
+            ? await handlers.requestBulkExport(testId, submissionIds)
+            : ({
+                test_id: testId,
+                items: submissionIds.map((submissionId) => ({
+                  submission_id: submissionId,
+                  status: "reused",
+                  export: {
+                    id: `exp-${submissionId}`,
+                    job_id: `job-${submissionId}`,
+                    submission_id: submissionId,
+                    file_path: `exports/${submissionId}_corrected.pdf`,
+                    file_sha256: "0".repeat(64),
+                    created_at: new Date().toISOString(),
+                  },
+                })),
+              } as BulkExportResponse);
+          return { data, response: new Response(), error: undefined };
         } catch (err) {
           return {
             data: undefined,
