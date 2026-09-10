@@ -648,6 +648,102 @@ void _missingQuestionGroups() {
       expect(find.byKey(const Key('answer-area-all-detected')), findsNothing);
     });
 
+    testWidgets(
+      'the absent group says what was found, not what the paper has',
+      (tester) async {
+        // Issue #167. Measured on the real material, the claim is right far
+        // more often than not -- but one subject's smallest answer box has an
+        // outline the scan breaks, so it is never a candidate and the question
+        // can only be reported absent. A reviewer told that as a fact goes to
+        // the 採点基準, finds nothing, and has lost the time.
+        await _pumpEditor(
+          tester,
+          regions: const [],
+          questionNumbers: const ['問1'],
+          absent: const ['問1'],
+        );
+
+        final text = tester
+            .widgetList<Text>(
+              find.descendant(
+                of: find.byKey(const Key('answer-area-absent-group')),
+                matching: find.byType(Text),
+              ),
+            )
+            .map((t) => t.data ?? '')
+            .join();
+        expect(text, contains('見つけられなかった'));
+        expect(text, isNot(contains('判定された')));
+        expect(text, isNot(contains('回答欄が無い')));
+      },
+    );
+
+    testWidgets('no measured ratio is printed on the screen', (tester) async {
+      // A ratio is a property of one set of teaching material at one moment.
+      // On the screen it would go stale with nobody noticing; the likelihood
+      // is carried by the order of the two actions instead. The numbers live
+      // in docs/answer-area-detection.md with the date they were taken.
+      await _pumpEditor(
+        tester,
+        regions: const [],
+        questionNumbers: const ['問1', '問2'],
+        undetected: const ['問1'],
+        absent: const ['問2'],
+      );
+
+      final text = tester
+          .widgetList<Text>(find.byType(Text))
+          .map((t) => t.data ?? '')
+          .join();
+      expect(RegExp(r'\d+\s*件中').hasMatch(text), isFalse);
+      expect(RegExp(r'\d+\s*%').hasMatch(text), isFalse);
+      expect(text, isNot(contains('実測')));
+    });
+
+    testWidgets('the way out sits directly above the chips it applies to', (
+      tester,
+    ) async {
+      // Softening the opening promotes "draw it yourself" from a footnote to
+      // the other real possibility. Left at the end of the paragraph it is
+      // read last, or not at all.
+      await _pumpEditor(
+        tester,
+        regions: const [],
+        questionNumbers: const ['問1'],
+        absent: const ['問1'],
+      );
+
+      final action = find.byKey(const Key('answer-area-absent-action'));
+      expect(action, findsOne);
+      expect(
+        tester.getTopLeft(action).dy,
+        lessThan(
+          tester.getTopLeft(find.byKey(const Key('answer-area-absent-問1'))).dy,
+        ),
+      );
+      expect(tester.widget<Text>(action).data, contains('枠を引いて'));
+    });
+
+    testWidgets(
+      'drawing goes to an absent question when nothing is undetected',
+      (tester) async {
+        // On one measured subject every question with no box is in the absent
+        // group. Leaving the draw target on 「割り当てなし」 there would make the
+        // way out one click longer than the screen says it is.
+        await _pumpEditor(
+          tester,
+          regions: const [],
+          questionNumbers: const ['問1', '問2'],
+          absent: const ['問2'],
+        );
+
+        final dropdown = tester.widget<DropdownButton<String>>(
+          find.byKey(const Key('answer-area-draw-target')),
+        );
+        expect(dropdown.value, '問2');
+      },
+    );
+
     testWidgets('a question reported absent can still have its box drawn', (
       tester,
     ) async {

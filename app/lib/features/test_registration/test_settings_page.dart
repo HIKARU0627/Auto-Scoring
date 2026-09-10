@@ -899,19 +899,25 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 ),
               ),
             // Also not a blocker, and deliberately worded away from the one
-            // above: nothing here failed to be found. Confirming is the
-            // right move when the 採点基準 really does cover more paper than
-            // the registered answer sheet -- what must not happen is the
-            // reviewer reading it as a detection failure and hunting for
-            // boxes that are not there (Issue #164).
+            // above. Confirming is the right move when the 採点基準 really
+            // does cover more paper than the registered answer sheet -- what
+            // must not happen is the reviewer reading it as a detection
+            // failure and hunting for boxes that are not there (Issue #164).
+            //
+            // Stated as what was *found*, not as what the paper *has*
+            // (Issue #167): the claim is right far more often than not but
+            // not always, and a reviewer who acts on it as a fact loses the
+            // time. The way out is named before the consequence, for the
+            // same reason it sits above the chips in the editor.
             if (absent.isNotEmpty)
               Padding(
                 key: const Key('absent-question-notice'),
                 padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                 child: Text(
-                  'この答案に回答欄が無いと判定された設問が${absent.length}件あります'
+                  'この答案では回答欄を見つけられなかった設問が${absent.length}件あります'
                   '（${absent.join("、")}）。'
-                  '採点基準がこの答案より広い範囲を含んでいる可能性があります。'
+                  '登録した答案が課題の一部のページである可能性があります。'
+                  '答案に回答欄があるなら、上の一覧から枠を引けます。'
                   'このまま確定もできますが、その設問は採点されません。',
                   style: context.texts.bodyMedium,
                 ),
