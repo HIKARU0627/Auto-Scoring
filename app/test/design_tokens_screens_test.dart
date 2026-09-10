@@ -62,6 +62,10 @@ void main() {
     'テスト設定画面': AppRoutes.testSettings('test-1'),
     '設定画面': AppRoutes.settings,
     '添削レビュー画面': AppRoutes.pdfReview(testId: 'test-1', submissionId: 'sub-1'),
+    '答案確定画面': AppRoutes.submissionConfirm(
+      testId: 'test-1',
+      submissionId: 'sub-1',
+    ),
   };
 
   for (final brightness in Brightness.values) {
