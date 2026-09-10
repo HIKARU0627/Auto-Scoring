@@ -410,6 +410,14 @@ pollingの継続判定（2.8）も`latestOcrRecognition`の有無のみを見る
 （共通の型付けルールを型ペアごとに変えないことで推移律を保証する）。
 共通接頭部が一致してどちらかのトークン列が尽きた場合は、短い方を先とする。
 
+この比較関数は Issue #145 で `core/question_order.dart` の
+`compareQuestionNumbers` / `sortQuestionsForReview` へ移した。同じ答案の設問を
+並べる画面が添削レビューと**答案確定画面**の2つになったからで、
+**2か所で別々に並べると、確定画面の3枚目とレールの3番目が別の設問になる** --
+そうなった瞬間、「問3を見た」という到達の記録がどの設問についてのものか
+分からなくなる（`core/review_queue.dart` が答案の並び順について言っているのと
+同じ理由）。単体テストは `app/test/question_order_test.dart`。
+
 ### 2.12 annotationは表示中のgrading試行だけに限定する（R4レビュー対応）
 
 設問は複数回グレーディングされ得る（Issue #18: 新しい確定済み依存グラフ

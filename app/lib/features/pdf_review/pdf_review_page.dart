@@ -10,7 +10,6 @@ import 'package:pdfrx/pdfrx.dart';
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
-import 'package:auto_scoring_app/core/confidence_level.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
 import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
@@ -19,12 +18,14 @@ import 'package:auto_scoring_app/core/grading_failure_reason.dart';
 import 'package:auto_scoring_app/core/grading_kickoff.dart';
 import 'package:auto_scoring_app/core/material_read_ranges.dart';
 import 'package:auto_scoring_app/core/pdf_review_geometry.dart';
+import 'package:auto_scoring_app/core/question_order.dart';
 import 'package:auto_scoring_app/core/question_status.dart';
 import 'package:auto_scoring_app/core/review_queue.dart';
 import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/pdf_review/answer_crop_view.dart';
+import 'package:auto_scoring_app/features/pdf_review/confidence_badge.dart';
 import 'package:auto_scoring_app/features/pdf_review/dependency_dag_panel.dart';
 import 'package:auto_scoring_app/core/widgets/export_dialog.dart';
 
@@ -286,61 +287,6 @@ T? _latestWhere<T>(List<T>? items, bool Function(T) test) {
     if (test(items[i])) return items[i];
   }
   return null;
-}
-
-/// Splits [value] into alternating runs of ASCII digits and non-digits,
-/// e.g. `"1a"` -> `["1", "a"]`, `"問10"` -> `["問", "10"]`. The building
-/// block for [_compareQuestionNumbers]'s natural-sort key.
-List<String> _tokenizeForNaturalSort(String value) {
-  final tokens = <String>[];
-  final buffer = StringBuffer();
-  bool? previousWasDigit;
-  for (final unit in value.codeUnits) {
-    final isDigit = unit >= 0x30 && unit <= 0x39; // '0'..'9'
-    if (previousWasDigit != null && isDigit != previousWasDigit) {
-      tokens.add(buffer.toString());
-      buffer.clear();
-    }
-    buffer.writeCharCode(unit);
-    previousWasDigit = isDigit;
-  }
-  if (buffer.isNotEmpty) tokens.add(buffer.toString());
-  return tokens;
-}
-
-/// Orders question numbers the way a reviewer expects: naturally (1, 2,
-/// ..., 10), not lexicographically (which would put "10" before "2"), and
-/// with a single, transitive rule for labels that mix digits and letters
-/// (e.g. sub-questions like "1a") -- `Question.number` accepts any non-empty
-/// string (P2 review), so a comparator that only special-cases pure-integer
-/// labels and otherwise falls back to raw string comparison is not a total
-/// order (it can report `2 < 10`, `10 < "1a"`, and `"1a" < 2` all at once,
-/// since "10" vs "1a" and "1a" vs "2" each take the *other* branch of that
-/// special case). Comparing token-by-token with one fixed rule throughout
-/// (equal-type tokens compare within their type; a numeric token always
-/// sorts before a non-numeric one at the same position) avoids that: every
-/// pairwise comparison normalizes both sides identically, which is what
-/// makes the result transitive.
-int _compareQuestionNumbers(String a, String b) {
-  final tokensA = _tokenizeForNaturalSort(a);
-  final tokensB = _tokenizeForNaturalSort(b);
-  final sharedLength = tokensA.length < tokensB.length
-      ? tokensA.length
-      : tokensB.length;
-  for (var i = 0; i < sharedLength; i++) {
-    final numA = int.tryParse(tokensA[i]);
-    final numB = int.tryParse(tokensB[i]);
-    if (numA != null && numB != null) {
-      final comparison = numA.compareTo(numB);
-      if (comparison != 0) return comparison;
-      continue;
-    }
-    if (numA != null) return -1;
-    if (numB != null) return 1;
-    final comparison = tokensA[i].compareTo(tokensB[i]);
-    if (comparison != 0) return comparison;
-  }
-  return tokensA.length.compareTo(tokensB.length);
 }
 
 /// How close to the bottom of the Inspector counts as having reached it.
@@ -1033,13 +979,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       final submission = await _dependencies.getSubmission(widget.submissionId);
       final questions = await _dependencies.listQuestions(widget.testId);
       final pdfBytes = await _dependencies.getSourcePdf(widget.submissionId);
-      final sorted = questions.toList()
-        ..sort((a, b) {
-          final byPage = a.page.compareTo(b.page);
-          return byPage != 0
-              ? byPage
-              : _compareQuestionNumbers(a.number, b.number);
-        });
+      final sorted = sortQuestionsForReview(questions);
       if (!mounted) return;
       _setStateIfMounted(() {
         _submission = submission;
@@ -2886,7 +2826,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             style: context.textRoles.recognizedText,
           ),
           const SizedBox(height: AppSpacing.xs),
-          _ConfidenceBadge(
+          ConfidenceBadge(
             key: const Key('review-recognition-confidence'),
             label: 'OCR文字認識信頼度',
             confidence: ocrRecognition.confidence.toDouble(),
@@ -2911,7 +2851,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             style: context.textRoles.recognizedText,
           ),
           const SizedBox(height: AppSpacing.xs),
-          _ConfidenceBadge(
+          ConfidenceBadge(
             key: const Key('review-grading-recognition-confidence'),
             label: '採点AI文字認識信頼度',
             confidence: gradingRecognition.confidence.toDouble(),
@@ -2978,7 +2918,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
             ),
           ],
           const SizedBox(height: AppSpacing.xs),
-          _ConfidenceBadge(
+          ConfidenceBadge(
             key: const Key('review-grading-confidence'),
             label: '採点信頼度',
             confidence: aiGrade.confidence.toDouble(),
@@ -3364,56 +3304,6 @@ class _ProvenanceLabel extends StatelessWidget {
 /// which question to open first (§8.2・§10) -- and a reviewer who wants to
 /// judge the reading has it, next to the reading. What is removed is the
 /// affirmation, not the fact.
-class _ConfidenceBadge extends StatelessWidget {
-  const _ConfidenceBadge({
-    super.key,
-    required this.label,
-    required this.confidence,
-  });
-
-  final String label;
-  final double confidence;
-
-  @override
-  Widget build(BuildContext context) {
-    final level = ConfidenceLevel.of(confidence);
-    // 中と高は同じ無彩色の目盛りアイコンで、区別は数値と「中」「高」の語が
-    // 付ける。高だけ別のアイコンを与えれば、色を外しても「高は良い印」が
-    // 残ってしまう -- Issue #156 で外したのは色ではなく、太鼓判そのもの。
-    final icon = switch (level) {
-      ConfidenceLevel.high || ConfidenceLevel.medium => Icons.straighten,
-      ConfidenceLevel.low => Icons.warning_amber,
-    };
-    // 低Confidence は「人間が見ないと決められない」の代表例なので、この画面で
-    // 強調色を使ってよい数少ない場所。中/高は進行中と同じく無彩色に置く --
-    // 全部に色を付ければ、どれも目立たなくなる。
-    final tone = switch (level) {
-      ConfidenceLevel.high || ConfidenceLevel.medium => AppStatusTone.neutral,
-      ConfidenceLevel.low => AppStatusTone.attention,
-    };
-    final color = tone.color(context);
-    final percent = (confidence * 100).round();
-    return Semantics(
-      label: '$label $percent% ${level.label}',
-      // Without this, the child Text's own auto-generated semantics label
-      // merges with this one (joined by a newline) instead of being
-      // replaced by it, and a screen reader would announce both.
-      excludeSemantics: true,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: AppIconSize.dense, color: color),
-          const SizedBox(width: AppSpacing.xs),
-          Text(
-            '$label: $percent% (${level.label})',
-            style: context.texts.bodySmall?.copyWith(color: color),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// One annotation mark drawn on the PDF overlay -- shape/text always differ
 /// by kind, not just color, so the mark is legible without relying on color
 /// (Issue #21 acceptance criteria).
