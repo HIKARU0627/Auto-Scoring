@@ -3,7 +3,12 @@ import {
   IpcChannel,
   type AppInfo,
   type AutoScoringBridge,
-} from "../shared/bridge";
+} from "../shared/bridge.js";
+import type { ScannedFolder } from "../shared/folder-scan.js";
+import type {
+  SidecarMultipartRequest,
+  SidecarMultipartResponse,
+} from "../shared/sidecar-upload.js";
 
 /**
  * The only bridge between the main process and the renderer.
@@ -20,6 +25,20 @@ import {
 const bridge: AutoScoringBridge = {
   getAppInfo: (): Promise<AppInfo> =>
     ipcRenderer.invoke(IpcChannel.getAppInfo) as Promise<AppInfo>,
+  chooseFolder: (): Promise<string | null> =>
+    ipcRenderer.invoke(IpcChannel.chooseFolder) as Promise<string | null>,
+  scanFolder: (directoryPath: string): Promise<ScannedFolder> =>
+    ipcRenderer.invoke(
+      IpcChannel.scanFolder,
+      directoryPath,
+    ) as Promise<ScannedFolder>,
+  sidecarMultipartUpload: (
+    request: SidecarMultipartRequest,
+  ): Promise<SidecarMultipartResponse> =>
+    ipcRenderer.invoke(
+      IpcChannel.sidecarMultipartUpload,
+      request,
+    ) as Promise<SidecarMultipartResponse>,
 };
 
 contextBridge.exposeInMainWorld("autoScoring", bridge);

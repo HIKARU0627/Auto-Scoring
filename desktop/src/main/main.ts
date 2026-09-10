@@ -1,6 +1,13 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as path from "node:path";
-import { IpcChannel, type AppInfo } from "../shared/bridge";
+import { IpcChannel, type AppInfo } from "../shared/bridge.js";
+import type { ScannedFolder } from "../shared/folder-scan.js";
+import type {
+  SidecarMultipartRequest,
+  SidecarMultipartResponse,
+} from "../shared/sidecar-upload.js";
+import { scanDirectory } from "./folder-scan.js";
+import { sidecarMultipartUpload } from "./sidecar-upload.js";
 
 /**
  * Entry point of the Electron main process.
@@ -65,6 +72,30 @@ function createWindow(): BrowserWindow {
 ipcMain.handle(IpcChannel.getAppInfo, (): AppInfo => {
   return { version: app.getVersion(), platform: process.platform };
 });
+
+ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory"],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0] ?? null;
+});
+
+ipcMain.handle(
+  IpcChannel.scanFolder,
+  async (_event, directoryPath: string): Promise<ScannedFolder> =>
+    await scanDirectory(directoryPath),
+);
+
+ipcMain.handle(
+  IpcChannel.sidecarMultipartUpload,
+  async (
+    _event,
+    request: SidecarMultipartRequest,
+  ): Promise<SidecarMultipartResponse> => await sidecarMultipartUpload(request),
+);
 
 void app.whenReady().then(() => {
   createWindow();
