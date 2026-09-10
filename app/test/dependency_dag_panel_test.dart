@@ -622,6 +622,37 @@ void main() {
       expect(shown, contains('AIとの通信が最後まで通らず'));
     });
 
+    testWidgets('答案ごと落ちても、ヘッダーが画面を食い尽くさない', (tester) async {
+      // provider が1つ落ちれば、その答案の設問は全部同じ理由で落ちる。設問
+      // ごとに告知を出すと、説明している当の図とその下のPDFを、ヘッダが
+      // 押しのけることになる。
+      final layout = buildDependencyDagLayout(
+        questions: [
+          for (var i = 1; i <= 8; i++)
+            DagQuestion(
+              id: 'q$i',
+              label: '$i',
+              status: QuestionStatus.failed,
+              errorCode: 'server_error',
+            ),
+        ],
+        edges: const [],
+        releasedQuestionIds: const {},
+      )!;
+      await _pumpPanel(tester, layout, size: const Size(700, 720));
+
+      final notices = find.byWidgetPredicate(
+        (w) => w.key.toString().contains('dag-failure-open-'),
+      );
+      expect(notices, findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('dag-failure-headline-q1')))
+            .data,
+        '問1・問2・問3・問4・問5 ほか3件 が失敗しました。',
+      );
+    });
+
     testWidgets('要約の数字が何の数かを、ヘッダーが言える', (tester) async {
       // 「完了 2」は何個かは言うが、何の2個かは言わない。5体のうち1体が
       // まさにそこを指摘している (codex ambiguous-completion-count)。

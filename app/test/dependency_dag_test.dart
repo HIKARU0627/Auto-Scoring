@@ -581,7 +581,8 @@ void main() {
 
       expect(failed.failures, hasLength(1));
       final failure = failed.failures.single;
-      expect(failure.questionId, 'q2');
+      expect(failure.openQuestionId, 'q2');
+      expect(failure.questionLabels, ['2']);
       expect(failure.guidance, DagFailureGuidance.answerAreaWrong);
       // 止まっているのは直接の下流だけではない。
       expect(failure.stalledQuestionLabels, ['3', '5']);
@@ -600,6 +601,60 @@ void main() {
 
       expect(layout.failures.single.stalledQuestionLabels, isEmpty);
       expect(layout.failures.single.headline, '問1 が失敗しました。');
+    });
+
+    test('答案ごと落ちても、告知は理由ごとに1行にまとまる', () {
+      // 実際に会うのはこの形である -- provider が1つ落ちれば、その答案の
+      // 設問は全部同じ理由で落ちる。設問ごとに1行出すと、説明している当の
+      // 図とその下のPDFを、ヘッダが押しのけることになる。
+      final layout = buildDependencyDagLayout(
+        questions: [
+          for (var i = 1; i <= 8; i++)
+            _question(
+              'q$i',
+              label: '$i',
+              status: QuestionStatus.failed,
+              errorCode: 'server_error',
+            ),
+        ],
+        edges: const [],
+        releasedQuestionIds: const {},
+      )!;
+
+      expect(layout.failures, hasLength(1));
+      final failure = layout.failures.single;
+      expect(failure.questionLabels, hasLength(8));
+      // 名指しは5件まで。そこから先は列挙ではなく件数にする。
+      expect(failure.headline, '問1・問2・問3・問4・問5 ほか3件 が失敗しました。');
+      // 押す先はある。どれを開いてもインスペクタで同じ出口に着く。
+      expect(failure.openQuestionId, 'q1');
+    });
+
+    test('理由が違えば、行も分かれる', () {
+      final layout = buildDependencyDagLayout(
+        questions: [
+          _question(
+            'q1',
+            label: '1',
+            status: QuestionStatus.failed,
+            errorCode: 'server_error',
+          ),
+          _question(
+            'q2',
+            label: '2',
+            status: QuestionStatus.failed,
+            errorCode: 'permanent',
+          ),
+        ],
+        edges: const [],
+        releasedQuestionIds: const {},
+      )!;
+
+      // 次にできることが違うものを1行にまとめると、どちらの手も言えなくなる。
+      expect(layout.failures.map((f) => f.guidance), [
+        DagFailureGuidance.temporary,
+        DagFailureGuidance.permanent,
+      ]);
     });
 
     test('失敗していない答案には、失敗の告知が無い', () {

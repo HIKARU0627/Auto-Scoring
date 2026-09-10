@@ -441,32 +441,59 @@ class DagMetrics {
 @immutable
 class DagFailure {
   const DagFailure({
-    required this.questionId,
-    required this.questionLabel,
+    required this.openQuestionId,
+    required this.questionLabels,
     required this.guidance,
     required this.stalledQuestionLabels,
   });
 
-  final String questionId;
+  /// The question the header's button opens -- the first of
+  /// [questionLabels], since they all end in the same place: the Inspector,
+  /// where the diagnosis and both ways out are.
+  final String openQuestionId;
 
-  /// The 設問番号 (`QuestionResponse.number`).
-  final String questionLabel;
+  /// The 設問番号 (`QuestionResponse.number`) of every question that failed
+  /// this way.
+  ///
+  /// A list rather than one, because the failure a reviewer actually meets is
+  /// **the whole answer sheet at once**: one dead provider fails every
+  /// question of the submission, and a notice per question would push a
+  /// twelve-line header in front of the diagram it is describing and the PDF
+  /// underneath it. One line per *reason* is bounded by
+  /// [DagFailureGuidance.values], and it is also the truer sentence -- the
+  /// twelve say the same thing and have the same way out.
+  final List<String> questionLabels;
 
   final DagFailureGuidance guidance;
 
-  /// The 設問番号 of every question the queue is holding behind this one,
+  /// The 設問番号 of every question the queue is holding behind these,
   /// including those several links down the chain -- 問5 blocked on 問3
-  /// blocked on this one is stuck here just as much as 問3 is
+  /// blocked on a failed 問2 is stuck there just as much as 問3 is
   /// ([resolveQuestionWait]).
   final List<String> stalledQuestionLabels;
 
   /// 「問2 が失敗しました。」 plus, when something is stuck behind it, what
   /// that is. One sentence, because the header has room for one.
   String get headline {
-    final stalled = stalledQuestionLabels.map((n) => '問$n').join('・');
+    final failed = _name(questionLabels);
+    final stalled = _name(stalledQuestionLabels);
     return stalled.isEmpty
-        ? '問$questionLabel が失敗しました。'
-        : '問$questionLabel が失敗し、$stalled は人が対応するまで進みません。';
+        ? '$failed が失敗しました。'
+        : '$failed が失敗し、$stalled は人が対応するまで進みません。';
+  }
+
+  /// 「問1・問2・問3」, and 「問1・問2・問3・問4・問5 ほか7件」 once naming
+  /// them all would stop being a sentence and start being a list.
+  ///
+  /// The cap is what keeps this line a line. A 12設問 test whose provider is
+  /// down would otherwise spell out all twelve twice over -- once as the
+  /// failures, once as what they are holding up.
+  static String _name(List<String> labels) {
+    if (labels.isEmpty) return '';
+    const shown = 5;
+    final named = labels.take(shown).map((n) => '問$n').join('・');
+    final rest = labels.length - shown;
+    return rest > 0 ? '$named ほか$rest件' : named;
   }
 }
 
@@ -547,21 +574,31 @@ class DependencyDagLayout {
   /// #86) -- and because "which questions is this one holding up" is a walk
   /// over the queue's blocking chain, which is the sort of thing that
   /// belongs where a test can reach it without a widget.
-  List<DagFailure> get failures => [
-    for (final node in nodes)
-      if (node.failure case final failure?)
+  /// Grouped by [DagFailureGuidance], in the order the questions appear, so
+  /// the header holds at most one line per distinct reason however many
+  /// questions failed. See [DagFailure.questionLabels].
+  List<DagFailure> get failures {
+    final grouped = <DagFailureGuidance, List<DagNode>>{};
+    for (final node in nodes) {
+      if (node.failure case final failure?) {
+        grouped.putIfAbsent(failure, () => []).add(node);
+      }
+    }
+    return [
+      for (final MapEntry(key: guidance, value: failed) in grouped.entries)
         DagFailure(
-          questionId: node.id,
-          questionLabel: node.question.label,
-          guidance: failure,
+          openQuestionId: failed.first.id,
+          questionLabels: [for (final node in failed) node.question.label],
+          guidance: guidance,
           stalledQuestionLabels: [
             for (final other in nodes)
               if (other.status == QuestionStatus.blocked &&
-                  other.waitingOn?.questionId == node.id)
+                  failed.any((n) => n.id == other.waitingOn?.questionId))
                 other.question.label,
           ],
         ),
-  ];
+    ];
+  }
 
   Set<String> get satisfiedEdgeKeys => {
     for (final edge in edges)

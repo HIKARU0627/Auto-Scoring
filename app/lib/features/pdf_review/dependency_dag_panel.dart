@@ -239,7 +239,7 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
             _DagFailureNotice(
               failure: failure,
               onOpenQuestion: () =>
-                  widget.onQuestionSelected(failure.questionId),
+                  widget.onQuestionSelected(failure.openQuestionId),
             ),
           ],
         ],
@@ -387,7 +387,7 @@ class _DagFailureNotice extends StatelessWidget {
   Widget build(BuildContext context) {
     final tone = AppStatusTone.danger.color(context);
     return Row(
-      key: Key('dag-failure-${failure.questionId}'),
+      key: Key('dag-failure-${failure.openQuestionId}'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(QuestionStatus.failed.icon, size: AppIconSize.dense, color: tone),
@@ -398,7 +398,7 @@ class _DagFailureNotice extends StatelessWidget {
             children: [
               Text(
                 failure.headline,
-                key: Key('dag-failure-headline-${failure.questionId}'),
+                key: Key('dag-failure-headline-${failure.openQuestionId}'),
                 style: context.texts.bodySmall?.copyWith(color: tone),
               ),
               Text(
@@ -408,7 +408,7 @@ class _DagFailureNotice extends StatelessWidget {
                 // sentence that says neither -- a unit test asserts both
                 // halves are there for every failure category.
                 '${failure.guidance.cause}${failure.guidance.nextStep}',
-                key: Key('dag-failure-next-${failure.questionId}'),
+                key: Key('dag-failure-next-${failure.openQuestionId}'),
                 style: context.texts.bodySmall,
               ),
             ],
@@ -416,9 +416,9 @@ class _DagFailureNotice extends StatelessWidget {
         ),
         const SizedBox(width: AppSpacing.sm),
         TextButton(
-          key: Key('dag-failure-open-${failure.questionId}'),
+          key: Key('dag-failure-open-${failure.openQuestionId}'),
           onPressed: onOpenQuestion,
-          child: Text('問${failure.questionLabel} を開く'),
+          child: Text('問${failure.questionLabels.first} を開く'),
         ),
       ],
     );
