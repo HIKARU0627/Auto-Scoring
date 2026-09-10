@@ -44,6 +44,8 @@ silent fallback.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import NoReturn
 
 import httpx
@@ -93,8 +95,43 @@ def raise_classified_unavailable(exc: Exception, *, label: str) -> NoReturn:
         # a misspelled model (404) once the chain has failed (Issue #97
         # review round 4). A number cannot carry configuration.
         if status == _TOO_MANY_REQUESTS:
-            raise ProviderRateLimitedError(detail, status_code=status) from None
+            retry_after = parse_retry_after_seconds(
+                exc.response.headers.get("Retry-After"), now=datetime.now(UTC)
+            )
+            raise ProviderRateLimitedError(
+                detail, status_code=status, retry_after_seconds=retry_after
+            ) from None
         if status >= 500:
             raise ProviderServerError(detail, status_code=status) from None
         raise ProviderUnavailable(detail, status_code=status) from None
     raise ProviderUnavailable(f"{label} request failed: {type(exc).__name__}") from None
+
+
+def parse_retry_after_seconds(value: str | None, *, now: datetime) -> float | None:
+    """Parse a ``Retry-After`` header value into a non-negative seconds-from-
+    ``now`` count, or ``None`` if it is missing, malformed, or would be
+    negative (Issue #153 decision: "Retry-After があれば必ず尊重する", but an
+    invalid or already-past value is not a value to honour -- it falls back
+    to this adapter's own exponential schedule instead).
+
+    Handles both forms RFC 9110 §10.2.3 allows: an integer delay-seconds
+    (``"Retry-After: 30"``) and an HTTP-date
+    (``"Retry-After: Wed, 21 Oct 2015 07:28:00 GMT"``, resolved against
+    ``now``, which the caller supplies rather than this function reading the
+    clock itself -- see the module docstring). ``now`` is timezone-aware.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped.isdigit():
+        return float(int(stripped))
+    try:
+        parsed = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    delta = (parsed - now).total_seconds()
+    return delta if delta >= 0 else None

@@ -52,11 +52,13 @@ _CROP = b"\x89PNG\r\n\x1a\nanswer-area-crop"
 _SENSITIVE = "SENSITIVE-ANSWER-TEXT-MARKER"
 
 
-def _serving(body: Any, *, status: int = 200) -> DocumentAiOCRProvider:
+def _serving(
+    body: Any, *, status: int = 200, headers: dict[str, str] | None = None
+) -> DocumentAiOCRProvider:
     def handle(request: httpx.Request) -> httpx.Response:
         if isinstance(body, str):
-            return httpx.Response(status, text=body)
-        return httpx.Response(status, json=body)
+            return httpx.Response(status, text=body, headers=headers)
+        return httpx.Response(status, json=body, headers=headers)
 
     return document_ai_provider(httpx.MockTransport(handle))
 
@@ -288,6 +290,54 @@ def test_an_http_status_maps_to_the_exception_the_retry_policy_keys_off(
 
     assert str(status) in str(error.value)
     assert _SENSITIVE not in str(error.value)
+
+
+def test_429_with_a_delay_seconds_retry_after_is_parsed() -> None:
+    """Issue #153: the digit-only ``Retry-After`` form (RFC 9110 §10.2.3)."""
+    provider = _serving({"error": {}}, status=429, headers={"Retry-After": "30"})
+
+    with pytest.raises(OCRRateLimitedError) as error:
+        provider.recognize(_CROP)
+
+    assert error.value.retry_after_seconds == 30.0
+
+
+def test_429_with_an_http_date_retry_after_is_parsed_relative_to_now() -> None:
+    """Issue #153: the HTTP-date ``Retry-After`` form. `_raise_classified`
+    resolves it against the wall clock at call time, so this only pins the
+    parse to a wide, deterministic-enough tolerance rather than an exact
+    value."""
+    from datetime import UTC, datetime, timedelta
+
+    future = datetime.now(UTC) + timedelta(seconds=45)
+    http_date = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    provider = _serving({"error": {}}, status=429, headers={"Retry-After": http_date})
+
+    with pytest.raises(OCRRateLimitedError) as error:
+        provider.recognize(_CROP)
+
+    assert error.value.retry_after_seconds is not None
+    assert 40.0 <= error.value.retry_after_seconds <= 50.0
+
+
+def test_429_with_no_retry_after_header_carries_none() -> None:
+    """Issue #153: no header at all -- the queue falls back to its own
+    exponential schedule, never a fabricated wait."""
+    provider = _serving({"error": {}}, status=429)
+
+    with pytest.raises(OCRRateLimitedError) as error:
+        provider.recognize(_CROP)
+
+    assert error.value.retry_after_seconds is None
+
+
+def test_429_with_a_malformed_retry_after_is_ignored_not_fabricated() -> None:
+    provider = _serving({"error": {}}, status=429, headers={"Retry-After": "not-a-number"})
+
+    with pytest.raises(OCRRateLimitedError) as error:
+        provider.recognize(_CROP)
+
+    assert error.value.retry_after_seconds is None
 
 
 def test_a_timeout_is_a_timeout() -> None:

@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, NoReturn
 
 import httpx
@@ -202,7 +204,18 @@ def _raise_classified(exc: Exception) -> NoReturn:
         ) from None
     status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
     if status == _TOO_MANY_REQUESTS:
-        raise OCRRateLimitedError(f"Document AI rate limited the request (HTTP {status})") from None
+        # `status` is only ever non-None (and so only ever able to equal
+        # `_TOO_MANY_REQUESTS`) via the `isinstance` branch just above, so
+        # `exc` is always an `httpx.HTTPStatusError` here -- spelled out
+        # again for mypy, which cannot narrow across the ternary.
+        assert isinstance(exc, httpx.HTTPStatusError)
+        retry_after = _parse_retry_after_seconds(
+            exc.response.headers.get("Retry-After"), now=datetime.now(UTC)
+        )
+        raise OCRRateLimitedError(
+            f"Document AI rate limited the request (HTTP {status})",
+            retry_after_seconds=retry_after,
+        ) from None
     if status is not None and status >= _SERVER_ERROR_FLOOR:
         raise OCRServerError(f"Document AI returned HTTP {status}") from None
     if status is not None:
@@ -218,6 +231,35 @@ def _raise_classified(exc: Exception) -> NoReturn:
         # (the gap Issue #97 review round 4 found on the grading side).
         raise OCRProviderError(f"Document AI rejected the request (HTTP {status})") from None
     raise OCRProviderError(f"the Document AI call failed ({type(exc).__name__})") from None
+
+
+def _parse_retry_after_seconds(value: str | None, *, now: datetime) -> float | None:
+    """Parse a ``Retry-After`` header value into a non-negative seconds-from-
+    ``now`` count, or ``None`` if missing, malformed, or negative (Issue #153).
+
+    Deliberately duplicated from
+    `adapters.ai_grading._http.parse_retry_after_seconds` rather than shared,
+    for the same reason `_CONVERTIBLE_HTTP_ERRORS` above is duplicated: this
+    port and the ``AIProvider`` port are kept from importing each other's
+    adapter internals. Handles both RFC 9110 §10.2.3 forms (an integer
+    delay-seconds count, or an HTTP-date resolved against ``now``, which the
+    caller supplies rather than this function reading the clock itself).
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped.isdigit():
+        return float(int(stripped))
+    try:
+        parsed = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    delta = (parsed - now).total_seconds()
+    return delta if delta >= 0 else None
 
 
 def _to_ocr_result(body: Any) -> OcrResult:

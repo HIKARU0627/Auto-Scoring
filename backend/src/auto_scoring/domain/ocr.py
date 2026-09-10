@@ -211,6 +211,19 @@ class OCRProviderError(Exception):
     turning this into a persisted `Job.last_error` (Issue #19).
     """
 
+    def __init__(self, *args: object, retry_after_seconds: float | None = None) -> None:
+        super().__init__(*args)
+        #: Seconds a 429's ``Retry-After`` header asked for, already parsed
+        #: and sanity-checked by the raising adapter (Issue #153) -- ``None``
+        #: when there was no header, it did not parse, or it was negative.
+        #: Only meaningful on :class:`OCRRateLimitedError`; every other
+        #: member of this hierarchy leaves it ``None``. Mirrors
+        #: `domain.ai_provider.ProviderFailure.retry_after_seconds` (kept as
+        #: two separate attributes, not a shared base class, for the same
+        #: reason the two exception hierarchies stay separate -- see
+        #: `adapters.ocr.document_ai_provider._raise_classified`).
+        self.retry_after_seconds = retry_after_seconds
+
 
 class OCRTimeoutError(OCRProviderError):
     """The provider did not respond within its configured timeout."""
