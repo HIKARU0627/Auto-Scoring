@@ -16,6 +16,11 @@ import uvicorn
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
 from auto_scoring.adapters.ai_grading.vertex_gemini_provider import VertexGeminiAIProvider
+from auto_scoring.adapters.credentials.api_keys import NO_API_KEY_REASON
+from auto_scoring.adapters.credentials.store import (
+    InMemoryCredentialStore,
+    UnavailableCredentialStore,
+)
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
 from auto_scoring.api import sidecar
@@ -55,6 +60,21 @@ def _pinned_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
         sidecar,
         "build_ai_provider",
         lambda _env, **_: UnconfiguredAIProvider("pinned by the test suite"),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_credential_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`run()` reads this host's OS credential store (Issue #96). Pin it
+    empty for every test here, for the reason above and one more: the real
+    one would write into a developer's Windows Credential Manager, and on
+    Linux it may block on a D-Bus prompt. A test that wants a stored key
+    installs its own store.
+    """
+    monkeypatch.setattr(
+        sidecar,
+        "create_credential_store",
+        lambda: UnavailableCredentialStore("pinned by the test suite"),
     )
 
 
@@ -401,8 +421,107 @@ def test_run_starts_and_serves_on_a_host_with_no_ai_credentials(
 
     assert exit_code == 0
     assert handshake_file.is_file()
-    assert seen["env"] is os.environ
+    # A *copy* of this process's environment since Issue #96 -- the user's
+    # own API key is layered over it, and writing that into `os.environ`
+    # would hand it to every child process this app spawns. With no
+    # credential store (the fixture above) the copy is the environment.
+    assert seen["env"] == dict(os.environ)
+    # The provider that arrives is still the unconfigured one; its *reason*
+    # is Issue #96's, because this host has no AI configuration of any kind
+    # and the factory's message names variables nobody here has ever set.
+    # `test_run_keeps_the_specific_reason_when_something_is_configured`
+    # covers the other side.
+    served = captured["config"].app.state.ai_provider
+    assert isinstance(served, UnconfiguredAIProvider)
+    assert served.reason == NO_API_KEY_REASON
+
+
+def test_run_keeps_the_specific_reason_when_something_is_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of Issue #96's reason swap. A developer machine that
+    names a transport and got the credentials wrong needs the message that
+    names the variable; replacing it with "enter a key on the settings
+    screen" would throw away the only thing that identifies the mistake.
+    """
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
+    monkeypatch.setenv("AUTO_SCORING_AI_GRADING_TRANSPORT", "openrouter")
+    provider = UnconfiguredAIProvider("AUTO_SCORING_OPENROUTER_API_KEY is not set")
+    monkeypatch.setattr(sidecar, "build_ai_provider", lambda _env, **_: provider)
+
+    captured: dict[str, Any] = {}
+
+    def fake_server_run(self: uvicorn.Server, sockets: list[socket.socket] | None = None) -> None:
+        captured["config"] = self.config
+        if sockets is not None:
+            for sock in sockets:
+                sock.close()
+
+    monkeypatch.setattr(uvicorn.Server, "run", fake_server_run)
+
+    assert (
+        run(
+            [
+                "--handshake-file",
+                str(tmp_path / "handshake.json"),
+                "--app-data-dir",
+                str(tmp_path / "app-data"),
+            ]
+        )
+        == 0
+    )
     assert captured["config"].app.state.ai_provider is provider
+
+
+def test_run_layers_a_stored_key_over_the_environment_without_writing_to_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #96's whole mechanism, pinned at the composition root.
+
+    The four providers are built from the layered copy, and `os.environ`
+    is left alone -- so the `codex app-server` child this app can spawn
+    never inherits a key the user gave to *this* process
+    (`adapters.credentials.api_keys`, docs/sidecar-api.md section 6).
+    """
+    stored = "fake-openrouter-key-DO-NOT-USE-4c1f9a"
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
+    monkeypatch.delenv("AUTO_SCORING_AI_GRADING_TRANSPORT", raising=False)
+    monkeypatch.delenv("AUTO_SCORING_OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        sidecar,
+        "create_credential_store",
+        lambda: InMemoryCredentialStore({"AUTO_SCORING_OPENROUTER_API_KEY": stored}),
+    )
+
+    seen: dict[str, Mapping[str, str]] = {}
+
+    def fake_build(env: Mapping[str, str], **_: Any) -> UnconfiguredAIProvider:
+        seen["env"] = env
+        return UnconfiguredAIProvider("not under test")
+
+    monkeypatch.setattr(sidecar, "build_ai_provider", fake_build)
+    monkeypatch.setattr(
+        uvicorn.Server,
+        "run",
+        lambda self, sockets=None: [sock.close() for sock in sockets or []],
+    )
+
+    run(
+        [
+            "--handshake-file",
+            str(tmp_path / "handshake.json"),
+            "--app-data-dir",
+            str(tmp_path / "app-data"),
+        ]
+    )
+
+    assert seen["env"]["AUTO_SCORING_OPENROUTER_API_KEY"] == stored
+    assert seen["env"]["AUTO_SCORING_AI_GRADING_TRANSPORT"] == "openrouter"
+    assert "AUTO_SCORING_OPENROUTER_API_KEY" not in os.environ
 
 
 def test_run_injects_the_ocr_provider_it_built(
@@ -456,7 +575,7 @@ def test_run_injects_the_ocr_provider_it_built(
         )
 
     assert exit_code == 0
-    assert seen["env"] is os.environ
+    assert seen["env"] == dict(os.environ)
     assert captured["config"].app.state.ocr_provider is provider
     # Says so, once, for the whole app -- and names the variable, not a value.
     assert "AUTO_SCORING_DOCUMENT_AI_PROCESSOR is not set" in caplog.text

@@ -40,9 +40,12 @@ from typing import TypedDict
 import uvicorn
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.ai_classification.factory import create_material_classifier
 from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
 from auto_scoring.adapters.ai_grading.factory import create_ai_provider
 from auto_scoring.adapters.answer_area_detection.factory import create_answer_area_detector
+from auto_scoring.adapters.credentials.api_keys import ApiKeySettings
+from auto_scoring.adapters.credentials.store import create_credential_store
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.criteria_extraction.factory import create_criteria_extractor
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
@@ -56,7 +59,7 @@ from auto_scoring.api.app import (
     create_app,
 )
 from auto_scoring.api.auth import generate_token
-from auto_scoring.api.secret_redaction import configuration_secrets, redact
+from auto_scoring.api.secret_redaction import SecretRegistry, configuration_secrets, redact
 from auto_scoring.domain.answer_area_detection import UnconfiguredAnswerAreaDetector
 
 LOOPBACK = "127.0.0.1"
@@ -192,13 +195,18 @@ class _RedactingFilter(logging.Filter):
     INFO-level request URL).
     """
 
-    def __init__(self, secrets: Sequence[str]) -> None:
+    def __init__(self, registry: SecretRegistry) -> None:
         super().__init__()
-        self._secrets = tuple(secret for secret in secrets if secret)
+        self._registry = registry
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # Read per record, not captured once: a key entered on the settings
+        # screen becomes a secret while this process runs, and the whole
+        # point of the registry is that the filter installed at startup
+        # covers it from the moment it is saved (Issue #96).
+        secrets = self._registry.secrets()
         message = record.getMessage()
-        scrubbed = redact(message, self._secrets)
+        scrubbed = redact(message, secrets)
         if scrubbed != message:
             record.msg = scrubbed
             record.args = ()
@@ -218,7 +226,7 @@ class _RedactingFilter(logging.Filter):
         if record.exc_info is not None:
             if record.exc_text is None:
                 record.exc_text = logging.Formatter().formatException(record.exc_info)
-            record.exc_text = redact(record.exc_text, self._secrets)
+            record.exc_text = redact(record.exc_text, secrets)
         return True
 
 
@@ -227,6 +235,7 @@ def install_log_redaction(
     log_directory: Path | None = None,
     *,
     secrets: Sequence[str] = (),
+    registry: SecretRegistry | None = None,
 ) -> None:
     """Route logging through handlers that all scrub ``token`` and ``secrets``.
 
@@ -234,6 +243,13 @@ def install_log_redaction(
     -- the single gate described there. Empty by default so a caller that
     only wants the session token scrubbed, and every test that installs
     logging, says nothing about the machine's environment.
+
+    ``registry`` is what makes the gate hold for a value this process only
+    learns about later -- an API key entered on the settings screen (Issue
+    #96). Pass the same `SecretRegistry` the settings endpoints add to and
+    every handler picks up each new key immediately; omit it and this
+    function makes a private one holding exactly ``token`` and ``secrets``,
+    which is the old behaviour.
 
     Always to stderr; additionally to a rotating file under ``log_directory``
     when one is given. The file is what makes the log useful in a
@@ -272,11 +288,14 @@ def install_log_redaction(
         except OSError as error:
             file_log_error = error
 
-    scrubbed = (token, *secrets)
+    scrubbed = registry if registry is not None else SecretRegistry()
+    scrubbed.update((token, *secrets))
     for handler in handlers:
         handler.setFormatter(formatter)
         # A filter instance per handler, not one shared -- logging holds
-        # filters per handler and this keeps each handler independent.
+        # filters per handler and this keeps each handler independent. They
+        # do share the registry, which is the object that is *meant* to
+        # change.
         handler.addFilter(_RedactingFilter(scrubbed))
 
     root = logging.getLogger()
@@ -436,25 +455,49 @@ def run(argv: Sequence[str] | None = None) -> int:
     sock = _bind_socket(args.port)
     port = int(sock.getsockname()[1])
 
-    # Before create_app, so the file log captures the slowest and least
-    # observable part of startup: the first launch's full Alembic migration
-    # run. The cost is that a *second* instance -- one that is about to be
-    # refused the data-root lock below -- appends its single error line to
-    # the same file as the live instance. Harmless at one line, and the
-    # alternative (logging to a file only once the lock is held) would drop
-    # exactly the records worth keeping.
-    # `configuration_secrets(os.environ)`, not just the session token: the
-    # Vertex adapter builds AUTO_SCORING_VERTEX_PROJECT and
+    # The user's own API key, read back from the OS credential store, layered
+    # over this process's environment (Issue #96). One dict, built once, and
+    # handed to every `build_*` call below -- `os.environ` itself is never
+    # written to, so nothing this process spawns inherits a key it was not
+    # given (`adapters.credentials.api_keys`, docs/sidecar-api.md section 6).
+    #
+    # A host with no usable credential store -- every Linux development
+    # machine here, and CI -- gets an environment identical to the one it
+    # would have had, and starts exactly as before.
+    credential_settings = ApiKeySettings(create_credential_store(), os.environ)
+    environment = credential_settings.effective_environment()
+
+    # Logging is installed before create_app, so the file log captures the
+    # slowest and least observable part of startup: the first launch's full
+    # Alembic migration run. The cost is that a *second* instance -- one
+    # that is about to be refused the data-root lock below -- appends its
+    # single error line to the same file as the live instance. Harmless at
+    # one line, and the alternative (logging to a file only once the lock is
+    # held) would drop exactly the records worth keeping.
+    #
+    # It scrubs this host's configuration values, not just the session
+    # token: the Vertex adapter builds AUTO_SCORING_VERTEX_PROJECT and
     # AUTO_SCORING_GEMINI_MODEL into every request URL, and httpx logs that
     # URL at INFO -- so a key pasted into the wrong variable reached this
     # file log through a path that has nothing to do with our own log calls
     # (review round 2). Gating the log itself covers that path and the ones
     # nobody has found yet.
+    #
+    # Over `environment`, not `os.environ`: a key that came from the
+    # credential store is a configuration value like any other. The registry
+    # is what keeps that true for a key saved *after* this line runs -- the
+    # settings endpoints add to it, and the filter reads it per record.
+    secret_registry = SecretRegistry(configuration_secrets(environment))
     install_log_redaction(
         token,
         args.app_data_dir / LOG_DIRECTORY_NAME,
-        secrets=configuration_secrets(os.environ),
+        registry=secret_registry,
     )
+    # Never a value: `describe_sources` renders slot ids and the words
+    # "credential_store" / "environment" / "default" only. It answers the
+    # question a support conversation actually starts with -- "is it using
+    # the key I typed in, or the one in my .env.local?" (Issue #96).
+    logging.getLogger(__name__).info("%s", credential_settings.describe_sources())
 
     # data_root only, no session_factory: create_app() builds the database
     # itself (migrations, engine, the startup repair sweep) rather than this
@@ -474,9 +517,17 @@ def run(argv: Sequence[str] | None = None) -> int:
     # and says on every screen that grading is unavailable.
     shared_token_source = shared_adc_token_source()
     ai_provider = build_ai_provider(
-        os.environ,
+        environment,
         factory=lambda env: create_ai_provider(env, token_source_factory=shared_token_source),
     )
+    missing_key_reason = credential_settings.missing_api_key_reason()
+    if isinstance(ai_provider, UnconfiguredAIProvider) and missing_key_reason is not None:
+        # A freshly installed copy has no environment variables, so the
+        # factory's message -- which names them -- tells the user nothing
+        # they can act on. Replaced only when nothing at all is configured:
+        # a developer machine that names a transport and got the credentials
+        # wrong keeps the specific message, which is the useful one there.
+        ai_provider = UnconfiguredAIProvider(missing_key_reason)
     if isinstance(ai_provider, UnconfiguredAIProvider):
         # Warning, not error: the sidecar is about to serve normally. The
         # reason names variables and prerequisites, never their values
@@ -492,7 +543,7 @@ def run(argv: Sequence[str] | None = None) -> int:
     # 採点基準 screen, where every value can be typed in by hand (Issue #95
     # decision 8).
     criteria_extractor = build_criteria_extractor(
-        os.environ,
+        environment,
         factory=lambda env: create_criteria_extractor(
             env, token_source_factory=shared_token_source
         ),
@@ -506,7 +557,7 @@ def run(argv: Sequence[str] | None = None) -> int:
     # (Issue #105). A host with no image-capable provider still gets a working
     # テスト設定 screen; only the 自動検出 button is off, and it says why.
     answer_area_detector = build_answer_area_detector(
-        os.environ,
+        environment,
         factory=lambda env: create_answer_area_detector(
             env, token_source_factory=shared_token_source
         ),
@@ -531,7 +582,7 @@ def run(argv: Sequence[str] | None = None) -> int:
     # authenticates with the same ADC credentials as the three Vertex AI
     # callers above, and resolving them costs ~300ms each.
     ocr_provider = build_ocr_provider(
-        os.environ,
+        environment,
         factory=lambda env: create_ocr_provider(env, token_source_factory=shared_token_source),
     )
     if isinstance(ocr_provider, UnconfiguredOCRProvider):
@@ -552,6 +603,15 @@ def run(argv: Sequence[str] | None = None) -> int:
             ai_provider=ai_provider,
             criteria_extractor=criteria_extractor,
             answer_area_detector=answer_area_detector,
+            # Bound to the layered environment for the same reason as the
+            # four providers above: without it, a user who entered a key
+            # would get grading but not the 取込 screen's role suggestions,
+            # and nothing on screen would explain the difference. Still
+            # built per request (`api.app.create_app`), so fixing ADC
+            # still needs no restart.
+            material_classifier_factory=lambda: create_material_classifier(environment),
+            credential_settings=credential_settings,
+            secret_registry=secret_registry,
         )
     except DataRootLockedError as error:
         # The one startup failure with a name the user understands, so it
