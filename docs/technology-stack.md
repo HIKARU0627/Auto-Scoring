@@ -14,13 +14,37 @@
   [Issue #81](https://github.com/HIKARU0627/Auto-Scoring/issues/81) でオーナーが確定済み
   （§3.5・§7・§9）。抽象化の境界（`OCRProvider` / `AIProvider`）は確定後も維持する。
 
-### 0.1 確定事項（変更不可）
+### 0.1 確定事項
+
+#### 現行（2026-09-10 までの本番・CI）
 
 | 項目              | 値                |
 | ----------------- | ----------------- |
 | UI フレームワーク | Flutter           |
 | 言語（UI 側）     | Dart              |
 | デザインシステム  | Material Design 3 |
+| UI の所在         | `app/`            |
+
+#### 移行後（オーナー決定 2026-09-10、実装は未着手）
+
+親 Issue [#201](https://github.com/HIKARU0627/Auto-Scoring/issues/201)。
+段取りと cut-over 条件は [`frontend-migration.md`](./frontend-migration.md)。
+テストが固定している振る舞いは [`frontend-invariants.md`](./frontend-invariants.md)。
+
+| 項目              | 値                                      |
+| ----------------- | --------------------------------------- |
+| シェル            | Electron                                |
+| 言語（UI 側）     | TypeScript                              |
+| UI ライブラリ     | React + Vite                            |
+| スタイル          | CSS 変数（デザイントークン）+ Tailwind  |
+| サーバ状態        | TanStack Query                          |
+| API クライアント  | OpenAPI 生成（`openapi-typescript` 等） |
+| テスト            | Vitest + RTL、フロー系 Playwright       |
+| UI の所在（予定） | `desktop/`（Phase 2 で作成）            |
+| バックエンド      | **変更なし**（Python サイドカー）       |
+
+**移行完了まで Flutter は凍結**（重大不具合のみ修正。新機能は Electron 側）。
+`app/` を削除するのは cut-over 後のみ。
 
 ### 0.2 調査時に確認済みの前提
 
@@ -80,7 +104,14 @@
 
 ---
 
-## 2. フロントエンド（Flutter / Dart）
+## 2. フロントエンド
+
+> **移行注記:** 本章 §2.1〜2.3 は**現行の Flutter 実装**の決定記録である。
+> Electron 移行後の対応関係は [`frontend-migration.md`](./frontend-migration.md) と
+> [`frontend-invariants.md`](./frontend-invariants.md)。デザイントークンの値は
+> [`design-tokens.md`](./design-tokens.md) が正本で、移行後も同じ意味を CSS 変数へ移植する。
+
+### 2.0 現行スタック（Flutter / Dart）
 
 | 要素              | 決定                                                                                                                                          | 代替案と却下理由                                                                                                                                                                          |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -320,13 +351,15 @@ MSIX を採用しない判断の根拠は同 §2。
 
 ---
 
-## 5. リポジトリ構成案（後続 Issue で実装）
+## 5. リポジトリ構成
 
 単一リポジトリに UI と バックエンドを併置する。
 
+### 5.0 現行（Flutter）
+
 ```text
 /
-├─ app/                     # Flutter デスクトップアプリ
+├─ app/                     # Flutter デスクトップアプリ（移行完了まで本番）
 │   ├─ lib/
 │   │   ├─ main.dart        # コンポジションルート（サイドカー監視・DI の上書き）
 │   │   ├─ app_router.dart  # go_router のルート表（画面を名指しするので core には置けない: §2.2）
@@ -335,11 +368,12 @@ MSIX を採用しない判断の根拠は同 §2。
 │   │   └─ core/            # テーマ(Material 3), ルートのパス, provider 定義（DI）
 │   │       ├─ design/      # デザイントークン（配色・タイポ・余白・モーション: docs/design-tokens.md）
 │   │       └─ widgets/     # 複数画面で重複していた見た目の要素
+│   ├─ test/                # ウィジェットテスト（不変条件の根拠: docs/frontend-invariants.md）
 │   ├─ assets/fonts/        # Noto Sans JP（可変フォント、SIL OFL 1.1。同梱理由は docs/design-tokens.md §2）
 │   ├─ integration_test/
 │   └─ pubspec.yaml
 │
-├─ backend/                 # Python サイドカー
+├─ backend/                 # Python サイドカー（移行後も同じ）
 │   ├─ src/auto_scoring/
 │   │   ├─ api/             # FastAPI ルーター（薄く保つ）
 │   │   ├─ domain/          # 採点・プロファイル・状態遷移のコア（フレームワーク非依存）
@@ -353,12 +387,32 @@ MSIX を採用しない判断の根拠は同 §2。
 └─ package.json             # pnpm run <script> を全体のタスク入口として使う
 ```
 
-依存方向（AGENTS.md「Architecture」）:
+### 5.0.1 移行後（Electron、Phase 2 以降で追加予定）
 
 ```text
-app: features → core → api            （api は生成物。features はここだけ経由で通信）
-backend: api → domain ← adapters       （domain はフレームワーク・DB・外部 API を import しない）
+/
+├─ desktop/                 # Electron アプリ（cut-over 後に app/ と置き換え）
+│   ├─ src/main/            # サイドカー起動・監視（PoC 7 / frontend-migration.md）
+│   ├─ src/preload/
+│   ├─ src/renderer/        # React UI（features 相当）
+│   │   ├─ features/
+│   │   ├─ core/            # トークン・ルーティング・共有ウィジェット
+│   │   └─ api/             # OpenAPI 生成 TS クライアント
+│   └─ package.json
+├─ app/                     # Flutter（cut-over まで残す。完了後削除）
+├─ backend/                 # 変更なし
+└─ docs/
 ```
+
+依存方向:
+
+```text
+現行 app:     features → core → api     （api は生成物。features はここだけ経由で通信）
+移行後 desktop: renderer/features → core → api/generated （同じ原則を TS で維持）
+backend:      api → domain ← adapters    （domain はフレームワーク・DB・外部 API を import しない）
+```
+
+不変条件の移植先一覧: [`frontend-invariants.md`](./frontend-invariants.md)。
 
 ### 5.1 品質ゲートへの割り当て（`package.json` scripts）
 
