@@ -506,6 +506,74 @@ SELECT answer_image_finding, COUNT(*) FROM grade_results GROUP BY answer_image_f
 指示文だけを取り除く変異でも、対応する1本だけが赤くなることを確認した
 （全部が緑のままにはならない）。
 
+### 画像を運ぶ AI 呼び出しを1本にする（Issue #125）
+
+採点基準の抽出（#103）・回答欄の検出（#105）・資料の分類（#101）は、どれも
+**「ページ画像と strict JSON Schema を image-capable transport へ1回投げ、
+壊れた応答は `SchemaViolation` にする」**という同じ処理をしていた。#105 の
+実装時にその重複は申告されていて、「マージ後に1本化する」follow-up として
+#125 が起票された。
+
+**目的は行数削減ではない。「1箇所直せば3つとも直る」ようにすること。**
+#121（注釈コメントが上限を超えると採点結果ごと破棄する）は採点側で見つかったが、
+**「strict schema に合わない応答は丸ごと捨てる」という構造は4アダプタで共通**で、
+3つに分かれている限り、同型の欠陥を直すたびに「同じ処理をしている別の場所」を
+探す作業が発生する。
+
+#### 何を1本にし、何を分けたまま残したか
+
+| 何                                                      | どこ                                                     |
+| ------------------------------------------------------- | -------------------------------------------------------- |
+| transport の選択（`AUTO_SCORING_AI_GRADING_TRANSPORT`） | `adapters/ai/image_transport.py`（1本）                  |
+| vendor ごとの認証情報・base URL・保持オプトアウト       | 同上（1本）                                              |
+| ページ画像の載せ方（base64 / data URL / `inlineData`）  | `adapters/ai/image_call.py`（1本）                       |
+| strict schema の送信と応答エンベロープの取り出し        | 同上（1本）                                              |
+| 応答を丸ごと捨てる判断（`discard_response`）            | 同上（**1本**。#121 と同型の欠陥はここに集まる）         |
+| プロンプト本文                                          | 各アダプタの `_prompt.py` / `classifier.py`（3本のまま） |
+| 応答スキーマ                                            | 同上（3本のまま）                                        |
+| パーサと妥当性検査                                      | 各アダプタの `domain` モジュール（3本のまま）            |
+| 「この端末では使えない」の言い方                        | 各 factory（3本のまま。後述）                            |
+
+プロンプトとスキーマを共通化しないのは #125 が明示した「やらないこと」である
+——3つは目的が違い、共通化すれば片方の都合でもう片方の文言が動く。
+
+**新しい抽象は足していない。** 共通化した `ImageJsonCall` は、#101 が
+`adapters/ai_classification/_calls.py` に既に持っていた `StructuredJsonCall`
+（「system 指示・テキスト・画像・スキーマを送り、JSON テキストを返す」）を
+画像1枚から複数枚へ広げて上へ移したものである。「将来のための基底クラス」も
+「差し替え可能なインターフェース」も足していない。
+
+#### `Unconfigured*` は3本のまま残した
+
+#125 は「この端末では使えない」の表現も1本化の対象に挙げているが、実際には
+1本にできなかった。`UnconfiguredCriteriaExtractor` は adapters 側、
+`UnconfiguredAnswerAreaDetector` は domain 側にあり、資料の分類はクラスではなく
+例外（`ClassifierUnavailable`）で表す。3つは**別のポートを実装していて**、
+`api/sidecar.py` はそれぞれを `isinstance` で見分けて別の availability を返す。
+1つのクラスにまとめるとその区別が消え、`api/` の書き換えを伴う——#125 の
+「共通化であって層を足すことではない」からも、担当範囲からも外れる。
+共通化したのは、その reason を作る側（transport 選択の失敗理由）である。
+
+#### 3本とも同じ扱いになることをテストで固定する
+
+`backend/tests/test_ai_response_overflow.py` は、3アダプタそれぞれに
+**「完全な応答で、載っている値も正しく、1つの文字列だけが長すぎる」**という
+#121 と同型の入力を与え、3本とも同じ答え（応答ごと `SchemaViolation`、値は
+引用しない、例外を連鎖させない）になることを検査する。#140 の
+`test_ai_response_language.py` と同じ形で、**共有部分を1か所変えると3本ぶんが
+同時に落ちる**。実際に変異させて確かめた:
+
+- `discard_response` が `SchemaViolation` ではなく `ProviderUnavailable` を
+  投げるようにすると、3アダプタのテストと新規テストで **37 件**が落ちる。
+- `transport_priority_list` の区切り文字を変えると、3アダプタの factory
+  テストが落ちる。
+- アダプタ固有の部分（抽出の `images` 引数／検出の設問候補／分類の
+  `_PROPOSABLE_ROLES`）を壊すと、**その1本だけ**が落ちる。
+
+`ai_classification` は分類スキーマに自由文フィールドが1つも無い（#140 と同じ
+理由）ので、「長すぎる文字列」に相当する入力は**モデルが返した role 文字列
+そのものが長すぎる**場合になる。テストにその旨を書いてある。
+
 `docs/job-queue.md`が決定した「1 Question = 1 Job（`JobKind.GRADING`）、
 Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由」という設計を受け、
 `auto_scoring.jobs.grading_processor.GradingJobProcessor`は

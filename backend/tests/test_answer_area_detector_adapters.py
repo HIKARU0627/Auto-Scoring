@@ -26,10 +26,14 @@ import httpx
 import pytest
 from google.auth.credentials import Credentials
 
+from auto_scoring.adapters.ai.image_call import (
+    ChatCompletionsImageCall,
+    VertexGeminiImageCall,
+)
 from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
 from auto_scoring.adapters.answer_area_detection.detector import (
-    ChatCompletionsAnswerAreaDetector,
-    VertexGeminiAnswerAreaDetector,
+    SCHEMA_NAME,
+    StructuredAnswerAreaDetector,
 )
 from auto_scoring.domain.ai_provider import (
     ProviderRateLimitedError,
@@ -86,23 +90,32 @@ class _FakeCredentials(Credentials):
         self.token = "fake-access-token"
 
 
-def _vertex(handler: httpx.MockTransport) -> VertexGeminiAnswerAreaDetector:
-    return VertexGeminiAnswerAreaDetector(
-        model="gemini-test",
-        tokens=AdcTokenSource(credentials=_FakeCredentials(), project_id="test-project"),
-        client=httpx.Client(transport=handler),
+def _vertex(handler: httpx.MockTransport) -> StructuredAnswerAreaDetector:
+    return StructuredAnswerAreaDetector(
+        VertexGeminiImageCall(
+            model="gemini-test",
+            tokens=AdcTokenSource(credentials=_FakeCredentials(), project_id="test-project"),
+            temperature=0.0,
+            timeout_seconds=1.0,
+            client=httpx.Client(transport=handler),
+        )
     )
 
 
-def _chat(handler: httpx.MockTransport) -> ChatCompletionsAnswerAreaDetector:
-    return ChatCompletionsAnswerAreaDetector(
-        name="openai",
-        api_key="fake-key",
-        model="model-test",
-        base_url="https://example.invalid/v1",
-        label="OpenAI",
-        extra_payload={"store": False},
-        client=httpx.Client(transport=handler, base_url="https://example.invalid/v1"),
+def _chat(handler: httpx.MockTransport) -> StructuredAnswerAreaDetector:
+    return StructuredAnswerAreaDetector(
+        ChatCompletionsImageCall(
+            provider="openai",
+            api_key="fake-key",
+            model="model-test",
+            base_url="https://example.invalid/v1",
+            label="OpenAI",
+            schema_name=SCHEMA_NAME,
+            extra_payload={"store": False},
+            temperature=0.0,
+            timeout_seconds=1.0,
+            client=httpx.Client(transport=handler, base_url="https://example.invalid/v1"),
+        )
     )
 
 

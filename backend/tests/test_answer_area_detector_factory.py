@@ -11,17 +11,21 @@ comes back.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
-from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
-from auto_scoring.adapters.answer_area_detection.detector import (
-    ChatCompletionsAnswerAreaDetector,
-    VertexGeminiAnswerAreaDetector,
+from auto_scoring.adapters.ai.image_call import (
+    ChatCompletionsImageCall,
+    VertexGeminiImageCall,
 )
+from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
+from auto_scoring.adapters.answer_area_detection.detector import StructuredAnswerAreaDetector
 from auto_scoring.adapters.answer_area_detection.factory import (
     AnswerAreaDetectorConfigError,
     create_answer_area_detector,
 )
+from auto_scoring.domain.answer_area_detection import AnswerAreaDetector
 
 _SENTINEL = "s3cr3t-value-that-must-not-be-published"
 
@@ -36,6 +40,14 @@ _ALL_VARIABLES = (
     "AUTO_SCORING_OPENAI_MODEL",
     "AUTO_SCORING_CODEX_EXECUTABLE",
 )
+
+
+def _call_of(detector: AnswerAreaDetector) -> Any:
+    """The provider call a built detector wraps. Reaches past the port on
+    purpose: what these tests pin is *which vendor was selected*, which is
+    the factory's whole job and is not visible on the port itself."""
+    assert isinstance(detector, StructuredAnswerAreaDetector)
+    return detector._call
 
 
 def _no_adc(project_id: str | None) -> AdcTokenSource:
@@ -59,7 +71,7 @@ def test_builds_vertex_when_gemini_leads_and_adc_is_present() -> None:
         {"AUTO_SCORING_AI_GRADING_TRANSPORT": "gemini", "AUTO_SCORING_GEMINI_MODEL": "m"},
         token_source_factory=_fake_adc,
     )
-    assert isinstance(detector, VertexGeminiAnswerAreaDetector)
+    assert isinstance(_call_of(detector), VertexGeminiImageCall)
 
 
 def test_falls_through_to_the_next_vendor_when_credentials_are_missing() -> None:
@@ -73,7 +85,7 @@ def test_falls_through_to_the_next_vendor_when_credentials_are_missing() -> None
         },
         token_source_factory=_no_adc,
     )
-    assert isinstance(detector, ChatCompletionsAnswerAreaDetector)
+    assert isinstance(_call_of(detector), ChatCompletionsImageCall)
     assert detector.name == "openai"
 
 
@@ -128,10 +140,10 @@ def test_the_openai_and_openrouter_retention_opt_outs_are_sent() -> None:
         },
         token_source_factory=_no_adc,
     )
-    assert isinstance(openai, ChatCompletionsAnswerAreaDetector)
-    assert isinstance(openrouter, ChatCompletionsAnswerAreaDetector)
-    assert openai._extra_payload == {"store": False}
-    assert openrouter._extra_payload == {"provider": {"data_collection": "deny", "zdr": True}}
+    assert _call_of(openai)._extra_payload == {"store": False}
+    assert _call_of(openrouter)._extra_payload == {
+        "provider": {"data_collection": "deny", "zdr": True}
+    }
 
 
 @pytest.mark.parametrize("variable", _ALL_VARIABLES)

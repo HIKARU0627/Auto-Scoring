@@ -45,19 +45,11 @@ from auto_scoring.domain.answer_area_detection import (
     question_number_choices,
 )
 
-_JPEG_MAGIC = b"\xff\xd8\xff"
-
 #: Bumped whenever the wording below changes. Recorded so a later comparison
 #: of two detection runs can tell "the model changed" from "the prompt
 #: changed" (the reason `domain.ai_provider.ProviderDescriptor` requires a
 #: ``prompt_version`` at all).
 ANSWER_AREA_PROMPT_VERSION = "answer-area-detection-v3"
-
-
-def sniff_image_format(data: bytes) -> str:
-    """Returns ``"jpeg"`` or ``"png"`` (the default -- this project renders
-    pages to PNG via ``adapters.pdf.pdfium_pypdf_engine``)."""
-    return "jpeg" if data.startswith(_JPEG_MAGIC) else "png"
 
 
 #: The trailing sentence is `domain.ai_response_language

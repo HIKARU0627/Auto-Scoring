@@ -51,18 +51,29 @@
   → Question / Rubric 行になる
 ```
 
-| 層                               | モジュール                                                           |
-| -------------------------------- | -------------------------------------------------------------------- |
-| スキーマ・ドラフト・集計・ポート | `backend/src/auto_scoring/domain/criteria_extraction.py`             |
-| ページ描画と入力の組み立て       | `backend/src/auto_scoring/adapters/criteria_extraction/source.py`    |
-| プロンプトと strict JSON Schema  | `backend/src/auto_scoring/adapters/criteria_extraction/_prompt.py`   |
-| Vertex Gemini / OpenAI 互換      | `backend/src/auto_scoring/adapters/criteria_extraction/extractor.py` |
-| provider の選択                  | `backend/src/auto_scoring/adapters/criteria_extraction/factory.py`   |
-| 保存                             | `backend/src/auto_scoring/adapters/local/criteria_store.py`          |
-| HTTP                             | `backend/src/auto_scoring/api/criteria_router.py`                    |
-| 画面                             | `app/lib/features/test_registration/test_settings_page.dart`         |
+| 層                               | モジュール                                                            |
+| -------------------------------- | --------------------------------------------------------------------- |
+| スキーマ・ドラフト・集計・ポート | `backend/src/auto_scoring/domain/criteria_extraction.py`              |
+| ページ描画と入力の組み立て       | `backend/src/auto_scoring/adapters/criteria_extraction/source.py`     |
+| プロンプトと strict JSON Schema  | `backend/src/auto_scoring/adapters/criteria_extraction/_prompt.py`    |
+| 呼び出しの組み立てと結果の検証   | `backend/src/auto_scoring/adapters/criteria_extraction/extractor.py`  |
+| provider の選択                  | `backend/src/auto_scoring/adapters/criteria_extraction/factory.py`    |
+| Vertex Gemini / OpenAI 互換      | `backend/src/auto_scoring/adapters/ai/image_call.py`（3アダプタ共通） |
+| transport の選択と認証情報       | `backend/src/auto_scoring/adapters/ai/image_transport.py`（同上）     |
+| 保存                             | `backend/src/auto_scoring/adapters/local/criteria_store.py`           |
+| HTTP                             | `backend/src/auto_scoring/api/criteria_router.py`                     |
+| 画面                             | `app/lib/features/test_registration/test_settings_page.dart`          |
 
 ### provider
+
+**Vertex Gemini / OpenAI 互換の呼び出し本体は、回答欄の検出・資料の分類と
+共有している**（Issue #125、`adapters/ai/image_call.py`）。3つとも
+「ページ画像 + strict JSON Schema を1回投げ、壊れた応答は `SchemaViolation`」
+という同じ処理で、分けておくと #121 と同型の欠陥を3回直すことになる。
+このモジュールに残っているのは、採点基準に固有のもの——プロンプト・スキーマ・
+`parse_criteria_extraction`——だけである。詳しくは
+[ai-grading-pipeline.md](./ai-grading-pipeline.md)「画像を運ぶ AI 呼び出しを
+1本にする」。
 
 **新しい設定変数は増やしていない。** 採点と同じ
 `AUTO_SCORING_AI_GRADING_TRANSPORT` の優先順位を読み、
