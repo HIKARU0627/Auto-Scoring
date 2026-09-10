@@ -48,6 +48,7 @@ the former is updated in the same PR.
 | [poc-2-ai-grading.md](./poc-2-ai-grading.md)                             | AI 採点候補の比較、構造化出力、transport 選択         |
 | [poc-3-pdf-coordinates.md](./poc-3-pdf-coordinates.md)                   | Flutter(pdfium) と Python 間の PDF 座標往復誤差の検証 |
 | [poc-4-multi-layout-profiles.md](./poc-4-multi-layout-profiles.md)       | 複数レイアウトのテストプロファイル生成・往復検証      |
+| [poc-5-scan-to-scan-drift.md](./poc-5-scan-to-scan-drift.md)             | 別々にスキャンされた同一様式の紙のずれの実測          |
 
 ## 配布・開発環境・運用
 
