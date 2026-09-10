@@ -101,6 +101,10 @@ Class | Method | HTTP request | Description
 [*JobsApi*](doc/JobsApi.md) | [**listSubmissionJobsSubmissionsSubmissionIdJobsGet**](doc/JobsApi.md#listsubmissionjobssubmissionssubmissionidjobsget) | **GET** /submissions/{submission_id}/jobs | List Submission Jobs
 [*JobsApi*](doc/JobsApi.md) | [**resumeQuestionSubmissionsSubmissionIdQuestionsQuestionIdResumePost**](doc/JobsApi.md#resumequestionsubmissionssubmissionidquestionsquestionidresumepost) | **POST** /submissions/{submission_id}/questions/{question_id}/resume | Resume Question
 [*JobsApi*](doc/JobsApi.md) | [**retryJobJobsJobIdRetryPost**](doc/JobsApi.md#retryjobjobsjobidretrypost) | **POST** /jobs/{job_id}/retry | Retry Job
+[*PagesApi*](doc/PagesApi.md) | [**getAnswerLayoutPageImageTestsTestIdAnswerLayoutPagesPageIndexImageGet**](doc/PagesApi.md#getanswerlayoutpageimageteststestidanswerlayoutpagespageindeximageget) | **GET** /tests/{test_id}/answer-layout/pages/{page_index}/image | Get Answer Layout Page Image
+[*PagesApi*](doc/PagesApi.md) | [**getSubmissionPageImageSubmissionsSubmissionIdPagesPageIndexImageGet**](doc/PagesApi.md#getsubmissionpageimagesubmissionssubmissionidpagespageindeximageget) | **GET** /submissions/{submission_id}/pages/{page_index}/image | Get Submission Page Image
+[*PagesApi*](doc/PagesApi.md) | [**listAnswerLayoutPagesTestsTestIdAnswerLayoutPagesGet**](doc/PagesApi.md#listanswerlayoutpagesteststestidanswerlayoutpagesget) | **GET** /tests/{test_id}/answer-layout/pages | List Answer Layout Pages
+[*PagesApi*](doc/PagesApi.md) | [**listSubmissionPagesSubmissionsSubmissionIdPagesGet**](doc/PagesApi.md#listsubmissionpagessubmissionssubmissionidpagesget) | **GET** /submissions/{submission_id}/pages | List Submission Pages
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**createManualRecognitionSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsPost**](doc/RecognitionsApi.md#createmanualrecognitionsubmissionssubmissionidquestionsquestionidrecognitionspost) | **POST** /submissions/{submission_id}/questions/{question_id}/recognitions | Create Manual Recognition
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**getAnswerImageSubmissionsSubmissionIdQuestionsQuestionIdAnswerImageGet**](doc/RecognitionsApi.md#getanswerimagesubmissionssubmissionidquestionsquestionidanswerimageget) | **GET** /submissions/{submission_id}/questions/{question_id}/answer-image | Get Answer Image
 [*RecognitionsApi*](doc/RecognitionsApi.md) | [**listRecognitionsSubmissionsSubmissionIdQuestionsQuestionIdRecognitionsGet**](doc/RecognitionsApi.md#listrecognitionssubmissionssubmissionidquestionsquestionidrecognitionsget) | **GET** /submissions/{submission_id}/questions/{question_id}/recognitions | List Recognitions
@@ -173,6 +177,7 @@ Class | Method | HTTP request | Description
  - [DependencyEdgeModel](doc/DependencyEdgeModel.md)
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
  - [DependencyProvision](doc/DependencyProvision.md)
+ - [DocumentPagesResponse](doc/DocumentPagesResponse.md)
  - [EditReviewRequest](doc/EditReviewRequest.md)
  - [ExportRefusalReason](doc/ExportRefusalReason.md)
  - [ExportRequestResponse](doc/ExportRequestResponse.md)
@@ -193,6 +198,7 @@ Class | Method | HTTP request | Description
  - [NormalizedRectResponse](doc/NormalizedRectResponse.md)
  - [OcrAvailabilityResponse](doc/OcrAvailabilityResponse.md)
  - [PageFormatModel](doc/PageFormatModel.md)
+ - [PageGeometryResponse](doc/PageGeometryResponse.md)
  - [PlanRequest](doc/PlanRequest.md)
  - [PlannedFileModel](doc/PlannedFileModel.md)
  - [PlannedGroupModel](doc/PlannedGroupModel.md)

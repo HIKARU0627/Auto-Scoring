@@ -15,6 +15,7 @@ import 'package:auto_scoring_api/src/api/dependency_graph_api.dart';
 import 'package:auto_scoring_api/src/api/export_api.dart';
 import 'package:auto_scoring_api/src/api/intake_api.dart';
 import 'package:auto_scoring_api/src/api/jobs_api.dart';
+import 'package:auto_scoring_api/src/api/pages_api.dart';
 import 'package:auto_scoring_api/src/api/recognitions_api.dart';
 import 'package:auto_scoring_api/src/api/review_api.dart';
 import 'package:auto_scoring_api/src/api/settings_api.dart';
@@ -174,6 +175,12 @@ class AutoScoringApi {
   /// by doing that all interceptors will not be executed
   JobsApi getJobsApi() {
     return JobsApi(dio, serializers);
+  }
+
+  /// Get PagesApi instance, base route and serializer can be overridden by a given but be careful,
+  /// by doing that all interceptors will not be executed
+  PagesApi getPagesApi() {
+    return PagesApi(dio, serializers);
   }
 
   /// Get RecognitionsApi instance, base route and serializer can be overridden by a given but be careful,

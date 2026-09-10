@@ -41,6 +41,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(DependencyEdgeModel.serializer)
       ..add(DependencyGraphResponse.serializer)
       ..add(DependencyProvision.serializer)
+      ..add(DocumentPagesResponse.serializer)
       ..add(EditReviewRequest.serializer)
       ..add(ExportRefusalReason.serializer)
       ..add(ExportRequestResponse.serializer)
@@ -61,6 +62,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(NormalizedRectResponse.serializer)
       ..add(OcrAvailabilityResponse.serializer)
       ..add(PageFormatModel.serializer)
+      ..add(PageGeometryResponse.serializer)
       ..add(PlanRequest.serializer)
       ..add(PlannedFileModel.serializer)
       ..add(PlannedGroupModel.serializer)
@@ -181,6 +183,10 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(LocationInner)]),
           () => ListBuilder<LocationInner>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(PageGeometryResponse)]),
+          () => ListBuilder<PageGeometryResponse>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(PlannedFileModel)]),
           () => ListBuilder<PlannedFileModel>())
