@@ -136,6 +136,10 @@ contain, how to recover — is in
 - Use short-lived branches off `origin/main`; never push to `main` directly. Keep
   each commit to one purpose — no generated files, formatting-only noise, or
   unrelated refactors mixed in.
+- Opening the PR is the agent's step, not the human's: `change-explainer` only
+  syncs the summary comment onto a PR that already exists. Look for an open PR
+  for your branch and create one through the GitHub App helper when there is
+  none (`review-ready` Step 5).
 - Put `Closes #<number>` in the PR body. For a sub-issue, reference the parent
   Issue too, and keep the worktree's linked issue consistent.
 - The tracked git hooks in `.githooks/` are canonical; `pnpm run bootstrap`

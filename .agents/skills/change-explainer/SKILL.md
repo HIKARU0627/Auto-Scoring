@@ -77,6 +77,8 @@ $branch = '<current-branch>'
 
 `change-explainer` は**PRを勝手に作成しない**。生成したChange Summary本文を出力し、「対応するPRが存在しないためコメントは投稿していない」ことを明示して終了する。
 
+呼び出し元が `review-ready` の場合、PR作成はその Step 5 の責務である。ここで終了したら、Step 5 を先に済ませてから再実行する。
+
 ## Step 6: 既存コメントの検索
 
 ```powershell

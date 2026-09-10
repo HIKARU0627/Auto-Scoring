@@ -9,24 +9,24 @@ AIエージェントが生成したコードを、人間が短時間かつ安全
 エージェントに担当させる。
 
 ```text
-AI実装 → 可読性改善 → Lint / Typecheck / Test / Build → Atomic Commitへ整理 → Push → PRの変更内容を説明 → 人間へ引き渡し
+AI実装 → 可読性改善 → Lint / Typecheck / Test / Build → Atomic Commitへ整理 → Push → PR作成 → PRの変更内容を説明 → 人間へ引き渡し
 ```
 
 人間が「PRを開く → 最新のChange Summaryを読む → 影響範囲を把握 →
 Atomic Commit単位で確認 → 必要なdiffだけ詳しく読む」できるようにする。
 GitHubの承認レビューは不要。エージェントは `AGENTS.md` に従い、明示依頼なしでは
-マージしない。`review-ready` は push と PR 説明までで止まる。
+マージしない。`review-ready` は push・PR作成・PR説明までで止まり、マージはしない。
 
 ## Skill一覧
 
-| Skill                                                                                   | 役割                                                                                        | 種別                              |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------- |
-| [`review-ready`](../.agents/skills/review-ready/SKILL.md)                               | オーケストレーター。下記を順に実行し、結果をまとめて報告する                                | 本テンプレートで作成              |
-| [`atomic-commit-splitter`](../.agents/skills/atomic-commit-splitter/SKILL.md)           | 混在した未コミット変更を、部分ステージングで複数のAtomic Commitへ分割する**手順**           | 本テンプレートで作成              |
-| [`change-explainer`](../.agents/skills/change-explainer/SKILL.md)                       | PR全体の変更を解析し、Change SummaryをPRコメントとして同期する（常に最新の1コメントを維持） | 本テンプレートで作成              |
-| [`code-simplification`](../.agents/skills/code-simplification/SKILL.md)                 | AI生成コードの不要な複雑性を、挙動を変えずに減らす                                          | 外部（`addyosmani/agent-skills`） |
-| [`git-workflow-and-versioning`](../.agents/skills/git-workflow-and-versioning/SKILL.md) | コミット規約・粒度・ブランチ運用。最初からAtomic Commitを維持する「予防」側                 | 外部（`addyosmani/agent-skills`） |
-| [`ponytail`](../.agents/skills/ponytail/SKILL.md) ほか                                  | YAGNI・標準ライブラリ優先で「そもそも書かない」を徹底するモードとコマンド                   | 外部（`DietrichGebert/ponytail`） |
+| Skill                                                                                   | 役割                                                                                                        | 種別                              |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| [`review-ready`](../.agents/skills/review-ready/SKILL.md)                               | オーケストレーター。下記を順に実行し、結果をまとめて報告する                                                | 本テンプレートで作成              |
+| [`atomic-commit-splitter`](../.agents/skills/atomic-commit-splitter/SKILL.md)           | 混在した未コミット変更を、部分ステージングで複数のAtomic Commitへ分割する**手順**                           | 本テンプレートで作成              |
+| [`change-explainer`](../.agents/skills/change-explainer/SKILL.md)                       | PR全体の変更を解析し、Change SummaryをPRコメントとして同期する（常に最新の1コメントを維持）。PRは作成しない | 本テンプレートで作成              |
+| [`code-simplification`](../.agents/skills/code-simplification/SKILL.md)                 | AI生成コードの不要な複雑性を、挙動を変えずに減らす                                                          | 外部（`addyosmani/agent-skills`） |
+| [`git-workflow-and-versioning`](../.agents/skills/git-workflow-and-versioning/SKILL.md) | コミット規約・粒度・ブランチ運用。最初からAtomic Commitを維持する「予防」側                                 | 外部（`addyosmani/agent-skills`） |
+| [`ponytail`](../.agents/skills/ponytail/SKILL.md) ほか                                  | YAGNI・標準ライブラリ優先で「そもそも書かない」を徹底するモードとコマンド                                   | 外部（`DietrichGebert/ponytail`） |
 
 `git-workflow-and-versioning`（予防）と `atomic-commit-splitter`（整理・修復）は
 役割分担の関係にある。可読性改善は `ponytail-review`（過剰実装の洗い出し）と
