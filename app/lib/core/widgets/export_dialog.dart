@@ -40,7 +40,7 @@ Future<void> showExportDialog(
 
 enum _ExportStage { running, succeeded, refused, failed }
 
-/// `api.export_router.ExportConflictCode` の値。**サイドカーが名乗る拒否理由**
+/// `domain.pdf_export.ExportRefusalReason` の値。**サイドカーが名乗る拒否理由**
 /// であって、こちら側が推測したものではない (Issue #150)。
 ///
 /// Issue #150 まで、この画面は 409 を1種類しか想定しておらず、#120 が足した

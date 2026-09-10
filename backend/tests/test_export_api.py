@@ -24,13 +24,13 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
-from auto_scoring.api.export_router import ExportConflictCode
 from auto_scoring.domain.models import (
     Annotation,
     AnnotationKind,
     GradingSource,
     NormalizedRect,
 )
+from auto_scoring.domain.pdf_export import ExportRefusalReason
 from auto_scoring.jobs.export_processor import ExportJobProcessor
 from tests.font_support import install_font_covering
 from tests.support import at, make_grade, make_question, make_review, make_submission, make_test
@@ -131,7 +131,7 @@ def test_export_refuses_and_names_unconfirmed_questions(
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert detail["code"] == ExportConflictCode.UNCONFIRMED_QUESTIONS.value
+    assert detail["code"] == ExportRefusalReason.UNCONFIRMED_QUESTIONS.value
     assert detail["question_ids"] == ["q-1"]
 
 
@@ -182,8 +182,8 @@ def test_the_two_refusals_are_told_apart_by_their_code(
 
     assert refused.status_code == 409
     detail = refused.json()["detail"]
-    assert detail["code"] == ExportConflictCode.NO_ROOM_FOR_SCORE.value
-    assert detail["code"] != ExportConflictCode.UNCONFIRMED_QUESTIONS.value
+    assert detail["code"] == ExportRefusalReason.NO_ROOM_FOR_SCORE.value
+    assert detail["code"] != ExportRefusalReason.UNCONFIRMED_QUESTIONS.value
     assert detail["question_ids"] == ["q-18"]
 
 

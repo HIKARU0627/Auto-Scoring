@@ -357,7 +357,7 @@ void main() {
   test('a 409 carries the sidecar\'s own refusal code through', () async {
     // Issue #150: `SidecarErrorKind.conflict` is one kind over several
     // refusals whose remedies differ, so the code the sidecar names
-    // (`api.export_router.ExportConflictCode`) has to survive translation.
+    // (`domain.pdf_export.ExportRefusalReason`) has to survive translation.
     // Without it the caller can only guess, and the guess it had been making
     // told a reviewer to redo work that was already done.
     final connection = await ensureSidecar();

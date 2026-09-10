@@ -9,6 +9,10 @@ doc/AnswerLayoutResponse.md
 doc/ApproveReviewRequest.md
 doc/AttributionProposalResponse.md
 doc/BoundingBoxResponse.md
+doc/BulkExportItemResponse.md
+doc/BulkExportItemStatus.md
+doc/BulkExportRequest.md
+doc/BulkExportResponse.md
 doc/ClassificationAvailabilityResponse.md
 doc/ClassificationEstimateModel.md
 doc/ClassificationNeed.md
@@ -33,6 +37,7 @@ doc/DependencyGraphResponse.md
 doc/DependencyProvision.md
 doc/EditReviewRequest.md
 doc/ExportApi.md
+doc/ExportRefusalReason.md
 doc/ExportRequestResponse.md
 doc/ExportResponse.md
 doc/GradeResultResponse.md
@@ -115,6 +120,10 @@ lib/src/model/answer_layout_response.dart
 lib/src/model/approve_review_request.dart
 lib/src/model/attribution_proposal_response.dart
 lib/src/model/bounding_box_response.dart
+lib/src/model/bulk_export_item_response.dart
+lib/src/model/bulk_export_item_status.dart
+lib/src/model/bulk_export_request.dart
+lib/src/model/bulk_export_response.dart
 lib/src/model/classification_availability_response.dart
 lib/src/model/classification_estimate_model.dart
 lib/src/model/classification_need.dart
@@ -136,6 +145,7 @@ lib/src/model/dependency_edge_model.dart
 lib/src/model/dependency_graph_response.dart
 lib/src/model/dependency_provision.dart
 lib/src/model/edit_review_request.dart
+lib/src/model/export_refusal_reason.dart
 lib/src/model/export_request_response.dart
 lib/src/model/export_response.dart
 lib/src/model/grade_result_response.dart

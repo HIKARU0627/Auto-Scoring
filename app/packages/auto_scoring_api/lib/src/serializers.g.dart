@@ -15,6 +15,10 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ApproveReviewRequest.serializer)
       ..add(AttributionProposalResponse.serializer)
       ..add(BoundingBoxResponse.serializer)
+      ..add(BulkExportItemResponse.serializer)
+      ..add(BulkExportItemStatus.serializer)
+      ..add(BulkExportRequest.serializer)
+      ..add(BulkExportResponse.serializer)
       ..add(ClassificationAvailabilityResponse.serializer)
       ..add(ClassificationEstimateModel.serializer)
       ..add(ClassificationNeed.serializer)
@@ -35,6 +39,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(DependencyGraphResponse.serializer)
       ..add(DependencyProvision.serializer)
       ..add(EditReviewRequest.serializer)
+      ..add(ExportRefusalReason.serializer)
       ..add(ExportRequestResponse.serializer)
       ..add(ExportResponse.serializer)
       ..add(GradeResultResponse.serializer)
@@ -109,6 +114,10 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(
               BuiltList, const [const FullType(BoundingBoxResponse)]),
           () => ListBuilder<BoundingBoxResponse>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(BulkExportItemResponse)]),
+          () => ListBuilder<BulkExportItemResponse>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(CriteriaItemModel)]),
           () => ListBuilder<CriteriaItemModel>())
@@ -187,6 +196,12 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ScannedFileModel)]),
           () => ListBuilder<ScannedFileModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(String)]),
           () => ListBuilder<String>())

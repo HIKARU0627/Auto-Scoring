@@ -283,6 +283,16 @@ Future<JobResponse> _unavailableGetJob(String jobId) async => _unavailable();
 
 Future<JobResponse> _unavailableRetryJob(String jobId) async => _unavailable();
 
+Future<BulkExportResponse> _unavailableRequestBulkExport(
+  String testId, {
+  List<String>? submissionIds,
+}) async => _unavailable();
+
+Future<Uint8List> _unavailableGetExportFile(String exportId) async =>
+    _unavailable();
+
+Future<JobResponse> _unavailableCancelJob(String jobId) async => _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -650,6 +660,22 @@ typedef GetJob = Future<JobResponse> Function(String jobId);
 /// Requeues a `FAILED` job (Issue #23: 出力の再試行).
 typedef RetryJob = Future<JobResponse> Function(String jobId);
 
+/// Exports a whole test's answer sheets at once, or just [submissionIds]
+/// of them (Issue #142: 一括PDF出力 / 失敗分だけの再実行).
+typedef RequestBulkExport =
+    Future<BulkExportResponse> Function(
+      String testId, {
+      List<String>? submissionIds,
+    });
+
+/// A generated export's PDF bytes, by `Export.id` (Issue #142). The app
+/// needs the bytes because it does not know where the sidecar's `app-data/`
+/// is -- see `SidecarApiClient.getExportFile`.
+typedef GetExportFile = Future<Uint8List> Function(String exportId);
+
+/// Cancels a `QUEUED`/`RUNNING` job (Issue #142: 一括出力の中止).
+typedef CancelJob = Future<JobResponse> Function(String jobId);
+
 /// The [AppDependencies] every screen resolves its collaborators through.
 ///
 /// Overridden twice, and only twice:
@@ -750,6 +776,9 @@ class AppDependencies {
     this.listExports = _unavailableListExports,
     this.getJob = _unavailableGetJob,
     this.retryJob = _unavailableRetryJob,
+    this.requestBulkExport = _unavailableRequestBulkExport,
+    this.getExportFile = _unavailableGetExportFile,
+    this.cancelJob = _unavailableCancelJob,
   });
 
   /// Wires every operation to a live sidecar.
@@ -818,7 +847,10 @@ class AppDependencies {
       requestExport = client.requestExport,
       listExports = client.listExports,
       getJob = client.getJob,
-      retryJob = client.retryJob;
+      retryJob = client.retryJob,
+      requestBulkExport = client.requestBulkExport,
+      getExportFile = client.getExportFile,
+      cancelJob = client.cancelJob;
 
   /// Whether the sidecar answers its health endpoint. In the running app this
   /// is `SidecarApiClient.isHealthy`; the default is a stub that reports
@@ -882,4 +914,7 @@ class AppDependencies {
   final ListExports listExports;
   final GetJob getJob;
   final RetryJob retryJob;
+  final RequestBulkExport requestBulkExport;
+  final GetExportFile getExportFile;
+  final CancelJob cancelJob;
 }

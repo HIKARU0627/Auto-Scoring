@@ -83,7 +83,9 @@ Class | Method | HTTP request | Description
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**getLatestTestsTestIdDependencyGraphGet**](doc/DependencyGraphApi.md#getlatestteststestiddependencygraphget) | **GET** /tests/{test_id}/dependency-graph | Get Latest
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**listVersionsTestsTestIdDependencyGraphVersionsGet**](doc/DependencyGraphApi.md#listversionsteststestiddependencygraphversionsget) | **GET** /tests/{test_id}/dependency-graph/versions | List Versions
+[*ExportApi*](doc/ExportApi.md) | [**getExportFileExportsExportIdFileGet**](doc/ExportApi.md#getexportfileexportsexportidfileget) | **GET** /exports/{export_id}/file | Get Export File
 [*ExportApi*](doc/ExportApi.md) | [**listExportsSubmissionsSubmissionIdExportsGet**](doc/ExportApi.md#listexportssubmissionssubmissionidexportsget) | **GET** /submissions/{submission_id}/exports | List Exports
+[*ExportApi*](doc/ExportApi.md) | [**requestBulkExportTestsTestIdExportPost**](doc/ExportApi.md#requestbulkexportteststestidexportpost) | **POST** /tests/{test_id}/export | Request Bulk Export
 [*ExportApi*](doc/ExportApi.md) | [**requestExportSubmissionsSubmissionIdExportPost**](doc/ExportApi.md#requestexportsubmissionssubmissionidexportpost) | **POST** /submissions/{submission_id}/export | Request Export
 [*IntakeApi*](doc/IntakeApi.md) | [**attributeAnswerIntakeAttributePost**](doc/IntakeApi.md#attributeanswerintakeattributepost) | **POST** /intake/attribute | Attribute Answer
 [*IntakeApi*](doc/IntakeApi.md) | [**classificationAvailabilityIntakeClassificationAvailabilityGet**](doc/IntakeApi.md#classificationavailabilityintakeclassificationavailabilityget) | **GET** /intake/classification-availability | Classification Availability
@@ -141,6 +143,10 @@ Class | Method | HTTP request | Description
  - [ApproveReviewRequest](doc/ApproveReviewRequest.md)
  - [AttributionProposalResponse](doc/AttributionProposalResponse.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
+ - [BulkExportItemResponse](doc/BulkExportItemResponse.md)
+ - [BulkExportItemStatus](doc/BulkExportItemStatus.md)
+ - [BulkExportRequest](doc/BulkExportRequest.md)
+ - [BulkExportResponse](doc/BulkExportResponse.md)
  - [ClassificationAvailabilityResponse](doc/ClassificationAvailabilityResponse.md)
  - [ClassificationEstimateModel](doc/ClassificationEstimateModel.md)
  - [ClassificationNeed](doc/ClassificationNeed.md)
@@ -161,6 +167,7 @@ Class | Method | HTTP request | Description
  - [DependencyGraphResponse](doc/DependencyGraphResponse.md)
  - [DependencyProvision](doc/DependencyProvision.md)
  - [EditReviewRequest](doc/EditReviewRequest.md)
+ - [ExportRefusalReason](doc/ExportRefusalReason.md)
  - [ExportRequestResponse](doc/ExportRequestResponse.md)
  - [ExportResponse](doc/ExportResponse.md)
  - [GradeResultResponse](doc/GradeResultResponse.md)

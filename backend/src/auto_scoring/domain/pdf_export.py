@@ -8,8 +8,9 @@ record this implements.
 
 Two concerns live here:
 
-* Gating: `unconfirmed_question_ids` (Issue #23 acceptance: "未確認設問がある
-  場合は出力を拒否し、対象を表示する") and the review-version snapshot
+* Gating: `export_refusal` (`unconfirmed_question_ids` -- Issue #23
+  acceptance: "未確認設問がある場合は出力を拒否し、対象を表示する" -- plus
+  `unplaceable_question_ids`) and the review-version snapshot
   (`review_version_snapshot`) that lets a later export request tell whether
   anything changed since the last successful one (`decide_reexport`).
 * Layout: `build_export_marks` turns one question's confirmed grade +
@@ -167,7 +168,7 @@ def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
     margin strip can hold legibly. That is a real refusal and not a
     theoretical one -- the alternative is drawing scores the reader cannot
     read -- but it is no longer the common one, and the caller must say which
-    refusal it is (`api.export_router.ExportConflictCode`).
+    refusal it is (`ExportRefusalReason`).
 
     Only `score_area` is checked, not `comment_area`. The score is drawn for
     every question (`build_export_marks`), so a missing `score_area` always
@@ -182,6 +183,75 @@ def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
         for question in questions
         if question.score_area is None and question.id not in placeable
     ]
+
+
+class ExportRefusalReason(StrEnum):
+    """Why the sidecar refuses to export one submission -- the two gates
+    `export_refusal` evaluates, and the wire values the client reads.
+
+    The values travel verbatim: as ``detail.code`` on the single export's
+    409 (`api.export_router`) and as ``refusal_code`` on a bulk item
+    (Issue #142). They live here rather than in the API layer because the
+    *distinction* is a domain fact, not a transport one -- what the reviewer
+    must do next differs completely between the two, and both the single
+    and the bulk path must name it the same way.
+
+    Issue #150 is why naming it at all is not optional. Until then the two
+    refusals shared one ``{message, question_ids}`` shape with nothing to
+    tell them apart, and the Flutter client -- written when only
+    `UNCONFIRMED_QUESTIONS` existed -- rendered both as "未確認の設問がある
+    ため出力できません". In the live run a reviewer who had already confirmed
+    every question was told to go and confirm them: an instruction that was
+    not merely unhelpful but unfollowable, since the work it asked for was
+    already done.
+    """
+
+    #: Issue #23: at least one question has no confirmed review yet.
+    #: Confirming them makes the export possible.
+    UNCONFIRMED_QUESTIONS = "unconfirmed_questions"
+    #: Issue #120/#150: at least one question's score cannot be written
+    #: anywhere -- neither at its own `Question.score_area` nor in its
+    #: page's fallback band. **Confirming changes nothing here**; the page
+    #: itself has no room, so this is not something the reviewer can
+    #: resolve from the review screen.
+    NO_ROOM_FOR_SCORE = "no_room_for_score"
+
+
+@dataclass(frozen=True, kw_only=True)
+class ExportRefusal:
+    """One refusal, with the questions it is about (`ExportRefusalReason`)."""
+
+    reason: ExportRefusalReason
+    question_ids: tuple[str, ...]
+
+
+def export_refusal(
+    questions: Sequence[Question], reviews_by_question: Mapping[str, Sequence[Review]]
+) -> ExportRefusal | None:
+    """Whether this submission may be exported right now, and if not, why.
+
+    Both gates in one function so the single export (which turns a refusal
+    into a 409) and the bulk export (which turns it into one skipped row and
+    keeps going, Issue #142) can never drift apart on *which* submissions
+    are exportable. `unconfirmed_question_ids` is checked first because it
+    is the one the reviewer can act on.
+    """
+    missing = unconfirmed_question_ids([question.id for question in questions], reviews_by_question)
+    if missing:
+        return ExportRefusal(
+            reason=ExportRefusalReason.UNCONFIRMED_QUESTIONS, question_ids=tuple(sorted(missing))
+        )
+    # Issue #120: the other way an export comes out blank. The live run's
+    # export returned 202, succeeded, and wrote a file byte-for-byte
+    # identical to the answer sheet, because no question had anywhere to
+    # draw. Refused before a job is queued rather than handed back as an
+    # empty PDF.
+    unplaceable = unplaceable_question_ids(questions)
+    if unplaceable:
+        return ExportRefusal(
+            reason=ExportRefusalReason.NO_ROOM_FOR_SCORE, question_ids=tuple(sorted(unplaceable))
+        )
+    return None
 
 
 def review_version_snapshot(

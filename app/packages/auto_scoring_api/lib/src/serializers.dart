@@ -22,6 +22,10 @@ import 'package:auto_scoring_api/src/model/answer_layout_response.dart';
 import 'package:auto_scoring_api/src/model/approve_review_request.dart';
 import 'package:auto_scoring_api/src/model/attribution_proposal_response.dart';
 import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
+import 'package:auto_scoring_api/src/model/bulk_export_item_response.dart';
+import 'package:auto_scoring_api/src/model/bulk_export_item_status.dart';
+import 'package:auto_scoring_api/src/model/bulk_export_request.dart';
+import 'package:auto_scoring_api/src/model/bulk_export_response.dart';
 import 'package:auto_scoring_api/src/model/classification_availability_response.dart';
 import 'package:auto_scoring_api/src/model/classification_estimate_model.dart';
 import 'package:auto_scoring_api/src/model/classification_need.dart';
@@ -42,6 +46,7 @@ import 'package:auto_scoring_api/src/model/dependency_edge_model.dart';
 import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/edit_review_request.dart';
+import 'package:auto_scoring_api/src/model/export_refusal_reason.dart';
 import 'package:auto_scoring_api/src/model/export_request_response.dart';
 import 'package:auto_scoring_api/src/model/export_response.dart';
 import 'package:auto_scoring_api/src/model/grade_result_response.dart';
@@ -105,6 +110,10 @@ part 'serializers.g.dart';
   ApproveReviewRequest,
   AttributionProposalResponse,
   BoundingBoxResponse,
+  BulkExportItemResponse,
+  BulkExportItemStatus,
+  BulkExportRequest,
+  BulkExportResponse,
   ClassificationAvailabilityResponse,
   ClassificationEstimateModel,
   ClassificationNeed,
@@ -125,6 +134,7 @@ part 'serializers.g.dart';
   DependencyGraphResponse,
   DependencyProvision,
   EditReviewRequest,
+  ExportRefusalReason,
   ExportRequestResponse,
   ExportResponse,
   GradeResultResponse,
@@ -287,6 +297,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(RecognitionResponse)]),
         () => ListBuilder<RecognitionResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(BulkExportItemResponse)]),
+        () => ListBuilder<BulkExportItemResponse>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(CriterionResultResponse)]),
