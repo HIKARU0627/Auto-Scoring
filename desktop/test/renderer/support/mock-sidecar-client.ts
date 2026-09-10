@@ -210,52 +210,6 @@ export function createMockSidecarClient(
           };
         }
       }
-      return {
-        data: undefined,
-        response: new Response(null, { status: 404 }),
-        error: { message: "not found" },
-      };
-    }),
-    POST: vi.fn(async (path, init) => {
-      if (path === "/submissions/{submission_id}/export") {
-        const submissionId = init?.params?.path?.submission_id;
-        if (submissionId === undefined) {
-          return {
-            data: undefined,
-            response: new Response(null, { status: 400 }),
-            error: { message: "missing submission id" },
-          };
-        }
-        try {
-          if (handlers.requestExport) {
-            const data = await handlers.requestExport(submissionId);
-            return { data, response: new Response(), error: undefined };
-          }
-          return {
-            data: {
-              decision: "reuse_existing",
-              export: {
-                id: `exp-${submissionId}`,
-                job_id: `job-${submissionId}`,
-                submission_id: submissionId,
-                file_path: `exports/submission_${submissionId}.pdf`,
-                file_sha256: "0".repeat(64),
-                created_at: new Date().toISOString(),
-              },
-            } as ExportRequestResponse,
-            response: new Response(),
-            error: undefined,
-          };
-        } catch (err) {
-          return {
-            data: undefined,
-            response: new Response(null, { status: 500 }),
-            error: {
-              message: err instanceof Error ? err.message : String(err),
-            },
-          };
-        }
-      }
       if (path === "/submissions/{submission_id}") {
         const submissionId = init?.params?.path?.submission_id ?? "sub-1";
         return {
@@ -370,6 +324,52 @@ export function createMockSidecarClient(
           type: "image/png",
         });
         return { data: blob, response: new Response(), error: undefined };
+      }
+      return {
+        data: undefined,
+        response: new Response(null, { status: 404 }),
+        error: { message: "not found" },
+      };
+    }),
+    POST: vi.fn(async (path, init) => {
+      if (path === "/submissions/{submission_id}/export") {
+        const submissionId = init?.params?.path?.submission_id;
+        if (submissionId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing submission id" },
+          };
+        }
+        try {
+          if (handlers.requestExport) {
+            const data = await handlers.requestExport(submissionId);
+            return { data, response: new Response(), error: undefined };
+          }
+          return {
+            data: {
+              decision: "reuse_existing",
+              export: {
+                id: `exp-${submissionId}`,
+                job_id: `job-${submissionId}`,
+                submission_id: submissionId,
+                file_path: `exports/submission_${submissionId}.pdf`,
+                file_sha256: "0".repeat(64),
+                created_at: new Date().toISOString(),
+              },
+            } as ExportRequestResponse,
+            response: new Response(),
+            error: undefined,
+          };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
       }
       return {
         data: undefined,
