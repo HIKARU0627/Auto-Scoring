@@ -5,6 +5,7 @@ import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/features/home/home_page.dart';
 import 'package:auto_scoring_app/features/intake/intake_page.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
+import 'package:auto_scoring_app/features/pdf_review/submission_confirm_page.dart';
 import 'package:auto_scoring_app/features/review_queue/submission_queue_page.dart';
 import 'package:auto_scoring_app/features/settings/settings_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
@@ -57,6 +58,23 @@ GoRouter createAppRouter({String initialLocation = AppRoutes.home}) {
             SubmissionQueuePage(testId: state.pathParameters['testId']!),
       ),
       GoRoute(
+        path: AppRoutes.submissionConfirmPattern,
+        builder: (context, state) {
+          final testId = state.pathParameters['testId']!;
+          final submissionId = state.pathParameters['submissionId']!;
+          // Keyed by the answer it shows, for the same reason the review
+          // route below is: 確定すると次の答案へ `replace` で移るので、同じ
+          // ルートのまま別の答案になる瞬間がある。`State` を作り直させないと、
+          // 前の答案の設問・判断材料・**到達済みの記録**がそのまま残る --
+          // 見ていない答案が最初から確定できる画面になってしまう。
+          return SubmissionConfirmPage(
+            key: ValueKey('submission-confirm/$testId/$submissionId'),
+            testId: testId,
+            submissionId: submissionId,
+          );
+        },
+      ),
+      GoRoute(
         path: AppRoutes.pdfReviewPattern,
         builder: (context, state) {
           final testId = state.pathParameters['testId']!;
@@ -75,6 +93,8 @@ GoRouter createAppRouter({String initialLocation = AppRoutes.home}) {
             key: ValueKey('pdf-review/$testId/$submissionId'),
             testId: testId,
             submissionId: submissionId,
+            initialQuestionId:
+                state.uri.queryParameters[AppRoutes.pdfReviewQuestionParam],
           );
         },
       ),

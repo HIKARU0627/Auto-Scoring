@@ -44,13 +44,44 @@ abstract final class AppRoutes {
   static String submissionQueue(String testId) =>
       '/tests/${Uri.encodeComponent(testId)}/submissions';
 
+  /// 答案確定画面 -- その答案の**全設問を1画面に並べ、1回で確定する**
+  /// (Issue #145)。
+  ///
+  /// 答案キューから開くのはここである。設問ごとに承認させると 40枚 × 5設問 で
+  /// 200回になり、#113 が消したのはホームへの往復80回だけだった。**確定の単位を
+  /// 設問から答案へ移すのがこの経路の理由である。**
+  ///
+  /// 1設問を詳しく見る・直すときは、ここから [pdfReview] へ入る。
+  static const String submissionConfirmPattern =
+      '/tests/:testId/submissions/:submissionId/confirm';
+  static String submissionConfirm({
+    required String testId,
+    required String submissionId,
+  }) =>
+      '/tests/${Uri.encodeComponent(testId)}'
+      '/submissions/${Uri.encodeComponent(submissionId)}/confirm';
+
   /// 添削レビュー画面 for one submission of one test.
+  ///
+  /// [questionId] を渡すと、その設問を開いた状態で始まる。答案確定画面の
+  /// 「この設問を直す」から入るときに要る -- 問4を直しに来た人を問1に降ろすと、
+  /// **どれを直しに来たかを人の側に覚えさせる**ことになる。クエリなのは、
+  /// 「どの設問から見始めるか」は画面の初期状態であって、この画面が指している
+  /// もの (答案1件) ではないからである。
   static const String pdfReviewPattern =
       '/tests/:testId/submissions/:submissionId/review';
   static String pdfReview({
     required String testId,
     required String submissionId,
-  }) =>
-      '/tests/${Uri.encodeComponent(testId)}'
-      '/submissions/${Uri.encodeComponent(submissionId)}/review';
+    String? questionId,
+  }) {
+    final path =
+        '/tests/${Uri.encodeComponent(testId)}'
+        '/submissions/${Uri.encodeComponent(submissionId)}/review';
+    if (questionId == null) return path;
+    return '$path?$pdfReviewQuestionParam=${Uri.encodeComponent(questionId)}';
+  }
+
+  /// [pdfReview] の「最初に開く設問」を運ぶクエリパラメータ名。
+  static const String pdfReviewQuestionParam = 'question';
 }

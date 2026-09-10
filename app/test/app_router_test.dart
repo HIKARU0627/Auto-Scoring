@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/features/home/home_page.dart';
 import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
+import 'package:auto_scoring_app/features/pdf_review/submission_confirm_page.dart';
 import 'package:auto_scoring_app/features/test_registration/test_list_page.dart';
 import 'package:auto_scoring_app/features/intake/intake_page.dart';
 import 'package:auto_scoring_app/features/settings/settings_page.dart';
@@ -33,6 +34,8 @@ void main() {
     AppRoutes.testSettings('test-1'): TestSettingsPage,
     AppRoutes.settings: SettingsPage,
     AppRoutes.pdfReview(testId: 'test-1', submissionId: 'sub-1'): PdfReviewPage,
+    AppRoutes.submissionConfirm(testId: 'test-1', submissionId: 'sub-1'):
+        SubmissionConfirmPage,
   };
 
   locations.forEach((location, page) {
@@ -42,6 +45,23 @@ void main() {
 
       expect(find.byType(page), findsOneWidget);
     });
+  });
+
+  testWidgets('添削レビューは、開く設問を指定して呼べる (Issue #145)', (tester) async {
+    // 答案確定画面の「この設問を直す」から入るときに要る。問4を直しに来た人を
+    // 問1に降ろすと、どれを直しに来たかを人の側に覚えさせることになる。
+    await pumpAppAt(
+      tester,
+      AppRoutes.pdfReview(
+        testId: 'test-1',
+        submissionId: 'sub-1',
+        questionId: 'q-4',
+      ),
+    );
+    await tester.pump();
+
+    final page = tester.widget<PdfReviewPage>(find.byType(PdfReviewPage));
+    expect(page.initialQuestionId, 'q-4');
   });
 
   testWidgets('an id with URL-significant characters still resolves', (

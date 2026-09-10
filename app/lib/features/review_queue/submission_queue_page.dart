@@ -152,9 +152,17 @@ class _SubmissionQueuePageState extends ConsumerState<SubmissionQueuePage> {
                       entry: data.queue.entries[index],
                       position: index + 1,
                       total: data.queue.total,
+                      // **開く先は答案確定画面である** (Issue #145)。
+                      //
+                      // 添削レビュー画面は設問1件の画面で、そこから入ると
+                      // 1枚を終えるのに設問の数だけ承認が要る -- 40枚 × 5設問
+                      // で200回になる。#113 が消したのはホームへの往復80回
+                      // だけだった。**確定の単位を答案1枚に移す**には、
+                      // その答案の判断材料が全部ある画面から入るしかない。
+                      // 1設問を直す経路は、その画面から `pdfReview` へ続く。
                       onOpen: () async {
                         await context.push(
-                          AppRoutes.pdfReview(
+                          AppRoutes.submissionConfirm(
                             testId: widget.testId,
                             submissionId: data.queue.entries[index].id,
                           ),

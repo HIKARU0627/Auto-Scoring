@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -16,6 +15,7 @@ import 'package:auto_scoring_app/features/pdf_review/pdf_review_page.dart';
 import 'package:auto_scoring_app/features/review_queue/submission_queue_page.dart';
 
 import 'app_harness.dart';
+import 'pdfium_bootstrap.dart';
 
 /// The PoC 3 (Issue #12) A4-portrait fixture: a real, tiny single-page PDF
 /// with the same 5 normalized test points stamped on it as red marks
@@ -499,56 +499,8 @@ Future<void> _pumpTimes(WidgetTester tester, int times) async {
   }
 }
 
-/// The pdfium shared library that `flutter test` builds but never wires up,
-/// or `null` when this platform does not need the detour.
-///
-/// `pdfium_dart`'s loader finds pdfium either next to a *built* Flutter
-/// application (`<executable>/../lib/libpdfium.so`) or through
-/// `.dart_tool/native_assets.yaml`, which only `dart test`/`dart run` write.
-/// Under `flutter test` on Linux the executable is `flutter_tester` and there
-/// is no native-assets file, so every test that renders the real fixture PDF
-/// died with "Failed to load PDFium module" -- a failure with nothing to do
-/// with the code under test (Issue #60). Windows resolves a bare `pdfium.dll`
-/// through the OS search path instead, which is why CI never saw this;
-/// nothing here touches that path.
-///
-/// The library itself is present: `flutter test` does run `pdfium_dart`'s
-/// build hook, which downloads pdfium and records the result in the hook's
-/// `output.json`. Reading that record back is what connects the two, and
-/// keeps these tests on the real pdfium pipeline rather than a stand-in.
-String? _hookBuiltPdfiumModule() {
-  if (!Platform.isLinux) return null;
-  final hookOutputs = Directory('.dart_tool/hooks_runner/pdfium_dart');
-  if (!hookOutputs.existsSync()) return null;
-  for (final run in hookOutputs.listSync().whereType<Directory>()) {
-    final output = File('${run.path}/output.json');
-    if (!output.existsSync()) continue;
-    final decoded =
-        jsonDecode(output.readAsStringSync()) as Map<String, dynamic>;
-    for (final asset in decoded['assets'] as List<dynamic>? ?? const []) {
-      final encoding =
-          (asset as Map<String, dynamic>)['encoding'] as Map<String, dynamic>?;
-      if (encoding?['id'] != 'package:pdfium_dart/libpdfium') continue;
-      final file = encoding!['file'] as String?;
-      if (file != null && File(file).existsSync()) return file;
-    }
-  }
-  return null;
-}
-
 void main() {
-  setUpAll(() {
-    // pdfrxFlutterInitialize() otherwise calls path_provider's
-    // getTemporaryDirectory() over a platform channel that `flutter test`
-    // has no implementation for (MissingPluginException). Pre-setting this
-    // skips that call entirely; it never actually needs a *writable* cache
-    // for these fixture sizes.
-    Pdfrx.cacheDirectoryPath = Directory.systemTemp.path;
-    // Left untouched (and the default resolution used) wherever the loader
-    // can find pdfium on its own -- see `_hookBuiltPdfiumModule`.
-    final pdfiumModule = _hookBuiltPdfiumModule();
-    if (pdfiumModule != null) Pdfrx.pdfiumModulePath = pdfiumModule;
-  });
+  setUpAll(initializePdfiumForTests);
 
   testWidgets('shows a loading indicator before the shell finishes loading', (
     tester,

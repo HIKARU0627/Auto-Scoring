@@ -150,6 +150,19 @@ abstract final class AppLayout {
   /// same dialog width instead of one sized to its text.
   static const double dialogContentWidth = 360;
 
+  /// `AppBar` の下に1行だけ添える帯の高さ（「12 / 40 件目」など）。
+  static const double appBarSubtitle = 28;
+
+  /// 答案確定画面で、1設問ぶんの切り出し画像に必ず割り当てる高さ (Issue #145)。
+  ///
+  /// **画像が届いても行の高さが変わらないことに意味がある。** あの画面の
+  /// 「見た」判定は行の上端と下端の位置から測るので、読み終えたあとに画像が
+  /// 到着して行が伸びると、**人が見ていない部分まで見たことになる**。読み込み中も
+  /// 届いたあとも同じ高さを取れば、その伸びは起きない。
+  ///
+  /// `AnswerCropView` の画像上限 (220) に見出しと余白を足した値。
+  static const double answerCropSlot = 260;
+
   /// A `Divider`/`VerticalDivider` that separates two panes: the widget's
   /// `width`/`height` is its *total* extent including padding, so 1 means a
   /// hairline with nothing around it.

@@ -195,7 +195,7 @@ void main() {
     expect(find.byKey(const Key('queue-manual-grade-fine')), findsNothing);
   });
 
-  testWidgets('行をタップするとその答案の添削レビューへ行く', (tester) async {
+  testWidgets('行をタップするとその答案の確定画面へ行く', (tester) async {
     await pumpAppAt(
       tester,
       AppRoutes.submissionQueue('t1'),
@@ -213,11 +213,15 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
-    // 添削レビュー画面はサイドカーを引くので描き切らない。確かめたいのは
-    // **その答案の**レビューが開いたことなので、ルータが付ける key を見る
-    // (`app_router.dart`: 答案ごとに別の `State` にするためのもの)。
-    // 「キューが見えなくなったこと」では、push の途中でも通ってしまう。
-    expect(find.byKey(const ValueKey('pdf-review/t1/s1')), findsOneWidget);
+    // **開く先は答案確定画面である** (Issue #145)。設問ごとの承認では
+    // 40枚 × 5設問 で200回になる。確かめたいのは **その答案の** 確定画面が
+    // 開いたことなので、ルータが付ける key を見る (`app_router.dart`: 答案ごとに
+    // 別の `State` にするためのもの)。「キューが見えなくなったこと」では、
+    // push の途中でも通ってしまう。
+    expect(
+      find.byKey(const ValueKey('submission-confirm/t1/s1')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('答案が1件も無いときは、そう言う', (tester) async {
