@@ -1,5 +1,7 @@
 # Dependencies
 /node_modules/
+# Workspace packages get their own (pnpm-workspace.yaml).
+/desktop/node_modules/
 /.pnp/
 .pnp.*
 
@@ -34,6 +36,13 @@
 # too because `backend/tests/test_seed_demo_app_data.py` imports the seeder from
 # there, and importing it writes `scripts/__pycache__/`.
 __pycache__/
+
+# Electron desktop shell build output and test artifacts (desktop/, Issue #217).
+# `/dist/` and `/out/` above are anchored at the repository root, so they do not
+# cover these.
+/desktop/out/
+/desktop/test-results/
+/desktop/playwright-report/
 
 # Editor / OS
 .DS_Store

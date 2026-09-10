@@ -1,0 +1,22 @@
+{
+  // Emit configuration for the Electron main process.
+  //
+  // CommonJS, not ESM, and that is deliberate: the window runs with
+  // `sandbox: true`, and Electron loads a sandboxed preload script as CommonJS
+  // -- an ESM preload would only work by turning the sandbox off.
+  //
+  // The preload script is not here: it is bundled by `vite.preload.config.mts`,
+  // because a sandboxed preload cannot `require` a sibling file. See that file.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "verbatimModuleSyntax": false,
+    "rootDir": "src",
+    "outDir": "out",
+    "noEmit": false,
+    "sourceMap": true
+  },
+  "include": ["src/main", "src/shared"]
+}

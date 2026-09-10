@@ -31,31 +31,43 @@ process) cannot leave the working tree dirty. Needs only Node, so unlike
 `openapi:check` it is cheap enough to run on every `pnpm run check`, before the
 real (slow) regenerate.
 
-`package.json` is a task runner over the two stacks. Each gate fans out to an
-`:app` (Flutter) and a `:backend` (Python) script:
+`package.json` is a task runner over the three stacks. Each gate fans out to an
+`:app` (Flutter), a `:backend` (Python) and a `:desktop` (Electron) script:
 
-| Gate        | `:app`                                                  | `:backend`                           |
-| ----------- | ------------------------------------------------------- | ------------------------------------ |
-| `lint`      | `dart format --set-exit-if-changed` + `flutter analyze` | `ruff check` + `ruff format --check` |
-| `typecheck` | `flutter analyze`                                       | `mypy` (`strict`)                    |
-| `test`      | `flutter test`                                          | `pytest`                             |
-| `build`     | `flutter build windows --debug`                         | `python -c "import auto_scoring"`    |
+| Gate        | `:app`                                                  | `:backend`                           | `:desktop`                                        |
+| ----------- | ------------------------------------------------------- | ------------------------------------ | ------------------------------------------------- |
+| `lint`      | `dart format --set-exit-if-changed` + `flutter analyze` | `ruff check` + `ruff format --check` | — (Prettier, repo-wide)                           |
+| `typecheck` | `flutter analyze`                                       | `mypy` (`strict`)                    | `tsc --noEmit` (`strict` + 6 more, tsconfig.json) |
+| `test`      | `flutter test`                                          | `pytest`                             | `vitest run`                                      |
+| `build`     | `flutter build windows --debug`                         | `python -c "import auto_scoring"`    | `tsc -p tsconfig.main.json` + `vite build`        |
 
-`format` / `format:check` stay on Prettier for the repo-level files; `app/` and
-`backend/` are in `.prettierignore` because Dart and Ruff own their formatting.
+`desktop/` (Issue #217) has no `:desktop` lint script on purpose: Prettier already
+formats it (it is not in `.prettierignore`, unlike `app/` and `backend/`), and no
+linter beyond the TypeScript compiler was added — `docs/frontend-migration.md` §1
+fixes the dependency list, and ESLint is not on it.
+
+`test:desktop:e2e` (`vitest`'s sibling: Playwright driving the built Electron app)
+is a gate of its own rather than part of `test`, because it builds the app first
+and is the only gate that opens a window. It is in `check` and in CI, but not in
+`check:pre-push` — a commit hook that launches Electron is a hook people disable.
+
+`format` / `format:check` stay on Prettier for the repo-level files and for
+`desktop/`; `app/` and `backend/` are in `.prettierignore` because Dart and Ruff
+own their formatting.
 
 ## CI のジョブ構成と、必須チェック `Quality`
 
-CI は 4 ジョブ。`app` と `backend` が実作業、`quality` は**判定を集約するだけ**の
-ジョブで、`package` は独立。`needs` で繋がっているのは `quality` だけなので、
-`app` / `backend` / `package` は同時に走る。**待ち時間は和ではなく最大値。**
+CI は 5 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は**判定を集約する
+だけ**のジョブで、`package` は独立。`needs` で繋がっているのは `quality` だけなので、
+`app` / `backend` / `desktop` / `package` は同時に走る。**待ち時間は和ではなく最大値。**
 
-| ジョブ    | 表示名            | 中身                                                               | ツールチェーン                    |
-| --------- | ----------------- | ------------------------------------------------------------------ | --------------------------------- |
-| `app`     | App               | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
-| `backend` | Backend           | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
-| `quality` | **Quality**       | 上 2 つの結果を判定するだけ                                        | なし（ubuntu）                    |
-| `package` | Package (Windows) | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
+| ジョブ    | 表示名            | 中身                                                               | ツールチェーン                            |
+| --------- | ----------------- | ------------------------------------------------------------------ | ----------------------------------------- |
+| `app`     | App               | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node                   |
+| `backend` | Backend           | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**）         |
+| `desktop` | Desktop           | `:desktop` の typecheck/test/build + Playwright (Electron)         | Node のみ（**Flutter SDK も uv も無し**） |
+| `quality` | **Quality**       | 上 3 つの結果を判定するだけ                                        | なし（ubuntu）                            |
+| `package` | Package (Windows) | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node                   |
 
 ### 置き場所の理由
 
@@ -69,6 +81,14 @@ CI は 4 ジョブ。`app` と `backend` が実作業、`quality` は**判定を
   これは Windows 専用製品で、サイドカーのパス・ファイル I/O の挙動は
   「Linux では通り、先生の実機で落ちる」の典型。速さのために出荷先の検証を
   やめることはしない。
+- **`desktop` も `windows-latest`。** 理由は `backend` と同じ。Electron のシェルは
+  パス・プロセス起動・ウィンドウ生成という**まさに OS で挙動が割れる層**で、
+  Playwright は実際にウィンドウを開く。Linux ランナー + Xvfb でも「動く」が、
+  それは出荷しない構成を検証していることになる。
+- **`pnpm install` は `--filter` で絞る。** `desktop/` はワークスペースの別
+  パッケージ（`pnpm-workspace.yaml`）なので、素の `pnpm install` は `app` /
+  `backend` / `package` ジョブにも Electron のバイナリ（約 100 MB）を落としてくる。
+  各ジョブは自分が動かすパッケージだけを入れる。
 
 ### `Quality` が必須チェックである以上、外してはいけない 2 点
 

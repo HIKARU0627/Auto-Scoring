@@ -1,0 +1,43 @@
+{
+  // Type-checking configuration for the whole package (`pnpm run typecheck`),
+  // and the one an editor picks up. It emits nothing; `tsconfig.main.json`
+  // handles the main/preload emit and Vite handles the renderer bundle.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+
+    // `strict` is the floor, not the ceiling. The four below are the ones that
+    // catch the mistakes this codebase actually cares about: an optional field
+    // silently set to `undefined`, an array index assumed to exist, a `switch`
+    // that falls through, and a value read off an index signature as if it were
+    // a declared property.
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": [
+    "src",
+    "test",
+    "e2e",
+    "vite.config.mts",
+    "vite.preload.config.mts",
+    "vitest.config.mts",
+    "playwright.config.ts"
+  ]
+}

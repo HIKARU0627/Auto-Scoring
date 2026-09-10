@@ -89,7 +89,10 @@ jobs:
           version: "0.10.7"
           enable-cache: true
       - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile
+        # `--filter` on the root package: `desktop/` is a workspace package
+        # (pnpm-workspace.yaml) and nothing in this job runs it, so there is no
+        # reason to spend a minute downloading the Electron binary here.
+        run: pnpm install --frozen-lockfile --filter auto-scoring
       - name: Restore Flutter packages
         run: flutter pub get
         working-directory: app
@@ -164,14 +167,56 @@ jobs:
       - name: Build
         run: pnpm build:backend
 
+  desktop:
+    name: Desktop
+    # Windows for the same reason as the two jobs above: this is a Windows-only
+    # product, and an Electron shell is exactly where a path, a spawn or a
+    # window that behaves differently per platform hides. The Playwright test
+    # below launches a real Electron window, which GitHub's Windows runners
+    # support without an X server stand-in.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+      - name: Enable pnpm
+        run: corepack enable
+      # Deliberately no Flutter SDK and no uv: nothing here touches dart or
+      # Python. `--filter` keeps this to `desktop/`'s own dependency tree, the
+      # mirror image of the app/backend jobs skipping the Electron binary.
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --filter @auto-scoring/desktop
+      - name: Typecheck
+        run: pnpm typecheck:desktop
+      - name: Test
+        # Vitest: the React Testing Library test and the dependency-direction
+        # test (desktop/test/architecture.test.ts).
+        run: pnpm test:desktop
+      - name: Build
+        run: pnpm build:desktop
+      - name: End-to-end
+        # Playwright launches the built Electron app and checks a window
+        # actually appears (Issue #217 acceptance condition 1). No artifact is
+        # uploaded on failure: `_electron.launch()` builds its own context, so
+        # Playwright's `trace` and `screenshot` options do not apply to it, and
+        # the report would hold nothing the `github` reporter has not already
+        # annotated onto the failing step.
+        run: pnpm test:desktop:e2e
+
   quality:
     name: Quality
     # The context main's ruleset requires, kept under its original name so
     # splitting the work above stays invisible to branch protection. It holds
-    # the verdict for `app` + `backend`, which is exactly what the single
-    # Quality job used to cover -- `package` was never a required check and
-    # is not made into one here.
-    needs: [app, backend]
+    # the verdict for `app` + `backend` + `desktop`, which is exactly what the
+    # single Quality job used to cover -- `package` was never a required check
+    # and is not made into one here. A new job that is not in `needs` below is
+    # a job whose failure cannot block a merge, so adding one means adding it
+    # in both places.
+    needs: [app, backend, desktop]
     # `if: always()` is load-bearing. Without it, a failing `needs` leaves
     # this job *skipped*, and GitHub counts a skipped required check as a
     # pass -- the build would be red while the merge gate showed green. The
@@ -186,8 +231,9 @@ jobs:
         run: |
           echo "app=${{ needs.app.result }}"
           echo "backend=${{ needs.backend.result }}"
+          echo "desktop=${{ needs.desktop.result }}"
           failed=0
-          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}"; do
+          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}" "${{ needs.desktop.result }}"; do
             if [ "$result" != "success" ]; then failed=1; fi
           done
           if [ "$failed" -ne 0 ]; then
@@ -224,7 +270,10 @@ jobs:
           version: "0.10.7"
           enable-cache: true
       - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile
+        # `--filter` on the root package: `desktop/` is a workspace package
+        # (pnpm-workspace.yaml) and nothing in this job runs it, so there is no
+        # reason to spend a minute downloading the Electron binary here.
+        run: pnpm install --frozen-lockfile --filter auto-scoring
       - name: Restore Flutter packages
         run: flutter pub get
         working-directory: app
