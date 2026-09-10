@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from statistics import fmean
 from typing import Any
 
-from auto_scoring.domain.ocr import BoundingBox, OcrResult
+from auto_scoring.domain.ocr import BoundingBox, ConfidenceBand, OcrResult
 
 _COLUMNS = (
     "手書き品質",
@@ -24,7 +24,7 @@ _COLUMNS = (
     "重要語一致率",
     "BBox中心誤差",
     "BBox IoU",
-    "低Confidence率",
+    "読めなかった語の割合",
     "失敗率",
 )
 
@@ -133,7 +133,20 @@ class SampleMetrics:
     keyword_match_rate: float
     bounding_box_center_error: float | None
     bounding_box_iou: float | None
-    low_confidence: bool
+    #: Share of this sample's tokens the provider put in the LOW band.
+    #:
+    #: A *rate*, not "did any token come back LOW" (`OcrResult.
+    #: has_low_confidence`), which is what this used to report. Any sample
+    #: with more spans has more chances to contain one low span, so that
+    #: boolean rose with the length of the answer rather than with how badly
+    #: it was read -- the same defect Issue #158 removed from the usable gate
+    #: (docs/ocr-recognition-pipeline.md §9). ``0.0`` when the sample has no
+    #: tokens at all; ``failed`` is what says that.
+    #:
+    #: Reported by band, not by `RecognitionSettings.confidence_threshold`:
+    #: this is a PoC report, and nothing branches on it. The threshold stays
+    #: the single place a *decision* reads (business rules §3.1 (C)).
+    unreadable_token_rate: float
     failed: bool
 
 
@@ -147,8 +160,15 @@ class BucketSummary:
     mean_keyword_match_rate: float
     mean_bounding_box_center_error: float | None
     mean_bounding_box_iou: float | None
-    low_confidence_rate: float
+    mean_unreadable_token_rate: float
     failure_rate: float
+
+
+def _unreadable_token_rate(result: OcrResult) -> float:
+    if not result.tokens:
+        return 0.0
+    low = sum(1 for token in result.tokens if token.band is ConfidenceBand.LOW)
+    return low / len(result.tokens)
 
 
 def evaluate_sample(truth: OcrGroundTruth, result: OcrResult) -> SampleMetrics:
@@ -164,7 +184,7 @@ def evaluate_sample(truth: OcrGroundTruth, result: OcrResult) -> SampleMetrics:
         keyword_match_rate=keyword_match_rate(truth.keywords, result.text),
         bounding_box_center_error=None if alignment is None else alignment[0],
         bounding_box_iou=None if alignment is None else alignment[1],
-        low_confidence=result.has_low_confidence,
+        unreadable_token_rate=_unreadable_token_rate(result),
         failed=not result.text and not result.tokens,
     )
 
@@ -194,7 +214,7 @@ def summarize_by_quality(samples: Iterable[SampleMetrics]) -> list[BucketSummary
                 mean_keyword_match_rate=fmean(s.keyword_match_rate for s in group),
                 mean_bounding_box_center_error=_mean_or_none(errors),
                 mean_bounding_box_iou=_mean_or_none(ious),
-                low_confidence_rate=fmean(float(s.low_confidence) for s in group),
+                mean_unreadable_token_rate=fmean(s.unreadable_token_rate for s in group),
                 failure_rate=fmean(float(s.failed) for s in group),
             )
         )
@@ -222,7 +242,7 @@ def to_markdown_table(summaries: Sequence[BucketSummary]) -> str:
                     _fmt(summary.mean_keyword_match_rate),
                     _fmt(summary.mean_bounding_box_center_error),
                     _fmt(summary.mean_bounding_box_iou),
-                    _fmt(summary.low_confidence_rate),
+                    _fmt(summary.mean_unreadable_token_rate),
                     _fmt(summary.failure_rate),
                 )
             )

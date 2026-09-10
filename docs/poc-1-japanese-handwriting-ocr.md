@@ -169,12 +169,20 @@ uv run python poc/run_ocr_eval.py --dataset "<local eval-dataset dir>" --out poc
 ```
 # uv run python poc/run_ocr_eval.py の出力（合成フィクスチャ / 参考値のみ）
 samples: 4
-| 手書き品質 | 件数 | 平均CER | 重要語一致率 | BBox中心誤差 | BBox IoU | 低Confidence率 | 失敗率 |
+| 手書き品質 | 件数 | 平均CER | 重要語一致率 | BBox中心誤差 | BBox IoU | 読めなかった語の割合 | 失敗率 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | clean | 1 | 0.000 | 1.000 | 0.000 | 1.000 | 0.000 | 0.000 |
-| messy | 2 | 0.562 | 0.167 | 0.050 | 0.500 | 0.500 | 0.500 |
+| messy | 2 | 0.562 | 0.167 | 0.050 | 0.500 | 0.250 | 0.500 |
 | normal | 1 | 0.083 | 0.667 | - | - | 0.000 | 0.000 |
 ```
+
+> **「低Confidence率」列は Issue #158 で「読めなかった語の割合」に変えた。**
+> 旧列は「**低Confidenceの語を1つでも含む答案の割合**」で、答案あたりの語数が
+> 増えるほど上がる — 読み取りの悪さではなく**答案の長さ**を測っていた。
+> 新列は語単位の率で、同じ合成フィクスチャでは messy が 0.500 → 0.250 になる
+> （messy-01 は2語中1語、messy-02 は0語）。同じ形の欠陥が `usable` 判定の側にも
+> あり、そちらの決着は
+> [ocr-recognition-pipeline.md](./ocr-recognition-pipeline.md) §9 にある。
 
 ---
 

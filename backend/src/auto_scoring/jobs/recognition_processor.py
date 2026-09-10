@@ -48,7 +48,9 @@ from auto_scoring.domain.ocr import (
     OCRTimeoutError,
     OcrToken,
     OCRUnavailable,
-    overall_confidence,
+    UnreadableSpans,
+    lowest_token_confidence,
+    unreadable_spans,
 )
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.recognition_settings import RecognitionSettings
@@ -64,17 +66,26 @@ def _clamp_unit(value: float) -> float:
     return min(1.0, max(0.0, value))
 
 
-def _to_domain_boxes(tokens: tuple[OcrToken, ...]) -> tuple[ModelsBoundingBox, ...]:
+def _to_domain_boxes(
+    tokens: tuple[OcrToken, ...], unreadable: UnreadableSpans
+) -> tuple[ModelsBoundingBox, ...]:
     """Translate the provider's normalized boxes into the persisted domain
-    type. Clamped defensively: `domain.ocr.BoundingBox` tolerates a tiny
+    type, carrying which spans could not be read.
+
+    Clamped defensively: `domain.ocr.BoundingBox` tolerates a tiny
     floating-point overshoot past 1.0 (its own epsilon), but
     `domain.models.NormalizedRect` does not -- a real provider's raw
     normalized coordinates should never need this, but persisting a
     `RecognitionResult` must not fail outright over a rounding error at the
     page edge.
+
+    The unreadable spans ride along on the boxes because the box *is* the
+    position (Issue #158): a reviewer needs to see which part of the answer
+    the reading is missing, and a count on the row could not say that.
     """
+    unreadable_indices = set(unreadable.indices)
     boxes = []
-    for token in tokens:
+    for index, token in enumerate(tokens):
         box = token.bounding_box
         x = _clamp_unit(box.x)
         y = _clamp_unit(box.y)
@@ -82,10 +93,24 @@ def _to_domain_boxes(tokens: tuple[OcrToken, ...]) -> tuple[ModelsBoundingBox, .
         height = _clamp_unit(min(box.height, 1.0 - y))
         boxes.append(
             ModelsBoundingBox(
-                text=token.text, rect=NormalizedRect(x=x, y=y, width=width, height=height)
+                text=token.text,
+                rect=NormalizedRect(x=x, y=y, width=width, height=height),
+                unreadable=index in unreadable_indices,
             )
         )
     return tuple(boxes)
+
+
+def _nothing_readable(boxes: tuple[ModelsBoundingBox, ...]) -> bool:
+    """The persisted form of `domain.ocr.UnreadableSpans.nothing_readable`.
+
+    Used only on the crash-recovery path, where the reading is already a row
+    and the provider must not be called again. Rows written before Issue #158
+    carry no per-span flag, so they read back as fully readable -- which is
+    the same answer the new rule gives for a reading that had any readable
+    span at all, and the case it changed (`domain.models.BoundingBox`).
+    """
+    return all(box.unreadable for box in boxes)
 
 
 def recognition_result_id(job: Job) -> str:
@@ -118,13 +143,26 @@ class RecognitionJobProcessor:
     the result as a `RecognitionResult` (source=AI, always -- Issue #19
     acceptance: never auto-confirm).
 
-    ``usable`` on a `ProcessingResult.SUCCEEDED` outcome is
-    ``overall_confidence(...) >= settings.confidence_threshold``: below
-    threshold routes the question to needs_review (any dependent stays
-    `BLOCKED`, business-rules-and-evaluation-data.md section 4.4) without
-    ever raising -- a low-confidence/unreadable read is a completed
-    recognition, not a processing failure (`domain.ocr.OcrToken`'s own
-    docstring: an unreadable span is still returned, never dropped).
+    ``usable`` on a `ProcessingResult.SUCCEEDED` outcome is **"at least one
+    span of this crop came back readable"** -- `domain.ocr.unreadable_spans`,
+    which scores each token against `settings.confidence_threshold` and
+    reports which ones fell below it. A reading with nothing readable at all
+    routes the question to needs_review (any dependent stays `BLOCKED`,
+    business-rules-and-evaluation-data.md section 4.4) without ever raising
+    -- an unreadable read is a completed recognition, not a processing
+    failure (`domain.ocr.OcrToken`'s own docstring: an unreadable span is
+    still returned, never dropped).
+
+    **It used to be ``overall_confidence(...) >= threshold``, and that
+    measured the length of the answer** (Issue #158). That aggregate is the
+    minimum over every token, so each additional span is another chance to
+    pull it under the threshold: on the 15 recorded readings of 2026-09-09
+    every reading of 5 tokens or fewer passed and every one of 9 tokens or
+    more failed, while correctness did not separate them at all. Whatever
+    else a gate is, it must not stop a question for being long -- see
+    docs/ocr-recognition-pipeline.md §9 for the numbers and for why no new
+    threshold replaced it. The unreadable spans are persisted per box
+    instead, as information for the reviewer.
 
     **A host with no OCR at all is a third case, not a low-confidence read**
     (Issue #114). `domain.ocr.OCRUnavailable` yields ``SUCCEEDED`` with no
@@ -171,7 +209,13 @@ class RecognitionJobProcessor:
 
     @property
     def confidence_threshold(self) -> float:
-        """The Recognition Confidence threshold this instance gates on.
+        """The Recognition Confidence threshold this instance reads with.
+
+        Since Issue #158 this processor compares it against **each token**,
+        to decide which spans came back unreadable, rather than against one
+        aggregate for the whole reading; the value and its single source are
+        unchanged, and `GradingJobProcessor` still compares the AI grader's
+        own single recognition confidence against it.
 
         Public so `auto_scoring.jobs.grading_processor.GradingJobProcessor`
         (which composes this processor for the recognition half of a job)
@@ -199,7 +243,7 @@ class RecognitionJobProcessor:
             if existing is not None:
                 return ProcessingResult(
                     outcome=ProcessingOutcome.SUCCEEDED,
-                    usable=existing.confidence >= self._settings.confidence_threshold,
+                    usable=not _nothing_readable(existing.boxes),
                 )
             images = uow.answer_images.list_for_submission(job.submission_id)
             image = find_answer_image(images, question_id)
@@ -259,16 +303,21 @@ class RecognitionJobProcessor:
         except OCRProviderError:
             return self._failed(ErrorCategory.PERMANENT, "call failed")
 
-        confidence = overall_confidence(result)
+        unreadable = unreadable_spans(
+            result, minimum_confidence=self._settings.confidence_threshold
+        )
         recognition = RecognitionResult(
             id=recognition_id,
             submission_id=job.submission_id,
             question_id=question_id,
             source=GradingSource.AI,
             text=result.text,
-            confidence=confidence,
+            # Display only, and no longer compared against anything: the
+            # worst span's own confidence, kept next to the reading the
+            # reviewer can see (`domain.ocr.lowest_token_confidence`).
+            confidence=lowest_token_confidence(result),
             created_at=self._clock.now(),
-            boxes=_to_domain_boxes(result.tokens),
+            boxes=_to_domain_boxes(result.tokens, unreadable),
         )
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             uow.recognitions.add(recognition)
@@ -276,7 +325,7 @@ class RecognitionJobProcessor:
 
         return ProcessingResult(
             outcome=ProcessingOutcome.SUCCEEDED,
-            usable=confidence >= self._settings.confidence_threshold,
+            usable=not unreadable.nothing_readable,
         )
 
     def _failed(

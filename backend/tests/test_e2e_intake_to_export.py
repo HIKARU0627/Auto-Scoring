@@ -106,7 +106,7 @@ from tests.test_e2e_acceptance import (
     ScriptedOCRProvider,
     answer_crops,
     grading_response,
-    ocr_result,
+    ocr_result_of_spans,
 )
 
 _TOKEN = "e2e-intake-to-export-token"
@@ -917,7 +917,7 @@ def test_without_an_ocr_service_a_dependent_question_still_runs_without_a_human(
         ).json(), "問2 was released but never graded"
 
 
-def test_an_ocr_reading_it_could_not_trust_still_blocks_until_a_human_resumes_it(
+def test_an_ocr_that_read_nothing_still_blocks_until_a_human_resumes_it(
     data_root: Path,
     extractor: _ScriptedCriteriaExtractor,
     ocr_provider: ScriptedOCRProvider,
@@ -925,15 +925,20 @@ def test_an_ocr_reading_it_could_not_trust_still_blocks_until_a_human_resumes_it
 ) -> None:
     """The half Issue #114 deliberately left alone, pinned on its own.
 
-    Here the host *has* an OCR service and it read 問1's crop -- it just was
-    not confident about what it read. That is the case
+    Here the host *has* an OCR service and it looked at 問1's crop -- and got
+    nothing readable out of it. That is the case
     business-rules-and-evaluation-data.md section 4.4 was written for, and it
-    still stops the dependent: the reading exists, it is below the threshold,
-    and a human decides whether to trust it.
+    still stops the dependent: the reading exists, none of it can be handed
+    downstream, and a human decides what to do.
 
     Together with the test above this is the whole distinction Issue #114
     turns on. Loosening "no OCR here" must not quietly loosen "the OCR could
     not read this", and only running both proves it did not.
+
+    **Issue #158 narrowed what counts as the second one, and its own test is
+    below**: a reading with unreadable spans *among readable ones* no longer
+    stops anything. What is scripted here is a reading with nothing readable
+    in it at all -- which is why the name no longer says "could not trust".
     """
     with _build_client(
         data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=ocr_provider
@@ -944,7 +949,8 @@ def test_an_ocr_reading_it_could_not_trust_still_blocks_until_a_human_resumes_it
         _script_the_grader(ai_provider, crops)
         first, second = f"{test_id}:問1", f"{test_id}:問2"
         ocr_provider.script(
-            crops[first], [ocr_result(text="こうごうせい(判読不能)", confidence=0.3)]
+            crops[first],
+            [ocr_result_of_spans([("(判読不能)", 0.3), ("(判読不能)", 0.2)])],
         )
 
         started = client.post(f"/submissions/{submission_id}/jobs", headers=_AUTH)
@@ -977,3 +983,71 @@ def test_an_ocr_reading_it_could_not_trust_still_blocks_until_a_human_resumes_it
             "問2 never ran after its prerequisite was resumed",
         )
         assert _job_for(client, submission_id, second)["state"] == "succeeded"
+
+
+def test_a_partly_unreadable_prerequisite_no_longer_blocks_its_dependent(
+    data_root: Path,
+    extractor: _ScriptedCriteriaExtractor,
+    ocr_provider: ScriptedOCRProvider,
+    ai_provider: ScriptedAIProvider,
+) -> None:
+    """The pair to the test above, and what Issue #158 actually changed.
+
+    Same host, same edge 問1 -> 問2, and 問1's crop *was* read -- most of it
+    confidently, one span of it not. Until Issue #158 the recognition half
+    reported the worst span's confidence and compared that against the
+    threshold, so this reading stopped 問2 and a human had to press
+    ``/resume`` to release it.
+
+    That rule punished length. The worst of N spans only falls as N grows, so
+    the more a student wrote the more certainly their answer stopped the next
+    question, whatever it said -- on the 15 recorded readings of 2026-09-09
+    every reading of 5 spans or fewer passed and every one of 9 or more
+    failed (docs/ocr-recognition-pipeline.md §9). So this scenario, which is
+    what a long answer in ordinary handwriting looks like, must run through
+    without a human, while the test above -- nothing readable at all -- must
+    still stop. Running both is the only way to show the loosening went
+    exactly that far and no further.
+    """
+    with _build_client(
+        data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=ocr_provider
+    ) as client:
+        test_id = _register_via_the_new_path(client, edges=True)
+        submission_id = _upload_answer(client, test_id, marker="ans-f")
+        crops = answer_crops(data_root, submission_id)
+        _script_the_grader(ai_provider, crops)
+        first, second = f"{test_id}:問1", f"{test_id}:問2"
+        ocr_provider.script(
+            crops[first],
+            [
+                ocr_result_of_spans(
+                    [("光合成は", 0.96), ("葉緑体で", 0.93), ("&&&", 0.31), ("行われる", 0.91)]
+                )
+            ],
+        )
+
+        _start_and_wait(client, submission_id)
+
+        prerequisite = _job_for(client, submission_id, first)
+        assert prerequisite["state"] == "succeeded"
+        assert prerequisite["usable"] is True, (
+            "one unreadable span among readable ones is a fact about the "
+            "length of the answer, not a reason to stop the next question"
+        )
+
+        # 問2 ran on its own. No /resume is called anywhere in this test.
+        dependent = _job_for(client, submission_id, second)
+        assert dependent["state"] == "succeeded", dependent
+        assert client.get(
+            f"/submissions/{submission_id}/questions/{second}/grades", headers=_AUTH
+        ).json(), "問2 was released but never graded"
+
+        # The unreadable span is not lost -- it is recorded where it is, for
+        # a reviewer to look at (Issue #158; showing it on screen is its own
+        # issue, since that needs the OpenAPI schema to carry it).
+        recognitions = client.get(
+            f"/submissions/{submission_id}/questions/{first}/recognitions", headers=_AUTH
+        ).json()
+        ocr_rows = [row for row in recognitions if row["stage"] == "ocr"]
+        assert len(ocr_rows) == 1
+        assert len(ocr_rows[0]["boxes"]) == 4

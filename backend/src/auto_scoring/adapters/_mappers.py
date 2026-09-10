@@ -81,13 +81,17 @@ def rect_from_json(data: dict[str, Any] | None) -> NormalizedRect | None:
 
 
 def _box_to_json(box: BoundingBox) -> dict[str, Any]:
-    return {"text": box.text, "rect": rect_to_json(box.rect)}
+    return {"text": box.text, "rect": rect_to_json(box.rect), "unreadable": box.unreadable}
 
 
 def _box_from_json(data: dict[str, Any]) -> BoundingBox:
     rect = rect_from_json(data["rect"])
     assert rect is not None  # a box always carries a rect
-    return BoundingBox(text=data["text"], rect=rect)
+    # ``unreadable`` (Issue #158) is absent from every row written before it
+    # existed. Those readings were persisted under the old rule, which kept
+    # no per-span verdict at all, so the honest default is "nothing here says
+    # this span was unreadable" -- see `domain.models.BoundingBox`.
+    return BoundingBox(text=data["text"], rect=rect, unreadable=bool(data.get("unreadable", False)))
 
 
 def _criterion_to_json(result: CriterionResult) -> dict[str, Any]:

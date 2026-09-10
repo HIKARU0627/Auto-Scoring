@@ -504,10 +504,22 @@ class Score:
 
 @dataclass(frozen=True, kw_only=True)
 class BoundingBox:
-    """One OCR word box, used to place text-anchored annotations (§12.3)."""
+    """One OCR word box, used to place text-anchored annotations (§12.3).
+
+    ``unreadable`` marks a span the provider returned but could not read
+    (below the configured Recognition Confidence threshold when it was
+    recognized -- `domain.ocr.unreadable_spans`). Kept per box, rather than
+    as one number on the row, because *where* the reading is missing is what
+    a human can act on, and because a count on its own grows with the length
+    of the answer (Issue #158, docs/ocr-recognition-pipeline.md §9).
+
+    Rows written before Issue #158 carry no such flag and read back as
+    ``False``; they still carry the row's `RecognitionResult.confidence`.
+    """
 
     text: str
     rect: NormalizedRect
+    unreadable: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
