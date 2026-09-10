@@ -49,6 +49,7 @@ void main() {
     AppRoutes.settings,
     AppRoutes.testList,
     AppRoutes.testSettingsPattern,
+    AppRoutes.submissionConfirmPattern,
   };
 
   /// パスの `:param` を、下のフェイクが答えられる id で埋める。
