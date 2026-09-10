@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/answer_area_review.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/criteria_totals.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
@@ -781,33 +782,19 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// claim having to be rewritten.
   ({List<String> undetected, List<String> absent}) _missingFrom(
     List<RegionModel> regions,
-  ) {
-    final covered = {
-      for (final region in regions)
-        if (region.kind == RegionKind.answerArea) region.label,
-    };
-    final reportedAbsent =
-        _profile?.absentQuestionNumbers.toSet() ?? const <String>{};
-    final undetected = <String>[];
-    final absent = <String>[];
-    for (final number in _questionNumbers) {
-      if (covered.contains(number)) continue;
-      (reportedAbsent.contains(number) ? absent : undetected).add(number);
-    }
-    return (undetected: undetected, absent: absent);
-  }
+  ) => missingAnswerAreas(
+    regions: regions,
+    questionNumbers: _questionNumbers,
+    reportedAbsent: _profile?.absentQuestionNumbers.toSet() ?? const {},
+  );
 
   /// Answer areas that name no confirmed question. These block the confirm --
   /// `build_questions_and_rubrics` ignores them without a word.
-  List<RegionModel> _unassignedFrom(List<RegionModel> regions) {
-    final known = _questionNumbers.toSet();
-    return [
-      for (final region in regions)
-        if (region.kind == RegionKind.answerArea &&
-            !known.contains(region.label))
-          region,
-    ];
-  }
+  List<RegionModel> _unassignedFrom(List<RegionModel> regions) =>
+      unassignedAnswerAreas(
+        regions: regions,
+        knownQuestionNumbers: _questionNumbers.toSet(),
+      );
 
   /// Whether the answer sheet the regions are drawn on is actually on screen.
   ///
@@ -816,8 +803,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// looked at, so it is refused while any answer area exists and the sheet
   /// is not displayed (review round 1, P1; Issue #85's rule).
   bool _mustSeeAnswerSheetFirst(List<RegionModel> regions) =>
-      _answerLayoutPdf == null &&
-      regions.any((region) => region.kind == RegionKind.answerArea);
+      mustSeeAnswerSheetFirst(
+        answerSheetVisible: _answerLayoutPdf != null,
+        regions: regions,
+      );
 
   Widget _buildProfileSection() {
     final regions = _editableRegions;
