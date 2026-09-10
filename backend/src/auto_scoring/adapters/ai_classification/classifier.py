@@ -1,7 +1,7 @@
 """``MaterialClassifier`` over a structured-output provider call (Issue #101).
 
 Holds the two prompts, the two response schemas, and the parsing -- once,
-regardless of which transport `_calls` sends them over.
+regardless of which transport `adapters.ai.image_call` sends them over.
 
 Two things here are deliberate and load-bearing.
 
@@ -23,15 +23,12 @@ or records either the request or the response.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 
-from auto_scoring.adapters.ai_classification._calls import (
-    StructuredJsonCall,
-    _descriptor,
-    parse_json_object,
-)
-from auto_scoring.domain.ai_provider import SchemaViolation
+from auto_scoring.adapters.ai.image_call import ImageJsonCall, discard_response
+from auto_scoring.domain.ai_provider import ProviderDescriptor
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.material_classifier import (
     UNKNOWN,
@@ -40,6 +37,18 @@ from auto_scoring.domain.material_classifier import (
     RoleProposal,
     validate_attribution,
 )
+
+#: Classification is a single-token-ish answer over one image, so it is far
+#: quicker than a grading call -- but a batch runs one call per file, and a
+#: reviewer is watching a progress line while it does. A shorter ceiling
+#: than grading's keeps one stuck request from stalling the whole run.
+DEFAULT_TIMEOUT_SECONDS = 60.0
+
+#: The name the OpenAI-compatible ``response_format`` gives these schemas.
+SCHEMA_NAME = "classification"
+
+#: Recorded verbatim into ``ProviderDescriptor.structured_output_mode``.
+_STRUCTURED_OUTPUT_MODE = "json_schema"
 
 #: The roles a classifier may propose. `IGNORE` is excluded on purpose: "do
 #: not import this" is a decision about what the reviewer wants, not
@@ -140,20 +149,49 @@ def build_attribution_user_text(candidates: Sequence[AttributionCandidate]) -> s
     return "\n".join(lines)
 
 
+def _payload(text: str, *, label: str) -> dict[str, Any]:
+    """Parse a provider's structured answer, or discard the response.
+
+    Neither message quotes the text: a classification response can echo the
+    page it looked at, which is the school's material.
+    """
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        discard_response(label, "response was not valid JSON")
+    if not isinstance(parsed, dict):
+        discard_response(label, "response was not a JSON object")
+    return parsed
+
+
 def _confidence(payload: dict[str, Any], *, label: str) -> float:
     value = payload.get("confidence")
     if not isinstance(value, int | float) or isinstance(value, bool):
-        raise SchemaViolation(f"{label} response had no numeric confidence")
+        discard_response(label, "response had no numeric confidence")
     if not 0.0 <= float(value) <= 1.0:
-        raise SchemaViolation(f"{label} response confidence was outside 0..1")
+        discard_response(label, "response confidence was outside 0..1")
     return float(value)
 
 
+def _descriptor(
+    call: ImageJsonCall, *, prompt_version: str, temperature: float, version: str | None
+) -> ProviderDescriptor:
+    return ProviderDescriptor(
+        provider=call.provider,
+        model=call.model,
+        version=version,
+        prompt_version=prompt_version,
+        temperature=temperature,
+        structured_output_mode=_STRUCTURED_OUTPUT_MODE,
+    )
+
+
 class StructuredMaterialClassifier:
-    """`MaterialClassifier` backed by one :class:`StructuredJsonCall`."""
+    """`MaterialClassifier` backed by one
+    :class:`~auto_scoring.adapters.ai.image_call.ImageJsonCall`."""
 
     def __init__(
-        self, call: StructuredJsonCall, *, prompt_version: str, temperature: float = 0.0
+        self, call: ImageJsonCall, *, prompt_version: str, temperature: float = 0.0
     ) -> None:
         self._call = call
         self._prompt_version = prompt_version
@@ -167,13 +205,13 @@ class StructuredMaterialClassifier:
         text, version = self._call.call(
             system=ROLE_SYSTEM_INSTRUCTIONS,
             user_text=_ROLE_USER_TEXT,
-            image=page_image,
+            images=(page_image,),
             schema=role_response_schema(),
         )
-        payload = parse_json_object(text, label=self._call.provider)
+        payload = _payload(text, label=self._call.provider)
         raw_role = payload.get("role")
         if not isinstance(raw_role, str):
-            raise SchemaViolation(f"{self._call.provider} response had no role string")
+            discard_response(self._call.provider, "response had no role string")
         if raw_role == UNKNOWN:
             role = None
         else:
@@ -182,12 +220,12 @@ class StructuredMaterialClassifier:
             except ValueError:
                 # Never quote the value back: it came from a provider that
                 # was looking at the school's page.
-                raise SchemaViolation(
-                    f"{self._call.provider} answered with a role outside the offered set"
-                ) from None
+                discard_response(
+                    self._call.provider, "answered with a role outside the offered set"
+                )
             if role not in _PROPOSABLE_ROLES:
-                raise SchemaViolation(
-                    f"{self._call.provider} answered with a role outside the offered set"
+                discard_response(
+                    self._call.provider, "answered with a role outside the offered set"
                 )
         return RoleProposal(
             role=role,
@@ -208,13 +246,13 @@ class StructuredMaterialClassifier:
         text, version = self._call.call(
             system=ATTRIBUTION_SYSTEM_INSTRUCTIONS,
             user_text=build_attribution_user_text(candidates),
-            image=page_image,
+            images=(page_image,),
             schema=attribution_response_schema(candidates),
         )
-        payload = parse_json_object(text, label=self._call.provider)
+        payload = _payload(text, label=self._call.provider)
         raw_id = payload.get("candidate_id")
         if not isinstance(raw_id, str):
-            raise SchemaViolation(f"{self._call.provider} response had no candidate_id string")
+            discard_response(self._call.provider, "response had no candidate_id string")
         return AttributionProposal(
             # Checked again here, not only by the schema sent: a provider is
             # free to ignore a structured-output constraint, and an id the

@@ -9,6 +9,7 @@ Pins the two properties the design depends on:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -39,16 +40,22 @@ class _FakeCall:
 
     provider = "fake"
     model = "fake-model"
+    label = "Fake"
 
     def __init__(self, reply: str) -> None:
         self._reply = reply
         self.sent: list[dict[str, Any]] = []
 
     def call(
-        self, *, system: str, user_text: str, image: bytes, schema: dict[str, Any]
+        self,
+        *,
+        system: str,
+        user_text: str,
+        images: Sequence[bytes],
+        schema: dict[str, Any],
     ) -> tuple[str, str | None]:
         self.sent.append(
-            {"system": system, "user_text": user_text, "image": image, "schema": schema}
+            {"system": system, "user_text": user_text, "images": tuple(images), "schema": schema}
         )
         return self._reply, "fake-route"
 
@@ -129,8 +136,8 @@ def test_no_file_name_or_path_is_ever_sent() -> None:
     # carrying anything about either of them. Only the image differs.
     assert first["system"] == second["system"]
     assert first["user_text"] == second["user_text"]
-    assert first["image"] != second["image"]
-    assert first["image"] == _IMAGE
+    assert first["images"] != second["images"]
+    assert first["images"] == (_IMAGE,)
 
 
 def test_attribution_sends_the_candidate_labels_but_no_file_names() -> None:
