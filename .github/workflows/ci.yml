@@ -185,13 +185,24 @@ jobs:
           node-version-file: .node-version
       - name: Enable pnpm
         run: corepack enable
-      # Deliberately no Flutter SDK and no uv: nothing here touches dart or
-      # Python. `--filter` keeps this to `desktop/`'s own dependency tree, the
-      # mirror image of the app/backend jobs skipping the Electron binary.
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.10.7"
+          enable-cache: true
+      # Deliberately no Flutter SDK: nothing here touches dart. `--filter` keeps
+      # this to `desktop/`'s own dependency tree, the mirror image of the
+      # app/backend jobs skipping the Electron binary.
       - name: Install Node dependencies
         # Root package carries openapi-typescript (TS 6) for `openapi:check:ts`;
         # desktop carries the runtime `openapi-fetch` client.
         run: pnpm install --frozen-lockfile --filter auto-scoring --filter @auto-scoring/desktop
+      - name: Restore Python environment
+        # Sidecar lifecycle integration tests (Issue #234) verify real startup,
+        # dynamic port binding, handshake, health check, and parent watchdog
+        # against the backend sidecar executable in backend/.venv.
+        run: uv sync --locked
+        working-directory: backend
       - name: TypeScript OpenAPI contract
         # Regenerates desktop/src/renderer/api/generated from the committed
         # schema and fails on drift. No uv/dart/Java -- reads openapi.json only.
