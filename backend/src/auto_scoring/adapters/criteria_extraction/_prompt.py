@@ -34,15 +34,6 @@ from auto_scoring.domain.criteria_extraction import (
     CriteriaExtractionRequest,
 )
 
-_JPEG_MAGIC = b"\xff\xd8\xff"
-
-
-def sniff_image_format(data: bytes) -> str:
-    """Returns ``"jpeg"`` or ``"png"`` (default -- this project renders
-    pages to PNG via ``adapters.pdf.pdfium_pypdf_engine``)."""
-    return "jpeg" if data.startswith(_JPEG_MAGIC) else "png"
-
-
 #: The trailing sentence is `domain.ai_response_language
 #: .RESPONSE_LANGUAGE_INSTRUCTION` (Issue #140): the model's own ``note`` --
 #: what it could not read or determine -- is shown to the teacher on screen

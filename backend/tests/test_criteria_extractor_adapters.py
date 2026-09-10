@@ -23,16 +23,20 @@ import httpx
 import pytest
 from google.auth.credentials import Credentials
 
+from auto_scoring.adapters.ai.image_call import (
+    ChatCompletionsImageCall,
+    VertexGeminiImageCall,
+)
 from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ai_grading._prompt import sniff_image_format
 from auto_scoring.adapters.criteria_extraction._prompt import (
     build_criteria_user_content,
-    sniff_image_format,
     strict_criteria_extraction_schema,
 )
 from auto_scoring.adapters.criteria_extraction.extractor import (
-    ChatCompletionsCriteriaExtractor,
+    SCHEMA_NAME,
+    StructuredCriteriaExtractor,
     UnconfiguredCriteriaExtractor,
-    VertexGeminiCriteriaExtractor,
 )
 from auto_scoring.adapters.criteria_extraction.factory import (
     CriteriaExtractorConfigError,
@@ -104,25 +108,36 @@ def _request(pages: int = 2, *, texts: tuple[str, ...] = ()) -> CriteriaExtracti
     return CriteriaExtractionRequest(page_images=tuple([_PNG] * pages), page_texts=texts)
 
 
-def _vertex(handler: httpx.MockTransport) -> VertexGeminiCriteriaExtractor:
-    return VertexGeminiCriteriaExtractor(
-        model="fake-model", tokens=_tokens(), client=httpx.Client(transport=handler)
+def _vertex(handler: httpx.MockTransport) -> StructuredCriteriaExtractor:
+    return StructuredCriteriaExtractor(
+        VertexGeminiImageCall(
+            model="fake-model",
+            tokens=_tokens(),
+            temperature=0.0,
+            timeout_seconds=1.0,
+            client=httpx.Client(transport=handler),
+        )
     )
 
 
-def _chat(handler: httpx.MockTransport) -> ChatCompletionsCriteriaExtractor:
-    return ChatCompletionsCriteriaExtractor(
-        name="openai",
-        api_key="fake-key",
-        model="fake-model",
-        base_url="https://example.invalid/v1",
-        label="OpenAI",
-        extra_payload={"store": False},
-        client=httpx.Client(
-            transport=handler,
+def _chat(handler: httpx.MockTransport) -> StructuredCriteriaExtractor:
+    return StructuredCriteriaExtractor(
+        ChatCompletionsImageCall(
+            provider="openai",
+            api_key="fake-key",
+            model="fake-model",
             base_url="https://example.invalid/v1",
-            headers={"Authorization": "Bearer fake-key"},
-        ),
+            label="OpenAI",
+            schema_name=SCHEMA_NAME,
+            extra_payload={"store": False},
+            temperature=0.0,
+            timeout_seconds=1.0,
+            client=httpx.Client(
+                transport=handler,
+                base_url="https://example.invalid/v1",
+                headers={"Authorization": "Bearer fake-key"},
+            ),
+        )
     )
 
 
