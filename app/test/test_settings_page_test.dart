@@ -1213,6 +1213,76 @@ void main() {
       );
     });
 
+    testWidgets('配点と採点基準を確定した直後に、画面を出入りしなくてもプロファイル欄が新しい設問を反映する', (
+      tester,
+    ) async {
+      // 直す前は `_confirmCriteria` が listQuestions を呼び直さず、
+      // プロファイル節はこの画面を出て戻る（＝ `_loadAll` が再度走る）まで
+      // 古い設問一覧のままだった。バックエンドは確定と同時に
+      // `build_questions_and_rubrics` を通して Question 行を作り直すので
+      // (`docs/criteria-extraction.md` §6「確定の順序に依存しない」)、
+      // ここは表示側が確定イベントを取りこぼしていただけだった。
+      var confirmed = false;
+      final dependencies = AppDependencies(
+        getAnswerLayout: (testId) async => _answerLayout(),
+        getAnswerLayoutPdf: (testId) async => _answerSheetPdf(),
+        getTest: (testId) async => _test(),
+        getProfile: (testId) async =>
+            _profile(status: 'draft', regions: const []),
+        getDependencyGraph: (testId) async => _dependencyGraph(),
+        getCriteria: (testId) async =>
+            _criteria(questions: [_criteriaQuestion()], revision: 1),
+        // Empty until confirm actually runs -- the same shape the real
+        // sidecar has, where Question rows do not exist until then.
+        listQuestions: (testId) async =>
+            confirmed ? _questions() : const <QuestionResponse>[],
+        updateCriteria: (testId, questions, {declaredTotalPoints}) async =>
+            _criteria(questions: questions, revision: 7),
+        confirmCriteria: (testId, {required revision}) async {
+          confirmed = true;
+          return _criteria(
+            questions: [_criteriaQuestion()],
+            revision: revision,
+            status: 'confirmed',
+          );
+        },
+      );
+
+      await _pumpSettings(tester, dependencies);
+
+      // 確定前: 設問がまだ無いので自動検出できず、理由が出ている。
+      expect(
+        find.byKey(const Key('answer-layout-needs-questions')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('detect-answer-areas-button')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byKey(const Key('confirm-criteria-button')));
+      await tester.pumpAndSettle();
+
+      // 画面を出入りしていないのに、確定した設問がすぐプロファイル欄に
+      // 反映される。
+      expect(
+        find.byKey(const Key('answer-layout-needs-questions')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('detect-answer-areas-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+
     testWidgets('配点を確定しても、なぜまだ採点が始まらないかを画面に出す', (tester) async {
       // #104 の取込完了画面と同じ規律: できないことをできるように見せない。
       final dependencies = AppDependencies(

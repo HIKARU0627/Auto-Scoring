@@ -452,11 +452,23 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
       widget.testId,
       revision: saved.revision,
     );
+    // Confirming criteria rebuilds the test's `Question` rows the same way
+    // confirming the profile does (`docs/criteria-extraction.md` §6: 確定の
+    // 順序に依存しない -- both endpoints call the same
+    // `build_questions_and_rubrics`). The プロファイル section above reads
+    // `_questionNumbers`, not `_criteria`, to decide whether 自動検出 has
+    // anything to attribute a box to -- without re-reading it here, that
+    // section kept showing the pre-confirm question set until the reviewer
+    // left this screen and came back (a pull-to-refresh, or `_loadAll`
+    // running again, was the only thing that noticed). The screen was not
+    // missing a message for this state; it was missing the fetch.
+    final questions = await _dependencies.listQuestions(widget.testId);
     if (!mounted) return;
     setState(() {
       _criteria = confirmed;
       _editableCriteria = confirmed.questions.toList();
       _editableDeclaredTotal = confirmed.declaredTotalPoints;
+      _questionNumbers = [for (final q in questions) q.number];
     });
     _showSnackBar('配点と採点基準を確定し、設問に反映しました');
   });

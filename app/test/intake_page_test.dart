@@ -157,6 +157,77 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// Dependencies that import one group as a *new* test successfully.
+  AppDependencies importing({
+    required IntakePlanResponse withPlan,
+    List<TestSummary> existingTests = const [],
+    Future<SubmissionResponse> Function({
+      required String testId,
+      required String filePath,
+      String? studentLabel,
+    })?
+    createSubmission,
+    Future<List<SubmissionResponse>> Function(String)? listSubmissions,
+    Future<List<TestMaterialResponse>> Function(String)? listMaterials,
+    Future<void> Function(String)? deleteTest,
+    Future<List<TestMaterialResponse>> Function(
+      String, {
+      required List<({MaterialRole role, String path})> materials,
+    })?
+    addMaterials,
+    Future<AttributionProposalResponse> Function({
+      required String path,
+      required List<({String id, String label})> candidates,
+    })?
+    attributeAnswer,
+  }) => AppDependencies(
+    listIntakeTemplates: () async => [template()],
+    intakeCost: () async => null,
+    listTests: () async => existingTests,
+    classificationAvailability: () async => available(),
+    planIntake:
+        ({required templateId, required rootName, required files}) async =>
+            withPlan,
+    createTest:
+        ({
+          required name,
+          subject,
+          required criteriaPath,
+          materials = const [],
+        }) async => TestResponse(
+          (builder) => builder
+            ..id = 'test-1'
+            ..name = name
+            ..status = 'draft'
+            ..createdAt = DateTime.utc(2026),
+        ),
+    addMaterials:
+        addMaterials ??
+        (testId, {required materials}) async => const <TestMaterialResponse>[],
+    createSubmission:
+        createSubmission ??
+        ({required testId, required filePath, studentLabel}) async =>
+            SubmissionResponse(
+              (builder) => builder
+                ..id = 'sub-1'
+                ..testId = testId
+                ..state = 'needs_review'
+                ..pageCount = 1
+                ..createdAt = DateTime.utc(2026),
+            ),
+    listSubmissions: listSubmissions ?? (_) async => const [],
+    listMaterials: listMaterials ?? (_) async => const [],
+    deleteTest: deleteTest ?? (_) async {},
+    attributeAnswer:
+        attributeAnswer ??
+        ({required path, required candidates}) async =>
+            AttributionProposalResponse(
+              (builder) => builder
+                ..testId = null
+                ..confidence = 0.0,
+            ),
+  );
+
   testWidgets('規則が当たったファイルだけなら、AIには一度も問い合わせない (受入条件8)', (tester) async {
     // Asserted as the *absence* of a call: a recording fake that is never
     // invoked is the only way to prove a file was not sent.
@@ -422,24 +493,65 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('intake-next-step-notice')), findsOneWidget);
-    expect(find.textContaining('配点と採点基準が必要です'), findsOneWidget);
+    expect(find.textContaining('配点と採点基準の確定が必要です'), findsOneWidget);
     // Nothing here may claim the test is ready to grade. Reporting that a
     // kickoff was attempted and failed is a different thing and is allowed --
     // what is forbidden is asserting a state the app cannot know.
     expect(find.textContaining('採点できます'), findsNothing);
     expect(find.textContaining('採点を開始できます'), findsNothing);
     expect(find.textContaining('AI採点を開始しました'), findsNothing);
-    // No link to テスト設定画面: that screen cannot enter points or criteria
-    // for a test registered this way, and sending the reviewer somewhere they
-    // cannot do the thing the notice just asked for is worse than saying the
-    // app cannot do it yet.
-    expect(
-      find.byKey(const Key('intake-open-settings-subject-a')),
-      findsNothing,
+    // Issue #103 built the screen this notice used to say did not exist yet.
+    // It reads 採点基準PDF (already registered by this import) directly, with
+    // no profile or model-answer PDF required first, so the completion screen
+    // can and does link straight to it -- the 導線 docs/intake-and-settings.md
+    // §1 asks for.
+    final settingsLink = tester.widget<TextButton>(
+      find.byKey(const Key('intake-open-test-settings-subject-a')),
     );
-    expect(find.textContaining('画面はまだありません'), findsOneWidget);
+    expect(settingsLink.onPressed, isNotNull);
     // The undo for what this import created is still one tap away.
     expect(find.byKey(const Key('intake-delete-subject-a')), findsOneWidget);
+  });
+
+  testWidgets('廃止済みの「入力する画面はまだありません」という文言はどこにも出ない (#111 の手口)', (tester) async {
+    // Issue #103 shipped the screen this notice used to say was still being
+    // built. The exact string must never resurface, on this screen or any
+    // other -- pinned the same way Issue #111 pinned the retired PDF notice.
+    await openReview(
+      tester,
+      withPlan: plan(ruleMatched),
+      paths: const ['subject-a/01_answers.pdf', 'subject-a/02_criteria.pdf'],
+      dependencies: importing(withPlan: plan(ruleMatched)),
+    );
+
+    await tester.tap(find.byKey(const Key('intake-import')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('画面はまだありません'), findsNothing);
+    expect(find.textContaining('Issue #103'), findsNothing);
+  });
+
+  testWidgets('テスト設定を開くリンクは、実際にテスト設定画面へ遷移する', (tester) async {
+    await openReview(
+      tester,
+      withPlan: plan(ruleMatched),
+      paths: const ['subject-a/01_answers.pdf', 'subject-a/02_criteria.pdf'],
+      dependencies: importing(withPlan: plan(ruleMatched)),
+    );
+
+    await tester.tap(find.byKey(const Key('intake-import')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('intake-open-test-settings-subject-a')),
+    );
+    await tester.pumpAndSettle();
+
+    // A screen that cannot fully load with this test's stub dependencies
+    // still proves the route change happened without throwing -- pushing
+    // somewhere is the behaviour under test, not what that screen renders.
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('intake-import')), findsNothing);
   });
 
   testWidgets('27件目で失敗しても、その前の答案は残る', (tester) async {
@@ -524,6 +636,66 @@ void main() {
     expect(created, 3);
     expect(find.byKey(const Key('intake-outcome-subject-a')), findsOneWidget);
     expect(find.textContaining('取り込めませんでした'), findsOneWidget);
+  });
+
+  testWidgets('取込が失敗すると、見出し・要約が成功時と同じ文言にならず、失敗件数が分かる', (tester) async {
+    // Every answer fails and nothing else is attached, so this group's
+    // outcome carries an error with nothing imported -- a total failure,
+    // not the partial one above.
+    await openReview(
+      tester,
+      withPlan: plan(
+        [planned('subject-a/01_answers.pdf', role: MaterialRole.studentAnswer)],
+        missing: const [MaterialRole.gradingCriteria],
+      ),
+      paths: const ['subject-a/01_answers.pdf'],
+      dependencies: importing(
+        withPlan: plan(
+          [
+            planned(
+              'subject-a/01_answers.pdf',
+              role: MaterialRole.studentAnswer,
+            ),
+          ],
+          missing: const [MaterialRole.gradingCriteria],
+        ),
+        existingTests: [
+          TestSummary(
+            (builder) => builder
+              ..id = 'existing-1'
+              ..name = '国語 第1回',
+          ),
+        ],
+        createSubmission:
+            ({required testId, required filePath, studentLabel}) async {
+              throw SidecarApiException(
+                SidecarErrorKind.unknown,
+                'simulated failure',
+              );
+            },
+      ),
+    );
+
+    // Bind the group to the already-registered test, same as the P1 fix
+    // above -- the failure has to happen against a real target, not an
+    // unassigned group the import button would refuse anyway.
+    await tester.tap(find.byKey(const Key('intake-target-subject-a')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('登録済み: 国語 第1回').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('intake-import')));
+    await tester.pumpAndSettle();
+
+    // The success wording must not appear anywhere on this screen.
+    expect(find.text('取込が完了しました'), findsNothing);
+    expect(find.byKey(const Key('intake-done-heading')), findsOneWidget);
+    final heading = tester.widget<Text>(
+      find.byKey(const Key('intake-done-heading')),
+    );
+    expect(heading.data, isNot('取込が完了しました'));
+    expect(find.byKey(const Key('intake-failure-summary')), findsOneWidget);
+    expect(find.textContaining('1件のグループで取り込みに失敗しました'), findsOneWidget);
   });
 
   testWidgets('取り込んだ答案のAI採点を起票する (Issue #80 の経路を落とさない)', (tester) async {
@@ -633,77 +805,6 @@ void main() {
     expect(find.textContaining('AI採点を開始できませんでした'), findsOneWidget);
     expect(find.textContaining('AI採点を開始しました'), findsNothing);
   });
-
-  /// Dependencies that import one group as a *new* test successfully.
-  AppDependencies importing({
-    required IntakePlanResponse withPlan,
-    List<TestSummary> existingTests = const [],
-    Future<SubmissionResponse> Function({
-      required String testId,
-      required String filePath,
-      String? studentLabel,
-    })?
-    createSubmission,
-    Future<List<SubmissionResponse>> Function(String)? listSubmissions,
-    Future<List<TestMaterialResponse>> Function(String)? listMaterials,
-    Future<void> Function(String)? deleteTest,
-    Future<List<TestMaterialResponse>> Function(
-      String, {
-      required List<({MaterialRole role, String path})> materials,
-    })?
-    addMaterials,
-    Future<AttributionProposalResponse> Function({
-      required String path,
-      required List<({String id, String label})> candidates,
-    })?
-    attributeAnswer,
-  }) => AppDependencies(
-    listIntakeTemplates: () async => [template()],
-    intakeCost: () async => null,
-    listTests: () async => existingTests,
-    classificationAvailability: () async => available(),
-    planIntake:
-        ({required templateId, required rootName, required files}) async =>
-            withPlan,
-    createTest:
-        ({
-          required name,
-          subject,
-          required criteriaPath,
-          materials = const [],
-        }) async => TestResponse(
-          (builder) => builder
-            ..id = 'test-1'
-            ..name = name
-            ..status = 'draft'
-            ..createdAt = DateTime.utc(2026),
-        ),
-    addMaterials:
-        addMaterials ??
-        (testId, {required materials}) async => const <TestMaterialResponse>[],
-    createSubmission:
-        createSubmission ??
-        ({required testId, required filePath, studentLabel}) async =>
-            SubmissionResponse(
-              (builder) => builder
-                ..id = 'sub-1'
-                ..testId = testId
-                ..state = 'needs_review'
-                ..pageCount = 1
-                ..createdAt = DateTime.utc(2026),
-            ),
-    listSubmissions: listSubmissions ?? (_) async => const [],
-    listMaterials: listMaterials ?? (_) async => const [],
-    deleteTest: deleteTest ?? (_) async {},
-    attributeAnswer:
-        attributeAnswer ??
-        ({required path, required candidates}) async =>
-            AttributionProposalResponse(
-              (builder) => builder
-                ..testId = null
-                ..confidence = 0.0,
-            ),
-  );
 
   group('コードレビュー1回目で見つかった穴', () {
     testWidgets('削除は、何が消えるかを言って確認してから実行する [P1]', (tester) async {
