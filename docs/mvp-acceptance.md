@@ -385,3 +385,102 @@ CI artifact については、`docs/windows-distribution.md` §9 が構成上の
 | `job-queue.md`                          | 決定論方針（本書 §3）は同書のIssue #50 の記録を前提にしている |
 | `windows-distribution.md` §10           | clean VM 受入の実施は #53                                     |
 | `backend/poc/README.md`                 | 性能測定プローブの実行方法                                    |
+
+---
+
+## 9. cut-over に向けたテスト参照の棚卸し（Issue #246 準備）
+
+GitHub Issue [#246](https://github.com/HIKARU0627/Auto-Scoring/issues/246)（親 [#201](https://github.com/HIKARU0627/Auto-Scoring/issues/201)）。
+
+最高責任者が定めたフロントエンド cut-over の第 4 条件:
+
+> - **`docs/mvp-acceptance.md` の対応表を新しいテストへ張り替えること**
+
+の実施準備として、本書内で現行の Flutter テスト（`app/test`）を参照している箇所をすべて棚卸しした。
+**本 Issue では張り替えは行わず、棚卸し（現状と移行先の対応関係の記録）のみを行う。** 実際の張り替えは cut-over の Issue で実施する。
+
+### 9.1 `app/test` 参照箇所の総数
+
+本書内で `app/test` を指している行は **合計 7 行**（§1 表の 6 行 + §4.1 表の 1 行）である。加えて、§4.4 に Flutter テストスイート全体の件数記録がある。
+
+| 箇所                        | 項目 / 対象               | 現行の `app/test` 参照                                                                                       | 新スタック対応状況                              |
+| --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
+| **§1 表 5 行目 (行 29)**    | PDF表示                   | `app/test/pdf_review_page_test.dart::Issue #25: 受入 -- 幅・focus・accessibility label`                      | **対応テストあり** (`desktop/test/`)            |
+| **§1 表 8 行目 (行 32)**    | 点数表示                  | `app/test/pdf_review_page_test.dart::shows recognition, score, rationale, rubric, and dual confidence ...`   | **部分対応**（受入統合テストは**まだ無い**）    |
+| **§1 表 9 行目 (行 33)**    | ○×表示                    | `app/test/pdf_review_page_test.dart::places a target-anchored annotation on the PDF overlay ...` ほか        | **対応テストあり** (`desktop/test/`)            |
+| **§1 表 10 行目 (行 34)**   | コメント表示              | `app/test/pdf_review_page_test.dart::shows the AI grade comment (総評コメント), distinct from the rationale` | **部分対応**（受入統合テストは**まだ無い**）    |
+| **§1 表 11 行目 (行 35)**   | AI結果修正                | `app/test/pdf_review_page_test.dart::Issue #22: ... 修正 ...`                                                | **部分対応**（UI 一連受入テストは**まだ無い**） |
+| **§1 表 12 行目 (行 36)**   | AI結果承認                | `app/test/pdf_review_page_test.dart::Issue #22: ... 承認して次へ ...`                                        | **まだ無い**（答案確定画面の移植で作る）        |
+| **§4.1 表 2 行目 (行 192)** | overlay 系 Linux 実行制約 | `app/test/pdf_review_page_test.dart` の overlay 系 (8件)                                                     | **構造的に解消**（Flutter 廃止に伴い不要化）    |
+
+### 9.2 各行の詳細と新スタックでの対応先・作成計画
+
+#### 1. 行 29 (§1 表 項目 5: PDF表示)
+
+- **現行参照:** `app/test/pdf_review_page_test.dart::Issue #25: 受入 -- 幅・focus・accessibility label`（desktop標準幅/狭幅の両方で `PdfViewer` が出る）
+- **新スタックの対応先:**
+  - `desktop/test/pdf-review-geometry.test.ts` (INV-050, INV-051, INV-062, INV-063)
+  - `desktop/test/renderer/pdf-review-page.test.tsx` (INV-014, INV-068, INV-069, INV-201-01, INV-067, INV-070, INV-071)
+  - `desktop/test/renderer/home-escape.test.tsx` (脱出・アクセシビリティ)
+- **状況:** **対応テストあり**。PoC 6 (Issue #207) および MIG-01〜03 の決定により、新スタックでは Flutter の `Pdfrx`/`PdfViewer` を廃止し、サイドカーが生成したページ画像を `PageImageViewer.tsx` で表示するアーキテクチャに刷新された。PR #244 で Vitest による描画・幾何計算テストが固定済み。
+
+#### 2. 行 32 (§1 表 項目 8: 点数表示)
+
+- **現行参照:** `app/test/pdf_review_page_test.dart::shows recognition, score, rationale, rubric, and dual confidence ...`
+- **新スタックの対応先:** **部分対応（完全な受入統合テストはまだ無い）**
+  - 単体・個別検証: `desktop/test/renderer/pdf-review-page.test.tsx` の `describe("confidence display (INV-068, INV-069)")` にて確信度バッジ表示および無記入時の 0 点理由表示がテストされている。
+- **まだ無いテストの作成先:** 添削レビュー画面インスペクターにおいて「認識文字・得点・根拠・ルーブリック・2系統の確信度」が同時に正しく描画されることを検証する受入テストは、**添削レビュー画面のフォローアップ Issue または cut-over 準備 Issue で作成すべき**。
+
+#### 3. 行 33 (§1 表 項目 9: ○×表示)
+
+- **現行参照:** `app/test/pdf_review_page_test.dart::places a target-anchored annotation on the PDF overlay ...` ほか overlay 系
+- **新スタックの対応先:** **対応テストあり**
+  - `desktop/test/pdf-review-geometry.test.ts` (INV-050〜063: explicit rect, target-anchored OCR box, crop座標変換, 最小run, 異常系など 15 件)
+  - `desktop/test/renderer/pdf-review-page.test.tsx` (INV-064: ターゲット未一致時の設問コメント欄退避)
+- **状況:** PR #244 にて画像画素寸法に基づく幾何変換とアノテーション解決ロジックが Vitest で完全に固定済み。
+
+#### 4. 行 34 (§1 表 項目 10: コメント表示)
+
+- **現行参照:** `app/test/pdf_review_page_test.dart::shows the AI grade comment (総評コメント), distinct from the rationale`
+- **新スタックの対応先:** **部分対応（完全な受入統合テストはまだ無い）**
+  - 単体・個別検証: `desktop/test/renderer/pdf-review-page.test.tsx` (INV-064: 未解決アノテーションの設問コメント欄表示)。
+- **まだ無いテストの作成先:** 総評コメント（AI grade comment）が採点理由（rationale）と明確に区別されてインスペクターに描画されることを確認する受入テストは、**添削レビュー画面のフォローアップ Issue または cut-over 準備 Issue で作成すべき**。
+
+#### 5. 行 35 (§1 表 項目 11: AI結果修正)
+
+- **現行参照:** `test_e2e_acceptance.py::test_correcting_approving_and_undoing_leaves_a_complete_history`、`app/test/pdf_review_page_test.dart::Issue #22: ... 修正 ...`
+- **新スタックの対応先:** **部分対応（UI 一連受入テストはまだ無い）**
+  - バックエンドの履歴・Undo 保証（`test_e2e_acceptance.py`）はそのまま存続。
+  - フロントエンド: `desktop/test/renderer/pdf-review-page.test.tsx` (INV-071) にて却下アクション（`review-reject-button`）と理由送信のテストが存在する。
+- **まだ無いテストの作成先:** 画面上での編集（edit）、再採点（regrade）、承認（approve）、Undo の一連のユーザー操作が整合して通ることを検証する UI 統合テストは、**添削レビュー画面のフォローアップ Issue または cut-over 準備 Issue で作成すべき**。
+
+#### 6. 行 36 (§1 表 項目 12: AI結果承認)
+
+- **現行参照:** 同上（`review/approve` と Undo を含む1本）、`app/test/pdf_review_page_test.dart::Issue #22: ... 承認して次へ ...`
+- **新スタックの対応先:** **まだ無い**
+  - 現状: 設問単位の承認ゲート（未読時の承認禁止・Enter 無効化）は `desktop/test/renderer/pdf-review-page.test.tsx` (INV-201-01, INV-067) でテスト済み。
+  - 不足点: 設問を順次承認して「次へ」進み、最終的に全問承認後に答案を確定するフロー全体のテストが存在しない。
+- **まだ無いテストの作成先:** **答案確定画面（未移植、未引き取り 7 件: INV-201-02, INV-201-08, INV-005, INV-154〜INV-157）の移植で作られるべき**。答案確定画面の移植時に「未到達設問がある場合の確定禁止」「全到達後の一括承認」「確定後の次答案への遷移」を検証するテストが実装される。
+
+#### 7. 行 192 (§4.1 表 2 行目: Linux での overlay 系 8 件の失敗)
+
+- **現行参照:** `app/test/pdf_review_page_test.dart` の overlay 系 (8件)
+- **新スタックの対応先:** **構造的に解消（該当行は cut-over 時に削除）**
+  - 背景: Flutter では `pdfium_dart` が Linux 上の `flutter test` でネイティブバイナリを解決できず 8 件失敗していた（Issue #60）。
+  - 新スタック: Electron renderer は PDF を直接描画せず、サイドカーが pypdfium2 で生成したページ画像を `PageImageViewer.tsx` で描画する。座標計算（`desktop/test/pdf-review-geometry.test.ts`）は純粋関数として実行されるため、Linux / Windows の環境差やネイティブバイナリ解決エラー自体が構造的に消滅した。
+  - cut-over 時の方針: §4.1 の本行および Flutter 固有の workaround 記述（`build hook が libpdfium.so を渡す`）は cut-over 時に削除するか、歴史的記録として「Electron 移行により解消済み」と注記する。
+
+#### 参考: 行 244-246 (§4.4 スイート件数表)
+
+- `| Flutter | 157 passed / 8 failed（既知） | 176 passed / 0 failed |`
+- cut-over 時の方針: Flutter スイートの行を削除し、`desktop`（Vitest 250+ 件、Playwright e2e）の実績件数に差し替える。
+
+### 9.3 張り替え作業のロードマップ（cut-over Issue への申し送り）
+
+1. **未移植画面の移植とテスト作成:**
+   - 答案確定画面（Issue #245 等）の移植により、項目 12（AI結果承認・一括承認・答案確定）の新スタックテストを確立する。
+2. **添削レビュー画面の受入テスト補完:**
+   - 項目 8（点数・確信度・ルーブリック統合受入）、項目 10（総評コメント区別）、項目 11（編集・再採点・Undo一連操作）の Vitest 統合テストを `desktop/test/renderer/pdf-review-page.test.tsx` に追記する。
+3. **cut-over Issue での対応表張り替え:**
+   - 本書 §1 の表の `app/test/...` 参照 6 行を、上記の `desktop/test/...` テストへ一括して書き換える。
+   - §4 の Linux プラットフォーム差の記述から Flutter 固有の記述（pdfium 解決 hook）を整理し、§4.4 のテスト件数表を新スタックのものへ更新する。
