@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/action_requirements.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
@@ -12,6 +13,8 @@ import 'package:auto_scoring_app/core/intake_attribution.dart';
 import 'package:auto_scoring_app/core/intake_review.dart';
 import 'package:auto_scoring_app/core/material_role_labels.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
+import 'package:auto_scoring_app/core/widgets/disabled_action_reason.dart';
 
 /// 資料取込画面 — the single flow that replaced テスト登録 and 答案取込
 /// (Issue #101).
@@ -797,6 +800,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: const BackOrHomeButton(),
         title: const Text('資料の取込'),
         actions: [
           IconButton(
@@ -827,6 +831,11 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   }
 
   Widget _buildChooseStep() {
+    // 無効にしている条件と、無効の理由は同じ1つの計算から出す (Issue #88)。
+    final folderPick = intakeFolderPickRequirements(
+      busy: _busy,
+      templateChosen: _templateId != null,
+    );
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: AppLayout.formMaxWidth),
       child: ListView(
@@ -875,10 +884,11 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           const SizedBox(height: AppSpacing.lg),
           FilledButton.icon(
             key: const Key('intake-choose-folder'),
-            onPressed: _busy || _templateId == null ? null : _pickFolder,
+            onPressed: folderPick.isEmpty ? _pickFolder : null,
             icon: const Icon(Icons.folder_open),
             label: const Text('フォルダを選ぶ'),
           ),
+          DisabledActionReason(requirements: folderPick),
         ],
       ),
     );
@@ -889,7 +899,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     final billable = review.pendingClassification.length;
     final classifiable = review.classifiableFiles.length;
     final cachedOnly = classifiable - billable;
-    final unconfirmed = review.unconfirmedProposals.length;
+    // 取り込めないなら理由が1件以上、取り込めるなら0件。`onPressed` も
+    // その場に出る文も、この1本から決まる (Issue #88)。
+    final importAction = intakeImportRequirements(
+      busy: _busy,
+      classifying: _classifying,
+      folderRequirements: review.importRequirements,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -928,36 +944,33 @@ class _IntakePageState extends ConsumerState<IntakePage> {
           ),
         ),
         const SizedBox(height: AppSpacing.md),
-        if (unconfirmed > 0)
+        // ここには以前「AIの提案を$unconfirmed件、まだ確認していません。内容を
+        // 確かめてから取り込んでください。」と書き下ろしてあった。取り込めない
+        // 理由をこの1か所だけが持ち、取り込みボタンの横には何も無い形である
+        // -- 条件が変われば文言だけが古くなる (Issue #88)。理由は下の
+        // `DisabledActionReason` が `ActionRequirement` から出すので、ここに
+        // 残すのは「まとめて確認済みにする」ショートカットだけにした。
+        if (review.confirmableProposals.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    key: const Key('intake-unconfirmed-notice'),
-                    'AIの提案を$unconfirmed件、まだ確認していません。'
-                    '内容を確かめてから取り込んでください。',
-                  ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                key: const Key('intake-confirm-all'),
+                // Explicit bulk approval, not an auto-accept: the reviewer
+                // still has to press it, and it only touches rows that
+                // actually carry a proposal. A folder of forty answers no
+                // rule matched would otherwise cost forty taps.
+                onPressed: _busy || _classifying
+                    ? null
+                    : () => setState(
+                        () => _review = _review?.confirmAllProposals(),
+                      ),
+                child: Text(
+                  'AIの提案 ${review.confirmableProposals.length}件を'
+                  'まとめて確認済みにする',
                 ),
-                if (review.confirmableProposals.isNotEmpty)
-                  TextButton(
-                    key: const Key('intake-confirm-all'),
-                    // Explicit bulk approval, not an auto-accept: the reviewer
-                    // still has to press it, and it only touches rows that
-                    // actually carry a proposal. A folder of forty answers no
-                    // rule matched would otherwise cost forty taps.
-                    onPressed: _busy || _classifying
-                        ? null
-                        : () => setState(
-                            () => _review = _review?.confirmAllProposals(),
-                          ),
-                    child: Text(
-                      'AIの提案 ${review.confirmableProposals.length}件を'
-                      'まとめて確認済みにする',
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         // `Wrap`, not `Row`: at 390px the two buttons together are wider than
@@ -991,14 +1004,13 @@ class _IntakePageState extends ConsumerState<IntakePage> {
               ),
             FilledButton.icon(
               key: const Key('intake-import'),
-              onPressed: _busy || _classifying || !review.canImport
-                  ? null
-                  : _import,
+              onPressed: importAction.isEmpty ? _import : null,
               icon: const Icon(Icons.download_done),
               label: const Text('この内容で取り込む'),
             ),
           ],
         ),
+        DisabledActionReason(requirements: importAction),
       ],
     );
   }

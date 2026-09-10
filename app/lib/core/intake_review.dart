@@ -13,6 +13,7 @@
 library;
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/action_requirements.dart';
 import 'package:auto_scoring_app/core/folder_scan.dart';
 
 /// What a group of files will be imported into.
@@ -198,6 +199,60 @@ class IntakeFileState {
   );
 }
 
+/// 取込を止めている条件ごとの件数 (Issue #88)。
+///
+/// フォルダ1つぶんが [IntakeGroupState.blockingCounts]、batch 全体ぶんが
+/// [IntakeBlockingCountsTotals.plus] で足し合わせたものになる。名前付きの
+/// レコードにしてあるのは、条件を1本足したときに**足し忘れた場所が
+/// コンパイルエラーになる**ようにするためで、`Map<String, int>` だと黙って
+/// 0 のまま通る。
+typedef IntakeBlockingCounts = ({
+  int targetUnassigned,
+  int requiredRolesMissing,
+  int testNameEmpty,
+  int answersUnrouted,
+  int nonAnswersUnroutable,
+  int unconfirmedProposals,
+});
+
+extension IntakeBlockingCountsTotals on IntakeBlockingCounts {
+  /// 止めているものが1つも無い。
+  bool get isClear =>
+      targetUnassigned == 0 &&
+      requiredRolesMissing == 0 &&
+      testNameEmpty == 0 &&
+      answersUnrouted == 0 &&
+      nonAnswersUnroutable == 0 &&
+      unconfirmedProposals == 0;
+
+  IntakeBlockingCounts plus(IntakeBlockingCounts other) => (
+    targetUnassigned: targetUnassigned + other.targetUnassigned,
+    requiredRolesMissing: requiredRolesMissing + other.requiredRolesMissing,
+    testNameEmpty: testNameEmpty + other.testNameEmpty,
+    answersUnrouted: answersUnrouted + other.answersUnrouted,
+    nonAnswersUnroutable: nonAnswersUnroutable + other.nonAnswersUnroutable,
+    unconfirmedProposals: unconfirmedProposals + other.unconfirmedProposals,
+  );
+
+  /// 「何を満たせば取り込めるか」の文に直す。
+  ///
+  /// 文言は `core/action_requirements.dart` にしか無い -- ここも画面も、
+  /// 自分の言い回しを持たない。
+  List<ActionRequirement> get requirements => [
+    if (targetUnassigned > 0)
+      ActionRequirement.intakeTargetUnassigned(targetUnassigned),
+    if (testNameEmpty > 0) ActionRequirement.intakeTestNameEmpty(testNameEmpty),
+    if (requiredRolesMissing > 0)
+      ActionRequirement.intakeRequiredRoleMissing(requiredRolesMissing),
+    if (unconfirmedProposals > 0)
+      ActionRequirement.intakeProposalUnconfirmed(unconfirmedProposals),
+    if (answersUnrouted > 0)
+      ActionRequirement.intakeAnswerUnrouted(answersUnrouted),
+    if (nonAnswersUnroutable > 0)
+      ActionRequirement.intakeNonAnswerUnroutable(nonAnswersUnroutable),
+  ];
+}
+
 /// One folder's worth of files and where they are going.
 class IntakeGroupState {
   const IntakeGroupState({
@@ -288,17 +343,35 @@ class IntakeGroupState {
         .toList();
   }
 
+  /// 何がこのフォルダの取込を止めているか、条件ごとの件数で (Issue #88)。
+  ///
+  /// **[isReady] はこれが全部ゼロかどうかである。** 条件と、画面に出す理由を
+  /// 1つの計算から出しておくと、条件を1本足したときに文言を足し忘れることが
+  /// できない -- 逆向き (画面が文言を書き下ろす) をやっていたのが Issue #111・
+  /// #138 で、どちらも条件が変わって文言だけが残った。
+  ///
+  /// 文ではなく件数を返すのは、[IntakeReviewState.importRequirements] が
+  /// フォルダをまたいで足してから1本の文にするからである。文をここで作ると、
+  /// 「フォルダ3つでそれぞれ1件」が「1件あります」×3行になる。
+  IntakeBlockingCounts get blockingCounts => (
+    targetUnassigned: targetKind == IntakeTargetKind.unassigned ? 1 : 0,
+    requiredRolesMissing: unmetRequirements.length,
+    testNameEmpty: targetKind == IntakeTargetKind.create && name.trim().isEmpty
+        ? 1
+        : 0,
+    answersUnrouted: unroutedAnswers.length,
+    nonAnswersUnroutable: unroutableNonAnswers.length,
+    unconfirmedProposals: includedFiles
+        .where((file) => file.blocksImport)
+        .length,
+  );
+
   bool get isReady {
-    if (targetKind == IntakeTargetKind.unassigned) return false;
+    // 取り込む物が無いフォルダは「準備できている」とは呼べない。batch 全体で
+    // 1件も無いときだけが取込を止める条件なので、その判断は
+    // [IntakeReviewState.importRequirements] 側に置いてある。
     if (includedFiles.isEmpty) return false;
-    if (unmetRequirements.isNotEmpty) return false;
-    if (targetKind == IntakeTargetKind.create && name.trim().isEmpty) {
-      return false;
-    }
-    if (unroutedAnswers.isNotEmpty || unroutableNonAnswers.isNotEmpty) {
-      return false;
-    }
-    return !includedFiles.any((file) => file.blocksImport);
+    return blockingCounts.isClear;
   }
 
   IntakeGroupState copyWith({
@@ -378,10 +451,27 @@ class IntakeReviewState {
   ];
 
   /// Whether the batch can be imported at all.
-  bool get canImport =>
-      groups.isNotEmpty &&
-      groups.any((group) => group.includedFiles.isNotEmpty) &&
-      groups.every((group) => group.includedFiles.isEmpty || group.isReady);
+  ///
+  /// **[importRequirements] が空かどうかである** (Issue #88)。条件をここに、
+  /// 理由を画面に、と分けて書いていたのをやめた。
+  bool get canImport => importRequirements.isEmpty;
+
+  /// 何を満たせば取り込めるか。空なら取り込める。
+  ///
+  /// ファイルが1件も残っていないフォルダは飛ばす -- 除外しきったフォルダは
+  /// 「不備」ではなく「取り込まない」という決定であり、それで他のフォルダの
+  /// 取込を止めるのは筋が違う。batch 全体で1件も無いときだけが、取込そのものを
+  /// 止める条件になる。
+  List<ActionRequirement> get importRequirements {
+    final active = groups
+        .where((group) => group.includedFiles.isNotEmpty)
+        .toList();
+    if (active.isEmpty) return [ActionRequirement.intakeNothingToImport];
+    return active
+        .map((group) => group.blockingCounts)
+        .reduce((total, counts) => total.plus(counts))
+        .requirements;
+  }
 
   /// Answers that would each cost an **attribution** call.
   ///

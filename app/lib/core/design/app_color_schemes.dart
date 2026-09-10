@@ -151,6 +151,43 @@ ColorScheme appColorScheme(Brightness brightness) {
   );
 }
 
+/// 無効なボタンの色 (Issue #88)。
+///
+/// Material の既定は `onSurface` を 12% (下地) と 38% (ラベル) で重ねる。あの数字は
+/// Material 自身の明るい surface を前提にしたもので、**このアプリの静かなランプの
+/// 上ではボタンがそこにあること自体が読み取れない** -- 計算すると、ダークテーマの
+/// カード (`surfaceContainerLow`) に載った無効ボタンの枠は 1.1:1、下地は 1.0:1 で、
+/// つまり何も無いのと同じである。Issue #88 受入条件2 が言っている「ダークテーマで
+/// 無効ボタンとカード背景の明度差が小さく、ボタンであることすら判別しにくい」は
+/// これである。
+///
+/// そこで既定を上書きして、役割を3つに分ける。
+///
+/// * [disabledButtonOutline] が「ボタンがそこにある」を持つ。境界線なので
+///   WCAG 1.4.11 の 3:1 を目標にする。
+/// * [disabledButtonLabel] が「何のボタンか」を持つ。読む文字なので 4.5:1。
+/// * [disabledButtonContainer] は板。ランプの段なので差は小さく、ここに数値は
+///   期待しない。
+///
+/// **「押せない」を色で伝えようとはしていない。** 色だけに載せた状態は、色の
+/// 見え方が違う人には届かない (Issue #25)。押せない理由は
+/// `core/widgets/disabled_action_reason.dart` が文で出す。色に求めるのは
+/// 「見つかること」だけである。
+///
+/// 3つの数値は `test/app_theme_contrast_test.dart` が計算して固定し、
+/// `docs/design-tokens.md` §3.5 に書いてある。
+extension AppDisabledButtonColors on ColorScheme {
+  /// ラベルとアイコン。二次テキストと同じトークンで、どの surface 段でも AA。
+  Color get disabledButtonLabel => onSurfaceVariant;
+
+  /// 下地の板。ランプの最上段なので、ライトでは一段沈み、ダークでは一段浮く。
+  Color get disabledButtonContainer => surfaceContainerHighest;
+
+  /// 輪郭。`outline` は有効な `OutlinedButton` の枠と同じ線で、それでよい --
+  /// 区別を付けるのは枠ではなくラベルの色と、隣に出る理由の文である。
+  Color get disabledButtonOutline => outline;
+}
+
 /// The states this app has to show that Material's [ColorScheme] has no slot
 /// for, as a [ThemeExtension] so light and dark carry their own values and
 /// `Theme.of(context)` resolves them the same way it resolves `colorScheme`.

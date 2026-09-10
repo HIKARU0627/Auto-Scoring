@@ -1298,8 +1298,27 @@ void main() {
 
       await _pumpSettings(tester, dependencies);
 
-      expect(find.textContaining('配点と採点基準が未確定です'), findsNothing);
+      expect(
+        find.byKey(const Key('remaining-work-criteria-unconfirmed')),
+        findsNothing,
+      );
+      // **1か所にしか出ない。** 「登録完了」ボタンを無効にしている条件と、
+      // 採点開始までに残っていることは別の問いだが、どちらにも出る条件は
+      // `id` で畳んで1行にしている (Issue #88)。
+      expect(
+        find.byKey(const Key('remaining-work-profile-unconfirmed')),
+        findsOneWidget,
+      );
       expect(find.textContaining('回答欄（テストプロファイル）が未確定です'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('complete-registration-button')),
+            )
+            .onPressed,
+        isNull,
+        reason: '理由が出ているのにボタンが押せるなら、理由と条件が別物になっている',
+      );
       expect(
         find.byKey(const Key('criteria-confirmed-next-step')),
         findsOneWidget,
@@ -1722,8 +1741,10 @@ void main() {
 
       expect(find.byKey(const Key('answer-layout-pdf-error')), findsOneWidget);
       expect(find.textContaining('答案を読み込めませんでした'), findsOneWidget);
+      // 理由は `ActionRequirement` の id で探す -- 文言を直してもテストは
+      // 書き換えずに済み、条件が消えれば落ちる (Issue #88)。
       expect(
-        find.byKey(const Key('unseen-answer-sheet-warning')),
+        find.byKey(const Key('disabled-reason-answer-sheet-unrendered')),
         findsOneWidget,
       );
       expect(
@@ -2005,7 +2026,7 @@ void main() {
       await _pumpSettings(tester, dependencies);
 
       expect(
-        find.byKey(const Key('unassigned-region-warning')),
+        find.byKey(const Key('disabled-reason-answer-regions-unassigned')),
         findsOneWidget,
       );
       final confirm = tester.widget<FilledButton>(

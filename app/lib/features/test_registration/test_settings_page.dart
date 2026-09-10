@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/action_requirements.dart';
 import 'package:auto_scoring_app/core/answer_area_review.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/criteria_totals.dart';
@@ -13,6 +14,8 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
 import 'package:auto_scoring_app/core/region_edit_validation.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/back_or_home_button.dart';
+import 'package:auto_scoring_app/core/widgets/disabled_action_reason.dart';
 import 'package:auto_scoring_app/features/test_registration/answer_area_editor.dart';
 
 /// テスト設定画面 (simplified-design-specification.md §16.3, Issue #16).
@@ -696,7 +699,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_test?.name ?? 'テスト設定')),
+      appBar: AppBar(
+        leading: const BackOrHomeButton(),
+        title: Text(_test?.name ?? 'テスト設定'),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -820,7 +826,21 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     final missing = _missingFrom(working);
     final undetected = missing.undetected;
     final absent = missing.absent;
-    final unseenSheet = _mustSeeAnswerSheetFirst(working);
+    // 無効にしている条件と、その場に出す理由は同じ1つの計算から出す
+    // (Issue #88)。文言は `core/action_requirements.dart` にしか無い。
+    final saveProfile = answerProfileSaveRequirements(
+      busy: _busy,
+      hasRegions: regions != null,
+      alreadyConfirmed: _profileConfirmed,
+    );
+    final confirmProfile = answerProfileConfirmRequirements(
+      busy: _busy,
+      alreadyConfirmed: _profileConfirmed,
+      regionCount: working.length,
+      unassignedRegionCount: unassigned.length,
+      mustSeeAnswerSheetFirst: _mustSeeAnswerSheetFirst(working),
+      answerSheetRegistered: _answerLayout?.pageCount != null,
+    );
     // Server-derived, and re-read on every save: the ordering of the boxes
     // is exactly what the reviewer is editing, so this cannot be computed
     // once and kept.
@@ -871,26 +891,6 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 onEditNumerically: _editRegion,
               ),
             const SizedBox(height: AppSpacing.md),
-            // Everything that stands between the reviewer and a confirm is
-            // stated *here*, next to the button, not only up in the editor.
-            // A reason that is only visible after scrolling back is a reason
-            // nobody reads before pressing.
-            if (unassigned.isNotEmpty)
-              _buildConfirmBlocker(
-                key: const Key('unassigned-region-warning'),
-                message:
-                    '設問が割り当てられていない回答欄が${unassigned.length}件あります。'
-                    '設問を選ぶか削除するまで確定できません。',
-              ),
-            if (unseenSheet)
-              _buildConfirmBlocker(
-                key: const Key('unseen-answer-sheet-warning'),
-                message: _answerLayout?.pageCount == null
-                    ? '回答欄の位置は答案の上で確認します。'
-                          '答案を取り込むまで確定できません。'
-                    : '答案を表示できていません。'
-                          '実際の答案を見ないまま確定はできません。上の再試行を押してください。',
-              ),
             // Not a blocker: a question with no回答欄 still grades -- against
             // the whole page, marked 要確認, in front of a human. Shown at
             // the point of confirming all the same, so nobody confirms a
@@ -936,44 +936,28 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
               children: [
                 OutlinedButton.icon(
                   key: const Key('save-profile-button'),
-                  onPressed: (_busy || regions == null || _profileConfirmed)
-                      ? null
-                      : _saveProfile,
+                  onPressed: saveProfile.isEmpty ? _saveProfile : null,
                   icon: const Icon(Icons.save_outlined),
                   label: const Text('修正内容を保存'),
                 ),
                 FilledButton.icon(
                   key: const Key('confirm-profile-button'),
-                  onPressed:
-                      (_busy ||
-                          regions == null ||
-                          regions.isEmpty ||
-                          unassigned.isNotEmpty ||
-                          unseenSheet ||
-                          _profileConfirmed)
-                      ? null
-                      : _confirmProfile,
+                  onPressed: confirmProfile.isEmpty ? _confirmProfile : null,
                   icon: const Icon(Icons.check_circle_outline),
                   label: const Text('プロファイルを確定'),
                 ),
               ],
             ),
+            // 確定を阻んでいるものは**ボタンの隣**に出す。一覧の中まで
+            // スクロールして戻らないと読めない理由は、押す前に読まれない。
+            //
+            // 「修正内容を保存」のぶんを別に出さないのは、あちらを無効にする
+            // 条件が確定ボタンの条件の部分集合だからである (`busy` /
+            // 確定済み / 回答欄が無い)。保存が無効なのに理由が出ていない状態は
+            // 作れない -- `action_requirements_test.dart` がその包含関係を
+            // 総当たりで確かめる。
+            DisabledActionReason(requirements: confirmProfile),
           ],
-        ),
-      ),
-    );
-  }
-
-  /// One reason the confirm is refused, in the attention tone, rendered
-  /// immediately above the confirm button.
-  Widget _buildConfirmBlocker({required Key key, required String message}) {
-    return Padding(
-      key: key,
-      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: Text(
-        message,
-        style: context.texts.bodyMedium?.copyWith(
-          color: AppStatusTone.attention.color(context),
         ),
       ),
     );
@@ -1366,6 +1350,12 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   Widget _buildDependencyGraphSection() {
     final graph = _dependencyGraph;
     final edges = _editableEdges;
+    // 無効にしている条件と、その場に出す理由を1つの計算から出す (Issue #88)。
+    final confirmGraph = dependencyGraphConfirmRequirements(
+      busy: _busy,
+      hasGraph: graph != null,
+      alreadyConfirmed: _dependencyGraphConfirmed,
+    );
     // Not `graph.layers`: that is a snapshot from the last analyze/confirm
     // response, and goes stale the moment a reviewer adds, edits, or
     // removes an edge below -- showing it here would let a reviewer
@@ -1496,12 +1486,11 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
             const SizedBox(height: AppSpacing.md),
             FilledButton.icon(
               key: const Key('confirm-dependency-graph-button'),
-              onPressed: (_busy || graph == null || _dependencyGraphConfirmed)
-                  ? null
-                  : _confirmDependencyGraph,
+              onPressed: confirmGraph.isEmpty ? _confirmDependencyGraph : null,
               icon: const Icon(Icons.check_circle_outline),
               label: const Text('依存関係グラフを確定'),
             ),
+            DisabledActionReason(requirements: confirmGraph),
           ],
         ),
       ),
@@ -1535,19 +1524,38 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   }
 
   Widget _buildCompleteRegistrationButton() {
-    final canComplete =
-        !_busy && !_isReady && _profileConfirmed && _dependencyGraphConfirmed;
+    // 「登録完了」を押せるかどうかと、押せない理由は同じ1つの計算から出す
+    // (Issue #88)。文言は `core/action_requirements.dart`。
+    final complete = completeRegistrationRequirements(
+      busy: _busy,
+      alreadyComplete: _isReady,
+      profileConfirmed: _profileConfirmed,
+      dependencyGraphConfirmed: _dependencyGraphConfirmed,
+    );
+    final toStartGrading = gradingStartRequirements(
+      criteriaSettled: _criteriaConfirmed || _hasFallbackScoreRegions,
+      profileConfirmed: _profileConfirmed,
+      dependencyGraphConfirmed: _dependencyGraphConfirmed,
+      dependencyGraphStale: _dependencyGraphIsStale,
+    );
+    // 2つの問い -- 「押せるか」と「採点が始まるか」 -- の答えを1か所に畳む。
+    // 別々に出すと、どちらにも出る条件が2行になる。`id` で重ねるので、同じ
+    // 条件が2度並ぶことはない。
+    final shown = <String, ActionRequirement>{
+      for (final requirement in [...complete, ...toStartGrading])
+        requirement.id: requirement,
+    }.values.toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         FilledButton.icon(
           key: const Key('complete-registration-button'),
-          onPressed: canComplete ? _completeRegistration : null,
+          onPressed: complete.isEmpty ? _completeRegistration : null,
           icon: const Icon(Icons.task_alt),
           label: Text(_isReady ? '登録完了済み' : '登録完了'),
         ),
         const SizedBox(height: AppSpacing.sm),
-        _buildRemainingWork(),
+        _buildRemainingWork(shown),
       ],
     );
   }
@@ -1559,26 +1567,14 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// 知るのでは遅い。#104 の取込完了画面と同じ規律で、**できないことを
   /// できるように見せない**。
   ///
-  /// 回答欄については「別 Issue で対応中」とだけ書き、Issue 番号は書かない。
-  /// この実装時点でその Issue はまだ起票されておらず、確かめていない番号を
-  /// 画面に出すことになるため。
-  Widget _buildRemainingWork() {
-    if (_isReady) {
-      return Text(
-        '登録が完了しています。答案を取り込むと採点が始まります。',
-        key: const Key('remaining-work-label'),
-        style: context.texts.bodySmall,
-      );
-    }
-    final remaining = <String>[
-      if (!_criteriaConfirmed && !_hasFallbackScoreRegions) '配点と採点基準が未確定です',
-      if (!_profileConfirmed) '回答欄（テストプロファイル）が未確定です',
-      if (!_dependencyGraphConfirmed)
-        '設問依存関係グラフが未確定です'
-      else if (_dependencyGraphIsStale)
-        '設問が変わったため、設問依存関係グラフを分析し直して確定してください'
-            '（このまま「登録完了」を押すと断られます）',
-    ];
+  /// **「登録完了」ボタンの有効・無効とは別の問い**である (Issue #88)。配点が
+  /// 未確定でもあのボタンは押せる -- それは #88 より前からの仕様で、この
+  /// Issue で締めるものではない。だからここは `gradingStartRequirements`、
+  /// ボタンは `completeRegistrationRequirements` を見る。文言はどちらも
+  /// `ActionRequirement` から来るので、同じ条件をボタンの横とここで違う言い方
+  /// にすることはできない。以前はこの一覧だけを画面に書き下ろしてあり、ボタンの
+  /// 横には何も無かった。
+  Widget _buildRemainingWork(List<ActionRequirement> remaining) {
     if (remaining.isEmpty) {
       return Text(
         '「登録完了」を押すと採点を開始できる状態になります。',
@@ -1586,13 +1582,22 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
         style: context.texts.bodySmall,
       );
     }
+    // 1件のときは見出しも「・」も付けない。1行の上に「次が残っています:」と
+    // 書くのは、同じことを2回言うだけである。登録が済んだ状態 (残り1件 =
+    // 「完了しています」) もここを通る。
+    final single = remaining.length == 1;
     return Column(
       key: const Key('remaining-work-label'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text('採点を始めるには、まだ次が残っています:', style: context.texts.bodySmall),
+        if (!single)
+          Text('採点を始めるには、まだ次が残っています:', style: context.texts.bodySmall),
         for (final item in remaining)
-          Text('・$item', style: context.texts.bodySmall),
+          Text(
+            key: Key('remaining-work-${item.id}'),
+            single ? item.message : '・${item.message}',
+            style: context.texts.bodySmall,
+          ),
         if (_criteriaConfirmed && !_profileConfirmed) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(

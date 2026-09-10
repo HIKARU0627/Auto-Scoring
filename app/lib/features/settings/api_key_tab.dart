@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/action_requirements.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/sidecar_restart.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/core/widgets/disabled_action_reason.dart';
 
 /// 設定画面の「API キー」タブ (Issue #96).
 ///
@@ -315,6 +317,16 @@ class _SlotCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // 無効にしている条件と、無効の理由は同じ1つの計算から出す (Issue #88)。
+    // 文言は `core/action_requirements.dart` にしか無い。
+    final save = apiKeySaveRequirements(
+      busy: busy,
+      credentialStoreAvailable: canSave,
+    );
+    final verify = apiKeyVerifyRequirements(
+      busy: busy,
+      configured: slot.configured,
+    );
     return Card(
       child: Padding(
         padding: AppSpacing.card,
@@ -355,9 +367,10 @@ class _SlotCard extends StatelessWidget {
               decoration: InputDecoration(
                 labelText: slot.configured ? '新しいキーに置き換える' : 'API キー',
                 border: const OutlineInputBorder(),
-                helperText: canSave
-                    ? '保存すると、この欄は空になります。保存したキーは表示できません。'
-                    : 'この PC ではキーを保存できません。',
+                // 保存できない理由はここには書かない。ボタンの横に
+                // `DisabledActionReason` が出すので、2か所に同じことを書くと
+                // 片方だけ古くなる (Issue #88)。
+                helperText: canSave ? '保存すると、この欄は空になります。保存したキーは表示できません。' : null,
               ),
             ),
             const SizedBox(height: AppSpacing.md),
@@ -367,13 +380,13 @@ class _SlotCard extends StatelessWidget {
               children: [
                 FilledButton.icon(
                   key: Key('settings-api-key-save-${slot.id}'),
-                  onPressed: busy || !canSave ? null : onSave,
+                  onPressed: save.isEmpty ? onSave : null,
                   icon: const Icon(Icons.save),
                   label: const Text('保存する'),
                 ),
                 OutlinedButton.icon(
                   key: Key('settings-api-key-verify-${slot.id}'),
-                  onPressed: busy || !slot.configured ? null : onVerify,
+                  onPressed: verify.isEmpty ? onVerify : null,
                   icon: const Icon(Icons.network_check),
                   label: const Text('疎通を確認する'),
                 ),
@@ -387,6 +400,11 @@ class _SlotCard extends StatelessWidget {
                   ),
               ],
             ),
+            // 2つ並べるのは、押せない理由が別々だからである -- 保存は資格情報
+            // ストア、疎通はキーの有無。どちらか片方だけ無効な状態が普通に
+            // 起きるので、1本にまとめると無効でないボタンの理由まで出る。
+            DisabledActionReason(requirements: save),
+            DisabledActionReason(requirements: verify),
             if (verification != null) ...[
               const SizedBox(height: AppSpacing.md),
               _VerificationResult(slotId: slot.id, outcome: verification!),
