@@ -113,7 +113,12 @@ def test_end_to_end_aggregate_from_fixtures() -> None:
     assert messy.samples == 2
     assert messy.mean_character_error_rate == pytest.approx(0.5625)
     assert messy.failure_rate == pytest.approx(0.5)
-    assert messy.low_confidence_rate == pytest.approx(0.5)
+    # A rate over *tokens*, not over samples (Issue #158): messy-01 has one
+    # unreadable span out of two and messy-02 has no tokens at all, so the
+    # bucket reads 0.25. The old "share of samples with at least one low
+    # span" said 0.5 for the same data -- a number that rises with how much
+    # each sample contains rather than with how badly it was read.
+    assert messy.mean_unreadable_token_rate == pytest.approx(0.25)
     assert messy.mean_bounding_box_center_error == pytest.approx(0.05)
     assert messy.mean_bounding_box_iou == pytest.approx(0.5)
 
