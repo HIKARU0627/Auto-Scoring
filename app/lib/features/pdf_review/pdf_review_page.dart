@@ -55,10 +55,19 @@ class PdfReviewPage extends ConsumerStatefulWidget {
     super.key,
     required this.testId,
     required this.submissionId,
+    this.initialQuestionId,
   });
 
   final String testId;
   final String submissionId;
+
+  /// 最初に開く設問。`null` なら先頭から (これまでどおり)。
+  ///
+  /// 答案確定画面 (Issue #145) の「この設問を直す」から入るときに渡る。問4を
+  /// 直しに来た人を問1に降ろすと、**どれを直しに来たかを人の側に覚えさせる**
+  /// ことになる。id がこの答案の設問に無ければ黙って先頭を開く -- 行き先を
+  /// 失うより、開いたほうが作業は続く (`ReviewQueue.nextAfter` と同じ判断)。
+  final String? initialQuestionId;
 
   @override
   ConsumerState<PdfReviewPage> createState() => _PdfReviewPageState();
@@ -980,12 +989,18 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
       final questions = await _dependencies.listQuestions(widget.testId);
       final pdfBytes = await _dependencies.getSourcePdf(widget.submissionId);
       final sorted = sortQuestionsForReview(questions);
+      // 渡された設問が無ければ先頭。`indexWhere` の -1 をそのまま使わないのは、
+      // 「見つからなかった」を「最後の設問」と読み替えてしまうからである。
+      final requested = widget.initialQuestionId;
+      final initialIndex = requested == null
+          ? 0
+          : sorted.indexWhere((q) => q.id == requested);
       if (!mounted) return;
       _setStateIfMounted(() {
         _submission = submission;
         _questions = sorted;
         _pdfBytes = pdfBytes;
-        _questionIndex = 0;
+        _questionIndex = initialIndex < 0 ? 0 : initialIndex;
       });
       // Before the jobs, so that `_refreshJobs`' own staleness check has
       // something to compare against and does not fetch the same graph a

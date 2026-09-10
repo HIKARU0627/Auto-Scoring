@@ -45,12 +45,26 @@ abstract final class AppRoutes {
       '/tests/${Uri.encodeComponent(testId)}/submissions';
 
   /// 添削レビュー画面 for one submission of one test.
+  ///
+  /// [questionId] を渡すと、その設問を開いた状態で始まる。答案確定画面の
+  /// 「この設問を直す」から入るときに要る -- 問4を直しに来た人を問1に降ろすと、
+  /// **どれを直しに来たかを人の側に覚えさせる**ことになる。クエリなのは、
+  /// 「どの設問から見始めるか」は画面の初期状態であって、この画面が指している
+  /// もの (答案1件) ではないからである。
   static const String pdfReviewPattern =
       '/tests/:testId/submissions/:submissionId/review';
   static String pdfReview({
     required String testId,
     required String submissionId,
-  }) =>
-      '/tests/${Uri.encodeComponent(testId)}'
-      '/submissions/${Uri.encodeComponent(submissionId)}/review';
+    String? questionId,
+  }) {
+    final path =
+        '/tests/${Uri.encodeComponent(testId)}'
+        '/submissions/${Uri.encodeComponent(submissionId)}/review';
+    if (questionId == null) return path;
+    return '$path?$pdfReviewQuestionParam=${Uri.encodeComponent(questionId)}';
+  }
+
+  /// [pdfReview] の「最初に開く設問」を運ぶクエリパラメータ名。
+  static const String pdfReviewQuestionParam = 'question';
 }

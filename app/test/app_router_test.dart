@@ -44,6 +44,23 @@ void main() {
     });
   });
 
+  testWidgets('添削レビューは、開く設問を指定して呼べる (Issue #145)', (tester) async {
+    // 答案確定画面の「この設問を直す」から入るときに要る。問4を直しに来た人を
+    // 問1に降ろすと、どれを直しに来たかを人の側に覚えさせることになる。
+    await pumpAppAt(
+      tester,
+      AppRoutes.pdfReview(
+        testId: 'test-1',
+        submissionId: 'sub-1',
+        questionId: 'q-4',
+      ),
+    );
+    await tester.pump();
+
+    final page = tester.widget<PdfReviewPage>(find.byType(PdfReviewPage));
+    expect(page.initialQuestionId, 'q-4');
+  });
+
   testWidgets('an id with URL-significant characters still resolves', (
     tester,
   ) async {

@@ -75,6 +75,8 @@ GoRouter createAppRouter({String initialLocation = AppRoutes.home}) {
             key: ValueKey('pdf-review/$testId/$submissionId'),
             testId: testId,
             submissionId: submissionId,
+            initialQuestionId:
+                state.uri.queryParameters[AppRoutes.pdfReviewQuestionParam],
           );
         },
       ),
