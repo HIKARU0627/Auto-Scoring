@@ -701,21 +701,30 @@ class TestReadingOrderConflicts:
         assert reading_order_conflicts(regions, numbers) == ()
 
     def test_one_answer_area_on_a_page_has_no_order_to_contradict(self) -> None:
+        """True by construction rather than by a guard -- there is no pair to
+        compare. Kept as a statement of the behaviour, not as a claim that
+        some branch enforces it."""
         regions = self._regions(("問1", 0.016, 0.244, 0.962, 0.463))
 
         assert reading_order_conflicts(regions, ("問1", "問2")) == ()
 
     def test_pages_are_checked_apart(self) -> None:
         """A question order spanning two pages says nothing about where on
-        either page the boxes sit."""
-        regions = self._regions(("問二", 0.1, 0.6, 0.9, 0.8))
+        either page the boxes sit.
+
+        Laid out so that pooling the pages would *invent* a conflict: 問二 is
+        near the top of page 2 and 問一 near the bottom of page 1, which read
+        as one page is the wrong way round and read as two pages is nothing
+        at all.
+        """
+        regions = self._regions(("問一", 0.1, 0.6, 0.9, 0.8))
         regions.append(
             Region(
                 region_id="answer-area-1",
                 kind=RegionKind.ANSWER_AREA,
                 page_index=1,
                 bbox=NormalizedBBox(x0=0.1, y0=0.2, x1=0.9, y1=0.4),
-                label="問一",
+                label="問二",
             )
         )
 

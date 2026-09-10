@@ -619,8 +619,9 @@ def reading_order_conflicts(
     conflicts: list[tuple[str, str]] = []
     for page in sorted(by_page):
         on_page = by_page[page]
-        if len(on_page) < 2:
-            continue
+        # No explicit "fewer than two" guard: `combinations` over a single
+        # region is already empty, and a guard no test can distinguish from
+        # its absence is a line that only looks like a decision.
         vertical = _reads_vertically(on_page)
         placed = sorted(on_page, key=lambda region: _reading_key(region, vertical=vertical))
         position = {region.label: index for index, region in enumerate(placed)}
