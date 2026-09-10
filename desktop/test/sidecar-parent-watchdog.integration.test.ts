@@ -71,7 +71,11 @@ describe("Linux CI Parent Process Watchdog Integration (Acceptance 4, UG-01)", (
     for (const pid of spawnedPids) {
       if (isProcessAlive(pid)) {
         try {
-          process.kill(pid, "SIGKILL");
+          if (process.platform === "win32") {
+            execSync(`taskkill /pid ${pid} /T /F`, { stdio: "ignore" });
+          } else {
+            process.kill(pid, "SIGKILL");
+          }
         } catch {}
       }
     }
@@ -192,7 +196,17 @@ describe("Linux CI Parent Process Watchdog Integration (Acceptance 4, UG-01)", (
     expect(isProcessAlive(unwatchedChildPid)).toBe(true);
 
     // Cleanup child
-    process.kill(unwatchedChildPid, "SIGKILL");
+    if (process.platform === "win32") {
+      try {
+        execSync(`taskkill /pid ${unwatchedChildPid} /T /F`, {
+          stdio: "ignore",
+        });
+      } catch {
+        process.kill(unwatchedChildPid, "SIGKILL");
+      }
+    } else {
+      process.kill(unwatchedChildPid, "SIGKILL");
+    }
     try {
       fs.rmSync(handshakeDir, { recursive: true, force: true });
     } catch {}

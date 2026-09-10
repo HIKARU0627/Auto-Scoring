@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -100,7 +100,17 @@ export class NodeSidecarPlatform implements SidecarPlatform {
             exitCode: exitPromise,
             kill: (signal = "SIGTERM") => {
               try {
-                child.kill(signal);
+                if (process.platform === "win32" && child.pid) {
+                  try {
+                    execSync(`taskkill /pid ${child.pid} /T /F`, {
+                      stdio: "ignore",
+                    });
+                  } catch {
+                    child.kill(signal);
+                  }
+                } else {
+                  child.kill(signal);
+                }
               } catch {
                 // Process may already be dead
               }

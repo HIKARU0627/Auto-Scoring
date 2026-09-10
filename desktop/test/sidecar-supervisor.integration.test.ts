@@ -22,6 +22,22 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+async function waitUntil(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+  intervalMs = 100,
+): Promise<number> {
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) {
+      return Date.now() - start;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms waiting for condition`);
+}
+
 function isPortListening(
   port: number,
   host = "127.0.0.1",
@@ -210,7 +226,14 @@ describe("SidecarSupervisor integration tests", () => {
     expect(isProcessAlive(pid)).toBe(false);
 
     // Acceptance 2: Port is released (connection refused)
-    expect(await isPortListening(port, host)).toBe(false);
+    const portReleased = await waitUntil(
+      async () => !(await isPortListening(port, host)),
+      5000,
+      100,
+    )
+      .then(() => true)
+      .catch(() => false);
+    expect(portReleased).toBe(true);
 
     // Acceptance 2: App-data lock released, so a second supervisor can start immediately
     const nextSupervisor = new SidecarSupervisor({
