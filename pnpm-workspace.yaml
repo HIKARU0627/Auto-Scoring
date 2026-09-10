@@ -1,0 +1,11 @@
+# `desktop/` (Electron, Issue #217) is a package of its own, so its dependency
+# tree stays out of the root's and `pnpm --filter` can install one side without
+# the other -- the app/backend CI jobs need Prettier and the OpenAPI generator,
+# not a 100 MB Electron binary.
+#
+# `desktop-poc/` is deliberately not listed. Those are throwaway probes with
+# their own npm lockfiles (docs/poc-6-pdf-coordinates.md, poc-7-sidecar-lifecycle.md);
+# pulling them into the workspace would put probe dependencies into the
+# lockfile that ships the product.
+packages:
+  - desktop
