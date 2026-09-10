@@ -55,6 +55,7 @@ from auto_scoring.api.dependency_graph_router import build_dependency_graph_rout
 from auto_scoring.api.export_router import build_export_router
 from auto_scoring.api.intake_router import ClassifierFactory, build_intake_router
 from auto_scoring.api.jobs_router import build_jobs_router
+from auto_scoring.api.page_image_router import build_page_image_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
 from auto_scoring.api.secret_redaction import (
@@ -985,6 +986,9 @@ def create_app(
             secret_registry=secret_registry or SecretRegistry(),
             verifier=credential_verifier,
         )
+    )
+    protected.include_router(
+        build_page_image_router(session_factory, store, engine, pdfium_lock=pdfium_lock)
     )
     protected.include_router(build_recognitions_router(session_factory, store))
     protected.include_router(build_review_router(session_factory, store, queue_service))
