@@ -37,6 +37,10 @@ from auto_scoring.adapters.image.ink import ink_coverage
 from auto_scoring.adapters.image.opencv_preprocessor import crop_normalized_rect
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.answer_area_detection import (
+    conflicted_question_numbers,
+    questions_reading_order_conflicts,
+)
 from auto_scoring.domain.image_preprocess import ImagePreprocessor
 from auto_scoring.domain.models import (
     AnswerImage,
@@ -57,6 +61,7 @@ from auto_scoring.domain.pdf_intake import (
 )
 from auto_scoring.domain.submission_intake import (
     NEARLY_BLANK_CROP_REASON,
+    READING_ORDER_CONFLICT_REASON,
     PageCoverage,
     ReintakeDecision,
     decide_reintake,
@@ -307,6 +312,10 @@ def _write_submission(
     ) as staged:
         # One page's raw raster lives at a time -- not the whole PDF's worth --
         # so a large page count doesn't multiply the sidecar's memory use.
+        question_numbers = tuple(question.number for question in questions)
+        reading_order_conflict_numbers = conflicted_question_numbers(
+            questions_reading_order_conflicts(questions, question_numbers)
+        )
         answer_images: list[AnswerImage] = []
         for page in range(1, page_count + 1):
             # A page can have a page tree and geometry pypdf/page_geometry
@@ -330,6 +339,7 @@ def _write_submission(
                         staged=staged,
                         id_factory=id_factory,
                         now=now,
+                        reading_order_conflict_numbers=reading_order_conflict_numbers,
                     )
                 )
 
@@ -429,6 +439,7 @@ _SUBMISSION_REASON_BY_IMAGE_REASON = {
     "no_answer_area_defined": "answer_area_undefined",
     "answer_area_zero_area": "answer_area_undefined",
     NEARLY_BLANK_CROP_REASON: NEARLY_BLANK_CROP_REASON,
+    READING_ORDER_CONFLICT_REASON: READING_ORDER_CONFLICT_REASON,
 }
 
 
@@ -454,6 +465,7 @@ def _build_answer_image(
     staged: StagedFiles,
     id_factory: Callable[[], str],
     now: datetime,
+    reading_order_conflict_numbers: frozenset[str] = frozenset(),
 ) -> AnswerImage:
     """Crop one question's answer area from its (already-rendered) page raster.
 
@@ -487,7 +499,10 @@ def _build_answer_image(
         # wrong place (Issue #122). The other branches have no crop to show
         # and fall back to the page.
         staged.add(image_path, cropped)
-        if is_nearly_blank_crop(ink_coverage(cropped)):
+        if question.number in reading_order_conflict_numbers:
+            status = AnswerImageStatus.NEEDS_REVIEW
+            reason = READING_ORDER_CONFLICT_REASON
+        elif is_nearly_blank_crop(ink_coverage(cropped)):
             status = AnswerImageStatus.NEEDS_REVIEW
             reason = NEARLY_BLANK_CROP_REASON
         else:

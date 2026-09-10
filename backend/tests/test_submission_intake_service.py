@@ -45,6 +45,7 @@ from auto_scoring.domain.pdf_intake import (
     PdfPageTooLargeError,
     StagedOutputTooLargeError,
 )
+from auto_scoring.domain.submission_intake import READING_ORDER_CONFLICT_REASON
 from tests.support import at, make_job, make_question, make_test, written_on_pdf_bytes
 
 _ENGINE = PdfiumPypdfEngine()
@@ -349,6 +350,150 @@ def test_a_crop_that_came_out_blank_is_stopped_before_it_is_graded(
         store.submission_question_image_path(result.submission.id, "q-1").relative_to(store.root)
     ).replace("\\", "/")
     assert (store.root / image.image_path).exists()
+
+
+def _swapped_vertical_column_questions() -> list[Question]:
+    """Measured swap from ``test_answer_area_detection`` -- 問一 and 問二
+    attributed to each other's columns on a vertical right-to-left sheet.
+
+    問三 lives on page 2 so it is outside the per-page check and stays a
+    control for "non-conflicted questions still grade".
+    """
+    return [
+        make_question(
+            id="q-1",
+            number="問一",
+            page=1,
+            answer_area=NormalizedRect(x=0.639, y=0.270, width=0.064, height=0.450),
+        ),
+        make_question(
+            id="q-2",
+            number="問二",
+            page=1,
+            answer_area=NormalizedRect(x=0.798, y=0.270, width=0.045, height=0.401),
+        ),
+        make_question(
+            id="q-3",
+            number="問三",
+            page=2,
+            answer_area=NormalizedRect(x=0.100, y=0.200, width=0.080, height=0.400),
+        ),
+    ]
+
+
+def _corrected_vertical_column_questions() -> list[Question]:
+    """Same columns, labels swapped back to match reading order."""
+    return [
+        make_question(
+            id="q-1",
+            number="問一",
+            page=1,
+            answer_area=NormalizedRect(x=0.798, y=0.270, width=0.045, height=0.401),
+        ),
+        make_question(
+            id="q-2",
+            number="問二",
+            page=1,
+            answer_area=NormalizedRect(x=0.639, y=0.270, width=0.064, height=0.450),
+        ),
+        make_question(
+            id="q-3",
+            number="問三",
+            page=2,
+            answer_area=NormalizedRect(x=0.100, y=0.200, width=0.080, height=0.400),
+        ),
+    ]
+
+
+def test_reading_order_conflict_stops_only_the_swapped_questions_from_grading(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """Issue #213: detection's advisory list is not consulted at confirm, so
+    intake must re-derive the suspicion and refuse to trust the crops."""
+    _seed_test_with_questions(make_uow, questions=_swapped_vertical_column_questions())
+    data = _pdf_bytes(pages=2)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result.submission.state is SubmissionState.NEEDS_REVIEW
+    by_id = {image.question_id: image for image in result.answer_images}
+    assert by_id["q-1"].status is AnswerImageStatus.NEEDS_REVIEW
+    assert by_id["q-1"].reason == READING_ORDER_CONFLICT_REASON
+    assert by_id["q-2"].status is AnswerImageStatus.NEEDS_REVIEW
+    assert by_id["q-2"].reason == READING_ORDER_CONFLICT_REASON
+    assert by_id["q-3"].status is AnswerImageStatus.OK
+    assert result.submission.review_reason == "reading_order_conflict:q-1,q-2"
+
+
+def test_reading_order_conflict_keeps_the_crop_for_the_reviewer(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """Same contract as Issue #122's nearly-blank crop: show what would have
+    been graded, but do not send it."""
+    _seed_test_with_questions(
+        make_uow,
+        questions=_swapped_vertical_column_questions()[:2],
+    )
+    data = _pdf_bytes(pages=1)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    image = result.answer_images[0]
+    assert image.status is AnswerImageStatus.NEEDS_REVIEW
+    assert image.reason == READING_ORDER_CONFLICT_REASON
+    assert image.image_path == str(
+        store.submission_question_image_path(result.submission.id, "q-1").relative_to(store.root)
+    ).replace("\\", "/")
+    assert (store.root / image.image_path).exists()
+
+
+def test_corrected_reading_order_proceeds_to_grading(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """Once the profile is fixed, the flag must not stick around forever."""
+    _seed_test_with_questions(make_uow, questions=_corrected_vertical_column_questions())
+    data = _pdf_bytes(pages=2)
+
+    with make_uow() as uow:
+        result = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="a.pdf",
+            declared_mime=None,
+            data=data,
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result.submission.state is SubmissionState.AI_PROCESSED
+    assert all(image.status is AnswerImageStatus.OK for image in result.answer_images)
 
 
 def test_a_blank_crop_and_an_undefined_area_are_reported_as_different_reasons(

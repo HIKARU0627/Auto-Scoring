@@ -120,7 +120,7 @@ unprocessed → ai_processing → ai_processed → (問題なければそのま�
 取込パイプラインは問題の有無に関わらず必ず `ai_processed` を経由してから
 `needs_review` へ遷移する。`review_reason` に理由の文字列を記録する
 （`missing_pages:2`、`no_questions_registered`、`answer_area_undefined:<question-id,...>`、
-`crop_nearly_blank:<question-id,...>` 等）。
+`crop_nearly_blank:<question-id,...>`、`reading_order_conflict:<question-id,...>` 等）。
 
 **設問ごとの理由は、理由ごとに分けて書く**（Issue #122）。形は
 `<reason>:<value>` を `;` で連ねたもので、値は設問 ID のカンマ区切り
@@ -130,6 +130,15 @@ unprocessed → ai_processing → ai_processed → (問題なければそのま�
 後者は答案そのもの —— ため、ラベルが嘘になる。app 側は
 `core/submission_review_reason.dart` がこの形を読む（知らない理由は
 **何も表示しない**。当てずっぽうで別の設問に警告を出すより良い）。
+
+### 読み順の入れ違いが疑われる切り出しは、採点に送らない（Issue #213）
+
+`domain.answer_area_detection.questions_reading_order_conflicts` で、確定済み
+`Question.answer_area` から Issue #171 と同じ検査を取込時に再実行する。
+衝突した設問の切り出しは `AnswerImageStatus.NEEDS_REVIEW` と理由
+`reading_order_conflict` を立てる。`/profile/confirm` は止めない（#171 の決定
+どおり）が、**信用できない切り出しはプロバイダへ送らない**（#122 と同じ契約）。
+隣の設問のそれらしい解答は AI から見て不自然ではないため、確信度でも拾えない。
 
 ### 切り出しがほぼ余白なら、採点に送らない（Issue #122）
 
@@ -365,15 +374,15 @@ simplified-design-specification.md §7.1 の「傾き補正・回転補正・拡
 
 設問ごとに切り出した回答欄画像 1 件を表す（`submission_id` + `question_id` で一意）。
 
-| フィールド      | 型                     | 説明                                                                                                      |
-| --------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
-| `id`            | str                    | 主キー                                                                                                    |
-| `submission_id` | str (FK)               |                                                                                                           |
-| `question_id`   | str (FK)               |                                                                                                           |
-| `page`          | int                    | 1始まりページ番号（`Question.page` と一致）                                                               |
-| `image_path`    | str                    | `app-data/` からの相対パス                                                                                |
-| `status`        | `ok` \| `needs_review` | 切り出し成功可否（§6.2 の「回答欄検出失敗」に対応）                                                       |
-| `reason`        | str?                   | `needs_review` のときのみ必須（例: `no_answer_area_defined`、`crop_nearly_blank`、`crop_not_the_answer`） |
+| フィールド      | 型                     | 説明                                                                                                                                |
+| --------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `id`            | str                    | 主キー                                                                                                                              |
+| `submission_id` | str (FK)               |                                                                                                                                     |
+| `question_id`   | str (FK)               |                                                                                                                                     |
+| `page`          | int                    | 1始まりページ番号（`Question.page` と一致）                                                                                         |
+| `image_path`    | str                    | `app-data/` からの相対パス                                                                                                          |
+| `status`        | `ok` \| `needs_review` | 切り出し成功可否（§6.2 の「回答欄検出失敗」に対応）                                                                                 |
+| `reason`        | str?                   | `needs_review` のときのみ必須（例: `no_answer_area_defined`、`crop_nearly_blank`、`reading_order_conflict`、`crop_not_the_answer`） |
 
 `Question.answer_area` が未設定（テスト登録がまだ回答欄を確定していない）場合は、
 `status=needs_review, reason="no_answer_area_defined"` とし、`image_path` は

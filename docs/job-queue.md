@@ -183,7 +183,7 @@ Submission・同じQuestionのJobを二重に作ろうとすると`IntegrityErro
 `ProcessingResult.skipped_reason`を`last_error`に書く。`error_code`は`NULL`のまま
 （retry対象ではない）。値は`AnswerImage.reason`の固定語彙
 （`no_answer_area_defined` / `answer_area_zero_area` / `crop_nearly_blank` /
-`crop_not_the_answer`）で、自由文言ではなく、答案から読んだものは一切入らない。
+`reading_order_conflict` / `crop_not_the_answer`）で、自由文言ではなく、答案から読んだものは一切入らない。
 `app/lib/core/grading_failure_reason.dart`がすでに`last_error`から同じ語彙を
 読んでいる。
 

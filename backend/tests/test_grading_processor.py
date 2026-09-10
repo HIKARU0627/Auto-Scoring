@@ -52,7 +52,10 @@ from auto_scoring.domain.models import (
     find_answer_image,
 )
 from auto_scoring.domain.ocr import BoundingBox, ConfidenceBand, OcrResult, OcrToken
-from auto_scoring.domain.submission_intake import NOT_THE_ANSWER_CROP_REASON
+from auto_scoring.domain.submission_intake import (
+    NOT_THE_ANSWER_CROP_REASON,
+    READING_ORDER_CONFLICT_REASON,
+)
 from auto_scoring.domain.test_material import TestMaterial
 from auto_scoring.jobs.grading_processor import (
     GradingJobProcessor,
@@ -540,6 +543,38 @@ async def test_needs_review_answer_image_skips_grading_entirely(
 
     assert result.outcome is ProcessingOutcome.SUCCEEDED
     assert result.usable is False
+    assert ai_provider.calls == []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+
+
+async def test_reading_order_conflict_skips_grading_without_calling_the_provider(
+    session_factory: sessionmaker[Session],
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #213: intake's suspicion must reach grading as NEEDS_REVIEW."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(model_answer="模範解答"))
+        uow.rubrics.add(make_rubric())
+        uow.submissions.add(make_submission())
+        uow.answer_images.add(
+            make_answer_image(
+                status=AnswerImageStatus.NEEDS_REVIEW,
+                reason=READING_ORDER_CONFLICT_REASON,
+            )
+        )
+        uow.commit()
+    _confirm_graph(session_factory, question_ids=["q-1"])
+    ai_provider.script(_response())
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is False
+    assert result.skipped_reason == READING_ORDER_CONFLICT_REASON
     assert ai_provider.calls == []
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.grades.history("sub-1", "q-1") == []
