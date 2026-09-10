@@ -62,3 +62,40 @@ export function expectedReviewVersion(
 ): number {
   return reviews.length;
 }
+
+export function effectiveReview(
+  reviews: readonly ReviewResponse[],
+): ReviewResponse | null {
+  return effectiveLatestReview(reviews);
+}
+
+export function isQuestionConfirmed(
+  reviews: readonly ReviewResponse[],
+): boolean {
+  const action = effectiveLatestReview(reviews)?.action;
+  return action === "approved" || action === "modified";
+}
+
+export function latestAiGrade(
+  grades: readonly GradeResultResponse[],
+): GradeResultResponse | null {
+  for (let index = grades.length - 1; index >= 0; index -= 1) {
+    const grade = grades[index];
+    if (grade?.source === "ai") {
+      return grade;
+    }
+  }
+  return null;
+}
+
+export function latestOcrRecognition(
+  recognitions: readonly RecognitionResponse[],
+): RecognitionResponse | null {
+  for (let index = recognitions.length - 1; index >= 0; index -= 1) {
+    const recognition = recognitions[index];
+    if (recognition?.stage === "ocr") {
+      return recognition;
+    }
+  }
+  return null;
+}
