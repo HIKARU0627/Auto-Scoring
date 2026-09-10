@@ -157,9 +157,17 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
             widget.questionNumbers.contains(target))) {
       return target;
     }
-    return widget.undetectedQuestionNumbers.isNotEmpty
-        ? widget.undetectedQuestionNumbers.first
-        : unassignedQuestionLabel;
+    // Falls through to the absent group when nothing is undetected
+    // (Issue #167): on one measured subject *every* question with no box is
+    // in that group, and leaving the target on 「割り当てなし」 there would
+    // make the way out one click longer than the screen says it is.
+    if (widget.undetectedQuestionNumbers.isNotEmpty) {
+      return widget.undetectedQuestionNumbers.first;
+    }
+    if (widget.absentQuestionNumbers.isNotEmpty) {
+      return widget.absentQuestionNumbers.first;
+    }
+    return unassignedQuestionLabel;
   }
 
   void _emit(List<RegionModel> next) => widget.onRegionsChanged(next);
@@ -346,9 +354,9 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
             // on the page, this run did not locate them.
             message:
                 '回答欄が見つからなかった設問が${undetected.length}件あります。'
-                '答案には回答欄があるはずなので、下の設問名を押して枠を引いてください。'
                 'このまま確定もできますが、その設問は答案のページ全体を採点に送り、'
                 '要確認として人の目に回ります。',
+            action: '答案には回答欄があるはずです。設問名を押して枠を引いてください。',
             numbers: undetected,
           ),
         if (undetected.isNotEmpty && absent.isNotEmpty)
@@ -358,15 +366,32 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
             context,
             keyPrefix: 'answer-area-absent',
             icon: Icons.description_outlined,
-            // The opposite instruction from the group above, and the reason
-            // the two are not one list: nothing is wrong with the detection
-            // here, and drawing a box would invent an answer space the paper
-            // does not have.
+            // Says what is known, not what was concluded (Issue #167).
+            //
+            // This used to open with 「回答欄が無いと判定された」. Measured over
+            // the real material the claim is right far more often than not,
+            // but not always -- one subject's smallest answer box has an
+            // outline the scan breaks (its top rule is 61% inked), so it
+            // never becomes a candidate and the model can only report the
+            // question as absent. A reviewer told that as a fact goes to the
+            // 採点基準, finds nothing, and has lost the time.
+            //
+            // The likelihood is carried by the *order* of the two actions,
+            // never by a number. A measured ratio printed here would be a
+            // property of one set of teaching material at one moment; on the
+            // screen it would go stale with nobody noticing. It lives in
+            // docs/answer-area-detection.md with the date it was taken.
             message:
-                'この答案に回答欄が無いと判定された設問が${absent.length}件あります。'
-                '採点基準はこの答案より広い範囲を含んでいることがあります。'
-                '登録した答案か採点基準のどちらかを見直してください。'
-                '答案に回答欄があるのに挙がっている場合は、設問名を押して枠を引けます。',
+                'この答案では回答欄を見つけられなかった設問が${absent.length}件あります。'
+                '登録した答案が課題の一部のページで、採点基準がそれより広い範囲を'
+                '含んでいることがあります。まず答案と採点基準を確かめてください。',
+            // Not a trailing sentence (Issue #167). Softening the opening
+            // promotes this from a footnote to the other real possibility,
+            // and it is the only path by which "a person fixes what
+            // detection could not, but only then" actually works. A question
+            // wrongly listed here is not a dead end as long as the way out
+            // is visible.
+            action: '答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。',
             numbers: absent,
           ),
       ],
@@ -378,6 +403,7 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
     required String keyPrefix,
     required IconData icon,
     required String message,
+    required String action,
     required List<String> numbers,
   }) {
     return Column(
@@ -396,6 +422,17 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
+        // Immediately above the chips it describes, and in its own emphasis
+        // rather than inside the paragraph: this is the sentence the
+        // reviewer has to act on, and the chips below are the action.
+        Text(
+          action,
+          key: Key('$keyPrefix-action'),
+          style: context.texts.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
         Wrap(
           spacing: AppSpacing.sm,
           runSpacing: AppSpacing.xs,
