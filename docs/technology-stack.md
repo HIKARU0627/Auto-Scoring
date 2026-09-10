@@ -387,18 +387,25 @@ MSIX を採用しない判断の根拠は同 §2。
 └─ package.json             # pnpm run <script> を全体のタスク入口として使う
 ```
 
-### 5.0.1 移行後（Electron、Phase 2 以降で追加予定）
+### 5.0.1 移行後（Electron）
+
+骨格は Issue [#217](https://github.com/HIKARU0627/Auto-Scoring/issues/217)（Phase 2-1）で作成済み。
+`features/` `core/` `api/` の中身は後続 Issue（デザイントークン → TS クライアント生成 → ホーム画面）。
 
 ```text
 /
 ├─ desktop/                 # Electron アプリ（cut-over 後に app/ と置き換え）
 │   ├─ src/main/            # サイドカー起動・監視（PoC 7 / frontend-migration.md）
-│   ├─ src/preload/
+│   ├─ src/preload/         # contextBridge。main ↔ renderer の唯一の境界
+│   ├─ src/shared/          # 境界の型（bridge.ts）。両側が読むので何も import しない
 │   ├─ src/renderer/        # React UI（features 相当）
-│   │   ├─ features/
-│   │   ├─ core/            # トークン・ルーティング・共有ウィジェット
-│   │   └─ api/             # OpenAPI 生成 TS クライアント
-│   └─ package.json
+│   │   ├─ features/        # 画面（#217 の時点では未作成）
+│   │   ├─ core/            # トークン・ルーティング・共有ウィジェット（同上）
+│   │   └─ api/             # OpenAPI 生成 TS クライアント（同上）
+│   ├─ test/                # Vitest（RTL は test/renderer/、依存方向は architecture.test.ts）
+│   ├─ e2e/                 # Playwright (Electron)
+│   ├─ out/                 # ビルド成果（tsc → out/main, out/preload / vite → out/renderer。git 管理外）
+│   └─ package.json         # ワークスペースの別パッケージ（ルートの pnpm-workspace.yaml）
 ├─ app/                     # Flutter（cut-over まで残す。完了後削除）
 ├─ backend/                 # 変更なし
 └─ docs/
@@ -409,8 +416,15 @@ MSIX を採用しない判断の根拠は同 §2。
 ```text
 現行 app:     features → core → api     （api は生成物。features はここだけ経由で通信）
 移行後 desktop: renderer/features → core → api/generated （同じ原則を TS で維持）
+              renderer ↛ electron / Node 組み込み、main ↛ react、shared → 何も import しない
 backend:      api → domain ← adapters    （domain はフレームワーク・DB・外部 API を import しない）
 ```
+
+`desktop/` の依存方向は `desktop/test/architecture.test.ts` が機械的に落とす
+（`app/test/architecture_test.dart`、`backend/tests/test_architecture.py` と同じ役割）。
+同じテストが `contextIsolation: true` / `nodeIntegration: false` / `sandbox: true` の
+3 つが `src/main` に残っていることも確認する ―― この 3 つが崩れると
+「renderer に Node が無い」という前提そのものが消え、import 規則だけが空虚に通るため。
 
 不変条件の移植先一覧: [`frontend-invariants.md`](./frontend-invariants.md)。
 
@@ -422,7 +436,7 @@ backend:      api → domain ← adapters    （domain はフレームワーク�
 | ----------- | ------------------------------------------------------------------------- |
 | `lint`      | `dart format --set-exit-if-changed` + `flutter analyze` かつ `ruff check` |
 | `typecheck` | `dart analyze`（analyzer） かつ `mypy backend/src`                        |
-| `test`      | `flutter test` かつ `uv run pytest`                                       |
+| `test`      | `flutter test` かつ `uv run pytest` かつ `vitest run`                     |
 | `build`     | `flutter build windows --release` かつ サイドカーの PyInstaller ビルド    |
 
 `format` は現状どおり Prettier（テンプレート基盤）。Node ツールチェーンは維持し、
