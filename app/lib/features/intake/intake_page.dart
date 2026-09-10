@@ -1565,6 +1565,23 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     );
   }
 
+  /// How many groups this batch's import failed on, entirely or in part.
+  ///
+  /// Counted from `_ImportOutcome.error`, the same field the per-group card
+  /// already uses to decide whether to show a failure line -- not a second,
+  /// independent judgement of "did this fail" that could disagree with it.
+  int get _failedOutcomeCount =>
+      _outcomes.where((outcome) => outcome.error != null).length;
+
+  /// The completion heading, derived from what actually happened.
+  ///
+  /// A batch with any failed group -- whether that group failed outright or
+  /// only partly -- must not read the same as one where nothing did. How many
+  /// groups and how badly is the summary line's job, right below; this
+  /// heading only has to stop asserting success it did not check (see #111).
+  String get _doneHeadingText =>
+      _failedOutcomeCount == 0 ? '取込が完了しました' : '取込に失敗した項目があります';
+
   /// The completion step.
   ///
   /// Says what happened, what is still needed, and offers the next action
@@ -1572,6 +1589,7 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   /// with no idea where to go, and one that said "registered" alone would read
   /// as "ready to grade", which it is not.
   Widget _buildDoneStep() {
+    final failedCount = _failedOutcomeCount;
     return ListView(
       children: [
         Card(
@@ -1581,15 +1599,28 @@ class _IntakePageState extends ConsumerState<IntakePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '取込が完了しました',
+                  _doneHeadingText,
+                  key: const Key('intake-done-heading'),
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
+                if (failedCount > 0) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    key: const Key('intake-failure-summary'),
+                    '$failedCount件のグループで取り込みに失敗しました'
+                    '（全${_outcomes.length}件中）。'
+                    '内容は下の一覧で確認できます。',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: AppSpacing.sm),
                 const Text(
                   key: Key('intake-next-step-notice'),
-                  '採点にはこのあと配点と採点基準が必要ですが、'
-                  'それを入力する画面はまだありません（Issue #103 で作成中）。'
-                  'そのため、取り込んだ答案はまだ採点できません。',
+                  '採点にはこのあと配点と採点基準の確定が必要です。'
+                  '下のテストごとの「テスト設定を開く」から入力・確定してください。'
+                  'それまでは、取り込んだ答案はまだ採点できません。',
                 ),
               ],
             ),
@@ -1658,15 +1689,23 @@ class _IntakePageState extends ConsumerState<IntakePage> {
                   Row(
                     children: [
                       if (outcome.testId != null) ...[
-                        // No link to テスト設定画面. That screen's manual
-                        // region editor is disabled until a profile exists,
-                        // and generating one needs a model-answer-shaped
-                        // reference PDF -- which the standard input for this
-                        // flow (採点基準 PDF + 答案) does not include. Sending
-                        // the reviewer there would be sending them somewhere
-                        // they cannot do what the notice above asks. Saying
-                        // the app cannot do it yet is worse news and better
-                        // information.
+                        // The 導線 docs/intake-and-settings.md §1 asks for:
+                        // 配点・採点基準の入力口 is the 「配点と採点基準」節
+                        // (Issue #103), and that section reads the 採点基準
+                        // PDF this same import just registered -- it does not
+                        // need a profile or a model-answer PDF first.
+                        TextButton.icon(
+                          key: Key(
+                            'intake-open-test-settings-${outcome.groupKey}',
+                          ),
+                          onPressed: _busy
+                              ? null
+                              : () => context.push(
+                                  AppRoutes.testSettings(outcome.testId!),
+                                ),
+                          icon: const Icon(Icons.settings_outlined),
+                          label: const Text('テスト設定を開く'),
+                        ),
                         if (outcome.createdTest) ...[
                           TextButton.icon(
                             key: Key('intake-delete-${outcome.groupKey}'),
