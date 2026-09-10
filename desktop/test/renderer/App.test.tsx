@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { App } from "../../src/renderer/App";
+import { ThemeProvider } from "../../src/renderer/theme/ThemeProvider";
 
 /**
  * Vitest + React Testing Library foundation (Issue #217). One real test, so the
@@ -20,7 +21,11 @@ describe("App", () => {
   it("shows what the preload bridge reports", async () => {
     stubBridge("0.1.0", "win32");
 
-    render(<App />);
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>,
+    );
 
     expect(await screen.findByText("version 0.1.0 / win32")).toBeDefined();
   });
