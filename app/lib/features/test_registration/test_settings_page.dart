@@ -756,15 +756,33 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// from the last server response. A stored answer goes stale the moment the
   /// reviewer draws the missing box or reassigns one -- and that moment is
   /// exactly when it is being read (review round 1, P2).
-  List<String> _undetectedFrom(List<RegionModel> regions) {
+  List<String> _undetectedFrom(List<RegionModel> regions) =>
+      _missingFrom(regions).undetected;
+
+  /// The questions with no回答欄, split by *why* (Issue #164).
+  ///
+  /// The membership test is derived from the working copy for the reason
+  /// above; what it is tested *against* is the last server response's
+  /// [ProfileResponse.absentQuestionNumbers], which is what detection said
+  /// and does not change as the reviewer edits. So a question the reviewer
+  /// draws a box for leaves both lists on the click, without the stored
+  /// claim having to be rewritten.
+  ({List<String> undetected, List<String> absent}) _missingFrom(
+    List<RegionModel> regions,
+  ) {
     final covered = {
       for (final region in regions)
         if (region.kind == RegionKind.answerArea) region.label,
     };
-    return [
-      for (final number in _questionNumbers)
-        if (!covered.contains(number)) number,
-    ];
+    final reportedAbsent =
+        _profile?.absentQuestionNumbers.toSet() ?? const <String>{};
+    final undetected = <String>[];
+    final absent = <String>[];
+    for (final number in _questionNumbers) {
+      if (covered.contains(number)) continue;
+      (reportedAbsent.contains(number) ? absent : undetected).add(number);
+    }
+    return (undetected: undetected, absent: absent);
   }
 
   /// Answer areas that name no confirmed question. These block the confirm --
@@ -797,7 +815,9 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     // and every one of these has to follow that click -- not the next 保存
     // round-trip.
     final unassigned = _unassignedFrom(working);
-    final undetected = _undetectedFrom(working);
+    final missing = _missingFrom(working);
+    final undetected = missing.undetected;
+    final absent = missing.absent;
     final unseenSheet = _mustSeeAnswerSheetFirst(working);
     return Card(
       child: Padding(
@@ -834,6 +854,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 regions: regions,
                 questionNumbers: _questionNumbers,
                 undetectedQuestionNumbers: undetected,
+                absentQuestionNumbers: absent,
                 pdfBytes: _answerLayoutPdf,
                 readOnly: _busy || _profileConfirmed,
                 onRegionsChanged: (next) =>
@@ -874,6 +895,24 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                   '（${undetected.join("、")}）。'
                   'このまま確定もできますが、その設問は答案のページ全体を採点に送り、'
                   '要確認として人の目に回ります。',
+                  style: context.texts.bodyMedium,
+                ),
+              ),
+            // Also not a blocker, and deliberately worded away from the one
+            // above: nothing here failed to be found. Confirming is the
+            // right move when the 採点基準 really does cover more paper than
+            // the registered answer sheet -- what must not happen is the
+            // reviewer reading it as a detection failure and hunting for
+            // boxes that are not there (Issue #164).
+            if (absent.isNotEmpty)
+              Padding(
+                key: const Key('absent-question-notice'),
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: Text(
+                  'この答案に回答欄が無いと判定された設問が${absent.length}件あります'
+                  '（${absent.join("、")}）。'
+                  '採点基準がこの答案より広い範囲を含んでいる可能性があります。'
+                  'このまま確定もできますが、その設問は採点されません。',
                   style: context.texts.bodyMedium,
                 ),
               ),

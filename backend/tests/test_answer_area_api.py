@@ -64,6 +64,11 @@ class _FakeDetector:
         self._body = body
         self.requests: list[AnswerAreaDetectionRequest] = []
 
+    def set_body(self, body: str | Exception) -> None:
+        """Answer differently on the next call -- what a re-run after a
+        provider failure looks like from the router's side."""
+        self._body = body
+
     def detect(self, request: AnswerAreaDetectionRequest) -> AnswerAreaDetectionOutput:
         self.requests.append(request)
         if isinstance(self._body, Exception):
@@ -73,6 +78,7 @@ class _FakeDetector:
                 self._body,
                 question_numbers=request.question_numbers,
                 page_count=len(request.page_images),
+                boxes_per_page=[len(boxes) for boxes in request.page_boxes],
             )
         except ValidationError:
             raise SchemaViolation("fake response failed schema validation") from None
@@ -87,8 +93,8 @@ def _pdf_bytes(*, pages: int = 1) -> bytes:
     return buffer.getvalue()
 
 
-def _detection_body(*areas: dict[str, object]) -> str:
-    return json.dumps({"areas": list(areas)})
+def _detection_body(*areas: dict[str, object], absent: list[str] | None = None) -> str:
+    return json.dumps({"areas": list(areas), "questions_not_on_these_pages": absent or []})
 
 
 def _area(
@@ -767,3 +773,88 @@ class TestConfirmGate:
         body = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()
         assert body["question_numbers"] == ["問1", "問2"]
         assert body["undetected_question_numbers"] == ["問2"]
+
+
+class TestMissingQuestionsAreSplitByCause:
+    """Issue #164. A blank fixture page has no printed box, so detection can
+    only ever report a rectangle here -- which is the point: what varies is
+    what the model *said* about the questions it did not locate."""
+
+    def test_a_question_reported_absent_is_listed_apart_from_an_undetected_one(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1", "問2", "問3")
+        _upload_layout(client, test_id)
+        detector.set_body(_detection_body(_area(number="問1"), absent=["問3"]))
+
+        body = _detect(client, test_id).json()
+
+        assert body["undetected_question_numbers"] == ["問2"]
+        assert body["absent_question_numbers"] == ["問3"]
+
+    def test_the_split_survives_a_save_and_reload(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """It is stored, so a reviewer who comes back to the screen must see
+        the same two lists -- otherwise the question silently changes from
+        "the paper has no space for this" to "go and draw it"."""
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1", "問2")
+        _upload_layout(client, test_id)
+        detector.set_body(_detection_body(_area(number="問1"), absent=["問2"]))
+        _detect(client, test_id)
+
+        body = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()
+
+        assert body["absent_question_numbers"] == ["問2"]
+
+    def test_drawing_the_box_anyway_takes_it_out_of_both_lists(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """The reviewer can see the page and the model cannot be right about
+        everything. Derived on every read, so nothing has to be un-stored."""
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1", "問2")
+        _upload_layout(client, test_id)
+        detector.set_body(_detection_body(_area(number="問1"), absent=["問2"]))
+        detected = _detect(client, test_id).json()
+
+        saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={
+                "regions": [
+                    *detected["regions"],
+                    {
+                        "region_id": "drawn-by-hand",
+                        "kind": "answer_area",
+                        "page_index": 0,
+                        "bbox": {"x0": 0.1, "y0": 0.5, "x1": 0.6, "y1": 0.7},
+                        "label": "問2",
+                        "confirmed": False,
+                        "text": None,
+                    },
+                ]
+            },
+        ).json()
+
+        assert saved["absent_question_numbers"] == []
+        assert saved["undetected_question_numbers"] == []
+
+    def test_a_rerun_replaces_what_the_previous_run_said(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """Re-running detection after a provider failure is a normal thing to
+        do, and a question the previous run called absent may be one this run
+        finds. Merging the two would keep the older claim alive forever."""
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1", "問2")
+        _upload_layout(client, test_id)
+        detector.set_body(_detection_body(_area(number="問1"), absent=["問2"]))
+        _detect(client, test_id)
+
+        detector.set_body(_detection_body(_area(number="問2"), absent=["問1"]))
+        body = _detect(client, test_id).json()
+
+        assert body["absent_question_numbers"] == ["問1"]

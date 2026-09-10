@@ -14,6 +14,7 @@ part 'profile_response.g.dart';
 /// ProfileResponse
 ///
 /// Properties:
+/// * [absentQuestionNumbers]
 /// * [pages]
 /// * [questionNumbers]
 /// * [regions]
@@ -25,6 +26,9 @@ part 'profile_response.g.dart';
 @BuiltValue()
 abstract class ProfileResponse
     implements Built<ProfileResponse, ProfileResponseBuilder> {
+  @BuiltValueField(wireName: r'absent_question_numbers')
+  BuiltList<String> get absentQuestionNumbers;
+
   @BuiltValueField(wireName: r'pages')
   BuiltList<PageFormatModel> get pages;
 
@@ -75,6 +79,11 @@ class _$ProfileResponseSerializer
     ProfileResponse object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
+    yield r'absent_question_numbers';
+    yield serializers.serialize(
+      object.absentQuestionNumbers,
+      specifiedType: const FullType(BuiltList, [FullType(String)]),
+    );
     yield r'pages';
     yield serializers.serialize(
       object.pages,
@@ -140,6 +149,13 @@ class _$ProfileResponseSerializer
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
+        case r'absent_question_numbers':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [FullType(String)]),
+          ) as BuiltList<String>;
+          result.absentQuestionNumbers.replace(valueDes);
+          break;
         case r'pages':
           final valueDes = serializers.deserialize(
             value,

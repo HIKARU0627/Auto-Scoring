@@ -53,6 +53,7 @@ Future<List<RegionModel> Function()> _pumpEditor(
   required List<RegionModel> regions,
   List<String> questionNumbers = const ['問1', '問2'],
   List<String> undetected = const [],
+  List<String> absent = const [],
   int pages = 1,
   bool readOnly = false,
   void Function(int index)? onEditNumerically,
@@ -74,6 +75,7 @@ Future<List<RegionModel> Function()> _pumpEditor(
               regions: current,
               questionNumbers: questionNumbers,
               undetectedQuestionNumbers: undetected,
+              absentQuestionNumbers: absent,
               readOnly: readOnly,
               onEditNumerically: onEditNumerically,
               onRegionsChanged: (next) => setState(() => current = next),
@@ -119,6 +121,7 @@ Future<void> _dragBy(
 }
 
 void main() {
+  _missingQuestionGroups();
   group('showing what was and was not found', () {
     testWidgets('lists every question the detection did not find', (
       tester,
@@ -594,6 +597,71 @@ void main() {
       );
       expect(find.textContaining('回答欄・1ページ'), findsOneWidget);
       expect(find.textContaining('回答欄・2ページ'), findsOneWidget);
+    });
+  });
+}
+
+void _missingQuestionGroups() {
+  group('missing questions are split by cause (Issue #164)', () {
+    testWidgets('a question with no box on the paper is listed apart from one '
+        'the run failed to find', (tester) async {
+      await _pumpEditor(
+        tester,
+        regions: const [],
+        questionNumbers: const ['問1', '問2'],
+        undetected: const ['問1'],
+        absent: const ['問2'],
+      );
+
+      expect(find.byKey(const Key('answer-area-undetected-group')), findsOne);
+      expect(find.byKey(const Key('answer-area-absent-group')), findsOne);
+      expect(find.byKey(const Key('answer-area-undetected-問1')), findsOne);
+      expect(find.byKey(const Key('answer-area-absent-問2')), findsOne);
+    });
+
+    testWidgets('only the group that applies is shown', (tester) async {
+      await _pumpEditor(
+        tester,
+        regions: const [],
+        questionNumbers: const ['問1', '問2'],
+        absent: const ['問1', '問2'],
+      );
+
+      expect(find.byKey(const Key('answer-area-undetected-group')), findsNothing);
+      expect(find.byKey(const Key('answer-area-absent-group')), findsOne);
+    });
+
+    testWidgets('the all-clear needs both groups empty', (tester) async {
+      // Before the split this said "every question has an answer area" while
+      // the response was still naming questions that had none -- the exact
+      // confusion Issue #164 was opened about, on the screen.
+      await _pumpEditor(
+        tester,
+        regions: const [],
+        questionNumbers: const ['問1'],
+        absent: const ['問1'],
+      );
+
+      expect(find.byKey(const Key('answer-area-all-detected')), findsNothing);
+    });
+
+    testWidgets('a question reported absent can still have its box drawn',
+        (tester) async {
+      // The reviewer can see the page and the model is not always right.
+      await _pumpEditor(
+        tester,
+        regions: const [],
+        questionNumbers: const ['問1'],
+        absent: const ['問1'],
+      );
+
+      await tester.tap(find.byKey(const Key('answer-area-absent-問1')));
+      await tester.pumpAndSettle();
+
+      final dropdown = tester.widget<DropdownButton<String>>(
+        find.byKey(const Key('answer-area-draw-target')),
+      );
+      expect(dropdown.value, '問1');
     });
   });
 }

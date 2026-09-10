@@ -1915,6 +1915,13 @@
       },
       "ProfileResponse": {
         "properties": {
+          "absent_question_numbers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Absent Question Numbers",
+            "type": "array"
+          },
           "pages": {
             "items": {
               "$ref": "#/components/schemas/PageFormatModel"
@@ -1971,6 +1978,7 @@
           "revision",
           "question_numbers",
           "undetected_question_numbers",
+          "absent_question_numbers",
           "unassigned_region_ids"
         ],
         "title": "ProfileResponse",
