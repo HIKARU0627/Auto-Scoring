@@ -181,34 +181,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       _dropRoutingOutsideCandidates();
     }
 
-    // A group's *target* points into the same list. Left alone it produces two
-    // failures, both found by sweeping for values held across a state change:
-    //
-    // * a group bound to a test that has since gone still reports itself ready
-    //   and fails at import time with a dead id -- on the completion screen,
-    //   which cannot fix it;
-    // * a group routing answers individually keeps that mode while the option
-    //   that offers it disappears with the last registered test, so the
-    //   dropdown holds a value with no matching item and asserts.
-    //
-    // Reset to "not chosen" so the reviewer picks again. Losing a choice is
-    // worth saying out loud; silently keeping an impossible one is not.
-    _review = _review?.copyWith(
-      groups: [
-        for (final group in _review!.groups)
-          if (group.targetKind == IntakeTargetKind.existing &&
-              !known.contains(group.targetTestId))
-            group.copyWith(
-              targetKind: IntakeTargetKind.unassigned,
-              clearTargetTestId: true,
-            )
-          else if (group.targetKind == IntakeTargetKind.perAnswer &&
-              tests.isEmpty)
-            group.copyWith(targetKind: IntakeTargetKind.unassigned)
-          else
-            group,
-      ],
-    );
+    // A group's *target* points into the same list, and needs the same
+    // pruning -- see `pruneStaleTargets` for what breaks without it.
+    final review = _review;
+    if (review != null) _review = pruneStaleTargets(review, known);
   }
 
   /// Re-read the registered tests, without failing the caller.
@@ -256,24 +232,6 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     }
   }
 
-  /// The roles a template marks required, in rule order and de-duplicated.
-  ///
-  /// Taken from the template the reviewer selected rather than from the plan:
-  /// the plan reports what was *missing* when it was computed, and this screen
-  /// lets them exclude a file afterwards.
-  List<MaterialRole> _requiredRolesOf(String templateId) {
-    final template = _templates.where((entry) => entry.id == templateId);
-    if (template.isEmpty) return const [];
-    final roles = <MaterialRole>[];
-    for (final rule in template.first.rules) {
-      if (rule.requirement == Requirement.required_ &&
-          !roles.contains(rule.role)) {
-        roles.add(rule.role);
-      }
-    }
-    return roles;
-  }
-
   Future<void> _pickFolder() async {
     final templateId = _templateId;
     if (templateId == null) return;
@@ -314,7 +272,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         _review = buildReviewState(
           plan: plan,
           folder: folder,
-          requiredRoles: _requiredRolesOf(templateId),
+          requiredRoles: requiredRolesOf(
+            templates: _templates,
+            templateId: templateId,
+          ),
           unitCost: _unitCost,
         );
         _step = _Step.review;
