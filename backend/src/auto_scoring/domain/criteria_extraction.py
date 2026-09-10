@@ -43,7 +43,10 @@ capability into it that was not built (Issue #103 "『必ずある』『全教�
 と書かないこと"):
 
 * the 添削資料 (Excel/Word) catalogues of 誤答パターン → 減点 → 赤入れ案.
-  Neither format is read at all. See ``docs/criteria-extraction.md``.
+  Issue #106 has since built the Excel half (``domain.error_catalog``), which
+  feeds the *grading* prompt rather than this extraction; Word remains unread
+  (Issue #208). Nothing here reads either. See
+  ``docs/criteria-extraction.md``.
 * any claim about subjects beyond the 11 that were measured, or about
   extraction *accuracy* on any of them. What was verified is that the
   extraction runs to completion and that whatever it could not read is

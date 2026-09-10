@@ -1,0 +1,334 @@
+"""誤答パターン → 減点量 → 赤入れ案 read out of a 添削資料 Excel sheet
+(Issue #106).
+
+A 添削資料 is the one registered material that carries what a 採点基準 PDF
+does not: the mistakes real students made on this material, the deduction the
+instructor applied, and the wording they proposed writing in red
+(docs/grading-material-structure.md section 5). Issue #103 deliberately left
+it unread; this module is the reading half's pure core.
+
+**Why the reading is a search, not a schema.** The 7 measured Excel files hold
+**4 different column layouts** (section 5.1): 6-11 columns, a 場所 column in
+some, a 採点基準 column that becomes 減点の有無・幅 or disappears entirely,
+重要度/頻度 present or absent, and the same meaning spelled two ways
+(生徒の誤り方・現状 / 生徒の誤りの例, 赤入れ案 / 赤入れ例). The header row is
+**not row 1** -- row 1 is a course title -- and the sheet name is not fixed
+either. A fixed column-index mapping, or an equality match on header labels,
+is wrong for at least one of the four. So :func:`build_error_catalog` searches
+the top of each sheet for a row that names both required roles, and maps
+columns by role marker rather than by position or by exact name.
+
+**Not being able to read is a result, not an absence.** The failure this
+module is written against is the one the project keeps hitting -- a tool that
+answers "0 entries" when it means "I did not understand this file". Every path
+that fails to produce entries raises :class:`ErrorCatalogUnreadable` carrying
+*which* sheets failed and *why*; a sheet that fails inside a workbook whose
+other sheets read fine is recorded on :attr:`ErrorCatalog.unreadable_sheets`
+rather than dropped. There is no code path that returns an empty catalogue.
+
+**What this deliberately does not read.** 「伝えるべきこと」 (present in 3 of
+the 4 layouts) and 重要度/頻度 are not extracted: Issue #106 names the triple
+誤答パターン → 減点量 → 赤入れ案, and columns nobody asked for are columns
+nobody has checked the meaning of. Word (.docx) 添削資料 are out of scope for
+Issue #106 entirely -- see ``docs/grading-material-structure.md`` section 5.4
+for what that costs, which is not nothing.
+
+Framework-free (``AGENTS.md`` "Architecture"): the Excel libraries live in
+``adapters.excel_error_catalog``, which hands this module a plain grid of
+strings. ``tests/test_architecture.py`` holds that boundary.
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+
+from auto_scoring.domain.models import DomainError
+
+#: A grid of already-stringified cells: sheets -> rows -> cells. Rows are not
+#: padded to a common width (a real sheet's rows are ragged), so every read
+#: goes through :func:`_cell`.
+CellGrid = Sequence[Sequence[Sequence[str]]]
+
+#: How far down a sheet to look for the header row. The measured files all
+#: put it at index 1, under a one-line course title, but
+#: docs/grading-material-structure.md section 5.1 says the position is not
+#: fixed and this module must not assume it is. 10 covers a title block
+#: several lines deep while still failing loudly on a sheet that simply has
+#: no header -- searching the whole sheet would instead find a *data* row
+#: that happens to mention 赤入れ and report nonsense as success.
+HEADER_SEARCH_ROWS = 10
+
+#: Substrings that identify a column's role in a header cell, matched against
+#: :func:`_normalize`d text. Substrings rather than equality because the
+#: measured layouts append qualifiers to the same label
+#: (「重要度（◎、〇、△）」, 「伝えるべきこと（添削者が共有しておくべきこと）」)
+#: and spell the same role two ways. Order within a tuple is irrelevant;
+#: order *between* roles is not -- see :func:`_map_columns`.
+_MISTAKE_MARKERS = ("誤り", "誤答")
+_RED_INK_MARKERS = ("赤入れ",)
+_DEDUCTION_MARKERS = ("減点", "採点基準", "配点")
+_QUESTION_MARKERS = ("問題番号", "設問番号", "小問", "設問")
+_ROUND_MARKERS = ("回数", "実施回")
+
+#: Whitespace to strip from a cell. ``str.strip()`` already covers U+3000 in
+#: CPython, but the measured files pad values with it specifically
+#: (docs/grading-material-structure.md section 5.1, 「末尾に全角空白が付く」),
+#: so it is named here rather than left to depend on that.
+_TRIM = " \t\r\n　"
+
+
+class CatalogUnreadableReason(StrEnum):
+    """Why a sheet, or a whole workbook, yielded no catalogue.
+
+    Deliberately coarse and content-free: these values reach logs and error
+    messages, and the real material's cell contents are the tutoring school's
+    copyrighted text (``AGENTS.md`` "Security"). A reason says what shape the
+    file had, never what it said.
+    """
+
+    #: No row in the first :data:`HEADER_SEARCH_ROWS` named both a 誤答 column
+    #: and a 赤入れ column. The sheet may be a legend, a cover sheet, or a
+    #: layout this module has not been taught.
+    NO_HEADER_ROW = "no_header_row"
+    #: A header row was found, but every row under it was blank in both
+    #: required columns.
+    NO_DATA_ROWS = "no_data_rows"
+    #: The workbook held no sheets at all.
+    NO_SHEETS = "no_sheets"
+
+
+@dataclass(frozen=True, kw_only=True)
+class SheetProblem:
+    """One sheet that could not be read, by 1-based position and reason.
+
+    **Position, not name.** A sheet name is content out of the source file --
+    the measured ones are innocuous (「赤入れ案」「第1回」「Sheet1」) but the
+    next school's need not be, and this value is written to logs. The index
+    is enough to find the sheet and cannot leak anything.
+    """
+
+    sheet_number: int
+    reason: CatalogUnreadableReason
+
+
+class ErrorCatalogUnreadable(DomainError):
+    """No sheet in the workbook yielded a single entry.
+
+    Raised instead of returning an empty :class:`ErrorCatalog` so that "this
+    file's columns are not what we expected" can never be mistaken for "this
+    material records no mistakes" -- the two call for completely different
+    actions from whoever registered the file.
+    """
+
+    def __init__(self, problems: Sequence[SheetProblem]) -> None:
+        detail = ", ".join(f"sheet {p.sheet_number}: {p.reason.value}" for p in problems) or (
+            CatalogUnreadableReason.NO_SHEETS.value
+        )
+        super().__init__(f"no 添削資料 catalogue could be read ({detail})")
+        self.problems: tuple[SheetProblem, ...] = tuple(problems)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CatalogEntry:
+    """One row: a mistake, what it cost, and the red-pen wording proposed.
+
+    ``deduction``, ``question_label`` and ``round_label`` are ``None`` when the
+    layout has no such column or the cell was blank -- absent, never guessed
+    and never defaulted to 0 (the same rule
+    ``domain.criteria_extraction`` applies to points it could not read).
+
+    ``mistake`` and ``red_ink`` may individually be empty, because a real row
+    sometimes fills only one of them, but not both at once: a row with neither
+    is not a row, and :func:`build_error_catalog` skips it rather than emitting
+    a blank entry.
+    """
+
+    mistake: str
+    red_ink: str
+    deduction: str | None = None
+    question_label: str | None = None
+    round_label: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.mistake and not self.red_ink:
+            raise ValueError("CatalogEntry needs at least one of mistake / red_ink")
+
+
+@dataclass(frozen=True, kw_only=True)
+class ErrorCatalog:
+    """Every entry read from one 添削資料 workbook.
+
+    ``unreadable_sheets`` is the visible half of a partial read: a workbook
+    whose second sheet is a legend still produces a catalogue, and the sheet
+    that produced nothing is named here rather than silently dropped. A caller
+    that wants to warn has something to warn about; a caller that does not
+    still cannot mistake the result for a complete read.
+    """
+
+    entries: tuple[CatalogEntry, ...]
+    unreadable_sheets: tuple[SheetProblem, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.entries:
+            raise ValueError("ErrorCatalog must hold at least one entry")
+
+
+def build_error_catalog(sheets: CellGrid) -> ErrorCatalog:
+    """Read every sheet of one workbook, or raise.
+
+    Raises :class:`ErrorCatalogUnreadable` when no sheet yields an entry --
+    including the empty-workbook case, which is a failure of the same kind
+    and not an empty success.
+    """
+    entries: list[CatalogEntry] = []
+    problems: list[SheetProblem] = []
+    for index, rows in enumerate(sheets, start=1):
+        sheet_entries, reason = _read_sheet(rows)
+        if reason is not None:
+            problems.append(SheetProblem(sheet_number=index, reason=reason))
+        entries.extend(sheet_entries)
+    if not entries:
+        raise ErrorCatalogUnreadable(problems)
+    return ErrorCatalog(entries=tuple(entries), unreadable_sheets=tuple(problems))
+
+
+def _read_sheet(
+    rows: Sequence[Sequence[str]],
+) -> tuple[tuple[CatalogEntry, ...], CatalogUnreadableReason | None]:
+    """``(entries, None)`` or ``((), reason)`` -- never both."""
+    header = _find_header(rows)
+    if header is None:
+        return (), CatalogUnreadableReason.NO_HEADER_ROW
+    header_index, columns = header
+    entries = tuple(
+        entry for row in rows[header_index + 1 :] if (entry := _read_row(row, columns)) is not None
+    )
+    if not entries:
+        return (), CatalogUnreadableReason.NO_DATA_ROWS
+    return entries, None
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Columns:
+    """Column index per role. ``mistake``/``red_ink`` are always resolved --
+    a header row is only recognized as one when both are present."""
+
+    mistake: int
+    red_ink: int
+    deduction: int | None
+    question: int | None
+    round: int | None
+
+
+def _find_header(rows: Sequence[Sequence[str]]) -> tuple[int, _Columns] | None:
+    """The first row near the top that maps to both required roles, with its
+    column mapping. ``None`` if no row near the top does.
+
+    Recognizing the header and mapping its columns is one decision, not two:
+    a row "names 誤答 and 赤入れ" exactly when :func:`_map_columns` can claim a
+    distinct column for each. Splitting them would let a header naming both
+    roles in a *single* label pass the recognition test and then have no
+    column left for the second role.
+
+    Requiring both roles is what keeps the course-title row (which in the
+    measured files carries a 重要度/頻度 legend with embedded newlines) and a
+    stray data row from being taken for the header.
+    """
+    for index, row in enumerate(rows[:HEADER_SEARCH_ROWS]):
+        columns = _map_columns(row)
+        if columns is not None:
+            return index, columns
+    return None
+
+
+def _map_columns(header: Sequence[str]) -> _Columns | None:
+    """Role -> column index for a candidate header row, or ``None`` when it
+    does not carry both required roles in separate columns.
+
+    Roles are resolved in a fixed order and a column is claimed at most once,
+    so a label matching two roles' markers goes to whichever role is resolved
+    first. Today no two roles' markers overlap; the order is stated anyway, so
+    that adding a marker later cannot silently re-point an existing column.
+
+    Unmatched columns -- the decorative 「⇒」 column, 重要度, 頻度, 場所,
+    備考, 伝えるべきこと -- are simply not claimed. That is why an unknown
+    extra column costs nothing, while a *missing required* column costs a
+    :data:`CatalogUnreadableReason.NO_HEADER_ROW`.
+    """
+    claimed: set[int] = set()
+
+    def claim(markers: Sequence[str]) -> int | None:
+        index = _first_match(header, markers, skip=claimed)
+        if index is not None:
+            claimed.add(index)
+        return index
+
+    mistake = claim(_MISTAKE_MARKERS)
+    red_ink = claim(_RED_INK_MARKERS)
+    if mistake is None or red_ink is None:
+        return None
+    return _Columns(
+        mistake=mistake,
+        red_ink=red_ink,
+        deduction=claim(_DEDUCTION_MARKERS),
+        question=claim(_QUESTION_MARKERS),
+        round=claim(_ROUND_MARKERS),
+    )
+
+
+def _read_row(row: Sequence[str], columns: _Columns) -> CatalogEntry | None:
+    """One data row, or ``None`` for a row that is blank in both required
+    columns (a spacer, or a trailing row the sheet's used range includes)."""
+    mistake = _cell(row, columns.mistake)
+    red_ink = _cell(row, columns.red_ink)
+    if not mistake and not red_ink:
+        return None
+    return CatalogEntry(
+        mistake=mistake,
+        red_ink=red_ink,
+        deduction=_optional_cell(row, columns.deduction),
+        question_label=_optional_cell(row, columns.question),
+        round_label=_optional_cell(row, columns.round),
+    )
+
+
+def _first_match(
+    row: Sequence[str], markers: Sequence[str], *, skip: set[int] | None = None
+) -> int | None:
+    for index, cell in enumerate(row):
+        if skip is not None and index in skip:
+            continue
+        normalized = _normalize(cell)
+        if normalized and any(marker in normalized for marker in markers):
+            return index
+    return None
+
+
+def _normalize(text: str) -> str:
+    """Header text with the noise the measured files carry stripped out.
+
+    NFKC folds the half-width/full-width mix that is present *within a single
+    file* (section 5.1); whitespace goes entirely, because a header label is
+    split across lines in some of the files and the marker must match either
+    way.
+    """
+    return "".join(unicodedata.normalize("NFKC", text).split())
+
+
+def _cell(row: Sequence[str], index: int) -> str:
+    """``row[index]`` trimmed, or ``""`` for a row shorter than the header."""
+    if index >= len(row):
+        return ""
+    return row[index].strip(_TRIM)
+
+
+def _optional_cell(row: Sequence[str], index: int | None) -> str | None:
+    """``None`` for "this layout has no such column" *and* for "the cell was
+    blank" -- both mean the same thing to a reader of the catalogue, and
+    neither may become an empty string that looks like a value."""
+    if index is None:
+        return None
+    return _cell(row, index) or None

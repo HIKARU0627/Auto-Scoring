@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 from auto_scoring.domain.ai_grading import AIGradingResult
 from auto_scoring.domain.dependency_graph import DependencyProvision
+from auto_scoring.domain.error_catalog import CatalogEntry
 from auto_scoring.domain.models import (
     AnnotationKind,
     AnswerImageFinding,
@@ -460,6 +461,27 @@ class GradingRequest:
     ``auto_scoring.domain.grading_context.build_prerequisite_context`` from
     the confirmed `DependencyGraph` (Issue #26), never assembled ad hoc by a
     caller. Empty for a question with no prerequisite edge into it.
+
+    ``error_catalog`` (Issue #106) is the 誤答パターン → 減点量 → 赤入れ案
+    rows read out of this test's registered 添削資料 Excel, carried here so
+    the grading call can *see* how this material's instructor writes a
+    correction. It is reference material, not rubric: the prompt says so, and
+    nothing downstream overwrites the model's output with a catalogue row --
+    a proposal stays a proposal a human confirms
+    (simplified-design-specification.md section 25.2). Empty for a test with
+    no 添削資料, one that is Word-only, or one whose columns the reader did
+    not recognize; ``adapters.excel_error_catalog`` logs which of the three it
+    was rather than letting them look alike.
+
+    Not filtered to this question. A measured catalogue holds 2-6 rows in
+    total, and matching its 問題番号 strings ("問1", "大問1-問1(1)", "5")
+    against registered question numbers would drop rows on a spelling
+    mismatch -- silently, which is worse than a slightly longer prompt. Each
+    entry carries its own label instead, so the model can tell which row is
+    about the question in front of it. Sending the whole thing is allowed:
+    business-rules-and-evaluation-data.md section 2 (2) puts 添削資料 in the
+    "資料側" row, which may be sent whole, because it is not a student's
+    answer.
     """
 
     question_id: str
@@ -471,6 +493,7 @@ class GradingRequest:
     criterion_ids: tuple[str, ...]
     max_score: int
     prerequisite_context: tuple[PrerequisiteAnswer, ...] = ()
+    error_catalog: tuple[CatalogEntry, ...] = ()
 
     def __post_init__(self) -> None:
         for field_name, value in (

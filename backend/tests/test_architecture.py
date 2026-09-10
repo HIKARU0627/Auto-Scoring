@@ -20,6 +20,11 @@ _FORBIDDEN_PREFIXES = (
     "httpx",
     "requests",
     "uvicorn",
+    # Issue #106: the 添削資料 Excel readers. `domain.error_catalog` takes a
+    # grid of strings and never opens a file, so the two formats' libraries
+    # stay in `adapters.excel_error_catalog` with every other vendor SDK.
+    "openpyxl",
+    "xlrd",
     "auto_scoring.api",
     "auto_scoring.adapters",
     "auto_scoring.db",
