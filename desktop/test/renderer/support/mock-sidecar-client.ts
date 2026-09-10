@@ -2,13 +2,22 @@ import { vi } from "vitest";
 
 import type { SidecarClient } from "../../../src/renderer/api/client.js";
 import type {
+  ExportRequestResponse,
+  JobResponse,
   SubmissionResponse,
+  SubmissionReviewProgressResponse,
   TestResponse,
-} from "../../../src/renderer/core/home-dashboard.js";
+} from "../../../src/renderer/api/submission-queue-data.js";
 
 export interface MockSidecarHandlers {
   listTestRegistrations?: () => Promise<TestResponse[]>;
+  getTest?: (testId: string) => Promise<TestResponse>;
   listSubmissions?: (testId: string) => Promise<SubmissionResponse[]>;
+  listReviewProgress?: (
+    testId: string,
+  ) => Promise<SubmissionReviewProgressResponse[]>;
+  requestExport?: (submissionId: string) => Promise<ExportRequestResponse>;
+  getJob?: (jobId: string) => Promise<JobResponse>;
 }
 
 export function buildTest(input: {
@@ -29,22 +38,38 @@ export function buildTest(input: {
 
 export function buildSubmission(input: {
   id: string;
-  testId: string;
+  testId?: string;
   state: string;
   createdDay?: number;
   studentLabel?: string | null;
+  reviewReason?: string | null;
+  originalFilename?: string | null;
 }): SubmissionResponse {
   const day = input.createdDay ?? 1;
   return {
     id: input.id,
-    test_id: input.testId,
+    test_id: input.testId ?? "t1",
     state: input.state,
     page_count: 1,
     student_label: input.studentLabel ?? null,
     created_at: new Date(Date.UTC(2026, 1, day)).toISOString(),
     is_retry: false,
-    original_filename: null,
-    review_reason: null,
+    original_filename: input.originalFilename ?? null,
+    review_reason: input.reviewReason ?? null,
+  };
+}
+
+export function buildProgress(input: {
+  id: string;
+  total?: number;
+  confirmed?: number;
+  manualGrading?: number;
+}): SubmissionReviewProgressResponse {
+  return {
+    submission_id: input.id,
+    total_questions: input.total ?? 5,
+    confirmed_questions: input.confirmed ?? 0,
+    manual_grading_questions: input.manualGrading ?? 0,
   };
 }
 
@@ -59,6 +84,46 @@ export function createMockSidecarClient(
           : [];
         return { data, response: new Response(), error: undefined };
       }
+      if (path === "/tests/{test_id}") {
+        const testId = init?.params?.path?.test_id;
+        if (testId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing test id" },
+          };
+        }
+        try {
+          if (handlers.getTest) {
+            const data = await handlers.getTest(testId);
+            return { data, response: new Response(), error: undefined };
+          }
+          if (handlers.listTestRegistrations) {
+            const all = await handlers.listTestRegistrations();
+            const found = all.find((t) => t.id === testId);
+            if (found) {
+              return {
+                data: found,
+                response: new Response(),
+                error: undefined,
+              };
+            }
+          }
+          return {
+            data: buildTest({ id: testId }),
+            response: new Response(),
+            error: undefined,
+          };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
       if (path === "/tests/{test_id}/submissions") {
         const testId = init?.params?.path?.test_id;
         if (testId === undefined) {
@@ -68,10 +133,82 @@ export function createMockSidecarClient(
             error: { message: "missing test id" },
           };
         }
-        const data = handlers.listSubmissions
-          ? await handlers.listSubmissions(testId)
-          : [];
-        return { data, response: new Response(), error: undefined };
+        try {
+          const data = handlers.listSubmissions
+            ? await handlers.listSubmissions(testId)
+            : [];
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/tests/{test_id}/review-progress") {
+        const testId = init?.params?.path?.test_id;
+        if (testId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing test id" },
+          };
+        }
+        try {
+          const data = handlers.listReviewProgress
+            ? await handlers.listReviewProgress(testId)
+            : [];
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/jobs/{job_id}") {
+        const jobId = init?.params?.path?.job_id;
+        if (jobId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing job id" },
+          };
+        }
+        try {
+          if (handlers.getJob) {
+            const data = await handlers.getJob(jobId);
+            return { data, response: new Response(), error: undefined };
+          }
+          return {
+            data: {
+              id: jobId,
+              kind: "export_submission",
+              state: "succeeded",
+              attempts: 1,
+              max_attempts: 1,
+              submission_id: "s1",
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            } as unknown as JobResponse,
+            response: new Response(),
+            error: undefined,
+          };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
       }
       return {
         data: undefined,
@@ -79,7 +216,52 @@ export function createMockSidecarClient(
         error: { message: "not found" },
       };
     }),
-    POST: vi.fn(),
+    POST: vi.fn(async (path, init) => {
+      if (path === "/submissions/{submission_id}/export") {
+        const submissionId = init?.params?.path?.submission_id;
+        if (submissionId === undefined) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 400 }),
+            error: { message: "missing submission id" },
+          };
+        }
+        try {
+          if (handlers.requestExport) {
+            const data = await handlers.requestExport(submissionId);
+            return { data, response: new Response(), error: undefined };
+          }
+          return {
+            data: {
+              decision: "reuse_existing",
+              export: {
+                id: `exp-${submissionId}`,
+                job_id: `job-${submissionId}`,
+                submission_id: submissionId,
+                file_path: `exports/submission_${submissionId}.pdf`,
+                file_sha256: "0".repeat(64),
+                created_at: new Date().toISOString(),
+              },
+            } as ExportRequestResponse,
+            response: new Response(),
+            error: undefined,
+          };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      return {
+        data: undefined,
+        response: new Response(null, { status: 404 }),
+        error: { message: "not found" },
+      };
+    }),
     PUT: vi.fn(),
     PATCH: vi.fn(),
     DELETE: vi.fn(),
