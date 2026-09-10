@@ -93,11 +93,16 @@ Issue #17 追加要件は「ページ欠落・重複・順序違いを検出し�
 ページ内容の同一性判定（OCR/レイアウト解析）は、テスト登録 Issue と OCR Issue が
 実装され次第、本チェックを置き換える。
 
-**「前提設問を含むページが欠落した状態では AI 採点を開始しない」の満たし方**:
-OCR・AI 採点のジョブ生成自体がまだ実装されていない（Issue #17 対象外）ため、
-`needs_review` になった Submission に対して何もジョブを作らないことで自動的に
-満たされる。将来の OCR/AI 採点 Issue は、`needs_review` の Submission に対して
-ジョブを起票しない、という制約を継続する必要がある。
+**「前提設問を含むページが欠落した状態では AI 採点を開始しない」の満たし方（Issue #215 で徹底）**:
+ページ被覆に問題がある（`missing_pages` または `extra_pages`）答案は、`should_extract` が False となり
+回答欄画像は抽出されない（まず人に見せる設計判断）。
+Issue #215 では、この答案に対して採点ジョブを投入しない（`JobQueueService.submit_submission` が
+`PageCoverage` を検査し、被覆問題がある場合はジョブを作成・投入しない）。
+再試行しても直らないものを機械の失敗（`PERMANENT`）として記録せず、`needs_review` かつ `review_reason`
+（例: `extra_pages:3>2`）のまま人の介入待ちにする。
+万が一、手動操作等でジョブが実行された場合も、`RecognitionJobProcessor` / `GradingJobProcessor` は
+`last_error` に `review_reason` を運び（`no answer image recorded for this question (extra_pages:3>2)`）、
+人に届く言葉がページ数の問題を伝える。
 
 ## 4. Submission 状態機械への当てはめ
 

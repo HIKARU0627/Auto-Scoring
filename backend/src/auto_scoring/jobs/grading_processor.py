@@ -172,7 +172,17 @@ class GradingJobProcessor:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
             images = uow.answer_images.list_for_submission(job.submission_id)
             image = find_answer_image(images, question_id)
-            assert image is not None  # the recognition step above already required this
+            if image is None:
+                submission = uow.submissions.get(job.submission_id)
+                suffix = (
+                    f" ({submission.review_reason})"
+                    if submission is not None and submission.review_reason
+                    else ""
+                )
+                return self._failed(
+                    ErrorCategory.PERMANENT,
+                    f"no answer image recorded for this question{suffix}",
+                )
             if image.status is AnswerImageStatus.NEEDS_REVIEW:
                 # The crop itself could not be trusted (Issue #17 section 7.1).
                 # The recognition step already declined to send it anywhere,

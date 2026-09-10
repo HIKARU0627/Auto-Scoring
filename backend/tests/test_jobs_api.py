@@ -123,6 +123,28 @@ def test_create_submission_jobs_returns_the_planned_jobs(
     assert jobs["qb"]["blocked_on_question_id"] == "qa"
 
 
+def test_create_submission_jobs_does_not_create_jobs_for_extra_pages(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Issue #215: POST /submissions/{id}/jobs creates no jobs for an extra-pages submission."""
+    app = create_app(api_token=_TOKEN, session_factory=session_factory)
+    client = TestClient(app)
+    _seed_confirmed(
+        session_factory,
+        question_ids=["qa", "qb"],
+        question_pages={"qa": 1, "qb": 2},
+        page_count=3,
+    )
+
+    response = client.post("/submissions/sub-1/jobs", headers=_AUTH)
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+
+    listing = client.get("/submissions/sub-1/jobs", headers=_AUTH)
+    assert listing.status_code == 200
+    assert listing.json() == []
+
+
 def test_create_submission_jobs_is_idempotent(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

@@ -374,6 +374,26 @@ async def test_missing_answer_image_fails_permanently(
 
     assert result.outcome is ProcessingOutcome.FAILED
     assert result.error_category is ErrorCategory.PERMANENT
+    assert result.error_message == "no answer image recorded for this question"
+
+
+async def test_missing_answer_image_carries_submission_review_reason(
+    session_factory: sessionmaker[Session], processor: RecognitionJobProcessor
+) -> None:
+    """Issue #215: If an answer image is missing, the error message carries the
+    submission's review_reason (e.g. extra_pages:3>2), speaking of pages to humans."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question())
+        uow.submissions.add(make_submission(review_reason="extra_pages:3>2"))
+        uow.commit()
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_category is ErrorCategory.PERMANENT
+    assert result.error_message == "no answer image recorded for this question (extra_pages:3>2)"
 
 
 @pytest.mark.parametrize(

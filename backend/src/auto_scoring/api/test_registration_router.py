@@ -1021,13 +1021,19 @@ def build_test_registration_router(
                 # dropping half a student's answer -- which means the
                 # reviewer meets this error, and it has to say what is wrong
                 # and what to do, not just restate the invariant.
+                # Issue #215: forewarn that deleting one page's area means only
+                # the remaining page will be graded, and if a page is left with
+                # no questions, imported answer sheets will be flagged with
+                # extra_pages and will not start automated grading.
                 raise HTTPException(
                     422,
                     detail=(
                         f"{exc} —— この設問の回答欄が複数ページにまたがっています。"
                         "いまは1設問につき1ページ分しか扱えません。"
-                        "どちらか一方のページの回答欄だけを残してから確定してください。"
-                        "残したページの分だけが採点に送られます。"
+                        "どちらか一方のページの回答欄だけを残して確定できますが、"
+                        "残したページの分しか採点されません。"
+                        "また、設問のないページが生じると、答案取込時にページ超過（extra_pages）"
+                        "と判定され、自動採点は開始されず人による確認が必要になります。"
                     ),
                 ) from exc
             except DomainError as exc:

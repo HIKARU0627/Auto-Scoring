@@ -24,7 +24,14 @@ from auto_scoring.domain.dependency_graph import (
     DependencyProvision,
 )
 from auto_scoring.domain.job_execution import ProcessingOutcome, ProcessingResult
-from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
+from auto_scoring.domain.models import (
+    ErrorCategory,
+    Job,
+    JobKind,
+    JobSaveConflict,
+    JobState,
+    SubmissionState,
+)
 from auto_scoring.jobs.clock import Clock
 from auto_scoring.jobs.queue import (
     JobCancelRejectedError,
@@ -2842,5 +2849,110 @@ async def test_a_post_claim_failure_recovers_the_stuck_running_job(
         job = service.get_job(job_id)
         assert job is not None
         assert job.attempts == 2  # the recovered attempt, then the one that actually succeeded
+    finally:
+        await service.shutdown()
+
+
+async def test_submit_submission_does_not_queue_jobs_for_extra_pages(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """Issue #215: A submission with extra pages relative to registered questions
+    (e.g. page_count=3, expected pages=(1, 2)) must NOT have grading jobs queued.
+    It must stay in needs_review waiting for human intervention rather than failing
+    with 'no answer image recorded'."""
+    _seed(
+        session_factory,
+        question_ids=["qa", "qb"],
+        question_pages={"qa": 1, "qb": 2},
+        page_count=3,
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.submissions.mark_intake_outcome("sub-1", SubmissionState.AI_PROCESSING, None)
+        uow.submissions.mark_intake_outcome("sub-1", SubmissionState.AI_PROCESSED, None)
+        uow.submissions.mark_intake_outcome(
+            "sub-1", SubmissionState.NEEDS_REVIEW, "extra_pages:3>2"
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        created = service.submit_submission(submission_id="sub-1")
+        assert created == []
+        assert service.list_for_submission("sub-1") == []
+        assert processor.calls == []
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            assert uow.jobs.list_for_submission("sub-1") == []
+            sub = uow.submissions.get("sub-1")
+            assert sub is not None
+            assert sub.state is SubmissionState.NEEDS_REVIEW
+            assert sub.review_reason == "extra_pages:3>2"
+    finally:
+        await service.shutdown()
+
+
+async def test_submit_submission_does_not_queue_jobs_for_missing_pages(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """Issue #215: A submission with missing pages relative to registered questions
+    (e.g. page_count=1, expected pages=(1, 2)) must NOT have grading jobs queued."""
+    _seed(
+        session_factory,
+        question_ids=["qa", "qb"],
+        question_pages={"qa": 1, "qb": 2},
+        page_count=1,
+    )
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.submissions.mark_intake_outcome("sub-1", SubmissionState.AI_PROCESSING, None)
+        uow.submissions.mark_intake_outcome("sub-1", SubmissionState.AI_PROCESSED, None)
+        uow.submissions.mark_intake_outcome(
+            "sub-1", SubmissionState.NEEDS_REVIEW, "missing_pages:2"
+        )
+        uow.commit()
+
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        created = service.submit_submission(submission_id="sub-1")
+        assert created == []
+        assert service.list_for_submission("sub-1") == []
+        assert processor.calls == []
+        with SqlAlchemyUnitOfWork(session_factory) as uow:
+            assert uow.jobs.list_for_submission("sub-1") == []
+            sub = uow.submissions.get("sub-1")
+            assert sub is not None
+            assert sub.state is SubmissionState.NEEDS_REVIEW
+            assert sub.review_reason == "missing_pages:2"
+    finally:
+        await service.shutdown()
+
+
+async def test_submit_submission_queues_jobs_normally_when_page_coverage_is_complete(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """Issue #215 (regression prevention): A submission with complete page coverage
+    (e.g. page_count=2, expected pages=(1, 2)) queues jobs and processes them normally."""
+    _seed(
+        session_factory,
+        question_ids=["qa", "qb"],
+        question_pages={"qa": 1, "qb": 2},
+        page_count=2,
+    )
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        created = service.submit_submission(submission_id="sub-1")
+        assert len(created) == 2
+        assert len(service.list_for_submission("sub-1")) == 2
+        await _wait_until(lambda: len(processor.calls) == 2)
+        await _wait_until(
+            lambda: all(
+                _state(service, j.id) is JobState.SUCCEEDED
+                for j in service.list_for_submission("sub-1")
+            )
+        )
     finally:
         await service.shutdown()

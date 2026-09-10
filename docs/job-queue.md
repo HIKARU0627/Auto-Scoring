@@ -311,13 +311,21 @@ Semaphoreを取得する。これにより「異なるSubmission間の並列実�
 （ページ数が合わない、回答欄が未定義の設問がある）や `error` になった答案は、
 自動では起票しない。`docs/answer-intake-and-preprocessing.md` §3 の
 「前提設問を含むページが欠落した状態では AI 採点を開始しない」を、起票側で
-守るのがここになったためである。一方、**添削レビュー画面の「AI採点を開始」は
-状態で塞がない** -- あれは答案と要確認の理由を見た人間が明示的に押すもので、
-business-rules §4.4 が認めている「人間が前提を承認して続行する」に当たる。
-回答欄が信頼できない設問については、パイプライン側が既に
-`AnswerImageStatus.NEEDS_REVIEW` の画像へproviderを呼ばず
-`SUCCEEDED(usable=False)` を返す（`docs/ocr-recognition-pipeline.md`）ので、
-起票しても誤った画像が外部へ出ることはない。
+守るのがここになったためである。
+
+**ページ被覆に問題がある答案（`extra_pages`, `missing_pages`）には採点ジョブを投入しない（Issue #215）。**
+設問切り出しの失敗（単一設問の枠外れ等）では `AnswerImageStatus.NEEDS_REVIEW` の画像が存在し、
+パイプラインが provider を呼ばずに `SUCCEEDED(usable=False)` で安全にスキップする。
+しかしページ被覆に問題がある答案では「まず人に見せる」設計判断により設問画像が 0 件
+（`should_extract = False`）となっており、ジョブを投入すると全問が 0.01 秒で
+`FAILED(PERMANENT)` となり、`last_error` は `no answer image recorded for this question` になる。
+再試行しても直らないものを「失敗」として記録するのは、人が直すべきものを機械の失敗に見せかける行為である。
+そのため、`JobQueueService.submit_submission` は `PageCoverage` を検査し、被覆問題がある答案には
+ジョブを作成・投入しない。答案は `needs_review` かつ `review_reason`（例: `extra_pages:3>2`）
+のまま、人の介入待ち状態を維持する。
+それでも手動操作等でジョブが実行・失敗する経路に対しては、`last_error` に `review_reason` を
+運び（`no answer image recorded for this question (extra_pages:3>2)`）、`#136` と同じ形で
+人に届く言葉がページ数の問題を明示する。
 
 **エラーの扱い。**
 

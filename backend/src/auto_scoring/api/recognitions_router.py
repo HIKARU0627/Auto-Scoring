@@ -166,8 +166,16 @@ def build_recognitions_router(
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             images = uow.answer_images.list_for_submission(submission_id)
             image = find_answer_image(images, question_id)
-        if image is None:
-            raise HTTPException(404, detail="no answer image recorded for this question")
+            if image is None:
+                submission = uow.submissions.get(submission_id)
+                suffix = (
+                    f" ({submission.review_reason})"
+                    if submission is not None and submission.review_reason
+                    else ""
+                )
+                raise HTTPException(
+                    404, detail=f"no answer image recorded for this question{suffix}"
+                )
         data = store.read_bytes(Path(image.image_path))
         return Response(content=data, media_type="image/png")
 

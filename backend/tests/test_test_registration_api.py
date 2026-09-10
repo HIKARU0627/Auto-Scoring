@@ -448,6 +448,48 @@ class TestProfileReviewAndConfirm:
         response = _confirm(client, test_id)
         assert response.status_code == 422
 
+    def test_confirm_cross_page_region_error_forewarns_downstream_impact(
+        self, client: TestClient
+    ) -> None:
+        """Issue #215: CrossPageRegionError 422 explains the limitation and
+        forewarns that removing one page's area means only the remaining page is
+        graded, and leaving a question-free page causes extra_pages on intake
+        which stops automated grading until human review."""
+        created = client.post(
+            "/tests",
+            headers=_auth(),
+            data={"name": "2ページ参考", "subject": "国語", "material_roles": ["reference"]},
+            files=[
+                ("criteria", ("02_criteria.pdf", _pdf_bytes(pages=2), "application/pdf")),
+                ("materials", ("reference.pdf", _pdf_bytes(pages=2), "application/pdf")),
+            ],
+        )
+        assert created.status_code == 201
+        test_id = created.json()["id"]
+        client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
+        regions = _minimal_regions()
+        regions.append(
+            _region(
+                region_id="answer-1-p2",
+                kind="answer_area",
+                label="1",
+                page_index=1,
+                bbox=(0.1, 0.5, 0.5, 0.7),
+            )
+        )
+        put_res = client.put(
+            f"/tests/{test_id}/profile", headers=_auth(), json={"regions": regions}
+        )
+        assert put_res.status_code == 200, put_res.text
+        response = _confirm(client, test_id)
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "複数ページにまたがっています" in detail
+        assert "どちらか一方のページの回答欄だけを残して確定できますが" in detail
+        assert "残したページの分しか採点されません" in detail
+        assert "extra_pages" in detail
+        assert "自動採点は開始されず人による確認が必要" in detail
+
     def test_update_rejects_out_of_range_coordinates(self, client: TestClient) -> None:
         test_id = _register_test(client)
         client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
