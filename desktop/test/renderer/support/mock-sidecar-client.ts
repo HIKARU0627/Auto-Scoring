@@ -210,6 +210,121 @@ export function createMockSidecarClient(
           };
         }
       }
+      if (path === "/submissions/{submission_id}") {
+        const submissionId = init?.params?.path?.submission_id ?? "sub-1";
+        return {
+          data: {
+            id: submissionId,
+            test_id: "t1",
+            state: "needs_review",
+            page_count: 1,
+            student_label: null,
+            created_at: "2026-01-01T00:00:00Z",
+            is_retry: false,
+            original_filename: null,
+            review_reason: null,
+          },
+          response: new Response(),
+          error: undefined,
+        };
+      }
+      if (path === "/tests/{test_id}/questions") {
+        return {
+          data: [
+            {
+              id: "q-1",
+              test_id: init?.params?.path?.test_id ?? "t1",
+              number: "1",
+              page: 1,
+              points: 5,
+              scoring_method: "additive",
+              rubric: [],
+            },
+          ],
+          response: new Response(),
+          error: undefined,
+        };
+      }
+      if (path === "/tests/{test_id}/dependency-graph") {
+        return {
+          data: {
+            id: "graph-1",
+            test_id: init?.params?.path?.test_id ?? "t1",
+            status: "confirmed",
+            version: 1,
+            question_ids: ["q-1"],
+            edges: [],
+            layers: [["q-1"]],
+            unresolved: [],
+            confirmed_at: "2026-01-01T00:00:00Z",
+          },
+          response: new Response(),
+          error: undefined,
+        };
+      }
+      if (path === "/submissions/{submission_id}/jobs") {
+        return {
+          data: [
+            {
+              id: "job-1",
+              kind: "grading",
+              submission_id: init?.params?.path?.submission_id ?? "sub-1",
+              question_id: "q-1",
+              state: "succeeded",
+              usable: true,
+              attempts: 1,
+              max_attempts: 3,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            },
+          ],
+          response: new Response(),
+          error: undefined,
+        };
+      }
+      if (path === "/submissions/{submission_id}/pages") {
+        return {
+          data: {
+            page_count: 1,
+            pages: [
+              {
+                page_index: 0,
+                displayed_width: 595,
+                displayed_height: 842,
+                rotation: 0,
+              },
+            ],
+          },
+          response: new Response(),
+          error: undefined,
+        };
+      }
+      if (path === "/submissions/{submission_id}/pages/{page_index}/image") {
+        const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
+          type: "image/png",
+        });
+        return { data: blob, response: new Response(), error: undefined };
+      }
+      if (
+        path ===
+          "/submissions/{submission_id}/questions/{question_id}/recognitions" ||
+        path ===
+          "/submissions/{submission_id}/questions/{question_id}/grades" ||
+        path ===
+          "/submissions/{submission_id}/questions/{question_id}/annotations" ||
+        path === "/submissions/{submission_id}/questions/{question_id}/reviews"
+      ) {
+        return { data: [], response: new Response(), error: undefined };
+      }
+      if (
+        path ===
+        "/submissions/{submission_id}/questions/{question_id}/answer-image"
+      ) {
+        const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
+          type: "image/png",
+        });
+        return { data: blob, response: new Response(), error: undefined };
+      }
       return {
         data: undefined,
         response: new Response(null, { status: 404 }),
