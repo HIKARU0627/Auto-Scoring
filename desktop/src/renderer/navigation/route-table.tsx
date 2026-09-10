@@ -5,6 +5,7 @@ import { HomePage } from "../features/home/HomePage.js";
 import { IntakePage } from "../features/intake/IntakePage.js";
 import { PdfReviewPage } from "../features/pdf-review/PdfReviewPage.js";
 import { SubmissionQueuePage } from "../features/review-queue/SubmissionQueuePage.js";
+import { SubmissionConfirmPage } from "../features/submission-confirm/SubmissionConfirmPage.js";
 import { TestSettingsPage } from "../features/test-settings/TestSettingsPage.js";
 import { ShellScreen } from "./ShellScreen.js";
 import { matchRoutePattern } from "./router.js";
@@ -64,7 +65,7 @@ export const ROUTE_TABLE: readonly RouteDefinition[] = [
   },
   {
     pattern: AppRoutes.submissionConfirmPattern,
-    render: () => <PlaceholderScreen title="答案確定" />,
+    render: () => <SubmissionConfirmPage />,
   },
   {
     pattern: AppRoutes.pdfReviewPattern,

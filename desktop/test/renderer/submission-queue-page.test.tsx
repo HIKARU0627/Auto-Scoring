@@ -162,8 +162,7 @@ describe("SubmissionQueuePage (Issue #113 / Issue #242 / INV-021, 140..146, 158,
     fireEvent.click(screen.getByTestId("queue-row-s1"));
 
     // 開く先は答案確定画面 (INV-021)
-    await screen.findByText("答案確定");
-    expect(screen.getByText("testId=t1, submissionId=s1")).toBeDefined();
+    await screen.findByTestId("confirm-question-list");
   });
 
   it("答案が1件も無いときは、そう言う", async () => {
