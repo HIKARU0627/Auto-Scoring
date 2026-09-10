@@ -293,6 +293,20 @@ Future<Uint8List> _unavailableGetExportFile(String exportId) async =>
 
 Future<JobResponse> _unavailableCancelJob(String jobId) async => _unavailable();
 
+Future<ApiKeySettingsResponse> _unavailableApiKeySettings() async =>
+    _unavailable();
+
+Future<ApiKeySettingsResponse> _unavailableSaveApiKey(
+  String slotId,
+  String value,
+) async => _unavailable();
+
+Future<ApiKeySettingsResponse> _unavailableDeleteApiKey(String slotId) async =>
+    _unavailable();
+
+Future<VerifyApiKeyResponse> _unavailableVerifyApiKey(String slotId) async =>
+    _unavailable();
+
 /// Fetches every registered test available to import answers into
 /// (simplified-design-spec.md §16.4).
 typedef ListTests = Future<List<TestSummary>> Function();
@@ -301,6 +315,20 @@ typedef ListTests = Future<List<TestSummary>> Function();
 /// (Issue #97). Asked once per sidecar connection by the composition
 /// root, which puts the answer above every screen.
 typedef GetGradingAvailability = Future<GradingAvailabilityResponse> Function();
+
+/// Which providers take an API key, whether each has one, and where that key
+/// came from (Issue #96). Never carries a key.
+typedef GetApiKeySettings = Future<ApiKeySettingsResponse> Function();
+
+/// Stores an API key in the OS credential store.
+typedef SaveApiKey =
+    Future<ApiKeySettingsResponse> Function(String slotId, String value);
+
+/// Removes a stored API key.
+typedef DeleteApiKey = Future<ApiKeySettingsResponse> Function(String slotId);
+
+/// Tries the key in force against its provider, once.
+typedef VerifyApiKey = Future<VerifyApiKeyResponse> Function(String slotId);
 
 /// Fetches every submission already imported for [testId].
 typedef ListSubmissions =
@@ -779,6 +807,10 @@ class AppDependencies {
     this.requestBulkExport = _unavailableRequestBulkExport,
     this.getExportFile = _unavailableGetExportFile,
     this.cancelJob = _unavailableCancelJob,
+    this.apiKeySettings = _unavailableApiKeySettings,
+    this.saveApiKey = _unavailableSaveApiKey,
+    this.deleteApiKey = _unavailableDeleteApiKey,
+    this.verifyApiKey = _unavailableVerifyApiKey,
   });
 
   /// Wires every operation to a live sidecar.
@@ -850,7 +882,11 @@ class AppDependencies {
       retryJob = client.retryJob,
       requestBulkExport = client.requestBulkExport,
       getExportFile = client.getExportFile,
-      cancelJob = client.cancelJob;
+      cancelJob = client.cancelJob,
+      apiKeySettings = client.apiKeySettings,
+      saveApiKey = client.saveApiKey,
+      deleteApiKey = client.deleteApiKey,
+      verifyApiKey = client.verifyApiKey;
 
   /// Whether the sidecar answers its health endpoint. In the running app this
   /// is `SidecarApiClient.isHealthy`; the default is a stub that reports
@@ -858,6 +894,10 @@ class AppDependencies {
   final Future<bool> Function() healthCheck;
 
   final GetGradingAvailability gradingAvailability;
+  final GetApiKeySettings apiKeySettings;
+  final SaveApiKey saveApiKey;
+  final DeleteApiKey deleteApiKey;
+  final VerifyApiKey verifyApiKey;
   final ListTests listTests;
   final ListSubmissions listSubmissions;
   final GetSubmission getSubmission;

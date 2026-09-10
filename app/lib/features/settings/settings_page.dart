@@ -6,18 +6,24 @@ import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/material_role_labels.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
+import 'package:auto_scoring_app/features/settings/api_key_tab.dart';
 
-/// 設定画面 (Issue #101).
+/// 設定画面 (Issue #101, Issue #96).
 ///
-/// **One settings screen, with tabs.** Issue #101 fills in 取込の型; Issue
-/// #96's API-key settings are meant to become a second tab here rather than a
-/// second screen -- for the person using this, settings are one place.
+/// **One settings screen, with tabs.** Issue #101 filled in 取込の型 and
+/// Issue #96 added API キー beside it rather than as a second screen -- for
+/// the person using this, settings are one place.
 ///
-/// The two will not share a *storage* location, and that is deliberate: a
+/// The two do not share a *storage* location, and that is deliberate: a
 /// template is a folder layout and lives as plain JSON under `app-data/`,
-/// while an API key belongs in the OS credential store (Issue #96's decision).
-/// Sitting next to each other on screen does not make them the same kind of
-/// thing.
+/// while an API key belongs in the OS credential store (Issue #96's
+/// decision). Sitting next to each other on screen does not make them the
+/// same kind of thing.
+///
+/// Only 取込の型 is built here. `ApiKeyTab` owns its own state and its own
+/// rules about what may be shown, which is the point: a tab that must never
+/// render the value it manages should not share a State object with one that
+/// renders everything it holds.
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
@@ -135,15 +141,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 1,
+      length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('設定'),
           bottom: const TabBar(
-            tabs: [Tab(key: Key('settings-tab-intake'), text: '取込の型')],
+            tabs: [
+              Tab(key: Key('settings-tab-intake'), text: '取込の型'),
+              Tab(key: Key('settings-tab-api-key'), text: 'API キー'),
+            ],
           ),
         ),
-        body: TabBarView(children: [_buildIntakeTab()]),
+        // The 取込の型 tab's state lives in this widget, so it is built here;
+        // the API-key tab owns its own and is a widget of its own. They share
+        // a screen because settings are one place for the person using this,
+        // not because they are the same kind of thing -- one is a folder
+        // layout in plain JSON under `app-data/`, the other a secret in the
+        // OS credential store (docs/intake-and-settings.md section 2.2).
+        body: TabBarView(children: [_buildIntakeTab(), const ApiKeyTab()]),
       ),
     );
   }

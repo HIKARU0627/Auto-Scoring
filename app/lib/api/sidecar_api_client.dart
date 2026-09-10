@@ -21,6 +21,10 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
     show
         AnnotationEditRequest,
         AnswerLayoutResponse,
+        ApiKeySettingsResponse,
+        ApiKeyStatusModel,
+        ConfigurationSource,
+        VerifyApiKeyResponse,
         AttributionProposalResponse,
         ClassificationAvailabilityResponse,
         ClassificationEstimateModel,
@@ -233,6 +237,11 @@ class SidecarApiClient {
     _reviewApi = generated.getReviewApi();
     _jobsApi = generated.getJobsApi();
     _exportApi = generated.getExportApi();
+    _settingsApi = generated.getSettingsApi();
+    // Verifying an API key waits on a round trip to the provider, which is
+    // an internet hop rather than a loopback one. It shares the upload
+    // client's headroom for the same reason classification does.
+    _verifySettingsApi = uploadGenerated.getSettingsApi();
   }
 
   static void _configure(
@@ -269,6 +278,7 @@ class SidecarApiClient {
   late final JobsApi _jobsApi;
   late final ExportApi _exportApi;
   late final IntakeApi _intakeApi;
+  late final SettingsApi _settingsApi;
 
   /// A second Dio/client pair, configured with [intakeTimeout] instead of
   /// [timeout], for [createSubmission]. Rasterizing, deskewing and cropping
@@ -282,6 +292,7 @@ class SidecarApiClient {
   late final DefaultApi _uploadApi;
   late final TestRegistrationApi _uploadTestRegistrationApi;
   late final IntakeApi _uploadIntakeApi;
+  late final SettingsApi _verifySettingsApi;
 
   /// Plan a scanned batch against a saved 取込の型 (Issue #101).
   ///
@@ -500,6 +511,89 @@ class SidecarApiClient {
       final response = await _api.gradingAvailabilityGradingAvailabilityGet(
         cancelToken: cancelToken,
       );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Which providers take an API key, whether each has one, and where that
+  /// key came from (Issue #96).
+  ///
+  /// **No key is ever in the response.** The screen learns that one is held
+  /// and which layer it came from -- the OS credential store or an
+  /// environment variable -- and can replace it; it cannot read one back.
+  Future<ApiKeySettingsResponse> apiKeySettings({
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _settingsApi.readApiKeysSettingsApiKeysGet(
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Store [value] as the API key for [slotId], returning the refreshed
+  /// settings.
+  ///
+  /// A host with no OS credential store answers 503, which arrives here as a
+  /// [SidecarApiException] carrying the sidecar's own explanation -- "saved"
+  /// must never be reported for a save that did not happen.
+  Future<ApiKeySettingsResponse> saveApiKey(
+    String slotId,
+    String value, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _settingsApi.saveApiKeySettingsApiKeysSlotIdPut(
+        slotId: slotId,
+        saveApiKeyRequest: SaveApiKeyRequest(
+          (builder) => builder..value = value,
+        ),
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Remove the stored API key for [slotId].
+  Future<ApiKeySettingsResponse> deleteApiKey(
+    String slotId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _settingsApi
+          .deleteApiKeySettingsApiKeysSlotIdDelete(
+            slotId: slotId,
+            cancelToken: cancelToken,
+          );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Try the key in force for [slotId] against its provider, once.
+  ///
+  /// "Saved" is not "works": a typo, a revoked key and a blocked network all
+  /// look identical on the settings screen until something tries one. The
+  /// outcomes are distinct values, not one boolean, because they call for
+  /// different actions.
+  Future<VerifyApiKeyResponse> verifyApiKey(
+    String slotId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _verifySettingsApi
+          .verifySettingsApiKeysSlotIdVerifyPost(
+            slotId: slotId,
+            cancelToken: cancelToken,
+          );
       return _requireBody(response);
     } on DioException catch (error) {
       throw _translate(error);
