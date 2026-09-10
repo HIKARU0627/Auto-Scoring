@@ -858,3 +858,127 @@ class TestMissingQuestionsAreSplitByCause:
         body = _detect(client, test_id).json()
 
         assert body["absent_question_numbers"] == ["問1"]
+
+
+class TestReadingOrderIsReported:
+    """Issue #171. Advisory, never a blocker: the check is a rule of thumb
+    measured over 8 answer sheets, and a wrong flag must not be able to make
+    a correct profile unconfirmable."""
+
+    def test_a_swapped_pair_is_named_in_the_response(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問一", "問二")
+        _upload_layout(client, test_id)
+        # Two vertical columns, at the positions measured on a real
+        # right-to-left sheet -- attributed the wrong way round.
+        detector.set_body(
+            _detection_body(
+                _area(number="問一", bbox=(0.639, 0.270, 0.703, 0.720)),
+                _area(number="問二", bbox=(0.798, 0.270, 0.843, 0.671)),
+            )
+        )
+
+        body = _detect(client, test_id).json()
+
+        assert body["reading_order_conflicts"] == [["問一", "問二"]]
+        assert body["undetected_question_numbers"] == []
+
+    def test_the_same_columns_attributed_correctly_are_quiet(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問一", "問二")
+        _upload_layout(client, test_id)
+        detector.set_body(
+            _detection_body(
+                _area(number="問一", bbox=(0.798, 0.270, 0.843, 0.671)),
+                _area(number="問二", bbox=(0.639, 0.270, 0.703, 0.720)),
+            )
+        )
+
+        body = _detect(client, test_id).json()
+
+        assert body["reading_order_conflicts"] == []
+
+    def test_a_flagged_pair_does_not_block_the_confirm(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """Deliberately unlike 設問未割当. That one is a fact -- the box names
+        no question and would vanish silently. This one is a suspicion drawn
+        from 8 sheets, and which of the two boxes moved is not decidable from
+        the geometry at all."""
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問一", "問二")
+        _upload_layout(client, test_id)
+        detector.set_body(
+            _detection_body(
+                _area(number="問一", bbox=(0.639, 0.270, 0.703, 0.720)),
+                _area(number="問二", bbox=(0.798, 0.270, 0.843, 0.671)),
+            )
+        )
+        detected = _detect(client, test_id).json()
+        assert detected["reading_order_conflicts"] == [["問一", "問二"]]
+        # A confirm needs the question/score regions like any other; only the
+        # flag is under test here.
+        saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={
+                "regions": [
+                    *detected["regions"],
+                    {
+                        "region_id": "question-1",
+                        "kind": "question",
+                        "page_index": 0,
+                        "bbox": {"x0": 0.0, "y0": 0.0, "x1": 0.4, "y1": 0.1},
+                        "label": "問一",
+                        "confirmed": False,
+                        "text": "問一",
+                    },
+                    {
+                        "region_id": "score-1",
+                        "kind": "score",
+                        "page_index": 0,
+                        "bbox": {"x0": 0.8, "y0": 0.0, "x1": 0.9, "y1": 0.1},
+                        "label": "問一",
+                        "confirmed": False,
+                        "text": "5点",
+                    },
+                ]
+            },
+        ).json()
+        assert saved["reading_order_conflicts"] == [["問一", "問二"]]
+
+        response = client.post(
+            f"/tests/{test_id}/profile/confirm",
+            headers=_auth(),
+            json={"revision": saved["revision"]},
+        )
+
+        assert response.status_code == 200, response.text
+
+    def test_swapping_the_labels_clears_it(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問一", "問二")
+        _upload_layout(client, test_id)
+        detector.set_body(
+            _detection_body(
+                _area(number="問一", bbox=(0.639, 0.270, 0.703, 0.720)),
+                _area(number="問二", bbox=(0.798, 0.270, 0.843, 0.671)),
+            )
+        )
+        detected = _detect(client, test_id).json()
+        swapped = [
+            {**region, "label": "問二" if region["label"] == "問一" else "問一"}
+            for region in detected["regions"]
+        ]
+
+        saved = client.put(
+            f"/tests/{test_id}/profile", headers=_auth(), json={"regions": swapped}
+        ).json()
+
+        assert saved["reading_order_conflicts"] == []

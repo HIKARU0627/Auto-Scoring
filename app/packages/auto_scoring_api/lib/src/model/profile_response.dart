@@ -17,6 +17,7 @@ part 'profile_response.g.dart';
 /// * [absentQuestionNumbers]
 /// * [pages]
 /// * [questionNumbers]
+/// * [readingOrderConflicts]
 /// * [regions]
 /// * [revision]
 /// * [status]
@@ -34,6 +35,9 @@ abstract class ProfileResponse
 
   @BuiltValueField(wireName: r'question_numbers')
   BuiltList<String> get questionNumbers;
+
+  @BuiltValueField(wireName: r'reading_order_conflicts')
+  BuiltList<BuiltList<String>> get readingOrderConflicts;
 
   @BuiltValueField(wireName: r'regions')
   BuiltList<RegionModel> get regions;
@@ -93,6 +97,13 @@ class _$ProfileResponseSerializer
     yield serializers.serialize(
       object.questionNumbers,
       specifiedType: const FullType(BuiltList, [FullType(String)]),
+    );
+    yield r'reading_order_conflicts';
+    yield serializers.serialize(
+      object.readingOrderConflicts,
+      specifiedType: const FullType(BuiltList, [
+        FullType(BuiltList, [FullType(String)])
+      ]),
     );
     yield r'regions';
     yield serializers.serialize(
@@ -170,6 +181,15 @@ class _$ProfileResponseSerializer
             specifiedType: const FullType(BuiltList, [FullType(String)]),
           ) as BuiltList<String>;
           result.questionNumbers.replace(valueDes);
+          break;
+        case r'reading_order_conflicts':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [
+              FullType(BuiltList, [FullType(String)])
+            ]),
+          ) as BuiltList<BuiltList<String>>;
+          result.readingOrderConflicts.replace(valueDes);
           break;
         case r'regions':
           final valueDes = serializers.deserialize(

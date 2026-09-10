@@ -1936,6 +1936,16 @@
             "title": "Question Numbers",
             "type": "array"
           },
+          "reading_order_conflicts": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Reading Order Conflicts",
+            "type": "array"
+          },
           "regions": {
             "items": {
               "$ref": "#/components/schemas/RegionModel"
@@ -1979,6 +1989,7 @@
           "question_numbers",
           "undetected_question_numbers",
           "absent_question_numbers",
+          "reading_order_conflicts",
           "unassigned_region_ids"
         ],
         "title": "ProfileResponse",

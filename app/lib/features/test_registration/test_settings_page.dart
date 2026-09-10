@@ -819,6 +819,12 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
     final undetected = missing.undetected;
     final absent = missing.absent;
     final unseenSheet = _mustSeeAnswerSheetFirst(working);
+    // Server-derived, and re-read on every save: the ordering of the boxes
+    // is exactly what the reviewer is editing, so this cannot be computed
+    // once and kept.
+    final conflicts =
+        _profile?.readingOrderConflicts.map((pair) => pair.toList()).toList() ??
+        const <List<String>>[];
     return Card(
       child: Padding(
         padding: AppSpacing.card,
@@ -855,6 +861,7 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
                 questionNumbers: _questionNumbers,
                 undetectedQuestionNumbers: undetected,
                 absentQuestionNumbers: absent,
+                readingOrderConflicts: conflicts,
                 pdfBytes: _answerLayoutPdf,
                 readOnly: _busy || _profileConfirmed,
                 onRegionsChanged: (next) =>

@@ -54,6 +54,7 @@ Future<List<RegionModel> Function()> _pumpEditor(
   List<String> questionNumbers = const ['問1', '問2'],
   List<String> undetected = const [],
   List<String> absent = const [],
+  List<List<String>> conflicts = const [],
   int pages = 1,
   bool readOnly = false,
   void Function(int index)? onEditNumerically,
@@ -76,6 +77,7 @@ Future<List<RegionModel> Function()> _pumpEditor(
               questionNumbers: questionNumbers,
               undetectedQuestionNumbers: undetected,
               absentQuestionNumbers: absent,
+              readingOrderConflicts: conflicts,
               readOnly: readOnly,
               onEditNumerically: onEditNumerically,
               onRegionsChanged: (next) => setState(() => current = next),
@@ -122,6 +124,7 @@ Future<void> _dragBy(
 
 void main() {
   _missingQuestionGroups();
+  _readingOrderWarning();
   group('showing what was and was not found', () {
     testWidgets('lists every question the detection did not find', (
       tester,
@@ -762,6 +765,102 @@ void _missingQuestionGroups() {
         find.byKey(const Key('answer-area-draw-target')),
       );
       expect(dropdown.value, '問1');
+    });
+  });
+}
+
+void _readingOrderWarning() {
+  group('reading order disagrees with the question numbers (Issue #171)', () {
+    // Two vertical answer columns at the positions measured on a real
+    // right-to-left sheet: 問一's column is the one further right.
+    List<RegionModel> twoColumns() => [
+      _region(
+        regionId: 'r-1',
+        label: '問一',
+        x0: 0.639,
+        y0: 0.270,
+        x1: 0.703,
+        y1: 0.720,
+      ),
+      _region(
+        regionId: 'r-2',
+        label: '問二',
+        x0: 0.798,
+        y0: 0.270,
+        x1: 0.843,
+        y1: 0.671,
+      ),
+    ];
+
+    testWidgets('nothing is shown when the order agrees', (tester) async {
+      await _pumpEditor(
+        tester,
+        regions: twoColumns(),
+        questionNumbers: const ['問一', '問二'],
+      );
+
+      expect(find.byKey(const Key('answer-area-reading-order')), findsNothing);
+    });
+
+    testWidgets('the suspicious pair is named', (tester) async {
+      // The one failure that looks like success: both questions have a box,
+      // so the banner above says every question has one, while each has the
+      // other's answer.
+      await _pumpEditor(
+        tester,
+        regions: twoColumns(),
+        questionNumbers: const ['問一', '問二'],
+        conflicts: const [
+          ['問一', '問二'],
+        ],
+      );
+
+      expect(find.byKey(const Key('answer-area-reading-order')), findsOne);
+      expect(find.text('問一 と 問二'), findsOne);
+      expect(find.byKey(const Key('answer-area-all-detected')), findsOne);
+    });
+
+    testWidgets('swapping moves the questions, not the rectangles', (
+      tester,
+    ) async {
+      // The rectangles are the half detection got right -- they sit exactly
+      // on the printed columns. Only the attribution is in doubt.
+      final read = await _pumpEditor(
+        tester,
+        regions: twoColumns(),
+        questionNumbers: const ['問一', '問二'],
+        conflicts: const [
+          ['問一', '問二'],
+        ],
+      );
+
+      await tester.tap(find.byKey(const Key('answer-area-swap-問一-問二')));
+      await tester.pumpAndSettle();
+
+      final after = read();
+      expect(after.map((r) => r.label).toList(), ['問二', '問一']);
+      expect(after[0].bbox.x0, closeTo(0.639, 1e-9));
+      expect(after[1].bbox.x0, closeTo(0.798, 1e-9));
+    });
+
+    testWidgets('a confirmed profile offers no swap', (tester) async {
+      await _pumpEditor(
+        tester,
+        regions: twoColumns(),
+        questionNumbers: const ['問一', '問二'],
+        conflicts: const [
+          ['問一', '問二'],
+        ],
+        readOnly: true,
+      );
+
+      final button = tester.widget<TextButton>(
+        find.ancestor(
+          of: find.text('回答欄を入れ替える'),
+          matching: find.byType(TextButton),
+        ),
+      );
+      expect(button.onPressed, isNull);
     });
   });
 }

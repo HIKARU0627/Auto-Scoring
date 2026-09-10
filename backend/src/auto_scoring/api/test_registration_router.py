@@ -74,6 +74,7 @@ from auto_scoring.domain.answer_area_detection import (
     UnconfiguredAnswerAreaDetector,
     ensure_answer_areas_confirmable,
     missing_question_numbers,
+    reading_order_conflicts,
     regions_from_detection,
     unassigned_answer_area_ids,
 )
@@ -324,6 +325,13 @@ class ProfileResponse(BaseModel):
     #: (`Profile.absent_question_numbers`), so a reviewer who draws the box
     #: anyway drops it out of both lists.
     absent_question_numbers: list[str]
+    #: Pairs of question numbers whose boxes sit in the opposite order to
+    #: their numbers on the page they share (Issue #171). Advisory: it names
+    #: a suspicion, and which of the two boxes is the misplaced one is not
+    #: decidable from the geometry -- so it does **not** block confirming,
+    #: and nothing is re-labelled automatically. Derived on every response
+    #: from the current region set, like every other list here.
+    reading_order_conflicts: list[list[str]]
     #: Region ids of detected boxes that still have no question assigned.
     #: These *do* block confirming (`ensure_answer_areas_confirmable`) --
     #: `build_questions_and_rubrics` would ignore them without a word.
@@ -343,6 +351,9 @@ class ProfileResponse(BaseModel):
             question_numbers=list(question_numbers),
             undetected_question_numbers=list(undetected),
             absent_question_numbers=list(absent),
+            reading_order_conflicts=[
+                list(pair) for pair in reading_order_conflicts(profile.regions, question_numbers)
+            ],
             unassigned_region_ids=list(unassigned_answer_area_ids(profile.regions)),
         )
 
