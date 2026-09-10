@@ -70,7 +70,7 @@ from pydantic import model_validator as pydantic_model_validator
 
 from auto_scoring.domain.ai_response_language import FIELD_LANGUAGE_NOTE
 from auto_scoring.domain.answer_area_snapping import PageRuling, snap_bbox_to_ruling
-from auto_scoring.domain.models import DomainError
+from auto_scoring.domain.models import DomainError, Question
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
 
 #: `Region.label` for a box the model found but could not attribute to any
@@ -639,6 +639,59 @@ def reading_order_conflicts(
             if position[first.label] > position[second.label]:
                 conflicts.append((first.label, second.label))
     return tuple(conflicts)
+
+
+def question_answer_regions(questions: Sequence[Question]) -> tuple[Region, ...]:
+    """`ANSWER_AREA` regions rebuilt from confirmed `Question` rows.
+
+    Intake has no profile file on hand -- only the question table the
+    profile became at confirm time -- but `reading_order_conflicts` needs
+    the same geometry the detector produced. This is the one-way bridge.
+    """
+    regions: list[Region] = []
+    for question in questions:
+        area = question.answer_area
+        if area is None or area.width <= 0 or area.height <= 0:
+            continue
+        regions.append(
+            Region(
+                region_id=question.id,
+                kind=RegionKind.ANSWER_AREA,
+                page_index=question.page - 1,
+                bbox=NormalizedBBox(
+                    x0=area.x,
+                    y0=area.y,
+                    x1=area.x + area.width,
+                    y1=area.y + area.height,
+                ),
+                label=question.number,
+            )
+        )
+    return tuple(regions)
+
+
+def questions_reading_order_conflicts(
+    questions: Sequence[Question], question_numbers: Sequence[str]
+) -> tuple[tuple[str, str], ...]:
+    """Pairs of question numbers whose confirmed boxes contradict their order.
+
+    Thin wrapper over :func:`reading_order_conflicts` for the intake path:
+    detection's advisory list on `PUT /profile` is not consulted at confirm
+    time (Issue #213), so intake re-derives the same suspicion from the
+    question rows it is about to crop against.
+    """
+    return reading_order_conflicts(question_answer_regions(questions), question_numbers)
+
+
+def conflicted_question_numbers(
+    conflicts: Sequence[tuple[str, str]],
+) -> frozenset[str]:
+    """Every question number that appears in at least one conflict pair."""
+    numbers: set[str] = set()
+    for first, second in conflicts:
+        numbers.add(first)
+        numbers.add(second)
+    return frozenset(numbers)
 
 
 def unassigned_answer_area_ids(regions: Sequence[Region]) -> tuple[str, ...]:

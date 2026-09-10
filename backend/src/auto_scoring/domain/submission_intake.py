@@ -151,6 +151,15 @@ NEARLY_BLANK_CROP_REASON = "crop_nearly_blank"
 #: grading_failure_reason.dart` holds the other half.
 NOT_THE_ANSWER_CROP_REASON = "crop_not_the_answer"
 
+#: `AnswerImage.reason` when the confirmed answer areas for two questions sit
+#: in the opposite order to their numbers on the page they share (Issue #213,
+#: building on Issue #171's detection). Same contract as the other intake
+#: reasons: the crop is kept so a person can see what would have been graded,
+#: but `jobs.recognition_processor` / `jobs.grading_processor` never send it
+#: to a provider -- an adjacent question's plausible answer is indistinguishable
+#: to the AI, and confidence is no help (one real run scored 0/4 at 1.00).
+READING_ORDER_CONFLICT_REASON = "reading_order_conflict"
+
 
 def is_nearly_blank_crop(ink_coverage: float) -> bool:
     """Whether a cropped answer image holds so little ink that sending it to

@@ -23,9 +23,11 @@ from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionOutput,
     AnswerAreaDetectionRequest,
     UnassignedAnswerAreaError,
+    conflicted_question_numbers,
     ensure_answer_areas_confirmable,
     missing_question_numbers,
     parse_answer_area_detection,
+    questions_reading_order_conflicts,
     reading_order_conflicts,
     regions_from_detection,
     unassigned_answer_area_ids,
@@ -761,3 +763,34 @@ class TestReadingOrderConflicts:
 
         assert reading_order_conflicts(tall, ("問一", "問二")) == (("問一", "問二"),)
         assert reading_order_conflicts(wide, ("問一", "問二")) == ()
+
+
+def test_questions_reading_order_conflicts_rebuilds_regions_from_question_rows() -> None:
+    """Intake has only `Question` rows, not the profile file."""
+    from auto_scoring.domain.models import NormalizedRect, Question
+
+    questions = (
+        Question(
+            id="q-1",
+            test_id="t",
+            number="問一",
+            page=1,
+            points=5,
+            answer_area=NormalizedRect(x=0.639, y=0.270, width=0.064, height=0.450),
+        ),
+        Question(
+            id="q-2",
+            test_id="t",
+            number="問二",
+            page=1,
+            points=5,
+            answer_area=NormalizedRect(x=0.798, y=0.270, width=0.045, height=0.401),
+        ),
+    )
+    numbers = ("問一", "問二", "問三")
+
+    assert questions_reading_order_conflicts(questions, numbers) == (("問一", "問二"),)
+    assert conflicted_question_numbers(questions_reading_order_conflicts(questions, numbers)) == {
+        "問一",
+        "問二",
+    }
