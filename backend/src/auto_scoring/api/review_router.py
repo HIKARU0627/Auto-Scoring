@@ -565,6 +565,27 @@ def build_review_router(
         },
     )
     def get_source_pdf(submission_id: str) -> Response:
+        """The original, unmodified answer PDF's raw bytes (§13.1: 元PDF自体は
+        直接編集しない).
+
+        **Used by the Flutter 添削レビュー screen until the Electron
+        cut-over**, and by nothing else -- it renders the PDF itself with
+        `pdfrx` and draws the annotation overlay on top.
+
+        The new UI does not receive raw PDF bytes. PoC 6
+        (`docs/poc-6-pdf-coordinates.md`) put the rasterization in the sidecar,
+        so that the pdfium which draws the page is the same one that performs
+        the coordinate transform; the Electron screen reads
+        ``GET /submissions/{submission_id}/pages`` and
+        ``.../pages/{page_index}/image`` (`api.page_image_router`) instead, and
+        app-data stays owned by the sidecar.
+
+        **After the cut-over there is no known caller left** -- the export path
+        opens the stored file directly rather than going through HTTP.
+        **Whether to delete this endpoint (and
+        ``GET /tests/{test_id}/answer-layout/pdf``, kept for the same reason)
+        is decided at cut-over, tracked in Issue #201.**
+        """
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             submission = uow.submissions.get(submission_id)
         if submission is None:
