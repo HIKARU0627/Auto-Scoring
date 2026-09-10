@@ -12,6 +12,13 @@ import type {
   SubmissionReviewProgressResponse,
   TestResponse,
 } from "../../../src/renderer/api/submission-queue-data.js";
+import type {
+  ApiKeySettingsResponse,
+  ApiKeyStatusModel,
+  IntakeCostModel,
+  IntakeTemplateModel,
+  VerifyApiKeyResponse,
+} from "../../../src/renderer/api/settings-data.js";
 
 export interface MockSidecarHandlers {
   listTestRegistrations?: () => Promise<TestResponse[]>;
@@ -32,6 +39,19 @@ export interface MockSidecarHandlers {
     submissionIds: readonly string[],
   ) => Promise<BulkExportResponse>;
   getExportFile?: (exportId: string) => Promise<Uint8Array>;
+  getApiKeySettings?: () => Promise<ApiKeySettingsResponse>;
+  saveApiKey?: (
+    slotId: string,
+    value: string,
+  ) => Promise<ApiKeySettingsResponse>;
+  deleteApiKey?: (slotId: string) => Promise<ApiKeySettingsResponse>;
+  verifyApiKey?: (slotId: string) => Promise<VerifyApiKeyResponse>;
+  listIntakeTemplates?: () => Promise<IntakeTemplateModel[]>;
+  saveIntakeTemplates?: (
+    templates: IntakeTemplateModel[],
+  ) => Promise<IntakeTemplateModel[]>;
+  getIntakeCost?: () => Promise<IntakeCostModel>;
+  saveIntakeCost?: (cost: number | null) => Promise<IntakeCostModel>;
 }
 
 export function buildTest(input: {
@@ -84,6 +104,44 @@ export function buildProgress(input: {
     total_questions: input.total ?? 5,
     confirmed_questions: input.confirmed ?? 0,
     manual_grading_questions: input.manualGrading ?? 0,
+  };
+}
+
+export function buildApiKeyStatus(
+  input: Partial<ApiKeyStatusModel> & { id?: string } = {},
+): ApiKeyStatusModel {
+  return {
+    id: input.id ?? "openrouter",
+    label: input.label ?? "OpenRouter",
+    configured: input.configured ?? false,
+    key_source: input.key_source ?? "none",
+    key_variable: input.key_variable ?? "AUTO_SCORING_OPENROUTER_API_KEY",
+    model: input.model ?? "google/gemini-2.5-flash",
+    model_source: input.model_source ?? "builtin_default",
+    console_url: input.console_url ?? "https://openrouter.ai/settings/keys",
+  };
+}
+
+export function buildApiKeySettings(
+  input: Partial<ApiKeySettingsResponse> = {},
+): ApiKeySettingsResponse {
+  return {
+    keys: input.keys ?? [buildApiKeyStatus()],
+    restart_required: input.restart_required ?? false,
+    store_unavailable_reason: input.store_unavailable_reason ?? null,
+    transport_order: input.transport_order ?? "openrouter",
+    transport_source: input.transport_source ?? "builtin_default",
+  };
+}
+
+export function buildVerifyApiKeyResponse(
+  input: Partial<VerifyApiKeyResponse> = {},
+): VerifyApiKeyResponse {
+  return {
+    result: input.result ?? "ok",
+    detail: input.detail ?? "疎通しました。",
+    key_source: input.key_source ?? "credential_store",
+    status_code: input.status_code ?? 200,
   };
 }
 
@@ -390,6 +448,68 @@ export function createMockSidecarClient(
         });
         return { data: blob, response: new Response(), error: undefined };
       }
+      if (path === "/settings/api-keys") {
+        try {
+          const data = handlers.getApiKeySettings
+            ? await handlers.getApiKeySettings()
+            : buildApiKeySettings();
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/intake-templates") {
+        try {
+          const data = handlers.listIntakeTemplates
+            ? await handlers.listIntakeTemplates()
+            : [
+                {
+                  id: "serial-number-prefix",
+                  name: "連番の接頭辞 (既定)",
+                  split_child_directories: true,
+                  rules: [
+                    {
+                      scope: "file",
+                      pattern: "01_*",
+                      role: "student_answer",
+                      requirement: "required",
+                    },
+                  ],
+                },
+              ];
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/intake-cost") {
+        try {
+          const data = handlers.getIntakeCost
+            ? await handlers.getIntakeCost()
+            : { classification_unit_cost: null };
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
       return {
         data: undefined,
         response: new Response(null, { status: 404 }),
@@ -486,6 +606,23 @@ export function createMockSidecarClient(
           };
         }
       }
+      if (path === "/settings/api-keys/{slot_id}/verify") {
+        const slotId = init?.params?.path?.slot_id;
+        try {
+          const data = handlers.verifyApiKey
+            ? await handlers.verifyApiKey(slotId ?? "")
+            : buildVerifyApiKeyResponse();
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
       if (path === "/jobs/{job_id}/cancel") {
         const jobId = init?.params?.path?.job_id;
         if (jobId === undefined) {
@@ -565,9 +702,114 @@ export function createMockSidecarClient(
         error: { message: "not found" },
       };
     }),
-    PUT: vi.fn(),
+    PUT: vi.fn(async (path, init) => {
+      if (path === "/settings/api-keys/{slot_id}") {
+        const slotId = init?.params?.path?.slot_id;
+        const value =
+          (init?.body as { value?: string } | undefined)?.value ?? "";
+        try {
+          const data = handlers.saveApiKey
+            ? await handlers.saveApiKey(slotId ?? "", value)
+            : buildApiKeySettings({
+                keys: [
+                  buildApiKeyStatus({
+                    id: slotId,
+                    configured: true,
+                    key_source: "credential_store",
+                  }),
+                ],
+                restart_required: true,
+              });
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/intake-templates") {
+        const templates =
+          (init?.body as { templates?: IntakeTemplateModel[] } | undefined)
+            ?.templates ?? [];
+        try {
+          const data = handlers.saveIntakeTemplates
+            ? await handlers.saveIntakeTemplates(templates)
+            : templates;
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/intake-cost") {
+        const cost =
+          (
+            init?.body as
+              { classification_unit_cost?: number | null } | undefined
+          )?.classification_unit_cost ?? null;
+        try {
+          const data = handlers.saveIntakeCost
+            ? await handlers.saveIntakeCost(cost)
+            : { classification_unit_cost: cost };
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      return {
+        data: undefined,
+        response: new Response(null, { status: 404 }),
+        error: { message: "not found" },
+      };
+    }),
     PATCH: vi.fn(),
-    DELETE: vi.fn(),
+    DELETE: vi.fn(async (path, init) => {
+      if (path === "/settings/api-keys/{slot_id}") {
+        const slotId = init?.params?.path?.slot_id;
+        try {
+          const data = handlers.deleteApiKey
+            ? await handlers.deleteApiKey(slotId ?? "")
+            : buildApiKeySettings({
+                keys: [
+                  buildApiKeyStatus({
+                    id: slotId,
+                    configured: false,
+                    key_source: "none",
+                  }),
+                ],
+              });
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      return {
+        data: undefined,
+        response: new Response(null, { status: 404 }),
+        error: { message: "not found" },
+      };
+    }),
     use: vi.fn(),
     eject: vi.fn(),
   } as unknown as SidecarClient;

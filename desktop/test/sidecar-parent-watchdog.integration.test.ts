@@ -203,10 +203,14 @@ describe("Linux CI Parent Process Watchdog Integration (Acceptance 4, UG-01)", (
           stdio: "ignore",
         });
       } catch {
-        process.kill(unwatchedChildPid, "SIGKILL");
+        try {
+          process.kill(unwatchedChildPid, "SIGKILL");
+        } catch {}
       }
     } else {
-      process.kill(unwatchedChildPid, "SIGKILL");
+      try {
+        process.kill(unwatchedChildPid, "SIGKILL");
+      } catch {}
     }
     try {
       fs.rmSync(handshakeDir, { recursive: true, force: true });
