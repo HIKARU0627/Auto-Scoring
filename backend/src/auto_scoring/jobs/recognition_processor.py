@@ -248,10 +248,16 @@ class RecognitionJobProcessor:
             images = uow.answer_images.list_for_submission(job.submission_id)
             image = find_answer_image(images, question_id)
             if image is None:
+                submission = uow.submissions.get(job.submission_id)
+                suffix = (
+                    f" ({submission.review_reason})"
+                    if submission is not None and submission.review_reason
+                    else ""
+                )
                 return ProcessingResult(
                     outcome=ProcessingOutcome.FAILED,
                     error_category=ErrorCategory.PERMANENT,
-                    error_message="no answer image recorded for this question",
+                    error_message=f"no answer image recorded for this question{suffix}",
                 )
             if image.status is AnswerImageStatus.NEEDS_REVIEW:
                 # The crop itself could not be trusted (Issue #17 §7.1) -- do

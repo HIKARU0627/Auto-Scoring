@@ -203,6 +203,10 @@ def intake_submission(
         expected_pages = tuple(sorted({q.page for q in questions}))
         coverage = PageCoverage(expected_pages=expected_pages, actual_page_count=page_count)
         coverage_issue = describe_coverage_issue(coverage)
+        # When coverage has an issue (e.g. extra_pages or missing_pages),
+        # extracting answer images is skipped to present the whole page to a human.
+        # Under Issue #215, grading jobs are not queued for such submissions,
+        # keeping them in NEEDS_REVIEW waiting for human intervention.
         should_extract = bool(questions) and coverage_issue is None
 
         questions_by_page: dict[int, list[Question]] = {}

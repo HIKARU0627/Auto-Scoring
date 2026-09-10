@@ -1075,6 +1075,30 @@ async def test_recognition_failure_short_circuits_grading(
     assert ai_provider.calls == []
 
 
+async def test_grading_processor_missing_answer_image_carries_submission_review_reason(
+    session_factory: sessionmaker[Session],
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #215: Missing answer image in grading carries submission review_reason
+    to last_error."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(model_answer="模範解答"))
+        uow.rubrics.add(make_rubric())
+        uow.submissions.add(make_submission(review_reason="extra_pages:3>2"))
+        uow.commit()
+    _confirm_graph(session_factory, question_ids=["q-1"])
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.FAILED
+    assert result.error_category is ErrorCategory.PERMANENT
+    assert result.error_message == "no answer image recorded for this question (extra_pages:3>2)"
+    assert ai_provider.calls == []
+
+
 async def test_reprocessing_the_same_job_after_a_crash_does_not_call_the_provider_twice(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,

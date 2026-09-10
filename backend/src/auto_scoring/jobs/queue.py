@@ -59,8 +59,15 @@ from auto_scoring.domain.job_scheduling import (
     question_statuses,
     recover_running_job,
 )
-from auto_scoring.domain.models import ErrorCategory, Job, JobKind, JobSaveConflict, JobState
+from auto_scoring.domain.models import (
+    ErrorCategory,
+    Job,
+    JobKind,
+    JobSaveConflict,
+    JobState,
+)
 from auto_scoring.domain.retry_policy import RetryPolicy, is_retryable
+from auto_scoring.domain.submission_intake import PageCoverage, describe_coverage_issue
 from auto_scoring.jobs.clock import Clock, SystemClock
 from auto_scoring.jobs.settings import QueueSettings
 
@@ -570,6 +577,20 @@ class JobQueueService:
                     f"test {test_id!r} has no confirmed, up-to-date dependency graph"
                 )
             assert graph is not None  # can_start_submission_processing already checked this
+
+            # Issue #215: Do not submit/queue grading jobs for a submission with
+            # page coverage issues (extra_pages, missing_pages). Processing would
+            # immediately fail with "no answer image recorded", hiding human-required
+            # intervention behind a mechanical failure. Keep the submission in
+            # NEEDS_REVIEW waiting for human review.
+            expected_pages = tuple(sorted({q.page for q in questions}))
+            coverage = PageCoverage(
+                expected_pages=expected_pages,
+                actual_page_count=submission.page_count,
+            )
+            coverage_issue = describe_coverage_issue(coverage)
+            if coverage_issue is not None:
+                return [], []
 
             existing = {
                 job.question_id: job
