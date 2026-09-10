@@ -215,6 +215,17 @@ settle した Worker には必ず次のどれか1つを、ACK の前に決める
 読める。`worker-list --terminal-state reclaimable` が空になるまで Commander のターンを
 終えない。
 
+**`worker-release` はターミナルの生死を決めるだけで、worktree・branch は消さない。** PR が
+マージされた Issue の worktree は、その時点で残す理由が無い。定期的に（2026-09-10 に実施した
+ような棚卸しのタイミングでよい）次を確認する:
+
+1. `orca worktree list` と、GitHub で closed/merged になった Issue 番号を突き合わせる。
+2. 突き合わせが取れた worktree だけ `orca worktree rm --worktree "id:<repo-id>::<path>"` で
+   消す。人間が明示的に残すと言った worktree（例: `megamouth`）と、稼働中の Dispatch が使って
+   いる worktree は対象外。
+3. 消す前に対象 worktree の `git status` を見る。**コミットされていない変更がある worktree は
+   消さない**（`worker-abandon` 直後の未報告作業を捨てることになるため）。
+
 ## 4. Worker の手順
 
 ### 4.1 dispatch された場合
@@ -278,8 +289,21 @@ Agent Teams / subagent）を使う。
 - UI/UX: 実装者以外の複数モデルに独立評価させ、一致した指摘だけを起票する。手順と
   過去の結果は [ui-ux-multi-agent-evaluation.md](./ui-ux-multi-agent-evaluation.md)。
 - Critical / High の指摘は完了前に解消する。
-- GitHub 上の承認レビューは不要。**マージは人間の手順**。エージェントは、人間がその PR の
-  マージを明示的に依頼したときだけ squash merge する。
+- GitHub 上の承認レビューは不要。**マージの実行は Commander または人間の手順**。Worker は
+  マージしない（§4.1）。
+- **マージ判断の委譲（オーナー、2026-09-10）。** オーナーの発言（原文）:
+  「特に問題がなさそうであればあなたの判断でマージしてください。許可します」。
+  これ以降、Commander は PR ごとに人間へ確認を取らずに squash merge する
+  （2026-09-10 にマージした 12 件がその最初の適用）。
+- **委譲されたのはマージの「判断」であって、検証の省略ではない。** マージ前に確認する
+  ことは委譲前と同じ、§3.7 の完了判定そのもの: 報告の Task ID / Dispatch ID が有効な
+  Dispatch のものである／Issue の受入条件を満たしている／必要な gate が通っている／
+  branch にその Issue 以外の変更が混ざっていない／Critical・High のレビュー指摘が残って
+  いない／PR に `Closes #<n>` がある。**「必須 check が緑」は、この6項目の1つでしかない。**
+  緑でも他の項目が崩れていれば、Commander は自分の判断で止める。赤・未完了・受入条件未達の
+  PR は、委譲の前後にかかわらずマージしない。
+- **委譲に含まれないもの**: force push、ブランチ削除以外の破壊的操作、本番設定の変更。
+  これらは委譲前と同じく、実行前にオーナーへ確認する。
 
 ## 7. 初回構築
 

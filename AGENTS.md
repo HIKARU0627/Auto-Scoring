@@ -145,9 +145,19 @@ contain, how to recover — is in
 - The tracked git hooks in `.githooks/` are canonical; `pnpm run bootstrap`
   points the current worktree at them. Hooks can be bypassed, so the same
   required checks run in GitHub Actions and the `main` branch ruleset.
-- Do not merge a PR, enable auto-merge, or bypass merge rules unless a human
-  explicitly asked to merge that specific PR. `review-ready` stops at push +
-  PR + change summary. Merging is a human step.
+- A Worker or solo agent must not merge a PR, enable auto-merge, or bypass
+  merge rules; `review-ready` stops at push + PR + change summary. Merging is
+  the Commander's or a human's step.
+- The Commander may squash-merge without asking a human each time. The owner
+  delegated the merge _decision_ — not verification — on 2026-09-10, but only
+  when, before merging, all of these hold: required checks are green, the
+  Issue's acceptance criteria are met, the branch carries no change outside
+  that Issue's scope, and no unresolved Critical/High review finding remains.
+  Green checks alone are not a reason to merge — a red, incomplete, or
+  acceptance-unmet PR is stopped regardless of check status. The delegation
+  excludes force-push, any destructive operation other than deleting the
+  merged branch, and production configuration changes. Full procedure and
+  provenance: `docs/agent-orchestration.md` §6.
 
 ## GitHub App authentication
 
