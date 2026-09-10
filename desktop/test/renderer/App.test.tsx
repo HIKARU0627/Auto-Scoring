@@ -1,32 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
+
 import { App } from "../../src/renderer/App";
 import { ThemeProvider } from "../../src/renderer/theme/ThemeProvider";
 
-/**
- * Vitest + React Testing Library foundation (Issue #217). One real test, so the
- * setup is known to run rather than merely configured.
- *
- * It also shows the shape every later renderer test takes: the bridge is a stub
- * on `window`, because in a test there is no Electron main process and the
- * renderer is not allowed to reach one directly.
- */
 describe("App", () => {
-  function stubBridge(version: string, platform: string): void {
-    vi.stubGlobal("autoScoring", {
-      getAppInfo: vi.fn().mockResolvedValue({ version, platform }),
-    });
-  }
-
-  it("shows what the preload bridge reports", async () => {
-    stubBridge("0.1.0", "win32");
-
+  it("shows the sidecar placeholder before a client is available", async () => {
     render(
       <ThemeProvider>
         <App />
       </ThemeProvider>,
     );
 
-    expect(await screen.findByText("version 0.1.0 / win32")).toBeDefined();
+    expect(screen.getByText("Auto-Scoring")).toBeDefined();
+    expect(
+      await screen.findByText("サイドカーの準備ができたらホームを表示します。"),
+    ).toBeDefined();
   });
 });
