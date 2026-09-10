@@ -1,0 +1,13 @@
+{
+  "name": "poc6-approach-a-pdfjs",
+  "private": true,
+  "type": "module",
+  "description": "PoC 6 probe-only: pdf.js display measurement (not a product dependency)",
+  "scripts": {
+    "measure": "node measure.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.68",
+    "pdfjs-dist": "^5.2.133"
+  }
+}
