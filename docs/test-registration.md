@@ -151,13 +151,20 @@ region が無いとき **`answer_area` から導出される**
 変わらない。導出の規約と、それでも決まらないとき出力前に断ることは
 [`pdf-export.md`](./pdf-export.md) §2.2.1。
 
-**Issue #159 以降**: 導出されるのは **`comment_area` だけ**になった
-（`domain.annotation_layout.derive_comment_area`）。`score_area` は
+**Issue #159 以降**: 導出されるのは **`comment_area` だけ**になった。`score_area` は
 `SCORE` region が無ければ `None` のままで、点数の位置は**出力時**に
 ページ左余白へ解決される（`domain.pdf_export.fallback_score_areas`）。
 導出した帯が実機で筆跡・印字の上に載っていたためで、計測と判断は
 [`pdf-export.md`](./pdf-export.md) §2.2.3。手で置いた `SCORE` region が
 優先される点は変わらない。
+
+**Issue #161 以降**: **`answer_area` からの導出は無くなった。**`comment_area` も
+`ANNOTATION_AREA` region が無ければ `None` のままで、注釈コメントは**出力時**に
+末尾の注釈ページへ解決される（`domain.pdf_export.build_note_pages`）。
+同じ帯がコメント側でも筆跡に重なっていたためで（最悪 19.1%）、しかもコメントは
+散文なので #150 の幅3%の左余白帯には入らない。実答案8教科を測っても、文が入るだけの
+空白は答案上に無かった。計測と判断は [`pdf-export.md`](./pdf-export.md) §2.3.2。
+手で置いた `ANNOTATION_AREA` region が優先される点は変わらない。
 
 ### Profile確認は一方向・一度きり
 

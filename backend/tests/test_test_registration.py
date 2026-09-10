@@ -298,7 +298,8 @@ def test_an_annotation_area_on_a_different_page_than_its_question_is_rejected() 
 
 
 # --------------------------------------------------------------------------- #
-# Issue #120: where the score and the comment go when nobody placed them
+# Issue #120/#159/#161: where the score and the comment go when nobody placed
+# them -- which, since #161, is nowhere derived from the answer box at all
 # --------------------------------------------------------------------------- #
 
 _ANSWER_BBOX = NormalizedBBox(x0=0.1, y0=0.2, x1=0.9, y1=0.5)
@@ -324,14 +325,18 @@ def _new_path_regions() -> list[Region]:
     ]
 
 
-def test_a_question_with_no_annotation_region_still_gets_somewhere_to_write() -> None:
-    """Issue #120: `comment_area` came only from an `ANNOTATION_AREA` region,
-    which the current registration path never produces -- so every question
-    registered through it had nowhere to draw, and the export ran to success
-    while writing nothing at all.
+def test_no_annotation_region_leaves_the_comment_position_to_the_export() -> None:
+    """Issue #161: `comment_area` no longer gets derived from the answer box
+    either. Issue #120 derived it as the band directly below the box, and the
+    live re-verification measured that band on the student's own writing for
+    fourteen of sixteen answer-box questions -- the worst at 19.1% ink
+    against 0.0015% for blank paper.
 
-    The answer box is the one coordinate this path always confirms, so it is
-    what the comment band is derived from when nobody placed one by hand.
+    Deriving nothing is what makes the fix structural rather than a
+    coordinate tweak: there is no longer a code path that puts prose on the
+    answer sheet, so a future caller cannot reach the same accident from
+    somewhere else. The notes go to an appended note page instead
+    (`domain.pdf_export.build_note_pages`).
     """
     regions = [r for r in _new_path_regions() if r.kind is not RegionKind.SCORE]
 
@@ -340,14 +345,14 @@ def test_a_question_with_no_annotation_region_still_gets_somewhere_to_write() ->
     )
 
     question = questions[0]
-    assert question.answer_area is not None
-    assert question.comment_area is not None, "the comment had nowhere to go"
+    assert question.answer_area is not None, "the answer box was still confirmed"
+    assert question.comment_area is None
 
 
 def test_no_score_region_leaves_the_score_position_to_the_export() -> None:
     """Issue #159: the score no longer gets a position derived from the answer
-    box, because that band was measured sitting on the student's writing (see
-    `domain.annotation_layout.derive_comment_area`). It stays `None` here and
+    box, because that band was measured sitting on the student's writing. It
+    stays `None` here and
     `domain.pdf_export.fallback_score_areas` resolves it into the page's left
     margin at export time -- the one place on these sheets measured empty.
     """

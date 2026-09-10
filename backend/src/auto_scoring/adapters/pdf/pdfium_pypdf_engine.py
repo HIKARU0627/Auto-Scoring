@@ -147,6 +147,7 @@ class PdfiumPypdfEngine:
         source: Path,
         destination: Path,
         marks: Mapping[int, Sequence[AnnotationMark]],
+        note_pages: Sequence[Sequence[AnnotationMark]] = (),
     ) -> None:
         writer = PdfWriter()
         writer.append(PdfReader(str(source)))
@@ -158,9 +159,41 @@ class PdfiumPypdfEngine:
             overlay_bytes = _render_annotation_overlay(page.mediabox, page_marks, geometry)
             overlay = PdfReader(BytesIO(overlay_bytes)).pages[0]
             page.merge_page(overlay)
+        if note_pages:
+            first = self.page_geometry(source, 0)
+            for page_marks in note_pages:
+                writer.append(PdfReader(BytesIO(_render_note_page(page_marks, first))))
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("wb") as handle:
             writer.write(handle)
+
+
+def _render_note_page(marks: Sequence[AnnotationMark], source_first_page: PageGeometry) -> bytes:
+    """A fresh one-page PDF carrying ``marks`` -- the appended note page
+    Issue #161 writes annotation notes onto.
+
+    Unlike `_render_annotation_overlay` this is a *new* page rather than an
+    overlay merged onto an existing one, so there is no MediaBox origin and
+    no ``/Rotate`` to reconcile: the page is created at the source's first
+    page's **displayed** size (`PageGeometry.displayed_width`/
+    ``displayed_height``, i.e. after any quarter turn), with a zero origin
+    and no rotation of its own. Sizing it from the answer sheet rather than
+    from a fixed A4 is what keeps the printed result one uniform stack of
+    paper: a landscape answer gets landscape notes.
+
+    ``marks`` are page-normalized against that same displayed page, which is
+    what `_draw_mark_in_place` already expects, so the geometry handed to it
+    describes this new page and nothing about the source's own boxes.
+    """
+    width = source_first_page.displayed_width
+    height = source_first_page.displayed_height
+    geometry = PageGeometry(crop_width=width, crop_height=height)
+    buffer = BytesIO()
+    pdf_canvas = canvas.Canvas(buffer, pagesize=(width, height))
+    for mark in marks:
+        _draw_mark_in_place(pdf_canvas, mark, geometry)
+    pdf_canvas.save()
+    return buffer.getvalue()
 
 
 def _render_annotation_overlay(

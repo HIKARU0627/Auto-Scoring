@@ -76,8 +76,9 @@ class _BadGeometryPdfEngine:
         source: Path,
         destination: Path,
         marks: Mapping[int, Sequence[AnnotationMark]],
+        note_pages: Sequence[Sequence[AnnotationMark]] = (),
     ) -> None:
-        self._delegate.render_annotations(source, destination, marks)
+        self._delegate.render_annotations(source, destination, marks, note_pages)
 
 
 #: A ZIP container's leading bytes. `domain.material_intake` checks the
