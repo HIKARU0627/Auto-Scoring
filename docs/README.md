@@ -8,14 +8,16 @@ the former is updated in the same PR.
 
 ## 仕様・設計
 
-| 文書                                                                             | 内容                                                                             |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| [simplified-design-specification.md](./simplified-design-specification.md)       | 簡易設計書。要件・画面・データ・MVP範囲の正本                                    |
-| [technology-stack.md](./technology-stack.md)                                     | 技術スタックの決定と却下した代替案、リポジトリ構成、依存方向                     |
-| [business-rules-and-evaluation-data.md](./business-rules-and-evaluation-data.md) | 採点業務ルールと評価用データ、未決定事項（OCRサービス・AIモデル）                |
-| [grading-material-structure.md](./grading-material-structure.md)                 | 実際の採点資料を調べた構造の記録（内容は載せない）。設計が耐えるべき既知のケース |
-| [data-model-and-local-storage.md](./data-model-and-local-storage.md)             | エンティティ・SQLite スキーマ・`app-data/` の配置と不変条件                      |
-| [sidecar-api.md](./sidecar-api.md)                                               | サイドカーのハンドシェイク・認証・OpenAPI → Dart クライアント生成                |
+| 文書                                                                             | 内容                                                                                           |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| [simplified-design-specification.md](./simplified-design-specification.md)       | 簡易設計書。要件・画面・データ・MVP範囲の正本                                                  |
+| [technology-stack.md](./technology-stack.md)                                     | 技術スタックの決定と却下した代替案、リポジトリ構成、依存方向（現行 Flutter と移行後 Electron） |
+| [frontend-migration.md](./frontend-migration.md)                                 | Flutter → Electron 移行の決定・段取り・cut-over 条件（Issue #201）                             |
+| [frontend-invariants.md](./frontend-invariants.md)                               | `app/test` が固定しているフロントエンド不変条件の一覧（移植先の正本、Issue #204）              |
+| [business-rules-and-evaluation-data.md](./business-rules-and-evaluation-data.md) | 採点業務ルールと評価用データ、未決定事項（OCRサービス・AIモデル）                              |
+| [grading-material-structure.md](./grading-material-structure.md)                 | 実際の採点資料を調べた構造の記録（内容は載せない）。設計が耐えるべき既知のケース               |
+| [data-model-and-local-storage.md](./data-model-and-local-storage.md)             | エンティティ・SQLite スキーマ・`app-data/` の配置と不変条件                                    |
+| [sidecar-api.md](./sidecar-api.md)                                               | サイドカーのハンドシェイク・認証・OpenAPI → Dart クライアント生成                              |
 
 ## 機能ごとの実装決定
 
