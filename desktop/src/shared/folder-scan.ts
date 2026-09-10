@@ -33,6 +33,11 @@ export const IGNORED_FILE_NAMES = new Set([
 /** Upper bound on how many files one scan will list (UG-10). */
 export const MAX_SCANNED_FILES = 5000;
 
+/** Optional overrides for folder scan (tests inject a smaller cap to avoid slow I/O). */
+export interface ScanDirectoryOptions {
+  readonly maxScannedFiles?: number;
+}
+
 /** Raised when the chosen folder holds more than [MAX_SCANNED_FILES] files. */
 export class FolderTooLargeException extends Error {
   readonly found: number;

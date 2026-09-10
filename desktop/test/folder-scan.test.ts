@@ -19,8 +19,11 @@ async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
+/** Injected cap for UG-10 limit tests — avoids creating 5001 files on slow Windows CI. */
+const TEST_SCANNED_FILE_CAP = 10;
+
 describe("folder scan (UG-10 / UG-11 / UG-12)", () => {
-  it("UG-10: skips hidden files, OS metadata, and enforces the 5000-file cap", async () => {
+  it("UG-10: skips hidden files, OS metadata, and enforces the file cap", async () => {
     await withTempDir(async (dir) => {
       await writeFile(path.join(dir, ".hidden"), "secret");
       await writeFile(path.join(dir, "Thumbs.db"), "meta");
@@ -32,13 +35,17 @@ describe("folder scan (UG-10 / UG-11 / UG-12)", () => {
     });
 
     await withTempDir(async (dir) => {
-      for (let index = 0; index < MAX_SCANNED_FILES + 1; index += 1) {
+      for (let index = 0; index < TEST_SCANNED_FILE_CAP + 1; index += 1) {
         await writeFile(path.join(dir, `file-${index}.txt`), "x");
       }
-      await expect(scanDirectory(dir)).rejects.toBeInstanceOf(
-        FolderTooLargeException,
-      );
+      await expect(
+        scanDirectory(dir, { maxScannedFiles: TEST_SCANNED_FILE_CAP }),
+      ).rejects.toBeInstanceOf(FolderTooLargeException);
     });
+  });
+
+  it("UG-10: production cap remains 5000 files", () => {
+    expect(MAX_SCANNED_FILES).toBe(5000);
   });
 
   it("UG-11: normalizes Windows-style relative paths to forward slashes", async () => {

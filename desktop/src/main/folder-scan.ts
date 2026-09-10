@@ -7,6 +7,7 @@ import {
   FolderTooLargeException,
   IGNORED_FILE_NAMES,
   MAX_SCANNED_FILES,
+  type ScanDirectoryOptions,
   type ScannedEntry,
   type ScannedFolder,
 } from "../shared/folder-scan.js";
@@ -38,7 +39,9 @@ function shouldSkipFile(name: string): boolean {
  */
 export async function scanDirectory(
   directoryPath: string,
+  options?: ScanDirectoryOptions,
 ): Promise<ScannedFolder> {
+  const maxScannedFiles = options?.maxScannedFiles ?? MAX_SCANNED_FILES;
   const entries: ScannedEntry[] = [];
 
   async function walk(current: string): Promise<void> {
@@ -55,8 +58,8 @@ export async function scanDirectory(
       if (shouldSkipFile(child.name)) {
         continue;
       }
-      if (entries.length >= MAX_SCANNED_FILES) {
-        throw new FolderTooLargeException(MAX_SCANNED_FILES);
+      if (entries.length >= maxScannedFiles) {
+        throw new FolderTooLargeException(maxScannedFiles);
       }
       const relative = path
         .relative(directoryPath, absolute)
