@@ -39,7 +39,8 @@ from __future__ import annotations
 import asyncio
 import heapq
 import logging
-from collections.abc import Sequence
+import random
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import cast
@@ -196,11 +197,20 @@ class JobQueueService:
         *,
         settings: QueueSettings | None = None,
         clock: Clock | None = None,
+        random_source: Callable[[], float] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._processor = processor
         self._settings = settings or QueueSettings()
         self._clock = clock or SystemClock()
+        #: Draws the jitter fraction (expected in ``[0.0, 1.0)``) for a
+        #: RATE_LIMITED retry's backoff (Issue #153) -- the one piece of
+        #: randomness `domain.retry_policy.RetryPolicy` deliberately does not
+        #: generate itself (see that module's docstring: "no clock, no
+        #: randomness, no I/O"). Injectable so a test can pin the jitter and
+        #: get an exactly reproducible delay, the same reason `clock` is
+        #: injectable; defaults to the real `random.random` otherwise.
+        self._random: Callable[[], float] = random_source or random.random
         self._queue: asyncio.Queue[object] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
         #: job_id -> the single worker task currently processing it. Only
@@ -291,7 +301,6 @@ class JobQueueService:
                 if (
                     job.error_code is None
                     or not is_retryable(job.error_code)
-                    or job.attempts >= job.max_attempts
                     # A human already approved this failure's downstream
                     # effect via `mark_question_usable` (Issue #18 §4.4) --
                     # requeuing it for an automatic retry would silently
@@ -304,7 +313,31 @@ class JobQueueService:
                 ):
                     continue
                 retry_policy = self._retry_policy_for(job)
-                full_delay = retry_policy.delay_seconds(job.attempts)
+                # retry_after_seconds=None: any `Retry-After` this attempt's
+                # own failure carried was never persisted on `Job` (Issue
+                # #153 -- no schema change), so a restart can only fall back
+                # to the nominal rate-limited schedule here. Covers both
+                # categories in one call: `should_retry` checks
+                # `attempts < max_attempts` for TIMEOUT/SERVER_ERROR (what
+                # the old explicit `job.attempts >= job.max_attempts` guard
+                # above used to do) and the wait-time budget for
+                # RATE_LIMITED instead.
+                if not retry_policy.should_retry(
+                    category=job.error_code, attempts=job.attempts, retry_after_seconds=None
+                ):
+                    continue
+                # jitter=0.0: deterministic and reproducible for this
+                # recovery-time estimate of "how much of the backoff is
+                # left" -- the actual jitter this attempt's own timer used
+                # (if any) is likewise not persisted, so this can only be an
+                # approximation of the minimum remaining wait, same
+                # reasoning as `retry_after_seconds=None` above.
+                full_delay = retry_policy.delay_for(
+                    category=job.error_code,
+                    attempt=job.attempts,
+                    retry_after_seconds=None,
+                    jitter=0.0,
+                )
                 elapsed = (self._clock.now() - job.updated_at).total_seconds()
                 remaining = max(0.0, full_delay - elapsed)
                 if remaining > 0:
@@ -1095,6 +1128,12 @@ class JobQueueService:
             initial_backoff_seconds=self._settings.initial_backoff_seconds,
             backoff_multiplier=self._settings.backoff_multiplier,
             max_backoff_seconds=self._settings.max_backoff_seconds,
+            rate_limited_initial_backoff_seconds=(
+                self._settings.rate_limited_initial_backoff_seconds
+            ),
+            rate_limited_backoff_multiplier=self._settings.rate_limited_backoff_multiplier,
+            rate_limited_max_backoff_seconds=self._settings.rate_limited_max_backoff_seconds,
+            rate_limited_budget_seconds=self._settings.rate_limited_budget_seconds,
         )
 
     def _finalize_result(
@@ -1179,7 +1218,11 @@ class JobQueueService:
 
             category = result.error_category or ErrorCategory.PERMANENT
             retry_policy = self._retry_policy_for(current)
-            should_retry = retry_policy.should_retry(category=category, attempts=current.attempts)
+            should_retry = retry_policy.should_retry(
+                category=category,
+                attempts=current.attempts,
+                retry_after_seconds=result.retry_after_seconds,
+            )
             failed = current.transitioned_to(
                 JobState.FAILED, updated_at=now, error=result.error_message, error_code=category
             )
@@ -1200,7 +1243,13 @@ class JobQueueService:
             uow.commit()
             if not should_retry:
                 return None
-            return retry_policy.delay_seconds(current.attempts), current.attempts
+            delay = retry_policy.delay_for(
+                category=category,
+                attempt=current.attempts,
+                retry_after_seconds=result.retry_after_seconds,
+                jitter=self._random(),
+            )
+            return delay, current.attempts
 
     def _requeue_after_backoff(self, job_id: str, *, expected_attempts: int) -> None:
         with SqlAlchemyUnitOfWork(self._session_factory) as uow:
