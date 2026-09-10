@@ -176,59 +176,72 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
 
   /// The header carries the summary itself, so collapsing the panel to buy
   /// the PDF viewer back its vertical space does not cost the reviewer the
-  /// answer to 「まだ動いているのか」.
+  /// answer to 「まだ動いているのか」 -- nor, since Issue #86, the answer to
+  /// 「私が呼ばれているのか」.
+  ///
+  /// Both the counts and the failure notice sit *above* the collapse
+  /// boundary. A failure used to be visible only on the node, so folding the
+  /// panel away -- which is the normal thing to do while reading a PDF --
+  /// removed the one thing on this screen that needed acting on.
   Widget _buildHeader(BuildContext context, {required bool fits}) {
     final layout = widget.layout;
-    // Straight off `DagNodeProgress`, so every state lands in exactly one
-    // bucket and the three always add up to the number of nodes -- 未処理
-    // used to fall through to 完了, and a collapsed panel then reported a
-    // submission whose jobs had not been enqueued at all as fully done.
-    final counts = {
-      for (final progress in DagNodeProgress.values)
-        progress: layout.countWhere((s) => s.progress == progress),
-    };
-    final summary = [
-      for (final progress in const [
-        DagNodeProgress.running,
-        DagNodeProgress.waiting,
-        DagNodeProgress.settled,
-      ])
-        '${progress.label} ${counts[progress]}',
-    ].join(' ・ ');
+    final failures = layout.failures;
     return Padding(
       padding: AppSpacing.banner,
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.account_tree_outlined, size: AppIconSize.dense),
-          const SizedBox(width: AppSpacing.sm),
-          Text('処理の進み方', style: context.texts.titleSmall),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Text(
-              key: const Key('dag-summary'),
-              summary,
-              style: context.texts.bodySmall,
-              overflow: TextOverflow.ellipsis,
-            ),
+          Row(
+            children: [
+              const Icon(Icons.account_tree_outlined, size: AppIconSize.dense),
+              const SizedBox(width: AppSpacing.sm),
+              Text('処理の進み方', style: context.texts.titleSmall),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                // 「完了 2」 says how many, not how many *of what*. The
+                // tooltip says what each label counts, which is the half a
+                // bare number cannot carry (Issue #86).
+                child: Tooltip(
+                  message: DependencyDagLayout.progressLegend,
+                  child: Text(
+                    key: const Key('dag-summary'),
+                    // Every string in it, and which buckets appear at all, is
+                    // decided in `core` where a unit test can pin it down
+                    // without a render tree (Issue #126).
+                    layout.progressSummary,
+                    style: context.texts.bodySmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+              IconButton(
+                key: const Key('dag-toggle-button'),
+                // Disabled rather than hidden when the window is too short
+                // for even one node row: a control that disappears reads as
+                // a bug, and the reason ("make the window taller") is
+                // something the reviewer can act on.
+                tooltip: fits
+                    ? (_expanded ? '依存グラフを閉じる' : '依存グラフを開く')
+                    : '画面の高さが足りないため、依存グラフは表示できません',
+                icon: Icon(
+                  !fits
+                      ? Icons.unfold_less
+                      : (_expanded ? Icons.expand_less : Icons.expand_more),
+                ),
+                onPressed: fits
+                    ? () => setState(() => _expanded = !_expanded)
+                    : null,
+              ),
+            ],
           ),
-          IconButton(
-            key: const Key('dag-toggle-button'),
-            // Disabled rather than hidden when the window is too short for
-            // even one node row: a control that disappears reads as a bug,
-            // and the reason ("make the window taller") is something the
-            // reviewer can act on.
-            tooltip: fits
-                ? (_expanded ? '依存グラフを閉じる' : '依存グラフを開く')
-                : '画面の高さが足りないため、依存グラフは表示できません',
-            icon: Icon(
-              !fits
-                  ? Icons.unfold_less
-                  : (_expanded ? Icons.expand_less : Icons.expand_more),
+          for (final failure in failures) ...[
+            const SizedBox(height: AppSpacing.sm),
+            _DagFailureNotice(
+              failure: failure,
+              onOpenQuestion: () =>
+                  widget.onQuestionSelected(failure.questionId),
             ),
-            onPressed: fits
-                ? () => setState(() => _expanded = !_expanded)
-                : null,
-          ),
+          ],
         ],
       ),
     );
@@ -332,6 +345,82 @@ class _DependencyDagPanelState extends State<DependencyDagPanel>
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The failure, stated where collapsing the panel cannot take it away
+/// (Issue #86).
+///
+/// Three things, in the order a reviewer needs them:
+///
+/// 1. **which question failed, and what that is costing** -- 「問2 が失敗し、
+///    問3・問5 は人が対応するまで進みません。」 The second half is what a
+///    count cannot say, and it is the half that gets the failure dealt with
+///    now rather than after the reviewer has walked away.
+/// 2. **why, and what to do about it**, from [DagFailureGuidance]. Never
+///    `Job.last_error`: that string names the provider, the exception class
+///    and the HTTP status it got back, and it answers a different question
+///    from 「次に何をすればいいか」 (AGENTS.md «Security»). The Inspector
+///    still prints the diagnosis for the reviewer who wants it -- this is
+///    the glance, not the investigation.
+/// 3. **a way to get there.** The button selects the failed question, which
+///    is the same thing clicking its node does: the Inspector then has the
+///    diagnosis, 再判定 and 点数を入力 all in one place. Not a 再判定 button
+///    of its own -- re-running is not the right move for every failure
+///    ([DagFailureGuidance.answerAreaWrong]), and a panel that offers it
+///    unconditionally recommends the wrong thing.
+///
+/// Reads without colour: an icon, a full Japanese sentence, and a named
+/// button. The [AppStatusTone.danger] tint only sharpens what the words
+/// already say (Issue #25).
+class _DagFailureNotice extends StatelessWidget {
+  const _DagFailureNotice({
+    required this.failure,
+    required this.onOpenQuestion,
+  });
+
+  final DagFailure failure;
+  final VoidCallback onOpenQuestion;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = AppStatusTone.danger.color(context);
+    return Row(
+      key: Key('dag-failure-${failure.questionId}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(QuestionStatus.failed.icon, size: AppIconSize.dense, color: tone),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                failure.headline,
+                key: Key('dag-failure-headline-${failure.questionId}'),
+                style: context.texts.bodySmall?.copyWith(color: tone),
+              ),
+              Text(
+                // One paragraph on screen; two fields on the value. Keeping
+                // them apart in `core` is what stops 「何が起きたか」 and
+                // 「次に何をするか」 from being edited into one blurred
+                // sentence that says neither -- a unit test asserts both
+                // halves are there for every failure category.
+                '${failure.guidance.cause}${failure.guidance.nextStep}',
+                key: Key('dag-failure-next-${failure.questionId}'),
+                style: context.texts.bodySmall,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        TextButton(
+          key: Key('dag-failure-open-${failure.questionId}'),
+          onPressed: onOpenQuestion,
+          child: Text('問${failure.questionLabel} を開く'),
+        ),
+      ],
     );
   }
 }
