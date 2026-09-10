@@ -18,12 +18,20 @@
 
 ## 2. 経路
 
-| メソッド | パス                               | 役割                                                                              |
-| -------- | ---------------------------------- | --------------------------------------------------------------------------------- |
-| `GET`    | `/tests/{id}/answer-layout`        | 参照答案の有無（ページ数、未取込なら `null`）と、この端末で自動検出が使えるか     |
-| `PUT`    | `/tests/{id}/answer-layout`        | 回答欄を決める答案を 1 枚保存する（テストにつき 1 枚。差し替え可）                |
-| `GET`    | `/tests/{id}/answer-layout/pdf`    | 画面のオーバーレイが上に描くための PDF バイト列                                   |
-| `POST`   | `/tests/{id}/answer-layout/detect` | 全ページを provider に送り、DRAFT プロファイルの `ANSWER_AREA` 領域として保存する |
+| メソッド | パス                                        | 役割                                                                              |
+| -------- | ------------------------------------------- | --------------------------------------------------------------------------------- |
+| `GET`    | `/tests/{id}/answer-layout`                 | 参照答案の有無（ページ数、未取込なら `null`）と、この端末で自動検出が使えるか     |
+| `PUT`    | `/tests/{id}/answer-layout`                 | 回答欄を決める答案を 1 枚保存する（テストにつき 1 枚。差し替え可）                |
+| `GET`    | `/tests/{id}/answer-layout/pdf`             | 画面のオーバーレイが上に描くための PDF バイト列（**cut-over まで Flutter 専用**） |
+| `GET`    | `/tests/{id}/answer-layout/pages`           | ページ数と各ページの表示寸法・回転（枠取りとページ送り用。Issue #207）            |
+| `GET`    | `/tests/{id}/answer-layout/pages/{n}/image` | サイドカーが描いた答案用紙のページ画像（`image/png`。Issue #207）                 |
+| `POST`   | `/tests/{id}/answer-layout/detect`          | 全ページを provider に送り、DRAFT プロファイルの `ANSWER_AREA` 領域として保存する |
+
+移行後（Electron）の回答欄エディタは、**PDF バイト列ではなくページ画像の上に**
+オーバーレイを置く（PoC 6 案 B、Issue #207）。**正規化座標は受け取った画像の画素寸法
+だけから作る**こと —— `/pages` が返す `displayed_*` で割ってはいけない。理由と契約は
+[`sidecar-api.md`](./sidecar-api.md) §7.1。`.../answer-layout/pdf` を消すかどうかは
+cut-over で判断する（Issue #201）。
 
 編集と確定は**既存の経路をそのまま使う**: `PUT /tests/{id}/profile` と
 `POST /tests/{id}/profile/confirm`。検出結果は `domain.profile.Profile` の

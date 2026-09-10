@@ -954,6 +954,33 @@ Issue #85 が 5 ラウンドかけて「判断材料と承認を同じ画面に�
 OpenAPIスキーマは `pnpm run openapi:export` / `openapi:generate` で
 `backend/openapi/openapi.json` と `app/packages/auto_scoring_api/` へ反映済み。
 
+### 3.1 Electron 移行後、この画面は元PDFバイト列を受け取らない（Issue #207）
+
+PoC 6（[`poc-6-pdf-coordinates.md`](./poc-6-pdf-coordinates.md)）が案 B を採ったため、
+移行後の添削レビュー画面は `GET /submissions/{id}/source-pdf` を呼ばない。代わりに
+**サイドカーが pypdfium2 で描いたページ画像**を表示する。
+
+| メソッド | パス                                           | 用途                                                  |
+| -------- | ---------------------------------------------- | ----------------------------------------------------- |
+| GET      | `/submissions/{submission_id}/pages`           | `page_count` と各ページの `displayed_*` / `rotation`  |
+| GET      | `/submissions/{submission_id}/pages/{n}/image` | 表示するページの画像（`image/png`、`scale` 既定 2.0） |
+
+**オーバーレイの正規化座標は、受け取った画像の画素寸法だけから作る**
+（`正規化X = クリック位置px ÷ 画像幅px`）。pdfium がその画素の中へ表示ページを描いた
+以上、この割り算はサイドカー側の座標変換と定義上ずれない。
+
+**幾何（`displayed_width` / `displayed_height`）で割らないこと。** 画像の画素寸法は
+`ceil(displayed_* × scale)` に切り上げられるため、幾何から作った座標と別に丸められた
+画像を組み合わせると、案 B が消したはずの二重解釈をこの画面で作り直すことになる。
+幾何は**画像が届く前の枠取り（縦横比）・ページ送り・回転の把握**に使う。全体の契約は
+[`sidecar-api.md`](./sidecar-api.md) §7。
+
+`GET /submissions/{id}/source-pdf` は**消していない**。cut-over まで現行の Flutter 画面が
+使っており、それが唯一の利用者である。**消すかどうかは cut-over で判断する（Issue #201）。**
+
+§2.7 の座標往復の検証（`app/test/pdf_review_geometry_test.dart` の pdfrx 実描画）は
+Flutter 側の話であり、移行後は「画像の画素寸法で割る」1 本に置き換わる。
+
 ## 4. 検証
 
 - `backend/tests/test_review_api.py`: 上記4エンドポイントのHTTP統合テスト。

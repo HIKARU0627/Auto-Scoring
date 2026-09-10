@@ -151,6 +151,7 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 | Python  | `backend/tests/test_api.py`                                           | `/healthz` は無認証 200、`/score` は無トークン/誤トークンで 401、正トークンで 200                                                      |
 | Python  | `backend/tests/test_sidecar.py`                                       | ポート 0 → 空きポート、占有ポート → フォールバック、ログのトークン秘匿、ハンドシェイク、`run()` が loopback で bind                    |
 | Python  | `backend/tests/test_openapi_schema.py`                                | コミット済み schema と生成結果の一致、security 設定                                                                                    |
+| Python  | `backend/tests/test_page_image_api.py`                                | §7 のページ画像・ページ幾何。幾何が `PageGeometry` と同値、画素寸法 = 表示ページ × scale、許容外 scale の拒否、ETag のキーと無効化     |
 | Flutter | `app/test/sidecar_api_client_test.dart`（tag: `sidecar`）             | 実サイドカーを起動し health check・保護 API（正トークン 200 / 誤トークン 401）・未起動時 `unavailable`・材料の役割が wire 名で渡ること |
 | Flutter | `app/test/sidecar_supervisor_test.dart`                               | プロセス監督の状態遷移全部（`SidecarPlatform` を fake 化。時計も fake なので起動 timeout も一瞬で検証）                                |
 | Flutter | `app/test/sidecar_supervisor_integration_test.dart`（tag: `sidecar`） | 実サイドカーに対して動的ポート・handshake 削除・通常終了・crash からの再起動・二重起動拒否                                             |
@@ -160,3 +161,101 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 | Flutter | `app/test/api_key_tab_test.dart` | 設定画面の「API キー」タブ。値を再表示しないこと、出どころの表示、疎通結果の出し分け、保存後の再起動導線 |
 
 `flutter test -x sidecar` で実サイドカー起動テストを除外できる（`uv` 不要の環境向け）。
+
+## 7. ページ画像とページ幾何（Issue #207、親 #201）
+
+PoC 6（[`poc-6-pdf-coordinates.md`](./poc-6-pdf-coordinates.md)）が案 B を採った。
+移行後の UI は**生の PDF を受け取って自分で描くのをやめ、サイドカーが pypdfium2 で
+描いた画像を表示する**。採用理由は実測精度ではない（案 A も 45 測点すべて許容内）。
+**同じ pdfium が raster 化と座標変換の両方を担うので、「表示するページ」の解釈が
+2 つに割れる余地が構造的に無い**ことである。
+
+| メソッド | パス                                        | 返すもの                                             |
+| -------- | ------------------------------------------- | ---------------------------------------------------- |
+| `GET`    | `/submissions/{id}/pages`                   | `page_count` と各ページの `displayed_*` / `rotation` |
+| `GET`    | `/submissions/{id}/pages/{n}/image`         | `image/png`（`scale` 既定 2.0）                      |
+| `GET`    | `/tests/{id}/answer-layout/pages`           | 同上（回答欄エディタが描く答案用紙）                 |
+| `GET`    | `/tests/{id}/answer-layout/pages/{n}/image` | `image/png`（`scale` 既定 2.0）                      |
+
+実装は `backend/src/auto_scoring/api/page_image_router.py`、
+検査は `backend/tests/test_page_image_api.py`（fixture は合成 PDF 8 種）。
+
+### 7.1 正規化座標の基準は「返ってきた画像の画素寸法」ただ一つ
+
+renderer が座標を作るときに割ってよいのは、**受け取った画像そのものの画素寸法**だけ。
+
+```text
+正規化X = クリック位置px ÷ 画像幅px
+正規化Y = クリック位置py ÷ 画像高px
+```
+
+pdfium がその画素の中へ表示ページを描いた以上、この割り算がサイドカー側の座標変換と
+食い違うことは定義上ありえない。
+
+**幾何エンドポイントの値を座標計算に使わないこと。** 幾何の用途は次に限る。
+
+| 用途       | 使う値                                 | 例                                       |
+| ---------- | -------------------------------------- | ---------------------------------------- |
+| レイアウト | `displayed_width` / `displayed_height` | 画像が届く前の枠取り（縦横比だけを使う） |
+| ページ送り | `page_count`                           | 次ページ・前ページ、サムネイル一覧       |
+| 回転の把握 | `rotation`                             | 回転済みであることの表示                 |
+
+画像の画素寸法は `ceil(displayed_* × scale)` に**切り上げ**られる。座標を幾何から作り、
+画像は別に丸められる、という形にすると、**案 B が消したはずの二重解釈を renderer 側で
+作り直すことになる。** この区別は OpenAPI の description（4 本すべて）にも書いてある。
+
+**画素寸法はどこにも重複して返さない。** Issue #207 はレスポンスヘッダか幾何側で画素
+サイズも返すことを提案していたが、採らなかった。PNG は自分の寸法を持っており
+（`naturalWidth` / `naturalHeight`）、renderer はそれを追加の要求なしに読める。同じ数を
+2 か所に置けば、画像と食い違いうる値が 1 つ増える —— 上の規則が防ごうとしている形そのもの。
+`ceil(displayed × scale)` という関係自体は
+`test_page_image_api.py::test_image_pixel_size_is_the_displayed_page_times_scale` が
+回転 0/90/180/270・非ゼロ原点 MediaBox・CropBox インセットで固定している。
+
+### 7.2 幾何は座標変換と同じ `PageGeometry` から出す
+
+router は寸法を自分で計算しない。`PdfEngine.page_geometry`（= 注釈書き出しが
+`domain/pdf_geometry.py` へ渡すのと同じ値）をそのまま返す。別経路で計算した瞬間に
+ずれる余地が生まれる。
+
+`test_geometry_is_the_transforms_own_page_geometry` が同一性を固定し、
+`test_the_fixture_set_can_tell_a_second_derivation_apart` が「fixture が第二の導出
+（MediaBox を読む／`/Rotate` を無視する）と区別できること」自体を固定する。後者が無いと、
+原点にある直立 A4 ばかりの fixture では**前者が真かつ空**になりうる。
+
+### 7.3 `scale` はサーバ側で列挙し、黙って丸めない
+
+許容値は **1.0 / 2.0 / 3.5**、既定 **2.0**（`ALLOWED_SCALES` / `DEFAULT_SCALE`）。
+PoC 6 実測で 5.1 / 20.8 / 78.6 ms per page。任意の実数を受けると、大きな値でこの
+プロセスのメモリと時間を焼ける。**許容外は 422 で拒否する。近い値へ丸めない** ——
+黙って差し替えると、呼び出し側が枠取りに使った画素寸法と違う画像が返り、呼び出し側には
+気づく手段が無い。
+
+OpenAPI schema の `enum` と実際の検証は、どちらも `ALLOWED_SCALES` 1 つから作る。
+なお `Literal[1.0, 2.0, 3.5]` は使えない。pydantic の literal 検証はクエリ文字列を
+float へ寄せないので、`?scale=2.0` まで 422 になる（`_permitted_scale` の docstring）。
+
+### 7.4 ETag のキーは `(文書の中身, ページ, scale)`
+
+PoC 6 が測ったキーそのまま。文書は**バイト列の SHA-256** で識別する。パスや mtime では
+ない —— `POST /tests/{id}/answer-layout` は答案用紙をその場で置き換えるので、同じ長さで
+タイムスタンプ粒度内の差し替えが古いキャッシュのまま配られる。`scale` がキーに入るのは、
+**scale が変われば別の画像**であって同じ画像の丸め直しではないから。
+`If-None-Match` の一致は**描画の前**に判定する（304 の価値はそこにしか無い）。
+
+### 7.5 renderer は生の PDF バイト列を受け取らない
+
+**app-data の所有はサイドカーのまま。** 移行後の UI が受け取るのは、上のページ画像と
+幾何だけである。
+
+生の PDF を返す既存 2 本 —— `GET /submissions/{id}/source-pdf` と
+`GET /tests/{id}/answer-layout/pdf` —— は**消していない**。cut-over まで Flutter アプリ
+（添削レビュー画面・回答欄エディタ）が使っているためで、それが唯一の利用者である。
+**cut-over 後に残る用途は無い**: 回答欄検出・配点抽出・PDF 出力はいずれも保存済み
+ファイルを直接開いており、HTTP を経由しない。
+
+**この 2 本を消すかは cut-over で判断する。追跡は Issue #201。** 専用の cut-over Issue が
+切られたら、項目をそちらへ移し、両エンドポイントの description の参照先も更新すること。
+後者の description には以前「Flutter が pdfrx で描くから PDF を返す」という採用理由が
+書かれていたが、移行でその前提が消えた。**理由が古いまま残るのが、このリポジトリで
+何度も踏んだ形である**（#111 → #138）。
