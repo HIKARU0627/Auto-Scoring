@@ -2,6 +2,7 @@ import type { JSX } from "react";
 
 import { AppRoutes } from "../core/app-routes.js";
 import { HomePage } from "../features/home/HomePage.js";
+import { TestSettingsPage } from "../features/test-settings/TestSettingsPage.js";
 import { ShellScreen } from "./ShellScreen.js";
 import { matchRoutePattern } from "./router.js";
 import { useRouter } from "./router.js";
@@ -52,7 +53,7 @@ export const ROUTE_TABLE: readonly RouteDefinition[] = [
   },
   {
     pattern: AppRoutes.testSettingsPattern,
-    render: () => <PlaceholderScreen title="テスト設定" />,
+    render: () => <TestSettingsPage />,
   },
   {
     pattern: AppRoutes.submissionQueuePattern,
