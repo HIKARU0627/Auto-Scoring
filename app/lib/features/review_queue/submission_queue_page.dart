@@ -11,6 +11,7 @@ import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/review_queue.dart';
 import 'package:auto_scoring_app/core/submission_review_reason.dart';
 import 'package:auto_scoring_app/core/submission_status.dart';
+import 'package:auto_scoring_app/core/widgets/bulk_export_dialog.dart';
 import 'package:auto_scoring_app/core/widgets/export_dialog.dart';
 
 /// 答案キュー画面 (Issue #113)。
@@ -127,7 +128,20 @@ class _SubmissionQueuePageState extends ConsumerState<SubmissionQueuePage> {
             onRefresh: _reload,
             child: Column(
               children: [
-                _QueueHeader(test: data.test, queue: data.queue),
+                _QueueHeader(
+                  test: data.test,
+                  queue: data.queue,
+                  onBulkExport: () async {
+                    await showBulkExportDialog(
+                      context,
+                      testId: widget.testId,
+                      queue: data.queue,
+                    );
+                    // 出力は答案の状態を `exported` へ動かしうる。行の
+                    // 見た目がそのままだと、何も起きていないように見える。
+                    if (mounted) await _reload();
+                  },
+                ),
                 const Divider(height: AppLayout.hairline),
                 Expanded(
                   child: ListView.separated(
@@ -170,12 +184,23 @@ class _SubmissionQueuePageState extends ConsumerState<SubmissionQueuePage> {
   }
 }
 
-/// テスト名と「確認済み N / M」。ホームのカードと同じ語彙にしてある。
+/// テスト名と「確認済み N / M」、そしてテスト単位の一括出力 (Issue #142)。
+///
+/// **行の「PDF出力」は消さない。** ヘッダのこれは *テスト* の操作 (「確認済みの
+/// 答案を全部まとめて出す」)、行のそれは *答案1件* の操作 (「この1枚を出し直す」)
+/// で、置き換えではない。#137 がヘッダに置かないと決めたのは「どれを出すのか」を
+/// 別に選ばせることになるからで、こちらは選ばせる代わりに**対象一覧を見せてから
+/// 走る** (`bulk_export_dialog.dart`、`docs/review-queue.md` §4.1.1)。
 class _QueueHeader extends StatelessWidget {
-  const _QueueHeader({required this.test, required this.queue});
+  const _QueueHeader({
+    required this.test,
+    required this.queue,
+    required this.onBulkExport,
+  });
 
   final TestResponse test;
   final ReviewQueue queue;
+  final Future<void> Function() onBulkExport;
 
   @override
   Widget build(BuildContext context) {
@@ -195,6 +220,16 @@ class _QueueHeader extends StatelessWidget {
             value: queue.total == 0 ? 0 : done / queue.total,
             borderRadius: AppRadius.smAll,
             semanticsLabel: '${test.name} の確認済み答案',
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              key: const Key('queue-bulk-export-button'),
+              onPressed: onBulkExport,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: const Text('まとめてPDF出力'),
+            ),
           ),
         ],
       ),

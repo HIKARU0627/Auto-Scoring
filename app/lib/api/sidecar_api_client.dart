@@ -42,6 +42,9 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         AnnotationResponse,
         AnswerImageFinding,
         BoundingBoxResponse,
+        BulkExportItemResponse,
+        BulkExportItemStatus,
+        BulkExportResponse,
         CompleteRegistrationResponse,
         ConfirmCriteriaRequest,
         CriteriaEstimateResponse,
@@ -56,6 +59,7 @@ export 'package:auto_scoring_api/auto_scoring_api.dart'
         DependencyEdgeModel,
         DependencyGraphResponse,
         DependencyProvision,
+        ExportRefusalReason,
         ExportRequestResponse,
         ExportResponse,
         GradeResultResponse,
@@ -148,7 +152,7 @@ class SidecarApiException implements Exception {
   final int? statusCode;
 
   /// The sidecar's own name for *which* refusal a 409 is
-  /// (`api.export_router.ExportConflictCode`), or `null` when the body
+  /// (`domain.pdf_export.ExportRefusalReason`), or `null` when the body
   /// carries none.
   ///
   /// [SidecarErrorKind.conflict] covers every 409 the sidecar can answer,
@@ -1737,6 +1741,77 @@ class SidecarApiClient {
   Future<JobResponse> retryJob(String jobId, {CancelToken? cancelToken}) async {
     try {
       final response = await _jobsApi.retryJobJobsJobIdRetryPost(
+        jobId: jobId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Exports every answer sheet of [testId] in one request (Issue #142),
+  /// optionally narrowed to [submissionIds].
+  ///
+  /// **The result is a row per submission, not a single verdict.** One
+  /// unconfirmed or unrenderable sheet in a run of 40 must not cost the
+  /// reviewer the other 39, so the refusals the single-sheet
+  /// [requestExport] raises as a 409 come back here as
+  /// `BulkExportItemStatus.refused` rows carrying their reason
+  /// (`domain.pdf_export.ExportRefusalReason`). Re-running only what failed
+  /// is the same call with a shorter [submissionIds].
+  Future<BulkExportResponse> requestBulkExport(
+    String testId, {
+    List<String>? submissionIds,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _exportApi.requestBulkExportTestsTestIdExportPost(
+        testId: testId,
+        bulkExportRequest: submissionIds == null
+            ? null
+            : BulkExportRequest((b) => b..submissionIds.replace(submissionIds)),
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// The generated PDF's bytes, by `Export.id` (Issue #142).
+  ///
+  /// The app writes each sheet into the folder the reviewer picked, and it
+  /// **deliberately does not know where the sidecar's `app-data/` is**
+  /// (`main.dart`), so `Export.file_path` -- relative to that root -- is not
+  /// something it can open. Bytes are; same shape as [getSourcePdf].
+  Future<Uint8List> getExportFile(
+    String exportId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _exportApi.getExportFileExportsExportIdFileGet(
+        exportId: exportId,
+        cancelToken: cancelToken,
+      );
+      return _requireBody(response);
+    } on DioException catch (error) {
+      throw _translate(error);
+    }
+  }
+
+  /// Cancels a `QUEUED`/`RUNNING` job (Issue #142: 中止).
+  ///
+  /// A bulk run queues every sheet up front, so stopping it means telling
+  /// the sidecar to drop the ones it has not started -- otherwise "中止"
+  /// would only stop the app from *watching*, and the machine would keep
+  /// rendering PDFs nobody asked for any more.
+  Future<JobResponse> cancelJob(
+    String jobId, {
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await _jobsApi.cancelJobJobsJobIdCancelPost(
         jobId: jobId,
         cancelToken: cancelToken,
       );
