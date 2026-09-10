@@ -17,16 +17,34 @@ permissions:
 # green (Issue #180). `cancel-in-progress` itself is not the thing to drop;
 # it is part of the CI-time cut from Issue #129 and stays correct for PRs.
 #
-# For a `push` to `main`, `github.ref` is `refs/heads/main`. For a
-# `pull_request` run, it is `refs/pull/<number>/merge`, not the head branch
-# name (confirmed from this repo's own run logs, not assumed) -- this
-# workflow never runs on a plain `push` to a non-main branch, so those are
-# the only two cases the expression below has to tell apart. Without
-# `cancel-in-progress`, same-group runs queue instead of racing, so
-# consecutive merges to `main` still run one after another rather than in
-# parallel; they just no longer cancel each other.
+# Issue #180 kept one shared group for every push to `main`
+# (`ci-refs/heads/main`) and only turned `cancel-in-progress` off there, so
+# consecutive merges queued and ran one after another instead of cancelling
+# each other -- safe, but still serialised. Issue #199 removes that queueing
+# too: `github.sha` is folded into the group for a `main` push, so every
+# commit gets its own group and no run ever shares a group with another
+# main run to queue behind. Two merges landing close together are therefore
+# verified by two runs racing in parallel -- an accepted side effect (owner
+# decision), not something this workflow tries to serialise with a queue.
+#
+# For a `push` to `main`, `github.ref` is `refs/heads/main`; for a
+# `pull_request` run it is `refs/pull/<number>/merge`, not the head branch
+# name -- confirmed from this repo's own run logs (checkout step), not
+# assumed: a main-push run's Checkout step ran
+# `checkout ... -B main refs/remotes/origin/main` (run 34474222375), and a
+# pull_request run's Checkout step ran
+# `checkout ... refs/remotes/pull/<number>/merge` (run 34472340931). This
+# workflow only triggers on `pull_request` and `push: branches: [main]`, so
+# those are the only two cases the expression below has to tell apart.
+#
+# `A && B || C` is short-circuit evaluation, not a ternary: GitHub Actions
+# returns whichever operand decided the result, not a coerced boolean (same
+# behaviour as JavaScript), so if `B` were falsy the expression would fall
+# through to `C` even when `A` is true. That is safe here only because `B`
+# (`format('ci-main-{0}', github.sha)`) is a `format()` call with a fixed
+# non-empty prefix, so it is always truthy regardless of `github.sha`.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.ref == 'refs/heads/main' && format('ci-main-{0}', github.sha) || format('ci-{0}', github.ref) }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:

@@ -81,37 +81,53 @@ CI は 4 ジョブ。`app` と `backend` が実作業、`quality` は**判定を
 **GitHub は skipped の必須チェックを成功として扱う。** ここを外すと、ビルドが
 赤いままマージゲートだけが緑に見える。到達したこと自体は何の成功の証拠でもない。
 
-### `concurrency` は PR では打ち切り、`main` では打ち切らない
+### `concurrency`: PR は ref 単位で打ち切り、`main` はコミットごとに独立させる
 
 ```yaml
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.ref == 'refs/heads/main' && format('ci-main-{0}', github.sha) || format('ci-{0}', github.ref) }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 ```
 
 `cancel-in-progress` 自体は Issue #129 の CI 短縮策の一部で、**PR ブランチでは
-正しい**（同じブランチへ push し直したら古い run の結果に意味は無い）。問題は
-`main` だった: `main` への連続 push は `group` が同じ（`github.ref` は push では
-常に `refs/heads/main`）ため、後のマージが前のマージの run を打ち切っていた
-（Issue #180、実測: run 34446115669 が `8edc2394` に対して開始 1 分 10 秒で
-cancelled）。**打ち切られた run は GitHub 上で赤ではなく中立表示になるため、
-`main` は緑に見えたまま、そのマージコミットは自分自身を検証した run を
-1 つも持たない状態になる。**
+正しい**（同じブランチへ push し直したら古い run の結果に意味は無い）。
+
+Issue #180 が直した時点では `main` への push は常に同じ group
+（`ci-refs/heads/main`。`github.ref` は push では常に `refs/heads/main`）で、
+そこから `cancel-in-progress` だけを外した。これで後のマージが前のマージの
+run を打ち切ることは無くなった（打ち切られた run は GitHub 上で赤ではなく
+中立表示になるため、`main` は緑に見えたまま、そのマージコミットは自分自身を
+検証した run を 1 つも持たない状態になっていた: 実測、run 34446115669 が
+`8edc2394` に対して開始 1 分 10 秒で cancelled）。ただし同じ group にいる限り
+run は打ち切られない代わりに**キューされ、1 本ずつ順に流れる**ままだった。
+
+Issue #199 でそのキューも外した。`main` への push は `group` に
+`github.sha` を折り込んで**コミットごとに一意**にする（`ci-main-<sha>`）。
+同じ group を共有する run がもう存在しないので、待ち合わせる相手もいない。
+結果として、**近い時刻に連続でマージされた 2 つのコミットは、互いを待たず
+並列に検証される。** これは意図した副作用であり（オーナー決定）、それを
+避けるためのキューや待ち合わせをこの workflow に足すことはしない。
 
 `github.ref` は `pull_request` イベントでは head ブランチ名ではなく
-`refs/pull/<番号>/merge` になる（このリポジトリの実際の run ログの checkout
-ステップで確認済み。`pull_request:` と `push: branches: [main]` しか
-トリガーしないため、この workflow が実際に区別すべきなのはこの 2 パターンだけ）。
-したがって上の式は「`main` への push だけ打ち切らない、それ以外（PR）は
-打ち切る」を満たす。
+`refs/pull/<番号>/merge` になり、`push` では `refs/heads/main` になる。
+どちらも本リポジトリの実際の run の Checkout ステップのログで確認済み
+（`push` 側: run 34474222375 で `checkout ... -B main
+refs/remotes/origin/main`。`pull_request` 側: run 34472340931 で
+`checkout ... refs/remotes/pull/<番号>/merge`）。`pull_request:` と
+`push: branches: [main]` しかトリガーしないため、この workflow が実際に
+区別すべきなのはこの 2 パターンだけである。
 
-`cancel-in-progress: false` になったからといって `main` の連続 push が並列に
-走るわけではない。`group` が同じ run は、打ち切られない代わりに**キューされ、
-1 本ずつ順に流れる**。並列にはならないが、互いを消しもしない。
+`A && B || C` は GitHub Actions では**三項演算子ではなく短絡評価**であり、
+`&&` / `||` は真偽値ではなく**その場で決め手になったオペランドの値そのもの**を
+返す（JavaScript と同じ挙動）。`B` が falsy な値だと `A` が真でも結果は `C` に
+落ちる、というのがその落とし穴で、上の式が安全なのは `B`
+（`format('ci-main-{0}', github.sha)`）が固定の非空プレフィクスを持つ
+`format()` 呼び出しであり、`github.sha` の値にかかわらず常に truthy だから。
 
 **この PR 自身の CI では、PR 側の打ち切り（従来どおり）しか観測できない。**
-`main` 側で打ち切られなくなったことは、この変更のマージ後に実際に 2 件
-連続でマージされて初めて観測できる。observable acceptance はそちらに記録する。
+`main` 側で並列に走るようになったこと自体は、この変更のマージ後に実際に
+2 件連続でマージされて初めて観測できる。observable acceptance はそちらに
+記録する。
 
 ## git hooks vs CI
 
