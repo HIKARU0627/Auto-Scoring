@@ -24,6 +24,8 @@ from auto_scoring.adapters.answer_area_detection.factory import (
     AnswerAreaDetectorConfigError,
     create_answer_area_detector,
 )
+from auto_scoring.adapters.credentials.api_keys import ApiKeySettings
+from auto_scoring.adapters.credentials.store import UnavailableCredentialStore
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.criteria_extraction.factory import (
     CriteriaExtractorConfigError,
@@ -55,7 +57,12 @@ from auto_scoring.api.intake_router import ClassifierFactory, build_intake_route
 from auto_scoring.api.jobs_router import build_jobs_router
 from auto_scoring.api.recognitions_router import build_recognitions_router
 from auto_scoring.api.review_router import build_review_router
-from auto_scoring.api.secret_redaction import configuration_secrets, redact
+from auto_scoring.api.secret_redaction import (
+    SecretRegistry,
+    configuration_secrets,
+    redact,
+)
+from auto_scoring.api.settings_router import CredentialVerifier, build_settings_router
 from auto_scoring.api.submission_upload_gate import SubmissionUploadGateMiddleware
 from auto_scoring.api.test_artifact_lock import TestArtifactLocks
 from auto_scoring.api.test_registration_router import build_test_registration_router
@@ -202,6 +209,13 @@ OCRProviderFactory = Callable[[Mapping[str, str]], OCRProvider]
 #: ``ocr_provider`` was injected. Same role and wording discipline as
 #: `_NO_PROVIDER_INJECTED`.
 _NO_OCR_PROVIDER_INJECTED = "no OCR provider was supplied to create_app()"
+
+#: What the settings endpoints report when no `ApiKeySettings` was injected.
+#: Same role and wording discipline again, and the same reason for existing:
+#: a default that reached for this host's real credential store would make
+#: every test that builds an app -- and the schema export -- depend on
+#: whether the machine running it has one (Issue #96).
+_NO_CREDENTIAL_STORE_INJECTED = "no credential store was supplied to create_app()"
 
 
 class OcrAvailabilityResponse(BaseModel):
@@ -434,6 +448,9 @@ def create_app(
     grading_settings: GradingSettings | None = None,
     export_processor: JobProcessor | None = None,
     material_classifier_factory: ClassifierFactory | None = None,
+    credential_settings: ApiKeySettings | None = None,
+    secret_registry: SecretRegistry | None = None,
+    credential_verifier: CredentialVerifier | None = None,
 ) -> FastAPI:
     """Build the sidecar app.
 
@@ -520,6 +537,15 @@ def create_app(
     grades. Whichever arrives is published by ``GET /grading/availability``
     (`GradingAvailabilityResponse`). All of these are ignored when
     ``job_processor`` is supplied directly.
+
+    ``credential_settings``/``secret_registry``/``credential_verifier``
+    configure the API-key settings endpoints (Issue #96). All three are
+    injected for the reason ``ai_provider`` is: the real ones reach this
+    host's OS credential store and, for the verifier, the network. Omitted,
+    the screen reports that no credential store was supplied, saves are
+    refused, and no request is ever made -- so a test that forgot to inject
+    cannot silently keyring-write on a developer's machine or bill somebody
+    for a live call.
 
     ``export_processor`` (Issue #23) defaults to `auto_scoring.jobs.
     export_processor.ExportJobProcessor`, handling ``JobKind.EXPORT`` jobs
@@ -948,6 +974,16 @@ def create_app(
             material_classifier_factory or create_material_classifier,
             intake_limits=limits,
             pdfium_lock=pdfium_lock,
+        )
+    )
+    protected.include_router(
+        build_settings_router(
+            credential_settings
+            or ApiKeySettings(
+                UnavailableCredentialStore(_NO_CREDENTIAL_STORE_INJECTED), environment={}
+            ),
+            secret_registry=secret_registry or SecretRegistry(),
+            verifier=credential_verifier,
         )
     )
     protected.include_router(build_recognitions_router(session_factory, store))

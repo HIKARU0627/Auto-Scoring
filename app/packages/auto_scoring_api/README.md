@@ -116,6 +116,10 @@ Class | Method | HTTP request | Description
 [*ReviewApi*](doc/ReviewApi.md) | [**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](doc/ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
 [*ReviewApi*](doc/ReviewApi.md) | [**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](doc/ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
 [*ReviewApi*](doc/ReviewApi.md) | [**undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost**](doc/ReviewApi.md#undosubmissionssubmissionidquestionsquestionidreviewundopost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/undo | Undo
+[*SettingsApi*](doc/SettingsApi.md) | [**deleteApiKeySettingsApiKeysSlotIdDelete**](doc/SettingsApi.md#deleteapikeysettingsapikeysslotiddelete) | **DELETE** /settings/api-keys/{slot_id} | Delete Api Key
+[*SettingsApi*](doc/SettingsApi.md) | [**readApiKeysSettingsApiKeysGet**](doc/SettingsApi.md#readapikeyssettingsapikeysget) | **GET** /settings/api-keys | Read Api Keys
+[*SettingsApi*](doc/SettingsApi.md) | [**saveApiKeySettingsApiKeysSlotIdPut**](doc/SettingsApi.md#saveapikeysettingsapikeysslotidput) | **PUT** /settings/api-keys/{slot_id} | Save Api Key
+[*SettingsApi*](doc/SettingsApi.md) | [**verifySettingsApiKeysSlotIdVerifyPost**](doc/SettingsApi.md#verifysettingsapikeysslotidverifypost) | **POST** /settings/api-keys/{slot_id}/verify | Verify
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**addMaterialsTestsTestIdMaterialsPost**](doc/TestRegistrationApi.md#addmaterialsteststestidmaterialspost) | **POST** /tests/{test_id}/materials | Add Materials
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**completeRegistrationTestsTestIdCompleteRegistrationPost**](doc/TestRegistrationApi.md#completeregistrationteststestidcompleteregistrationpost) | **POST** /tests/{test_id}/complete-registration | Complete Registration
@@ -140,6 +144,8 @@ Class | Method | HTTP request | Description
  - [AnnotationResponse](doc/AnnotationResponse.md)
  - [AnswerImageFinding](doc/AnswerImageFinding.md)
  - [AnswerLayoutResponse](doc/AnswerLayoutResponse.md)
+ - [ApiKeySettingsResponse](doc/ApiKeySettingsResponse.md)
+ - [ApiKeyStatusModel](doc/ApiKeyStatusModel.md)
  - [ApproveReviewRequest](doc/ApproveReviewRequest.md)
  - [AttributionProposalResponse](doc/AttributionProposalResponse.md)
  - [BoundingBoxResponse](doc/BoundingBoxResponse.md)
@@ -151,6 +157,7 @@ Class | Method | HTTP request | Description
  - [ClassificationEstimateModel](doc/ClassificationEstimateModel.md)
  - [ClassificationNeed](doc/ClassificationNeed.md)
  - [CompleteRegistrationResponse](doc/CompleteRegistrationResponse.md)
+ - [ConfigurationSource](doc/ConfigurationSource.md)
  - [ConfirmCriteriaRequest](doc/ConfirmCriteriaRequest.md)
  - [ConfirmProfileRequest](doc/ConfirmProfileRequest.md)
  - [ConfirmRequest](doc/ConfirmRequest.md)
@@ -204,6 +211,7 @@ Class | Method | HTTP request | Description
  - [RoleSource](doc/RoleSource.md)
  - [RubricCriterionResponse](doc/RubricCriterionResponse.md)
  - [RuleScope](doc/RuleScope.md)
+ - [SaveApiKeyRequest](doc/SaveApiKeyRequest.md)
  - [SaveTemplatesRequest](doc/SaveTemplatesRequest.md)
  - [ScannedFileModel](doc/ScannedFileModel.md)
  - [ScoreRequest](doc/ScoreRequest.md)
@@ -219,6 +227,7 @@ Class | Method | HTTP request | Description
  - [UpdateCriteriaRequest](doc/UpdateCriteriaRequest.md)
  - [UpdateProfileRequest](doc/UpdateProfileRequest.md)
  - [ValidationError](doc/ValidationError.md)
+ - [VerifyApiKeyResponse](doc/VerifyApiKeyResponse.md)
 
 
 ## Documentation For Authorization

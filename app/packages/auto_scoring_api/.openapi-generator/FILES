@@ -6,6 +6,8 @@ doc/AnnotationEditRequest.md
 doc/AnnotationResponse.md
 doc/AnswerImageFinding.md
 doc/AnswerLayoutResponse.md
+doc/ApiKeySettingsResponse.md
+doc/ApiKeyStatusModel.md
 doc/ApproveReviewRequest.md
 doc/AttributionProposalResponse.md
 doc/BoundingBoxResponse.md
@@ -17,6 +19,7 @@ doc/ClassificationAvailabilityResponse.md
 doc/ClassificationEstimateModel.md
 doc/ClassificationNeed.md
 doc/CompleteRegistrationResponse.md
+doc/ConfigurationSource.md
 doc/ConfirmCriteriaRequest.md
 doc/ConfirmProfileRequest.md
 doc/ConfirmRequest.md
@@ -78,11 +81,13 @@ doc/RoleProposalResponse.md
 doc/RoleSource.md
 doc/RubricCriterionResponse.md
 doc/RuleScope.md
+doc/SaveApiKeyRequest.md
 doc/SaveTemplatesRequest.md
 doc/ScannedFileModel.md
 doc/ScoreRequest.md
 doc/ScoreResponse.md
 doc/ScoreValueResponse.md
+doc/SettingsApi.md
 doc/SubmissionResponse.md
 doc/SubmissionReviewProgressResponse.md
 doc/TestMaterialResponse.md
@@ -94,6 +99,7 @@ doc/UnresolvedQuestionModel.md
 doc/UpdateCriteriaRequest.md
 doc/UpdateProfileRequest.md
 doc/ValidationError.md
+doc/VerifyApiKeyResponse.md
 lib/auto_scoring_api.dart
 lib/src/api.dart
 lib/src/api/criteria_api.dart
@@ -104,6 +110,7 @@ lib/src/api/intake_api.dart
 lib/src/api/jobs_api.dart
 lib/src/api/recognitions_api.dart
 lib/src/api/review_api.dart
+lib/src/api/settings_api.dart
 lib/src/api/test_registration_api.dart
 lib/src/api_util.dart
 lib/src/auth/api_key_auth.dart
@@ -117,6 +124,8 @@ lib/src/model/annotation_edit_request.dart
 lib/src/model/annotation_response.dart
 lib/src/model/answer_image_finding.dart
 lib/src/model/answer_layout_response.dart
+lib/src/model/api_key_settings_response.dart
+lib/src/model/api_key_status_model.dart
 lib/src/model/approve_review_request.dart
 lib/src/model/attribution_proposal_response.dart
 lib/src/model/bounding_box_response.dart
@@ -128,6 +137,7 @@ lib/src/model/classification_availability_response.dart
 lib/src/model/classification_estimate_model.dart
 lib/src/model/classification_need.dart
 lib/src/model/complete_registration_response.dart
+lib/src/model/configuration_source.dart
 lib/src/model/confirm_criteria_request.dart
 lib/src/model/confirm_profile_request.dart
 lib/src/model/confirm_request.dart
@@ -182,6 +192,7 @@ lib/src/model/role_proposal_response.dart
 lib/src/model/role_source.dart
 lib/src/model/rubric_criterion_response.dart
 lib/src/model/rule_scope.dart
+lib/src/model/save_api_key_request.dart
 lib/src/model/save_templates_request.dart
 lib/src/model/scanned_file_model.dart
 lib/src/model/score_request.dart
@@ -197,5 +208,6 @@ lib/src/model/unresolved_question_model.dart
 lib/src/model/update_criteria_request.dart
 lib/src/model/update_profile_request.dart
 lib/src/model/validation_error.dart
+lib/src/model/verify_api_key_response.dart
 lib/src/serializers.dart
 pubspec.yaml

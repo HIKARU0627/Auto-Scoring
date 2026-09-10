@@ -19,6 +19,7 @@ import 'package:auto_scoring_app/core/app_theme.dart';
 import 'package:auto_scoring_app/core/sidecar_paths.dart';
 import 'package:auto_scoring_app/core/sidecar_platform_io.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
+import 'package:auto_scoring_app/core/sidecar_restart.dart';
 import 'package:auto_scoring_app/core/widgets/grading_unavailable_banner.dart';
 import 'package:auto_scoring_app/features/startup/startup_gate.dart';
 
@@ -257,6 +258,11 @@ class _AutoScoringAppState extends State<AutoScoringApp>
     return ProviderScope(
       overrides: [
         appDependenciesProvider.overrideWithValue(_activeDependencies),
+        // The settings screen saves an API key that only takes effect when
+        // the sidecar is rebuilt, and `start()` is already the restart path
+        // (§24's 再起動ボタン, `SidecarSupervisor`). Handing it over here
+        // keeps the supervisor itself out of `features` (Issue #96).
+        restartSidecarProvider.overrideWithValue(supervisor?.start),
       ],
       child: MaterialApp.router(
         title: 'Auto-Scoring',

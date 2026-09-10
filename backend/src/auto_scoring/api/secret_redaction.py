@@ -20,6 +20,11 @@ is the only place this process configures logging, and
 `api.app.build_ai_provider` is the only place a reason is published; both
 apply :func:`redact` with :func:`configuration_secrets`.
 
+Issue #96 added the one thing that arrangement could not cover on its own: a
+key the user *types in while the process runs* is not in the environment the
+gate was built from. :class:`SecretRegistry` is where those go, and the log
+filter reads it per record rather than capturing a list at startup.
+
 This is a safety net, not a licence: a message that quotes a configuration
 value is still a bug (`adapters.ai_grading.factory`'s module docstring
 forbids it), because the net only knows the values this process was
@@ -49,6 +54,7 @@ this process at all.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from threading import Lock
 
 #: Length at or above which *any* configuration value is treated as a secret,
 #: regardless of which variable it came from.
@@ -102,3 +108,41 @@ def redact(text: str, secrets: Sequence[str]) -> str:
         if secret:
             text = text.replace(secret, REDACTED)
     return text
+
+
+class SecretRegistry:
+    """The secrets to scrub, including ones learned after logging was set up.
+
+    :func:`configuration_secrets` answers "what was this process started
+    with", which was the whole answer until a key could be *entered while it
+    runs* (Issue #96). A key saved from the settings screen is a
+    configuration value that the log filter installed at startup has never
+    heard of -- and the very next thing that happens to it is a live HTTP
+    call whose failure gets logged. Without somewhere to put it, the gate
+    described above would cover every key except the ones this app itself
+    asked the user for.
+
+    Mutable and shared: one instance is created in the composition root,
+    handed to `api.sidecar.install_log_redaction` (whose filter reads it per
+    record, so an addition takes effect immediately) and to the settings
+    endpoints (which add to it on every save). Guarded by a lock because
+    those are different threads -- a request handler and whatever logs next.
+    """
+
+    def __init__(self, secrets: Sequence[str] = ()) -> None:
+        self._lock = Lock()
+        self._secrets: tuple[str, ...] = ()
+        self.update(secrets)
+
+    def add(self, secret: str) -> None:
+        self.update((secret,))
+
+    def update(self, secrets: Sequence[str]) -> None:
+        with self._lock:
+            combined = {*self._secrets, *(secret for secret in secrets if secret)}
+            # Longest first, for the reason `configuration_secrets` sorts.
+            self._secrets = tuple(sorted(combined, key=len, reverse=True))
+
+    def secrets(self) -> tuple[str, ...]:
+        with self._lock:
+            return self._secrets

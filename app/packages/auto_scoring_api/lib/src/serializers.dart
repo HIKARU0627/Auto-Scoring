@@ -19,6 +19,8 @@ import 'package:auto_scoring_api/src/model/annotation_edit_request.dart';
 import 'package:auto_scoring_api/src/model/annotation_response.dart';
 import 'package:auto_scoring_api/src/model/answer_image_finding.dart';
 import 'package:auto_scoring_api/src/model/answer_layout_response.dart';
+import 'package:auto_scoring_api/src/model/api_key_settings_response.dart';
+import 'package:auto_scoring_api/src/model/api_key_status_model.dart';
 import 'package:auto_scoring_api/src/model/approve_review_request.dart';
 import 'package:auto_scoring_api/src/model/attribution_proposal_response.dart';
 import 'package:auto_scoring_api/src/model/bounding_box_response.dart';
@@ -30,6 +32,7 @@ import 'package:auto_scoring_api/src/model/classification_availability_response.
 import 'package:auto_scoring_api/src/model/classification_estimate_model.dart';
 import 'package:auto_scoring_api/src/model/classification_need.dart';
 import 'package:auto_scoring_api/src/model/complete_registration_response.dart';
+import 'package:auto_scoring_api/src/model/configuration_source.dart';
 import 'package:auto_scoring_api/src/model/confirm_criteria_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_profile_request.dart';
 import 'package:auto_scoring_api/src/model/confirm_request.dart';
@@ -83,6 +86,7 @@ import 'package:auto_scoring_api/src/model/role_proposal_response.dart';
 import 'package:auto_scoring_api/src/model/role_source.dart';
 import 'package:auto_scoring_api/src/model/rubric_criterion_response.dart';
 import 'package:auto_scoring_api/src/model/rule_scope.dart';
+import 'package:auto_scoring_api/src/model/save_api_key_request.dart';
 import 'package:auto_scoring_api/src/model/save_templates_request.dart';
 import 'package:auto_scoring_api/src/model/scanned_file_model.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
@@ -98,6 +102,7 @@ import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 import 'package:auto_scoring_api/src/model/update_criteria_request.dart';
 import 'package:auto_scoring_api/src/model/update_profile_request.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
+import 'package:auto_scoring_api/src/model/verify_api_key_response.dart';
 
 part 'serializers.g.dart';
 
@@ -107,6 +112,8 @@ part 'serializers.g.dart';
   AnnotationResponse,
   AnswerImageFinding,
   AnswerLayoutResponse,
+  ApiKeySettingsResponse,
+  ApiKeyStatusModel,
   ApproveReviewRequest,
   AttributionProposalResponse,
   BoundingBoxResponse,
@@ -118,6 +125,7 @@ part 'serializers.g.dart';
   ClassificationEstimateModel,
   ClassificationNeed,
   CompleteRegistrationResponse,
+  ConfigurationSource,
   ConfirmCriteriaRequest,
   ConfirmProfileRequest,
   ConfirmRequest,
@@ -171,6 +179,7 @@ part 'serializers.g.dart';
   RoleSource,
   RubricCriterionResponse,
   RuleScope,
+  SaveApiKeyRequest,
   SaveTemplatesRequest,
   ScannedFileModel,
   ScoreRequest,
@@ -186,6 +195,7 @@ part 'serializers.g.dart';
   UpdateCriteriaRequest,
   UpdateProfileRequest,
   ValidationError,
+  VerifyApiKeyResponse,
 ])
 Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
@@ -305,6 +315,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(CriterionResultResponse)]),
         () => ListBuilder<CriterionResultResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(ApiKeyStatusModel)]),
+        () => ListBuilder<ApiKeyStatusModel>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(UnresolvedQuestionModel)]),

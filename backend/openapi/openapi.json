@@ -223,6 +223,95 @@
         "title": "AnswerLayoutResponse",
         "type": "object"
       },
+      "ApiKeySettingsResponse": {
+        "description": "The whole screen's state, so one round trip refreshes all of it.",
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyStatusModel"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "restart_required": {
+            "title": "Restart Required",
+            "type": "boolean"
+          },
+          "store_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Unavailable Reason"
+          },
+          "transport_order": {
+            "title": "Transport Order",
+            "type": "string"
+          },
+          "transport_source": {
+            "$ref": "#/components/schemas/ConfigurationSource"
+          }
+        },
+        "required": [
+          "transport_order",
+          "transport_source",
+          "restart_required",
+          "keys"
+        ],
+        "title": "ApiKeySettingsResponse",
+        "type": "object"
+      },
+      "ApiKeyStatusModel": {
+        "description": "One provider's key, described without disclosing it.",
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "console_url": {
+            "title": "Console Url",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key_source": {
+            "$ref": "#/components/schemas/ConfigurationSource"
+          },
+          "key_variable": {
+            "title": "Key Variable",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "model_source": {
+            "$ref": "#/components/schemas/ConfigurationSource"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "configured",
+          "key_source",
+          "key_variable",
+          "model",
+          "model_source",
+          "console_url"
+        ],
+        "title": "ApiKeyStatusModel",
+        "type": "object"
+      },
       "ApproveReviewRequest": {
         "properties": {
           "expected_ai_grade_id": {
@@ -678,6 +767,17 @@
         ],
         "title": "CompleteRegistrationResponse",
         "type": "object"
+      },
+      "ConfigurationSource": {
+        "description": "Where an effective configuration value came from.",
+        "enum": [
+          "credential_store",
+          "environment",
+          "builtin_default",
+          "none"
+        ],
+        "title": "ConfigurationSource",
+        "type": "string"
       },
       "ConfirmCriteriaRequest": {
         "description": "The revision the reviewer is signing off on.",
@@ -2658,6 +2758,21 @@
         "title": "RuleScope",
         "type": "string"
       },
+      "SaveApiKeyRequest": {
+        "properties": {
+          "value": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "SaveApiKeyRequest",
+        "type": "object"
+      },
       "SaveTemplatesRequest": {
         "properties": {
           "templates": {
@@ -3106,6 +3221,40 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifyApiKeyResponse": {
+        "description": "The outcome of one live call. Fixed sentences and a status number.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "key_source": {
+            "$ref": "#/components/schemas/ConfigurationSource"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          }
+        },
+        "required": [
+          "result",
+          "detail",
+          "key_source"
+        ],
+        "title": "VerifyApiKeyResponse",
         "type": "object"
       }
     },
@@ -3749,6 +3898,181 @@
           }
         ],
         "summary": "Score"
+      }
+    },
+    "/settings/api-keys": {
+      "get": {
+        "operationId": "read_api_keys_settings_api_keys_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Api Keys",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/settings/api-keys/{slot_id}": {
+      "delete": {
+        "operationId": "delete_api_key_settings_api_keys__slot_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slot_id",
+            "required": true,
+            "schema": {
+              "title": "Slot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Api Key",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "save_api_key_settings_api_keys__slot_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slot_id",
+            "required": true,
+            "schema": {
+              "title": "Slot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveApiKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Api Key",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/settings/api-keys/{slot_id}/verify": {
+      "post": {
+        "operationId": "verify_settings_api_keys__slot_id__verify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slot_id",
+            "required": true,
+            "schema": {
+              "title": "Slot Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyApiKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Verify",
+        "tags": [
+          "settings"
+        ]
       }
     },
     "/submissions/{submission_id}": {

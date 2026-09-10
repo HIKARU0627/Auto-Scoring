@@ -89,6 +89,13 @@ hiddenimports = [
     # Same pattern one layer down: Alembic picks the DDL implementation that
     # matches the connected dialect.
     *collect_submodules("alembic.ddl"),
+    # `keyring` finds its backend the same way: an entry-point scan over
+    # `keyring.backends`, with nothing importing the Windows one by name
+    # (Issue #96). Without this the packaged sidecar starts, reports "この
+    # 環境では OS の資格情報ストアを利用できません" on the settings screen, and
+    # the one platform this ships to is the one where saving a key silently
+    # stops working -- which no test on a Linux developer machine can see.
+    *collect_submodules("keyring.backends"),
     # OpenCV's Python package is a loader shim around a compiled extension;
     # naming it explicitly makes PyInstaller run its bundled cv2 hook (which
     # is what actually collects the native libraries) even though nothing

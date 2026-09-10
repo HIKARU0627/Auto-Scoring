@@ -12,6 +12,8 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(AnnotationResponse.serializer)
       ..add(AnswerImageFinding.serializer)
       ..add(AnswerLayoutResponse.serializer)
+      ..add(ApiKeySettingsResponse.serializer)
+      ..add(ApiKeyStatusModel.serializer)
       ..add(ApproveReviewRequest.serializer)
       ..add(AttributionProposalResponse.serializer)
       ..add(BoundingBoxResponse.serializer)
@@ -23,6 +25,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ClassificationEstimateModel.serializer)
       ..add(ClassificationNeed.serializer)
       ..add(CompleteRegistrationResponse.serializer)
+      ..add(ConfigurationSource.serializer)
       ..add(ConfirmCriteriaRequest.serializer)
       ..add(ConfirmProfileRequest.serializer)
       ..add(ConfirmRequest.serializer)
@@ -76,6 +79,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(RoleSource.serializer)
       ..add(RubricCriterionResponse.serializer)
       ..add(RuleScope.serializer)
+      ..add(SaveApiKeyRequest.serializer)
       ..add(SaveTemplatesRequest.serializer)
       ..add(ScannedFileModel.serializer)
       ..add(ScoreRequest.serializer)
@@ -91,6 +95,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(UpdateCriteriaRequest.serializer)
       ..add(UpdateProfileRequest.serializer)
       ..add(ValidationError.serializer)
+      ..add(VerifyApiKeyResponse.serializer)
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(AnnotationEditRequest)]),
@@ -110,6 +115,9 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(AnnotationResponse)]),
           () => ListBuilder<AnnotationResponse>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(ApiKeyStatusModel)]),
+          () => ListBuilder<ApiKeyStatusModel>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(BoundingBoxResponse)]),
