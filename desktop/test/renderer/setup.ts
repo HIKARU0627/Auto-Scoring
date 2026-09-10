@@ -1,5 +1,6 @@
 import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import "../../src/renderer/styles/index.css";
 
 /**
  * React Testing Library unmounts between tests only when a global `afterEach`
