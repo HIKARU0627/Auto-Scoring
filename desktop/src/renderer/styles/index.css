@@ -1,0 +1,82 @@
+@import "./design-tokens.css";
+@import "tailwindcss";
+
+/**
+ * Bridge design tokens into Tailwind utilities. `inline` keeps utilities as
+ * `var(--color-surface)` etc., so light/dark switching only touches
+ * `design-tokens.css`.
+ */
+@theme inline {
+  --color-primary: var(--color-primary);
+  --color-on-primary: var(--color-on-primary);
+  --color-primary-container: var(--color-primary-container);
+  --color-on-primary-container: var(--color-on-primary-container);
+  --color-secondary-container: var(--color-secondary-container);
+  --color-on-secondary-container: var(--color-on-secondary-container);
+  --color-tertiary-container: var(--color-tertiary-container);
+  --color-on-tertiary-container: var(--color-on-tertiary-container);
+  --color-error: var(--color-error);
+  --color-on-error: var(--color-on-error);
+  --color-error-container: var(--color-error-container);
+  --color-on-error-container: var(--color-on-error-container);
+  --color-surface: var(--color-surface);
+  --color-on-surface: var(--color-on-surface);
+  --color-surface-dim: var(--color-surface-dim);
+  --color-surface-bright: var(--color-surface-bright);
+  --color-surface-container-lowest: var(--color-surface-container-lowest);
+  --color-surface-container-low: var(--color-surface-container-low);
+  --color-surface-container: var(--color-surface-container);
+  --color-surface-container-high: var(--color-surface-container-high);
+  --color-surface-container-highest: var(--color-surface-container-highest);
+  --color-on-surface-variant: var(--color-on-surface-variant);
+  --color-outline: var(--color-outline);
+  --color-outline-variant: var(--color-outline-variant);
+  --color-inverse-surface: var(--color-inverse-surface);
+  --color-on-inverse-surface: var(--color-on-inverse-surface);
+  --color-attention: var(--color-attention);
+  --color-attention-container: var(--color-attention-container);
+  --color-on-attention-container: var(--color-on-attention-container);
+  --color-success: var(--color-success);
+  --color-success-container: var(--color-success-container);
+  --color-on-success-container: var(--color-on-success-container);
+  --color-annotation-mark: var(--color-annotation-mark);
+  --color-disabled-button-outline: var(--color-disabled-button-outline);
+  --color-disabled-button-label: var(--color-disabled-button-label);
+  --color-disabled-button-container: var(--color-disabled-button-container);
+
+  --spacing-xs: var(--spacing-xs);
+  --spacing-sm: var(--spacing-sm);
+  --spacing-md: var(--spacing-md);
+  --spacing-lg: var(--spacing-lg);
+  --spacing-xl: var(--spacing-xl);
+  --spacing-xxl: var(--spacing-xxl);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+
+  --font-sans: var(--font-family-sans);
+
+  --text-title-large: var(--font-size-title-large);
+  --text-body-medium: var(--font-size-body-medium);
+  --text-ui-label: var(--font-size-label-large);
+
+  --leading-ui: var(--line-height-ui);
+  --leading-reading: var(--line-height-reading);
+}
+
+@layer base {
+  html {
+    font-family: var(--font-family-sans);
+    font-size: var(--font-size-body-large);
+    line-height: var(--line-height-reading);
+    letter-spacing: 0;
+    color: var(--color-on-surface);
+    background-color: var(--color-surface);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+  }
+}
