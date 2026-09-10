@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# scripts/openapi.mjs generates into a scratch dir beside auto_scoring_api/
+# and only swaps it in once generation fully succeeds (Issue #102). A leftover
+# one (killed before cleanup) must never show up as untracked in git status.
+packages/.auto_scoring_api.generate-*
+packages/auto_scoring_api.generate-backup

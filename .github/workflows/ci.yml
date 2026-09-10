@@ -85,6 +85,11 @@ jobs:
         run: pnpm skills:check
       - name: Check formatting
         run: pnpm format:check
+      - name: OpenAPI contract self-test
+        # Fast, dependency-free unit test for the atomic generate/swap helper
+        # (Issue #102) -- separate from "OpenAPI contract" below so a broken
+        # helper is reported before spending time on a full regenerate.
+        run: pnpm openapi:selftest
       - name: OpenAPI contract
         # Regenerates the schema + Dart client and fails on any drift. Needs
         # uv, dart, and Java (openapi-generator) -- all present on the runner.
