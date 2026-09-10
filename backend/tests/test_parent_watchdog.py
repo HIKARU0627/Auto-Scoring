@@ -248,7 +248,12 @@ if spec["budget_seconds"] is not None:
 # process ends. A flag some later line was meant to notice would never be
 # noticed here.
 blocked = socket.create_connection(("127.0.0.1", spec["never_answers_port"]))
-blocked.recv(1)
+try:
+    blocked.recv(1)
+except OSError:
+    # The test closed the far end, which is how a surviving child is asked
+    # to go home. Not a failure, and a traceback for it is CI noise.
+    pass
 """
 
 _PARENT_SOURCE = """
@@ -264,7 +269,10 @@ for spec in json.loads(specs_json):
 # Parked the same way its children are, so this process only ever ends by
 # being killed -- and, if the test itself dies first, by the socket closing.
 blocked = socket.create_connection(("127.0.0.1", never_answers_port))
-blocked.recv(1)
+try:
+    blocked.recv(1)
+except OSError:
+    pass
 """
 
 
@@ -331,10 +339,19 @@ def _family(
 
 
 def _kill_if_running(data_root: Path) -> None:
+    """Best effort: the process named in ``ready`` has usually already gone.
+
+    ``OSError``, not just ``ProcessLookupError``: on Windows `os.kill` is
+    ``TerminateProcess`` (the hazard `adapters.parent_watchdog` documents),
+    and an id no process holds comes back as a plain ``OSError`` --
+    ``[WinError 87] The parameter is incorrect`` -- rather than the POSIX
+    exception. Caught in CI on Windows, where the child this is cleaning up
+    had already exited on its own, exactly as intended.
+    """
     ready = data_root / "ready"
     if not ready.is_file():
         return
-    with contextlib.suppress(ProcessLookupError, ValueError):
+    with contextlib.suppress(OSError, ValueError):
         os.kill(int(ready.read_text(encoding="utf-8")), 9)
 
 
