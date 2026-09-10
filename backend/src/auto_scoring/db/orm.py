@@ -359,18 +359,18 @@ class GradeResultRow(Base):
 #: wrong is the entire failure that Issue removes (AGENTS.md "Architecture":
 #: guarantee important invariants with real constraints).
 #:
-#: **A trigger, not a ``CheckConstraint``, and the reason is measured.**
-#: SQLite cannot add a CHECK to an existing table, so a migration adding one
-#: must rebuild ``grade_results`` -- which moves it to the end of
-#: ``sqlite_master``, behind ``reviews``. Deleting a test then aborts with
-#: ``ck_reviews_confirmed_requires_ai_grade`` (Issue #118): the cascade is
-#: applied in schema order, so the grade rows go first and
-#: ``reviews.ai_grade_result_id``'s ``ON DELETE SET NULL`` blanks an
-#: ``approved`` review's grade reference while that row still exists.
-#: ``ADD COLUMN`` needs no rebuild, so expressing this rule as a trigger
-#: leaves every other table's schema untouched. The same reason the
-#: dependency-graph triggers above exist: what has to be enforced does not
-#: fit a CHECK on this table as it stands. See migration ``0017``.
+#: **A trigger, not a ``CheckConstraint``.** SQLite cannot add a CHECK to an
+#: existing table, so a migration adding one must rebuild ``grade_results``.
+#: When ``0017`` was written that rebuild broke deleting a test, because it
+#: moved the table behind ``reviews`` in ``sqlite_master`` and so flipped the
+#: cascade order into ``ck_reviews_confirmed_requires_ai_grade``; ``ADD
+#: COLUMN`` plus a trigger avoided the rebuild. Issue #149 has since removed
+#: that hazard at its source (``ReviewRow``'s references cascade instead of
+#: blanking), so rebuilding this table is safe again -- the trigger simply
+#: stays, since re-expressing the same rule as a CHECK would rebuild the
+#: table for no behavioural gain. The dependency-graph triggers above are
+#: there for the other reason: what they enforce does not fit a CHECK on the
+#: table as it stands. See migrations ``0017`` and ``0018``.
 #:
 #: It rejects any value other than ``answer``/``blank``/``NULL``, so it also
 #: carries the "known value" half that a migrated database would otherwise
@@ -497,21 +497,31 @@ class ReviewRow(Base):
     #: review history (Issue #22 optimistic concurrency). See the unique
     #: constraint above.
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Every one of the four references below is ``ON DELETE CASCADE``, not
+    #: ``SET NULL`` (Issue #149). ``SET NULL`` *rewrites* the review row while
+    #: it still exists, so removing the row it names aborts the delete on the
+    #: matching CHECK above -- and whether that happens is decided by the
+    #: order SQLite walks the tables in, i.e. by whatever the last migration
+    #: left in ``sqlite_master``. ``CASCADE`` never produces that intermediate
+    #: row at all: a review disappears together with the thing it is a
+    #: decision about, in every order. See
+    #: ``docs/data-model-and-local-storage.md`` "Review が指す行の削除".
     ai_grade_result_id: Mapped[str | None] = mapped_column(
-        ForeignKey("grade_results.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("grade_results.id", ondelete="CASCADE"), nullable=True
     )
     human_grade_result_id: Mapped[str | None] = mapped_column(
-        ForeignKey("grade_results.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("grade_results.id", ondelete="CASCADE"), nullable=True
     )
     #: The `Job` a ``regrade_requested`` row queued (Issue #22). ``None`` for
     #: every other action.
     regrade_job_id: Mapped[str | None] = mapped_column(
-        ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=True
     )
     #: The prior `Review` row an ``undone`` row reverts (Issue #22). Never
-    #: physically removed -- see `domain.review_workflow.effective_latest_review`.
+    #: physically removed while that row lives -- see
+    #: `domain.review_workflow.effective_latest_review`.
     undone_review_id: Mapped[str | None] = mapped_column(
-        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("reviews.id", ondelete="CASCADE"), nullable=True
     )
     note: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

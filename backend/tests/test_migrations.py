@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0017"
+    assert current_revision(db_url) == "0018"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0017"
+    assert current_revision(db_url) == "0018"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0017"
+    assert current_revision(db_url) == "0018"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0017"
+    assert current_revision(db_url) == "0018"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0017"
+    assert current_revision(db_url) == "0018"
 
 
 _CHILD_TABLES = (
@@ -872,6 +872,84 @@ def test_reviews_check_constraints_track_who_needs_an_ai_grade(db_url: str) -> N
         conn.commit()
     finally:
         conn.close()
+        engine.dispose()
+
+
+_REVIEW_HISTORY_SEED = [
+    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+    "VALUES ('t', 'n', 'additive', 'draft', '2026-01-01')",
+    "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+    "VALUES ('q', 't', '1', 1, 5, 'additive')",
+    "INSERT INTO submissions "
+    "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, created_at) "
+    "VALUES ('s', 't', 'submissions/s/source.pdf', '" + ("4" * 64) + "', 1, "
+    "'unprocessed', '2026-01-01')",
+    "INSERT INTO grade_results "
+    "(id, submission_id, question_id, source, awarded, maximum, confidence, "
+    "criteria, context, created_at) "
+    "VALUES ('g-ai', 's', 'q', 'ai', 4, 5, 0.9, '[]', '[]', '2026-01-01')",
+    "INSERT INTO grade_results "
+    "(id, submission_id, question_id, source, awarded, maximum, confidence, "
+    "criteria, context, created_at) "
+    "VALUES ('g-human', 's', 'q', 'human', 3, 5, 1.0, '[]', '[]', '2026-01-01')",
+    "INSERT INTO jobs "
+    "(id, kind, submission_id, question_id, state, attempts, max_attempts, "
+    "created_at, updated_at) "
+    "VALUES ('j', 'grading', 's', 'q', 'queued', 0, 3, '2026-01-01', '2026-01-01')",
+    "INSERT INTO reviews "
+    "(id, submission_id, question_id, action, version, ai_grade_result_id, created_at) "
+    "VALUES ('rv-approved', 's', 'q', 'approved', 1, 'g-ai', '2026-01-01')",
+    "INSERT INTO reviews "
+    "(id, submission_id, question_id, action, version, human_grade_result_id, created_at) "
+    "VALUES ('rv-modified', 's', 'q', 'modified', 2, 'g-human', '2026-01-01')",
+    "INSERT INTO reviews "
+    "(id, submission_id, question_id, action, version, regrade_job_id, created_at) "
+    "VALUES ('rv-regrade', 's', 'q', 'regrade_requested', 3, 'j', '2026-01-01')",
+    "INSERT INTO reviews "
+    "(id, submission_id, question_id, action, version, undone_review_id, created_at) "
+    "VALUES ('rv-undone', 's', 'q', 'undone', 4, 'rv-approved', '2026-01-01')",
+]
+
+
+def test_upgrade_repairs_a_review_history_that_could_not_be_deleted(db_url: str) -> None:
+    """Issue #149: at 0017, deleting the test aborted on ``reviews``' own CHECKs.
+
+    Each of the four references a CHECK makes mandatory carried ``ON DELETE
+    SET NULL``, which rewrites the review row while it still exists. The
+    ``undone`` one points back into ``reviews``, so no table order saved it:
+    a test with a single undone review could not be deleted at all. 0018
+    turns all four into ``ON DELETE CASCADE`` -- asserted here on a database
+    that already holds the history, since that is the shape a real one is in.
+    """
+    upgrade(db_url, "0017")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            for statement in _REVIEW_HISTORY_SEED:
+                conn.execute(text(statement))
+
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(text("DELETE FROM tests WHERE id = 't'"))
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            carried = conn.execute(text("SELECT id FROM reviews ORDER BY version")).fetchall()
+            assert [row[0] for row in carried] == [
+                "rv-approved",
+                "rv-modified",
+                "rv-regrade",
+                "rv-undone",
+            ]
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM tests WHERE id = 't'"))
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM reviews")).scalar() == 0
+    finally:
         engine.dispose()
 
 
