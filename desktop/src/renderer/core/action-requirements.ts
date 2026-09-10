@@ -53,6 +53,14 @@ export const ActionRequirements = {
       "intake-non-answer-unroutable",
       `答案ごとに振り分けるフォルダに、答案以外のファイルが${files}件あります。除外するか、取り込み先を1つのテストに変えてください。`,
     ),
+  credentialStoreUnavailable: requirement(
+    "credential-store-unavailable",
+    "この PC の資格情報ストアが使えないため、キーを保存できません。上の通知にある理由を解消するか、環境変数でキーを渡してください。",
+  ),
+  apiKeyNotConfigured: requirement(
+    "api-key-not-configured",
+    "キーがまだありません。上の欄に入力して「保存する」を押すと疎通を確認できます。",
+  ),
 } as const;
 
 export function intakeFolderPickRequirements(input: {
@@ -79,4 +87,44 @@ export function intakeImportRequirements(input: {
     requirements.push(ActionRequirements.busy);
   }
   return [...requirements, ...input.folderRequirements];
+}
+
+/** 進行中の処理が終わるまでしか無効にならない操作 */
+export function whileRunningRequirements(input: {
+  running: boolean;
+}): readonly ActionRequirement[] {
+  if (input.running) {
+    return [ActionRequirements.busy];
+  }
+  return [];
+}
+
+/** 設定画面 API キータブの「保存する」 */
+export function apiKeySaveRequirements(input: {
+  busy: boolean;
+  credentialStoreAvailable: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (!input.credentialStoreAvailable) {
+    requirements.push(ActionRequirements.credentialStoreUnavailable);
+  }
+  return requirements;
+}
+
+/** 設定画面 API キータブの「疎通を確認する」 (INV-107) */
+export function apiKeyVerifyRequirements(input: {
+  busy: boolean;
+  configured: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (!input.configured) {
+    requirements.push(ActionRequirements.apiKeyNotConfigured);
+  }
+  return requirements;
 }
