@@ -70,6 +70,38 @@ CI は 4 ジョブ。`app` と `backend` が実作業、`quality` は**判定を
 **GitHub は skipped の必須チェックを成功として扱う。** ここを外すと、ビルドが
 赤いままマージゲートだけが緑に見える。到達したこと自体は何の成功の証拠でもない。
 
+### `concurrency` は PR では打ち切り、`main` では打ち切らない
+
+```yaml
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+```
+
+`cancel-in-progress` 自体は Issue #129 の CI 短縮策の一部で、**PR ブランチでは
+正しい**（同じブランチへ push し直したら古い run の結果に意味は無い）。問題は
+`main` だった: `main` への連続 push は `group` が同じ（`github.ref` は push では
+常に `refs/heads/main`）ため、後のマージが前のマージの run を打ち切っていた
+（Issue #180、実測: run 34446115669 が `8edc2394` に対して開始 1 分 10 秒で
+cancelled）。**打ち切られた run は GitHub 上で赤ではなく中立表示になるため、
+`main` は緑に見えたまま、そのマージコミットは自分自身を検証した run を
+1 つも持たない状態になる。**
+
+`github.ref` は `pull_request` イベントでは head ブランチ名ではなく
+`refs/pull/<番号>/merge` になる（このリポジトリの実際の run ログの checkout
+ステップで確認済み。`pull_request:` と `push: branches: [main]` しか
+トリガーしないため、この workflow が実際に区別すべきなのはこの 2 パターンだけ）。
+したがって上の式は「`main` への push だけ打ち切らない、それ以外（PR）は
+打ち切る」を満たす。
+
+`cancel-in-progress: false` になったからといって `main` の連続 push が並列に
+走るわけではない。`group` が同じ run は、打ち切られない代わりに**キューされ、
+1 本ずつ順に流れる**。並列にはならないが、互いを消しもしない。
+
+**この PR 自身の CI では、PR 側の打ち切り（従来どおり）しか観測できない。**
+`main` 側で打ち切られなくなったことは、この変更のマージ後に実際に 2 件
+連続でマージされて初めて観測できる。observable acceptance はそちらに記録する。
+
 ## git hooks vs CI
 
 - `.githooks/pre-commit` runs `pnpm run check:pre-commit` (skill mirror +

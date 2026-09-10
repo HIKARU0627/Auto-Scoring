@@ -9,9 +9,25 @@ on:
 permissions:
   contents: read
 
+# Cancelling an in-progress run is right on a PR branch (a superseded push
+# means the old run's result is worthless) but wrong on `main`: two merges
+# within a run's duration would cancel the first merge commit's own run,
+# leaving that commit on `main` with no run that ever verified it -- and
+# GitHub shows the cancelled run as neutral, not red, so `main` still looks
+# green (Issue #180). `cancel-in-progress` itself is not the thing to drop;
+# it is part of the CI-time cut from Issue #129 and stays correct for PRs.
+#
+# For a `push` to `main`, `github.ref` is `refs/heads/main`. For a
+# `pull_request` run, it is `refs/pull/<number>/merge`, not the head branch
+# name (confirmed from this repo's own run logs, not assumed) -- this
+# workflow never runs on a plain `push` to a non-main branch, so those are
+# the only two cases the expression below has to tell apart. Without
+# `cancel-in-progress`, same-group runs queue instead of racing, so
+# consecutive merges to `main` still run one after another rather than in
+# parallel; they just no longer cancel each other.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # `pnpm test` ran `test:app && test:backend` back to back, so the two halves
