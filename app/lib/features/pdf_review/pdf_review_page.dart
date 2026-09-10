@@ -635,16 +635,34 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   /// prerequisite it is waiting on -- the same string the DAG node prints,
   /// via the same `core` rule.
   String _questionStatusLabel(QuestionResponse question) =>
-      _questionStatus(question).labelWaitingFor(_blockedOnNumber(question));
+      _questionStatus(question).labelWaitingFor(_waitingOn(question));
 
-  /// The 設問番号 of the question [question]'s job is waiting on, or `null`
-  /// when it is not blocked (or the prerequisite is not in this submission's
-  /// own question list, which a graph fetched for the whole test can name).
-  String? _blockedOnNumber(QuestionResponse question) {
-    final blockedOn = _latestJobFor(question.id)?.blockedOnQuestionId;
-    if (blockedOn == null) return null;
+  /// Which question [question] is actually waiting on, and what state that
+  /// question is in.
+  ///
+  /// Goes through the same `core` walk the DAG panel uses
+  /// ([resolveQuestionWait]) rather than reading one hop of
+  /// `blocked_on_question_id` here: the rail, the Inspector badge and the
+  /// diagram have to name the same prerequisite, which is the whole of
+  /// Issue #84, and a question stuck behind a *failure* has to name the
+  /// failure rather than the next link in the chain, which is Issue #86.
+  /// The lookups are `null`-tolerant because a graph fetched for the whole
+  /// test can name a question this submission's list does not have.
+  QuestionWait? _waitingOn(QuestionResponse question) => resolveQuestionWait(
+    question.id,
+    blockedOn: (id) => _latestJobFor(id)?.blockedOnQuestionId,
+    statusOf: (id) {
+      final candidate = _questionById(id);
+      return candidate == null
+          ? QuestionStatus.pending
+          : _questionStatus(candidate);
+    },
+    numberOf: (id) => _questionById(id)?.number,
+  );
+
+  QuestionResponse? _questionById(String id) {
     for (final candidate in _questions) {
-      if (candidate.id == blockedOn) return candidate.number;
+      if (candidate.id == id) return candidate;
     }
     return null;
   }
@@ -2406,6 +2424,11 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
           label: question.number,
           status: _questionStatus(question),
           blockedOnQuestionId: job?.blockedOnQuestionId,
+          // Handed over so `core` can turn them into words a person can act
+          // on. Neither string survives the `DagQuestion` constructor
+          // (Issue #86) -- what the panel gets is a `DagFailureGuidance`.
+          lastError: job?.lastError,
+          errorCode: job?.errorCode,
         ),
       );
       if (releasesDependents(job)) released.add(question.id);

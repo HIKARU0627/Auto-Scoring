@@ -109,18 +109,137 @@ enum QuestionStatus {
 
   final AppStatusTone tone;
 
-  /// [label], except that [blocked] names the prerequisite it is waiting on
-  /// when [prerequisiteNumber] is known -- 「問2 待ち」 rather than a bare
-  /// 「前提待ち」, since *what* it is waiting for is the one thing a blocked
-  /// question exists to tell the reviewer.
+  /// [label], except that [blocked] names what it is waiting on and **what
+  /// state that thing is in** -- 「問2 待ち」 rather than a bare 「前提待ち」,
+  /// since *what* it is waiting for is the one thing a blocked question
+  /// exists to tell the reviewer, and 「問2 失敗で停止」 rather than
+  /// 「問2 待ち」 when that wait is never going to end on its own.
+  ///
+  /// That last distinction is Issue #86. 「問2 待ち」 was printed whether 問2
+  /// had stopped for a person to look at it (要確認) or had failed outright,
+  /// and a wait that a person has to break reads exactly like one that will
+  /// clear itself in a minute. The prerequisite [resolveQuestionWait] hands
+  /// back is the one a person can act on, so the two now read differently:
+  ///
+  /// | 前提の状態 | ラベル          |
+  /// | ---------- | --------------- |
+  /// | 失敗       | 問2 失敗で停止  |
+  /// | 要確認     | 問2 確認待ち    |
+  /// | それ以外   | 問2 待ち        |
+  ///
+  /// All three are 「問N」 + what: same shape, different word, so the
+  /// difference is where the eye already is. They are also all **8 glyphs or
+  /// fewer**, which is what a node at `AppLayout.dagNodeWidth` fits without
+  /// ellipsis -- a truncated 「問2 失敗で…」 would put the distinction back
+  /// exactly where it was.
   ///
   /// Lives here rather than in the DAG node so the rail and the Inspector
   /// say the same words about the same question as the diagram does. A
   /// caller with no prerequisite to name just gets [label].
-  String labelWaitingFor(String? prerequisiteNumber) =>
-      this == QuestionStatus.blocked && prerequisiteNumber != null
-      ? '問$prerequisiteNumber 待ち'
-      : label;
+  String labelWaitingFor(QuestionWait? waitingOn) {
+    if (this != QuestionStatus.blocked || waitingOn == null) return label;
+    return switch (waitingOn.status) {
+      QuestionStatus.failed => '問${waitingOn.number} 失敗で停止',
+      QuestionStatus.needsCheck => '問${waitingOn.number} 確認待ち',
+      _ => '問${waitingOn.number} 待ち',
+    };
+  }
+}
+
+/// The question a [QuestionStatus.blocked] question is actually waiting on,
+/// and the state that question is in.
+///
+/// [number] is the 設問番号 the reviewer sees, never an id: an opaque id in
+/// 「問X 待ち」 answers nothing.
+@immutable
+class QuestionWait {
+  const QuestionWait({
+    required this.questionId,
+    required this.number,
+    required this.status,
+  });
+
+  /// Identity, for a caller that has to match this against a question rather
+  /// than print it. [number] is what a person reads and is not unique by
+  /// construction; this is.
+  final String questionId;
+
+  /// `QuestionResponse.number` of the prerequisite.
+  final String number;
+
+  /// What that prerequisite is doing. [QuestionStatus.failed] and
+  /// [QuestionStatus.needsCheck] are the two that mean the wait ends only
+  /// when a person acts (Issue #86).
+  final QuestionStatus status;
+
+  @override
+  bool operator ==(Object other) =>
+      other is QuestionWait &&
+      other.questionId == questionId &&
+      other.number == number &&
+      other.status == status;
+
+  @override
+  int get hashCode => Object.hash(questionId, number, status);
+
+  @override
+  String toString() => 'QuestionWait($questionId, $number, ${status.name})';
+}
+
+/// Follows `Job.blocked_on_question_id` out from [questionId] and returns the
+/// prerequisite worth naming on screen.
+///
+/// Normally that is simply the direct one -- 問3 waits on 問2, so 問3 says
+/// 「問2 待ち」. The exception is a chain that has stopped dead: when 問2 has
+/// failed, 問3 is 「問2 待ち」 and 問5, blocked behind 問3, is 「問3 待ち」,
+/// and **neither of them names the question a person has to go and fix**
+/// (Issue #86). Following the chain to the question that is actually stopped
+/// makes both of them point at 問2, which is the only place work can resume
+/// from. The edges of the DAG still draw the structure the chain went
+/// through, so nothing is lost by naming the far end instead of the near one.
+///
+/// The walk stops at the first prerequisite that is *not* itself
+/// [QuestionStatus.blocked]: an upstream that is running or queued is going
+/// to release on its own, so the direct prerequisite is the honest answer and
+/// there is nothing further along to blame.
+///
+/// Takes lookups rather than a data structure because the three places that
+/// need this hold their inputs differently -- the panel has a laid-out node
+/// list, the rail and the Inspector have this screen's `_jobs` -- and one
+/// derivation shared between them is the whole point of Issue #84.
+/// [numberOf] returning `null` means the prerequisite is not one of this
+/// submission's own questions (a graph fetched for the whole test can name
+/// one), and an unnameable question is not named.
+QuestionWait? resolveQuestionWait(
+  String questionId, {
+  required String? Function(String id) blockedOn,
+  required QuestionStatus Function(String id) statusOf,
+  required String? Function(String id) numberOf,
+}) {
+  final seen = <String>{questionId};
+  QuestionWait? direct;
+  var current = blockedOn(questionId);
+  // `seen` is a cycle guard, not a hypothetical: a confirmed graph is acyclic,
+  // but this walks the queue's own `blocked_on` pointers, which are rows that
+  // can be stale mid-re-enqueue. A loop here would hang the frame.
+  while (current != null && seen.add(current)) {
+    final number = numberOf(current);
+    if (number == null) return direct;
+    final status = statusOf(current);
+    final wait = QuestionWait(
+      questionId: current,
+      number: number,
+      status: status,
+    );
+    direct ??= wait;
+    if (status == QuestionStatus.failed ||
+        status == QuestionStatus.needsCheck) {
+      return wait;
+    }
+    if (status != QuestionStatus.blocked) return direct;
+    current = blockedOn(current);
+  }
+  return direct;
 }
 
 /// Collapses one question's `Job` and `Review` into the single state every
