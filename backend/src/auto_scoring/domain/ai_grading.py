@@ -84,6 +84,7 @@ from pydantic import (
     model_validator,
 )
 
+from auto_scoring.domain.ai_response_language import FIELD_LANGUAGE_NOTE
 from auto_scoring.domain.models import (
     AnnotationKind,
     AnswerImageFinding,
@@ -111,6 +112,11 @@ def _truncated_comment(value: object) -> object:
 #: rather than rejected for exceeding it -- see `_truncated_comment` and the
 #: module docstring's ``comment`` bullet.
 _CommentStr = Annotated[_NonBlankStr, BeforeValidator(_truncated_comment)]
+
+#: Issue #140: the model's own prose about what a mark means, not a
+#: verbatim quote -- see `domain.ai_response_language` for why this
+#: (unlike ``AnnotationCandidate.target``) carries the language instruction.
+_ANNOTATION_COMMENT_DESCRIPTION = "What this mark means." + FIELD_LANGUAGE_NOTE
 
 
 class RecognitionOutput(BaseModel):
@@ -171,7 +177,13 @@ class CriterionResultOutput(BaseModel):
     index: int = Field(ge=1)
     result: CriterionOutcome
     confidence: float = Field(ge=0.0, le=1.0)
-    rationale: _NonBlankStr
+    #: Issue #140: the description reaches the model's schema, not just the
+    #: system instructions -- see `domain.ai_response_language` for why both
+    #: places need to say it.
+    rationale: Annotated[
+        _NonBlankStr,
+        Field(description="Why this criterion got this result." + FIELD_LANGUAGE_NOTE),
+    ]
 
 
 class AnnotationCandidate(BaseModel):
@@ -212,7 +224,12 @@ class AnnotationCandidate(BaseModel):
         )
     )
     type: AnnotationKind
-    comment: _CommentStr | None = None
+    #: Issue #140: unlike ``target`` above, this is the model's own prose
+    #: (what the mark means), not a verbatim quote -- so it gets the
+    #: language instruction ``target`` deliberately does not.
+    comment: Annotated[_CommentStr, Field(description=_ANNOTATION_COMMENT_DESCRIPTION)] | None = (
+        None
+    )
 
     @model_validator(mode="after")
     def _comment_type_requires_comment_text(self) -> AnnotationCandidate:
@@ -238,8 +255,18 @@ class AIGradingResult(BaseModel):
     recognition: RecognitionOutput
     grading: GradingOutput
     criteria: tuple[CriterionResultOutput, ...] = Field(min_length=1)
-    comment: _CommentStr
-    rationale: _NonBlankStr
+    #: Issue #140: both are the model's own prose (the overall comment/根拠
+    #: shown to the teacher, section 16.5), so both get the language
+    #: instruction in their schema description as well as in the system
+    #: instructions -- see `domain.ai_response_language`.
+    comment: Annotated[
+        _CommentStr,
+        Field(description="Overall comment for the student's answer." + FIELD_LANGUAGE_NOTE),
+    ]
+    rationale: Annotated[
+        _NonBlankStr,
+        Field(description="Why this grade was given, overall." + FIELD_LANGUAGE_NOTE),
+    ]
     annotations: tuple[AnnotationCandidate, ...] = ()
     #: What the model says the attached image actually shows
     #: (`domain.models.AnswerImageFinding`, Issue #136) -- the crop it was

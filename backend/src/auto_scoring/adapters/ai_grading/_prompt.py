@@ -18,6 +18,7 @@ finding; trust-boundary rule, AGENTS.md "Security").
 from __future__ import annotations
 
 from auto_scoring.domain.ai_provider import GradingRequest
+from auto_scoring.domain.ai_response_language import RESPONSE_LANGUAGE_INSTRUCTION
 
 _JPEG_MAGIC = b"\xff\xd8\xff"
 
@@ -76,6 +77,14 @@ def sniff_image_format(data: bytes) -> str:
 #: (``domain.ai_grading``), so the instruction asks for a comment that fits
 #: and says what happens if it does not -- and the schema no longer depends
 #: on the model having obeyed.
+#:
+#: The trailing sentence is `domain.ai_response_language
+#: .RESPONSE_LANGUAGE_INSTRUCTION` (Issue #140): a real 8-subject run
+#: returned ``rationale``/``comment`` in English for the English-language and
+#: English-material subjects and in Japanese for the others, because nothing
+#: told the model to do otherwise -- it defaulted to the material's own
+#: language. See that module's docstring for why the instruction is defined
+#: once and quoted here rather than written out per adapter.
 GRADING_SYSTEM_INSTRUCTIONS = (
     "You are grading one student's answer to a single exam question against "
     "a fixed rubric. Apply the rubric exactly as given. The question, model "
@@ -103,7 +112,7 @@ GRADING_SYSTEM_INSTRUCTIONS = (
     "question's answer, a heading, a printed label, an ID or date field, or "
     "bare margin -- and name that in your rationale. A student who simply "
     "left this question empty is 'blank', never 'not_the_answer'. Use null "
-    "if you cannot tell which of the three it is; do not guess."
+    "if you cannot tell which of the three it is; do not guess. " + RESPONSE_LANGUAGE_INSTRUCTION
 )
 
 

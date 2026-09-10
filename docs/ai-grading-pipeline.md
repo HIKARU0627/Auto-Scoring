@@ -447,7 +447,64 @@ SELECT answer_image_finding, COUNT(*) FROM grade_results GROUP BY answer_image_f
 実データを流さないと分からないので、マージ後の実機検証で**その 4 件が採点されたまま
 かを確認する**。
 
-### `GradingJobProcessor`: `RecognitionJobProcessor`を合成し、採点半分を追加する
+### 自然文の出力言語は日本語固定（Issue #140）
+
+8教科の実機再検証で、`rationale`/`comment` が**教科によって英語で返ってきた**
+（日本史・化学・英語は英語、古漢・現代文・生物は日本語）。モデルは渡した資料や
+設問の言語に引きずられていて、どちらを使うかを一度も指示していなかった。同じ
+実機検証で、採点基準抽出（[criteria-extraction.md](./criteria-extraction.md)）の
+モデル自身の申し送り `note` も英語で返り、そのまま画面に出ていた。
+
+この画面を読むのは日本の塾講師で、読む対象は生徒に返す添削コメントの下書きである。
+**出力言語は日本語固定**とし、設定で切り替えられるようにはしない（利用者が日本の
+塾講師以外に増える見込みが無い）。
+
+#### 1か所に定義し、3アダプタが参照する
+
+`domain.ai_response_language` に `RESPONSE_LANGUAGE_INSTRUCTION`（プロンプト本文に
+足す1文）と `FIELD_LANGUAGE_NOTE`（スキーマの `description` に足す1句）を追加し、
+`adapters/ai_grading/_prompt.py` ・ `adapters/criteria_extraction/_prompt.py` ・
+`adapters/answer_area_detection/_prompt.py` の3アダプタがそれを import して使う。
+3アダプタがそれぞれ自分の文言で「日本語で」と書く形にはしていない -- それこそが
+今回のばらつきの原因（教科ごとに違う資料言語へ、指示が無いまま引きずられた）と
+同じ失敗を、指示の書き方の水準で繰り返すことになるため。#125（3アダプタ共通部分の
+一本化）とは別で、ここで共通化したのは**言語指定だけ**である。
+
+**両方の経路に置く必要がある。** 構造化出力のバックエンドが実際に強制するのは
+スキーマ側（各フィールドの `description` を含む）で、プロンプト本文は信頼できる
+指示チャネルとして別に送られる -- スキーマ駆動のデコーダがプロンプト本文をどこまで
+重く見るかは保証されていない。どちらか片方にしか書かないと、もう片方しか読まれない
+フィールドで資料の言語へ戻る。これが実際に起きていた失敗そのものなので、
+プロンプト本文（`GRADING_SYSTEM_INSTRUCTIONS` 等）とスキーマの `description`
+（`comment` / `rationale` / 採点基準ごとの `rationale` / 注釈の `comment` /
+抽出・検出側の `note`）の両方に足した。
+
+**引用は対象外。** 生徒の解答・模範解答・OCR結果を逐語引用する
+`AnnotationCandidate.target` や、採点基準文書からの転記である
+`ExtractedCriterionOutput.description` / `model_answer` は、原文の言語のまま
+でよい。ここへ日本語化の指示を足すと、英語科の答案そのものを日本語へ訳して返す
+方向にモデルを押しかねず、答案の実際の文字列と一致しなくなる
+（`target` は OCR の word box と照合して打点位置を決めるため、逐語性が壊れると
+機能しない）。
+
+`ai_classification`（採点基準PDF/答案の自動振り分け、Issue #101）は対象外にした。
+`role`/`candidate_id` は enum、`confidence` は数値のみで、モデル自身の自由文を
+一切返さない -- 訳す対象になる自然文フィールドがそもそも無い。
+`backend/tests/test_ai_response_language.py` の
+`test_classification_schemas_have_no_free_text_field` がこの前提を固定していて、
+将来ここに自由文フィールドが増えたら赤くなる。
+
+#### 定義を1か所に保つことをテストで固定する
+
+`backend/tests/test_ai_response_language.py` は、3アダプタのプロンプト本文が
+共有定数をそのまま含むこと、対応するスキーマフィールドの `description` に
+`FIELD_LANGUAGE_NOTE` が含まれること、逐語引用・転記系フィールドには含まれない
+ことを検査する。**定義を消す（`RESPONSE_LANGUAGE_INSTRUCTION` を削除・改名する）
+と、3アダプタすべてが import エラーで即座に落ちる**ことを実際に確かめた
+-- 3アダプタの `_prompt.py` はどれもこの名前を直接 import しているため、
+定義側を壊すと参照側全部が壊れる形になっている。個別のプロンプト・スキーマから
+指示文だけを取り除く変異でも、対応する1本だけが赤くなることを確認した
+（全部が緑のままにはならない）。
 
 `docs/job-queue.md`が決定した「1 Question = 1 Job（`JobKind.GRADING`）、
 Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由」という設計を受け、

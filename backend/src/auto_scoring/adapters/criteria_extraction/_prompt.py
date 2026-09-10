@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from auto_scoring.domain.ai_response_language import RESPONSE_LANGUAGE_INSTRUCTION
 from auto_scoring.domain.criteria_extraction import (
     MAX_CRITERIA_TEXT_CHARS,
     CriteriaExtractionOutput,
@@ -42,6 +43,12 @@ def sniff_image_format(data: bytes) -> str:
     return "jpeg" if data.startswith(_JPEG_MAGIC) else "png"
 
 
+#: The trailing sentence is `domain.ai_response_language
+#: .RESPONSE_LANGUAGE_INSTRUCTION` (Issue #140): the model's own ``note`` --
+#: what it could not read or determine -- is shown to the teacher on screen
+#: (docs/criteria-extraction.md section 3), and on a real run it came back in
+#: English. See that module's docstring for why the instruction is defined
+#: once and quoted here rather than written out per adapter.
 CRITERIA_SYSTEM_INSTRUCTIONS = (
     "You are reading a Japanese cram school's marking-criteria document "
     "(採点基準) for one test. Extract, for each question: its number as "
@@ -72,7 +79,7 @@ CRITERIA_SYSTEM_INSTRUCTIONS = (
     f"Every text field must be at most {MAX_CRITERIA_TEXT_CHARS} characters; a "
     "longer value makes the whole response invalid, and it is rejected rather "
     "than truncated. Respond with ONLY a JSON object matching the provided "
-    "schema -- no prose, no markdown fences."
+    "schema -- no prose, no markdown fences. " + RESPONSE_LANGUAGE_INSTRUCTION
 )
 
 

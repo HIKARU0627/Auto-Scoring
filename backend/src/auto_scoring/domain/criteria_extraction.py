@@ -59,7 +59,14 @@ from typing import Annotated, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from auto_scoring.domain.ai_response_language import FIELD_LANGUAGE_NOTE
 from auto_scoring.domain.models import DomainError
+
+#: Issue #140: the model's own explanation of what it could not determine,
+#: not a transcription of the document -- see `domain.ai_response_language`
+#: for why this (unlike ``description``/``model_answer``, both copied from
+#: the document) carries the language instruction in its schema description.
+_NOTE_DESCRIPTION = "What you could not determine, or why a value is missing." + FIELD_LANGUAGE_NOTE
 
 #: Same shape as ``domain.ai_grading._NonBlankStr``: ``min_length=1`` alone
 #: would accept ``" "``.
@@ -173,7 +180,12 @@ class ExtractedQuestionOutput(BaseModel):
     source_pages: tuple[Annotated[int, Field(ge=1)], ...] = ()
     #: The model's own note about what it could not determine. Shown to the
     #: reviewer verbatim next to the question.
-    note: Annotated[_NonBlankStr, Field(max_length=MAX_CRITERIA_TEXT_CHARS)] | None = None
+    note: (
+        Annotated[
+            _NonBlankStr, Field(max_length=MAX_CRITERIA_TEXT_CHARS, description=_NOTE_DESCRIPTION)
+        ]
+        | None
+    ) = None
 
 
 class CriteriaExtractionOutput(BaseModel):
@@ -215,7 +227,12 @@ class CriteriaExtractionOutput(BaseModel):
     #: page number is to be ignored.
     total_points: int | None = Field(default=None, ge=0, le=MAX_EXTRACTED_POINTS)
     unreadable_pages: tuple[Annotated[int, Field(ge=1)], ...] = ()
-    note: Annotated[_NonBlankStr, Field(max_length=MAX_CRITERIA_TEXT_CHARS)] | None = None
+    note: (
+        Annotated[
+            _NonBlankStr, Field(max_length=MAX_CRITERIA_TEXT_CHARS, description=_NOTE_DESCRIPTION)
+        ]
+        | None
+    ) = None
 
 
 def parse_criteria_extraction(raw: str | bytes) -> CriteriaExtractionOutput:

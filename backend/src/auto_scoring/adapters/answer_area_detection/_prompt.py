@@ -36,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from auto_scoring.domain.ai_response_language import RESPONSE_LANGUAGE_INSTRUCTION
 from auto_scoring.domain.answer_area_detection import (
     MAX_NOTE_CHARS,
     UNASSIGNED_QUESTION_LABEL,
@@ -59,6 +60,12 @@ def sniff_image_format(data: bytes) -> str:
     return "jpeg" if data.startswith(_JPEG_MAGIC) else "png"
 
 
+#: The trailing sentence is `domain.ai_response_language
+#: .RESPONSE_LANGUAGE_INSTRUCTION` (Issue #140): the model's own 'note' on an
+#: unassigned or undetected area is shown to the teacher on screen, and on a
+#: real run it came back in English along with the other two adapters' free
+#: text. See that module's docstring for why the instruction is defined once
+#: and quoted here rather than written out per adapter.
 ANSWER_AREA_SYSTEM_INSTRUCTIONS = (
     "You are looking at the scanned pages of ONE Japanese cram school answer "
     "sheet (解答用紙) that a student has already written on. Your only job is "
@@ -131,7 +138,7 @@ ANSWER_AREA_SYSTEM_INSTRUCTIONS = (
     f"'note' must be at most {MAX_NOTE_CHARS} characters; a longer value makes "
     "the whole response invalid, and it is rejected rather than truncated. "
     "Respond with ONLY a JSON object matching the provided schema -- no prose, "
-    "no markdown fences."
+    "no markdown fences. " + RESPONSE_LANGUAGE_INSTRUCTION
 )
 
 
