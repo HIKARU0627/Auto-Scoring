@@ -28,7 +28,9 @@ Step 3  atomic-commit-splitter（Atomic Commitへ整理）
         ↓
 Step 4  Push
         ↓
-Step 5  change-explainer（PR Change Summary を GitHub App 経由で同期）
+Step 5  PR（open PR が無ければ作成する）
+        ↓
+Step 6  change-explainer（PR Change Summary を GitHub App 経由で同期）
         ↓
 人間へ引き渡し（マージしない）
 ```
@@ -107,13 +109,42 @@ Remove-Item Env:GIT_TERMINAL_PROMPT
 - push認証はworktree設定のGitHub App credential helperが処理する。個人認証・`gh` へフォールバックしない。
 - 失敗した場合は中止し、原因（権限・conflict・非fast-forward）を報告する。
 
-## Step 5: Change Summary
+## Step 5: PR
 
-push後、`change-explainer` Skill を実行する。
+push しただけでは、Change Summary の同期先も、人間がレビューする場所も存在しない。
+**`change-explainer` は PR を作成しない**ので、無ければここで作る。
+
+```powershell
+# 1. 対応する open PR を探す（あれば作らない。二重に作らないこと）
+$owner = '<owner>'
+$branch = (git rev-parse --abbrev-ref HEAD)
+./scripts/invoke-github-app-api.ps1 -Method Get `
+  -Endpoint "/repos/<owner>/<repo>/pulls?state=open&head=$owner`:$branch"
+
+# 2. 無ければ作成する。本文はファイルへ書いて -BodyPath で渡す
+#    ({ "title": ..., "head": ..., "base": "main", "body": ... } の JSON)
+./scripts/invoke-github-app-api.ps1 -Method Post `
+  -Endpoint "/repos/<owner>/<repo>/pulls" -BodyPath ./pr-body.json
+```
+
+- 本文は [`.github/pull_request_template.md`](../../../.github/pull_request_template.md)
+  の構成に沿う。`Closes #<Issue番号>` を必ず入れる（Sub-issue なら親Issueも参照）。
+- 本文をコマンドラインへ直接埋め込まない。改行・バッククォート・日本語で壊れるため、
+  JSON ファイルに書いて `-BodyPath` で渡し、渡し終えたら消す。
+- `base` は `main`。draft にしない（CI を回して人間へ渡すため）。
+- 既に open PR があれば作らず、その番号を Step 6 へ渡す。
+- **マージ・auto-merge はしない**（`AGENTS.md` «Git workflow»）。
+- GitHub App に PR 作成権限が無い場合は中止し、不足している権限を人間へ報告する。
+  個人アカウントや `gh` へフォールバックしない。
+
+## Step 6: Change Summary
+
+Step 5 の PR に対して `change-explainer` Skill を実行する。
 
 - 最新のPR全体（`origin/main...HEAD`）を解析する。
 - GitHub App経由で、対応するopen PRの `change-explainer` コメントを **なければ作成 / あれば編集** する。
-- 対応するPRが存在しない場合、`change-explainer` はPRを作成しない。Change Summary本文を生成し「PR未作成」と報告する。この場合、必要ならPR作成は人間または明示指示に委ねる。
+- ここで `change-explainer` が「PR未作成」と報告したら、Step 5 が済んでいない。Step 5 に戻って PR を作り、`change-explainer` を再実行する。人間の手を待たない。
+- GitHub App に権限が無くて Step 5 を完了できなかった場合だけ、Summary本文と不足権限を報告して終える。
 
 ## 最終報告
 
@@ -126,11 +157,26 @@ Step 1 可読性改善           : ponytail-review / code-simplification 実施 
 Step 2 Verification        : lint ✓ / typecheck ✓ / build ✓ / e2e 未実行(理由) / ...
 Step 3 atomic-commit       : N コミットへ整理 / 単一コミット / 変更なし
 Step 4 Push                : origin/<branch> へ push 済み（commit範囲）
-Step 5 change-explainer    : PR #<番号> のコメントを 作成/編集（URL） / PR未作成のためSummaryのみ
+Step 5 PR                  : PR #<番号> を作成（URL） / 既存PR #<番号> を利用
+Step 6 change-explainer    : PR #<番号> のコメントを 作成/編集（URL）
 
 未解決・要注意:
 - （検証失敗、スキップした処理、レビューで重点的に見てほしい点）
 ```
+
+## 監督下で動いている場合の引き渡し
+
+プロンプトに Task ID / Dispatch ID を含む preamble が注入されている（オーケストレーターに
+dispatch された）場合、最終報告を人間へ書くだけで終わらせない。preamble の指示に従い、
+その Dispatch につきちょうど1回 `worker_done` を送る。
+
+- 成功・失敗のどちらでも送る。失敗を文章だけで匂わせない。
+- Task ID と Dispatch ID の両方、明示的な outcome、上記の最終報告を圧縮した要約を含める。
+- **実行できなかった検証（プラットフォーム制約による build など）は理由付きで必ず書く。**
+  「全部通した」と書かない。
+- 送ったらそのターンを終えて待機する。自分から次の作業を取りに行かない。
+
+マージは Worker の仕事ではない（`AGENTS.md` «Git workflow»）。
 
 ## 冪等性
 
@@ -138,7 +184,8 @@ Step 5 change-explainer    : PR #<番号> のコメントを 作成/編集（URL
 
 - Step 1: 既に簡素なら変更を出さない。
 - Step 3: 既にAtomic Commitなら履歴を書き換えない。
-- Step 5: 既存コメントを編集し、新規コメントを増やさない。
+- Step 5: 既に open PR があれば作らず、それを使う。
+- Step 6: 既存コメントを編集し、新規コメントを増やさない。
 
 ## 検証（このスキルの完了条件）
 
@@ -146,6 +193,8 @@ Step 5 change-explainer    : PR #<番号> のコメントを 作成/編集（URL
 - [ ] Test / Lint / Typecheck / Build を可能な範囲で実行した
 - [ ] `atomic-commit-splitter` を利用した（または既にAtomic Commitである）
 - [ ] 必要な変更をpushした
-- [ ] `change-explainer` を利用してPR Change Summaryを同期した（またはPR未作成を報告した）
+- [ ] 対応する open PR がある（既存を見つけたか、`Closes #<n>` 付きで作成した）
+- [ ] `change-explainer` を利用してPR Change Summaryを同期した
 - [ ] 各Stepの結果を最後にまとめて報告した
 - [ ] 人間が当該PRのマージを明示依頼していない限り、マージしていない
+- [ ] dispatch されている場合、`worker_done` を1回だけ送った（未実行の検証も明記した）
