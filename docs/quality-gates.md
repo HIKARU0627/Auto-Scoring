@@ -3,22 +3,33 @@
 Local commands and GitHub Actions run the same checks. Each check is a `scripts`
 entry in `package.json`, invoked as `pnpm run <script>`.
 
-| Gate               | Command                  | CI job / step (`.github/workflows/ci.yml`)    |
-| ------------------ | ------------------------ | --------------------------------------------- |
-| Agent skill mirror | `pnpm run skills:check`  | App → Check agent skill mirrors               |
-| Formatting         | `pnpm run format:check`  | App → Check formatting                        |
-| OpenAPI contract   | `pnpm run openapi:check` | App → OpenAPI contract                        |
-| Lint               | `pnpm run lint`          | App → Lint (`:app`), Backend → Lint           |
-| Typecheck          | `pnpm run typecheck`     | App → Typecheck (`:app`), Backend → Typecheck |
-| Test               | `pnpm run test`          | App → Test (`:app`), Backend → Test           |
-| Build              | `pnpm run build`         | App → Build (`:app`), Backend → Build         |
-| Everything         | `pnpm run check`         | (all of the above, across both jobs)          |
+| Gate                       | Command                     | CI job / step (`.github/workflows/ci.yml`)    |
+| -------------------------- | --------------------------- | --------------------------------------------- |
+| Agent skill mirror         | `pnpm run skills:check`     | App → Check agent skill mirrors               |
+| Formatting                 | `pnpm run format:check`     | App → Check formatting                        |
+| OpenAPI contract self-test | `pnpm run openapi:selftest` | App → OpenAPI contract self-test              |
+| OpenAPI contract           | `pnpm run openapi:check`    | App → OpenAPI contract                        |
+| Lint                       | `pnpm run lint`             | App → Lint (`:app`), Backend → Lint           |
+| Typecheck                  | `pnpm run typecheck`        | App → Typecheck (`:app`), Backend → Typecheck |
+| Test                       | `pnpm run test`             | App → Test (`:app`), Backend → Test           |
+| Build                      | `pnpm run build`            | App → Build (`:app`), Backend → Build         |
+| Everything                 | `pnpm run check`            | (all of the above, across both jobs)          |
 
 `openapi:check` regenerates `backend/openapi/openapi.json` and the Dart client
 in `app/packages/auto_scoring_api/` and fails on any git diff. It needs `uv`,
 `dart`, and Java (openapi-generator) on PATH, so it stays out of the git hooks
 (`check:pre-commit` / `check:pre-push`) and runs only in `pnpm run check` and CI.
 See [`sidecar-api.md`](./sidecar-api.md) §4.
+
+`openapi:selftest` (`node --test scripts/openapi.test.mjs`) is a fast,
+dependency-free unit test for `generateIntoScratchThenSwap`, the helper that
+makes `openapi:generate` atomic (Issue #102): it never touches the committed
+`app/packages/auto_scoring_api/` until every generation step — openapi-generator,
+`dart pub get`, `build_runner`, `dart format` — has already succeeded against a
+scratch copy, so a kill mid-run (a hung `build_runner`, an interrupted agent
+process) cannot leave the working tree dirty. Needs only Node, so unlike
+`openapi:check` it is cheap enough to run on every `pnpm run check`, before the
+real (slow) regenerate.
 
 `package.json` is a task runner over the two stacks. Each gate fans out to an
 `:app` (Flutter) and a `:backend` (Python) script:
