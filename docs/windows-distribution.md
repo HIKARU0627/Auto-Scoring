@@ -297,6 +297,51 @@ macOS/Linux 配布は本 Issue の対象外で、そこでの等価物（`setsid
 （Windows の完全解は `CREATE_SUSPENDED` + assign + resume だが dart:io は
 これを公開していない）。その隙間で Flutter 側が死んだ場合のみ orphan が残る。
 
+### 5.3.1 Electron ではその Job Object が無い（Issue #211）
+
+上の保証は **Windows の Job Object を、親プロセス側から**かけている。Node.js の
+`child_process` に相当する機構は無いため、素の Electron へ移行する（#201）と
+この保証はそのまま消える。PoC 7（#203、[`poc-7-sidecar-lifecycle.md`](./poc-7-sidecar-lifecycle.md)
+§4）が Linux で実測し、Electron 側で再現できない唯一の項目として特定した。
+
+**決定（Issue #211）: 同じ保証を、親ではなくサイドカー自身に持たせる。**
+ネイティブアドオンから Win32 Job Object を呼ぶ案は当面採らない。精度では
+Job Object が上だが、**Windows でしか動かず Linux の CI で検査できない対策は、
+「テストが無いまま実装だけが保証を持っている」という今回の状態を掘り直すことになる。**
+Python 側なら `kill -9` で親を殺して子が終わることを CI で実際に走らせられる。
+
+`backend/src/auto_scoring/adapters/parent_watchdog.py`:
+
+| 項目           | 決定                                                                                                                                                       |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 有効化         | `--parent-pid <PID>` を渡したときだけ。**既定は無効**（[`sidecar-api.md`](./sidecar-api.md) §3.1）                                                         |
+| 期限           | 親の死から 5 秒以内（`DETECTION_BUDGET_SECONDS`）。その 1/5 の間隔で監視する                                                                               |
+| 生存判定       | PID そのものではなく **PID + プロセス開始時刻**。PID 再利用で別プロセスを親と誤認しない                                                                    |
+| 判定不能のとき | 「生きている」と答える。動作中のサイドカーを誤って殺す方が、孤児を残すより高くつく（孤児は app-data のロックが受け止める）                                 |
+| 終了の仕方     | daemon スレッドから `os._exit`。AI 呼び出しで数分ブロックしている最中でも期限を守るため                                                                    |
+| Windows        | `ctypes` で `OpenProcess` + `GetProcessTimes`（依存の追加なし）。backend の CI は Windows Server 2025 で走るため、この分岐は CI で実際に動いている（下記） |
+
+**app-data のロックは残す。** 監視は利用者の手間を減らすためのものであって、
+正しさを担保しているのは §5.4 のロックの方である。監視が効かなかった場合
+（判定不能、`--parent-pid` を渡さない起動、SIGKILL より早い異常）は、これまで
+どおりロックが多重書き込みを止める。
+
+**どこまで確かめたか（Issue #211）**:
+
+- **監視そのものは Windows で動いている。** `Backend` ジョブは Windows Server 2025 の
+  runner で走る（`.github/workflows/`）。`tests/test_parent_watchdog.py` の実プロセス検査は
+  そこで実際に親を殺し、子が予算内に `exit code 4` で終わり `app-data` のロックを解放する
+  ところまで通っている。`ctypes` の分岐（`OpenProcess` + `GetProcessTimes`）もそこで実行
+  されている。Linux 側では `sys.platform` の分岐により mypy も pytest もこの分岐を通らない
+  ので、**Windows 分岐の検証は CI の Windows ジョブが唯一の根拠**である。
+- **製品としての経路は未検証。** 配布物（PyInstaller onedir）+ Electron main +
+  タスクマネージャーからの End Task、という実際の並びを Windows 実機で通した人はいない。
+  CI で確かめたのは `python.exe` の親子だけである。
+
+**cut-over の条件（未達）**: 「強制終了しても次回の起動が失敗しないこと」を
+**Windows 実機で、配布物と Electron supervisor の組み合わせで確認するまで移行しない**。
+supervisor 側から `--parent-pid` を渡す配線自体がまだ無い（#201 Phase 2 以降）。
+
 ### 5.4 二重起動
 
 **決定: 2 つ目のインスタンスは起動を明示的に拒否する。**

@@ -599,6 +599,72 @@ def test_self_test_covers_every_lazily_imported_native_dependency() -> None:
     }
 
 
+def _run_and_capture_watched_pids(
+    argv: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[int]:
+    """`run()` up to the point uvicorn would take over, reporting which pid
+    (if any) it asked the watchdog to follow."""
+    watched: list[int] = []
+    monkeypatch.setattr(sidecar, "start_parent_watchdog", lambda pid: watched.append(pid))
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(uvicorn.Server, "run", lambda _self, sockets=None: _close_all(sockets))
+
+    exit_code = run(
+        [
+            "--handshake-file",
+            str(tmp_path / "handshake.json"),
+            "--app-data-dir",
+            str(tmp_path / "app-data"),
+            *argv,
+        ]
+    )
+
+    assert exit_code == 0
+    return watched
+
+
+def _close_all(sockets: list[socket.socket] | None) -> None:
+    for sock in sockets or []:
+        sock.close()
+
+
+def test_run_watches_no_parent_unless_it_is_given_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #211 requirement 2, at the wiring.
+
+    pytest and a developer's `uv run auto-scoring-sidecar` start this process
+    with no supervisor, so a watchdog on by default would have it follow
+    whatever spawned it into the grave -- pytest's own runner, in the case
+    that matters most here.
+    """
+    assert _run_and_capture_watched_pids([], tmp_path, monkeypatch) == []
+
+
+def test_run_watches_the_parent_a_supervisor_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half: a supervisor that passes `--parent-pid` gets the
+    guarantee the Windows Job Object used to give it from outside (Issue
+    #211, docs/windows-distribution.md §5.3)."""
+    watched = _run_and_capture_watched_pids(["--parent-pid", "4242"], tmp_path, monkeypatch)
+
+    assert watched == [4242]
+
+
+def test_run_rejects_a_parent_pid_that_is_not_a_process_id() -> None:
+    """0 and negative numbers select process *groups* in the POSIX signal API.
+    Refused at the boundary rather than handed to the watchdog, where "watch
+    every process in my group" is not a thing anyone meant to ask for."""
+    with pytest.raises(SystemExit) as exit_info:
+        run(["--handshake-file", "x", "--parent-pid", "0"])
+    assert exit_info.value.code == 2  # argparse's usage-error exit code
+
+
 def test_run_without_handshake_file_is_rejected() -> None:
     with pytest.raises(SystemExit) as exit_info:
         run([])

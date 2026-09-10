@@ -51,6 +51,10 @@ from auto_scoring.adapters.criteria_extraction.factory import create_criteria_ex
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
 from auto_scoring.adapters.ocr.factory import create_ocr_provider
 from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
+from auto_scoring.adapters.parent_watchdog import (
+    DETECTION_BUDGET_SECONDS,
+    start_parent_watchdog,
+)
 from auto_scoring.api.app import (
     build_ai_provider,
     build_answer_area_detector,
@@ -432,11 +436,26 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "%%LOCALAPPDATA%%\\Auto-Scoring\\app-data on Windows."
         ),
     )
+    parser.add_argument(
+        "--parent-pid",
+        type=int,
+        default=None,
+        help=(
+            "Exit within "
+            f"{DETECTION_BUDGET_SECONDS:.0f}s of the process with this id exiting. "
+            "Off unless given: pytest and a hand-started sidecar have no "
+            "supervisor to outlive (docs/windows-distribution.md §5.3)."
+        ),
+    )
     args = parser.parse_args(argv)
     # Required for a real run, meaningless for --self-test (which starts no
     # server for anyone to hand a host:port to).
     if not args.self_test and args.handshake_file is None:
         parser.error("--handshake-file is required")
+    if args.parent_pid is not None and args.parent_pid <= 0:
+        # 0 and negative numbers are process *group* selectors to the POSIX
+        # signal API, not process ids, and neither is ever a parent to watch.
+        parser.error("--parent-pid must be a positive process id")
     return args
 
 
@@ -498,6 +517,19 @@ def run(argv: Sequence[str] | None = None) -> int:
     # question a support conversation actually starts with -- "is it using
     # the key I typed in, or the one in my .env.local?" (Issue #96).
     logging.getLogger(__name__).info("%s", credential_settings.describe_sources())
+
+    # Before create_app, so the watchdog also covers the first launch's full
+    # migration run -- the slowest part of startup, and a stretch during
+    # which this process already holds the data-root lock the next launch
+    # needs. After logging is installed, so its one line reaches sidecar.log.
+    #
+    # Only when a supervisor asked for it (Issue #211 requirement 2): a
+    # sidecar started by pytest or by hand has no parent whose death should
+    # end it, and a default-on watchdog would make those launches kill
+    # themselves. The data-root lock stays the backstop for every case this
+    # misses (`adapters.parent_watchdog`).
+    if args.parent_pid is not None:
+        start_parent_watchdog(args.parent_pid)
 
     # data_root only, no session_factory: create_app() builds the database
     # itself (migrations, engine, the startup repair sweep) rather than this
