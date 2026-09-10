@@ -473,6 +473,126 @@
         "title": "BoundingBoxResponse",
         "type": "object"
       },
+      "BulkExportItemResponse": {
+        "description": "One submission's outcome in a bulk export.",
+        "properties": {
+          "export": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExportResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "refusal_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExportRefusalReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refusal_question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Refusal Question Ids",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BulkExportItemStatus"
+          },
+          "submission_id": {
+            "title": "Submission Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "submission_id",
+          "status"
+        ],
+        "title": "BulkExportItemResponse",
+        "type": "object"
+      },
+      "BulkExportItemStatus": {
+        "description": "What happened to one submission in a bulk export (Issue #142).\n\nDeliberately *not* an error: the whole point of the bulk endpoint is\nthat one submission's refusal must not cost the reviewer the other 39\n(Issue #142, \"\u9014\u4e2d\u3067\u6b62\u3081\u306a\u3044\"). So every outcome -- including the ones\nthe single-submission endpoint raises a 409 for -- comes back as a row.",
+        "enum": [
+          "queued",
+          "reused",
+          "refused"
+        ],
+        "title": "BulkExportItemStatus",
+        "type": "string"
+      },
+      "BulkExportRequest": {
+        "description": "``submission_ids`` narrows the run to a subset of the test's\nsubmissions; omitted or ``null`` means every one of them.\n\nThis is the whole of \"\u5931\u6557\u3057\u305f\u5206\u3060\u3051\u518d\u5b9f\u884c\u3067\u304d\u308b\" (Issue #142): the screen\nalready holds the failed rows, so re-running them is the same call with\na shorter list -- no server-side notion of \"a bulk run\" to persist,\nresume, or garbage-collect.\n\nIds that do not belong to ``test_id`` are not silently dropped: the\nrequest is refused (400), because a caller asking for a submission this\ntest does not have is asking for something that will never happen, and\nquietly exporting a shorter list would look like success.",
+        "properties": {
+          "submission_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submission Ids"
+          }
+        },
+        "title": "BulkExportRequest",
+        "type": "object"
+      },
+      "BulkExportResponse": {
+        "description": "Every target's outcome, in the same order the test's submissions are\nlisted in (`SubmissionRepository.list_for_test`) -- so the screen's\nprogress list matches the queue screen's order.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BulkExportItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "test_id",
+          "items"
+        ],
+        "title": "BulkExportResponse",
+        "type": "object"
+      },
       "ClassificationAvailabilityResponse": {
         "properties": {
           "available": {
@@ -1176,6 +1296,15 @@
         ],
         "title": "EditReviewRequest",
         "type": "object"
+      },
+      "ExportRefusalReason": {
+        "description": "Why the sidecar refuses to export one submission -- the two gates\n`export_refusal` evaluates, and the wire values the client reads.\n\nThe values travel verbatim: as ``detail.code`` on the single export's\n409 (`api.export_router`) and as ``refusal_code`` on a bulk item\n(Issue #142). They live here rather than in the API layer because the\n*distinction* is a domain fact, not a transport one -- what the reviewer\nmust do next differs completely between the two, and both the single\nand the bulk path must name it the same way.\n\nIssue #150 is why naming it at all is not optional. Until then the two\nrefusals shared one ``{message, question_ids}`` shape with nothing to\ntell them apart, and the Flutter client -- written when only\n`UNCONFIRMED_QUESTIONS` existed -- rendered both as \"\u672a\u78ba\u8a8d\u306e\u8a2d\u554f\u304c\u3042\u308b\n\u305f\u3081\u51fa\u529b\u3067\u304d\u307e\u305b\u3093\". In the live run a reviewer who had already confirmed\nevery question was told to go and confirm them: an instruction that was\nnot merely unhelpful but unfollowable, since the work it asked for was\nalready done.",
+        "enum": [
+          "unconfirmed_questions",
+          "no_room_for_score"
+        ],
+        "title": "ExportRefusalReason",
+        "type": "string"
       },
       "ExportRequestResponse": {
         "description": "Result of ``POST .../export``: `decision` is one of\n`domain.pdf_export.ReexportDecision`'s values.\n\n``job_id`` is set (and the HTTP status is 202) for\n``accept_new``/``accept_new_superseding`` -- a fresh `Job` was queued;\npoll it via `api.jobs_router`. ``export`` is set (status 200) for\n``reuse_existing`` -- nothing was queued, the existing export already\nreflects the current review state.",
@@ -2994,6 +3123,55 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/exports/{export_id}/file": {
+      "get": {
+        "description": "The produced PDF itself, so the app can write it wherever the\nreviewer asked (Issue #142).\n\nThe sidecar does not copy files out of ``app-data/`` on request: the\ndestination is a folder a human picked in a desktop file dialog, and\n`LocalFileStore` exists precisely to guarantee nothing the sidecar\nwrites lands outside its own root. Handing over bytes keeps the\n\"where do the reviewer's files go\" decision entirely on the app side,\nwhere the dialog is, and mirrors how the review screen already gets\n`GET /submissions/{id}/source-pdf`.",
+        "operationId": "get_export_file_exports__export_id__file_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "title": "Export Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The generated annotated PDF's bytes."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Export File",
+        "tags": [
+          "export"
+        ]
+      }
+    },
     "/grading/availability": {
       "get": {
         "description": "Whether AI grading is configured on this host (Issue #97).\n\nBehind the bearer token, unlike ``/healthz``: it reports on this\ninstallation's configuration, which is nobody's business but the\napp's -- and it is not a liveness probe, so nothing needs it before\nthe handshake has been read.",
@@ -5584,6 +5762,71 @@
         "summary": "List Versions",
         "tags": [
           "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/export": {
+      "post": {
+        "description": "Export a whole test's answer sheets in one go (Issue #142).\n\nRuns the *same* per-submission gate and re-export decision as\n``POST /submissions/{id}/export`` -- `domain.pdf_export.export_refusal`\nand `decide_reexport` -- for every target, and **never raises on a\nper-submission outcome**. A reviewer running 40 answer sheets loses\nnothing to one unconfirmed sheet; the refused ones come back as rows\nto show, and the rest are queued.\n\nAll the `Job` rows are committed in one transaction and only then\nhanded to the queue, matching the single endpoint's order (commit\nfirst, enqueue after) -- a queued id must always name a row that is\nactually there.",
+        "operationId": "request_bulk_export_tests__test_id__export_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BulkExportRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkExportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Request Bulk Export",
+        "tags": [
+          "export"
         ]
       }
     },
