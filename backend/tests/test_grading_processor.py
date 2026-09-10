@@ -875,6 +875,45 @@ async def test_provider_errors_are_classified_and_never_leak_the_raw_message(
         assert uow.grades.history("sub-1", "q-1") == []
 
 
+async def test_rate_limited_retry_after_reaches_the_processing_result(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #153: a 429's parsed ``Retry-After`` (already resolved to
+    seconds by the adapter -- `ProviderRateLimitedError.retry_after_seconds`)
+    must survive the trip through `GradingJobProcessor._failed` into
+    `ProcessingResult`, so `auto_scoring.jobs.queue.JobQueueService` can
+    honour it instead of guessing a delay."""
+    _seed(session_factory, store)
+    ai_provider.script(ProviderRateLimitedError("boom", retry_after_seconds=30.0))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_category is ErrorCategory.RATE_LIMITED
+    assert result.retry_after_seconds == 30.0
+
+
+async def test_timeout_never_carries_a_retry_after(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """A TIMEOUT/SERVER_ERROR failure has no `Retry-After` concept -- must
+    not carry one through even if some future adapter mistakenly set it."""
+    _seed(session_factory, store)
+    ai_provider.script(ProviderTimeoutError("boom"))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_category is ErrorCategory.TIMEOUT
+    assert result.retry_after_seconds is None
+
+
 async def test_missing_model_answer_fails_permanently_without_calling_the_provider(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
