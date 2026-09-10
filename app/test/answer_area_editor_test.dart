@@ -627,7 +627,10 @@ void _missingQuestionGroups() {
         absent: const ['問1', '問2'],
       );
 
-      expect(find.byKey(const Key('answer-area-undetected-group')), findsNothing);
+      expect(
+        find.byKey(const Key('answer-area-undetected-group')),
+        findsNothing,
+      );
       expect(find.byKey(const Key('answer-area-absent-group')), findsOne);
     });
 
@@ -645,8 +648,9 @@ void _missingQuestionGroups() {
       expect(find.byKey(const Key('answer-area-all-detected')), findsNothing);
     });
 
-    testWidgets('a question reported absent can still have its box drawn',
-        (tester) async {
+    testWidgets('a question reported absent can still have its box drawn', (
+      tester,
+    ) async {
       // The reviewer can see the page and the model is not always right.
       await _pumpEditor(
         tester,

@@ -392,9 +392,7 @@ class _AnswerAreaEditorState extends State<AnswerAreaEditor> {
               color: AppStatusTone.attention.color(context),
             ),
             const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Text(message, style: context.texts.bodyMedium),
-            ),
+            Expanded(child: Text(message, style: context.texts.bodyMedium)),
           ],
         ),
         const SizedBox(height: AppSpacing.sm),
