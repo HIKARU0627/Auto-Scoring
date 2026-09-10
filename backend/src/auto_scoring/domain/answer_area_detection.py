@@ -68,6 +68,7 @@ from typing import Annotated, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationInfo
 from pydantic import model_validator as pydantic_model_validator
 
+from auto_scoring.domain.ai_response_language import FIELD_LANGUAGE_NOTE
 from auto_scoring.domain.answer_area_snapping import PageRuling, snap_bbox_to_ruling
 from auto_scoring.domain.models import DomainError
 from auto_scoring.domain.profile import NormalizedBBox, Region, RegionKind
@@ -107,6 +108,15 @@ MERGED_NOTE_PREFIX = "検出された枠"
 #: ruling -- see :func:`regions_from_detection`. The reviewer is told, because
 #: the rectangle on screen is then not the one the model reported.
 SNAPPED_NOTE_PREFIX = "枠を印刷された罫線に合わせました"
+
+#: Issue #140: the model's own explanation for why an area is unassigned or
+#: undetected, not a transcription of anything printed on the sheet -- see
+#: `domain.ai_response_language` for why this carries the language
+#: instruction in its schema description.
+_NOTE_DESCRIPTION = (
+    "Why this area could not be attributed to a question, if you chose "
+    f"'{UNASSIGNED_QUESTION_LABEL}'." + FIELD_LANGUAGE_NOTE
+)
 
 
 class AnswerAreaDetectionError(DomainError):
@@ -197,7 +207,7 @@ class DetectedAnswerAreaOutput(BaseModel):
     #: Only for an answer space with no printed border. ``None`` whenever
     #: ``box_indexes`` is given.
     bbox: DetectedBBoxOutput | None = None
-    note: str | None = Field(default=None, max_length=MAX_NOTE_CHARS)
+    note: str | None = Field(default=None, max_length=MAX_NOTE_CHARS, description=_NOTE_DESCRIPTION)
 
     @pydantic_model_validator(mode="after")
     def _exactly_one_location(self) -> DetectedAnswerAreaOutput:
