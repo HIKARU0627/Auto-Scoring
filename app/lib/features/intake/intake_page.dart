@@ -8,6 +8,7 @@ import 'package:auto_scoring_app/core/app_routes.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/folder_scan.dart';
 import 'package:auto_scoring_app/core/grading_kickoff.dart';
+import 'package:auto_scoring_app/core/intake_attribution.dart';
 import 'package:auto_scoring_app/core/intake_review.dart';
 import 'package:auto_scoring_app/core/material_role_labels.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
@@ -181,34 +182,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
       _dropRoutingOutsideCandidates();
     }
 
-    // A group's *target* points into the same list. Left alone it produces two
-    // failures, both found by sweeping for values held across a state change:
-    //
-    // * a group bound to a test that has since gone still reports itself ready
-    //   and fails at import time with a dead id -- on the completion screen,
-    //   which cannot fix it;
-    // * a group routing answers individually keeps that mode while the option
-    //   that offers it disappears with the last registered test, so the
-    //   dropdown holds a value with no matching item and asserts.
-    //
-    // Reset to "not chosen" so the reviewer picks again. Losing a choice is
-    // worth saying out loud; silently keeping an impossible one is not.
-    _review = _review?.copyWith(
-      groups: [
-        for (final group in _review!.groups)
-          if (group.targetKind == IntakeTargetKind.existing &&
-              !known.contains(group.targetTestId))
-            group.copyWith(
-              targetKind: IntakeTargetKind.unassigned,
-              clearTargetTestId: true,
-            )
-          else if (group.targetKind == IntakeTargetKind.perAnswer &&
-              tests.isEmpty)
-            group.copyWith(targetKind: IntakeTargetKind.unassigned)
-          else
-            group,
-      ],
-    );
+    // A group's *target* points into the same list, and needs the same
+    // pruning -- see `pruneStaleTargets` for what breaks without it.
+    final review = _review;
+    if (review != null) _review = pruneStaleTargets(review, known);
   }
 
   /// Re-read the registered tests, without failing the caller.
@@ -256,24 +233,6 @@ class _IntakePageState extends ConsumerState<IntakePage> {
     }
   }
 
-  /// The roles a template marks required, in rule order and de-duplicated.
-  ///
-  /// Taken from the template the reviewer selected rather than from the plan:
-  /// the plan reports what was *missing* when it was computed, and this screen
-  /// lets them exclude a file afterwards.
-  List<MaterialRole> _requiredRolesOf(String templateId) {
-    final template = _templates.where((entry) => entry.id == templateId);
-    if (template.isEmpty) return const [];
-    final roles = <MaterialRole>[];
-    for (final rule in template.first.rules) {
-      if (rule.requirement == Requirement.required_ &&
-          !roles.contains(rule.role)) {
-        roles.add(rule.role);
-      }
-    }
-    return roles;
-  }
-
   Future<void> _pickFolder() async {
     final templateId = _templateId;
     if (templateId == null) return;
@@ -314,7 +273,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
         _review = buildReviewState(
           plan: plan,
           folder: folder,
-          requiredRoles: _requiredRolesOf(templateId),
+          requiredRoles: requiredRolesOf(
+            templates: _templates,
+            templateId: templateId,
+          ),
           unitCost: _unitCost,
         );
         _step = _Step.review;
@@ -415,29 +377,18 @@ class _IntakePageState extends ConsumerState<IntakePage> {
   /// Narrowed by the reviewer first. This is the real cost control: a week
   /// whose answers are all one subject narrows to one candidate, and then
   /// nothing is asked at all -- the answer is already decided.
-  List<TestSummary> get _attributionCandidates => _narrowedTestIds.isEmpty
-      ? _existingTests
-      : _existingTests
-            .where((test) => _narrowedTestIds.contains(test.id))
-            .toList();
+  List<TestSummary> get _attributionCandidates => attributionCandidates(
+    existingTests: _existingTests,
+    narrowedTestIds: _narrowedTestIds,
+  );
 
   /// Whether the reviewer has explicitly narrowed the batch to one test.
-  ///
-  /// **Held as state, never inferred from the candidate count.** A count of
-  /// one can mean "the reviewer said so" or "only one test happens to be
-  /// registered" -- and the second is what every first-time user hits.
-  /// Treating them the same assigned every answer with nobody having chosen
-  /// anything. **A number does not carry an intention.**
-  ///
-  /// The candidate check on the right is not a second guess at intent: it
-  /// confirms the test they chose still exists. `_narrowedTestIds` is a
-  /// selection that can outlive the list it points into -- the registered
-  /// tests are re-read at the start of every batch -- and without it
-  /// `_attributionCandidates.single` throws on a chosen test that has since
-  /// been deleted. Found by sweeping for values held across a state change
-  /// (review round 4).
-  bool get _reviewerChoseOneTest =>
-      _narrowedTestIds.length == 1 && _attributionCandidates.length == 1;
+  /// See `reviewerChoseOneTest` for why this is state, not an inference from
+  /// the candidate count.
+  bool get _reviewerChoseOneTest => reviewerChoseOneTest(
+    narrowedTestIds: _narrowedTestIds,
+    candidateCount: _attributionCandidates.length,
+  );
 
   /// Route one group's answers.
   ///
@@ -1173,25 +1124,10 @@ class _IntakePageState extends ConsumerState<IntakePage> {
 
   /// Clear any answer routed to a test that is no longer a candidate.
   void _dropRoutingOutsideCandidates() {
-    final allowed = _attributionCandidates.map((test) => test.id).toSet();
-    var review = _review;
+    final review = _review;
     if (review == null) return;
-    for (final file in review.allFiles) {
-      final routed = file.answerTestId;
-      final proposed = file.proposedAnswerTestId;
-      if ((routed != null && !allowed.contains(routed)) ||
-          (proposed != null && !allowed.contains(proposed))) {
-        review = review!.withFile(
-          file.relativePath,
-          (current) => current.copyWith(
-            clearAnswerTestId: routed != null && !allowed.contains(routed),
-            clearProposedAnswerTestId:
-                proposed != null && !allowed.contains(proposed),
-          ),
-        );
-      }
-    }
-    _review = review;
+    final allowed = _attributionCandidates.map((test) => test.id).toSet();
+    _review = dropRoutingOutsideCandidates(review, allowed);
   }
 
   Widget _buildGroupCard(IntakeGroupState group) {

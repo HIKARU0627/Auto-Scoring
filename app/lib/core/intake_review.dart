@@ -503,6 +503,66 @@ class IntakeReviewState {
   );
 }
 
+/// The roles [templateId] marks required, in rule order and de-duplicated.
+///
+/// Extracted from `features/intake/intake_page.dart` (Issue #126). Read from
+/// the template the reviewer selected rather than from a plan already built:
+/// a plan reports what was *missing* when it was computed, and a reviewer can
+/// exclude a file from the confirmation screen afterwards, at which point the
+/// plan's snapshot no longer says what the template actually requires.
+List<MaterialRole> requiredRolesOf({
+  required List<IntakeTemplateModel> templates,
+  required String templateId,
+}) {
+  final template = templates.where((entry) => entry.id == templateId);
+  if (template.isEmpty) return const [];
+  final roles = <MaterialRole>[];
+  for (final rule in template.first.rules) {
+    if (rule.requirement == Requirement.required_ &&
+        !roles.contains(rule.role)) {
+      roles.add(rule.role);
+    }
+  }
+  return roles;
+}
+
+/// Resets any group's target that no longer names a test in
+/// [knownTestIds] -- the registered-test list this screen re-reads at the
+/// start of every batch.
+///
+/// Extracted from `_IntakePageState._applyExistingTests` (Issue #126). Left
+/// alone, a stale target produces two failures, both found by sweeping for
+/// values held across a state change:
+///
+/// * a group bound to a test that has since gone still reports itself ready
+///   and fails at import time with a dead id -- on the completion screen,
+///   which cannot fix it;
+/// * a group routing answers individually keeps that mode after the last
+///   registered test disappears, so its dropdown holds a value with no
+///   matching item and asserts.
+///
+/// Reset to "not chosen" rather than left as-is: losing a choice is worth
+/// saying out loud, silently keeping an impossible one is not.
+IntakeReviewState pruneStaleTargets(
+  IntakeReviewState review,
+  Set<String> knownTestIds,
+) => review.copyWith(
+  groups: [
+    for (final group in review.groups)
+      if (group.targetKind == IntakeTargetKind.existing &&
+          !knownTestIds.contains(group.targetTestId))
+        group.copyWith(
+          targetKind: IntakeTargetKind.unassigned,
+          clearTargetTestId: true,
+        )
+      else if (group.targetKind == IntakeTargetKind.perAnswer &&
+          knownTestIds.isEmpty)
+        group.copyWith(targetKind: IntakeTargetKind.unassigned)
+      else
+        group,
+  ],
+);
+
 /// Build the initial review state from a sidecar plan and the scan it came
 /// from.
 ///

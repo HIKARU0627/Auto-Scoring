@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
+import 'package:auto_scoring_app/core/answer_area_review.dart';
 import 'package:auto_scoring_app/core/app_dependencies.dart';
 import 'package:auto_scoring_app/core/criteria_totals.dart';
 import 'package:auto_scoring_app/core/dependency_dag.dart';
@@ -10,6 +11,7 @@ import 'package:auto_scoring_app/core/design/app_status_tone.dart';
 import 'package:auto_scoring_app/core/design/app_theme_context.dart';
 import 'package:auto_scoring_app/core/design/design_tokens.dart';
 import 'package:auto_scoring_app/core/pdf_file_picker.dart';
+import 'package:auto_scoring_app/core/region_edit_validation.dart';
 import 'package:auto_scoring_app/core/widgets/app_error_banner.dart';
 import 'package:auto_scoring_app/features/test_registration/answer_area_editor.dart';
 
@@ -781,33 +783,19 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// claim having to be rewritten.
   ({List<String> undetected, List<String> absent}) _missingFrom(
     List<RegionModel> regions,
-  ) {
-    final covered = {
-      for (final region in regions)
-        if (region.kind == RegionKind.answerArea) region.label,
-    };
-    final reportedAbsent =
-        _profile?.absentQuestionNumbers.toSet() ?? const <String>{};
-    final undetected = <String>[];
-    final absent = <String>[];
-    for (final number in _questionNumbers) {
-      if (covered.contains(number)) continue;
-      (reportedAbsent.contains(number) ? absent : undetected).add(number);
-    }
-    return (undetected: undetected, absent: absent);
-  }
+  ) => missingAnswerAreas(
+    regions: regions,
+    questionNumbers: _questionNumbers,
+    reportedAbsent: _profile?.absentQuestionNumbers.toSet() ?? const {},
+  );
 
   /// Answer areas that name no confirmed question. These block the confirm --
   /// `build_questions_and_rubrics` ignores them without a word.
-  List<RegionModel> _unassignedFrom(List<RegionModel> regions) {
-    final known = _questionNumbers.toSet();
-    return [
-      for (final region in regions)
-        if (region.kind == RegionKind.answerArea &&
-            !known.contains(region.label))
-          region,
-    ];
-  }
+  List<RegionModel> _unassignedFrom(List<RegionModel> regions) =>
+      unassignedAnswerAreas(
+        regions: regions,
+        knownQuestionNumbers: _questionNumbers.toSet(),
+      );
 
   /// Whether the answer sheet the regions are drawn on is actually on screen.
   ///
@@ -816,8 +804,10 @@ class _TestSettingsPageState extends ConsumerState<TestSettingsPage> {
   /// looked at, so it is refused while any answer area exists and the sheet
   /// is not displayed (review round 1, P1; Issue #85's rule).
   bool _mustSeeAnswerSheetFirst(List<RegionModel> regions) =>
-      _answerLayoutPdf == null &&
-      regions.any((region) => region.kind == RegionKind.answerArea);
+      mustSeeAnswerSheetFirst(
+        answerSheetVisible: _answerLayoutPdf != null,
+        regions: regions,
+      );
 
   Widget _buildProfileSection() {
     final regions = _editableRegions;
@@ -1708,55 +1698,22 @@ class _RegionEditDialogState extends State<_RegionEditDialog> {
   }
 
   void _save() {
-    final page = int.tryParse(_pageController.text);
-    final x0 = double.tryParse(_x0Controller.text);
-    final y0 = double.tryParse(_y0Controller.text);
-    final x1 = double.tryParse(_x1Controller.text);
-    final y1 = double.tryParse(_y1Controller.text);
-    if (page == null || page < 1) {
-      setState(() => _validationError = 'ページ番号は1以上の整数で入力してください');
-      return;
-    }
-    // `double.tryParse('NaN')` returns non-null `double.nan`, not `null` --
-    // every comparison below (`<`, `>`, `>=`) is false for NaN, so without
-    // this check the range/ordering tests would all silently pass and the
-    // invalid value would reach JSON serialization or the server instead of
-    // this dialog's own validation (Issue #16 review round 5).
-    if (x0 == null ||
-        y0 == null ||
-        x1 == null ||
-        y1 == null ||
-        !x0.isFinite ||
-        !y0.isFinite ||
-        !x1.isFinite ||
-        !y1.isFinite ||
-        x0 < 0 ||
-        y0 < 0 ||
-        x1 > 1 ||
-        y1 > 1 ||
-        x0 >= x1 ||
-        y0 >= y1) {
-      setState(() => _validationError = '座標は0〜1の範囲で、右下が左上より大きくなるように入力してください');
-      return;
-    }
-    if (_labelController.text.trim().isEmpty) {
-      setState(() => _validationError = '設問番号を入力してください');
-      return;
-    }
-    final updated = widget.region.rebuild(
-      (b) => b
-        ..kind = _kind
-        ..label = _labelController.text.trim()
-        ..pageIndex = page - 1
-        ..text = _textController.text.trim().isEmpty
-            ? null
-            : _textController.text.trim()
-        ..bbox.x0 = x0
-        ..bbox.y0 = y0
-        ..bbox.x1 = x1
-        ..bbox.y1 = y1,
+    final result = validateRegionEdit(
+      original: widget.region,
+      kind: _kind,
+      labelText: _labelController.text,
+      pageText: _pageController.text,
+      x0Text: _x0Controller.text,
+      y0Text: _y0Controller.text,
+      x1Text: _x1Controller.text,
+      y1Text: _y1Controller.text,
+      contentText: _textController.text,
     );
-    Navigator.of(context).pop(updated);
+    if (result.region == null) {
+      setState(() => _validationError = result.error);
+      return;
+    }
+    Navigator.of(context).pop(result.region);
   }
 
   @override

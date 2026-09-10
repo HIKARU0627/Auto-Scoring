@@ -642,4 +642,118 @@ void main() {
       expect(review.canImport, isFalse);
     });
   });
+
+  group('requiredRolesOf (Issue #126)', () {
+    IntakeRuleModel rule(MaterialRole role, {Requirement? requirement}) =>
+        IntakeRuleModel(
+          (b) => b
+            ..pattern = '*'
+            ..scope = RuleScope.file
+            ..requirement = requirement
+            ..role = role,
+        );
+
+    IntakeTemplateModel template(String id, List<IntakeRuleModel> rules) =>
+        IntakeTemplateModel(
+          (b) => b
+            ..id = id
+            ..name = id
+            ..rules.replace(rules),
+        );
+
+    test('必須の役割だけを、規則の順で返す', () {
+      final roles = requiredRolesOf(
+        templates: [
+          template('t1', [
+            rule(
+              MaterialRole.gradingCriteria,
+              requirement: Requirement.required_,
+            ),
+            rule(
+              MaterialRole.studentAnswer,
+              requirement: Requirement.recommended,
+            ),
+            rule(MaterialRole.reference, requirement: Requirement.required_),
+          ]),
+        ],
+        templateId: 't1',
+      );
+
+      expect(roles, [MaterialRole.gradingCriteria, MaterialRole.reference]);
+    });
+
+    test('同じ役割が複数回必須でも一度だけ', () {
+      final roles = requiredRolesOf(
+        templates: [
+          template('t1', [
+            rule(
+              MaterialRole.gradingCriteria,
+              requirement: Requirement.required_,
+            ),
+            rule(
+              MaterialRole.gradingCriteria,
+              requirement: Requirement.required_,
+            ),
+          ]),
+        ],
+        templateId: 't1',
+      );
+
+      expect(roles, [MaterialRole.gradingCriteria]);
+    });
+
+    test('存在しないテンプレートIDなら空', () {
+      expect(
+        requiredRolesOf(templates: const [], templateId: 'missing'),
+        isEmpty,
+      );
+    });
+  });
+
+  group('pruneStaleTargets (Issue #126)', () {
+    test('消えたテストへの existing 指定は unassigned に戻す', () {
+      final review = state([
+        buildGroup([file()], kind: IntakeTargetKind.existing, testId: 'gone'),
+      ]);
+
+      final pruned = pruneStaleTargets(review, {'still-here'});
+
+      expect(pruned.groups.single.targetKind, IntakeTargetKind.unassigned);
+      expect(pruned.groups.single.targetTestId, isNull);
+    });
+
+    test('登録済みテストが残っていれば existing 指定は変えない', () {
+      final review = state([
+        buildGroup([file()], kind: IntakeTargetKind.existing, testId: 't1'),
+      ]);
+
+      final pruned = pruneStaleTargets(review, {'t1'});
+
+      expect(pruned.groups.single.targetKind, IntakeTargetKind.existing);
+      expect(pruned.groups.single.targetTestId, 't1');
+    });
+
+    test('登録済みテストが1件も無くなったら perAnswer は unassigned に戻す', () {
+      // The dropdown offering "答案ごとに登録済みのテストへ振り分ける" disappears
+      // with the last registered test, so a group still in that mode would
+      // hold a value with no matching item.
+      final review = state([
+        buildGroup([file()], kind: IntakeTargetKind.perAnswer),
+      ]);
+
+      final pruned = pruneStaleTargets(review, const {});
+
+      expect(pruned.groups.single.targetKind, IntakeTargetKind.unassigned);
+    });
+
+    test('登録済みテストが残っていれば perAnswer のままにする', () {
+      final review = state([
+        buildGroup([file()], kind: IntakeTargetKind.perAnswer),
+      ]);
+
+      final pruned = pruneStaleTargets(review, {'t1'});
+
+      expect(pruned.groups.single.targetKind, IntakeTargetKind.perAnswer);
+    });
+  });
 }
