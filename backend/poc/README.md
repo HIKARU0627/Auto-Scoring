@@ -74,6 +74,23 @@ uv run python poc/issue_25_queue_throughput/report.py
 uv run python poc/issue_25_queue_throughput/report.py --answers 6 --latency 1.0
 ```
 
+## Issue #214 -- nearly-blank crop threshold calibration (`issue_214_blank_crop_threshold/report.py`)
+
+Measures ink coverage vs crop area on live-run #6 crops to decide whether
+`NEARLY_BLANK_INK_COVERAGE` should move. Result, denominator, and the
+decision not to change the threshold:
+[`docs/answer-intake-and-preprocessing.md`](../../docs/answer-intake-and-preprocessing.md)
+§4.1 (Issue #214).
+
+```bash
+# From backend/. Synthetic only -- confirms area-normalised coverage behaviour.
+uv run python poc/issue_214_blank_crop_threshold/report.py --self-test
+
+# Against live-run #6 exports (kept outside this repository). Prints ratios
+# and pixel dimensions only.
+uv run python poc/issue_214_blank_crop_threshold/report.py --data "<live-run dir>"
+```
+
 ## Issue #130 -- scan-to-scan drift of the same printed form (`issue_130_scan_drift/`)
 
 Measures how far the printed ruling of one answer form moves between two

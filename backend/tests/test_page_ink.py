@@ -123,6 +123,25 @@ def test_ink_coverage_ignores_light_paper_texture() -> None:
     assert ink_coverage(_encode(image)) == 0.0
 
 
+def test_ink_coverage_is_the_ink_pixel_fraction() -> None:
+    """Issue #214: ``ink_coverage`` is already normalised by crop area — it is
+    the fraction of pixels at or below the ink level, not a raw pixel count.
+    The same printed ruling therefore reads *higher* in a tighter crop, which
+    is why a single coverage threshold is size-dependent for ruling-only
+    mis-detections."""
+    line = 3
+    small = np.full((100, 200), 255, dtype=np.uint8)
+    small[50 : 50 + line, :] = 0
+    large = np.full((400, 800), 255, dtype=np.uint8)
+    large[200 : 200 + line, :] = 0
+
+    small_cov = ink_coverage(_encode(small))
+    large_cov = ink_coverage(_encode(large))
+
+    assert small_cov > large_cov
+    assert large_cov == pytest.approx(small_cov / 4.0, rel=0.02)
+
+
 def test_undecodable_bytes_are_rejected_rather_than_measured() -> None:
     for measure in (ink_coverage, measure_page_ruling):
         with pytest.raises(ValueError, match="could not decode page image"):
