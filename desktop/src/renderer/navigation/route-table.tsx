@@ -3,6 +3,7 @@ import type { JSX } from "react";
 import { AppRoutes } from "../core/app-routes.js";
 import { HomePage } from "../features/home/HomePage.js";
 import { IntakePage } from "../features/intake/IntakePage.js";
+import { SubmissionQueuePage } from "../features/review-queue/SubmissionQueuePage.js";
 import { TestSettingsPage } from "../features/test-settings/TestSettingsPage.js";
 import { ShellScreen } from "./ShellScreen.js";
 import { matchRoutePattern } from "./router.js";
@@ -58,7 +59,7 @@ export const ROUTE_TABLE: readonly RouteDefinition[] = [
   },
   {
     pattern: AppRoutes.submissionQueuePattern,
-    render: () => <PlaceholderScreen title="答案キュー" />,
+    render: () => <SubmissionQueuePage />,
   },
   {
     pattern: AppRoutes.submissionConfirmPattern,
