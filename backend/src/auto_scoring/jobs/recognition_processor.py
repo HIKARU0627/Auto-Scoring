@@ -250,8 +250,8 @@ class RecognitionJobProcessor:
             return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=True)
         except OCRTimeoutError:
             return self._failed(ErrorCategory.TIMEOUT, "timed out")
-        except OCRRateLimitedError:
-            return self._failed(ErrorCategory.RATE_LIMITED, "rate limited")
+        except OCRRateLimitedError as exc:
+            return self._failed(ErrorCategory.RATE_LIMITED, "rate limited", exc)
         except OCRServerError:
             return self._failed(ErrorCategory.SERVER_ERROR, "server error")
         except OCRResponseSchemaError:
@@ -279,7 +279,12 @@ class RecognitionJobProcessor:
             usable=confidence >= self._settings.confidence_threshold,
         )
 
-    def _failed(self, category: ErrorCategory, reason: str) -> ProcessingResult:
+    def _failed(
+        self,
+        category: ErrorCategory,
+        reason: str,
+        failure: OCRProviderError | None = None,
+    ) -> ProcessingResult:
         # Never includes the provider exception's own message: it may be
         # built from the request/response body a concrete adapter received,
         # which must never reach `Job.last_error` (AGENTS.md "Security").
@@ -287,4 +292,10 @@ class RecognitionJobProcessor:
             outcome=ProcessingOutcome.FAILED,
             error_category=category,
             error_message=f"{self._provider.name} OCR provider {reason}",
+            # Only ever non-None for a RATE_LIMITED `OCRRateLimitedError`
+            # carrying a parsed `Retry-After` (Issue #153); every other
+            # caller either passes no `failure` or one whose
+            # `retry_after_seconds` is `None`, and `ProcessingResult.
+            # __post_init__` refuses a non-None value outside RATE_LIMITED.
+            retry_after_seconds=getattr(failure, "retry_after_seconds", None),
         )

@@ -166,9 +166,13 @@ async def test_different_submissions_share_the_same_concurrency_cap(
 # --------------------------------------------------------------------------- #
 # Retry / backoff
 # --------------------------------------------------------------------------- #
-async def test_retry_succeeds_after_transient_failures_with_exponential_backoff(
+async def test_retry_succeeds_after_a_timeout_then_a_rate_limit_with_each_ones_own_schedule(
     session_factory: sessionmaker[Session], clock: FakeClock, fast_settings: QueueSettings
 ) -> None:
+    """TIMEOUT uses `QueueSettings`' plain exponential schedule; RATE_LIMITED
+    (Issue #153) uses its own, separate one -- pinned here by injecting
+    jitter=0.0 (the minimum of the "equal jitter" range) so the second delay
+    is exactly reproducible instead of merely "greater than the first"."""
     _seed(session_factory, question_ids=["qa"])
     processor = FakeJobProcessor()
     processor.script(
@@ -183,7 +187,13 @@ async def test_retry_succeeds_after_transient_failures_with_exponential_backoff(
             ),
         ],
     )
-    service = JobQueueService(session_factory, processor, settings=fast_settings, clock=clock)
+    service = JobQueueService(
+        session_factory,
+        processor,
+        settings=fast_settings,
+        clock=clock,
+        random_source=lambda: 0.0,
+    )
     await service.start()
     try:
         service.submit_submission(submission_id="sub-1")
@@ -194,17 +204,22 @@ async def test_retry_succeeds_after_transient_failures_with_exponential_backoff(
     job = service.get_job(job_id)
     assert job is not None
     assert job.attempts == 3
-    assert clock.sleep_calls == [1.0, 2.0]
+    # 1.0s: TIMEOUT's own (unchanged) delay_seconds(1) with fast_settings'
+    # initial_backoff_seconds=1.0. 5.0s: RATE_LIMITED's default schedule
+    # (initial 5.0s * 2^(2-1) = 10.0, halved by "equal jitter" at jitter=0.0)
+    # -- *not* fast_settings' 1s/2s schedule, and not delay_seconds(2)==2.0.
+    assert clock.sleep_calls == [1.0, 5.0]
 
 
-async def test_429_and_5xx_do_not_retry_without_bound(
+async def test_5xx_does_not_retry_past_max_attempts(
     session_factory: sessionmaker[Session], clock: FakeClock
 ) -> None:
-    """Issue #18 acceptance: "429時に無制限retryしない"."""
+    """Issue #18 acceptance: "429時に無制限retryしない" -- unaffected by
+    Issue #153 for SERVER_ERROR/TIMEOUT, which still stop at max_attempts."""
     _seed(session_factory, question_ids=["qa"])
     processor = FakeJobProcessor(
         default=ProcessingResult(
-            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.RATE_LIMITED
+            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.SERVER_ERROR
         ),
     )
     settings = QueueSettings(max_attempts=2, initial_backoff_seconds=0.001, backoff_multiplier=2.0)
@@ -222,8 +237,189 @@ async def test_429_and_5xx_do_not_retry_without_bound(
     assert job is not None
     assert job.state is JobState.FAILED
     assert job.attempts == 2
-    assert job.error_code is ErrorCategory.RATE_LIMITED
+    assert job.error_code is ErrorCategory.SERVER_ERROR
     assert len(processor.calls) == 2
+
+
+async def test_rate_limited_failures_keep_retrying_past_five_seconds_of_total_wait(
+    session_factory: sessionmaker[Session], clock: FakeClock
+) -> None:
+    """Issue #153: real incident. A real run hit 429 twice and the job
+    exhausted all 3 attempts (the old 1s + 2s schedule, `max_attempts=3`)
+    within 5 seconds, handing the question to a human even though a later
+    manual retry from the review screen succeeded immediately. Waiting
+    longer would have worked; three quick attempts just re-hit the same
+    provider congestion window three times.
+
+    Against the pre-fix `RetryPolicy`/`QueueSettings` (`max_attempts=3`,
+    `initial_backoff_seconds=1.0`, `backoff_multiplier=2.0` applied to every
+    retryable category alike), this test fails: the job gives up
+    (`state is FAILED`) after only 3 attempts and 1.0 + 2.0 == 3.0 seconds of
+    total simulated wait -- well under 5. This was confirmed red against
+    that implementation before `RetryPolicy` grew a separate RATE_LIMITED
+    schedule and wait-time budget (see PR description / worker report).
+    """
+    _seed(session_factory, question_ids=["qa"])
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED, error_category=ErrorCategory.RATE_LIMITED
+        ),
+    )
+    # Plain production-shaped defaults: QueueSettings()'s own max_attempts=3
+    # must not cut this short -- RATE_LIMITED is bounded by the wait-time
+    # budget instead (Issue #153 decision).
+    service = JobQueueService(session_factory, processor, settings=QueueSettings(), clock=clock)
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        # Waits for the *final* terminal FAILED, not merely the first time
+        # the state reads FAILED: for a retryable category FAILED is a
+        # transient state the retry scheduler flips back to QUEUED moments
+        # later, and `FakeClock.sleep` doesn't actually block real time, so
+        # polling on state alone can observe an intermediate attempt's
+        # FAILED row before the scheduler gets to run again -- checking
+        # `attempts` reached the deterministic give-up count (independent of
+        # jitter, which only affects the actual delay, not the nominal
+        # cumulative budget decision) makes this wait race-free rather than
+        # papering over the race with an extra fixed sleep.
+        await _wait_until(
+            lambda: (
+                (job := service.get_job(job_id)) is not None
+                and job.state is JobState.FAILED
+                and job.attempts == 6
+            ),
+            timeout=10.0,
+        )
+    finally:
+        await service.shutdown()
+    job = service.get_job(job_id)
+    assert job is not None
+    assert job.state is JobState.FAILED
+    assert job.error_code is ErrorCategory.RATE_LIMITED
+    # max_attempts=3 (QueueSettings()'s own default) did not cut this short:
+    # the job ran 6 attempts, and the total simulated wait comfortably
+    # clears the 5-second window that lost the real run's question to a
+    # human.
+    assert job.attempts == 6
+    assert sum(clock.sleep_calls) > 5.0
+
+
+async def test_rate_limited_gives_up_once_the_wait_time_budget_is_spent(
+    session_factory: sessionmaker[Session], clock: FakeClock
+) -> None:
+    """Issue #153 acceptance: once the (default 120s) budget is spent, the
+    job gives up and the failure is legible as provider congestion, not a
+    generic error -- `ErrorCategory.RATE_LIMITED` plus its own message."""
+    _seed(session_factory, question_ids=["qa"])
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED,
+            error_category=ErrorCategory.RATE_LIMITED,
+            error_message="rate limited",
+        ),
+    )
+    settings = QueueSettings(
+        rate_limited_initial_backoff_seconds=5.0,
+        rate_limited_backoff_multiplier=2.0,
+        rate_limited_max_backoff_seconds=60.0,
+        rate_limited_budget_seconds=120.0,
+    )
+    service = JobQueueService(
+        session_factory, processor, settings=settings, clock=clock, random_source=lambda: 0.0
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        # See the identical comment in
+        # test_rate_limited_failures_keep_retrying_past_five_seconds_of_total_wait
+        # for why this waits on the exact terminal attempts count rather
+        # than on state alone.
+        await _wait_until(
+            lambda: (
+                (job := service.get_job(job_id)) is not None
+                and job.state is JobState.FAILED
+                and job.attempts == 6
+            ),
+            timeout=10.0,
+        )
+    finally:
+        await service.shutdown()
+    job = service.get_job(job_id)
+    assert job is not None
+    # Nominal schedule (5, 10, 20, 40, 60, 60, ...): cumulative before the
+    # 6th attempt is 5+10+20+40=75 (<120, retried); before the 7th it is
+    # 75+60=135 (>=120, gives up) -- so exactly 6 attempts are made.
+    assert job.attempts == 6
+    assert job.error_code is ErrorCategory.RATE_LIMITED
+    assert job.last_error == "rate limited"
+
+
+async def test_rate_limited_honours_retry_after_instead_of_the_exponential_schedule(
+    session_factory: sessionmaker[Session], clock: FakeClock
+) -> None:
+    """Issue #153 decision: "Retry-After があれば必ず尊重する"."""
+    _seed(session_factory, question_ids=["qa"])
+    processor = FakeJobProcessor()
+    processor.script(
+        "sub-1",
+        "qa",
+        [
+            ProcessingResult(
+                outcome=ProcessingOutcome.FAILED,
+                error_category=ErrorCategory.RATE_LIMITED,
+                retry_after_seconds=17.0,
+            ),
+        ],
+    )
+    service = JobQueueService(
+        session_factory,
+        processor,
+        settings=QueueSettings(),
+        clock=clock,
+        # jitter=0.99 would move the plain exponential schedule's delay
+        # close to 10.0 -- proving the actual sleep came from retry_after,
+        # not from ignoring jitter by coincidence.
+        random_source=lambda: 0.99,
+    )
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.SUCCEEDED)
+    finally:
+        await service.shutdown()
+    assert clock.sleep_calls == [17.0]
+
+
+async def test_rate_limited_gives_up_immediately_when_retry_after_exceeds_the_budget(
+    session_factory: sessionmaker[Session], clock: FakeClock
+) -> None:
+    """Issue #153 decision: a Retry-After bigger than the whole wait-time
+    budget is not worth waiting out -- fail now, without sleeping at all,
+    rather than blocking this job's worth of retries on one huge wait."""
+    _seed(session_factory, question_ids=["qa"])
+    processor = FakeJobProcessor(
+        default=ProcessingResult(
+            outcome=ProcessingOutcome.FAILED,
+            error_category=ErrorCategory.RATE_LIMITED,
+            retry_after_seconds=999.0,
+        ),
+    )
+    settings = QueueSettings(rate_limited_budget_seconds=120.0)
+    service = JobQueueService(session_factory, processor, settings=settings, clock=clock)
+    await service.start()
+    try:
+        service.submit_submission(submission_id="sub-1")
+        job_id = _job_id_for_question(service, "sub-1", "qa")
+        await _wait_until(lambda: _state(service, job_id) is JobState.FAILED)
+    finally:
+        await service.shutdown()
+    job = service.get_job(job_id)
+    assert job is not None
+    assert job.attempts == 1
+    assert clock.sleep_calls == []
 
 
 async def test_permanent_error_fails_immediately_without_retry(

@@ -288,6 +288,45 @@ async def test_provider_errors_are_classified_and_never_leak_the_raw_message(
     assert result.error_category is expected_category
     assert result.error_message is not None
     assert "boom" not in result.error_message
+
+
+async def test_rate_limited_retry_after_reaches_the_processing_result(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """Issue #153: a 429's parsed ``Retry-After`` (already resolved to
+    seconds by the adapter -- `OCRRateLimitedError.retry_after_seconds`) must
+    survive the trip through `RecognitionJobProcessor._failed` into
+    `ProcessingResult`, so `auto_scoring.jobs.queue.JobQueueService` can
+    honour it instead of guessing a delay."""
+    _seed(session_factory, store)
+    provider.script(OCRRateLimitedError("boom", retry_after_seconds=30.0))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_category is ErrorCategory.RATE_LIMITED
+    assert result.retry_after_seconds == 30.0
+
+
+async def test_timeout_never_carries_a_retry_after(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    provider: _ScriptedOCRProvider,
+    processor: RecognitionJobProcessor,
+) -> None:
+    """A TIMEOUT/SERVER_ERROR failure has no `Retry-After` concept -- must
+    not carry one through even if some future adapter mistakenly set it."""
+    _seed(session_factory, store)
+    provider.script(OCRTimeoutError("boom"))
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.error_category is ErrorCategory.TIMEOUT
+    assert result.retry_after_seconds is None
     with SqlAlchemyUnitOfWork(session_factory) as uow:
         assert uow.recognitions.history("sub-1", "q-1") == []
 

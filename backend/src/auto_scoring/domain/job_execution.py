@@ -43,6 +43,16 @@ class ProcessingResult:
     retried, and the question is already in front of a human on the review
     screen. It carries a fixed vocabulary word, never free text and never
     anything read off the paper.
+
+    ``retry_after_seconds`` (Issue #153) is the number of seconds a 429
+    response's ``Retry-After`` header asked the caller to wait, already
+    parsed and validated by the adapter that saw the header (both the
+    delay-seconds and HTTP-date forms; a missing, malformed, or negative
+    header is ``None`` here, not a fabricated guess) --
+    `auto_scoring.jobs.queue.JobQueueService` honours it instead of its own
+    exponential schedule when scheduling a RATE_LIMITED retry. Only
+    meaningful on a FAILED/RATE_LIMITED result; a processor that hands it
+    back for anything else is a bug, not a value worth silently ignoring.
     """
 
     outcome: ProcessingOutcome
@@ -50,6 +60,7 @@ class ProcessingResult:
     error_category: ErrorCategory | None = None
     error_message: str | None = None
     skipped_reason: str | None = None
+    retry_after_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.outcome is ProcessingOutcome.FAILED and self.error_category is None:
@@ -62,6 +73,13 @@ class ProcessingResult:
                 # question" cannot both be true, and letting them be would
                 # release a dependent onto a prerequisite that has no grade.
                 raise ValueError("a skipped ProcessingResult cannot be usable")
+        if self.retry_after_seconds is not None and (
+            self.outcome is not ProcessingOutcome.FAILED
+            or self.error_category is not ErrorCategory.RATE_LIMITED
+        ):
+            raise ValueError(
+                "retry_after_seconds only applies to a FAILED/RATE_LIMITED ProcessingResult"
+            )
 
 
 @runtime_checkable

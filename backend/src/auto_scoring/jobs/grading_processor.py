@@ -515,6 +515,13 @@ class GradingJobProcessor:
             outcome=ProcessingOutcome.FAILED,
             error_category=category,
             error_message=message,
+            # Only ever non-None when `failure` is a `ProviderRateLimitedError`
+            # carrying a parsed `Retry-After` (Issue #153) -- `ProviderFailure.
+            # retry_after_seconds` defaults to `None` for every other
+            # subclass, and `ProcessingResult.__post_init__` refuses a
+            # non-None value outside RATE_LIMITED, so passing it through
+            # unconditionally here cannot smuggle it into the wrong category.
+            retry_after_seconds=getattr(failure, "retry_after_seconds", None),
         )
 
 

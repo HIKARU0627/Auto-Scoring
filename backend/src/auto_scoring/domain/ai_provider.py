@@ -123,6 +123,7 @@ class ProviderFailure(Exception):
         status_code: int | None = None,
         detail: str | None = None,
         attempts: Sequence[ProviderAttempt] = (),
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(*args)
         self.status_code = status_code
@@ -133,6 +134,13 @@ class ProviderFailure(Exception):
         #: did not.
         self.detail = detail
         self.attempts: tuple[ProviderAttempt, ...] = tuple(attempts)
+        #: Seconds a 429's ``Retry-After`` header asked for, already parsed
+        #: and sanity-checked by the raising adapter (Issue #153) -- ``None``
+        #: when there was no header, it did not parse, or it was negative.
+        #: Only meaningful on `ProviderRateLimitedError`; every other
+        #: subclass leaves it ``None``. Never derived from anything but the
+        #: header's own value: no response body, no request data.
+        self.retry_after_seconds = retry_after_seconds
 
 
 class SchemaViolation(ProviderFailure):

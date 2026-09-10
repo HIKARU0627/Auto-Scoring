@@ -25,11 +25,24 @@ class QueueSettings:
     #: backoff and requeue remain required regardless.
     max_concurrency: int = 4
     #: Default `auto_scoring.domain.models.Job.max_attempts` for jobs this
-    #: package creates.
+    #: package creates. Governs TIMEOUT/SERVER_ERROR retries only --
+    #: RATE_LIMITED is bounded by ``rate_limited_budget_seconds`` instead
+    #: (Issue #153; see `auto_scoring.domain.retry_policy.RetryPolicy`).
     max_attempts: int = 3
     initial_backoff_seconds: float = 1.0
     backoff_multiplier: float = 2.0
     max_backoff_seconds: float = 30.0
+    #: Separate, slower schedule for `ErrorCategory.RATE_LIMITED` (Issue
+    #: #153 decision: a provider rejecting a call for being over quota is not
+    #: the same kind of failure as a timeout or a 5xx, and retrying it on the
+    #: same 1s/2s schedule just re-hits the same congestion window).
+    rate_limited_initial_backoff_seconds: float = 5.0
+    rate_limited_backoff_multiplier: float = 2.0
+    rate_limited_max_backoff_seconds: float = 60.0
+    #: Total nominal wait-time budget for RATE_LIMITED retries (Issue #153
+    #: decision: "回数ではなく経過時間で決める…既定120秒"). Replaces
+    #: ``max_attempts`` as the stopping condition for that one category.
+    rate_limited_budget_seconds: float = 120.0
 
     def __post_init__(self) -> None:
         if self.max_concurrency < 1:
@@ -50,4 +63,8 @@ class QueueSettings:
             initial_backoff_seconds=self.initial_backoff_seconds,
             backoff_multiplier=self.backoff_multiplier,
             max_backoff_seconds=self.max_backoff_seconds,
+            rate_limited_initial_backoff_seconds=self.rate_limited_initial_backoff_seconds,
+            rate_limited_backoff_multiplier=self.rate_limited_backoff_multiplier,
+            rate_limited_max_backoff_seconds=self.rate_limited_max_backoff_seconds,
+            rate_limited_budget_seconds=self.rate_limited_budget_seconds,
         )
