@@ -215,7 +215,14 @@ class RecognitionJobProcessor:
                 # No RecognitionResult exists yet for this attempt; a human
                 # reviews the original page image and either corrects the
                 # crop or enters text manually (Issue #19 acceptance).
-                return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=False)
+                # Carries the crop's own reason word, for the same reason
+                # `jobs.grading_processor` does (Issue #164): a job that did
+                # nothing has to say so on its own row.
+                return ProcessingResult(
+                    outcome=ProcessingOutcome.SUCCEEDED,
+                    usable=False,
+                    skipped_reason=image.reason or "answer_image_needs_review",
+                )
             image_bytes = self._store.read_bytes(Path(image.image_path))
 
         # The provider call happens outside the transaction above (and, via

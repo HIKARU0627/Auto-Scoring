@@ -197,7 +197,21 @@ class GradingJobProcessor:
                 # at all, on the strength of having been read clearly --
                 # which is precisely what "the crop cannot be trusted"
                 # denies.
-                return ProcessingResult(outcome=ProcessingOutcome.SUCCEEDED, usable=False)
+                #
+                # ``skipped_reason`` carries the crop's own reason word
+                # (Issue #164). Until it did, this branch produced a job row
+                # saying ``succeeded``, ``last_error`` NULL, in 0.013
+                # seconds -- 23 of one real run's 37 grading jobs, none of
+                # them distinguishable from work that was actually done. The
+                # value is `AnswerImage.reason`'s fixed vocabulary, which
+                # `app/lib/core/grading_failure_reason.dart` already reads
+                # off ``last_error`` for the same purpose; nothing from the
+                # paper goes into it.
+                return ProcessingResult(
+                    outcome=ProcessingOutcome.SUCCEEDED,
+                    usable=False,
+                    skipped_reason=image.reason or "answer_image_needs_review",
+                )
 
             recognition = uow.recognitions.get(recognition_result_id(job))
             # An absent row therefore means only that no OCR reading exists
