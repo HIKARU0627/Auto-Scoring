@@ -12,6 +12,7 @@ import { describeReviewReason } from "../../core/submission-review-reason.js";
 import { submissionStatusVisualOf } from "../../core/submission-status.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
+import { BulkExportDialog } from "./BulkExportDialog.js";
 import { ExportDialog } from "./ExportDialog.js";
 
 type LoadState =
@@ -49,6 +50,7 @@ export function SubmissionQueuePage(): JSX.Element {
   const [exportingSubmissionId, setExportingSubmissionId] = useState<
     string | null
   >(null);
+  const [bulkExportOpen, setBulkExportOpen] = useState(false);
 
   const reload = useCallback(async () => {
     if (testId.length === 0) {
@@ -159,7 +161,7 @@ export function SubmissionQueuePage(): JSX.Element {
                 data-testid="queue-bulk-export-button"
                 className="rounded-md border border-outline px-md py-xs text-ui-label text-on-surface bg-surface"
                 onClick={() => {
-                  // Bulk export modal placeholder
+                  setBulkExportOpen(true);
                 }}
               >
                 まとめてPDF出力
@@ -264,7 +266,17 @@ export function SubmissionQueuePage(): JSX.Element {
         </div>
       ) : null}
 
-      {/* Export Dialog */}
+      {bulkExportOpen && loadState.status === "ready" ? (
+        <BulkExportDialog
+          testId={testId}
+          queue={loadState.data.queue}
+          onClose={() => {
+            setBulkExportOpen(false);
+            void reload();
+          }}
+        />
+      ) : null}
+
       {exportingSubmissionId !== null ? (
         <ExportDialog
           submissionId={exportingSubmissionId}
