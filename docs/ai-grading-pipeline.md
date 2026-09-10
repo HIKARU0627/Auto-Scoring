@@ -376,8 +376,9 @@ C の扱いを決められる。**
 
 #### 受け口: 採点の応答を見てから、切り出し側の契約に落とす
 
-既存の理由（`no_answer_area_defined` / `answer_area_zero_area` / `crop_nearly_blank`）は
-**採点の前**に決まるが、これは**採点の応答を見て初めて分かる**。それでも置き場所は
+既存の理由（`no_answer_area_defined` / `answer_area_zero_area` / `crop_nearly_blank` /
+`reading_order_conflict`）は**採点の前**に決まるが、`crop_not_the_answer` は
+**採点の応答を見て初めて分かる**。それでも置き場所は
 同じにした（`jobs/grading_processor.py::_crop_is_not_the_answer`）:
 
 - **`AnswerImage` を `NEEDS_REVIEW` + 理由 `crop_not_the_answer` にする。** 切り出しに
