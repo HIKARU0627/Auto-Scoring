@@ -13,6 +13,8 @@
     "openapi:export": "node scripts/openapi.mjs export",
     "openapi:generate": "node scripts/openapi.mjs generate",
     "openapi:check": "node scripts/openapi.mjs check",
+    "openapi:generate:ts": "node scripts/openapi-ts.mjs generate",
+    "openapi:check:ts": "node scripts/openapi-ts.mjs check",
     "openapi:selftest": "node --test scripts/openapi.test.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -37,11 +39,13 @@
     "build": "pnpm run build:app && pnpm run build:backend && pnpm run build:desktop",
     "check:pre-commit": "pnpm skills:check && pnpm format:check",
     "check:pre-push": "pnpm lint && pnpm typecheck && pnpm test",
-    "check": "pnpm skills:check && pnpm format:check && pnpm openapi:selftest && pnpm openapi:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:desktop:e2e && pnpm build"
+    "check": "pnpm skills:check && pnpm format:check && pnpm openapi:selftest && pnpm openapi:check && pnpm openapi:check:ts && pnpm lint && pnpm typecheck && pnpm test && pnpm test:desktop:e2e && pnpm build"
   },
   "devDependencies": {
     "@openapitools/openapi-generator-cli": "^2.41.0",
-    "prettier": "3.9.6"
+    "openapi-typescript": "^7.13.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.2"
   },
   "engines": {
     "node": ">=24.14.0"
