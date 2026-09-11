@@ -24,6 +24,7 @@ export function renderAppAt(
 
   vi.stubGlobal("autoScoring", {
     getAppInfo: vi.fn(async () => ({ version: "0.0.0", platform: "linux" })),
+    getSidecarLogPath: vi.fn(async () => "/tmp/app-data/logs/sidecar.log"),
     chooseFolder: vi.fn(async () => "/tmp/batch"),
     choosePdfFile: vi.fn(async () => null),
     scanFolder: vi.fn(async () => ({ name: "batch", entries: [] })),

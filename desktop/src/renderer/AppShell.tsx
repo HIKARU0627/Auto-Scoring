@@ -22,7 +22,7 @@ export function AppShell({
   initialStack = [AppRoutes.home],
 }: {
   client: SidecarClient | null;
-  initialStack?: readonly string[];
+  initialStack?: readonly string[] | undefined;
 }): JSX.Element {
   return (
     <SidecarApiProvider client={client}>

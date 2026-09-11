@@ -30,6 +30,8 @@ import type {
 const bridge: AutoScoringBridge = {
   getAppInfo: (): Promise<AppInfo> =>
     ipcRenderer.invoke(IpcChannel.getAppInfo) as Promise<AppInfo>,
+  getSidecarLogPath: (): Promise<string> =>
+    ipcRenderer.invoke(IpcChannel.getSidecarLogPath) as Promise<string>,
   getSidecarStatus: (): Promise<SidecarStatus> =>
     ipcRenderer.invoke(IpcChannel.getSidecarStatus) as Promise<SidecarStatus>,
   restartSidecar: (): Promise<void> =>
