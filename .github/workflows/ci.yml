@@ -111,6 +111,14 @@ jobs:
         # (Issue #102) -- separate from "OpenAPI contract" below so a broken
         # helper is reported before spending time on a full regenerate.
         run: pnpm openapi:selftest
+      - name: Package alarm self-test
+        # Verifies the `package-alarm` job below is still wired to
+        # `Package (Windows)` (the display name, `needs: [package]`, and
+        # `if: always()`), and that every reporting branch of the alarm reacts.
+        # A rename or a wrong condition turns this step red instead of leaving
+        # a monitor that silently never fires (Issue #312). Pure Node, no
+        # network.
+        run: pnpm alarm:selftest
       - name: OpenAPI contract
         # Regenerates the schema + Dart client and fails on any drift. Needs
         # uv, dart, and Java (openapi-generator) -- all present on the runner.
@@ -347,3 +355,38 @@ jobs:
           name: auto-scoring-sidecar-bundle
           path: backend/dist/auto-scoring-sidecar/
           if-no-files-found: error
+
+  package-alarm:
+    name: Package (Windows) alarm
+    # `package` is deliberately not in `quality`'s `needs` (the comment there
+    # says so, and that is the owner's call), so a red `Package (Windows)` on
+    # `main` cannot block a merge and nothing forces anyone to open the run.
+    # Windows is the only place the shipped Windows artifacts can be built or
+    # verified (PyInstaller cannot cross-compile, `build:app` cannot run on
+    # Linux), so that red is the only signal that the Windows build broke.
+    #
+    # This job is the counterweight: it watches the `package` result and puts
+    # the failure where a person will see it -- a tracking issue on `main`
+    # (Issue #312). It is deliberately NOT in `quality`'s `needs`: adding it
+    # there would make `Package (Windows)` a required check, which is the
+    # owner's decision just before cut-over, not this change.
+    #
+    # `if: always()` is load-bearing for the same reason it is on `quality`: a
+    # failing `needs` would otherwise skip this job, and GitHub shows a skipped
+    # check as a pass. On a pull request the alarm turns this job red instead of
+    # filing an issue, so the wiring can be mutation-tested before it lands.
+    needs: [package]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Report a red Package (Windows)
+        env:
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/package-alarm.mjs
