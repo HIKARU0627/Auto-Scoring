@@ -22,6 +22,13 @@ No network and no credentials: the HTTP providers get a recorded
 scripted app-server transport the contract tests already use. The same seam
 makes the "cleanup was not called" mutation reachable without a live login
 (see the PR body).
+
+The ``auto-scoring-*`` snapshot is scoped to the test's own directory: the
+``isolated_temp_root`` fixture points ``tempfile.gettempdir()`` at
+``tmp_path`` so the provider writes there and the assertion observes only
+that directory. Globbing the machine-wide ``/tmp`` (Issue #340) made these
+tests fail whenever an unrelated concurrent process created or removed a
+matching directory.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from google.auth.credentials import Credentials
 
 from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
@@ -103,8 +111,23 @@ def _mock(body: dict[str, Any]) -> httpx.MockTransport:
     return httpx.MockTransport(handle)
 
 
-def _auto_scoring_temp_dirs() -> set[str]:
-    return {str(path) for path in Path(tempfile.gettempdir()).glob("auto-scoring-*")}
+@pytest.fixture
+def isolated_temp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Confines ``tempfile`` writes to this test's own ``tmp_path``.
+
+    The provider module calls ``tempfile.mkdtemp`` with no explicit ``dir``, so
+    it lands wherever ``tempfile.gettempdir()`` points. Redirecting that at
+    ``tmp_path`` means both the provider's writes *and* this module's
+    observation stay inside the test's own directory, so a concurrent process
+    creating or removing a machine-wide ``/tmp/auto-scoring-*`` cannot flip
+    the assertion (Issue #340).
+    """
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    return tmp_path
+
+
+def _auto_scoring_temp_dirs(root: Path) -> set[str]:
+    return {str(path) for path in root.glob("auto-scoring-*")}
 
 
 def _ai_ok_body() -> dict[str, Any]:
@@ -122,16 +145,18 @@ def _ai_ok_body() -> dict[str, Any]:
     return {"candidates": [{"content": {"role": "model", "parts": [{"text": content}]}}]}
 
 
-def test_adopted_providers_write_no_temporary_file_and_upload_no_remote_resource() -> None:
+def test_adopted_providers_write_no_temporary_file_and_upload_no_remote_resource(
+    isolated_temp_root: Path,
+) -> None:
     """A grading and an OCR call leave the disk and the far end clean.
 
     What is checked is the *shape* of the request that actually crossed the
     HTTP boundary: an inline crop is not an upload, and ``skipHumanReview``
     means Document AI keeps no copy in its own review queue. The
-    ``auto-scoring-*`` snapshot then confirms neither call created a local
-    temporary directory either.
+    ``auto-scoring-*`` snapshot -- scoped to this test's own temp root -- then
+    confirms neither call created a local temporary directory either.
     """
-    before = _auto_scoring_temp_dirs()
+    before = _auto_scoring_temp_dirs(isolated_temp_root)
 
     ai_transport = _RecordingTransport(_mock(_ai_ok_body()))
     VertexGeminiAIProvider(
@@ -148,7 +173,9 @@ def test_adopted_providers_write_no_temporary_file_and_upload_no_remote_resource
         client=httpx.Client(transport=ocr_transport),
     ).recognize(_CROP)
 
-    assert _auto_scoring_temp_dirs() == before, "a provider left a temporary directory behind"
+    assert _auto_scoring_temp_dirs(isolated_temp_root) == before, (
+        "a provider left a temporary directory behind"
+    )
 
     assert ai_transport.payloads, "the grading provider sent no payload to inspect"
     for payload in ai_transport.payloads:
@@ -165,16 +192,17 @@ def test_adopted_providers_write_no_temporary_file_and_upload_no_remote_resource
         assert "rawDocument" in payload
 
 
-def test_codex_provider_removes_its_temporary_workspace() -> None:
+def test_codex_provider_removes_its_temporary_workspace(isolated_temp_root: Path) -> None:
     """The answer image does not survive the grading call.
 
     The Codex app-server link is the one adopted path that writes the crop to
     a per-call temporary workspace (``_write_temp_workspace``). ``grade()``
     must remove it in its ``finally`` block, even though this test uses the
     scripted app-server transport -- so the assertion is reachable without a
-    live Codex login.
+    live Codex login. The workspace is created under the isolated root, so the
+    snapshot cannot see unrelated machine-wide temp directories.
     """
-    before = _auto_scoring_temp_dirs()
+    before = _auto_scoring_temp_dirs(isolated_temp_root)
 
     transport = _FakeAppServerTransport()
     provider = CodexAppServerProvider(prompt_version="cleanup", transport=transport)
@@ -195,4 +223,6 @@ def test_codex_provider_removes_its_temporary_workspace() -> None:
 
     assert written, "the Codex call wrote no temporary workspace"
     assert not os.path.exists(written[0]), "the answer image was left on disk"
-    assert _auto_scoring_temp_dirs() == before, "the temporary workspace was left behind"
+    assert _auto_scoring_temp_dirs(isolated_temp_root) == before, (
+        "the temporary workspace was left behind"
+    )
