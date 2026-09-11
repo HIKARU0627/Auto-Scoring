@@ -92,7 +92,11 @@ describe("app router (INV-012)", () => {
         expect(screen.getByTestId(expected.testId)).toBeDefined();
         return;
       }
-      expect(screen.getByText(expected.text)).toBeDefined();
+      // The persistent sidebar (Issue #335) repeats the destination labels, so
+      // match the page heading rather than the first occurrence of the text.
+      expect(
+        screen.getByRole("heading", { name: expected.text }),
+      ).toBeDefined();
     });
   }
 });
