@@ -701,7 +701,7 @@ function RegionOverlay({
   return (
     <div
       data-testid={`answer-area-box-${index}`}
-      className={`absolute ${borderClass} ${selected ? "border-[3px]" : "border-[1.5px]"} ${unassigned ? "bg-attention/10" : "bg-primary/10"}`}
+      className={`absolute ${borderClass} ${selected ? "border-region-selected" : "border-region"} ${unassigned ? "bg-attention/10" : "bg-primary/10"}`}
       style={{
         left: topLeft.x,
         top: topLeft.y,
@@ -740,7 +740,7 @@ function RegionOverlay({
       {selected && !readOnly ? (
         <div
           data-testid={`answer-area-resize-${index}`}
-          className={`absolute bottom-0 right-0 h-[14px] w-[14px] ${unassigned ? "bg-attention" : "bg-primary"}`}
+          className={`absolute bottom-0 right-0 h-3.5 w-3.5 ${unassigned ? "bg-attention" : "bg-primary"}`}
           onPointerDown={(event) => {
             event.stopPropagation();
           }}

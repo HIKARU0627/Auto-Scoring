@@ -548,7 +548,7 @@ export function PdfReviewPage(): JSX.Element {
             <aside
               ref={inspectorRef}
               data-testid="review-inspector"
-              className="flex w-80 shrink-0 flex-col gap-md overflow-y-auto max-h-[80vh] border border-outline-variant rounded-md p-md"
+              className="flex w-80 shrink-0 flex-col gap-md overflow-y-auto max-h-inspector border border-outline-variant rounded-md p-md"
             >
               <div data-testid="review-question-state">
                 <span className="text-body-medium">

@@ -111,6 +111,22 @@
   .grid-dialog-body-footer {
     grid-template-rows: var(--layout-dialog-body-footer-grid-rows);
   }
+
+  .bg-overlay-scrim {
+    background-color: var(--color-overlay-scrim);
+  }
+
+  .border-region {
+    border-width: var(--border-width-region);
+  }
+
+  .border-region-selected {
+    border-width: var(--border-width-region-selected);
+  }
+
+  .max-h-inspector {
+    max-height: var(--layout-inspector-max-height);
+  }
 }
 
 @layer base {

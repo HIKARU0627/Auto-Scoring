@@ -128,6 +128,12 @@
   --layout-dag-panel-max-height-fraction: 0.3;
   --layout-dag-column-gap-spread-limit: 3;
   --layout-activity-bar-height: 2px;
+
+  /* Issue #295 — literals promoted out of `src/renderer/features/`. */
+  --color-overlay-scrim: rgb(0 0 0 / 50%);
+  --border-width-region: 1.5px;
+  --border-width-region-selected: 3px;
+  --layout-inspector-max-height: 80vh;
 }
 
 [data-theme="dark"] {
