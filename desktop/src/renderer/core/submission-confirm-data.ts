@@ -1,4 +1,4 @@
-import type { SidecarClient } from "./client.js";
+import type { SidecarClient } from "../api/client.js";
 import {
   loadJobs,
   loadQuestionReviewData,
@@ -6,7 +6,7 @@ import {
   loadSubmission,
   PdfReviewDataError,
 } from "./pdf-review-data.js";
-import type { components } from "./generated/schema.js";
+import type { components } from "../api/generated/schema.js";
 import {
   loadSubmissionQueueData,
   type SubmissionQueueData,

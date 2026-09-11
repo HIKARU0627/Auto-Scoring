@@ -2,7 +2,7 @@ import { vi } from "vitest";
 
 import type { SidecarClient } from "../../../src/renderer/api/client.js";
 import type { components } from "../../../src/renderer/api/generated/schema.js";
-import type { IntakeBridge } from "../../../src/renderer/api/intake-data.js";
+import type { IntakeBridge } from "../../../src/renderer/core/intake-data.js";
 import type { ScannedEntry } from "../../../src/shared/folder-scan.js";
 import {
   createMockSidecarClient,

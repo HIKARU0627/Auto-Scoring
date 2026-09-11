@@ -56,6 +56,39 @@ TextTheme もコンポーネントテーマも余白スケールもモーショ�
 
 `app/test/architecture_test.dart` が依存方向を、既存の各画面テストが挙動を守る。
 
+### 1.1 Electron 側の検証と静的検査（INV-080〜INV-086, Issue #270）
+
+Flutter 版の cut-over（`app/` 削除）に向け、Electron (`desktop/`) 側でも同等の不変条件をテストで機械的に固定している。
+
+| テスト（Electron / Vitest）                            | 不変条件 ID                        | 何を保証するか                                                                                                                    |
+| ------------------------------------------------------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `desktop/test/design-tokens-lint.test.ts`              | **INV-080**                        | `src/renderer/features/` 配下でのスタイル・色リテラル直書きを禁止する静的検査テスト（厳密な同一性 allowlist 方式）                |
+| `desktop/test/renderer/design-tokens-screens.test.tsx` | **INV-081**                        | 主要画面が light/dark 両テーマにおいてデザイントークンの surface ramp 背景色（`bg-surface`）を例外なく適用していることを検証      |
+| `desktop/test/typography.test.ts`                      | **INV-082**                        | 配布・同梱フォント Noto Sans JP variable の `fvar` テーブル存在およびグリフ数（≥17000）を検証（静的差し替え・サブセット化の防止） |
+| `desktop/test/typography.test.ts`                      | **INV-083**                        | 点数等の数字表示に `tabular-nums`（`font-variant-numeric: tabular-nums`）が指定され、更新時に横ジャンプしないことを検証           |
+| `desktop/test/typography.test.ts`                      | **INV-084**                        | 可変フォントの `wght` 軸（100〜900）が CSS `@font-face` と `fontWeight` によって正しく駆動されることを検証                        |
+| `desktop/test/typography.test.ts`                      | **INV-085**                        | 全 text role（`questionText`, `recognizedText`, `gradingComment`, `score`, `uiLabel`）が規定の family と line-height を持つこと   |
+| `desktop/test/typography.test.ts`                      | **INV-086**                        | 認識文字 role（`recognizedText`）が body より大きく（17px > 16px）、正の字間（0.5px）を持ち手書き照合に適していることを検証       |
+| `desktop/test/theme-contrast.test.ts`                  | **INV-087〜090, 093, 094, 201-09** | surface ramp、Material on/role、status 色、disabled ボタン、annotationMark 等のコントラスト比（PR #225 で引き取り済み）           |
+
+#### INV-080 静的検査の対象範囲と運用方針
+
+1. **対象範囲**:
+   - 走査対象: `desktop/src/renderer/features/` 配下の全 `.ts` / `.tsx` ファイル。走査ファイル数が 24 件以上であることを assert し、glob 外れによる空振りを防ぐ。
+   - 違反とみなすもの:
+     1. 色リテラル: `#hex`、`rgb()`、`rgba()`、`hsl()`、Tailwind 既定色（`bg-black`, `bg-white`, `text-black` 等）、任意ブラケット色指定（`bg-[#...]`）。デザイントークン色（`bg-surface`, `text-on-surface`, `text-error`, `text-attention`, `text-success` 等）を使用すること。
+     2. 任意ブラケット寸法/スタイル: `className` 内の任意値指定（`max-w-[960px]`, `border-[3px]`, `text-[48px]`, `h-[14px]` 等）。
+     3. 数値スペーシング: Tailwind 生数値スペーシング（`p-1`, `py-0.5`, `mt-1.5` 等）。`AppSpacing` に対応するトークンクラス（`p-xs`, `p-sm`, `p-md`, `p-lg`, `p-xl`, `p-xxl` 等）を使用すること。
+     4. 単独 `rounded`: トークン角丸（`rounded-sm`, `rounded-md`, `rounded-lg`、円形用の `rounded-full`）ではなくプレーンな `rounded` を直接指定すること。
+     5. インラインスタイル直書き: `style={{ color: ..., backgroundColor: ..., padding: ..., margin: ..., borderRadius: ... }}` による静的スタイルの直接指定。
+   - 対象外とするものとその理由:
+     1. TypeScript/JavaScript ロジック内の配列インデックスアクセス（`entries[0]` 等）や正規表現・演算子に含まれる角括弧: スタイリングではなくデータ処理・ビジネスロジックであるため。
+     2. PDF 座標計算・ドラッグ描画における動的絶対配置（`style={{ left, top, width, height }}`）および進捗率のパーセンテージ幅（`style={{ width: \`\${pct}%\` }}`）: 画面の寸法規律ではなく、PDF ページの動的幾何変換（`normalized-coordinates`）やランタイム状態の計算値であるため。
+2. **既存残存違反の扱い（厳密な同一性 allowlist 方式）**:
+   - 件数ベースの baseline は採らず、`(file, symbol, rule, literal)` の組で 1 件ずつ列挙した allowlist で許可する。`line` は記録時点の参考値であり照合キーには含めない（`features/` は並行編集で行番号が動くため）。これにより既存違反があるファイル内でも、列挙に無い新規違反（新しいリテラル）は即座に赤となる。
+   - allowlist は Issue #295 で空になった。上限は `EXPECTED_ALLOWLIST_COUNT = 0` で、以後は新規違反を allowlist に登録できない（増やす方向は赤、減らす方向のみ許可）。
+   - 新しく `features/` にスタイルを足すときは allowlist ではなく、`design-tokens.css` / `index.css` のトークン・ユーティリティクラスを使う（§4.6）。
+
 ## 2. タイポグラフィ
 
 ### 2.1 このアプリが画面に出す文字
@@ -393,6 +426,36 @@ Issue #85 で、この高さの決め方に2つの上限を足した。
   「上流が終わって下流が動き出す」はそこにある。ノード自体は広げない
   （`dagNodeWidth` で既に読める）。ピクセル上限ではなく倍数なのは、
   ギャップの基準値を将来変えても意味が変わらないようにするため。
+
+### 4.5 Electron レンダラーのモーダルダイアログレイアウト（Issue #293）
+
+`desktop/src/renderer/styles/design-tokens.css` の CSS 変数と、
+`desktop/src/renderer/styles/index.css` のユーティリティクラスで定義する。
+`features/` からはクラス名だけ参照し、任意ブラケット値は使わない（INV-080）。
+
+| トークン / ユーティリティ                | 値                                                           | 使いどころ                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `--layout-dialog-viewport-padding-block` | `spacing-xxl` + `spacing-lg`（48px）                         | ビューポート中央に置くモーダルの外側余白（上下合計）。オーバーレイの `p-lg` と揃える |
+| `--layout-dialog-viewport-max-height`    | `calc(100dvh - var(--layout-dialog-viewport-padding-block))` | モーダルパネルの最大高さ。画面高から外側余白を引いた高さ                             |
+| `max-h-dialog-viewport`                  | 上記 max-height を適用                                       | 確認ダイアログなど、ビューポート内に収めるパネル                                     |
+| `--layout-dialog-body-footer-grid-rows`  | `minmax(0, 1fr) auto`                                        | 本文行はスクロール、最下行（キャンセル/確定）は固定                                  |
+| `grid-dialog-body-footer`                | 上記 grid-template-rows を適用                               | 本文＋固定アクション行の 2 行グリッド。同形の確認ダイアログで再利用                  |
+
+### 4.6 Issue #295 で features から移したトークン
+
+`features/` に残っていた直書き値のうち、値が一意なものを
+`desktop/src/renderer/styles/design-tokens.css` と `index.css` へ移した。
+
+| トークン / ユーティリティ        | 値                 | 使いどころ                                             |
+| -------------------------------- | ------------------ | ------------------------------------------------------ |
+| `--color-overlay-scrim`          | `rgb(0 0 0 / 50%)` | モーダルの背景（`bg-overlay-scrim`）                   |
+| `--border-width-region`          | `1.5px`            | 未選択の回答領域の枠（`border-region`）                |
+| `--border-width-region-selected` | `3px`              | 選択中の回答領域の枠（`border-region-selected`）       |
+| `--layout-inspector-max-height`  | `80vh`             | 添削レビュー Inspector の最大高さ（`max-h-inspector`） |
+
+寸法（`max-w-*`, `h-*`, `min-w-*`）と字サイズ（`text-5xl`）は Tailwind の
+spacing / 字サイズスケールから取る。sub-grid の spacing（旧 `py-0.5`,
+`mt-1.5`, `mt-1`）は §4.1 の 4px スケールへ寄せた。
 
 ## 5. モーション
 

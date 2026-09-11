@@ -50,6 +50,8 @@ const bridge: AutoScoringBridge = {
   },
   chooseFolder: (): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannel.chooseFolder) as Promise<string | null>,
+  choosePdfFile: (): Promise<string | null> =>
+    ipcRenderer.invoke(IpcChannel.choosePdfFile) as Promise<string | null>,
   scanFolder: (directoryPath: string): Promise<ScannedFolder> =>
     ipcRenderer.invoke(
       IpcChannel.scanFolder,

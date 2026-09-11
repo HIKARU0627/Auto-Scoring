@@ -1,7 +1,7 @@
-import type { SidecarClient } from "./client.js";
-import type { components } from "./generated/schema.js";
-import type { PageImageState } from "../features/answer-area-editor/answer-area-types.js";
-import { geometryToImagePixelSize } from "../core/normalized-coordinates.js";
+import type { SidecarClient } from "../api/client.js";
+import type { components } from "../api/generated/schema.js";
+import type { PageImageState } from "./page-image.js";
+import { geometryToImagePixelSize } from "./normalized-coordinates.js";
 
 export type SubmissionResponse = components["schemas"]["SubmissionResponse"];
 export type QuestionResponse = components["schemas"]["QuestionResponse"];

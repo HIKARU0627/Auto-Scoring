@@ -69,10 +69,10 @@ function SidecarErrorScreen({
       data-testid="sidecar-error"
       className="flex min-h-screen items-center justify-center bg-surface p-xl text-on-surface"
     >
-      <div className="max-w-[560px] text-center">
+      <div className="max-w-140 text-center">
         <span
           aria-hidden
-          className="material-symbols-outlined text-[48px] text-error"
+          className="material-symbols-outlined text-5xl text-error"
         >
           error_outline
         </span>

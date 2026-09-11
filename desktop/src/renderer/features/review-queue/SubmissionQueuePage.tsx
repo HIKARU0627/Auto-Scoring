@@ -6,7 +6,7 @@ import {
   SubmissionQueueDataError,
   type SubmissionQueueData,
   type SubmissionResponse,
-} from "../../api/submission-queue-data.js";
+} from "../../core/submission-queue-data.js";
 import { submissionConfirm } from "../../core/app-routes.js";
 import { describeReviewReason } from "../../core/submission-review-reason.js";
 import { submissionStatusVisualOf } from "../../core/submission-status.js";
@@ -137,7 +137,7 @@ export function SubmissionQueuePage(): JSX.Element {
       ) : null}
 
       {loadState.status === "ready" && !loadState.data.queue.isEmpty ? (
-        <div className="mx-auto max-w-[960px] flex flex-col gap-lg">
+        <div className="mx-auto max-w-240 flex flex-col gap-lg">
           {/* Header */}
           <div className="rounded-lg border border-outline-variant bg-surface-container p-lg">
             <h2 className="text-title-medium font-medium text-on-surface">
@@ -211,7 +211,7 @@ export function SubmissionQueuePage(): JSX.Element {
                       {entry.totalQuestions > 0 ? (
                         <span
                           data-testid={`queue-progress-${entry.id}`}
-                          className={`rounded px-xs py-0.5 text-ui-label border ${
+                          className={`rounded-sm px-xs py-xs text-ui-label border ${
                             entry.isDone
                               ? "border-success text-success"
                               : entry.isPartiallyReviewed
@@ -250,7 +250,7 @@ export function SubmissionQueuePage(): JSX.Element {
                       data-testid={`queue-export-${entry.id}`}
                       title="PDF出力"
                       aria-label="PDF出力"
-                      className="rounded border border-outline px-sm py-xs text-ui-label text-on-surface hover:bg-surface-container"
+                      className="rounded-sm border border-outline px-sm py-xs text-ui-label text-on-surface hover:bg-surface-container"
                       onClick={(e) => {
                         e.stopPropagation();
                         setExportingSubmissionId(entry.id);

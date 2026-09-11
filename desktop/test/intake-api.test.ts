@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   materialRoleWireValue,
   PDF_CONTENT_TYPE,
-} from "../src/renderer/api/intake-data.js";
+} from "../src/renderer/core/intake-data.js";
 
 describe("intake upload helpers (INV-134 / INV-135)", () => {
   it("INV-134: material roles use wire names", () => {

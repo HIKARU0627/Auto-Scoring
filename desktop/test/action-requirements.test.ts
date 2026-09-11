@@ -2,12 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   ActionRequirements,
+  answerDetectRequirements,
+  answerDetectionOutcomeRequirements,
   answerProfileConfirmRequirements,
   answerProfileSaveRequirements,
+  answerRegionAddRequirements,
   apiKeySaveRequirements,
   apiKeyVerifyRequirements,
+  completeRegistrationRequirements,
+  dependencyGraphConfirmRequirements,
   whileRunningRequirements,
 } from "../src/renderer/core/action-requirements.js";
+
+function expectActionable(requirement: { id: string; message: string }): void {
+  expect(requirement.id.length).toBeGreaterThan(0);
+  expect(requirement.message.endsWith("。")).toBe(true);
+  expect(requirement.message).not.toMatch(/Exception|Error|HTTP|[0-9]{3} /);
+}
 
 describe("action requirements: API key (INV-107, INV-201-04)", () => {
   it("資格情報ストアが使えないとき、代わりの手を言う", () => {
@@ -29,14 +40,12 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
   });
 
   it("条件を変えたら理由も変わる（無効条件そのものから導かれる）", () => {
-    // 1. 未設定時: キーが無い理由
     const unconfigured = apiKeyVerifyRequirements({
       busy: false,
       configured: false,
     });
     expect(unconfigured.map((r) => r.id)).toEqual(["api-key-not-configured"]);
 
-    // 2. 処理中かつ未設定時: busy と未設定の両方
     const busyAndUnconfigured = apiKeyVerifyRequirements({
       busy: true,
       configured: false,
@@ -46,14 +55,12 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
       "api-key-not-configured",
     ]);
 
-    // 3. 設定済みで処理中: busy のみ
     const busyAndConfigured = apiKeyVerifyRequirements({
       busy: true,
       configured: true,
     });
     expect(busyAndConfigured.map((r) => r.id)).toEqual(["busy"]);
 
-    // 4. 設定済みかつ待機時: 理由は 0 件 (有効)
     const configuredAndIdle = apiKeyVerifyRequirements({
       busy: false,
       configured: true,
@@ -62,7 +69,6 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
   });
 
   it("資格情報ストアの条件変化で保存の理由が変わる", () => {
-    // ストア利用不可
     const storeUnavailable = apiKeySaveRequirements({
       busy: false,
       credentialStoreAvailable: false,
@@ -71,7 +77,6 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
       "credential-store-unavailable",
     ]);
 
-    // ストア利用不可 かつ 処理中
     const storeUnavailableBusy = apiKeySaveRequirements({
       busy: true,
       credentialStoreAvailable: false,
@@ -81,14 +86,12 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
       "credential-store-unavailable",
     ]);
 
-    // ストア利用可 かつ 処理中
     const storeAvailableBusy = apiKeySaveRequirements({
       busy: true,
       credentialStoreAvailable: true,
     });
     expect(storeAvailableBusy.map((r) => r.id)).toEqual(["busy"]);
 
-    // 条件充足: 理由は 0 件
     const ready = apiKeySaveRequirements({
       busy: false,
       credentialStoreAvailable: true,
@@ -101,6 +104,95 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
       whileRunningRequirements({ running: true }).map((r) => r.id),
     ).toEqual(["busy"]);
     expect(whileRunningRequirements({ running: false })).toEqual([]);
+  });
+});
+
+describe("action requirements: 回答欄検出 (Issue #294)", () => {
+  it("検出 0 件の結果を区別する", () => {
+    expect(
+      answerDetectionOutcomeRequirements({ outcome: "zero-results" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["answer-detection-zero-results"]);
+    expect(
+      answerDetectionOutcomeRequirements({ outcome: "role-mismatch" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["answer-sheet-role-mismatch"]);
+    expect(answerDetectionOutcomeRequirements({ outcome: "none" })).toEqual([]);
+  });
+
+  it("手動追加は答案登録後なら有効", () => {
+    expect(
+      answerRegionAddRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: true,
+      }),
+    ).toEqual([]);
+    expect(
+      answerRegionAddRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: false,
+      }).map((item) => item.id),
+    ).toEqual(["answer-sheet-unseen"]);
+  });
+
+  it("自動検出は設定不足と未確定配点を区別する", () => {
+    expect(
+      answerDetectRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: true,
+        detectionAvailable: false,
+        criteriaConfirmed: false,
+      }).map((item) => item.id),
+    ).toEqual([
+      "answer-detect-criteria-unconfirmed",
+      "answer-detection-unavailable",
+    ]);
+    expect(
+      answerDetectRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: false,
+        detectionAvailable: true,
+        criteriaConfirmed: true,
+      }).map((item) => item.id),
+    ).toEqual(["answer-detect-layout-missing"]);
+  });
+});
+
+describe("test settings registration action requirements", () => {
+  it("complete registration stays blocked until profile and graph are confirmed", () => {
+    expect(
+      completeRegistrationRequirements({
+        busy: false,
+        alreadyComplete: false,
+        profileConfirmed: false,
+        dependencyGraphConfirmed: false,
+      }).map((item) => item.id),
+    ).toEqual(["profile-unconfirmed", "dependency-graph-unconfirmed"]);
+    expect(
+      completeRegistrationRequirements({
+        busy: false,
+        alreadyComplete: false,
+        profileConfirmed: true,
+        dependencyGraphConfirmed: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("dependency graph confirm requires an analyzed graph", () => {
+    expect(
+      dependencyGraphConfirmRequirements({
+        busy: false,
+        hasGraph: false,
+        alreadyConfirmed: false,
+      }).map((item) => item.id),
+    ).toEqual(["dependency-graph-missing"]);
+    expectActionable(ActionRequirements.dependencyGraphMissing);
   });
 });
 
@@ -193,16 +285,11 @@ describe("action requirements: テスト設定 プロファイル (INV-110, INV-
   });
 
   it("「修正内容を保存」が無効な状態は、確定ボタンの理由が必ず覆う（INV-110: confirm 理由 ⊇ save 理由）", () => {
-    // 画面はこの2つのボタンに1つの理由欄しか置いていない。置いてよいのは
-    // 保存の理由が確定の理由の部分集合だからで、その包含関係をここで総当たり
-    // する -- 片方の条件だけを落とすと落ちる。
     for (const busy of [false, true]) {
       for (const confirmed of [false, true]) {
         for (const regionCount of [0, 1]) {
           const save = answerProfileSaveRequirements({
             busy,
-            // 画面の `hasRegions` は「リストが null でない」。枠0件の
-            // リストは保存できて確定できない、という既存の意味を保つ。
             hasRegions: regionCount > 0,
             alreadyConfirmed: confirmed,
           });
@@ -217,7 +304,6 @@ describe("action requirements: テスト設定 プロファイル (INV-110, INV-
           const saveIds = new Set(save.map((r) => r.id));
           const confirmIds = new Set(confirm.map((r) => r.id));
 
-          // 包含関係そのものの検査: save の各理由が confirm の理由集合に含まれていること
           for (const saveId of saveIds) {
             expect(
               confirmIds.has(saveId),

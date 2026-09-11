@@ -14,7 +14,7 @@ import {
   type IntakeBridge,
   type TestSummary,
   importedAnything,
-} from "../../api/intake-data.js";
+} from "../../core/intake-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   intakeFolderPickRequirements,
@@ -396,7 +396,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   return (
     <ShellScreen title="資料の取込">
       {step === "choose" ? (
-        <div className="mx-auto flex max-w-[720px] flex-col gap-lg">
+        <div className="mx-auto flex max-w-180 flex-col gap-lg">
           <p className="text-body-medium text-on-surface-variant">
             塾から受け取ったフォルダをそのまま選んでください。中身の役割は取込の型で自動的に振り分け、取り込む前に一覧で確認できます。
           </p>

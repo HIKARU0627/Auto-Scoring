@@ -49,18 +49,18 @@ export function normalizedRectToLayout(
   };
 }
 
-export function resolveAnnotationRect(input: {
+export function resolveAnnotationRects(input: {
   annotation: AnnotationResponse;
   questionAnswerArea: NormalizedRect | null | undefined;
   recognitions: readonly RecognitionResponse[];
-}): NormalizedRect | null {
+}): readonly NormalizedRect[] | null {
   const { annotation, questionAnswerArea, recognitions } = input;
   if (annotation.rect != null) {
-    return annotation.rect;
+    return [annotation.rect];
   }
   const anchorText = annotation.anchor_text;
   if (anchorText != null && anchorText.length > 0) {
-    const matched = findAnchorTextRect(
+    const matched = findAnchorTextRects(
       anchorText,
       recognitions,
       effectiveAnswerArea(questionAnswerArea),
@@ -73,6 +73,18 @@ export function resolveAnnotationRect(input: {
   return null;
 }
 
+export function resolveAnnotationRect(input: {
+  annotation: AnnotationResponse;
+  questionAnswerArea: NormalizedRect | null | undefined;
+  recognitions: readonly RecognitionResponse[];
+}): NormalizedRect | null {
+  const rects = resolveAnnotationRects(input);
+  if (rects == null || rects.length !== 1) {
+    return null;
+  }
+  return rects[0] ?? null;
+}
+
 function effectiveAnswerArea(
   answerArea: NormalizedRect | null | undefined,
 ): NormalizedRect {
@@ -82,12 +94,12 @@ function effectiveAnswerArea(
   return answerArea;
 }
 
-function findAnchorTextRect(
+function findAnchorTextRects(
   anchorText: string,
   recognitions: readonly RecognitionResponse[],
   answerArea: NormalizedRect,
   kind?: string | null,
-): NormalizedRect | null {
+): readonly NormalizedRect[] | null {
   const needle = normalizedForAnchor(anchorText);
   if (needle.length === 0) {
     return null;
@@ -99,10 +111,29 @@ function findAnchorTextRect(
     }
     const matched = shortestBoxRun(needle, recognition.boxes, kind);
     if (matched != null) {
-      return cropRelativeToPage(matched, answerArea);
+      return matched.map((rect) => cropRelativeToPage(rect, answerArea));
     }
   }
   return null;
+}
+
+function groupBoxesByLine(
+  boxes: readonly BoundingBoxResponse[],
+): BoundingBoxResponse[][] {
+  if (boxes.length === 0) {
+    return [];
+  }
+  const groups: BoundingBoxResponse[][] = [[boxes[0]!]];
+  for (let index = 1; index < boxes.length; index += 1) {
+    const previous = boxes[index - 1]!;
+    const current = boxes[index]!;
+    if (isSameLine(previous, current)) {
+      groups[groups.length - 1]!.push(current);
+    } else {
+      groups.push([current]);
+    }
+  }
+  return groups;
 }
 
 function normalizedForAnchor(text: string): string {
@@ -141,7 +172,7 @@ function shortestBoxRun(
   needle: string,
   boxesIn: readonly BoundingBoxResponse[],
   kind?: string | null,
-): NormalizedRect | null {
+): readonly NormalizedRect[] | null {
   const boxes = [...boxesIn];
   const texts = boxes.map((box) => normalizedForAnchor(box.text));
   const limit = runLengthLimit(needle);
@@ -168,23 +199,19 @@ function shortestBoxRun(
   }
 
   const matchedBoxes = boxes.slice(bestStart, bestEnd + 1);
-  const firstLineBoxes: BoundingBoxResponse[] = [matchedBoxes[0]!];
-  for (let i = 1; i < matchedBoxes.length; i += 1) {
-    if (isSameLine(matchedBoxes[i - 1]!, matchedBoxes[i]!)) {
-      firstLineBoxes.push(matchedBoxes[i]!);
-    } else {
-      break;
-    }
-  }
-
-  const spansLineBreak = firstLineBoxes.length < matchedBoxes.length;
-  if (!spansLineBreak) {
-    return unionOfBoxes(matchedBoxes);
+  const lineGroups = groupBoxesByLine(matchedBoxes);
+  if (lineGroups.length === 1) {
+    return [unionOfBoxes(matchedBoxes)];
   }
 
   const isCross = kind?.toLowerCase() === "cross";
   if (isCross) {
-    return unionOfBoxes(firstLineBoxes);
+    return [unionOfBoxes(lineGroups[0]!)];
+  }
+
+  const kindLower = kind?.toLowerCase();
+  if (kindLower === "underline" || kindLower === "box") {
+    return lineGroups.map((group) => unionOfBoxes(group));
   }
   return null;
 }

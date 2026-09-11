@@ -264,7 +264,7 @@ export function IntakeTemplateTab(): JSX.Element {
               split_child_directories: e.target.checked,
             }))
           }
-          className="mt-1 h-4 w-4 rounded border-outline"
+          className="mt-xs h-4 w-4 rounded-sm border-outline"
         />
         <label htmlFor="split-child-dirs" className="flex flex-col">
           <span className="text-body-medium font-medium text-on-surface">
@@ -319,7 +319,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     scope: e.target.value as RuleScope,
                   })
                 }
-                className="rounded border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className="rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
               >
                 <option value="file">ファイル名</option>
                 <option value="folder">フォルダ名</option>
@@ -336,7 +336,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     pattern: e.target.value,
                   })
                 }
-                className="min-w-[120px] flex-1 rounded border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className="min-w-30 flex-1 rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
               />
 
               {/* Role */}
@@ -349,7 +349,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     role: e.target.value as MaterialRole,
                   })
                 }
-                className="rounded border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className="rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
               >
                 {ALL_ROLES.map((role) => (
                   <option key={role} value={role}>
@@ -368,7 +368,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     requirement: e.target.value as Requirement,
                   })
                 }
-                className="rounded border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className="rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
               >
                 <option value="required">必須</option>
                 <option value="recommended">推奨</option>
@@ -380,7 +380,7 @@ export function IntakeTemplateTab(): JSX.Element {
                 type="button"
                 data-testid={`settings-remove-rule-${index}`}
                 onClick={() => removeRule(index)}
-                className="rounded px-sm py-xs text-label-medium text-error hover:bg-error-container/20"
+                className="rounded-sm px-sm py-xs text-label-medium text-error hover:bg-error-container/20"
               >
                 削除
               </button>

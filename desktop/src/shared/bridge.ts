@@ -80,6 +80,7 @@ export interface AutoScoringBridge {
   restartSidecar(): Promise<void>;
   onSidecarStatusChange(callback: (status: SidecarStatus) => void): () => void;
   chooseFolder(): Promise<string | null>;
+  choosePdfFile(): Promise<string | null>;
   scanFolder(directoryPath: string): Promise<ScannedFolder>;
   sidecarMultipartUpload(
     request: SidecarMultipartRequest,
@@ -94,6 +95,7 @@ export const IpcChannel = {
   restartSidecar: "auto-scoring:restart-sidecar",
   sidecarStatusChanged: "auto-scoring:sidecar-status-changed",
   chooseFolder: "auto-scoring:choose-folder",
+  choosePdfFile: "auto-scoring:choose-pdf-file",
   scanFolder: "auto-scoring:scan-folder",
   sidecarMultipartUpload: "auto-scoring:sidecar-multipart-upload",
   sidecarFetch: "auto-scoring:sidecar-fetch",

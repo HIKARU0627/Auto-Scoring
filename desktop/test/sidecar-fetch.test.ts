@@ -1,7 +1,17 @@
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import { inspect } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mockIsPackaged = vi.hoisted(() => ({ value: false }));
+
+vi.mock("electron", () => ({
+  app: {
+    get isPackaged() {
+      return mockIsPackaged.value;
+    },
+  },
+}));
 
 import {
   SidecarTransportError,
@@ -57,8 +67,14 @@ async function startFakeSidecar(): Promise<FakeSidecar> {
 describe("sidecarFetch", () => {
   const running: FakeSidecar[] = [];
 
+  beforeEach(() => {
+    mockIsPackaged.value = false;
+    delete process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"];
+  });
+
   afterEach(async () => {
     vi.unstubAllGlobals();
+    delete process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"];
     await Promise.all(running.map((sidecar) => sidecar.close()));
     running.length = 0;
   });
@@ -159,6 +175,28 @@ describe("sidecarFetch", () => {
     expect(rendered).not.toContain(secret);
     expect(rendered).not.toContain("collector.example");
     expect(rendered).not.toContain("54321");
+  });
+
+  it("stubs criteria extract in E2E without calling the sidecar (Issue #293)", async () => {
+    process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"] = "1";
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const response = await sidecarFetch(
+      { host: "127.0.0.1", port: 1, token: "unused" },
+      {
+        method: "POST",
+        urlPath: "/tests/t-e2e/criteria/extract",
+      },
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const body = JSON.parse(
+      Buffer.from(response.bodyBase64, "base64").toString("utf8"),
+    ) as { test_id: string; questions: { number: string }[] };
+    expect(body.test_id).toBe("t-e2e");
+    expect(body.questions[0]?.number).toBe("問1");
   });
 
   it("INV-204: a transport failure never echoes the URL, port, or token", async () => {

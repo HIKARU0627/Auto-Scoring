@@ -51,6 +51,54 @@ describe("PdfReviewPage routing (INV-014)", () => {
   });
 });
 
+describe("unreadable OCR spans (Issue #185)", () => {
+  it("shows overlay and inspector notice distinct from blank finding", async () => {
+    renderPdfReview({
+      recognitions: [
+        {
+          id: "rec-1",
+          submission_id: "sub-1",
+          question_id: "q-1",
+          source: "ai",
+          stage: "ocr",
+          text: "あい",
+          confidence: 0.55,
+          created_at: "2026-01-01T00:00:00Z",
+          boxes: [
+            {
+              text: "あ",
+              x: 0.1,
+              y: 0.1,
+              width: 0.2,
+              height: 0.2,
+              unreadable: true,
+            },
+            {
+              text: "い",
+              x: 0.4,
+              y: 0.1,
+              width: 0.2,
+              height: 0.2,
+              unreadable: false,
+            },
+          ],
+        },
+      ],
+      grades: [buildGrade({ confidence: 0.97 })],
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("review-unreadable-spans-notice"),
+      ).toBeDefined();
+    });
+    expect(screen.getByTestId("review-unreadable-box-0")).toBeDefined();
+    expect(screen.queryByTestId("review-answer-image-blank")).toBeNull();
+    expect(
+      screen.getByTestId("review-unreadable-spans-notice").textContent,
+    ).toContain("空欄とは別");
+  });
+});
+
 describe("confidence display (INV-068, INV-069)", () => {
   it("INV-068: high confidence has no warning icon, low does", async () => {
     renderPdfReview({
@@ -274,6 +322,42 @@ describe("review actions (INV-071)", () => {
     await waitFor(() => {
       expect(view).toBeDefined();
     });
+  });
+});
+
+describe("Enter follows focus (Issue #196)", () => {
+  it("does not approve the question when Enter is pressed on another button", async () => {
+    const view = renderPdfReview({ grades: [] });
+    const approve = (await screen.findByTestId(
+      "review-approve-button",
+    )) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(approve.disabled).toBe(false);
+    });
+
+    const reject = screen.getByTestId("review-reject-button");
+    reject.focus();
+    expect(document.activeElement).toBe(reject);
+
+    fireEvent.keyDown(reject, { key: "Enter", code: "Enter", bubbles: true });
+
+    expect(view.client.POST).not.toHaveBeenCalled();
+  });
+
+  it("does not approve the question when Enter is pressed in the note field", async () => {
+    const view = renderPdfReview({ grades: [] });
+    const approve = (await screen.findByTestId(
+      "review-approve-button",
+    )) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(approve.disabled).toBe(false);
+    });
+
+    const note = screen.getByTestId("review-note-field");
+    note.focus();
+    fireEvent.keyDown(note, { key: "Enter", code: "Enter", bubbles: true });
+
+    expect(view.client.POST).not.toHaveBeenCalled();
   });
 });
 

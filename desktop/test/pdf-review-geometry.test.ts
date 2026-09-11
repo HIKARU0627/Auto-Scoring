@@ -7,6 +7,7 @@ import {
 import {
   normalizedRectToLayout,
   resolveAnnotationRect,
+  resolveAnnotationRects,
   type NormalizedRect,
 } from "../src/renderer/core/pdf-review-geometry.js";
 import type { components } from "../src/renderer/api/generated/schema.js";
@@ -63,6 +64,7 @@ function recognitionWithBoxes(
       y: box.rect.y,
       width: box.rect.width,
       height: box.rect.height,
+      unreadable: false,
     })),
   };
 }
@@ -270,7 +272,7 @@ describe("resolveAnnotationRect (INV-052–061)", () => {
     expect(resolved!.width).toBeLessThan(0.95);
   });
 
-  it("INV-057b: cross-line anchor for UNDERLINE and BOX returns null", () => {
+  it("INV-057b: cross-line anchor for UNDERLINE and BOX resolves to per-line rects", () => {
     const multiLineBoxes = [
       { text: "春", rect: { x: 0.86, y: 0.1, width: 0.06, height: 0.04 } },
       { text: "は", rect: { x: 0.92, y: 0.1, width: 0.06, height: 0.04 } },
@@ -279,12 +281,30 @@ describe("resolveAnnotationRect (INV-052–061)", () => {
       { text: "ぼ", rect: { x: 0.13, y: 0.3, width: 0.06, height: 0.04 } },
     ];
     for (const kind of ["underline", "box"]) {
-      const resolved = resolveAnnotationRect({
+      const resolved = resolveAnnotationRects({
         annotation: annotation({ kind, anchor_text: "春はあけぼ" }),
         questionAnswerArea: null,
         recognitions: [recognitionWithBoxes(multiLineBoxes)],
       });
-      expect(resolved).toBeNull();
+      expect(resolved).not.toBeNull();
+      expect(resolved).toHaveLength(2);
+      expect(resolved![0]!.x).toBeCloseTo(0.86, 6);
+      expect(resolved![0]!.y).toBeCloseTo(0.1, 6);
+      expect(resolved![0]!.width).toBeCloseTo(0.12, 6);
+      expect(resolved![0]!.height).toBeCloseTo(0.04, 6);
+      expect(resolved![0]!.width).toBeLessThan(0.95);
+      expect(resolved![1]!.x).toBeCloseTo(0.01, 6);
+      expect(resolved![1]!.y).toBeCloseTo(0.3, 6);
+      expect(resolved![1]!.width).toBeCloseTo(0.18, 6);
+      expect(resolved![1]!.height).toBeCloseTo(0.04, 6);
+      expect(resolved![1]!.width).toBeLessThan(0.95);
+      expect(
+        resolveAnnotationRect({
+          annotation: annotation({ kind, anchor_text: "春はあけぼ" }),
+          questionAnswerArea: null,
+          recognitions: [recognitionWithBoxes(multiLineBoxes)],
+        }),
+      ).toBeNull();
     }
   });
 
@@ -329,12 +349,15 @@ describe("resolveAnnotationRect (INV-052–061)", () => {
     expect(crossRes?.height).toBeCloseTo(0.12, 6);
     expect(crossRes!.height).toBeLessThan(0.95);
 
-    const ulineRes = resolveAnnotationRect({
+    const ulineRes = resolveAnnotationRects({
       annotation: annotation({ kind: "underline", anchor_text: "春はあけ" }),
       questionAnswerArea: null,
       recognitions: [recognitionWithBoxes(verticalBoxes)],
     });
-    expect(ulineRes).toBeNull();
+    expect(ulineRes).not.toBeNull();
+    expect(ulineRes).toHaveLength(2);
+    expect(ulineRes![0]!.width).toBeLessThan(0.95);
+    expect(ulineRes![1]!.width).toBeLessThan(0.95);
   });
 
   it("INV-058: shortest run wins", () => {

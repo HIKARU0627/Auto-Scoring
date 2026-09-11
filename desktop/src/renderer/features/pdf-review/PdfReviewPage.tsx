@@ -18,7 +18,7 @@ import {
   loadAnswerImageUrl,
   type QuestionReviewData,
   type SubmissionPageState,
-} from "../../api/pdf-review-data.js";
+} from "../../core/pdf-review-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   buildDependencyDagLayout,
@@ -39,6 +39,10 @@ import {
   expectedReviewVersion,
   recognitionsForDisplayedAttempt,
 } from "../../core/question-review-state.js";
+import {
+  unreadableBoxesFromOcr,
+  latestOcrRecognition,
+} from "../../core/unreadable-spans.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { AnswerCropView } from "./AnswerCropView.js";
@@ -63,6 +67,23 @@ type LoadState =
 
 function statusIcon(status: QuestionStatusKey): string {
   return QuestionStatus[status].icon;
+}
+
+const ENTER_ACTIVATES_LOCALLY =
+  'button, a[href], input, textarea, select, [role="button"], [contenteditable="true"]';
+
+/**
+ * Enter on a focused control belongs to that control, not the page (Issue #196).
+ *
+ * The page-wide listener below runs wherever focus is, so without this guard
+ * Tab-ing to 却下/再判定/取り消し/続きを表示/戻る and pressing Enter would approve
+ * the question instead of running the button the reviewer actually reached.
+ * Returning early leaves the key to the browser's own activation.
+ */
+function enterActivatesLocally(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element && target.closest(ENTER_ACTIVATES_LOCALLY) != null
+  );
 }
 
 export function PdfReviewPage(): JSX.Element {
@@ -259,6 +280,8 @@ export function PdfReviewPage(): JSX.Element {
     selectedData?.annotations ?? [],
     selectedGrade,
   );
+  const unreadableBoxes = unreadableBoxesFromOcr(selectedRecognitions);
+  const ocrRecognition = latestOcrRecognition(selectedRecognitions);
 
   const selectedJob =
     jobs.find((j) => j.question_id === selectedQuestion?.id) ?? null;
@@ -366,6 +389,9 @@ export function PdfReviewPage(): JSX.Element {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+        if (enterActivatesLocally(event.target)) {
+          return;
+        }
         if (!canApprove) {
           if (blockedOnUnread) {
             materialRead.revealRest();
@@ -523,7 +549,7 @@ export function PdfReviewPage(): JSX.Element {
             <aside
               ref={inspectorRef}
               data-testid="review-inspector"
-              className="flex w-80 shrink-0 flex-col gap-md overflow-y-auto max-h-[80vh] border border-outline-variant rounded-md p-md"
+              className="flex w-80 shrink-0 flex-col gap-md overflow-y-auto max-h-inspector border border-outline-variant rounded-md p-md"
             >
               <div data-testid="review-question-state">
                 <span className="text-body-medium">
@@ -566,10 +592,30 @@ export function PdfReviewPage(): JSX.Element {
                       AIは、解答欄に何も書かれていないと報告しました。本当に無記入ならこの0点は正しく、切り出しがずれている場合はテスト設定の回答欄を見直してください。
                     </p>
                   ) : null}
-                  {selectedRecognitions[0] != null ? (
+                  {unreadableBoxes.length > 0 ? (
+                    <div
+                      data-testid="review-unreadable-spans-notice"
+                      className="rounded-md border border-attention/40 bg-attention-container/20 p-sm text-body-small"
+                    >
+                      OCRが読めなかった箇所が {unreadableBoxes.length}{" "}
+                      か所あります（空欄とは別です）。切り出し画像のハイライトと、下の一覧で位置を確認してください。
+                      <ul className="mt-xs list-disc pl-lg">
+                        {unreadableBoxes.map((box, index) => (
+                          <li
+                            key={`${box.x}-${box.y}-${index}`}
+                            data-testid={`review-unreadable-span-${index}`}
+                          >
+                            {index + 1} 番目の語
+                            {box.text.length > 0 ? `（${box.text}）` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {ocrRecognition != null ? (
                     <ConfidenceBadge
                       label="OCR文字認識信頼度"
-                      confidence={selectedRecognitions[0].confidence}
+                      confidence={ocrRecognition.confidence}
                       testId="review-recognition-confidence"
                     />
                   ) : null}
@@ -589,7 +635,10 @@ export function PdfReviewPage(): JSX.Element {
                 </div>
               ) : null}
 
-              <AnswerCropView imageUrl={answerImageUrl} />
+              <AnswerCropView
+                imageUrl={answerImageUrl}
+                unreadableBoxes={unreadableBoxes}
+              />
 
               <label className="flex flex-col gap-xs">
                 <span className="text-ui-label">メモ</span>

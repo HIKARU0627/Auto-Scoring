@@ -17,6 +17,7 @@ export interface AnswerAreaEditorData {
   readonly profile: ProfileResponse | null;
   readonly layout: AnswerLayoutResponse | null;
   readonly pageImages: readonly PageImageState[];
+  readonly layoutPages: readonly components["schemas"]["PageGeometryResponse"][];
 }
 
 const DEFAULT_IMAGE_SCALE = 2;
@@ -55,6 +56,27 @@ export async function loadAnswerAreaEditorData(
   const layout = layoutResult.error === undefined ? layoutResult.data : null;
 
   const pageCount = profile?.pages.length ?? layout?.page_count ?? 0;
+  let layoutPages: readonly components["schemas"]["PageGeometryResponse"][] =
+    [];
+  if (profile !== null) {
+    layoutPages = profile.pages.map((page, page_index) => ({
+      page_index,
+      displayed_width: page.width_pt,
+      displayed_height: page.height_pt,
+      rotation: 0,
+    }));
+  } else if (pageCount > 0) {
+    const pagesResult = await client.GET(
+      "/tests/{test_id}/answer-layout/pages",
+      {
+        params: { path: { test_id: testId } },
+      },
+    );
+    if (pagesResult.error === undefined) {
+      layoutPages = pagesResult.data.pages;
+    }
+  }
+
   const pageImages: PageImageState[] = [];
 
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
@@ -77,7 +99,7 @@ export async function loadAnswerAreaEditorData(
       continue;
     }
     const blob = imageResult.data as Blob;
-    const objectUrl = URL.createObjectURL(blob);
+    const objectUrl = await imageDisplayUrl(blob);
     const pixelSize = await readImagePixelSize(objectUrl);
     pageImages.push({
       objectUrl,
@@ -86,7 +108,22 @@ export async function loadAnswerAreaEditorData(
     });
   }
 
-  return { profile, layout, pageImages };
+  return { profile, layout, pageImages, layoutPages };
+}
+
+async function imageDisplayUrl(blob: Blob): Promise<string> {
+  // Electron ships the renderer from file://; blob: object URLs fail to decode in
+  // <img> there while data URLs work (Issue #255 E2E).
+  if (typeof window !== "undefined" && window.location.protocol === "file:") {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    const contentType = blob.type.length > 0 ? blob.type : "image/png";
+    return `data:${contentType};base64,${btoa(binary)}`;
+  }
+  return URL.createObjectURL(blob);
 }
 
 async function readImagePixelSize(
