@@ -391,4 +391,7 @@ jobs:
         env:
           PACKAGE_RESULT: ${{ needs.package.result }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # TEMPORARY (Issue #312 mutation test): exercise the main reporting
+          # path from this PR. Removed before merge.
+          PACKAGE_ALARM_FORCE_MAIN: "1"
         run: node scripts/package-alarm.mjs

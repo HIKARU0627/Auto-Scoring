@@ -44,6 +44,12 @@ const DEFAULT_API_BASE = "https://api.github.com";
 
 /** True only for the `main` push this alarm is allowed to open issues for. */
 export function isMainPush(env) {
+  // TEMPORARY (Issue #312 mutation test): let a pull request exercise the
+  // `main` reporting path, because a `workflow_run`/`main` push cannot be
+  // produced from a feature branch. Removed before merge.
+  if (env.PACKAGE_ALARM_FORCE_MAIN === "1") {
+    return true;
+  }
   return (
     env.GITHUB_EVENT_NAME === "push" && env.GITHUB_REF === "refs/heads/main"
   );
