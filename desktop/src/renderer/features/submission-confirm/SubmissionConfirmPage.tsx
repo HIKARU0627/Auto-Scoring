@@ -31,10 +31,8 @@ import {
 } from "../../core/ai-usage-display.js";
 import type { components } from "../../api/generated/schema.js";
 import { pdfReview, submissionConfirm } from "../../core/app-routes.js";
-import {
-  deriveQuestionStatus,
-  QuestionStatus,
-} from "../../core/question-status.js";
+import { deriveQuestionStatus } from "../../core/question-status.js";
+import { QuestionStatusBadge } from "../../core/QuestionStatusBadge.js";
 import {
   displayGrade,
   effectiveReview,
@@ -638,9 +636,7 @@ export function SubmissionConfirmPage(): JSX.Element {
                       <h2 className="flex-1 text-title-medium font-medium">
                         問{question.number}
                       </h2>
-                      <span className="text-ui-label">
-                        {QuestionStatus[statusKey].label}
-                      </span>
+                      <QuestionStatusBadge status={statusKey} />
                       <span
                         data-testid={`confirm-reach-${question.id}`}
                         className={`text-ui-label ${reached ? "text-success" : "text-attention"}`}
