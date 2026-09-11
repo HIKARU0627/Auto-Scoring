@@ -41,3 +41,17 @@ export function unassignedAnswerAreas(input: {
       !input.knownQuestionNumbers.has(region.label),
   );
 }
+
+/**
+ * Whether profile confirm must wait until the answer sheet is visible on screen.
+ * Empty region lists do not open the gate — that is a separate requirement.
+ */
+export function mustSeeAnswerSheetFirst(input: {
+  answerSheetVisible: boolean;
+  regions: readonly RegionModel[];
+}): boolean {
+  return (
+    !input.answerSheetVisible &&
+    input.regions.some((region) => region.kind === "answer_area")
+  );
+}

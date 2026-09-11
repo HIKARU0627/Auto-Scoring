@@ -85,7 +85,7 @@ Flutter 版の cut-over（`app/` 削除）に向け、Electron (`desktop/`) 側�
      1. TypeScript/JavaScript ロジック内の配列インデックスアクセス（`entries[0]` 等）や正規表現・演算子に含まれる角括弧: スタイリングではなくデータ処理・ビジネスロジックであるため。
      2. PDF 座標計算・ドラッグ描画における動的絶対配置（`style={{ left, top, width, height }}`）および進捗率のパーセンテージ幅（`style={{ width: \`\${pct}%\` }}`）: 画面の寸法規律ではなく、PDF ページの動的幾何変換（`normalized-coordinates`）やランタイム状態の計算値であるため。
 2. **既存残存違反の扱い（厳密な同一性 allowlist 方式）**:
-   - 件数ベースの baseline は採らず、`(file, symbol, rule, literal, line)` の組で 1 件ずつ厳密に列挙した allowlist で許可する。これにより既存違反があるファイル内でも未登録の新規違反は即座に赤となる。
+   - 件数ベースの baseline は採らず、`(file, symbol, rule, literal)` の組で 1 件ずつ列挙した allowlist で許可する。`line` は記録時点の参考値であり照合キーには含めない（`features/` は並行編集で行番号が動くため）。これにより既存違反があるファイル内でも、列挙に無い新規違反（新しいリテラル）は即座に赤となる。
    - allowlist のエントリ数は定数上限（27 件）で拘束され、勝手に追加するとテストが赤になる（減る方向のみ許可）。
    - 各エントリの `removalIssue` には撤去先の Issue を付与する。司令塔が起票するまで番号を発明せず `TODO(owner)` を置く。他人のファイルを勝手に書き換えて解消せず、allowlist で隔離して撤去 Issue を通じて計画的に解消する。
 

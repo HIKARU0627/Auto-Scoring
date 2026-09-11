@@ -323,17 +323,19 @@ const RE_NUMERIC_SPACING =
 const RE_BARE_ROUNDED = /(?<=[\s"`'])rounded(?=[\s"`']|$)/g;
 
 /**
- * 違反の同一性キー。`line` まで含めるのは、同じファイル・同じシンボルにある
- * 同種リテラルでも、別の行の違反を別エントリとして厳密に区別するためである。
+ * 違反の同一性キー。`features/` は他のワーカーが並行して編集しており、行番号は
+ * 少しの追加で簡単にずれる。行番号をキーに含めると、既存違反がそのままでも
+ * 無関係な編集のたびに allowlist が不一致になってしまうため、ファイルパスと
+ * 「どの違反か」（シンボル・規則・リテラル）で同一性を判定する。新しいリテラル
+ * を足せば別キーになるので、未登録の新規違反はこれまで通り赤くなる。
  */
 function violationKey(v: {
   file: string;
   symbol: string;
   rule: string;
   literal: string;
-  line: number;
 }): string {
-  return `${v.file}::${v.symbol}::${v.rule}::${v.literal}::${v.line}`;
+  return `${v.file}::${v.symbol}::${v.rule}::${v.literal}`;
 }
 
 /**
