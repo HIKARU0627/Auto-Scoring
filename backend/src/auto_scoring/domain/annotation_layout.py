@@ -56,44 +56,26 @@ def recognitions_up_to_attempt(
     return [r for r in recognitions if r.created_at <= attempt_created_at]
 
 
-def resolve_annotation_rect(
+def resolve_annotation_rects(
     annotation: Annotation,
     *,
     question: Question,
     recognitions: Sequence[RecognitionResult],
-) -> NormalizedRect | None:
-    """Resolve ``annotation`` to the page-normalized rect to draw it at, per
-    simplified-design-specification.md §12.1-12.4:
+) -> list[NormalizedRect] | None:
+    """Resolve ``annotation`` to the page-normalized rect(s) to draw it at.
 
-    1. An explicit ``rect`` is used as-is.
-    2. Otherwise, an ``anchor_text`` is looked up against ``recognitions``'
-       OCR bounding boxes (§12.3, `_find_anchor_text_rect`), newest attempt
-       first, and mapped from crop-relative into page-relative space through
-       ``question.answer_area`` (§12.3, ``_crop_relative_to_page``).
-    3. Anything still unresolved returns ``None`` -- **nothing is drawn on
-       the answer**, and the caller says so in the question's comment area
-       instead (§12.4).
-
-    **There is deliberately no fixed-position fallback** (Issue #141). Until
-    then a CIRCLE/CROSS/TRIANGLE/SCORE whose anchor matched nothing was drawn
-    at ``question.score_area``, on the grounds that §12.2 places
-    question-level symbols there. Two different things were being conflated:
-    "the AI meant a mark about the whole question" and "we could not find the
-    words the AI meant". In the live re-verification every one of the
-    fourteen annotations took this path, and since Issue #120 derives
-    ``score_area`` as a band the height of the answer box, the result was a
-    red ``×`` cutting across a quarter of the page -- on top of the score,
-    and reading as though the whole answer had been struck out over an error
-    in one term of one formula. §12.4 already said what to do instead
-    ("無理に本文付近へ配置しない"): a position nobody knows is not a position.
+    Returns a one-element list for single-rect kinds (including CROSS on the
+    anchor's first line only), multiple rects for UNDERLINE/BOX spanning line
+    breaks (Issue #256), or ``None`` when nothing may be drawn on the answer
+    (§12.4). See ``resolve_annotation_rect`` for the single-rect view.
 
     ``recognitions`` must already be scoped to the attempt being exported
     (`recognitions_up_to_attempt`).
     """
     if annotation.rect is not None:
-        return annotation.rect
+        return [annotation.rect]
     if annotation.anchor_text:
-        matched = _find_anchor_text_rect(
+        matched = _find_anchor_text_rects(
             annotation.anchor_text,
             recognitions,
             _effective_answer_area(question.answer_area),
@@ -102,6 +84,31 @@ def resolve_annotation_rect(
         if matched is not None:
             return matched
     return None
+
+
+def resolve_annotation_rect(
+    annotation: Annotation,
+    *,
+    question: Question,
+    recognitions: Sequence[RecognitionResult],
+) -> NormalizedRect | None:
+    """Resolve ``annotation`` to a single page-normalized rect, per
+    simplified-design-specification.md §12.1-12.4.
+
+    Convenience wrapper around `resolve_annotation_rects`: returns the sole
+    rect when exactly one was resolved, otherwise ``None`` (including
+    multi-rect UNDERLINE/BOX -- callers that must draw every line should use
+    `resolve_annotation_rects` instead).
+
+    **There is deliberately no fixed-position fallback** (Issue #141).
+
+    ``recognitions`` must already be scoped to the attempt being exported
+    (`recognitions_up_to_attempt`).
+    """
+    rects = resolve_annotation_rects(annotation, question=question, recognitions=recognitions)
+    if rects is None or len(rects) != 1:
+        return None
+    return rects[0]
 
 
 def _effective_answer_area(answer_area: NormalizedRect | None) -> NormalizedRect:
@@ -171,13 +178,13 @@ def _normalized_for_anchor(text: str) -> str:
     return _WHITESPACE.sub("", folded)
 
 
-def _find_anchor_text_rect(
+def _find_anchor_text_rects(
     anchor_text: str,
     recognitions: Sequence[RecognitionResult],
     answer_area: NormalizedRect,
     *,
     kind: AnnotationKind | str | None = None,
-) -> NormalizedRect | None:
+) -> list[NormalizedRect] | None:
     """The page-normalized rect of the OCR boxes reading ``anchor_text``,
     searching ``recognitions`` newest-first (a stale earlier attempt can
     report the same text at a different position).
@@ -212,8 +219,21 @@ def _find_anchor_text_rect(
     for recognition in reversed(recognitions):
         matched = _shortest_box_run(needle, recognition.boxes, kind=kind)
         if matched is not None:
-            return _crop_relative_to_page(matched, answer_area)
+            return [_crop_relative_to_page(rect, answer_area) for rect in matched]
     return None
+
+
+def _group_boxes_by_line(boxes: Sequence[BoundingBox]) -> list[list[BoundingBox]]:
+    """Split consecutive OCR boxes into line groups in reading order."""
+    if not boxes:
+        return []
+    groups: list[list[BoundingBox]] = [[boxes[0]]]
+    for index in range(1, len(boxes)):
+        if _is_same_line(boxes[index - 1], boxes[index]):
+            groups[-1].append(boxes[index])
+        else:
+            groups.append([boxes[index]])
+    return groups
 
 
 def _is_same_line(b1: BoundingBox, b2: BoundingBox) -> bool:
@@ -252,15 +272,15 @@ def _shortest_box_run(
     boxes: Sequence[BoundingBox],
     *,
     kind: AnnotationKind | str | None = None,
-) -> NormalizedRect | None:
-    """The union rect of the fewest consecutive ``boxes`` whose joined,
+) -> list[NormalizedRect] | None:
+    """The union rect(s) of the fewest consecutive ``boxes`` whose joined,
     normalized text contains ``needle`` -- or ``None`` if no run does.
 
     When the matched run spans across a line break:
     - Single bounding boxes across line breaks are forbidden (Issue #260).
-    - For CROSS (×): restricted to the boxes in the anchor's first token line.
-    - For other kinds (UNDERLINE, BOX, etc.): returns ``None``, evacuating to
-      the comment area per §12.4 (multi-rect support deferred to Issue #256).
+    - For CROSS (×): one rect from the anchor's first token line only.
+    - For UNDERLINE / BOX: one rect per line group (Issue #256).
+    - For other kinds: ``None`` (§12.4 evacuate).
     """
     texts = [_normalized_for_anchor(box.text) for box in boxes]
     limit = _run_length_limit(needle)
@@ -282,20 +302,19 @@ def _shortest_box_run(
         return None
 
     matched_boxes = list(boxes[best[0] : best[1] + 1])
-    first_line_boxes = [matched_boxes[0]]
-    for i in range(1, len(matched_boxes)):
-        if _is_same_line(matched_boxes[i - 1], matched_boxes[i]):
-            first_line_boxes.append(matched_boxes[i])
-        else:
-            break
-
-    spans_line_break = len(first_line_boxes) < len(matched_boxes)
-    if not spans_line_break:
-        return _union([box.rect for box in matched_boxes])
+    line_groups = _group_boxes_by_line(matched_boxes)
+    if len(line_groups) == 1:
+        return [_union([box.rect for box in matched_boxes])]
 
     is_cross = kind == AnnotationKind.CROSS or (isinstance(kind, str) and kind.lower() == "cross")
     if is_cross:
-        return _union([box.rect for box in first_line_boxes])
+        return [_union([box.rect for box in line_groups[0]])]
+
+    is_underline_or_box = kind in (AnnotationKind.UNDERLINE, AnnotationKind.BOX) or (
+        isinstance(kind, str) and kind.lower() in ("underline", "box")
+    )
+    if is_underline_or_box:
+        return [_union([box.rect for box in group]) for group in line_groups]
     return None
 
 

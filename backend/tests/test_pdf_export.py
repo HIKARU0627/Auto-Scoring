@@ -568,13 +568,11 @@ class TestBuildExportMarks:
         assert exported.marks == (), "nothing may be drawn on the answer sheet"
         assert exported.unplaced_notes == ("コメント",)
 
-    def test_cross_line_anchor_annotation_evacuates_to_note_page_with_unplaced_suffix(
+    def test_cross_line_underline_draws_per_line_marks_on_answer_sheet(
         self,
     ) -> None:
-        """Issue #260: An annotation spanning across line breaks whose position
-        cannot be placed on a single line (such as UNDERLINE) returns None from
-        resolve_annotation_rect, draws no mark on the answer sheet, and outputs
-        to unplaced_notes with the '（位置特定できず）' suffix."""
+        """Issue #256: UNDERLINE spanning a line break draws one mark per line on
+        the answer sheet; the comment is placed without the unplaced suffix."""
         grade = _grade()
         annotation = Annotation(
             id="a-1",
@@ -624,10 +622,10 @@ class TestBuildExportMarks:
             recognitions=[recognition],
         )
 
-        assert exported.marks == (), (
-            "no shape marks may be drawn on the answer sheet for cross-line underline"
-        )
-        assert exported.unplaced_notes == ("＿ 要確認の表現（位置特定できず）",)
+        assert len(exported.marks) == 2
+        assert all(mark.kind is AnnotationKind.UNDERLINE for mark in exported.marks)
+        assert all(mark.rect.width < 0.95 for mark in exported.marks)
+        assert exported.unplaced_notes == ("＿ 要確認の表現",)
 
     def test_only_annotations_and_recognitions_from_the_grade_s_own_attempt_are_used(
         self,
