@@ -1,6 +1,9 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 
-import { electronLaunchArgs } from "./electron-launch";
+import {
+  electronLaunchArgs,
+  isolatedSidecarLaunchEnv,
+} from "./electron-launch";
 
 /**
  * Issue #264 acceptance: blob URLs are allowed by img-src so page and answer
@@ -9,7 +12,10 @@ import { electronLaunchArgs } from "./electron-launch";
 test("blob image URLs load in the renderer", async () => {
   test.setTimeout(60_000);
 
-  const app = await electron.launch({ args: electronLaunchArgs() });
+  const app = await electron.launch({
+    args: electronLaunchArgs(),
+    env: isolatedSidecarLaunchEnv(),
+  });
 
   try {
     const page = await app.firstWindow();

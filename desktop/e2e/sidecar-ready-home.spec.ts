@@ -1,6 +1,9 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 
-import { electronLaunchArgs } from "./electron-launch";
+import {
+  electronLaunchArgs,
+  isolatedSidecarLaunchEnv,
+} from "./electron-launch";
 
 /**
  * Issue #264 acceptance: the sidecar is ready, API data loads on the home
@@ -9,7 +12,10 @@ import { electronLaunchArgs } from "./electron-launch";
 test("sidecar becomes ready and home dashboard loads real API data", async () => {
   test.setTimeout(120_000);
 
-  const app = await electron.launch({ args: electronLaunchArgs() });
+  const app = await electron.launch({
+    args: electronLaunchArgs(),
+    env: isolatedSidecarLaunchEnv(),
+  });
 
   try {
     const page = await app.firstWindow();

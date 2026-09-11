@@ -1,10 +1,12 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import { test, expect, _electron as electron } from "@playwright/test";
 
-import { electronLaunchArgs, PACKAGE_ROOT } from "./electron-launch";
+import {
+  electronLaunchArgs,
+  isolatedSidecarLaunchEnv,
+  PACKAGE_ROOT,
+} from "./electron-launch";
 
 const FIXTURE_ROOT = path.join(
   PACKAGE_ROOT,
@@ -43,18 +45,9 @@ async function waitForHomeReady(page: ElectronPage): Promise<void> {
 }
 
 function e2eLaunchEnv(): Record<string, string> {
-  const appDataDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "auto-scoring-e2e-app-data-"),
-  );
-  return {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
-      ),
-    ),
-    AUTO_SCORING_E2E_APP_DATA: appDataDir,
+  return isolatedSidecarLaunchEnv({
     AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
-  };
+  });
 }
 
 async function createDraftTest(page: ElectronPage): Promise<string> {
