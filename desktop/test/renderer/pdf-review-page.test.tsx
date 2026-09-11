@@ -1,12 +1,23 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 
 import {
   buildGrade,
+  buildJob,
   buildQuestion,
   buildReviewableGrade,
   renderPdfReview,
 } from "./support/pdf-review-harness.js";
+import {
+  JOB_POLL_INTERVAL_MS,
+  JOB_POLL_MAX_ATTEMPTS,
+} from "../../src/renderer/features/pdf-review/PdfReviewPage.js";
 
 describe("PdfReviewPage routing (INV-014)", () => {
   it("INV-014: opens the question specified in the URL", async () => {
@@ -428,5 +439,151 @@ describe("three-place status consistency (INV-070)", () => {
     expect(rail.getAttribute("title")).toBe(dagLabel);
     const inspector = within(screen.getByTestId("review-inspector"));
     expect(inspector.getByText(/問3.*確認待ち/)).toBeDefined();
+  });
+});
+
+const JOBS_PATH = "/submissions/{submission_id}/jobs";
+
+function countJobReads(client: { GET: unknown }): number {
+  const spy = client.GET as ReturnType<typeof vi.fn>;
+  return spy.mock.calls.filter((call) => call[0] === JOBS_PATH).length;
+}
+
+/** Drains the mount/reload promise chains under fake timers. */
+async function flushAsync(): Promise<void> {
+  await act(async () => {
+    for (let tick = 0; tick < 12; tick += 1) {
+      await Promise.resolve();
+    }
+  });
+}
+
+describe("grading completion follow (Issue #319)", () => {
+  it("follows a running grading job to finished without any user action", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = buildJob({ state: "running", usable: null });
+      const finished = buildJob({ state: "succeeded", usable: true });
+      const view = renderPdfReview({
+        jobsSequence: [[running], [running], [finished]],
+        grades: [],
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const approve = screen.getByTestId(
+        "review-approve-button",
+      ) as HTMLButtonElement;
+      expect(approve.disabled).toBe(true);
+      expect(screen.getByTestId("review-approve-reason").textContent).toContain(
+        "AIが採点中",
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS);
+      });
+      expect(approve.disabled).toBe(true);
+
+      // The next scheduled poll sees the finished job. Nothing was clicked.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS);
+      });
+      expect(view).toBeDefined();
+      expect(approve.disabled).toBe(false);
+      expect(screen.queryByTestId("review-approve-reason")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reloads on demand even if automatic following never fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = buildJob({ state: "running", usable: null });
+      const finished = buildJob({ state: "succeeded", usable: true });
+      renderPdfReview({
+        jobsSequence: [[running], [finished]],
+        grades: [],
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const approve = screen.getByTestId(
+        "review-approve-button",
+      ) as HTMLButtonElement;
+      expect(approve.disabled).toBe(true);
+
+      fireEvent.click(screen.getByTestId("review-refresh-button"));
+      await flushAsync();
+      const refreshedApprove = screen.getByTestId(
+        "review-approve-button",
+      ) as HTMLButtonElement;
+      expect(refreshedApprove.disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not keep polling once grading is already finished", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = renderPdfReview({});
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const before = countJobReads(view.client);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS * 5);
+      });
+      expect(countJobReads(view.client)).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the cutoff and says so instead of stopping silently", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = buildJob({ state: "running", usable: null });
+      const view = renderPdfReview({ jobsSequence: [[running]], grades: [] });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByTestId("review-refresh-stale-notice")).toBeNull();
+
+      for (let tick = 0; tick < JOB_POLL_MAX_ATTEMPTS; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS);
+        });
+      }
+      expect(screen.getByTestId("review-refresh-stale-notice")).toBeDefined();
+
+      const afterGiveUp = countJobReads(view.client);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS * 5);
+      });
+      expect(countJobReads(view.client)).toBe(afterGiveUp);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows 問1 once even though the stored number already carries the prefix", async () => {
+    renderPdfReview({
+      questions: [buildQuestion({ id: "q-1", number: "問1" })],
+      jobs: [buildJob({ state: "succeeded", usable: true })],
+      grades: [buildGrade()],
+    });
+
+    const rail = await screen.findByTestId("review-rail-q-1");
+    expect(rail.textContent).toContain("問1");
+    expect(rail.textContent).not.toContain("問問1");
+    expect(rail.getAttribute("aria-label")).not.toContain("問問1");
+    expect(
+      screen.getByTestId("review-question-state").textContent,
+    ).not.toContain("問問1");
   });
 });

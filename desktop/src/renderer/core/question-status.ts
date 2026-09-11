@@ -58,6 +58,23 @@ export function labelWaitingFor(
   }
 }
 
+/**
+ * Whether a grading job has neither succeeded nor reached a terminal failure
+ * state (Issue #319).
+ *
+ * The review screen polls only while this is true, and the mapping from
+ * `job.state` to a question status belongs here so feature screens do not
+ * hand-roll it (INV-006).
+ */
+export function jobIsInProgress(job: JobResponse | null | undefined): boolean {
+  if (job == null) {
+    return false;
+  }
+  return (
+    job.state === "queued" || job.state === "running" || job.state === "blocked"
+  );
+}
+
 export function resolveQuestionWait(
   questionId: string,
   lookups: {
