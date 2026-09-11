@@ -148,3 +148,41 @@ describe("INV-201-02: confidence must not enter confirmation logic", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("INV-005: the confirmation rule lives in core/submission-confirmation", () => {
+  it("the confirm screen reads the core rule instead of re-deriving it", () => {
+    const source = readFileSync(
+      path.join(
+        import.meta.dirname,
+        "../src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
+      ),
+      "utf8",
+    );
+
+    // 確定してよいかの判定は core に置く（INV-005）。画面が条件を書き直したら、
+    // この 2 つの参照が消えるか、core を経由しない判定が現れる。
+    expect(source).toContain('from "../../core/submission-confirmation.js"');
+    expect(source).toContain("createSubmissionConfirmation(");
+    expect(source).toContain("runSubmissionConfirmation(");
+    expect(source).toContain("confirmation.canConfirm");
+    expect(source).toContain("confirmation.blocker");
+  });
+});
+
+describe("INV-157: a confirmed question no longer needs a human score", () => {
+  it("does not block on a confirmed question that lacks an AI grade", () => {
+    const confirmation = createSubmissionConfirmation([
+      question({
+        questionId: "q-1",
+        number: "1",
+        isConfirmed: true,
+        aiGradeId: null,
+      }),
+      question({ questionId: "q-2", number: "2" }),
+    ]);
+
+    expect(confirmation.needingHumanScore.map((q) => q.number)).toEqual([]);
+    expect(confirmation.blocker).toBeNull();
+    expect(confirmation.canConfirm).toBe(true);
+  });
+});

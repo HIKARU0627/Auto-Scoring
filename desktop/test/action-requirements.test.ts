@@ -102,6 +102,27 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
     expect(ready).toEqual([]);
   });
 
+  it("INV-107: 疎通の理由は設定状態から決まり、資格情報ストアの状態を混ぜない", () => {
+    // 設定済みなら、ストアが使えなくても疎通は試せる。保存の理由が疎通へ
+    // 漏れると、確認できるのに確認できないと表示されてしまう。
+    expect(apiKeyVerifyRequirements({ busy: false, configured: true })).toEqual(
+      [],
+    );
+
+    const save = apiKeySaveRequirements({
+      busy: false,
+      credentialStoreAvailable: false,
+    });
+    expect(save.map((r) => r.id)).toEqual(["credential-store-unavailable"]);
+
+    // 未設定なら、ストアの可用性にかかわらず疎通の理由は変わらない。
+    expect(
+      apiKeyVerifyRequirements({ busy: false, configured: false }).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["api-key-not-configured"]);
+  });
+
   it("進行中しか理由にならない操作 (INV-102)", () => {
     expect(
       whileRunningRequirements({ running: true }).map((r) => r.id),
@@ -440,6 +461,37 @@ describe("action requirements: テスト設定 プロファイル (INV-110, INV-
                 }
               }
             }
+          }
+        }
+      }
+    }
+  });
+
+  it("INV-110: 確定が有効なら保存も有効（保存理由 ⊆ 確定理由の対偶）", () => {
+    // 包含（save ⊆ confirm）は上の網羅検査が押さえる。こちらは対偶側から、
+    // 「確定できて保存できない」状態が生まれないことを固定する。確定の理由から
+    // 1 つ落とすと、confirm が空なのに save が塞がるケースで赤くなる。
+    for (const busy of [false, true]) {
+      for (const alreadyConfirmed of [false, true]) {
+        for (const regionCount of [0, 1, 5]) {
+          const confirm = answerProfileConfirmRequirements({
+            busy,
+            alreadyConfirmed,
+            regionCount,
+            unassignedRegionCount: 0,
+            mustSeeAnswerSheetFirst: false,
+            answerSheetRegistered: true,
+          });
+          const save = answerProfileSaveRequirements({
+            busy,
+            hasRegions: regionCount > 0,
+            alreadyConfirmed,
+          });
+          if (confirm.length === 0) {
+            expect(
+              save,
+              `確定が有効(busy=${busy}, confirmed=${alreadyConfirmed}, regions=${regionCount})なのに保存が無効`,
+            ).toEqual([]);
           }
         }
       }
