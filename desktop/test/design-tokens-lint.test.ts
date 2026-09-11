@@ -16,7 +16,8 @@ const FEATURES_DIR = path.resolve(__dirname, "../src/renderer/features");
  * 2. Pre-existing violations strictly tracked by identity (file, symbol, literal, line).
  * 3. Allowlist count is capped at EXPECTED_ALLOWLIST_COUNT; entries can only decrease.
  * 4. File scan count is asserted (>= EXPECTED_MIN_FILES) to prevent false-green glob misses.
- * 5. Removal issue comment attached to each entry.
+ * 5. Removal issue attached to each entry; until the commander files it, the
+ *    placeholder `TODO(owner)` marks it as pending (no invented issue numbers).
  */
 
 export const EXPECTED_MIN_FILES = 24;
@@ -28,7 +29,10 @@ export interface AllowlistEntry {
   readonly rule: string;
   readonly literal: string;
   readonly line: number;
-  /** Issue tracking the removal of this violation (created by Commander) */
+  /**
+   * Issue tracking the removal of this violation. Until the commander files
+   * it, this is the placeholder `TODO(owner)` rather than an invented number.
+   */
   readonly removalIssue: string;
 }
 
@@ -44,7 +48,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "border-[3px]",
     line: 704,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
@@ -52,7 +56,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "border-[1.5px]",
     line: 704,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
@@ -60,7 +64,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "h-[14px]",
     line: 743,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
@@ -68,7 +72,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "w-[14px]",
     line: 743,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // home: ダッシュボード最大幅のリテラル
@@ -78,7 +82,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 91,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // intake: ページレイアウト幅制約のリテラル
@@ -88,7 +92,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[720px]",
     line: 399,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // pdf-review: インスペクター最大高さ制約のリテラル
@@ -98,7 +102,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-h-[80vh]",
     line: 531,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // review-queue: ダイアログバックドロップの背景色リテラル (bg-black/50)
@@ -108,7 +112,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "non-token-color",
     literal: "bg-black/50",
     line: 127,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/review-queue/ExportDialog.tsx",
@@ -116,7 +120,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "non-token-color",
     literal: "bg-black/50",
     line: 255,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // submission-queue: テーブルおよびチップのスタイルリテラル
@@ -126,7 +130,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 140,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
@@ -134,7 +138,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "numeric-spacing",
     literal: "py-0.5",
     line: 214,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
@@ -142,7 +146,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 214,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
@@ -150,7 +154,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 253,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // settings: APIキー設定タブのドット間隔リテラル
@@ -160,7 +164,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "numeric-spacing",
     literal: "mt-1.5",
     line: 387,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // settings: 取込テンプレートタブのテーブルスタイルリテラル
@@ -170,7 +174,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "numeric-spacing",
     literal: "mt-1",
     line: 267,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -178,7 +182,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 267,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -186,7 +190,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 322,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -194,7 +198,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "min-w-[120px]",
     line: 339,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -202,7 +206,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 339,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -210,7 +214,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 352,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -218,7 +222,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 371,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -226,7 +230,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 383,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // startup: 起動オーバーレイのエラーアイコンサイズと幅制約リテラル
@@ -236,7 +240,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[560px]",
     line: 72,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/startup/SidecarStartupOverlay.tsx",
@@ -244,7 +248,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "text-[48px]",
     line: 75,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 
   // submission-confirm: 答案確定画面の最大幅と切り抜き高さリテラル
@@ -254,7 +258,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 531,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
@@ -262,7 +266,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "h-[180px]",
     line: 590,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
   {
     file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
@@ -270,7 +274,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 681,
-    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
+    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
   },
 ];
 
@@ -318,91 +322,129 @@ const RE_NUMERIC_SPACING =
   /\b(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap)-[0-9]+(?:\.[0-9]+)?\b/g;
 const RE_BARE_ROUNDED = /(?<=[\s"`'])rounded(?=[\s"`']|$)/g;
 
+/**
+ * 違反の同一性キー。`line` まで含めるのは、同じファイル・同じシンボルにある
+ * 同種リテラルでも、別の行の違反を別エントリとして厳密に区別するためである。
+ */
+function violationKey(v: {
+  file: string;
+  symbol: string;
+  rule: string;
+  literal: string;
+  line: number;
+}): string {
+  return `${v.file}::${v.symbol}::${v.rule}::${v.literal}::${v.line}`;
+}
+
+/**
+ * 1 ファイル分のソースから違反を抽出する。走査器そのものを fixture で
+ * 正の対照検査できるよう、ファイル読み込みから分離している。
+ */
+function findViolationsInSource(
+  relativeFile: string,
+  content: string,
+): FoundViolation[] {
+  const violations: FoundViolation[] = [];
+  const lines = content.split("\n");
+
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx]!.trim();
+    if (
+      line.startsWith("//") ||
+      line.startsWith("*") ||
+      line.startsWith("/*")
+    ) {
+      continue;
+    }
+
+    const symbol = findEnclosingComponent(lines, idx);
+    const lineNum = idx + 1;
+
+    for (const m of line.matchAll(RE_NON_TOKEN_COLOR)) {
+      violations.push({
+        file: relativeFile,
+        symbol,
+        rule: "non-token-color",
+        literal: m[0],
+        line: lineNum,
+        snippet: line,
+      });
+    }
+
+    for (const m of line.matchAll(RE_HEX_COLOR)) {
+      violations.push({
+        file: relativeFile,
+        symbol,
+        rule: "hex-color",
+        literal: m[0],
+        line: lineNum,
+        snippet: line,
+      });
+    }
+
+    for (const m of line.matchAll(RE_ARBITRARY_BRACKET)) {
+      violations.push({
+        file: relativeFile,
+        symbol,
+        rule: "arbitrary-bracket",
+        literal: m[0],
+        line: lineNum,
+        snippet: line,
+      });
+    }
+
+    for (const m of line.matchAll(RE_NUMERIC_SPACING)) {
+      violations.push({
+        file: relativeFile,
+        symbol,
+        rule: "numeric-spacing",
+        literal: m[0],
+        line: lineNum,
+        snippet: line,
+      });
+    }
+
+    if (line.includes("className") || line.includes("rounded")) {
+      for (const m of line.matchAll(RE_BARE_ROUNDED)) {
+        if (!/rounded-(?:sm|md|lg|full|none)/.test(line)) {
+          violations.push({
+            file: relativeFile,
+            symbol,
+            rule: "bare-rounded",
+            literal: m[0],
+            line: lineNum,
+            snippet: line,
+          });
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * パス区切りを `/` に正規化する。Windows の `path.relative` は区切りに `\` を
+ * 返すが、allowlist は `/` で書かれている。正規化しないと Windows CI だけ
+ * 全エントリが不一致になる（PR #282 で発生した赤の原因）。
+ */
+function toPosixPath(relativePath: string): string {
+  return relativePath.split(/[\\/]/).join("/");
+}
+
 function scanFeatures(): {
   files: string[];
   violations: FoundViolation[];
 } {
+  const desktopRoot = path.resolve(__dirname, "..");
   const files = walkFiles(FEATURES_DIR).sort();
   const violations: FoundViolation[] = [];
-  const desktopRoot = path.resolve(__dirname, "..");
 
   for (const fpath of files) {
-    const rel = path.relative(desktopRoot, fpath);
-    const content = fs.readFileSync(fpath, "utf8");
-    const lines = content.split("\n");
-
-    for (let idx = 0; idx < lines.length; idx++) {
-      const line = lines[idx]!.trim();
-      if (
-        line.startsWith("//") ||
-        line.startsWith("*") ||
-        line.startsWith("/*")
-      ) {
-        continue;
-      }
-
-      const symbol = findEnclosingComponent(lines, idx);
-      const lineNum = idx + 1;
-
-      for (const m of line.matchAll(RE_NON_TOKEN_COLOR)) {
-        violations.push({
-          file: rel,
-          symbol,
-          rule: "non-token-color",
-          literal: m[0],
-          line: lineNum,
-          snippet: line,
-        });
-      }
-
-      for (const m of line.matchAll(RE_HEX_COLOR)) {
-        violations.push({
-          file: rel,
-          symbol,
-          rule: "hex-color",
-          literal: m[0],
-          line: lineNum,
-          snippet: line,
-        });
-      }
-
-      for (const m of line.matchAll(RE_ARBITRARY_BRACKET)) {
-        violations.push({
-          file: rel,
-          symbol,
-          rule: "arbitrary-bracket",
-          literal: m[0],
-          line: lineNum,
-          snippet: line,
-        });
-      }
-
-      for (const m of line.matchAll(RE_NUMERIC_SPACING)) {
-        violations.push({
-          file: rel,
-          symbol,
-          rule: "numeric-spacing",
-          literal: m[0],
-          line: lineNum,
-          snippet: line,
-        });
-      }
-
-      if (line.includes("className") || line.includes("rounded")) {
-        for (const m of line.matchAll(RE_BARE_ROUNDED)) {
-          if (!/rounded-(?:sm|md|lg|full|none)/.test(line)) {
-            violations.push({
-              file: rel,
-              symbol,
-              rule: "bare-rounded",
-              literal: m[0],
-              line: lineNum,
-              snippet: line,
-            });
-          }
-        }
-      }
-    }
+    const rel = toPosixPath(path.relative(desktopRoot, fpath));
+    violations.push(
+      ...findViolationsInSource(rel, fs.readFileSync(fpath, "utf8")),
+    );
   }
 
   return { files, violations };
@@ -417,6 +459,16 @@ describe("Design tokens static lint test under src/renderer/features (INV-080)",
     ).toBeGreaterThanOrEqual(EXPECTED_MIN_FILES);
   });
 
+  it("normalizes Windows path separators to POSIX before matching the allowlist", () => {
+    // Windows CI だけ全エントリが不一致になった回帰の再発防止。
+    expect(toPosixPath("src\\renderer\\features\\home\\HomePage.tsx")).toBe(
+      "src/renderer/features/home/HomePage.tsx",
+    );
+    expect(toPosixPath("src/renderer/features/home/HomePage.tsx")).toBe(
+      "src/renderer/features/home/HomePage.tsx",
+    );
+  });
+
   it("allowlist count does not increase beyond the baseline cap", () => {
     expect(
       ALLOWLIST.length,
@@ -424,19 +476,39 @@ describe("Design tokens static lint test under src/renderer/features (INV-080)",
     ).toBeLessThanOrEqual(EXPECTED_ALLOWLIST_COUNT);
   });
 
+  it("scanner detects violations and ignores token-based styles (positive control)", () => {
+    // 走査器そのものの正の対照。実ツリーから違反が消えても、この検査が
+    // 通らなければ走査が空振りしていると分かる。違反はそれぞれ別行に置き、
+    // 行単位の `rounded-md` 抑止が他の検出を巻き込まないようにする。
+    const fixture = [
+      "export function Widget() {",
+      '  return <div className="mt-1 rounded max-w-[960px] bg-black/50" style={{ color: "#fff" }} />;',
+      "}",
+      "export function Clean() {",
+      '  return <div className="p-md gap-lg rounded-md bg-surface text-on-surface" />;',
+      "}",
+    ].join("\n");
+
+    const found = findViolationsInSource("fixture.tsx", fixture);
+    const rules = new Set(found.map((v) => `${v.rule}:${v.literal}`));
+    expect(rules).toContain("numeric-spacing:mt-1");
+    expect(rules).toContain("bare-rounded:rounded");
+    expect(rules).toContain("arbitrary-bracket:max-w-[960px]");
+    expect(rules).toContain("non-token-color:bg-black/50");
+    expect(rules).toContain("hex-color:#fff");
+    // トークン由来のスタイル（`p-md`, `gap-lg`, `rounded-md`, `bg-surface`,
+    // `text-on-surface`）は拾わない。
+    expect(found.filter((v) => v.symbol === "Clean")).toEqual([]);
+  });
+
   it("all violations in features/ are strictly permitted in the allowlist", () => {
     const { violations } = scanFeatures();
 
-    const allowlistKeys = new Set(
-      ALLOWLIST.map(
-        (e) => `${e.file}::${e.symbol}::${e.rule}::${e.literal}::${e.line}`,
-      ),
-    );
+    const allowlistKeys = new Set(ALLOWLIST.map(violationKey));
 
     const unpermitted: FoundViolation[] = [];
     for (const v of violations) {
-      const key = `${v.file}::${v.symbol}::${v.rule}::${v.literal}::${v.line}`;
-      if (!allowlistKeys.has(key)) {
+      if (!allowlistKeys.has(violationKey(v))) {
         unpermitted.push(v);
       }
     }
