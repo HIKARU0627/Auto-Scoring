@@ -5,6 +5,7 @@ import { SidecarApiProvider } from "./api/SidecarApiProvider.js";
 import { AppRoutes } from "./core/app-routes.js";
 import { RouteOutlet } from "./navigation/route-table.js";
 import { RouterProvider } from "./navigation/router.js";
+import { Sidebar } from "./navigation/Sidebar.js";
 
 function SidecarConnectionPlaceholder(): JSX.Element {
   return (
@@ -17,6 +18,11 @@ function SidecarConnectionPlaceholder(): JSX.Element {
   );
 }
 
+/**
+ * The application frame: a persistent sidebar beside the routed screen
+ * (Issue #335). The sidebar only appears once the sidecar is usable, so the
+ * startup and crash states keep the full window.
+ */
 export function AppShell({
   client,
   initialStack = [AppRoutes.home],
@@ -27,7 +33,16 @@ export function AppShell({
   return (
     <SidecarApiProvider client={client}>
       <RouterProvider initialStack={initialStack}>
-        {client === null ? <SidecarConnectionPlaceholder /> : <RouteOutlet />}
+        {client === null ? (
+          <SidecarConnectionPlaceholder />
+        ) : (
+          <div className="flex min-h-screen bg-surface text-on-surface">
+            <Sidebar />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <RouteOutlet />
+            </div>
+          </div>
+        )}
       </RouterProvider>
     </SidecarApiProvider>
   );

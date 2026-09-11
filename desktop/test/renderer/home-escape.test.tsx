@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 
 import {
   AppRoutes,
@@ -56,6 +56,17 @@ function sequentialFocusOrder(root: ParentNode): HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
   ).filter((element) => element.tabIndex >= 0);
+}
+
+/**
+ * Waits for the routed page heading to be `text`. The sidebar (Issue #335)
+ * repeats the destination labels, so the assertion targets the page heading
+ * (`data-testid="page-title"`) instead of the first text match.
+ */
+async function expectPageTitle(text: string): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByTestId("page-title").textContent).toBe(text);
+  });
 }
 
 /** Pins the viewport to the 700x720 narrow window from INV-016. */
@@ -196,7 +207,7 @@ describe("home escape meta test (INV-201-05)", () => {
       });
 
       fireEvent.click(await screen.findByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
-      await screen.findByText("テスト一覧");
+      await expectPageTitle("テスト一覧");
       expect(screen.queryByText("まだテストが登録されていません")).toBeNull();
     });
   }
@@ -218,9 +229,9 @@ describe("home escape meta test (INV-201-05)", () => {
       initialStack: [AppRoutes.home, AppRoutes.testList, AppRoutes.intake],
     });
 
-    await screen.findByText("資料の取込");
+    await expectPageTitle("資料の取込");
     fireEvent.click(screen.getByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
-    await screen.findByText("テスト一覧");
+    await expectPageTitle("テスト一覧");
     expect(screen.queryByText("まだテストが登録されていません")).toBeNull();
   });
 });
