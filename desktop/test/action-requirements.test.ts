@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   ActionRequirements,
+  answerDetectRequirements,
+  answerDetectionOutcomeRequirements,
   answerProfileConfirmRequirements,
   answerProfileSaveRequirements,
+  answerRegionAddRequirements,
   apiKeySaveRequirements,
   apiKeyVerifyRequirements,
   completeRegistrationRequirements,
@@ -101,6 +104,63 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
       whileRunningRequirements({ running: true }).map((r) => r.id),
     ).toEqual(["busy"]);
     expect(whileRunningRequirements({ running: false })).toEqual([]);
+  });
+});
+
+describe("action requirements: 回答欄検出 (Issue #294)", () => {
+  it("検出 0 件の結果を区別する", () => {
+    expect(
+      answerDetectionOutcomeRequirements({ outcome: "zero-results" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["answer-detection-zero-results"]);
+    expect(
+      answerDetectionOutcomeRequirements({ outcome: "role-mismatch" }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["answer-sheet-role-mismatch"]);
+    expect(answerDetectionOutcomeRequirements({ outcome: "none" })).toEqual([]);
+  });
+
+  it("手動追加は答案登録後なら有効", () => {
+    expect(
+      answerRegionAddRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: true,
+      }),
+    ).toEqual([]);
+    expect(
+      answerRegionAddRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: false,
+      }).map((item) => item.id),
+    ).toEqual(["answer-sheet-unseen"]);
+  });
+
+  it("自動検出は設定不足と未確定配点を区別する", () => {
+    expect(
+      answerDetectRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: true,
+        detectionAvailable: false,
+        criteriaConfirmed: false,
+      }).map((item) => item.id),
+    ).toEqual([
+      "answer-detect-criteria-unconfirmed",
+      "answer-detection-unavailable",
+    ]);
+    expect(
+      answerDetectRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: false,
+        detectionAvailable: true,
+        criteriaConfirmed: true,
+      }).map((item) => item.id),
+    ).toEqual(["answer-detect-layout-missing"]);
   });
 });
 
