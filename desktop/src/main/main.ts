@@ -18,6 +18,7 @@ import {
   type InternalSidecarStatus,
 } from "./sidecar-connection.js";
 import { sidecarFetch } from "./sidecar-fetch.js";
+import { resolveSidecarAppDataDirectory } from "./sidecar-app-data.js";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 import { sidecarMultipartUpload } from "./sidecar-upload.js";
 import type { SidecarStatus } from "../shared/bridge.js";
@@ -163,6 +164,10 @@ void app.whenReady().then(() => {
 
   supervisor = new SidecarSupervisor({
     executablePath,
+    appDataDirectory: resolveSidecarAppDataDirectory({
+      isPackaged: app.isPackaged,
+      env: process.env,
+    }),
     onStatusChange: (status) => {
       notifySidecarStatus(status);
     },
