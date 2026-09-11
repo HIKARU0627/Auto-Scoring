@@ -61,6 +61,27 @@ export const ActionRequirements = {
     "api-key-not-configured",
     "キーがまだありません。上の欄に入力して「保存する」を押すと疎通を確認できます。",
   ),
+  answerRegionsMissing: requirement(
+    "answer-regions-missing",
+    "回答欄が1つもありません。「回答欄を自動検出」するか「領域を手動追加」で引いてください。",
+  ),
+  answerRegionsUnassigned: (regions: number): ActionRequirement =>
+    requirement(
+      "answer-regions-unassigned",
+      `設問が割り当てられていない回答欄が${regions}件あります。設問を選ぶか削除してください。`,
+    ),
+  answerSheetUnseen: requirement(
+    "answer-sheet-unseen",
+    "回答欄の位置は答案の上で確認します。この様式の答案を1枚登録してください。",
+  ),
+  answerSheetUnrendered: requirement(
+    "answer-sheet-unrendered",
+    "答案を表示できていません。上の「再試行」を押して、実際の答案を出してください。",
+  ),
+  profileAlreadyConfirmed: requirement(
+    "profile-already-confirmed",
+    "テストプロファイルは確定済みです。確定した回答欄は変更できません。",
+  ),
 } as const;
 
 export function intakeFolderPickRequirements(input: {
@@ -125,6 +146,59 @@ export function apiKeyVerifyRequirements(input: {
   }
   if (!input.configured) {
     requirements.push(ActionRequirements.apiKeyNotConfigured);
+  }
+  return requirements;
+}
+
+/** テスト設定の「修正内容を保存」 */
+export function answerProfileSaveRequirements(input: {
+  busy: boolean;
+  hasRegions: boolean;
+  alreadyConfirmed: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.profileAlreadyConfirmed);
+  }
+  if (!input.hasRegions) {
+    requirements.push(ActionRequirements.answerRegionsMissing);
+  }
+  return requirements;
+}
+
+/** テスト設定の「プロファイルを確定」 (INV-110) */
+export function answerProfileConfirmRequirements(input: {
+  busy: boolean;
+  alreadyConfirmed: boolean;
+  regionCount: number;
+  unassignedRegionCount: number;
+  mustSeeAnswerSheetFirst: boolean;
+  answerSheetRegistered: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.profileAlreadyConfirmed);
+  }
+  if (input.regionCount === 0) {
+    requirements.push(ActionRequirements.answerRegionsMissing);
+  }
+  if (input.unassignedRegionCount > 0) {
+    requirements.push(
+      ActionRequirements.answerRegionsUnassigned(input.unassignedRegionCount),
+    );
+  }
+  if (input.mustSeeAnswerSheetFirst) {
+    requirements.push(
+      input.answerSheetRegistered
+        ? ActionRequirements.answerSheetUnrendered
+        : ActionRequirements.answerSheetUnseen,
+    );
   }
   return requirements;
 }
