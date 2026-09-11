@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type CSSProperties,
+  type JSX,
+} from "react";
 import { RefreshCw } from "lucide-react";
 
 import { whileRunningRequirements } from "../../core/action-requirements.js";
@@ -22,6 +28,14 @@ type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; dashboard: HomeDashboard; refreshing: boolean };
+
+/**
+ * The mock measures the main-column card pitch at 21/22px, while the space
+ * scale's `xl` step is 24px (Issue #367, parent #333). `features/` may not add
+ * a raw numeric spacing utility (`design-tokens-lint.test.ts`), so the measured
+ * literal lives here next to the components that carry it.
+ */
+const MAIN_COLUMN_GAP_STYLE: CSSProperties = { gap: "21px" };
 
 function errorText(error: unknown): string {
   if (error instanceof HomeDataError) {
@@ -84,7 +98,7 @@ export function HomePage(): JSX.Element {
       data-testid="home-page"
       className="flex min-h-full min-w-0 flex-col text-on-surface"
     >
-      <header className="flex items-start justify-between gap-md px-xl pt-lg pb-md">
+      <header className="flex items-start justify-between gap-md px-sm pt-lg pb-md">
         <div className="min-w-0 flex-1">
           <h1
             data-testid="page-title"
@@ -122,7 +136,13 @@ export function HomePage(): JSX.Element {
         </div>
       </header>
 
-      <main className="min-w-0 flex-1 px-xl pb-xl">
+      {/* `relative overflow-x-clip` (Issue 367): the recent-tests table's
+          scroll container is not a positioned ancestor, so the absolutely
+          positioned `.sr-only` in its last column was laid out against the
+          viewport and widened the document to x≈760 at 700px. Making this
+          content region a positioned clip box contains that visually hidden
+          node without touching the table (Issue 365's territory). */}
+      <main className="relative min-w-0 flex-1 overflow-x-clip px-sm pb-xl">
         {loadState.status === "loading" ? (
           <div className="flex flex-col gap-lg">
             <HomeDashboardSkeleton />
@@ -193,16 +213,22 @@ function DashboardBody({
   );
 
   return (
-    <div className="flex flex-col gap-xl">
+    <div className="flex flex-col" style={MAIN_COLUMN_GAP_STYLE}>
       {dashboard.degradedTests.length > 0 ? (
         <DegradedNotice dashboard={dashboard} />
       ) : null}
-      {/* Two independent stacks rather than one auto-placed grid: with a grid,
-          the taller right rail stretched the hero's row and left 143px of dead
-          page colour under it (Issue 353, evaluation A). The mock keeps the
-          table in the main column, so the table stays here too. */}
+      {/* Issue 367 (F4C): the right rail ends with the hero + graph row and
+          the 最近のテスト table spans the full page width beneath it, instead
+          of leaving the rail's lower half empty. The mock has no お知らせ /
+          最近の作業 / ユーザー行 and this product has no source for them
+          (parent Issue 333 §4), so the rail is not padded out with invented
+          cards. The left column keeps the two side-by-side graph cards from
+          Issue 360. */}
       <div className="flex flex-col gap-xl lg:flex-row lg:items-start">
-        <div className="flex min-w-0 flex-1 flex-col gap-xl">
+        <div
+          className="flex min-w-0 flex-1 flex-col"
+          style={MAIN_COLUMN_GAP_STYLE}
+        >
           <HomeHeroCard
             action={dashboard.nextAction}
             onAction={() => {
@@ -220,12 +246,13 @@ function DashboardBody({
               <HomeTestDonutPanel dashboard={dashboard} />
             </div>
           </div>
-          <HomeRecentTestsTable dashboard={dashboard} onOpen={onOpen} />
         </div>
-        <div className="flex min-w-0 flex-col gap-xl lg:w-1/3 lg:max-w-80">
+        {/* The mock's 361px rail: the space token `w-90` is exactly 360px. */}
+        <div className="flex min-w-0 flex-col lg:w-90 lg:shrink-0">
           <HomeQuickActions onOpen={onOpen} />
         </div>
       </div>
+      <HomeRecentTestsTable dashboard={dashboard} onOpen={onOpen} />
     </div>
   );
 }
