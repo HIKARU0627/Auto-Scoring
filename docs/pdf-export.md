@@ -624,6 +624,16 @@ OCR の語 box から探して位置を決める。**つまり `target` は説�
 `backend/tests/test_annotation_layout.py::TestResolveAnnotationRect::test_an_anchor_spanning_across_line_breaks_unions_into_full_width_box`）
 に残し、複数矩形分割または配置制御の本格対応は Issue #256 で実施する。
 
+#### 2.6.4 Issue #260 における第1段対応とプローブ昇格
+
+Issue #256 で決定された段階的対応方針に基づき、Issue #260 において第1段（即時対応）を実施した:
+
+1. **改行跨ぎトークン列の単一外接矩形化禁止**: 改行をまたぐトークン列から全幅の単一矩形を生成することを禁止した。
+2. **×（CROSS）の先頭行限定**: ×印については、アンカー先頭トークンが属する行内のトークン群のみを外接矩形とし、回答欄の全幅に広がることを防ぐ（幅95%未満に収める）。
+3. **下線・囲み（UNDERLINE / BOX）の退避**: 複数矩形化は Issue #256 で実施するため、本Issueでは暫定的に §12.4 の退避（`resolve_annotation_rect` が `None` を返し、注釈ページへ「位置特定できず」付きで出力）に倒す。
+4. **画面とPDFの整合性**: Python（`backend/src/auto_scoring/domain/annotation_layout.py`）と Electron（`desktop/src/renderer/core/pdf-review-geometry.ts`）に同一の判定ロジックを実装し、両側で同一のテストを固定した。
+5. **プローブの処分**: `backend/poc/issue_152_annotation_width/` は削除し、合成データによる回帰テストを `backend/tests/test_annotation_layout.py` および `desktop/test/pdf-review-geometry.test.ts` へ昇格させた。実データを要する `--data` 経路は撤去した。
+
 ## 3. `PdfEngine.render_annotations`（Issue #23で追加）
 
 `domain/pdf_engine.py`の`PdfEngine`契約へ新しいメソッドを追加した。

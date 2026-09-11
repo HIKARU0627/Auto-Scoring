@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:auto_scoring_app/api/sidecar_api_client.dart';
@@ -86,6 +87,7 @@ NormalizedRectResponse? resolveAnnotationRect({
       anchorText,
       recognitions,
       _effectiveAnswerArea(questionAnswerArea),
+      kind: annotation.kind,
     );
     if (matched != null) return matched;
   }
@@ -141,12 +143,13 @@ NormalizedRectResponse _effectiveAnswerArea(
 NormalizedRectResponse? _findAnchorTextRect(
   String anchorText,
   List<RecognitionResponse> recognitions,
-  NormalizedRectResponse answerArea,
-) {
+  NormalizedRectResponse answerArea, {
+  String? kind,
+}) {
   final needle = _normalizedForAnchor(anchorText);
   if (needle.isEmpty) return null;
   for (final recognition in recognitions.reversed) {
-    final matched = _shortestBoxRun(needle, recognition.boxes);
+    final matched = _shortestBoxRun(needle, recognition.boxes, kind: kind);
     if (matched != null) return _cropRelativeToPage(matched, answerArea);
   }
   return null;
@@ -154,18 +157,6 @@ NormalizedRectResponse? _findAnchorTextRect(
 
 /// [text] reduced to what an anchor and an OCR box can be compared on: no
 /// whitespace, and full-width ASCII folded to ASCII.
-///
-/// Both halves are mismatches this comparison must not fail on, and both
-/// were measured rather than imagined. Document AI slices a token's text
-/// straight out of the page text, so the detected line break travels with it
-/// and `酸素` arrives as `"酸素\n"`; and a question whose printed
-/// sub-question labels are full-width Latin letters was read back by the OCR
-/// as their ASCII equivalents.
-///
-/// Deliberately *not* NFKC, which Dart's core library has no implementation
-/// of: the Python side must fold identically, and these two rules are
-/// portable in a few lines where reaching for NFKC would mean a
-/// normalization dependency on this side.
 String _normalizedForAnchor(String text) {
   final folded = String.fromCharCodes([
     for (final unit in text.runes)
@@ -174,20 +165,43 @@ String _normalizedForAnchor(String text) {
   return folded.replaceAll(RegExp(r'\s+'), '');
 }
 
+/// True if [b2] continues on the same line as [b1] in reading order.
+///
+/// A token text containing a line break ends the line. Otherwise, two boxes
+/// continue the same line if their vertical extent overlaps substantially
+/// and x advances forward (horizontal text), or their horizontal extent
+/// overlaps substantially and y advances forward (vertical text).
+bool _isSameLine(BoundingBoxResponse b1, BoundingBoxResponse b2) {
+  if (b1.text.contains('\n')) return false;
+
+  final minH = b1.height < b2.height ? b1.height : b2.height;
+  final yOverlap =
+      math.min(b1.y + b1.height, b2.y + b2.height) - math.max(b1.y, b2.y);
+  final isHoriz =
+      minH > 0 && yOverlap > 0.5 * minH && b2.x >= b1.x - b1.width * 0.1;
+
+  final minW = b1.width < b2.width ? b1.width : b2.width;
+  final xOverlap =
+      math.min(b1.x + b1.width, b2.x + b2.width) - math.max(b1.x, b2.x);
+  final isVert =
+      minW > 0 && xOverlap > 0.5 * minW && b2.y >= b1.y - b1.height * 0.1;
+
+  return isHoriz || isVert;
+}
+
 /// The union rect of the fewest consecutive [boxes] whose joined, normalized
 /// text contains [needle] -- or `null` if no run does.
 ///
-/// The *shortest* run wins: a short anchor is contained in many longer ones,
-/// and the tightest is the one whose rect most nearly covers the words the
-/// annotation is actually about. A run reading far more than the anchor is
-/// refused outright (`_runLengthLimit`) rather than accepted for its rect --
-/// the rect drawn is the run's, not the anchor's, so letting a
-/// one-character anchor match a whole line would put a mark across all of
-/// it, which is Issue #141's own symptom in miniature.
+/// When the matched run spans across a line break:
+/// - Single bounding boxes across line breaks are forbidden (Issue #260).
+/// - For CROSS (×): restricted to the boxes in the anchor's first token line.
+/// - For other kinds (UNDERLINE, BOX, etc.): returns `null`, evacuating to
+///   the comment area per §12.4 (multi-rect support deferred to Issue #256).
 NormalizedRectResponse? _shortestBoxRun(
   String needle,
-  Iterable<BoundingBoxResponse> boxesIn,
-) {
+  Iterable<BoundingBoxResponse> boxesIn, {
+  String? kind,
+}) {
   final boxes = boxesIn.toList(growable: false);
   final texts = [for (final box in boxes) _normalizedForAnchor(box.text)];
   final limit = _runLengthLimit(needle);
@@ -209,7 +223,27 @@ NormalizedRectResponse? _shortestBoxRun(
     }
   }
   if (bestStart == null) return null;
-  return _unionOfBoxes(boxes.sublist(bestStart, bestEnd! + 1));
+
+  final matchedBoxes = boxes.sublist(bestStart, bestEnd! + 1);
+  final firstLineBoxes = <BoundingBoxResponse>[matchedBoxes.first];
+  for (var i = 1; i < matchedBoxes.length; i++) {
+    if (_isSameLine(matchedBoxes[i - 1], matchedBoxes[i])) {
+      firstLineBoxes.add(matchedBoxes[i]);
+    } else {
+      break;
+    }
+  }
+
+  final spansLineBreak = firstLineBoxes.length < matchedBoxes.length;
+  if (!spansLineBreak) {
+    return _unionOfBoxes(matchedBoxes);
+  }
+
+  final isCross = kind?.toLowerCase() == 'cross';
+  if (isCross) {
+    return _unionOfBoxes(firstLineBoxes);
+  }
+  return null;
 }
 
 /// How much longer than the anchor a matched run may read. OCR boxes are
