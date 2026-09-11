@@ -1,6 +1,10 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 
-import { electronLaunchArgs } from "./electron-launch";
+import {
+  closeElectronApp,
+  electronLaunchArgs,
+  isolatedSidecarLaunchEnv,
+} from "./electron-launch";
 
 /**
  * Acceptance condition 1 of Issue #217: the Electron app starts and a window
@@ -9,7 +13,10 @@ import { electronLaunchArgs } from "./electron-launch";
  * than a bundler's idea of it.
  */
 test("the app starts and shows a window", async () => {
-  const app = await electron.launch({ args: electronLaunchArgs() });
+  const app = await electron.launch({
+    args: electronLaunchArgs(),
+    env: isolatedSidecarLaunchEnv(),
+  });
 
   try {
     // Named `page`, not `window`: inside `evaluate` below, `window` has to mean
@@ -42,6 +49,6 @@ test("the app starts and shows a window", async () => {
       hasProcess: false,
     });
   } finally {
-    await app.close();
+    await closeElectronApp(app);
   }
 });
