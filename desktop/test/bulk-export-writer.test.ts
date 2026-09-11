@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   createMemoryBulkExportStorage,
+  createPathBulkExportStorage,
   resolveFreeExportPath,
   writeBulkExportFile,
+  type BulkExportPathBridge,
 } from "../src/renderer/core/bulk-export-writer.js";
 
 describe("bulk-export-writer (UG-09)", () => {
@@ -62,5 +64,65 @@ describe("bulk-export-writer (UG-09)", () => {
     expect(await storage.read("answer_corrected.pdf")).toEqual(first);
     expect(await storage.read("answer_corrected_2.pdf")).toEqual(second);
     expect(await storage.read("answer_corrected_3.pdf")).toEqual(third);
+  });
+});
+
+describe("path-backed bulk-export storage (Issue #345)", () => {
+  function bridgeSpy(): BulkExportPathBridge & {
+    written: { directoryPath: string; fileName: string; bytesBase64: string }[];
+  } {
+    const written: {
+      directoryPath: string;
+      fileName: string;
+      bytesBase64: string;
+    }[] = [];
+    return {
+      written,
+      bulkExportFileExists: async () => false,
+      bulkExportReadFile: async () => null,
+      bulkExportWriteFile: async (request) => {
+        written.push(request);
+        return request.fileName;
+      },
+    };
+  }
+
+  it("round-trips bytes through the main-process bridge as base64", async () => {
+    const bridge = bridgeSpy();
+    const storage = createPathBulkExportStorage("/chosen/out", bridge);
+    const bytes = new Uint8Array([0, 1, 2, 253, 254, 255]);
+
+    const savedName = await writeBulkExportFile(
+      storage,
+      "answer_corrected.pdf",
+      bytes,
+    );
+
+    expect(savedName).toBe("answer_corrected.pdf");
+    expect(bridge.written).toHaveLength(1);
+    expect(bridge.written[0]?.directoryPath).toBe("/chosen/out");
+    expect(bridge.written[0]?.fileName).toBe("answer_corrected.pdf");
+    expect(
+      Uint8Array.from(atob(bridge.written[0]!.bytesBase64), (character) =>
+        character.charCodeAt(0),
+      ),
+    ).toEqual(bytes);
+  });
+
+  it("returns the name main chose so a suffixed file is reported", async () => {
+    const bridge: BulkExportPathBridge = {
+      bulkExportFileExists: async () => false,
+      bulkExportReadFile: async () => null,
+      bulkExportWriteFile: async () => "answer_corrected_2.pdf",
+    };
+    const storage = createPathBulkExportStorage("/chosen/out", bridge);
+
+    const savedName = await writeBulkExportFile(
+      storage,
+      "answer_corrected.pdf",
+      new Uint8Array([1]),
+    );
+
+    expect(savedName).toBe("answer_corrected_2.pdf");
   });
 });
