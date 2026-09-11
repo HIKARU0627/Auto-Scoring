@@ -39,6 +39,10 @@
   --color-success: var(--color-success);
   --color-success-container: var(--color-success-container);
   --color-on-success-container: var(--color-on-success-container);
+  --color-info: var(--color-info);
+  --color-info-container: var(--color-info-container);
+  --color-on-info-container: var(--color-on-info-container);
+  --color-progress-track: var(--color-progress-track);
   --color-annotation-mark: var(--color-annotation-mark);
   --color-disabled-button-outline: var(--color-disabled-button-outline);
   --color-disabled-button-label: var(--color-disabled-button-label);
@@ -54,6 +58,7 @@
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
   --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
 
   --font-sans: var(--font-family-sans);
 

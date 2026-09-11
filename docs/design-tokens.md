@@ -359,6 +359,48 @@ Issue #88 が報告した「ダークテーマでは無効ボタンとカード�
 Material 既定の `outlineVariant` も同程度である。境界を見つける必要がある箇所には
 `outline`（3:1 以上）を使う。
 
+### 3.7 Electron 版パレット（Issue #334 段A）
+
+Electron (`desktop/`) の配色は `desktop/src/renderer/styles/design-tokens.css` が持つ。
+Issue #334（UI刷新 段A、親 #333）でモック `UI_Home.png` の実測パレットへ差し替え、
+**ダークを既定**にした。`:root` がダーク、`[data-theme="light"]` がライトである。
+
+実測値と採用値（AA を満たすため明度のみ調整し、色相は維持した）:
+
+| 役割                                          | 実測値    | 採用値（ダーク） | 備考                                     |
+| --------------------------------------------- | --------- | ---------------- | ---------------------------------------- |
+| ページ地 `--color-surface`                    | `#1e2435` | `#1e2435`        | 一致                                     |
+| カード地 `--color-surface-container`          | `#232b3e` | `#232b3e`        | 一致                                     |
+| 一段上げた面 `--color-surface-container-high` | `#293047` | `#293047`        | 一致                                     |
+| サイドバー地 `--color-surface-dim`            | `#0f141e` | `#0f141e`        | 最も暗い面                               |
+| 主色 `--color-primary`                        | `#6e5df0` | `#6e5df0`        | 一致                                     |
+| 要確認 `--color-attention`                    | `#fd6998` | `#ff7ba8`        | `surface-container-highest` 上 4.29→4.85 |
+| 完了 `--color-success`                        | `#69e4d5` | `#69e4d5`        | 一致                                     |
+| 処理中 `--color-info`                         | `#598ff9` | `#7aa7fb`        | `surface-container-highest` 上 3.77→4.91 |
+| 進捗トラック `--color-progress-track`         | `#363d52` | `#363d52`        | 一致                                     |
+| 見出し文字 `--color-on-surface`               | `#f5f6f7` | `#e9ebf2`        | surface 比 14.28→12.97（上限 13.0）      |
+
+- `--color-annotation-mark`（`#c62828`）は答案に書き込む朱色であって UI の装飾色では
+  ないので、両テーマで変更しない。
+- ライトは同じ色相を明るい面へ再調整して残す（例: `--color-primary: #5b49e6`）。
+- `--radius-xl: 16px` を追加（モックのカード角丸）。`--spacing-*` は既存の 4px
+  スケールで足りるため追加しない。
+- 新しい色 `--color-info` / `--color-info-container` / `--color-on-info-container` /
+  `--color-progress-track` と `--radius-xl` は `index.css` の `@theme inline` で
+  Tailwind へ橋渡しする。橋渡しの欠落は `desktop/test/design-tokens-bridge.test.ts`
+  が検出する。
+- 両テーマで全 on/role 対・無効ボタン・状態色の AA を保つことは
+  `desktop/test/theme-contrast.test.ts` / `theme-invariants.test.ts` が検査する（§1.1）。
+
+実機スクリーンショット（`desktop` を cwd に `shot.mjs` で撮影、1536x1024）で
+ホームの画素をサンプリングした実測 RGB:
+
+| 箇所           | 実測 RGB                      | トークン                                                                             |
+| -------------- | ----------------------------- | ------------------------------------------------------------------------------------ |
+| ページ地       | `rgb(30,36,53)` = `#1e2435`   | `--color-surface`                                                                    |
+| カード地       | `rgb(32,40,56)` = `#202838`   | `--color-surface-container-low`（現行画面はまだ `low` を使用。段Cで `container` へ） |
+| 主色（ボタン） | `rgb(110,93,240)` = `#6e5df0` | `--color-primary`                                                                    |
+
 ## 4. 余白・角丸・エレベーション・レイアウト寸法
 
 ### 4.1 余白（`AppSpacing`、4px基準）
