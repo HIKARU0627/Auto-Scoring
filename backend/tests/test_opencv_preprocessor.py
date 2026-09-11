@@ -8,6 +8,7 @@ import pytest
 
 from auto_scoring.adapters.image.opencv_preprocessor import (
     OpenCvImagePreprocessor,
+    combine_vertical_crops,
     crop_normalized_rect,
 )
 from auto_scoring.domain.models import NormalizedRect
@@ -82,3 +83,31 @@ def test_crop_normalized_rect_clamps_to_image_bounds() -> None:
 def test_crop_normalized_rect_rejects_undecodable_bytes() -> None:
     with pytest.raises(ValueError, match="decode"):
         crop_normalized_rect(b"not a png", NormalizedRect(x=0, y=0, width=1, height=1))
+
+
+def test_combine_vertical_crops_stitches_two_images() -> None:
+    img1 = np.full((30, 40, 3), 100, dtype=np.uint8)
+    img2 = np.full((50, 60, 3), 200, dtype=np.uint8)
+    b1 = _encode_png(img1)
+    b2 = _encode_png(img2)
+
+    combined_bytes = combine_vertical_crops(b1, b2, padding_px=10)
+    combined = cv2.imdecode(np.frombuffer(combined_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    assert combined is not None
+    # width = max(40, 60) = 60
+    # height = 30 + 50 + 10 = 90
+    assert combined.shape == (90, 60, 3)
+    # top part has img1 color
+    assert (combined[10, 10] == [100, 100, 100]).all()
+    # padding area has white background (255)
+    assert (combined[35, 10] == [255, 255, 255]).all()
+    # bottom part has img2 color
+    assert (combined[50, 10] == [200, 200, 200]).all()
+
+
+def test_combine_vertical_crops_rejects_undecodable_bytes() -> None:
+    img1 = np.full((10, 10, 3), 100, dtype=np.uint8)
+    b1 = _encode_png(img1)
+    with pytest.raises(ValueError, match="decode"):
+        combine_vertical_crops(b1, b"invalid")

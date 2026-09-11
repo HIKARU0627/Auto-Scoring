@@ -110,3 +110,35 @@ def _apply_clahe(image: np.ndarray) -> np.ndarray:
     l_channel = clahe.apply(l_channel)
     merged = cv2.merge((l_channel, a_channel, b_channel))
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+
+def combine_vertical_crops(
+    crop_1_bytes: bytes, crop_2_bytes: bytes, *, padding_px: int = 10
+) -> bytes:
+    """Vertically concatenate two cropped answer-area images (Issue #108).
+
+    For questions whose answer area spans two pages, this stitches the first
+    page crop and the second page crop vertically with white padding between
+    them, padding the narrower crop with white to match the maximum width.
+    """
+    buf1 = np.frombuffer(crop_1_bytes, dtype=np.uint8)
+    img1 = cv2.imdecode(buf1, cv2.IMREAD_COLOR)
+    buf2 = np.frombuffer(crop_2_bytes, dtype=np.uint8)
+    img2 = cv2.imdecode(buf2, cv2.IMREAD_COLOR)
+    if img1 is None or img2 is None:
+        raise ValueError("could not decode cropped answer image")
+
+    h1, w1 = int(img1.shape[0]), int(img1.shape[1])
+    h2, w2 = int(img2.shape[0]), int(img2.shape[1])
+    out_w = max(w1, w2)
+    out_h = h1 + h2 + padding_px
+
+    combined = np.full((out_h, out_w, 3), 255, dtype=np.uint8)
+    combined[0:h1, 0:w1] = img1
+    y_start = h1 + padding_px
+    combined[y_start : y_start + h2, 0:w2] = img2
+
+    ok, encoded = cv2.imencode(".png", combined)
+    if not ok:
+        raise ValueError("could not encode combined answer image")
+    return encoded.tobytes()
