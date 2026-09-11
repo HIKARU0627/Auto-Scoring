@@ -9,6 +9,14 @@
  * duplicate values in `tailwind.config`.
  */
 
+@font-face {
+  font-family: "Noto Sans JP";
+  src: local("Noto Sans JP"), local("NotoSansJP");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root,
 [data-theme="light"] {
   color-scheme: light;
@@ -90,6 +98,7 @@
   --line-height-reading: 1.75;
   --line-height-ui: 1.4;
   --letter-spacing-recognized-text: 0.5px;
+  --font-variant-numeric-score: tabular-nums;
 
   --motion-duration-state-change: 150ms;
   --motion-duration-emphasis: 250ms;
