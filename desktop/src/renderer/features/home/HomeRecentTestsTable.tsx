@@ -20,8 +20,11 @@ import {
 import {
   NUMERIC_STYLE,
   PANEL_TITLE_STYLE,
+  PROGRESS_TRACK_STYLE,
+  STATUS_PILL_STYLE,
   statusPillClass,
   TABLE_HEAD_STYLE,
+  TEST_NAME_STYLE,
 } from "./home-format.js";
 
 /**
@@ -135,41 +138,45 @@ function TestRow({
   return (
     <tr
       data-testid={`home-test-card-${test.id}`}
-      className="border-t border-outline-variant align-top"
+      className="border-t border-outline-variant align-middle"
     >
-      <th scope="row" className="py-md pr-md font-medium">
+      <th scope="row" className="py-sm pr-md font-normal">
         <span
           data-testid={`home-test-name-${test.id}`}
-          className="block truncate text-on-surface"
+          className="block truncate font-normal text-on-surface"
+          style={TEST_NAME_STYLE}
           title={test.name}
         >
           {test.name}
         </span>
       </th>
-      {/* Secondary state detail moves out of the name cell into this column so
-          no row stacks name / counts / link (Issue 360). */}
-      <td className="py-md pr-md">
-        <span
-          data-testid={`home-test-status-${test.id}`}
-          className={`inline-flex rounded-full px-sm py-xs text-ui-label ${statusPillClass(progress.statusBadge)}`}
-        >
-          {progress.statusBadge.label}
-        </span>
-        <BucketCounts progress={progress} />
+      {/* Secondary state detail lives beside the pill on the same line: the old
+          block below the pill made the mock's 43px row 57px (Issue 365). */}
+      <td className="py-sm pr-md">
+        <div className="flex items-center gap-sm">
+          <span
+            data-testid={`home-test-status-${test.id}`}
+            className={`inline-flex shrink-0 items-center rounded-full px-sm text-ui-label ${statusPillClass(progress.statusBadge)}`}
+            style={STATUS_PILL_STYLE}
+          >
+            {progress.statusBadge.label}
+          </span>
+          <BucketCounts progress={progress} />
+        </div>
       </td>
       <td
-        className="py-md pr-md text-right text-on-surface"
+        className="py-sm pr-md text-right text-on-surface"
         style={NUMERIC_STYLE}
       >
         {progress.answerCount ?? "—"}
       </td>
-      <td className="py-md pr-md">
+      <td className="py-sm pr-md">
         <ProgressCell progress={progress} onOpen={onOpen} />
       </td>
-      <td className="py-md text-on-surface-variant" style={NUMERIC_STYLE}>
+      <td className="py-sm text-on-surface-variant" style={NUMERIC_STYLE}>
         {formatHomeDate(progress.lastUpdatedAt)}
       </td>
-      <td className="py-md pl-sm text-right">
+      <td className="py-sm pl-sm text-right">
         <RowChevron progress={progress} onOpen={onOpen} />
       </td>
     </tr>
@@ -198,8 +205,12 @@ function ProgressCell({
     );
   }
 
-  // Issue 360: one line only. The old stacked form put the queue link above
-  // the bar and % (41px of ink / two lines); the mock keeps all three inline.
+  const queueLabel = `確認済み ${progress.doneCount} / ${progress.total}`;
+
+  // Issue 365: the mock's 進捗 cell holds only the track and the percent. The
+  // whole area is the queue-entry button, so dropping the visible
+  // "確認済み N / M" line (which squeezed the track to 56px) keeps the queue
+  // reachable through the same testid and accessible name.
   return (
     <div className="flex min-w-0 items-center gap-sm whitespace-nowrap">
       <button
@@ -208,46 +219,48 @@ function ProgressCell({
         onClick={() => {
           onOpen(submissionQueue(test.id));
         }}
-        className="shrink-0 rounded-sm text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        aria-label={queueLabel}
+        className="flex min-w-0 items-center gap-sm rounded-sm text-left text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
       >
-        確認済み {progress.doneCount} / {progress.total}
-      </button>
-      {summary !== null && percent !== null ? (
-        <>
-          {/* The track uses --color-progress-track (L+17 over the card); the
-              old surface-container-high sat only L+6 away and vanished on 0%
-              rows (Issue 360). */}
-          <div
-            role="progressbar"
-            data-testid={`home-test-progress-${test.id}`}
-            aria-label={`${test.name} の確認済み設問`}
-            aria-valuemin={0}
-            aria-valuemax={summary.total}
-            aria-valuenow={summary.confirmed}
-            className="h-2 w-14 shrink-0 rounded-sm bg-progress-track"
-          >
-            <div
-              data-testid={`home-test-progress-fill-${test.id}`}
-              className="h-full rounded-sm bg-primary"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
+        {summary !== null && percent !== null ? (
+          <>
+            {/* The track uses --color-progress-track (L+17 over the card); the
+                old surface-container-high sat only L+6 away and vanished on 0%
+                rows (Issue 360). It holds the mock's 148px proportion (365). */}
+            <span
+              role="progressbar"
+              data-testid={`home-test-progress-${test.id}`}
+              aria-label={`${test.name} の確認済み設問`}
+              aria-valuemin={0}
+              aria-valuemax={summary.total}
+              aria-valuenow={summary.confirmed}
+              className="block h-2 shrink-0 rounded-sm bg-progress-track"
+              style={PROGRESS_TRACK_STYLE}
+            >
+              <span
+                data-testid={`home-test-progress-fill-${test.id}`}
+                className="block h-full rounded-sm bg-primary"
+                style={{ width: `${percent}%` }}
+              />
+            </span>
+            <span
+              data-testid={`home-test-progress-percent-${test.id}`}
+              className="w-9 shrink-0 text-right text-on-surface-variant"
+              style={NUMERIC_STYLE}
+            >
+              {percent}%
+            </span>
+          </>
+        ) : (
           <span
-            data-testid={`home-test-progress-percent-${test.id}`}
-            className="w-9 shrink-0 text-right text-ui-label text-on-surface-variant"
-            style={NUMERIC_STYLE}
+            data-testid={`home-test-progress-unavailable-${test.id}`}
+            className="truncate text-on-surface-variant"
           >
-            {percent}%
+            設問の進捗を取得できませんでした
           </span>
-        </>
-      ) : (
-        <span
-          data-testid={`home-test-progress-unavailable-${test.id}`}
-          className="truncate text-ui-label text-on-surface-variant"
-        >
-          設問の進捗を取得できませんでした
-        </span>
-      )}
+        )}
+        <span className="sr-only">{queueLabel}</span>
+      </button>
     </div>
   );
 }
@@ -333,7 +346,7 @@ function BucketCounts({
   }
 
   return (
-    <span className="mt-xs flex flex-wrap gap-sm text-ui-label text-on-surface-variant">
+    <span className="flex flex-nowrap items-center gap-sm whitespace-nowrap text-ui-label text-on-surface-variant">
       {shown.map(({ bucket, label, count }) => (
         <span key={bucket}>
           {label} {count}件
