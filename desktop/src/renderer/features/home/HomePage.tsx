@@ -9,6 +9,7 @@ import {
 import { HomeDataError, loadHomeDashboard } from "../../core/home-data.js";
 import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
+import { pageSubtitleFor } from "../../navigation/page-header.js";
 import { useRouter } from "../../navigation/router.js";
 import { HomeDashboardSkeleton } from "./HomeDashboardSkeleton.js";
 import { HomeHeroCard } from "./HomeHeroCard.js";
@@ -30,14 +31,21 @@ function errorText(error: unknown): string {
 }
 
 /**
- * The home dashboard (Issue #336). Page-level chrome (sidebar, page heading)
- * belongs to segment B (#335); this feature renders the dashboard body, its
+ * The home dashboard (Issue #336). The sidebar and the content column come
+ * from the shell (#335); this feature renders the dashboard body, its
  * loading/empty/error/partial states, and the quick-action entry points whose
  * data-testids the E2E probes depend on.
+ *
+ * Home repeats the shell's page heading treatment here instead of calling
+ * `ShellScreen`: `ShellScreen` always renders the escape control, and home must
+ * not show one (INV-018). The subtitle still comes from `page-header.ts` so it
+ * is not copied. The heading's size comes from `--font-size-headline-medium`
+ * through an inline style because the token layer has no `text-headline-*`
+ * utility and `features/` may not add one; see the PR body.
  */
 export function HomePage(): JSX.Element {
   const client = useSidecarClient();
-  const { push } = useRouter();
+  const { pathname, push } = useRouter();
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
 
   const reload = useCallback(async () => {
@@ -71,9 +79,23 @@ export function HomePage(): JSX.Element {
   const busyReasons = whileRunningRequirements({ running });
 
   return (
-    <div className="min-h-screen w-full bg-surface px-xl py-lg text-on-surface">
-      <h1 className="sr-only">ホーム</h1>
-      <div className="flex items-center justify-end gap-sm">
+    <div
+      data-testid="home-page"
+      className="flex min-h-full min-w-0 flex-col text-on-surface"
+    >
+      <header className="flex items-start justify-between gap-md px-xl pt-lg pb-md">
+        <div className="min-w-0 flex-1">
+          <h1
+            data-testid="page-title"
+            className="font-medium leading-ui text-on-surface"
+            style={{ fontSize: "var(--font-size-headline-medium)" }}
+          >
+            ホーム
+          </h1>
+          <p className="mt-xs text-body-medium text-on-surface-variant">
+            {pageSubtitleFor(pathname)}
+          </p>
+        </div>
         <div className="flex flex-col items-end">
           <button
             type="button"
@@ -97,9 +119,9 @@ export function HomePage(): JSX.Element {
             </p>
           ))}
         </div>
-      </div>
+      </header>
 
-      <div className="mt-lg">
+      <main className="min-w-0 flex-1 px-xl pb-xl">
         {loadState.status === "loading" ? (
           <div className="flex flex-col gap-lg">
             <HomeDashboardSkeleton />
@@ -144,7 +166,7 @@ export function HomePage(): JSX.Element {
             />
           )
         ) : null}
-      </div>
+      </main>
     </div>
   );
 }

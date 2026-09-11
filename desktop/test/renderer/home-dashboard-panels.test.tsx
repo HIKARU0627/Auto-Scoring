@@ -367,10 +367,15 @@ describe("home dashboard: states and accessibility (Issue #336)", () => {
     });
 
     await screen.findByTestId("home-test-card-work-1");
-    const order = focusOrder(document.body).map((element) => ({
-      testId: element.getAttribute("data-testid"),
-      cls: element.className,
-    }));
+    // Scope to the routed home screen (`home-page`), not `document.body`: the
+    // shell's own Tab order (sidebar first) is pinned by `sidebar.test.tsx`, so
+    // this test owns the dashboard's internal order and does not repeat it.
+    const order = focusOrder(screen.getByTestId("home-page")).map(
+      (element) => ({
+        testId: element.getAttribute("data-testid"),
+        cls: element.className,
+      }),
+    );
     const ids = order.map((entry) => entry.testId);
     expect(ids).toEqual([
       "home-refresh",
