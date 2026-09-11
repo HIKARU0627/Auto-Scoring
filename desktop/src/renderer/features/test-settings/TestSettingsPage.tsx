@@ -28,12 +28,16 @@ import {
   type TestResponse,
 } from "../../api/test-registration-data.js";
 import {
+  answerDetectRequirements,
+  answerDetectionOutcomeRequirements,
   answerProfileConfirmRequirements,
   answerProfileSaveRequirements,
+  answerRegionAddRequirements,
   completeRegistrationRequirements,
   dependencyGraphConfirmRequirements,
   gradingStartRequirements,
 } from "../../core/action-requirements.js";
+import { classifyAnswerDetectionOutcome } from "../../core/answer-detection-outcome.js";
 import {
   missingAnswerAreas,
   mustSeeAnswerSheetFirst,
@@ -77,6 +81,7 @@ type LoadState =
       answerLayoutPageCount: number | null;
       answerLayoutDetectionAvailable: boolean;
       answerLayoutDetectionReason: string | null;
+      detectionOutcome: "none" | "zero-results" | "role-mismatch";
     };
 
 function criteriaConfirmed(criteria: CriteriaResponse | null): boolean {
@@ -109,6 +114,16 @@ function initialEditableRegions(
     return [];
   }
   return null;
+}
+
+function profileRegions(profile: ProfileResponse | null): RegionModel[] {
+  if (profile === null) {
+    return [];
+  }
+  return profile.regions.map((region) => ({
+    ...region,
+    bbox: { ...region.bbox },
+  }));
 }
 
 function editorPages(
@@ -171,6 +186,7 @@ export function TestSettingsPage(): JSX.Element {
           snapshot.answerLayout?.detection_available ?? false,
         answerLayoutDetectionReason:
           snapshot.answerLayout?.detection_unavailable_reason ?? null,
+        detectionOutcome: "none",
       });
     } catch (error) {
       const message =
@@ -227,6 +243,7 @@ export function TestSettingsPage(): JSX.Element {
             editor.layout?.detection_available ?? false,
           answerLayoutDetectionReason:
             editor.layout?.detection_unavailable_reason ?? null,
+          detectionOutcome: current.detectionOutcome,
         };
       });
     },
@@ -234,7 +251,10 @@ export function TestSettingsPage(): JSX.Element {
   );
 
   const ready = loadState.status === "ready" ? loadState : null;
-  const regions = ready?.editableRegions ?? null;
+  const answerSheetRegistered = (ready?.answerLayoutPageCount ?? null) !== null;
+  const regions =
+    ready?.editableRegions ??
+    (answerSheetRegistered ? ([] as RegionModel[]) : null);
   const workingRegions = regions ?? [];
   const missing = missingAnswerAreas({
     regions: workingRegions,
@@ -251,18 +271,36 @@ export function TestSettingsPage(): JSX.Element {
     regions: workingRegions,
   });
 
+  const answerAreaRegionCount = workingRegions.filter(
+    (region) => region.kind === "answer_area",
+  ).length;
   const saveProfileReqs = answerProfileSaveRequirements({
     busy,
-    hasRegions: regions !== null && regions.length > 0,
+    hasRegions: answerAreaRegionCount > 0,
     alreadyConfirmed: profileConfirmed(ready?.profile ?? null),
   });
   const confirmProfileReqs = answerProfileConfirmRequirements({
     busy,
     alreadyConfirmed: profileConfirmed(ready?.profile ?? null),
-    regionCount: workingRegions.length,
+    regionCount: answerAreaRegionCount,
     unassignedRegionCount: unassigned.length,
     mustSeeAnswerSheetFirst: mustSeeSheet,
-    answerSheetRegistered: (ready?.answerLayoutPageCount ?? null) !== null,
+    answerSheetRegistered,
+  });
+  const addRegionReqs = answerRegionAddRequirements({
+    busy,
+    alreadyConfirmed: profileConfirmed(ready?.profile ?? null),
+    answerSheetRegistered,
+  });
+  const detectReqs = answerDetectRequirements({
+    busy,
+    alreadyConfirmed: profileConfirmed(ready?.profile ?? null),
+    answerSheetRegistered,
+    detectionAvailable: ready?.answerLayoutDetectionAvailable ?? false,
+    criteriaConfirmed: criteriaConfirmed(ready?.criteria ?? null),
+  });
+  const detectionOutcomeReqs = answerDetectionOutcomeRequirements({
+    outcome: ready?.detectionOutcome ?? "none",
   });
   const confirmGraphReqs = dependencyGraphConfirmRequirements({
     busy,
@@ -665,6 +703,7 @@ export function TestSettingsPage(): JSX.Element {
                         answerLayoutDetectionReason:
                           snapshot.answerLayout?.detection_unavailable_reason ??
                           null,
+                        detectionOutcome: "none",
                       };
                     });
                   });
@@ -678,17 +717,28 @@ export function TestSettingsPage(): JSX.Element {
                 type="button"
                 data-testid="detect-answer-areas-button"
                 className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
-                disabled={
-                  busy ||
-                  profileConfirmed(ready.profile) ||
-                  ready.answerLayoutPageCount === null ||
-                  !ready.answerLayoutDetectionAvailable ||
-                  ready.questionNumbers.length === 0
-                }
+                disabled={detectReqs.length > 0}
                 onClick={() => {
                   void runGuarded(async () => {
                     const profile = await detectAnswerAreas(client, testId);
+                    const nextRegions = profileRegions(profile);
+                    const detectionOutcome = classifyAnswerDetectionOutcome({
+                      questionNumbers: ready.questionNumbers,
+                      regions: nextRegions,
+                      absentQuestionNumbers: profile.absent_question_numbers,
+                    });
                     await applyEditorReload(profile);
+                    setLoadState((current) => {
+                      if (current.status !== "ready") {
+                        return current;
+                      }
+                      return {
+                        ...current,
+                        profile,
+                        editableRegions: nextRegions,
+                        detectionOutcome,
+                      };
+                    });
                   });
                 }}
               >
@@ -698,30 +748,29 @@ export function TestSettingsPage(): JSX.Element {
                 type="button"
                 data-testid="add-region-button"
                 className="rounded-md border border-outline px-md py-sm text-ui-label disabled:opacity-40"
-                disabled={
-                  busy ||
-                  profileConfirmed(ready.profile) ||
-                  regions === null ||
-                  ready.answerLayoutPageCount === null
-                }
+                disabled={addRegionReqs.length > 0}
                 onClick={() => {
                   setLoadState((current) => {
-                    if (
-                      current.status !== "ready" ||
-                      current.editableRegions === null
-                    ) {
+                    if (current.status !== "ready") {
+                      return current;
+                    }
+                    const working =
+                      current.editableRegions ??
+                      (current.answerLayoutPageCount !== null ? [] : null);
+                    if (working === null) {
                       return current;
                     }
                     const label = current.questionNumbers[0] ?? "問1";
                     return {
                       ...current,
                       editableRegions: [
-                        ...current.editableRegions,
+                        ...working,
                         manualAnswerAreaRegion({
-                          regionId: freeRegionId(current.editableRegions),
+                          regionId: freeRegionId(working),
                           label,
                         }),
                       ],
+                      detectionOutcome: "none",
                     };
                   });
                 }}
@@ -729,6 +778,7 @@ export function TestSettingsPage(): JSX.Element {
                 領域を手動追加
               </button>
             </div>
+            <DisabledActionReason requirements={detectReqs} />
 
             {ready.answerLayoutPageCount === null ? (
               <p
@@ -739,14 +789,10 @@ export function TestSettingsPage(): JSX.Element {
               </p>
             ) : null}
 
-            {!ready.answerLayoutDetectionAvailable &&
-            ready.answerLayoutDetectionReason !== null ? (
-              <p
-                data-testid="answer-layout-detection-unavailable"
-                className="mb-md text-body-small text-on-surface-variant"
-              >
-                {ready.answerLayoutDetectionReason}
-              </p>
+            {detectionOutcomeReqs.length > 0 ? (
+              <div data-testid="answer-detection-outcome" className="mb-md">
+                <DisabledActionReason requirements={detectionOutcomeReqs} />
+              </div>
             ) : null}
 
             {regions === null ? (
@@ -830,6 +876,7 @@ export function TestSettingsPage(): JSX.Element {
                 プロファイルを確定
               </button>
             </div>
+            <DisabledActionReason requirements={addRegionReqs} />
             <DisabledActionReason requirements={confirmProfileReqs} />
           </section>
 

@@ -13,15 +13,15 @@ const FEATURES_DIR = path.resolve(__dirname, "../src/renderer/features");
  * Enforces design token usage (spacing, radius, colors, typography, layout)
  * following Commander's strict allowlist policy:
  * 1. Scope and exemptions defined and documented in `docs/design-tokens.md`.
- * 2. Pre-existing violations strictly tracked by identity (file, symbol, literal, line).
+ * 2. Pre-existing violations are tracked strictly by identity (file, symbol, rule, literal).
  * 3. Allowlist count is capped at EXPECTED_ALLOWLIST_COUNT; entries can only decrease.
+ *    Issue #295 replaced every legacy violation with a token/utility class, so the
+ *    cap is now 0. New violations go to the token layer, never to the allowlist.
  * 4. File scan count is asserted (>= EXPECTED_MIN_FILES) to prevent false-green glob misses.
- * 5. Removal issue attached to each entry; until the commander files it, the
- *    placeholder `TODO(owner)` marks it as pending (no invented issue numbers).
  */
 
 export const EXPECTED_MIN_FILES = 24;
-export const EXPECTED_ALLOWLIST_COUNT = 27;
+export const EXPECTED_ALLOWLIST_COUNT = 0;
 
 export interface AllowlistEntry {
   readonly file: string;
@@ -30,253 +30,19 @@ export interface AllowlistEntry {
   readonly literal: string;
   readonly line: number;
   /**
-   * Issue tracking the removal of this violation. Until the commander files
-   * it, this is the placeholder `TODO(owner)` rather than an invented number.
+   * Issue tracking the removal of this violation. Kept in the type so a future
+   * regression can be registered with its removal issue, but the list is empty
+   * since Issue #295 emptied it.
    */
   readonly removalIssue: string;
 }
 
 /**
  * Strict allowlist of existing violations in `desktop/src/renderer/features/`.
- * Each entry is tagged with its removal issue.
+ * Empty since Issue #295: every legacy literal was replaced with a token or a
+ * utility class from `styles/design-tokens.css` / `styles/index.css`.
  */
-export const ALLOWLIST: readonly AllowlistEntry[] = [
-  // answer-area-editor: カスタムハンドルと枠線のリテラル
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    symbol: "RegionOverlay",
-    rule: "arbitrary-bracket",
-    literal: "border-[3px]",
-    line: 704,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    symbol: "RegionOverlay",
-    rule: "arbitrary-bracket",
-    literal: "border-[1.5px]",
-    line: 704,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    symbol: "RegionOverlay",
-    rule: "arbitrary-bracket",
-    literal: "h-[14px]",
-    line: 743,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    symbol: "RegionOverlay",
-    rule: "arbitrary-bracket",
-    literal: "w-[14px]",
-    line: 743,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // home: ダッシュボード最大幅のリテラル
-  {
-    file: "src/renderer/features/home/HomePage.tsx",
-    symbol: "HomePage",
-    rule: "arbitrary-bracket",
-    literal: "max-w-[960px]",
-    line: 91,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // intake: ページレイアウト幅制約のリテラル
-  {
-    file: "src/renderer/features/intake/IntakePage.tsx",
-    symbol: "IntakePage",
-    rule: "arbitrary-bracket",
-    literal: "max-w-[720px]",
-    line: 399,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // pdf-review: インスペクター最大高さ制約のリテラル
-  {
-    file: "src/renderer/features/pdf-review/PdfReviewPage.tsx",
-    symbol: "PdfReviewPage",
-    rule: "arbitrary-bracket",
-    literal: "max-h-[80vh]",
-    line: 531,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // review-queue: ダイアログバックドロップの背景色リテラル (bg-black/50)
-  {
-    file: "src/renderer/features/review-queue/BulkExportDialog.tsx",
-    symbol: "BulkExportDialog",
-    rule: "non-token-color",
-    literal: "bg-black/50",
-    line: 127,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/review-queue/ExportDialog.tsx",
-    symbol: "ExportDialog",
-    rule: "non-token-color",
-    literal: "bg-black/50",
-    line: 255,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // submission-queue: テーブルおよびチップのスタイルリテラル
-  {
-    file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
-    symbol: "SubmissionQueuePage",
-    rule: "arbitrary-bracket",
-    literal: "max-w-[960px]",
-    line: 140,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
-    symbol: "SubmissionQueuePage",
-    rule: "numeric-spacing",
-    literal: "py-0.5",
-    line: 214,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
-    symbol: "SubmissionQueuePage",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 214,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
-    symbol: "SubmissionQueuePage",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 253,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // settings: APIキー設定タブのドット間隔リテラル
-  {
-    file: "src/renderer/features/settings/ApiKeyTab.tsx",
-    symbol: "ApiKeyTab",
-    rule: "numeric-spacing",
-    literal: "mt-1.5",
-    line: 387,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // settings: 取込テンプレートタブのテーブルスタイルリテラル
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "numeric-spacing",
-    literal: "mt-1",
-    line: 267,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 267,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 322,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "arbitrary-bracket",
-    literal: "min-w-[120px]",
-    line: 339,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 339,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 352,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 371,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
-    symbol: "IntakeTemplateTab",
-    rule: "bare-rounded",
-    literal: "rounded",
-    line: 383,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // startup: 起動オーバーレイのエラーアイコンサイズと幅制約リテラル
-  {
-    file: "src/renderer/features/startup/SidecarStartupOverlay.tsx",
-    symbol: "SidecarErrorScreen",
-    rule: "arbitrary-bracket",
-    literal: "max-w-[560px]",
-    line: 72,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/startup/SidecarStartupOverlay.tsx",
-    symbol: "SidecarErrorScreen",
-    rule: "arbitrary-bracket",
-    literal: "text-[48px]",
-    line: 75,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-
-  // submission-confirm: 答案確定画面の最大幅と切り抜き高さリテラル
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    symbol: "SubmissionConfirmPage",
-    rule: "arbitrary-bracket",
-    literal: "max-w-[960px]",
-    line: 531,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    symbol: "SubmissionConfirmPage",
-    rule: "arbitrary-bracket",
-    literal: "h-[180px]",
-    line: 590,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    symbol: "SubmissionConfirmPage",
-    rule: "arbitrary-bracket",
-    literal: "max-w-[960px]",
-    line: 681,
-    removalIssue: "TODO(owner): 撤去先 Issue は司令塔が起票予定",
-  },
-];
+export const ALLOWLIST: readonly AllowlistEntry[] = [];
 
 function walkFiles(dir: string): string[] {
   const result: string[] = [];

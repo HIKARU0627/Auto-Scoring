@@ -528,7 +528,7 @@ export function SubmissionConfirmPage(): JSX.Element {
             data-testid="confirm-question-list"
             className="min-h-0 flex-1 overflow-y-auto p-xl"
           >
-            <div className="mx-auto flex max-w-[960px] flex-col gap-lg">
+            <div className="mx-auto flex max-w-240 flex-col gap-lg">
               {questions.map((question) => {
                 const material = materialByQuestion[question.id];
                 const reviews = material?.data?.reviews ?? [];
@@ -587,7 +587,7 @@ export function SubmissionConfirmPage(): JSX.Element {
                     ) : null}
                     {material?.data != null && !material.loading ? (
                       <div className="flex flex-col gap-sm py-sm">
-                        <div className="h-[180px]">
+                        <div className="h-45">
                           <AnswerCropView
                             imageUrl={material.answerImageUrl}
                             nearlyBlank={hasNearlyBlankCrop(
@@ -678,7 +678,7 @@ export function SubmissionConfirmPage(): JSX.Element {
           </div>
 
           <footer className="border-t border-outline-variant bg-surface p-lg">
-            <div className="mx-auto flex max-w-[960px] flex-col gap-sm">
+            <div className="mx-auto flex max-w-240 flex-col gap-sm">
               {outcome != null ? (
                 <Notice
                   testId={

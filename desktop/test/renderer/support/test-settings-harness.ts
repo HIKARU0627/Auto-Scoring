@@ -27,11 +27,16 @@ const TINY_PNG = Uint8Array.from(
   (char) => char.charCodeAt(0),
 );
 
+type DetectAnswerAreasResult =
+  | { kind: "profile"; profile: ProfileResponse }
+  | { kind: "error"; status: number; detail: string };
+
 export function createTestSettingsMockClient(
   input: {
     testId?: string;
     testStatus?: string;
     handlers?: MockSidecarHandlers;
+    detectAnswerAreas?: () => DetectAnswerAreasResult;
   } = {},
 ): { client: SidecarClient; applyLayoutUpload: () => AnswerLayoutResponse } {
   const testId = input.testId ?? "t-reg";
@@ -69,8 +74,8 @@ export function createTestSettingsMockClient(
     layout = {
       test_id: testId,
       page_count: 1,
-      detection_available: false,
-      detection_unavailable_reason: "stub",
+      detection_available: true,
+      detection_unavailable_reason: null,
       dropped_region_count: 0,
     };
     profileRevision += 1;
@@ -248,6 +253,42 @@ export function createTestSettingsMockClient(
           error: undefined,
         };
       }
+      if (path === "/tests/{test_id}/answer-layout/detect") {
+        if (profile === null) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 404 }),
+            error: { message: "missing layout" },
+          };
+        }
+        const detectResult = input.detectAnswerAreas?.();
+        if (detectResult?.kind === "error") {
+          return {
+            data: undefined,
+            response: new Response(null, { status: detectResult.status }),
+            error: { detail: detectResult.detail },
+          };
+        }
+        profileRevision += 1;
+        profile = buildProfile(
+          detectResult?.kind === "profile"
+            ? {
+                status: "draft",
+                revision: profileRevision,
+                regions: detectResult.profile.regions,
+                absent_question_numbers:
+                  detectResult.profile.absent_question_numbers,
+                undetected_question_numbers:
+                  detectResult.profile.undetected_question_numbers,
+              }
+            : {
+                status: "draft",
+                revision: profileRevision,
+                regions: [],
+              },
+        );
+        return { data: profile, response: new Response(), error: undefined };
+      }
       if (path === "/tests/{test_id}/criteria/extract") {
         criteriaRevision += 1;
         criteria = {
@@ -319,8 +360,8 @@ export function createTestSettingsMockClient(
         layout = {
           test_id: testId,
           page_count: 1,
-          detection_available: false,
-          detection_unavailable_reason: "stub",
+          detection_available: true,
+          detection_unavailable_reason: null,
           dropped_region_count: 0,
         };
         profileRevision += 1;
