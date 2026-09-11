@@ -47,7 +47,7 @@ describe("preload script bridge", () => {
   it("getSidecarStatus invokes getSidecarStatus IPC channel", async () => {
     const readyStatus: SidecarStatus = {
       kind: "ready",
-      connection: { host: "127.0.0.1", port: 5000, token: "tok" },
+      connection: { host: "127.0.0.1", port: 5000 },
     };
     mockIpcRenderer.invoke.mockResolvedValueOnce(readyStatus);
     const result = await exposedBridge!.getSidecarStatus();
@@ -63,6 +63,24 @@ describe("preload script bridge", () => {
     expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
       "auto-scoring:restart-sidecar",
     );
+  });
+
+  it("sidecarFetch invokes sidecarFetch IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyBase64: "",
+    });
+    const result = await exposedBridge!.sidecarFetch({
+      method: "GET",
+      urlPath: "/healthz",
+    });
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:sidecar-fetch",
+      { method: "GET", urlPath: "/healthz" },
+    );
+    expect(result.status).toBe(200);
   });
 
   it("onSidecarStatusChange registers and unregisters IPC listener", () => {

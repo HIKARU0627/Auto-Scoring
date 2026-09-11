@@ -15,10 +15,7 @@ import {
   type TestSummary,
   importedAnything,
 } from "../../api/intake-data.js";
-import {
-  useSidecarClient,
-  useSidecarConnection,
-} from "../../api/SidecarApiProvider.js";
+import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   intakeFolderPickRequirements,
   intakeImportRequirements,
@@ -70,7 +67,6 @@ export interface IntakePageProps {
 
 export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const client = useSidecarClient();
-  const connection = useSidecarConnection();
   const { push } = useRouter();
   const fileBridge = bridge ?? intakeBridgeFromWindow();
 
@@ -226,7 +222,6 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           try {
             const proposal = await classifyMaterial(
               fileBridge,
-              connection,
               file.absolutePath,
             );
             setClassifiedCount((count) => count + 1);
@@ -255,7 +250,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         setClassifying(false);
       }
     },
-    [cancelClassification, connection, fileBridge, review],
+    [cancelClassification, fileBridge, review],
   );
 
   const attributeAnswers = useCallback(
@@ -304,7 +299,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
             break;
           }
           try {
-            const proposal = await attributeAnswer(fileBridge, connection, {
+            const proposal = await attributeAnswer(fileBridge, {
               filePath: answer.absolutePath,
               candidates: candidates.map((test) => ({
                 id: test.id,
@@ -331,7 +326,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         setClassifying(false);
       }
     },
-    [candidates, connection, fileBridge, review, reviewerChoseOne],
+    [candidates, fileBridge, review, reviewerChoseOne],
   );
 
   const runImport = useCallback(async () => {
@@ -347,7 +342,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           continue;
         }
         const partial = await importReview(
-          { bridge: fileBridge, connection, client },
+          { bridge: fileBridge, client },
           {
             ...review,
             groups: [group],
@@ -361,7 +356,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [client, connection, fileBridge, review]);
+  }, [client, fileBridge, review]);
 
   const folderPickRequirements = intakeFolderPickRequirements({
     busy,

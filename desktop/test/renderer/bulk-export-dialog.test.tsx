@@ -13,12 +13,6 @@ import {
   type MockSidecarHandlers,
 } from "./support/mock-sidecar-client.js";
 
-const CONNECTION = {
-  host: "127.0.0.1",
-  port: 12345,
-  token: "test-token",
-};
-
 function renderBulkDialog(
   handlers: MockSidecarHandlers,
   queue: ReviewQueue,
@@ -27,7 +21,7 @@ function renderBulkDialog(
   const client = createMockSidecarClient(handlers);
   render(
     <ThemeProvider>
-      <SidecarApiProvider client={client} connection={CONNECTION}>
+      <SidecarApiProvider client={client}>
         <BulkExportDialog
           testId="t1"
           queue={queue}

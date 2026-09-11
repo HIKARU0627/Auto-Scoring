@@ -7,7 +7,7 @@ import { ThemeProvider } from "../../src/renderer/theme/ThemeProvider";
 
 const readyStatus: SidecarStatus = {
   kind: "ready",
-  connection: { host: "127.0.0.1", port: 12345, token: "test-token" },
+  connection: { host: "127.0.0.1", port: 12345 },
 };
 
 function stubBridge(statusRef: { current: SidecarStatus }) {
@@ -33,6 +33,12 @@ function stubBridge(statusRef: { current: SidecarStatus }) {
     chooseFolder: vi.fn(async () => null),
     scanFolder: vi.fn(async () => ({ name: "batch", entries: [] })),
     sidecarMultipartUpload: vi.fn(async () => ({ status: 200, body: {} })),
+    sidecarFetch: vi.fn(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyBase64: "",
+    })),
   });
 
   return {

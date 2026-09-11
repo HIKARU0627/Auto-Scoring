@@ -260,10 +260,7 @@ export function renderPdfReview(
 
   return render(
     <ThemeProvider>
-      <SidecarApiProvider
-        client={client}
-        connection={{ host: "127.0.0.1", port: 1, token: "t" }}
-      >
+      <SidecarApiProvider client={client}>
         <RouterProvider initialStack={[location]}>
           <PdfReviewPage />
         </RouterProvider>
