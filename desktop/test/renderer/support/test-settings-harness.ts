@@ -29,7 +29,13 @@ const TINY_PNG = Uint8Array.from(
 
 type DetectAnswerAreasResult =
   | { kind: "profile"; profile: ProfileResponse }
-  | { kind: "error"; status: number; detail: string };
+  | {
+      kind: "error";
+      status: number;
+      detail: string;
+      /** Set to model the structured 429 body (Issue #304). */
+      retryAfterSeconds?: number | null;
+    };
 
 export function createTestSettingsMockClient(
   input: {
@@ -266,7 +272,15 @@ export function createTestSettingsMockClient(
           return {
             data: undefined,
             response: new Response(null, { status: detectResult.status }),
-            error: { detail: detectResult.detail },
+            error:
+              detectResult.retryAfterSeconds === undefined
+                ? { detail: detectResult.detail }
+                : {
+                    detail: {
+                      message: detectResult.detail,
+                      retry_after_seconds: detectResult.retryAfterSeconds,
+                    },
+                  },
           };
         }
         profileRevision += 1;

@@ -43,6 +43,7 @@ Registration flow (simplified-design-specification.md §6, docs/test-registratio
 
 from __future__ import annotations
 
+import math
 import tempfile
 import threading
 from asyncio import to_thread
@@ -66,7 +67,11 @@ from auto_scoring.adapters.submission_intake import RENDER_SCALE
 from auto_scoring.adapters.test_intake import MaterialUpload, attach_materials, register_test
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.test_artifact_lock import TestArtifactLocks
-from auto_scoring.domain.ai_provider import ProviderUnavailable, SchemaViolation
+from auto_scoring.domain.ai_provider import (
+    ProviderRateLimitedError,
+    ProviderUnavailable,
+    SchemaViolation,
+)
 from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionError,
     AnswerAreaDetectionRequest,
@@ -422,6 +427,31 @@ class _AnswerLayoutConfirmedError(Exception):
 def _intake_http_exception(exc: PdfIntakeError | MaterialIntakeError) -> HTTPException:
     status_code = _INTAKE_ERROR_STATUS.get(type(exc), status.HTTP_400_BAD_REQUEST)
     return HTTPException(status_code, detail=str(exc))
+
+
+def _rate_limited_http_exception(exc: ProviderRateLimitedError) -> HTTPException:
+    """A 429 that survived the detector's own retries (Issue #304).
+
+    Still a 503 -- the provider is temporarily unavailable -- but the two
+    things the caller needs to decide "wait and press again" are carried out
+    instead of being dropped: the parsed ``Retry-After`` as the standard
+    header, and ``retry_after_seconds`` in the body so the screen can say how
+    long to wait without parsing a header. It is ``None`` when the provider
+    sent no usable ``Retry-After``, and then no header is set either: the
+    screen must not invent a number.
+
+    ``ceil`` rounds an HTTP-date-derived fractional wait up, so the advice is
+    never to retry before the provider said it would be ready.
+    """
+    headers: dict[str, str] = {}
+    retry_after = exc.retry_after_seconds
+    if retry_after is not None:
+        headers["Retry-After"] = str(math.ceil(retry_after))
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={"message": str(exc), "retry_after_seconds": retry_after},
+        headers=headers,
+    )
 
 
 def build_test_registration_router(
@@ -1455,6 +1485,11 @@ def build_test_registration_router(
                 # complete one on the overlay, so half a detection is worse
                 # than none (Issue #105 acceptance 5).
                 raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
+            except ProviderRateLimitedError as exc:
+                # Before `ProviderUnavailable`: this is the subclass, and
+                # catching the parent first is exactly what discarded the
+                # parsed `Retry-After` (Issue #304). 429 stays a 503.
+                raise _rate_limited_http_exception(exc) from None
             except ProviderUnavailable as exc:
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from None
             except AnswerAreaDetectionError as exc:
