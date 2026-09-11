@@ -7,6 +7,12 @@ import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "../shared/sidecar-upload.js";
+import type { BulkExportWriteRequest } from "../shared/bulk-export-write.js";
+import {
+  bulkExportFileExists,
+  readBulkExportFile,
+  writeBulkExportFile,
+} from "./bulk-export-write.js";
 import { scanDirectory } from "./folder-scan.js";
 import {
   resolveSidecarExecutable,
@@ -164,6 +170,28 @@ ipcMain.handle(IpcChannel.choosePdfFile, async (): Promise<string | null> => {
   }
   return result.filePaths[0] ?? null;
 });
+
+ipcMain.handle(
+  IpcChannel.bulkExportWriteFile,
+  async (_event, request: BulkExportWriteRequest): Promise<string> =>
+    await writeBulkExportFile(request),
+);
+
+ipcMain.handle(
+  IpcChannel.bulkExportFileExists,
+  async (_event, directoryPath: string, fileName: string): Promise<boolean> =>
+    await bulkExportFileExists(directoryPath, fileName),
+);
+
+ipcMain.handle(
+  IpcChannel.bulkExportReadFile,
+  async (
+    _event,
+    directoryPath: string,
+    fileName: string,
+  ): Promise<string | null> =>
+    await readBulkExportFile(directoryPath, fileName),
+);
 
 ipcMain.handle(
   IpcChannel.scanFolder,

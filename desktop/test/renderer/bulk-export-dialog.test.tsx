@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { SidecarApiProvider } from "../../src/renderer/api/SidecarApiProvider.js";
-import { BulkExportDialog } from "../../src/renderer/features/review-queue/BulkExportDialog.js";
+import {
+  BulkExportDialog,
+  type BulkExportDestinationChoice,
+} from "../../src/renderer/features/review-queue/BulkExportDialog.js";
 import { ReviewQueue } from "../../src/renderer/core/review-queue.js";
 import { createMemoryBulkExportStorage } from "../../src/renderer/core/bulk-export-writer.js";
 import { ThemeProvider } from "../../src/renderer/theme/ThemeProvider.js";
@@ -16,6 +19,7 @@ import {
 function renderBulkDialog(
   handlers: MockSidecarHandlers,
   queue: ReviewQueue,
+  chooseDestination?: () => Promise<BulkExportDestinationChoice>,
 ): ReturnType<typeof createMemoryBulkExportStorage> {
   const storage = createMemoryBulkExportStorage();
   const client = createMockSidecarClient(handlers);
@@ -26,16 +30,35 @@ function renderBulkDialog(
           testId="t1"
           queue={queue}
           pollIntervalMs={10}
-          chooseDestination={async () => ({
-            label: "/out",
-            storage,
-          })}
+          chooseDestination={
+            chooseDestination ??
+            (async () => ({
+              kind: "chosen",
+              destination: {
+                label: "/out",
+                storage,
+              },
+            }))
+          }
           onClose={() => undefined}
         />
       </SidecarApiProvider>
     </ThemeProvider>,
   );
   return storage;
+}
+
+function fullyConfirmedQueue(): ReviewQueue {
+  return ReviewQueue.from({
+    submissions: [
+      buildSubmission({
+        id: "sub-1",
+        state: "ai_processed",
+        studentLabel: "出席1",
+      }),
+    ],
+    progress: [buildProgress({ id: "sub-1", total: 2, confirmed: 2 })],
+  });
 }
 
 describe("BulkExportDialog (INV-188..189)", () => {
@@ -217,5 +240,37 @@ describe("BulkExportDialog (INV-188..189)", () => {
 
     expect(screen.getByTestId("bulk-export-empty-targets")).toBeDefined();
     expect(screen.queryByTestId("bulk-export-start-button")).toBeNull();
+  });
+
+  it("shows a reason when there is no way to choose a destination (Issue #345)", async () => {
+    renderBulkDialog({}, fullyConfirmedQueue(), async () => ({
+      kind: "unavailable",
+    }));
+
+    fireEvent.click(screen.getByTestId("bulk-export-start-button"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("bulk-export-destination-error")).toBeDefined();
+    });
+    expect(
+      screen.getByTestId("bulk-export-destination-error").textContent,
+    ).toContain("保存先フォルダを選ぶ手段がありません");
+    // The run must not have started: no progress, and the start button remains.
+    expect(screen.queryByTestId("bulk-export-progress")).toBeNull();
+    expect(screen.getByTestId("bulk-export-start-button")).toBeDefined();
+  });
+
+  it("stays silent when the user cancels the destination picker (Issue #345)", async () => {
+    renderBulkDialog({}, fullyConfirmedQueue(), async () => ({
+      kind: "cancelled",
+    }));
+
+    fireEvent.click(screen.getByTestId("bulk-export-start-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("bulk-export-progress")).toBeNull();
+    });
+    expect(screen.queryByTestId("bulk-export-destination-error")).toBeNull();
+    expect(screen.getByTestId("bulk-export-start-button")).toBeDefined();
   });
 });
