@@ -75,6 +75,32 @@ pnpm run package:installer        # installer/output/*.exe を作る（unsigned�
 Flutter の Windows ビルドもできないため、**CI の `windows-latest` runner が
 唯一の検証環境**（§7）。
 
+### 1.3 Electron 配布物の構成とサイドカー配置・解決経路（Issue #265）
+
+Electron 版配布物は `electron-builder` により Windows インストーラ（NSIS）および展開済みディレクトリ（`win-unpacked`）として出力される。
+
+```text
+<インストール先>/                       # 既定: %LOCALAPPDATA%\Programs\Auto-Scoring
+├─ Auto-Scoring.exe                     # Electron 実行ファイル
+├─ resources/                           # app.asar 等
+├─ *.dll                                # Electron / Chromium ランタイム
+└─ sidecar/                             # PyInstaller onedir の成果物（extraFiles で配置）
+    ├─ auto-scoring-sidecar.exe
+    └─ _internal/                       # Python インタプリタ・依存・ネイティブライブラリ
+```
+
+- **配置経路**: `desktop/electron-builder.json` の `extraFiles` 設定により、`pnpm run package:sidecar` が出力した `backend/dist/auto-scoring-sidecar` を `<appOutDir>\sidecar\` へ直接同梱する。
+- **解決経路**: `desktop/src/main/sidecar-paths.ts` の `sidecarExecutableCandidates` は、実行時 `process.execPath` の親ディレクトリ（`<インストール先>`）直下の `sidecar\auto-scoring-sidecar.exe` を最優先候補として解決する。開発時は `workingDirectory`（リポジトリルート）からの `backend/.venv/` がフォールバックとして機能するが、パッケージ版では `extraFiles` による同梱サイドカーが確定的に選択される。
+
+### 1.4 Electron ビルド・パッケージ手順
+
+```powershell
+pnpm run package:sidecar          # backend/dist/auto-scoring-sidecar/ を作る
+pnpm run package:sidecar:smoke    # サイドカー単体 smoke test
+pnpm run package:electron         # desktop/dist/win-unpacked と installer をビルド
+pnpm run package:electron:smoke   # パッケージ版の実機 smoke test（§7.4）
+```
+
 ---
 
 ## 2. インストーラー: MSIX ではなく Inno Setup
@@ -594,6 +620,31 @@ Windows CI 上の実測（正常終了時、3 回ずつ）:
   セッションが残したディレクトリまで拾う。テスト実行中に**増えた**分だけを
   見るようにした。
 
+### 7.4 Electron パッケージの検証（CI と自動テスト、Issue #265）
+
+Electron 版配布物の導入に伴い、CI の `Package (Windows)` ジョブおよびローカル自動テストに以下を追加した。
+
+| ステップ                          | 内容                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------- |
+| `pnpm install --frozen-lockfile`  | `--filter auto-scoring` を外し、workspace の `desktop/` と `electron-builder` も含めて復元   |
+| `pnpm run package:electron`       | `desktop/` をビルドし、`electron-builder --win` でインストーラと `win-unpacked` を生成       |
+| `pnpm run package:electron:smoke` | `scripts/smoke-test-electron-package.ps1` で実起動・データ描画・強制終了時孤児防止を自動検査 |
+| `upload-artifact`                 | `auto-scoring-electron-installer-unsigned`（`desktop/dist/*-unsigned.exe`）                  |
+
+`scripts/smoke-test-electron-package.ps1` が検証する 2 つの柱:
+
+1. **実データ描画スモークテスト (`desktop/e2e/smoke-packaged.spec.ts`)**:
+   Playwright 経由でパッケージ版 exe（`win-unpacked`）を起動し、ウィンドウの存在だけでなく以下を検査する:
+   - サイドカーが正常起動し lifecycle status が `ready` になること
+   - `[data-testid="home-error"]` が**表示されていないこと**（CSP や API 通信阻害の検出）
+   - API 応答由来のダッシュボード要素（`[data-testid="home-next-up"]`）が**表示されること**
+   - セッショントークン等の秘匿情報が画面テキストに漏洩していないこと
+2. **強制終了時孤児防止テスト (UG-01/02, Issue #211)**:
+   パッケージ版 exe をバックグラウンド起動し、`--parent-pid` 付きで起動されたサイドカープロセスと待受ポートを特定した上で、Electron 親プロセスをタスクマネージャ相当（`Stop-Process -Force` / `kill -9`）で強制終了する。親監視 watchdog が 15 秒以内にサイドカーを道連れ終了させ、ポートが解放されることを検査する。
+
+**変異検査 (Mutation Testing)**:
+同梱された `sidecar/` ディレクトリを一時的に改名または削除すると、Part 1 ではサイドカーが `executableMissing` で起動失敗して `ready` に達せず Playwright が失敗し、Part 2 でもサイドカー子プロセスが見つからず失敗する。これによりテストが実際に機能していることを確認できる。
+
 ---
 
 ## 8. コード署名（人間だけが行う手順）
@@ -602,10 +653,11 @@ Windows CI 上の実測（正常終了時、3 回ずつ）:
 技術スタック決定書 §4）。したがって:
 
 - **CI が作るのは unsigned の test artifact だけ**。ファイル名も
-  `Auto-Scoring-Setup-<version>-unsigned.exe` と明示する。
+  `Auto-Scoring-Setup-<version>-unsigned.exe`（Flutter 版）および
+  `Auto-Scoring-Electron-Setup-<version>-unsigned.exe`（Electron 版）と明示する。
 - **リポジトリにも CI secrets にも、証明書・秘密鍵・パスワードを置かない。**
   `installer/auto-scoring.iss` に `SignTool=` ディレクティブは**書かない**
-  （書けば CI が署名を試みることになる）。
+  （書けば CI が署名を試みることになる）。electron-builder 側でもコード署名は行わない。
 - 署名は、CI が作った artifact に対して**人間が手元で**行う。
 
 証明書が用意できたあとの手順（**人間のみ**、CI では実行しない）:

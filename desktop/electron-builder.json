@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "com.auto-scoring.desktop",
+  "productName": "Auto-Scoring",
+  "directories": {
+    "output": "dist"
+  },
+  "files": ["out/**/*", "package.json"],
+  "extraFiles": [
+    {
+      "from": "../backend/dist/auto-scoring-sidecar",
+      "to": "sidecar",
+      "filter": ["**/*"]
+    }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      },
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      }
+    ],
+    "executableName": "Auto-Scoring"
+  },
+  "linux": {
+    "target": [
+      {
+        "target": "dir",
+        "arch": ["x64"]
+      }
+    ],
+    "executableName": "auto-scoring"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "artifactName": "Auto-Scoring-Electron-Setup-${version}-unsigned.${ext}"
+  }
+}

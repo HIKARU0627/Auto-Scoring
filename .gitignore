@@ -41,6 +41,7 @@ __pycache__/
 # `/dist/` and `/out/` above are anchored at the repository root, so they do not
 # cover these.
 /desktop/out/
+/desktop/dist/
 /desktop/test-results/
 /desktop/playwright-report/
 
