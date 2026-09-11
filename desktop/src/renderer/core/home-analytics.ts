@@ -8,6 +8,7 @@
  * number of bars and their heights.
  */
 import type { SubmissionResponse } from "./home-dashboard.js";
+import { HomeWorkBucket, homeWorkBucketOf } from "./submission-work-bucket.js";
 
 /** How many days the daily bar chart shows. The mock shows 7. */
 export const HOME_DAILY_DAYS = 7;
@@ -18,6 +19,12 @@ export interface HomeDailyPoint {
   /** Short axis label, e.g. `9/4`. */
   readonly label: string;
   readonly count: number;
+  /**
+   * Submissions of that day whose work is confirmed (`reviewed` / `exported`).
+   * The mock's bar is two stacked series, so the chart needs the split; it is
+   * read from the same `submission.state` the buckets use, never guessed.
+   */
+  readonly doneCount: number;
 }
 
 function localDayKey(date: Date): string {
@@ -40,7 +47,7 @@ export function dailySubmissionCounts(
   const points: HomeDailyPoint[] = [];
   const byKey = new Map<
     string,
-    { key: string; label: string; count: number }
+    { key: string; label: string; count: number; doneCount: number }
   >();
   for (let offset = days - 1; offset >= 0; offset -= 1) {
     const date = new Date(start);
@@ -49,6 +56,7 @@ export function dailySubmissionCounts(
       key: localDayKey(date),
       label: `${date.getMonth() + 1}/${date.getDate()}`,
       count: 0,
+      doneCount: 0,
     };
     points.push(point);
     byKey.set(point.key, point);
@@ -62,6 +70,9 @@ export function dailySubmissionCounts(
     const point = byKey.get(localDayKey(created));
     if (point !== undefined) {
       point.count += 1;
+      if (homeWorkBucketOf(submission.state) === HomeWorkBucket.done) {
+        point.doneCount += 1;
+      }
     }
   }
 

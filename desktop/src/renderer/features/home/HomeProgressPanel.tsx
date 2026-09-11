@@ -35,7 +35,7 @@ export function HomeProgressPanel({
   return (
     <section
       data-testid="home-progress-panel"
-      className="h-full min-w-0 rounded-xl bg-surface-container p-xl"
+      className="flex h-full min-w-0 flex-col rounded-xl bg-surface-container p-xl"
     >
       <div className="flex items-center justify-between gap-md">
         <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
@@ -45,10 +45,15 @@ export function HomeProgressPanel({
       </div>
       {/* Issue 360: the mock's four KPI columns span ~88% of the card at a
           ~128px pitch. A quarter-width grid reproduces that, where the old
-          label-hugging flex left ~49% of the card empty. */}
+          label-hugging flex left ~49% of the card empty. Issue 366 item 3:
+          the mock rules the columns apart, so the cell boundary carries a 1px
+          vertical stroke (the 2-up narrow layout rules its two columns too). */}
       <dl className="mt-lg grid grid-cols-2 gap-x-md gap-y-lg sm:grid-cols-4">
         {STAT_BUCKETS.map(({ bucket, tone }) => (
-          <div key={bucket} className="flex flex-col gap-xs">
+          <div
+            key={bucket}
+            className="flex flex-col gap-xs border-chart-divider even:border-l sm:border-l sm:first:border-l-0"
+          >
             <dt className="flex items-center gap-sm text-ui-label text-on-surface-variant">
               <span
                 aria-hidden
@@ -82,7 +87,7 @@ export function HomeProgressPanel({
       {/* The mock goes straight from the KPIs to the bars; the old
           「日別の取込」sub-heading and its rule added a fourth type size and
           broke the card's spacing rhythm (Issue 353, parent 333 §5). */}
-      <div className="mt-lg">
+      <div className="mt-lg flex min-h-0 flex-1 flex-col">
         <HomeBarChart points={daily} />
       </div>
     </section>
