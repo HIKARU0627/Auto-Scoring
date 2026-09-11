@@ -426,7 +426,7 @@ function findViolationsInSource(
 /**
  * パス区切りを `/` に正規化する。Windows の `path.relative` は区切りに `\` を
  * 返すが、allowlist は `/` で書かれている。正規化しないと Windows CI だけ
- * 全エントリが不一致になる（PR #282 で発生した赤の原因）。
+ * 全エントリが不一致になる（本 PR の Windows CI で発生した赤の原因）。
  */
 function toPosixPath(relativePath: string): string {
   return relativePath.split(/[\\/]/).join("/");
