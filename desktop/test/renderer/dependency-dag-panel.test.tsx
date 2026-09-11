@@ -5,7 +5,10 @@ import {
   buildDagQuestion,
   buildDependencyDagLayout,
 } from "../../src/renderer/core/dependency-dag.js";
-import { DependencyDagPanel } from "../../src/renderer/features/pdf-review/DependencyDagPanel.js";
+import {
+  DependencyDagPanel,
+  dagFlowHeight,
+} from "../../src/renderer/features/pdf-review/DependencyDagPanel.js";
 import { ThemeProvider } from "../../src/renderer/theme/ThemeProvider.js";
 import type { components } from "../../src/renderer/api/generated/schema.js";
 
@@ -176,5 +179,90 @@ describe("DependencyDagPanel React Flow regression (Issue #337)", () => {
     });
     fireEvent.click(screen.getByTestId("dag-node-q3"));
     expect(onSelect).toHaveBeenCalledWith("q3");
+  });
+});
+
+describe("DependencyDagPanel height and empty state (Issue #352)", () => {
+  function singleNodeLayout() {
+    return buildDependencyDagLayout({
+      questions: [
+        buildDagQuestion({ id: "q1", label: "1", status: "approved" }),
+      ],
+      edges: [],
+      releasedQuestionIds: new Set(),
+    })!;
+  }
+
+  function fanOutLayout() {
+    return buildDependencyDagLayout({
+      questions: [
+        buildDagQuestion({ id: "q1", label: "1", status: "approved" }),
+        buildDagQuestion({ id: "q2", label: "2", status: "graded" }),
+        buildDagQuestion({ id: "q3", label: "3", status: "graded" }),
+        buildDagQuestion({ id: "q4", label: "4", status: "graded" }),
+        buildDagQuestion({ id: "q5", label: "5", status: "graded" }),
+      ],
+      edges: [
+        edge("q1", "q2"),
+        edge("q1", "q3"),
+        edge("q1", "q4"),
+        edge("q1", "q5"),
+      ],
+      releasedQuestionIds: new Set(["q1"]),
+    })!;
+  }
+
+  it("① draws no canvas when there are no dependencies", () => {
+    const { container } = render(
+      <ThemeProvider>
+        <DependencyDagPanel
+          layout={singleNodeLayout()}
+          selectedQuestionId={null}
+          onQuestionSelected={() => {}}
+        />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId("dag-empty")).toBeDefined();
+    expect(container.querySelector(".react-flow")).toBeNull();
+    expect(screen.queryByTestId("dag-flow-canvas")).toBeNull();
+  });
+
+  it("② one node gets a shorter canvas than five nodes", () => {
+    expect(dagFlowHeight(singleNodeLayout().nodes)).toBeLessThan(
+      dagFlowHeight(fanOutLayout().nodes),
+    );
+
+    const { container } = render(
+      <ThemeProvider>
+        <DependencyDagPanel
+          layout={fanOutLayout()}
+          selectedQuestionId={null}
+          onQuestionSelected={() => {}}
+        />
+      </ThemeProvider>,
+    );
+    const canvas = screen.getByTestId("dag-flow-canvas");
+    expect(container.querySelector(".react-flow")).not.toBeNull();
+    expect(Number.parseInt(canvas.style.height, 10)).toBe(
+      dagFlowHeight(fanOutLayout().nodes),
+    );
+    expect(canvas.style.maxHeight).toBe("var(--layout-dag-flow-height)");
+  });
+
+  it("③ still draws the canvas when dependencies exist", async () => {
+    const { container } = render(
+      <ThemeProvider>
+        <DependencyDagPanel
+          layout={stalledLayout("failed")}
+          selectedQuestionId={null}
+          onQuestionSelected={() => {}}
+        />
+      </ThemeProvider>,
+    );
+    expect(screen.queryByTestId("dag-empty")).toBeNull();
+    await waitFor(() => {
+      expect(container.querySelectorAll(".react-flow__node")).toHaveLength(5);
+    });
+    expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(3);
   });
 });
