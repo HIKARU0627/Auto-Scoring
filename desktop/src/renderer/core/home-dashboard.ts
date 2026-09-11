@@ -6,6 +6,10 @@ import {
   testSettings,
 } from "./app-routes.js";
 import {
+  dailySubmissionCounts,
+  type HomeDailyPoint,
+} from "./home-analytics.js";
+import {
   HOME_WORK_BUCKET_ORDER,
   HomeWorkBucket,
   homeWorkBucketOf,
@@ -14,21 +18,97 @@ import {
 
 export type TestResponse = components["schemas"]["TestResponse"];
 export type SubmissionResponse = components["schemas"]["SubmissionResponse"];
+export type SubmissionReviewProgressResponse =
+  components["schemas"]["SubmissionReviewProgressResponse"];
 
 const RESUMABLE_BUCKETS = new Set<HomeWorkBucket>([
   HomeWorkBucket.needsReview,
   HomeWorkBucket.intakeDone,
 ]);
 
+/**
+ * The three-way rollup of a test shown by the home donut (Issue #336).
+ *
+ * The backend only has the two `TestStatus` values (`draft` / `ready`), so the
+ * third bucket is read from the answers already loaded for the test: a `ready`
+ * test whose answers are all human-confirmed is 完了, one with work left is
+ * 進行中. Nothing here guesses -- a test with no answers is 進行中, not 完了.
+ */
+export const HomeTestPhase = {
+  preparing: "preparing",
+  inProgress: "inProgress",
+  done: "done",
+} as const;
+
+export type HomeTestPhase = (typeof HomeTestPhase)[keyof typeof HomeTestPhase];
+
+export const HOME_TEST_PHASE_ORDER: readonly HomeTestPhase[] = [
+  HomeTestPhase.preparing,
+  HomeTestPhase.inProgress,
+  HomeTestPhase.done,
+];
+
+export interface HomeTestPhaseMeta {
+  readonly label: string;
+  readonly tone: "neutral" | "info" | "success";
+}
+
+const PHASE_META: Record<HomeTestPhase, HomeTestPhaseMeta> = {
+  [HomeTestPhase.preparing]: { label: "準備中", tone: "neutral" },
+  [HomeTestPhase.inProgress]: { label: "進行中", tone: "info" },
+  [HomeTestPhase.done]: { label: "完了", tone: "success" },
+};
+
+export function homeTestPhaseMeta(phase: HomeTestPhase): HomeTestPhaseMeta {
+  return PHASE_META[phase];
+}
+
+export interface HomeTestStatusBadge {
+  readonly label: string;
+  readonly tone:
+    "neutral" | "info" | "attention" | "danger" | "success" | "error";
+}
+
+export interface HomeReviewSummary {
+  readonly confirmed: number;
+  readonly total: number;
+}
+
+export interface HomeTestProgressOptions {
+  /** `false` when this test's submissions could not be read. */
+  readonly submissionsAvailable?: boolean;
+  /** `false` when this test's review progress could not be read. */
+  readonly reviewProgressAvailable?: boolean;
+  readonly reviewProgress?: readonly SubmissionReviewProgressResponse[];
+}
+
 export class HomeTestProgress {
   readonly test: TestResponse;
   readonly counts: Readonly<Partial<Record<HomeWorkBucket, number>>>;
   readonly resumableSubmission: SubmissionResponse | null;
+  /** `false` when the submissions list for this test failed to load. */
+  readonly submissionsAvailable: boolean;
+  /** `false` when the review progress for this test failed to load. */
+  readonly reviewProgressAvailable: boolean;
+  /** Summed question-level review progress, or `null` when unavailable. */
+  readonly reviewSummary: HomeReviewSummary | null;
+  /** Most recent known timestamp for the row: last answer, else registration. */
+  readonly lastUpdatedAt: string;
 
-  constructor(test: TestResponse, submissions: readonly SubmissionResponse[]) {
+  constructor(
+    test: TestResponse,
+    submissions: readonly SubmissionResponse[],
+    options: HomeTestProgressOptions = {},
+  ) {
     this.test = test;
+    this.submissionsAvailable = options.submissionsAvailable ?? true;
+    this.reviewProgressAvailable = options.reviewProgressAvailable ?? true;
     this.counts = HomeTestProgress.countByBucket(submissions);
     this.resumableSubmission = HomeTestProgress.pickResumable(submissions);
+    this.reviewSummary = this.reviewProgressAvailable
+      ? HomeTestProgress.summarizeReview(options.reviewProgress ?? [])
+      : null;
+    this.lastUpdatedAt = HomeTestProgress.latestOf(test, submissions);
   }
 
   get isDraft(): boolean {
@@ -48,6 +128,56 @@ export class HomeTestProgress {
 
   get doneCount(): number {
     return this.countOf(HomeWorkBucket.done);
+  }
+
+  /** Answers loaded for this test, or `null` when the list failed to load. */
+  get answerCount(): number | null {
+    return this.submissionsAvailable ? this.total : null;
+  }
+
+  /** `confirmed / total` percent across answers, or `null` when unknown. */
+  get reviewPercent(): number | null {
+    const summary = this.reviewSummary;
+    if (summary === null || summary.total <= 0) {
+      return null;
+    }
+    return Math.round((summary.confirmed / summary.total) * 100);
+  }
+
+  get phase(): HomeTestPhase {
+    if (this.test.status !== "ready") {
+      return HomeTestPhase.preparing;
+    }
+    if (!this.submissionsAvailable) {
+      return HomeTestPhase.inProgress;
+    }
+    if (this.total > 0 && this.doneCount === this.total) {
+      return HomeTestPhase.done;
+    }
+    return HomeTestPhase.inProgress;
+  }
+
+  /**
+   * The pill in the recent-tests table. Precedence mirrors `nextAction`: a
+   * failed import, then a flagged answer, outrank "in progress".
+   */
+  get statusBadge(): HomeTestStatusBadge {
+    if (!this.submissionsAvailable) {
+      return { label: "取得できません", tone: "neutral" };
+    }
+    if (this.test.status !== "ready") {
+      return { label: "準備中", tone: "neutral" };
+    }
+    if (this.countOf(HomeWorkBucket.failed) > 0) {
+      return { label: "取込失敗", tone: "danger" };
+    }
+    if (this.countOf(HomeWorkBucket.needsReview) > 0) {
+      return { label: "要確認", tone: "attention" };
+    }
+    if (this.total > 0 && this.doneCount === this.total) {
+      return { label: "完了", tone: "success" };
+    }
+    return { label: "進行中", tone: "info" };
   }
 
   static readonly settledOrder = 3;
@@ -74,6 +204,37 @@ export class HomeTestProgress {
       counts[bucket] = (counts[bucket] ?? 0) + 1;
     }
     return counts;
+  }
+
+  private static summarizeReview(
+    rows: readonly SubmissionReviewProgressResponse[],
+  ): HomeReviewSummary | null {
+    let confirmed = 0;
+    let total = 0;
+    for (const row of rows) {
+      confirmed += row.confirmed_questions;
+      total += row.total_questions;
+    }
+    if (total <= 0) {
+      return null;
+    }
+    return { confirmed, total };
+  }
+
+  private static latestOf(
+    test: TestResponse,
+    submissions: readonly SubmissionResponse[],
+  ): string {
+    let latest = test.created_at;
+    let latestMs = Date.parse(latest);
+    for (const submission of submissions) {
+      const ms = Date.parse(submission.created_at);
+      if (!Number.isNaN(ms) && ms > latestMs) {
+        latest = submission.created_at;
+        latestMs = ms;
+      }
+    }
+    return latest;
   }
 
   private static pickResumable(
@@ -104,18 +265,50 @@ export interface HomeNextAction {
   readonly route: string | null;
 }
 
+export interface HomeDegradedTest {
+  readonly testId: string;
+  readonly testName: string;
+  readonly missingSubmissions: boolean;
+  readonly missingReviewProgress: boolean;
+}
+
+export interface HomeDashboardInput {
+  readonly tests: readonly TestResponse[];
+  readonly submissionsByTestId: Readonly<
+    Record<string, readonly SubmissionResponse[]>
+  >;
+  /** Tests whose `GET /tests/{id}/submissions` failed. */
+  readonly unavailableSubmissionTestIds?: readonly string[];
+  readonly reviewProgressByTestId?: Readonly<
+    Record<string, readonly SubmissionReviewProgressResponse[]>
+  >;
+  /** Tests whose `GET /tests/{id}/review-progress` failed. */
+  readonly unavailableReviewProgressTestIds?: readonly string[];
+  readonly now?: Date;
+}
+
 export class HomeDashboard {
   static readonly maxTests = 8;
 
   readonly tests: readonly HomeTestProgress[];
   readonly visibleTests: readonly HomeTestProgress[];
+  readonly degradedTests: readonly HomeDegradedTest[];
+
+  private readonly submissions: readonly SubmissionResponse[];
+  private readonly now: Date;
 
   private constructor(
     tests: readonly HomeTestProgress[],
     visibleTests: readonly HomeTestProgress[],
+    submissions: readonly SubmissionResponse[],
+    degradedTests: readonly HomeDegradedTest[],
+    now: Date,
   ) {
     this.tests = tests;
     this.visibleTests = visibleTests;
+    this.submissions = submissions;
+    this.degradedTests = degradedTests;
+    this.now = now;
   }
 
   get hiddenTestCount(): number {
@@ -126,16 +319,30 @@ export class HomeDashboard {
     return this.tests.length === 0;
   }
 
-  static from(input: {
-    tests: readonly TestResponse[];
-    submissionsByTestId: Readonly<
-      Record<string, readonly SubmissionResponse[]>
-    >;
-  }): HomeDashboard {
+  static from(input: HomeDashboardInput): HomeDashboard {
+    const unavailableSubmissions = new Set(
+      input.unavailableSubmissionTestIds ?? [],
+    );
+    const unavailableReview = new Set(
+      input.unavailableReviewProgressTestIds ?? [],
+    );
+
     const progress = input.tests
       .map(
         (test) =>
-          new HomeTestProgress(test, input.submissionsByTestId[test.id] ?? []),
+          new HomeTestProgress(
+            test,
+            unavailableSubmissions.has(test.id)
+              ? []
+              : (input.submissionsByTestId[test.id] ?? []),
+            {
+              submissionsAvailable: !unavailableSubmissions.has(test.id),
+              reviewProgressAvailable: !unavailableReview.has(test.id),
+              ...(input.reviewProgressByTestId?.[test.id] !== undefined
+                ? { reviewProgress: input.reviewProgressByTestId[test.id] }
+                : {}),
+            },
+          ),
       )
       .sort((a, b) => {
         const byOrder = a.order - b.order;
@@ -144,7 +351,33 @@ export class HomeDashboard {
         }
         return Date.parse(b.test.created_at) - Date.parse(a.test.created_at);
       });
-    return new HomeDashboard(progress, HomeDashboard.pickVisible(progress));
+
+    const submissions: SubmissionResponse[] = [];
+    for (const test of progress) {
+      if (!test.submissionsAvailable) {
+        continue;
+      }
+      submissions.push(...(input.submissionsByTestId[test.test.id] ?? []));
+    }
+
+    const degradedTests: HomeDegradedTest[] = progress
+      .filter(
+        (test) => !test.submissionsAvailable || !test.reviewProgressAvailable,
+      )
+      .map((test) => ({
+        testId: test.test.id,
+        testName: test.test.name,
+        missingSubmissions: !test.submissionsAvailable,
+        missingReviewProgress: !test.reviewProgressAvailable,
+      }));
+
+    return new HomeDashboard(
+      progress,
+      HomeDashboard.pickVisible(progress),
+      submissions,
+      degradedTests,
+      input.now ?? new Date(),
+    );
   }
 
   private static pickVisible(
@@ -164,7 +397,25 @@ export class HomeDashboard {
   }
 
   count(bucket: HomeWorkBucket): number {
-    return this.tests.reduce((sum, test) => sum + test.countOf(bucket), 0);
+    return this.tests.reduce(
+      (sum, test) =>
+        sum + (test.submissionsAvailable ? test.countOf(bucket) : 0),
+      0,
+    );
+  }
+
+  /** Number of tests whose submissions are known (used for count disclosure). */
+  get countedTestCount(): number {
+    return this.tests.filter((test) => test.submissionsAvailable).length;
+  }
+
+  phaseCount(phase: HomeTestPhase): number {
+    return this.tests.filter((test) => test.phase === phase).length;
+  }
+
+  /** One point per day for the last 7 days, oldest first. */
+  dailySubmissions(): readonly HomeDailyPoint[] {
+    return dailySubmissionCounts(this.submissions, this.now);
   }
 
   private get resumeTarget(): [HomeTestProgress, SubmissionResponse] | null {

@@ -1,61 +1,64 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
+import { RefreshCw } from "lucide-react";
 
-import {
-  AppRoutes,
-  pdfReview,
-  submissionQueue,
-  testSettings,
-} from "../../core/app-routes.js";
+import { whileRunningRequirements } from "../../core/action-requirements.js";
 import {
   HomeDashboard,
   type HomeNextAction,
-  type HomeTestProgress,
 } from "../../core/home-dashboard.js";
-import {
-  HomeWorkBucket,
-  homeWorkBucketMeta,
-} from "../../core/submission-work-bucket.js";
 import { HomeDataError, loadHomeDashboard } from "../../core/home-data.js";
 import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
+import { pageSubtitleFor } from "../../navigation/page-header.js";
 import { useRouter } from "../../navigation/router.js";
+import { HomeDashboardSkeleton } from "./HomeDashboardSkeleton.js";
+import { HomeHeroCard } from "./HomeHeroCard.js";
+import { HomeProgressPanel } from "./HomeProgressPanel.js";
+import { HomeQuickActions } from "./HomeQuickActions.js";
+import { HomeRecentTestsTable } from "./HomeRecentTestsTable.js";
+import { HomeTestDonutPanel } from "./HomeTestDonutPanel.js";
 
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; dashboard: HomeDashboard };
+  | { status: "ready"; dashboard: HomeDashboard; refreshing: boolean };
 
-function toneClass(tone: HomeNextAction["tone"]): string {
-  switch (tone) {
-    case "attention":
-      return "text-attention";
-    case "danger":
-      return "text-error";
-    case "success":
-      return "text-success";
-    default:
-      return "text-on-surface-variant";
+function errorText(error: unknown): string {
+  if (error instanceof HomeDataError) {
+    return error.message;
   }
+  return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The home dashboard (Issue #336). The sidebar and the content column come
+ * from the shell (#335); this feature renders the dashboard body, its
+ * loading/empty/error/partial states, and the quick-action entry points whose
+ * data-testids the E2E probes depend on.
+ *
+ * Home repeats the shell's page heading treatment here instead of calling
+ * `ShellScreen`: `ShellScreen` always renders the escape control, and home must
+ * not show one (INV-018). The subtitle still comes from `page-header.ts` so it
+ * is not copied. The heading's size comes from `--font-size-headline-medium`
+ * through an inline style because the token layer has no `text-headline-*`
+ * utility and `features/` may not add one; see the PR body.
+ */
 export function HomePage(): JSX.Element {
   const client = useSidecarClient();
-  const { push } = useRouter();
+  const { pathname, push } = useRouter();
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
 
   const reload = useCallback(async () => {
-    setLoadState({ status: "loading" });
+    setLoadState((previous) =>
+      previous.status === "ready"
+        ? { status: "ready", dashboard: previous.dashboard, refreshing: true }
+        : { status: "loading" },
+    );
     try {
       const dashboard = await loadHomeDashboard(client);
-      setLoadState({ status: "ready", dashboard });
+      setLoadState({ status: "ready", dashboard, refreshing: false });
     } catch (error) {
-      const message =
-        error instanceof HomeDataError
-          ? error.message
-          : error instanceof Error
-            ? error.message
-            : String(error);
-      setLoadState({ status: "error", message });
+      setLoadState({ status: "error", message: errorText(error) });
     }
   }, [client]);
 
@@ -63,68 +66,106 @@ export function HomePage(): JSX.Element {
     void reload();
   }, [reload]);
 
-  const openAndReload = useCallback(
-    async (route: string) => {
+  const open = useCallback(
+    (route: string) => {
       push(route);
-      await reload();
     },
-    [push, reload],
+    [push],
   );
 
+  const running =
+    loadState.status === "loading" ||
+    (loadState.status === "ready" && loadState.refreshing);
+  const busyReasons = whileRunningRequirements({ running });
+
   return (
-    <div className="min-h-screen bg-surface text-on-surface">
-      <header className="flex items-center justify-between border-b border-outline-variant px-xl py-md">
-        <h1 className="text-title-large font-medium leading-ui">
-          Auto-Scoring
-        </h1>
-        <button
-          type="button"
-          data-testid="home-refresh"
-          className="rounded-md border border-outline px-md py-xs text-ui-label"
-          onClick={() => {
-            void reload();
-          }}
-        >
-          最新の状況に更新
-        </button>
+    <div
+      data-testid="home-page"
+      className="flex min-h-full min-w-0 flex-col text-on-surface"
+    >
+      <header className="flex items-start justify-between gap-md px-xl pt-lg pb-md">
+        <div className="min-w-0 flex-1">
+          <h1
+            data-testid="page-title"
+            className="font-medium leading-ui text-on-surface"
+            style={{ fontSize: "var(--font-size-headline-medium)" }}
+          >
+            ホーム
+          </h1>
+          <p className="mt-xs text-body-medium text-on-surface-variant">
+            {pageSubtitleFor(pathname)}
+          </p>
+        </div>
+        <div className="flex flex-col items-end">
+          <button
+            type="button"
+            data-testid="home-refresh"
+            disabled={running}
+            onClick={() => {
+              void reload();
+            }}
+            className="inline-flex items-center gap-sm rounded-md border border-outline px-md py-xs text-ui-label text-on-surface hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90 disabled:opacity-50"
+          >
+            <RefreshCw aria-hidden size={15} />
+            最新の状況に更新
+          </button>
+          {busyReasons.map((reason) => (
+            <p
+              key={reason.id}
+              data-testid={`home-reason-${reason.id}`}
+              className="mt-xs text-ui-label text-on-surface-variant"
+            >
+              {reason.message}
+            </p>
+          ))}
+        </div>
       </header>
 
-      <main className="mx-auto max-w-240 p-xl">
+      <main className="min-w-0 flex-1 px-xl pb-xl">
         {loadState.status === "loading" ? (
-          <p className="text-body-medium text-on-surface-variant">
-            読み込み中…
-          </p>
+          <div className="flex flex-col gap-lg">
+            <HomeDashboardSkeleton />
+            <HomeQuickActions onOpen={open} />
+          </div>
         ) : null}
 
         {loadState.status === "error" ? (
-          <AppErrorBanner
-            testId="home-error"
-            message={`作業状況を取得できません: ${loadState.message}`}
-            onRetry={() => {
-              void reload();
-            }}
-          />
+          <div className="flex flex-col gap-lg">
+            <AppErrorBanner
+              testId="home-error"
+              message={`作業状況を取得できません: ${loadState.message}`}
+              onRetry={() => {
+                void reload();
+              }}
+            />
+            <HomeQuickActions onOpen={open} />
+          </div>
         ) : null}
 
         {loadState.status === "ready" ? (
-          <DashboardBody
-            dashboard={loadState.dashboard}
-            onOpen={(route) => {
-              void openAndReload(route);
-            }}
-            onRefresh={() => {
-              void reload();
-            }}
-          />
+          loadState.dashboard.isEmpty ? (
+            <EmptyHome
+              action={loadState.dashboard.nextAction}
+              onAction={() => {
+                const route = loadState.dashboard.nextAction.route;
+                if (route === null) {
+                  void reload();
+                  return;
+                }
+                open(route);
+              }}
+              onOpen={open}
+            />
+          ) : (
+            <DashboardBody
+              dashboard={loadState.dashboard}
+              onOpen={open}
+              onRefresh={() => {
+                void reload();
+              }}
+            />
+          )
         ) : null}
-
-        <div className="mt-xl border-t border-outline-variant pt-md">
-          <EntryPointRow
-            onOpen={(route) => {
-              void openAndReload(route);
-            }}
-          />
-        </div>
       </main>
     </div>
   );
@@ -139,308 +180,90 @@ function DashboardBody({
   onOpen: (route: string) => void;
   onRefresh: () => void;
 }): JSX.Element {
-  const action = dashboard.nextAction;
+  const handleAction = useCallback(
+    (action: HomeNextAction) => {
+      if (action.route === null) {
+        onRefresh();
+        return;
+      }
+      onOpen(action.route);
+    },
+    [onOpen, onRefresh],
+  );
+
   return (
-    <div className="flex flex-col gap-xl">
-      <NextUpCard action={action} onOpen={onOpen} onRefresh={onRefresh} />
-      {dashboard.visibleTests.length > 0 ? (
-        <section>
-          <SectionHeader
-            hiddenTestCount={dashboard.hiddenTestCount}
-            onOpen={onOpen}
-          />
-          <div className="mt-sm flex flex-col gap-md">
-            {dashboard.visibleTests.map((progress) => (
-              <TestProgressCard
-                key={progress.test.id}
-                progress={progress}
-                onOpen={onOpen}
-              />
-            ))}
-          </div>
-        </section>
+    <div className="flex flex-col gap-lg">
+      {dashboard.degradedTests.length > 0 ? (
+        <DegradedNotice dashboard={dashboard} />
       ) : null}
+      <div className="grid grid-cols-1 gap-lg lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <HomeHeroCard
+            action={dashboard.nextAction}
+            onAction={() => {
+              handleAction(dashboard.nextAction);
+            }}
+          />
+        </div>
+        <HomeQuickActions onOpen={onOpen} />
+        <div className="lg:col-span-2">
+          <HomeProgressPanel dashboard={dashboard} />
+        </div>
+        <HomeTestDonutPanel dashboard={dashboard} />
+        <div className="lg:col-span-3">
+          <HomeRecentTestsTable dashboard={dashboard} onOpen={onOpen} />
+        </div>
+      </div>
     </div>
   );
 }
 
-function NextUpCard({
+function DegradedNotice({
+  dashboard,
+}: {
+  dashboard: HomeDashboard;
+}): JSX.Element {
+  const names = dashboard.degradedTests.map((test) => test.testName).join("、");
+  return (
+    <div
+      role="status"
+      data-testid="home-degraded"
+      className="rounded-xl border border-outline-variant bg-surface-container p-lg text-body-medium text-on-surface-variant"
+    >
+      <p>
+        一部のテストの答案を取得できませんでした（{names}）。そのテストの件数は
+        下の集計に含めていません。「最新の状況に更新」でもう一度試せます。
+      </p>
+    </div>
+  );
+}
+
+function EmptyHome({
   action,
+  onAction,
   onOpen,
-  onRefresh,
 }: {
   action: HomeNextAction;
-  onOpen: (route: string) => void;
-  onRefresh: () => void;
-}): JSX.Element {
-  const route = action.route;
-  return (
-    <section
-      data-testid="home-next-up"
-      className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-    >
-      <div className="flex gap-lg">
-        <div
-          className={`text-title-large ${toneClass(action.tone)}`}
-          aria-hidden
-        >
-          ●
-        </div>
-        <div className="flex-1">
-          <h2 className="text-title-large font-medium leading-ui">
-            {action.headline}
-          </h2>
-          <p className="mt-xs text-body-medium text-on-surface-variant">
-            {action.detail}
-          </p>
-        </div>
-      </div>
-      <div className="mt-lg flex justify-end">
-        <button
-          type="button"
-          data-testid="home-next-up-action"
-          className="rounded-md bg-primary px-lg py-sm text-ui-label text-on-primary"
-          onClick={() => {
-            if (route === null) {
-              onRefresh();
-              return;
-            }
-            onOpen(route);
-          }}
-        >
-          {action.actionLabel}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function SectionHeader({
-  hiddenTestCount,
-  onOpen,
-}: {
-  hiddenTestCount: number;
+  onAction: () => void;
   onOpen: (route: string) => void;
 }): JSX.Element {
   return (
-    <div className="flex items-center justify-between">
-      <h2 className="text-title-medium font-medium">テストの進み具合</h2>
-      {hiddenTestCount > 0 ? (
-        <button
-          type="button"
-          data-testid="home-open-hidden-tests"
-          className="text-ui-label text-primary"
-          onClick={() => {
-            onOpen(AppRoutes.testList);
-          }}
-        >
-          他{hiddenTestCount}件を見る
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function TestProgressCard({
-  progress,
-  onOpen,
-}: {
-  progress: HomeTestProgress;
-  onOpen: (route: string) => void;
-}): JSX.Element {
-  const test = progress.test;
-  const resume = resumeAction(progress, onOpen);
-  return (
-    <article
-      data-testid={`home-test-card-${test.id}`}
-      className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-    >
-      <h3 className="text-title-medium font-medium">{test.name}</h3>
-      {progress.isDraft ? (
+    <div data-testid="home-empty-state" className="flex flex-col gap-lg">
+      <HomeHeroCard action={action} onAction={onAction} />
+      <div className="rounded-xl bg-surface-container p-lg">
+        <h2 className="text-body-medium font-semibold text-on-surface">
+          ダッシュボードに何が並ぶか
+        </h2>
+        <ul className="mt-sm flex flex-col gap-xs text-body-medium text-on-surface-variant">
+          <li>・取り込んだ答案が日ごとに何件届いたか（直近7日）</li>
+          <li>・テストが準備中・進行中・完了のどれだけあるか</li>
+          <li>・テストごとの答案数と確認済みの進み具合</li>
+        </ul>
         <p className="mt-sm text-body-medium text-on-surface-variant">
-          登録が未完了です。回答欄と設問依存関係を確認するまで答案を取り込めません。
+          資料を取り込むと、ここに実データが並びます。
         </p>
-      ) : (
-        <>
-          <SubmissionProgress progress={progress} onOpen={onOpen} />
-          <BucketCounts progress={progress} />
-        </>
-      )}
-      {resume}
-    </article>
-  );
-}
-
-function SubmissionProgress({
-  progress,
-  onOpen,
-}: {
-  progress: HomeTestProgress;
-  onOpen: (route: string) => void;
-}): JSX.Element | null {
-  if (progress.total === 0) {
-    return (
-      <p className="mt-sm text-body-medium text-on-surface-variant">
-        まだ答案が取り込まれていません
-      </p>
-    );
-  }
-
-  const done = progress.doneCount;
-  const total = progress.total;
-  return (
-    <button
-      type="button"
-      data-testid={`home-open-queue-${progress.test.id}`}
-      className="mt-sm w-full rounded-md px-xs py-xs text-left"
-      onClick={() => {
-        onOpen(submissionQueue(progress.test.id));
-      }}
-    >
-      <div className="flex items-center gap-xs text-body-medium">
-        <span>
-          確認済み {done} / {total}
-        </span>
-        <span aria-hidden>›</span>
       </div>
-      <div
-        className="mt-xs h-2 rounded-sm bg-surface-container-high"
-        role="progressbar"
-        aria-label={`${progress.test.name} の確認済み答案`}
-        aria-valuemin={0}
-        aria-valuemax={total}
-        aria-valuenow={done}
-      >
-        <div
-          className="h-full rounded-sm bg-primary"
-          style={{ width: `${(done / total) * 100}%` }}
-        />
-      </div>
-    </button>
-  );
-}
-
-function BucketCounts({
-  progress,
-}: {
-  progress: HomeTestProgress;
-}): JSX.Element | null {
-  const shown = HOME_WORK_BUCKET_ORDER.flatMap((bucket) => {
-    if (bucket === HomeWorkBucket.done) {
-      return [];
-    }
-    const count = progress.countOf(bucket);
-    if (count === 0) {
-      return [];
-    }
-    const meta = homeWorkBucketMeta(bucket);
-    return [{ bucket, count, label: meta.label }];
-  });
-
-  if (shown.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="mt-sm flex flex-wrap gap-md text-ui-label">
-      {shown.map(({ label, count }) => (
-        <span key={label}>
-          {label} {count}件
-        </span>
-      ))}
+      <HomeQuickActions onOpen={onOpen} />
     </div>
   );
 }
-
-function resumeAction(
-  progress: HomeTestProgress,
-  onOpen: (route: string) => void,
-): JSX.Element | null {
-  const test = progress.test;
-  if (progress.isDraft) {
-    return (
-      <button
-        type="button"
-        data-testid={`home-resume-registration-${test.id}`}
-        className="mt-md rounded-md bg-secondary-container px-md py-sm text-ui-label text-on-secondary-container"
-        onClick={() => {
-          onOpen(testSettings(test.id));
-        }}
-      >
-        登録を続ける
-      </button>
-    );
-  }
-
-  const resumable = progress.resumableSubmission;
-  if (resumable === null) {
-    return null;
-  }
-
-  const label =
-    resumable.student_label === null || resumable.student_label === undefined
-      ? "レビューを続ける"
-      : `レビューを続ける（${resumable.student_label}）`;
-
-  return (
-    <button
-      type="button"
-      data-testid={`home-resume-review-${test.id}`}
-      className="mt-md rounded-md bg-secondary-container px-md py-sm text-ui-label text-on-secondary-container"
-      onClick={() => {
-        onOpen(pdfReview(test.id, resumable.id));
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function EntryPointRow({
-  onOpen,
-}: {
-  onOpen: (route: string) => void;
-}): JSX.Element {
-  return (
-    <div className="flex flex-wrap gap-sm">
-      <button
-        type="button"
-        data-testid="home-open-intake"
-        className="rounded-md border border-outline px-md py-sm text-ui-label"
-        onClick={() => {
-          onOpen(AppRoutes.intake);
-        }}
-      >
-        資料を取り込む
-      </button>
-      <button
-        type="button"
-        data-testid="home-open-test-list-footer"
-        className="rounded-md border border-outline px-md py-sm text-ui-label"
-        onClick={() => {
-          onOpen(AppRoutes.testList);
-        }}
-      >
-        テスト一覧
-      </button>
-      <button
-        type="button"
-        data-testid="home-open-settings"
-        className="rounded-md border border-outline px-md py-sm text-ui-label"
-        onClick={() => {
-          onOpen(AppRoutes.settings);
-        }}
-      >
-        設定
-      </button>
-    </div>
-  );
-}
-
-const HOME_WORK_BUCKET_ORDER = [
-  HomeWorkBucket.needsReview,
-  HomeWorkBucket.intakeDone,
-  HomeWorkBucket.processing,
-  HomeWorkBucket.failed,
-  HomeWorkBucket.done,
-] as const;
