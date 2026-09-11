@@ -634,6 +634,46 @@ Issue #256 で決定された段階的対応方針に基づき、Issue #260 に�
 4. **画面とPDFの整合性**: Python（`backend/src/auto_scoring/domain/annotation_layout.py`）と Electron（`desktop/src/renderer/core/pdf-review-geometry.ts`）に同一の判定ロジックを実装し、両側で同一のテストを固定した。
 5. **プローブの処分**: `backend/poc/issue_152_annotation_width/` は削除し、合成データによる回帰テストを `backend/tests/test_annotation_layout.py` および `desktop/test/pdf-review-geometry.test.ts` へ昇格させた。実データを要する `--data` 経路は撤去した。
 
+#### 2.6.5 Issue #256 — 下線・囲みの行ごと複数矩形（第2段）
+
+Issue #260 の第1段で下線・囲みは暫定的に §12.4 へ退避していた。本節は第2段として
+**UNDERLINE / BOX だけ**改行跨ぎアンカーを行ごとの矩形リストへ分割し、答案上に描く。
+
+**採用: 解決時の複数矩形（描画レイヤのみ）。永続化スキーマは変えない。**
+
+| 層                                | 変更                                                                                                       |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 永続化 `Annotation.rect`          | 変更なし。明示座標は従来どおり 0〜1 個（人が置いた印）。AI は引き続き `anchor_text` だけ返す。             |
+| 解決 `resolve_annotation_rects`   | **新規**。`list[NormalizedRect] \| None` を返す。単一行は長さ 1、改行跨ぎ UNDERLINE/BOX は行数と同じ長さ。 |
+| 出力 `AnnotationMark`             | 変更なし（1 矩形 1 マーク）。`build_export_marks` が解決リストを **1 矩形ずつ別マーク** に展開する。       |
+| OpenAPI `AnnotationResponse.rect` | **変更なし**（共有スキーマ）。複数矩形はクライアント／export 時の解決結果であり API ペイロードではない。   |
+| Electron / Flutter 描画           | `resolveAnnotationRects` で得た各矩形を重ね描き。                                                          |
+
+**種別ごとの規則（#260 の CROSS 限定は維持）**
+
+| 種別                | 改行跨ぎマッチ時                                                |
+| ------------------- | --------------------------------------------------------------- |
+| CROSS               | 先頭行のトークン群のみ → **1 矩形**（2 行に × を 2 個描かない） |
+| UNDERLINE / BOX     | 読み順の行グループごとに外接矩形 → **N 矩形**                   |
+| その他（CIRCLE 等） | `None`（§12.4 退避。全幅外接矩形は作らない）                    |
+
+行の切り方は #260 と同じ `_is_same_line`（トークン末尾 `\n` で行終端、水平／垂直の重なり判定）。
+
+**捨てた案**
+
+1. **`Annotation.rect` を配列に拡張して DB / OpenAPI まで変える** — 複数矩形は OCR 解決の派生値であり、再採点で OCR が変われば座標も変わる。永続化すると古い矩形が残り、§12.1「AI に座標を決めさせない」と矛盾する。
+2. **全面的なコメント退避（選択肢 2）を最終形にする** — Issue #256 コメントで否決。改行跨ぎ下線は普通に起き、退避では「どこを直すか」が答案から消える。
+3. **1 つの `AnnotationMark` に `rects[]` を持たせ PDF エンジンを変更** — 可能だが、既存の「1 マーク = 1 回 `_draw_mark`」を壊す。展開して複数マークにする方が `PdfEngine` 契約を変えずに済む。
+
+**不変条件（回帰）**
+
+- 単一行 20 件の占有幅中央値 ≈15% を悪化させない（#260 プローブ昇格テスト）。
+- 幅 >95% の矩形を生成しない。
+- CROSS は単一行（または先頭行 1 矩形）限定。
+- Python / Electron / Flutter が同一 fixture で同一 `rects` を返す（INV-053 拡張）。
+
+**変異検査（PR 記載用）**: `_group_boxes_by_line` を無効化して単一外接矩形に戻すと、改行跨ぎ UNDERLINE の新規テストが赤くなることを PR で記録する。
+
 ## 3. `PdfEngine.render_annotations`（Issue #23で追加）
 
 `domain/pdf_engine.py`の`PdfEngine`契約へ新しいメソッドを追加した。
