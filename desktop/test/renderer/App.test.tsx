@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { SidecarStatus } from "../../src/shared/bridge.js";
 import { App } from "../../src/renderer/App";
@@ -60,13 +60,21 @@ function renderApp() {
 }
 
 describe("App sidecar lifecycle wiring", () => {
-  it("shows a splash while the sidecar is starting (INV-030)", async () => {
+  it("shows a splash while the sidecar is starting (INV-030, UG-15)", async () => {
     const statusRef = { current: { kind: "starting" } as SidecarStatus };
     stubBridge(statusRef);
     renderApp();
 
-    expect(await screen.findByTestId("sidecar-splash")).toBeDefined();
+    const splash = await screen.findByTestId("sidecar-splash");
+    expect(
+      within(splash).getByRole("heading", { name: "Auto-Scoring" }),
+    ).toBeDefined();
     expect(screen.getByText("バックエンドを起動しています…")).toBeDefined();
+    // UG-15: the wait explains itself, so a slow first start is not mistaken
+    // for a hang. Pinned here rather than in E2E, where the splash is transient.
+    expect(
+      screen.getByText("初回起動には時間がかかることがあります。"),
+    ).toBeDefined();
   });
 
   it("shows the home entry points once the sidecar is ready", async () => {
