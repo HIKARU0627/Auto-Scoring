@@ -6,7 +6,7 @@ import {
   SubmissionQueueDataError,
   type SubmissionQueueData,
   type SubmissionResponse,
-} from "../../api/submission-queue-data.js";
+} from "../../core/submission-queue-data.js";
 import { submissionConfirm } from "../../core/app-routes.js";
 import { describeReviewReason } from "../../core/submission-review-reason.js";
 import { submissionStatusVisualOf } from "../../core/submission-status.js";

@@ -14,7 +14,7 @@ import {
   type IntakeBridge,
   type TestSummary,
   importedAnything,
-} from "../../api/intake-data.js";
+} from "../../core/intake-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   intakeFolderPickRequirements,

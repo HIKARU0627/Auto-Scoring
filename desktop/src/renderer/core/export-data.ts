@@ -4,17 +4,14 @@
  * Uses the generated OpenAPI client only — no hand-written fetch.
  */
 
-import type { SidecarClient } from "./client.js";
-import type { components } from "./generated/schema.js";
+import type { SidecarClient } from "../api/client.js";
+import type { components } from "../api/generated/schema.js";
 import {
   ExportDataError,
   exportConflictFromResponse,
-} from "../core/export-conflict.js";
+} from "./export-conflict.js";
 
-export {
-  ExportConflictError,
-  ExportDataError,
-} from "../core/export-conflict.js";
+export { ExportConflictError, ExportDataError } from "./export-conflict.js";
 
 export type ExportRequestResponse =
   components["schemas"]["ExportRequestResponse"];

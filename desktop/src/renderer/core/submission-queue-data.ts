@@ -4,9 +4,9 @@
  * Uses the generated OpenAPI client only — no hand-written fetch.
  */
 
-import type { components } from "./generated/schema.js";
-import { ReviewQueue } from "../core/review-queue.js";
-import type { SidecarClient } from "./client.js";
+import type { components } from "../api/generated/schema.js";
+import { ReviewQueue } from "./review-queue.js";
+import type { SidecarClient } from "../api/client.js";
 
 export type TestResponse = components["schemas"]["TestResponse"];
 export type SubmissionResponse = components["schemas"]["SubmissionResponse"];

@@ -6,7 +6,7 @@ import {
   type AnnotationResponse,
   type NormalizedRect,
 } from "../../core/pdf-review-geometry.js";
-import type { RecognitionResponse } from "../../api/pdf-review-data.js";
+import type { RecognitionResponse } from "../../core/pdf-review-data.js";
 import type { PageImageState } from "../answer-area-editor/answer-area-types.js";
 
 export interface ResolvedAnnotation {

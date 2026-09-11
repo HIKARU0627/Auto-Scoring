@@ -1,5 +1,5 @@
-import type { SidecarClient } from "./client.js";
-import { HomeDashboard } from "../core/home-dashboard.js";
+import type { SidecarClient } from "../api/client.js";
+import { HomeDashboard } from "./home-dashboard.js";
 
 export class HomeDataError extends Error {
   constructor(message: string) {
@@ -23,7 +23,7 @@ export async function loadHomeDashboard(
   const tests = registrations.data;
   const submissionsByTestId: Record<
     string,
-    readonly import("../core/home-dashboard.js").SubmissionResponse[]
+    readonly import("./home-dashboard.js").SubmissionResponse[]
   > = {};
 
   const submissionLists = await Promise.all(

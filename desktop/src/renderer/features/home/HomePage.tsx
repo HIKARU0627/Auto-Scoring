@@ -15,7 +15,7 @@ import {
   HomeWorkBucket,
   homeWorkBucketMeta,
 } from "../../core/submission-work-bucket.js";
-import { HomeDataError, loadHomeDashboard } from "../../api/home-data.js";
+import { HomeDataError, loadHomeDashboard } from "../../core/home-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import { useRouter } from "../../navigation/router.js";
 

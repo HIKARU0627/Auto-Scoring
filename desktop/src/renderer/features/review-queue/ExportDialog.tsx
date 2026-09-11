@@ -7,7 +7,7 @@ import {
   requestSubmissionExport,
   retryJob,
   getJob,
-} from "../../api/export-data.js";
+} from "../../core/export-data.js";
 import {
   ExportConflictError,
   refusalDetail,

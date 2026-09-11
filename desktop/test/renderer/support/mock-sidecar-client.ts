@@ -6,12 +6,12 @@ import type {
   ExportRequestResponse,
   ExportResponse,
   JobResponse,
-} from "../../../src/renderer/api/export-data.js";
+} from "../../../src/renderer/core/export-data.js";
 import type {
   SubmissionResponse,
   SubmissionReviewProgressResponse,
   TestResponse,
-} from "../../../src/renderer/api/submission-queue-data.js";
+} from "../../../src/renderer/core/submission-queue-data.js";
 import type {
   ApiKeySettingsResponse,
   ApiKeyStatusModel,
