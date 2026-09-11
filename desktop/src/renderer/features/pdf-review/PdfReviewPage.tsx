@@ -27,7 +27,12 @@ import {
 } from "../../core/dependency-dag.js";
 import { sortQuestionsForReview } from "../../core/question-order.js";
 import {
+  ActionRequirements,
+  reviewApproveRequirements,
+} from "../../core/action-requirements.js";
+import {
   deriveQuestionStatus,
+  jobIsInProgress,
   labelWaitingFor,
   resolveQuestionWait,
 } from "../../core/question-status.js";
@@ -81,6 +86,38 @@ function enterActivatesLocally(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * How often the review screen re-reads the job list while grading is still in
+ * flight (Issue #319).
+ *
+ * 2s is fast enough that a reviewer sees the approval unlock "by itself" as
+ * soon as the job lands (the live run measured a 32s job), and slow enough
+ * that it does not flood the single-worker sidecar. See
+ * `docs/pdf-review-overlay.md` §2.16 for why these values.
+ */
+export const JOB_POLL_INTERVAL_MS = 2000;
+
+/**
+ * Stop following automatically after this many polls -- 5 minutes at
+ * {@link JOB_POLL_INTERVAL_MS} -- and tell the reviewer to reload instead.
+ */
+export const JOB_POLL_MAX_ATTEMPTS = 150;
+
+/**
+ * The bare question number (`1`) whether the stored value is `1` or `問1`.
+ *
+ * Question numbers are stored with their prefix (`問1`), but some callers and
+ * tests use the bare form (`1`). Display sites add `問` themselves and
+ * `labelWaitingFor` adds it too, so an unconditional prepend produced `問問1`
+ * on screen. Stripping here keeps every path at one prefix.
+ */
+function questionNumberValue(number: string | null | undefined): string {
+  if (number == null || number.length === 0) {
+    return "";
+  }
+  return number.startsWith("問") ? number.slice(1) : number;
+}
+
 export function PdfReviewPage(): JSX.Element {
   const client = useSidecarClient();
   const { params } = useRouter();
@@ -90,6 +127,7 @@ export function PdfReviewPage(): JSX.Element {
 
   const mounted = useMountedRef();
   const inspectorRef = useRef<HTMLDivElement>(null);
+  const pollAttemptsRef = useRef(0);
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [questions, setQuestions] = useState<
     ReturnType<typeof sortQuestionsForReview>
@@ -103,6 +141,7 @@ export function PdfReviewPage(): JSX.Element {
   const [answerImageUrl, setAnswerImageUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [jobsRefreshStalled, setJobsRefreshStalled] = useState(false);
 
   const selectedQuestion = questions[selectedIndex] ?? null;
 
@@ -175,6 +214,45 @@ export function PdfReviewPage(): JSX.Element {
     }
   }, [client, initialQuestionId, mounted, submissionId, testId]);
 
+  /**
+   * Re-read one question's material and answer crop.
+   *
+   * `reportError` distinguishes the reviewer opening a question (a failure
+   * belongs on screen) from a background refresh after grading finished (a
+   * single failed poll must not blank the whole page).
+   */
+  const fetchQuestionData = useCallback(
+    async (questionId: string, reportError: boolean): Promise<void> => {
+      try {
+        const [data, imageUrl] = await Promise.all([
+          loadQuestionReviewData(client, submissionId, questionId),
+          loadAnswerImageUrl(client, submissionId, questionId),
+        ]);
+        setStateIfMounted(mounted, setAnswerImageUrl, imageUrl);
+        setStateIfMounted(mounted, setLoadState, (current) => {
+          if (current.status !== "ready") {
+            return current;
+          }
+          const next = new Map(current.questionData);
+          next.set(questionId, data);
+          return { ...current, questionData: next };
+        });
+      } catch (error) {
+        if (!reportError) {
+          return;
+        }
+        const message =
+          error instanceof PdfReviewDataError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        setStateIfMounted(mounted, setLoadState, { status: "error", message });
+      }
+    },
+    [client, mounted, submissionId],
+  );
+
   const loadSelectedQuestion = useCallback(async () => {
     if (selectedQuestion == null || loadState.status !== "ready") {
       return;
@@ -182,36 +260,37 @@ export function PdfReviewPage(): JSX.Element {
     if (loadState.questionData.has(selectedQuestion.id)) {
       return;
     }
+    await fetchQuestionData(selectedQuestion.id, true);
+  }, [fetchQuestionData, loadState, selectedQuestion]);
+
+  const pollJobs = useCallback(async (): Promise<void> => {
+    let refreshed: Awaited<ReturnType<typeof loadJobs>>;
     try {
-      const data = await loadQuestionReviewData(
-        client,
-        submissionId,
-        selectedQuestion.id,
-      );
-      const imageUrl = await loadAnswerImageUrl(
-        client,
-        submissionId,
-        selectedQuestion.id,
-      );
-      setStateIfMounted(mounted, setAnswerImageUrl, imageUrl);
-      setStateIfMounted(mounted, setLoadState, (current) => {
-        if (current.status !== "ready") {
-          return current;
-        }
-        const next = new Map(current.questionData);
-        next.set(selectedQuestion.id, data);
-        return { ...current, questionData: next };
-      });
-    } catch (error) {
-      const message =
-        error instanceof PdfReviewDataError
-          ? error.message
-          : error instanceof Error
-            ? error.message
-            : String(error);
-      setStateIfMounted(mounted, setLoadState, { status: "error", message });
+      refreshed = await loadJobs(client, submissionId);
+    } catch {
+      // A failed poll is exactly the "we can no longer see the jobs" case the
+      // stale notice exists for; keep the last known list on screen.
+      setStateIfMounted(mounted, setJobsRefreshStalled, true);
+      return;
     }
-  }, [client, loadState, mounted, selectedQuestion, submissionId]);
+    const previouslyRunning = new Set(
+      jobs.filter(jobIsInProgress).map((job) => job.question_id),
+    );
+    setStateIfMounted(mounted, setJobs, refreshed);
+    const finishedQuestionIds = new Set<string>();
+    for (const job of refreshed) {
+      if (
+        job.question_id != null &&
+        !jobIsInProgress(job) &&
+        previouslyRunning.has(job.question_id)
+      ) {
+        finishedQuestionIds.add(job.question_id);
+      }
+    }
+    for (const questionId of finishedQuestionIds) {
+      await fetchQuestionData(questionId, false);
+    }
+  }, [client, fetchQuestionData, jobs, mounted, submissionId]);
 
   useEffect(() => {
     void reload();
@@ -220,6 +299,42 @@ export function PdfReviewPage(): JSX.Element {
   useEffect(() => {
     void loadSelectedQuestion();
   }, [loadSelectedQuestion]);
+
+  const hasJobsInProgress = jobs.some(jobIsInProgress);
+
+  useEffect(() => {
+    if (loadState.status !== "ready" || !hasJobsInProgress) {
+      pollAttemptsRef.current = 0;
+      return undefined;
+    }
+    if (jobsRefreshStalled) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      pollAttemptsRef.current += 1;
+      if (pollAttemptsRef.current >= JOB_POLL_MAX_ATTEMPTS) {
+        setStateIfMounted(mounted, setJobsRefreshStalled, true);
+        return;
+      }
+      void pollJobs();
+    }, JOB_POLL_INTERVAL_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    hasJobsInProgress,
+    jobs,
+    jobsRefreshStalled,
+    loadState.status,
+    mounted,
+    pollJobs,
+  ]);
+
+  const reloadReview = useCallback(async () => {
+    pollAttemptsRef.current = 0;
+    setJobsRefreshStalled(false);
+    await reload();
+  }, [reload]);
 
   const reviewsByQuestion = useMemo(() => {
     if (loadState.status !== "ready") {
@@ -238,7 +353,10 @@ export function PdfReviewPage(): JSX.Element {
   const dagQuestions = useMemo(
     () =>
       deriveStatusesFromJobs({
-        questions: questions.map((q) => ({ id: q.id, label: q.number })),
+        questions: questions.map((q) => ({
+          id: q.id,
+          label: questionNumberValue(q.number),
+        })),
         jobs,
         reviewsByQuestion,
       }),
@@ -306,13 +424,23 @@ export function PdfReviewPage(): JSX.Element {
             ),
           });
         },
-        numberOf: (id) => questions.find((q) => q.id === id)?.number ?? null,
+        numberOf: (id) => {
+          const number = questions.find((q) => q.id === id)?.number;
+          return number == null ? null : questionNumberValue(number);
+        },
       })
     : null;
 
   const canApprove =
     materialRead.allRowsCovered && selectedStatus === "graded" && !busy;
   const blockedOnUnread = !materialRead.allRowsCovered;
+  const gradingInProgress =
+    selectedStatus === "queued" ||
+    selectedStatus === "running" ||
+    selectedStatus === "blocked";
+  const approveBlockedReason = canApprove
+    ? null
+    : (reviewApproveRequirements({ busy, gradingInProgress })[0] ?? null);
 
   const performAction = useCallback(
     async (action: "approve" | "reject" | "regrade" | "undo") => {
@@ -434,6 +562,28 @@ export function PdfReviewPage(): JSX.Element {
 
       {loadState.status === "ready" ? (
         <div className="flex flex-col gap-lg">
+          <div className="flex items-center justify-end gap-sm">
+            {jobsRefreshStalled ? (
+              <p
+                data-testid="review-refresh-stale-notice"
+                className="text-body-small text-attention"
+              >
+                {ActionRequirements.gradingStatusStale.message}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              data-testid="review-refresh-button"
+              className="rounded-md border border-outline px-md py-xs text-ui-label"
+              disabled={busy}
+              onClick={() => {
+                void reloadReview();
+              }}
+            >
+              再読み込み
+            </button>
+          </div>
+
           {dagLayout != null ? (
             <DependencyDagPanel
               layout={dagLayout}
@@ -480,10 +630,13 @@ export function PdfReviewPage(): JSX.Element {
                       ),
                     });
                   },
-                  numberOf: (id) =>
-                    questions.find((q) => q.id === id)?.number ?? null,
+                  numberOf: (id) => {
+                    const number = questions.find((q) => q.id === id)?.number;
+                    return number == null ? null : questionNumberValue(number);
+                  },
                 });
                 const label = labelWaitingFor(status, wait);
+                const displayNumber = questionNumberValue(question.number);
                 return (
                   <button
                     key={question.id}
@@ -494,14 +647,14 @@ export function PdfReviewPage(): JSX.Element {
                         ? "border-primary"
                         : "border-outline-variant"
                     }`}
-                    aria-label={`問${question.number} ${label}`}
+                    aria-label={`問${displayNumber} ${label}`}
                     title={label}
                     onClick={() => {
                       setSelectedIndex(index);
                     }}
                   >
                     <QuestionStatusBadge status={status} />
-                    <span> 問{question.number}</span>
+                    <span> 問{displayNumber}</span>
                   </button>
                 );
               })}
@@ -548,7 +701,7 @@ export function PdfReviewPage(): JSX.Element {
             >
               <div data-testid="review-question-state">
                 <span className="text-body-medium">
-                  問{selectedQuestion?.number ?? ""}{" "}
+                  問{questionNumberValue(selectedQuestion?.number)}{" "}
                   {labelWaitingFor(selectedStatus, selectedWait)}
                 </span>
               </div>
@@ -693,6 +846,16 @@ export function PdfReviewPage(): JSX.Element {
                   取り消し
                 </button>
               </div>
+
+              {approveBlockedReason != null ? (
+                <p
+                  data-testid="review-approve-reason"
+                  data-requirement-id={approveBlockedReason.id}
+                  className="text-body-small text-on-surface-variant"
+                >
+                  {approveBlockedReason.message}
+                </p>
+              ) : null}
             </aside>
           </div>
 

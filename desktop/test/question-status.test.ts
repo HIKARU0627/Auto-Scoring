@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { components } from "../src/renderer/api/generated/schema.js";
-import { deriveQuestionStatus } from "../src/renderer/core/question-status.js";
+import {
+  deriveQuestionStatus,
+  jobIsInProgress,
+} from "../src/renderer/core/question-status.js";
 
 type JobResponse = components["schemas"]["JobResponse"];
 type ReviewResponse = components["schemas"]["ReviewResponse"];
@@ -168,6 +171,17 @@ describe("deriveQuestionStatus", () => {
 });
 
 describe("INV-006: question status is derived centrally", () => {
+  it("only tells a caller a job is in flight for non-terminal states (Issue #319)", () => {
+    expect(jobIsInProgress(null)).toBe(false);
+    expect(jobIsInProgress(undefined)).toBe(false);
+    for (const state of ["queued", "running", "blocked"]) {
+      expect(jobIsInProgress(job({ state }))).toBe(true);
+    }
+    for (const state of ["succeeded", "failed", "cancelled"]) {
+      expect(jobIsInProgress(job({ state }))).toBe(false);
+    }
+  });
+
   const STATUS_SURFACES = [
     "src/renderer/features/pdf-review/PdfReviewPage.tsx",
     "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",

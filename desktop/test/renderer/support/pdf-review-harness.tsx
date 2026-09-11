@@ -23,6 +23,12 @@ export interface PdfReviewHarnessOptions {
   questionId?: string;
   questions?: QuestionResponse[];
   jobs?: JobResponse[];
+  /**
+   * Successive answers for `GET /submissions/{id}/jobs` (Issue #319). The
+   * last entry repeats once the sequence is exhausted, so a test can hold a
+   * job "running" and then let it finish.
+   */
+  jobsSequence?: JobResponse[][];
   edges?: DependencyEdge[];
   grades?: GradeResultResponse[];
   recognitions?: RecognitionResponse[];
@@ -55,6 +61,23 @@ export function buildQuestion(
     scoring_method: input.scoring_method ?? "additive",
     answer_area: input.answer_area ?? null,
     rubric: input.rubric ?? [],
+  };
+}
+
+export function buildJob(
+  input: Partial<JobResponse> & { state: string },
+): JobResponse {
+  return {
+    id: input.id ?? "job-1",
+    kind: input.kind ?? "grading",
+    submission_id: input.submission_id ?? DEFAULT_SUBMISSION_ID,
+    question_id: input.question_id ?? "q-1",
+    state: input.state,
+    usable: input.usable ?? null,
+    attempts: input.attempts ?? 1,
+    max_attempts: input.max_attempts ?? 3,
+    created_at: input.created_at ?? "2026-01-01T00:00:00Z",
+    updated_at: input.updated_at ?? "2026-01-01T00:00:00Z",
   };
 }
 
@@ -147,6 +170,7 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
   ];
   const annotations = options.annotations ?? [];
   const reviews = options.reviews ?? [];
+  let jobsRead = 0;
 
   const client = {
     GET: vi.fn(async (path, _init) => {
@@ -190,7 +214,24 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
         };
       }
       if (path === "/submissions/{submission_id}/jobs") {
-        return { data: jobs, response: new Response(), error: undefined };
+        const sequence = options.jobsSequence;
+        if (sequence != null && sequence.length > 0) {
+          const index = Math.min(jobsRead, sequence.length - 1);
+          jobsRead += 1;
+          // A fresh array each read, like a real HTTP response: reusing the
+          // same reference would make React skip the re-render and stop the
+          // screen's polling.
+          return {
+            data: [...(sequence[index] ?? [])],
+            response: new Response(),
+            error: undefined,
+          };
+        }
+        return {
+          data: [...jobs],
+          response: new Response(),
+          error: undefined,
+        };
       }
       if (path === "/submissions/{submission_id}/pages") {
         return {

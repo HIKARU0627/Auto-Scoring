@@ -13,6 +13,7 @@ import {
   apiKeyVerifyRequirements,
   completeRegistrationRequirements,
   dependencyGraphConfirmRequirements,
+  reviewApproveRequirements,
   whileRunningRequirements,
 } from "../src/renderer/core/action-requirements.js";
 
@@ -471,5 +472,39 @@ describe("action requirements: 未検出のまま確定 (Issue #314)", () => {
       "answer-coverage-complete",
     ]);
     expect(complete[0]?.message).toContain("5件すべて");
+  });
+});
+
+describe("action requirements: 添削レビューの承認 (Issue #319)", () => {
+  it("採点中は、なぜ承認できないかを採点の言葉で言う", () => {
+    const unmet = reviewApproveRequirements({
+      busy: false,
+      gradingInProgress: true,
+    });
+    expect(unmet.map((item) => item.id)).toEqual(["grading-in-progress"]);
+    expect(unmet[0]?.message).toContain("AIが採点中");
+    expect(unmet[0]?.message).toContain("承認");
+    expectActionable(unmet[0]!);
+  });
+
+  it("画面が処理中なら busy、採点が終われば理由は0件", () => {
+    expect(
+      reviewApproveRequirements({ busy: true, gradingInProgress: true }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["busy", "grading-in-progress"]);
+    expect(
+      reviewApproveRequirements({ busy: false, gradingInProgress: false }),
+    ).toEqual([]);
+  });
+
+  it("更新が取れていないことを黙って隠さない", () => {
+    expectActionable(ActionRequirements.gradingStatusStale);
+    expect(ActionRequirements.gradingStatusStale.message).toContain(
+      "更新できませんでした",
+    );
+    expect(ActionRequirements.gradingStatusStale.message).toContain(
+      "再読み込み",
+    );
   });
 });

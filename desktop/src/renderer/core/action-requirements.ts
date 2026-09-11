@@ -238,6 +238,14 @@ export const ActionRequirements = {
       "answer-coverage-complete",
       `採点基準の設問${covered}件すべてに回答欄があります。`,
     ),
+  gradingInProgress: requirement(
+    "grading-in-progress",
+    "AIが採点中です。採点が終わると承認できます。",
+  ),
+  gradingStatusStale: requirement(
+    "grading-status-stale",
+    "AI採点の状況を自動で更新できませんでした。「再読み込み」を押して最新の状態を確認してください。",
+  ),
 } as const;
 
 /** 答案の取込が失敗したときの種類。`createSubmission` が返す区分。 */
@@ -554,4 +562,28 @@ export function answerCoverageRequirements(input: {
       input.expected - input.covered,
     ),
   ];
+}
+
+/**
+ * 添削レビュー画面で「承認」が押せない理由 (Issue #319).
+ *
+ * Approve is disabled both while this screen is busy and while the selected
+ * question's grading job has not reached a terminal state. The second case is
+ * the one that stranded reviewers: the home screen sends them into review
+ * before grading finishes, and the screen said nothing about why the button
+ * was dead. Keeping that sentence here (rather than in the feature) is what
+ * INV-004 requires.
+ */
+export function reviewApproveRequirements(input: {
+  busy: boolean;
+  gradingInProgress: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.gradingInProgress) {
+    requirements.push(ActionRequirements.gradingInProgress);
+  }
+  return requirements;
 }

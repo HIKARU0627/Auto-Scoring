@@ -70,11 +70,13 @@ describe("sidecarFetch", () => {
   beforeEach(() => {
     mockIsPackaged.value = false;
     delete process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"];
+    delete process.env["AUTO_SCORING_E2E_STUB_GRADING_JOBS"];
   });
 
   afterEach(async () => {
     vi.unstubAllGlobals();
     delete process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"];
+    delete process.env["AUTO_SCORING_E2E_STUB_GRADING_JOBS"];
     await Promise.all(running.map((sidecar) => sidecar.close()));
     running.length = 0;
   });
@@ -197,6 +199,55 @@ describe("sidecarFetch", () => {
     ) as { test_id: string; questions: { number: string }[] };
     expect(body.test_id).toBe("t-e2e");
     expect(body.questions[0]?.number).toBe("問1");
+  });
+
+  it("stubs grading jobs from running to succeeded in E2E (Issue #319)", async () => {
+    process.env["AUTO_SCORING_E2E_STUB_GRADING_JOBS"] = "1";
+    const jobs = [
+      {
+        id: "job-1",
+        kind: "grading",
+        submission_id: "sub-stub-319",
+        question_id: "q-1",
+        state: "failed",
+        usable: false,
+        attempts: 1,
+        max_attempts: 3,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify(jobs), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const connection = { host: "127.0.0.1", port: 1, token: "unused" };
+
+    const reads = [] as { state: string; usable: boolean | null }[];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await sidecarFetch(connection, {
+        method: "GET",
+        urlPath: "/submissions/sub-stub-319/jobs",
+      });
+      reads.push(
+        (
+          JSON.parse(
+            Buffer.from(response.bodyBase64, "base64").toString("utf8"),
+          ) as { state: string; usable: boolean | null }[]
+        )[0]!,
+      );
+    }
+
+    expect(reads.slice(0, 4)).toHaveLength(4);
+    for (const read of reads.slice(0, 4)) {
+      expect(read).toMatchObject({ state: "running", usable: null });
+    }
+    expect(reads[4]).toMatchObject({ state: "succeeded", usable: true });
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
   });
 
   it("INV-204: a transport failure never echoes the URL, port, or token", async () => {
