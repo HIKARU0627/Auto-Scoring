@@ -111,6 +111,15 @@
   --layout-message-max-width: 480px;
   --layout-dashboard-max-width: 800px;
   --layout-dialog-content-width: 360px;
+  /* Viewport inset for centered modal panels: outer padding (xxl + lg). */
+  --layout-dialog-viewport-padding-block: calc(
+    var(--spacing-xxl) + var(--spacing-lg)
+  );
+  --layout-dialog-viewport-max-height: calc(
+    100dvh - var(--layout-dialog-viewport-padding-block)
+  );
+  /* Scrollable body row + fixed action footer row. */
+  --layout-dialog-body-footer-grid-rows: minmax(0, 1fr) auto;
   --layout-hairline: 1px;
   --layout-section-divider: 24px;
   --layout-dag-node-width: 116px;

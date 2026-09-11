@@ -1000,7 +1000,7 @@ export function TestSettingsPage(): JSX.Element {
               aria-modal="true"
             >
               <div className="flex min-h-full items-center justify-center p-lg">
-                <div className="grid w-full max-w-md max-h-[calc(100dvh-3rem)] grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-outline bg-surface shadow-lg">
+                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-lg border border-outline bg-surface shadow-lg">
                   <div className="overflow-y-auto p-lg">
                     <h3 className="text-title-medium font-medium">
                       採点基準PDFから抽出
