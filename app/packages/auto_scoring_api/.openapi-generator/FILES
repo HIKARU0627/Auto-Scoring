@@ -16,6 +16,7 @@ doc/BulkExportItemResponse.md
 doc/BulkExportItemStatus.md
 doc/BulkExportRequest.md
 doc/BulkExportResponse.md
+doc/CatalogState.md
 doc/ClassificationAvailabilityResponse.md
 doc/ClassificationEstimateModel.md
 doc/ClassificationNeed.md
@@ -41,6 +42,10 @@ doc/DependencyGraphResponse.md
 doc/DependencyProvision.md
 doc/DocumentPagesResponse.md
 doc/EditReviewRequest.md
+doc/ErrorCatalogApi.md
+doc/ErrorCatalogEntryInput.md
+doc/ErrorCatalogEntryModel.md
+doc/ErrorCatalogResponse.md
 doc/ExportApi.md
 doc/ExportRefusalReason.md
 doc/ExportRequestResponse.md
@@ -49,6 +54,8 @@ doc/GradeResultResponse.md
 doc/GradingAvailabilityResponse.md
 doc/GradingCostModel.md
 doc/HTTPValidationError.md
+doc/ImportConflictPolicy.md
+doc/ImportErrorCatalogRequest.md
 doc/IntakeApi.md
 doc/IntakeCostModel.md
 doc/IntakePlanResponse.md
@@ -88,6 +95,7 @@ doc/RoleSource.md
 doc/RubricCriterionResponse.md
 doc/RuleScope.md
 doc/SaveApiKeyRequest.md
+doc/SaveErrorCatalogRequest.md
 doc/SaveTemplatesRequest.md
 doc/ScannedFileModel.md
 doc/ScoreRequest.md
@@ -114,6 +122,7 @@ lib/src/api/ai_usage_api.dart
 lib/src/api/criteria_api.dart
 lib/src/api/default_api.dart
 lib/src/api/dependency_graph_api.dart
+lib/src/api/error_catalog_api.dart
 lib/src/api/export_api.dart
 lib/src/api/intake_api.dart
 lib/src/api/jobs_api.dart
@@ -143,6 +152,7 @@ lib/src/model/bulk_export_item_response.dart
 lib/src/model/bulk_export_item_status.dart
 lib/src/model/bulk_export_request.dart
 lib/src/model/bulk_export_response.dart
+lib/src/model/catalog_state.dart
 lib/src/model/classification_availability_response.dart
 lib/src/model/classification_estimate_model.dart
 lib/src/model/classification_need.dart
@@ -166,6 +176,9 @@ lib/src/model/dependency_graph_response.dart
 lib/src/model/dependency_provision.dart
 lib/src/model/document_pages_response.dart
 lib/src/model/edit_review_request.dart
+lib/src/model/error_catalog_entry_input.dart
+lib/src/model/error_catalog_entry_model.dart
+lib/src/model/error_catalog_response.dart
 lib/src/model/export_refusal_reason.dart
 lib/src/model/export_request_response.dart
 lib/src/model/export_response.dart
@@ -173,6 +186,8 @@ lib/src/model/grade_result_response.dart
 lib/src/model/grading_availability_response.dart
 lib/src/model/grading_cost_model.dart
 lib/src/model/http_validation_error.dart
+lib/src/model/import_conflict_policy.dart
+lib/src/model/import_error_catalog_request.dart
 lib/src/model/intake_cost_model.dart
 lib/src/model/intake_plan_response.dart
 lib/src/model/intake_rule_model.dart
@@ -207,6 +222,7 @@ lib/src/model/role_source.dart
 lib/src/model/rubric_criterion_response.dart
 lib/src/model/rule_scope.dart
 lib/src/model/save_api_key_request.dart
+lib/src/model/save_error_catalog_request.dart
 lib/src/model/save_templates_request.dart
 lib/src/model/scanned_file_model.dart
 lib/src/model/score_request.dart

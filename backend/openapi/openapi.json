@@ -687,6 +687,17 @@
         "title": "BulkExportResponse",
         "type": "object"
       },
+      "CatalogState": {
+        "description": "Why a test has, or has not, a usable \u8aa4\u7b54\u30ab\u30bf\u30ed\u30b0 (Issue #209).\n\nThe three situations Issue #106's logging used to collapse into one are\nnow three distinct wire values, because a person deciding what to do next\nneeds to tell \"we never received the file\" from \"we received it and could\nnot understand it\": the first means attach a \u6dfb\u524a\u8cc7\u6599, the second means\nthe one already attached is not a layout this reader knows.\n\n============================ ================================================\nvalue                        meaning\n============================ ================================================\n``not_registered``           no \u6dfb\u524a\u8cc7\u6599 of any kind is attached (a)\n``word_only``                a \u6dfb\u524a\u8cc7\u6599 is attached, but none is .xls/.xlsx (b)\n``unreadable``               an Excel \u6dfb\u524a\u8cc7\u6599 is attached but yielded no entries (c)\n``available``                entries were imported from the attached Excel\n============================ ================================================",
+        "enum": [
+          "not_registered",
+          "word_only",
+          "unreadable",
+          "available"
+        ],
+        "title": "CatalogState",
+        "type": "string"
+      },
       "ClassificationAvailabilityResponse": {
         "properties": {
           "available": {
@@ -1425,6 +1436,167 @@
         "title": "EditReviewRequest",
         "type": "object"
       },
+      "ErrorCatalogEntryInput": {
+        "description": "A row as the reviewer saved it. ``edited`` is the server's to set --\nany row that arrives through this route is a human edit by definition, so\naccepting the flag from the body would let a caller claim an AI row it\nnever touched.",
+        "properties": {
+          "deduction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deduction"
+          },
+          "mistake": {
+            "title": "Mistake",
+            "type": "string"
+          },
+          "question_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Label"
+          },
+          "red_ink": {
+            "title": "Red Ink",
+            "type": "string"
+          },
+          "round_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round Label"
+          }
+        },
+        "required": [
+          "mistake",
+          "red_ink"
+        ],
+        "title": "ErrorCatalogEntryInput",
+        "type": "object"
+      },
+      "ErrorCatalogEntryModel": {
+        "description": "One catalogue row over the wire.",
+        "properties": {
+          "deduction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deduction"
+          },
+          "edited": {
+            "default": false,
+            "title": "Edited",
+            "type": "boolean"
+          },
+          "mistake": {
+            "title": "Mistake",
+            "type": "string"
+          },
+          "question_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Label"
+          },
+          "red_ink": {
+            "title": "Red Ink",
+            "type": "string"
+          },
+          "round_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round Label"
+          }
+        },
+        "required": [
+          "mistake",
+          "red_ink"
+        ],
+        "title": "ErrorCatalogEntryModel",
+        "type": "object"
+      },
+      "ErrorCatalogResponse": {
+        "description": "A test's \u8aa4\u7b54\u30ab\u30bf\u30ed\u30b0, as the review screen sees it.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorCatalogEntryModel"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "entry_count": {
+            "title": "Entry Count",
+            "type": "integer"
+          },
+          "import_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Import Error"
+          },
+          "imported": {
+            "title": "Imported",
+            "type": "boolean"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CatalogState"
+          },
+          "test_id": {
+            "title": "Test Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "test_id",
+          "state",
+          "revision",
+          "imported",
+          "entries",
+          "entry_count"
+        ],
+        "title": "ErrorCatalogResponse",
+        "type": "object"
+      },
       "ExportRefusalReason": {
         "description": "Why the sidecar refuses to export one submission -- the two gates\n`export_refusal` evaluates, and the wire values the client reads.\n\nThe values travel verbatim: as ``detail.code`` on the single export's\n409 (`api.export_router`) and as ``refusal_code`` on a bulk item\n(Issue #142). They live here rather than in the API layer because the\n*distinction* is a domain fact, not a transport one -- what the reviewer\nmust do next differs completely between the two, and both the single\nand the bulk path must name it the same way.\n\nIssue #150 is why naming it at all is not optional. Until then the two\nrefusals shared one ``{message, question_ids}`` shape with nothing to\ntell them apart, and the Flutter client -- written when only\n`UNCONFIRMED_QUESTIONS` existed -- rendered both as \"\u672a\u78ba\u8a8d\u306e\u8a2d\u554f\u304c\u3042\u308b\n\u305f\u3081\u51fa\u529b\u3067\u304d\u307e\u305b\u3093\". In the live run a reviewer who had already confirmed\nevery question was told to go and confirm them: an instruction that was\nnot merely unhelpful but unfollowable, since the work it asked for was\nalready done.",
         "enum": [
@@ -1668,6 +1840,28 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ImportConflictPolicy": {
+        "description": "What a re-import does with rows a person edited.\n\nRequired, never defaulted: a caller that has not decided must not get a\nchoice made for it, because both choices lose something -- ``overwrite``\nloses the edit, ``keep_edited`` can leave a stale row beside a fresh one.",
+        "enum": [
+          "keep_edited",
+          "overwrite"
+        ],
+        "title": "ImportConflictPolicy",
+        "type": "string"
+      },
+      "ImportErrorCatalogRequest": {
+        "description": "The explicit instruction to read the source file again.",
+        "properties": {
+          "on_conflict": {
+            "$ref": "#/components/schemas/ImportConflictPolicy"
+          }
+        },
+        "required": [
+          "on_conflict"
+        ],
+        "title": "ImportErrorCatalogRequest",
         "type": "object"
       },
       "IntakeCostModel": {
@@ -2934,6 +3128,28 @@
           "value"
         ],
         "title": "SaveApiKeyRequest",
+        "type": "object"
+      },
+      "SaveErrorCatalogRequest": {
+        "description": "The reviewed row set, pinned to the revision the reviewer read.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ErrorCatalogEntryInput"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "entries"
+        ],
+        "title": "SaveErrorCatalogRequest",
         "type": "object"
       },
       "SaveTemplatesRequest": {
@@ -6755,6 +6971,167 @@
         "summary": "List Versions",
         "tags": [
           "dependency-graph"
+        ]
+      }
+    },
+    "/tests/{test_id}/error-catalog": {
+      "get": {
+        "operationId": "get_error_catalog_tests__test_id__error_catalog_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Error Catalog",
+        "tags": [
+          "error-catalog"
+        ]
+      },
+      "put": {
+        "description": "Save a reviewed row set, refused if it is based on a stale revision.",
+        "operationId": "save_error_catalog_tests__test_id__error_catalog_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveErrorCatalogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Error Catalog",
+        "tags": [
+          "error-catalog"
+        ]
+      }
+    },
+    "/tests/{test_id}/error-catalog/import": {
+      "post": {
+        "description": "Read the registered \u6dfb\u524a\u8cc7\u6599 Excel into the persisted catalogue.\n\nThe three \"we have no catalogue\" states are refused with a 409 naming\nwhich one it is, and an unreadable file is recorded (and answered 422)\nrather than returned as an empty catalogue -- the distinction Issue\n#106 was written to preserve.",
+        "operationId": "import_error_catalog_tests__test_id__error_catalog_import_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportErrorCatalogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Error Catalog",
+        "tags": [
+          "error-catalog"
         ]
       }
     },
