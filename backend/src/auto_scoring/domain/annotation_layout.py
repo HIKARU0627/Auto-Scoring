@@ -18,6 +18,7 @@ from datetime import datetime
 
 from auto_scoring.domain.models import (
     Annotation,
+    AnnotationKind,
     BoundingBox,
     NormalizedRect,
     Question,
@@ -93,7 +94,10 @@ def resolve_annotation_rect(
         return annotation.rect
     if annotation.anchor_text:
         matched = _find_anchor_text_rect(
-            annotation.anchor_text, recognitions, _effective_answer_area(question.answer_area)
+            annotation.anchor_text,
+            recognitions,
+            _effective_answer_area(question.answer_area),
+            kind=annotation.kind,
         )
         if matched is not None:
             return matched
@@ -168,7 +172,11 @@ def _normalized_for_anchor(text: str) -> str:
 
 
 def _find_anchor_text_rect(
-    anchor_text: str, recognitions: Sequence[RecognitionResult], answer_area: NormalizedRect
+    anchor_text: str,
+    recognitions: Sequence[RecognitionResult],
+    answer_area: NormalizedRect,
+    *,
+    kind: AnnotationKind | str | None = None,
 ) -> NormalizedRect | None:
     """The page-normalized rect of the OCR boxes reading ``anchor_text``,
     searching ``recognitions`` newest-first (a stale earlier attempt can
@@ -202,15 +210,58 @@ def _find_anchor_text_rect(
     if not needle:
         return None
     for recognition in reversed(recognitions):
-        matched = _shortest_box_run(needle, recognition.boxes)
+        matched = _shortest_box_run(needle, recognition.boxes, kind=kind)
         if matched is not None:
             return _crop_relative_to_page(matched, answer_area)
     return None
 
 
-def _shortest_box_run(needle: str, boxes: Sequence[BoundingBox]) -> NormalizedRect | None:
+def _is_same_line(b1: BoundingBox, b2: BoundingBox) -> bool:
+    """True if ``b2`` continues on the same line as ``b1`` in reading order.
+
+    A token text containing a line break ends the line. Otherwise, two boxes
+    continue the same line if their vertical extent overlaps substantially
+    and x advances forward (horizontal text), or their horizontal extent
+    overlaps substantially and y advances forward (vertical text).
+    """
+    if "\n" in b1.text:
+        return False
+    min_h = min(b1.rect.height, b2.rect.height)
+    y_overlap = min(b1.rect.y + b1.rect.height, b2.rect.y + b2.rect.height) - max(
+        b1.rect.y, b2.rect.y
+    )
+    is_horiz = (
+        (min_h > 0) and (y_overlap > 0.5 * min_h) and (b2.rect.x >= b1.rect.x - b1.rect.width * 0.1)
+    )
+
+    min_w = min(b1.rect.width, b2.rect.width)
+    x_overlap = min(b1.rect.x + b1.rect.width, b2.rect.x + b2.rect.width) - max(
+        b1.rect.x, b2.rect.x
+    )
+    is_vert = (
+        (min_w > 0)
+        and (x_overlap > 0.5 * min_w)
+        and (b2.rect.y >= b1.rect.y - b1.rect.height * 0.1)
+    )
+
+    return is_horiz or is_vert
+
+
+def _shortest_box_run(
+    needle: str,
+    boxes: Sequence[BoundingBox],
+    *,
+    kind: AnnotationKind | str | None = None,
+) -> NormalizedRect | None:
     """The union rect of the fewest consecutive ``boxes`` whose joined,
-    normalized text contains ``needle`` -- or ``None`` if no run does."""
+    normalized text contains ``needle`` -- or ``None`` if no run does.
+
+    When the matched run spans across a line break:
+    - Single bounding boxes across line breaks are forbidden (Issue #260).
+    - For CROSS (×): restricted to the boxes in the anchor's first token line.
+    - For other kinds (UNDERLINE, BOX, etc.): returns ``None``, evacuating to
+      the comment area per §12.4 (multi-rect support deferred to Issue #256).
+    """
     texts = [_normalized_for_anchor(box.text) for box in boxes]
     limit = _run_length_limit(needle)
     best: tuple[int, int] | None = None
@@ -229,7 +280,23 @@ def _shortest_box_run(needle: str, boxes: Sequence[BoundingBox]) -> NormalizedRe
                 break
     if best is None:
         return None
-    return _union([box.rect for box in boxes[best[0] : best[1] + 1]])
+
+    matched_boxes = list(boxes[best[0] : best[1] + 1])
+    first_line_boxes = [matched_boxes[0]]
+    for i in range(1, len(matched_boxes)):
+        if _is_same_line(matched_boxes[i - 1], matched_boxes[i]):
+            first_line_boxes.append(matched_boxes[i])
+        else:
+            break
+
+    spans_line_break = len(first_line_boxes) < len(matched_boxes)
+    if not spans_line_break:
+        return _union([box.rect for box in matched_boxes])
+
+    is_cross = kind == AnnotationKind.CROSS or (isinstance(kind, str) and kind.lower() == "cross")
+    if is_cross:
+        return _union([box.rect for box in first_line_boxes])
+    return None
 
 
 def _union(rects: Sequence[NormalizedRect]) -> NormalizedRect:

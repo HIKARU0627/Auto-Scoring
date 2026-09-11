@@ -185,12 +185,13 @@ class TestResolveAnnotationRect:
         assert resolved.width == pytest.approx(0.12)
         assert resolved.height == pytest.approx(0.04)
 
-    def test_an_anchor_spanning_across_line_breaks_unions_into_full_width_box(self) -> None:
-        """Issue #152: When an anchor's matched boxes cross a line break,
-        ``_shortest_box_run`` unions all boxes across the two lines into a single
-        bounding box. Because line 1 ends near the right edge (x=0.98) and line 2
-        starts near the left edge (x=0.01), the resulting union rect covers nearly
-        the entire line width (>95%), explaining the oversized 'x' symptom."""
+    def test_cross_line_anchor_for_cross_restricts_to_first_line_under_95pct_width(
+        self,
+    ) -> None:
+        """Issue #260 (Phase 1): When an anchor's matched boxes cross a line break,
+        single bounding box union across lines is forbidden. For CROSS, the rect is
+        restricted to the boxes belonging to the anchor's first token line, ensuring
+        width does not exceed 95%."""
         annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="春はあけぼ", rect=None)
         recognition = _recognition(
             boxes=(
@@ -207,10 +208,89 @@ class TestResolveAnnotationRect:
         )
 
         assert resolved is not None
-        assert resolved.x == pytest.approx(0.01)
+        assert resolved.x == pytest.approx(0.86)
         assert resolved.y == pytest.approx(0.10)
-        assert resolved.width == pytest.approx(0.97)
-        assert resolved.height == pytest.approx(0.24)
+        assert resolved.width == pytest.approx(0.12)
+        assert resolved.height == pytest.approx(0.04)
+        assert resolved.width < 0.95
+
+    def test_cross_line_anchor_for_underline_and_box_returns_none_to_prevent_full_width_box(
+        self,
+    ) -> None:
+        """Issue #260: Multi-line UNDERLINE and BOX annotations return None (evacuated
+        to the comment area per §12.4), preventing full-width bounding box creation
+        until multi-rect support is implemented in Issue #256."""
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="春", rect=_rect(0.86, 0.10, 0.06, 0.04)),
+                BoundingBox(text="は", rect=_rect(0.92, 0.10, 0.06, 0.04)),
+                BoundingBox(text="あ", rect=_rect(0.01, 0.30, 0.06, 0.04)),
+                BoundingBox(text="け", rect=_rect(0.07, 0.30, 0.06, 0.04)),
+                BoundingBox(text="ぼ", rect=_rect(0.13, 0.30, 0.06, 0.04)),
+            )
+        )
+
+        for kind in (AnnotationKind.UNDERLINE, AnnotationKind.BOX):
+            annotation = _annotation(kind=kind, anchor_text="春はあけぼ", rect=None)
+            resolved = resolve_annotation_rect(
+                annotation, question=_question(answer_area=None), recognitions=(recognition,)
+            )
+            assert resolved is None
+
+    def test_single_line_multi_box_anchor_resolves_to_union_for_both_cross_and_underline(
+        self,
+    ) -> None:
+        """Issue #260 (Regression prevention): When all matched boxes are on the same line,
+        both CROSS and UNDERLINE resolve to the full union rect with median ~15% width."""
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="春", rect=_rect(0.20, 0.10, 0.06, 0.04)),
+                BoundingBox(text="は", rect=_rect(0.26, 0.10, 0.06, 0.04)),
+                BoundingBox(text="あ", rect=_rect(0.32, 0.10, 0.06, 0.04)),
+                BoundingBox(text="け", rect=_rect(0.38, 0.10, 0.06, 0.04)),
+                BoundingBox(text="ぼ", rect=_rect(0.44, 0.10, 0.06, 0.04)),
+            )
+        )
+
+        for kind in (AnnotationKind.CROSS, AnnotationKind.UNDERLINE):
+            annotation = _annotation(kind=kind, anchor_text="春はあけぼ", rect=None)
+            resolved = resolve_annotation_rect(
+                annotation, question=_question(answer_area=None), recognitions=(recognition,)
+            )
+            assert resolved is not None
+            assert resolved.x == pytest.approx(0.20)
+            assert resolved.y == pytest.approx(0.10)
+            assert resolved.width == pytest.approx(0.30)
+            assert resolved.height == pytest.approx(0.04)
+
+    def test_vertical_text_cross_line_anchor_handling(self) -> None:
+        """Issue #260: In vertical text spanning columns, CROSS restricts to the first
+        column while UNDERLINE returns None."""
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="春", rect=_rect(0.80, 0.86, 0.04, 0.06)),
+                BoundingBox(text="は", rect=_rect(0.80, 0.92, 0.04, 0.06)),
+                BoundingBox(text="あ", rect=_rect(0.60, 0.01, 0.04, 0.06)),
+                BoundingBox(text="け", rect=_rect(0.60, 0.07, 0.04, 0.06)),
+            )
+        )
+
+        cross_anno = _annotation(kind=AnnotationKind.CROSS, anchor_text="春はあけ", rect=None)
+        cross_res = resolve_annotation_rect(
+            cross_anno, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+        assert cross_res is not None
+        assert cross_res.x == pytest.approx(0.80)
+        assert cross_res.y == pytest.approx(0.86)
+        assert cross_res.width == pytest.approx(0.04)
+        assert cross_res.height == pytest.approx(0.12)
+        assert cross_res.height < 0.95
+
+        uline_anno = _annotation(kind=AnnotationKind.UNDERLINE, anchor_text="春はあけ", rect=None)
+        uline_res = resolve_annotation_rect(
+            uline_anno, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+        assert uline_res is None
 
     def test_a_full_width_anchor_matches_the_ascii_the_ocr_read(self) -> None:
         box_rect = _rect(0.4, 0.1, 0.05, 0.03)

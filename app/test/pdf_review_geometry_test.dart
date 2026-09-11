@@ -329,6 +329,215 @@ void main() {
       expect(resolved?.height, closeTo(0.04, 1e-9));
     });
 
+    test(
+      'cross-line anchor for CROSS restricts to first line (width < 95%)',
+      () {
+        final multiLineBoxes = [
+          (
+            '春',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.86
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'は',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.92
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'あ',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.01
+                ..y = 0.30
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'け',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.07
+                ..y = 0.30
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'ぼ',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.13
+                ..y = 0.30
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+        ];
+
+        final resolved = resolveAnnotationRect(
+          annotation: annotation(kind: 'cross', anchorText: '春はあけぼ'),
+          questionAnswerArea: null,
+          recognitions: [recognitionWithBoxes(multiLineBoxes)],
+        );
+
+        expect(resolved, isNotNull);
+        expect(resolved?.x, closeTo(0.86, 1e-6));
+        expect(resolved?.y, closeTo(0.10, 1e-6));
+        expect(resolved?.width, closeTo(0.12, 1e-6));
+        expect(resolved?.height, closeTo(0.04, 1e-6));
+        expect(resolved!.width, lessThan(0.95));
+      },
+    );
+
+    test(
+      'cross-line anchor for UNDERLINE and BOX returns null (evacuated to comment)',
+      () {
+        final multiLineBoxes = [
+          (
+            '春',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.86
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'は',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.92
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'あ',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.01
+                ..y = 0.30
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'け',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.07
+                ..y = 0.30
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'ぼ',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.13
+                ..y = 0.30
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+        ];
+
+        for (final kind in ['underline', 'box']) {
+          final resolved = resolveAnnotationRect(
+            annotation: annotation(kind: kind, anchorText: '春はあけぼ'),
+            questionAnswerArea: null,
+            recognitions: [recognitionWithBoxes(multiLineBoxes)],
+          );
+          expect(resolved, isNull);
+        }
+      },
+    );
+
+    test(
+      'single-line multi-box anchor resolves to union for both cross and underline',
+      () {
+        final singleLineBoxes = [
+          (
+            '春',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.20
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'は',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.26
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'あ',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.32
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'け',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.38
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+          (
+            'ぼ',
+            NormalizedRectResponse(
+              (b) => b
+                ..x = 0.44
+                ..y = 0.10
+                ..width = 0.06
+                ..height = 0.04,
+            ),
+          ),
+        ];
+
+        for (final kind in ['cross', 'underline']) {
+          final resolved = resolveAnnotationRect(
+            annotation: annotation(kind: kind, anchorText: '春はあけぼ'),
+            questionAnswerArea: null,
+            recognitions: [recognitionWithBoxes(singleLineBoxes)],
+          );
+          expect(resolved, isNotNull);
+          expect(resolved?.x, closeTo(0.20, 1e-6));
+          expect(resolved?.y, closeTo(0.10, 1e-6));
+          expect(resolved?.width, closeTo(0.30, 1e-6));
+          expect(resolved?.height, closeTo(0.04, 1e-6));
+        }
+      },
+    );
+
     test('a full-width anchor matches the ASCII the OCR read', () {
       final wordBox = NormalizedRectResponse(
         (b) => b
