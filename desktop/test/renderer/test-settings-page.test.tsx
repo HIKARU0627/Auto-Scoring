@@ -3,9 +3,42 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 
 import { ActionRequirements } from "../../src/renderer/core/action-requirements.js";
 import { testSettings } from "../../src/renderer/core/app-routes.js";
+import type { SidecarClient } from "../../src/renderer/api/client.js";
 import * as answerAreaData from "../../src/renderer/api/answer-area-data.js";
 import { renderAppAt } from "./support/app-harness.js";
 import { createTestSettingsMockClient } from "./support/test-settings-harness.js";
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+type OpenGet = (path: string, init?: unknown) => Promise<unknown>;
+
+/** Holds one GET open so the loading state can be observed. */
+function gateOneGet(
+  client: SidecarClient,
+  path: string,
+  gate: Promise<void>,
+): SidecarClient {
+  const original = client.GET as unknown as OpenGet;
+  return {
+    ...client,
+    GET: vi.fn((requestPath: string, init?: unknown) =>
+      requestPath === path
+        ? gate.then(() => original(requestPath, init))
+        : original(requestPath, init),
+    ),
+  } as unknown as SidecarClient;
+}
 
 const VISIBLE_PAGE_IMAGE = {
   objectUrl:
@@ -559,5 +592,89 @@ describe("TestSettingsPage registration flow", () => {
     expect(screen.getByTestId("answer-area-coverage").textContent).toBe(
       ActionRequirements.answerCoverageIncomplete(2, 1, 1).message,
     );
+  });
+
+  it("Issue #346: the three confirmation steps start at criteria", async () => {
+    const { client } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), { client });
+
+    await screen.findByTestId("criteria-section");
+    expect(
+      screen
+        .getByTestId("test-settings-steps-criteria")
+        .getAttribute("data-state"),
+    ).toBe("current");
+    expect(
+      screen
+        .getByTestId("test-settings-steps-profile")
+        .getAttribute("data-state"),
+    ).toBe("upcoming");
+    expect(
+      screen
+        .getByTestId("test-settings-steps-dependency")
+        .getAttribute("data-state"),
+    ).toBe("upcoming");
+  });
+
+  it("Issue #346: confirming criteria advances the steps and the remaining count", async () => {
+    const { client } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), { client });
+
+    await screen.findByTestId("criteria-section");
+    expect(screen.getByTestId("remaining-work-count").textContent).toBe(
+      "残りの確認 3件",
+    );
+
+    await confirmTwoQuestionCriteria();
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("test-settings-steps-criteria")
+          .getAttribute("data-state"),
+      ).toBe("done");
+    });
+    expect(
+      screen
+        .getByTestId("test-settings-steps-profile")
+        .getAttribute("data-state"),
+    ).toBe("current");
+    expect(screen.getByTestId("remaining-work-count").textContent).toBe(
+      "残りの確認 2件",
+    );
+  });
+
+  it("Issue #346: a long upload says what is running", async () => {
+    const { client } = createTestSettingsMockClient();
+    const gate = deferred<string | null>();
+    renderAppAt(testSettings("t-reg"), {
+      client,
+      bridge: { choosePdfFile: () => gate.promise },
+    });
+
+    await screen.findByTestId("profile-section");
+    fireEvent.click(screen.getByTestId("upload-answer-layout-button"));
+
+    const busy = await screen.findByTestId("test-settings-busy");
+    expect(busy.textContent).toContain("答案を取り込んでいます");
+    expect(busy.getAttribute("role")).toBe("status");
+
+    gate.resolve(null);
+  });
+
+  it("Issue #346: test settings shows a skeleton while the snapshot loads", async () => {
+    const { client } = createTestSettingsMockClient();
+    const gate = deferred<void>();
+    const gated = gateOneGet(
+      client,
+      "/tests/{test_id}/questions",
+      gate.promise,
+    );
+
+    renderAppAt(testSettings("t-reg"), { client: gated });
+    expect(screen.getByTestId("test-settings-loading")).toBeDefined();
+
+    gate.resolve();
+    await screen.findByTestId("criteria-section");
   });
 });
