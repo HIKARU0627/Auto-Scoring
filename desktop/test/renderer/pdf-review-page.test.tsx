@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import {
@@ -121,28 +121,65 @@ describe("annotation fallback (INV-064)", () => {
   });
 });
 
+const WAIT_MS = 5000;
+const clientHeightDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "clientHeight",
+);
+
+function stubShortInspectorViewport(): void {
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get() {
+      return 120;
+    },
+  });
+}
+
+afterEach(() => {
+  if (clientHeightDescriptor != null) {
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "clientHeight",
+      clientHeightDescriptor,
+    );
+  }
+});
+
 describe("material read gate (INV-201-01, INV-067)", () => {
   it("INV-201-01: approve and Enter blocked while material is off-screen", async () => {
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-      configurable: true,
-      get() {
-        return 120;
-      },
-    });
+    stubShortInspectorViewport();
     renderPdfReview({
       grades: [buildReviewableGrade(24)],
     });
-    await waitFor(() => {
-      expect(screen.getByTestId("review-unread-material-notice")).toBeDefined();
-    });
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("review-unread-material-notice"),
+        ).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
     const approve = screen.getByTestId(
       "review-approve-button",
     ) as HTMLButtonElement;
     expect(approve.disabled).toBe(true);
+    await waitFor(
+      () => {
+        expect(approve.disabled).toBe(true);
+        expect(
+          screen.getByTestId("review-unread-material-notice"),
+        ).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
     fireEvent.keyDown(window, { key: "Enter" });
-    await waitFor(() => {
-      expect(screen.getByTestId("review-snackbar")).toBeDefined();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("review-snackbar")).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
     expect(screen.getByTestId("review-snackbar").textContent).toContain(
       "判断材料が画面外に残っていました",
     );
@@ -153,16 +190,16 @@ describe("material read gate (INV-201-01, INV-067)", () => {
   });
 
   it("INV-067: reject stays enabled while approve is gated", async () => {
-    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-      configurable: true,
-      get() {
-        return 120;
-      },
-    });
+    stubShortInspectorViewport();
     renderPdfReview({ grades: [buildReviewableGrade(12)] });
-    await waitFor(() => {
-      expect(screen.getByTestId("review-unread-material-notice")).toBeDefined();
-    });
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("review-unread-material-notice"),
+        ).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
     expect(
       (screen.getByTestId("review-approve-button") as HTMLButtonElement)
         .disabled,
@@ -171,6 +208,56 @@ describe("material read gate (INV-201-01, INV-067)", () => {
       (screen.getByTestId("review-reject-button") as HTMLButtonElement)
         .disabled,
     ).toBe(false);
+  });
+
+  it("INV-201-01: approve and Enter blocked while page data is loading", async () => {
+    const view = renderPdfReview({
+      holdInitialLoad: true,
+      grades: [buildGrade()],
+    });
+    expect(screen.getByText("読み込み中…")).toBeDefined();
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(view.client.POST).not.toHaveBeenCalled();
+    view.harness.releaseInitialLoad();
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("review-approve-button")).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
+    expect(
+      (screen.getByTestId("review-approve-button") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("INV-201-01: approve blocked while question review data is still loading", async () => {
+    const view = renderPdfReview({
+      holdQuestionData: true,
+      grades: [buildReviewableGrade(12)],
+    });
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("review-approve-button")).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
+    const approve = screen.getByTestId(
+      "review-approve-button",
+    ) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(view.client.POST).not.toHaveBeenCalled();
+    view.harness.releaseQuestionData();
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("review-unread-material-notice"),
+        ).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
+    expect(approve.disabled).toBe(true);
   });
 });
 
