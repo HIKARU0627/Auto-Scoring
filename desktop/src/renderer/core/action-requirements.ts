@@ -242,6 +242,10 @@ export const ActionRequirements = {
     "grading-in-progress",
     "AIが採点中です。採点が終わると承認できます。",
   ),
+  bulkExportDestinationUnavailable: requirement(
+    "bulk-export-destination-unavailable",
+    "この端末では保存先フォルダを選ぶ手段がありません。アプリを再起動してから、もう一度お試しください。",
+  ),
   gradingStatusStale: requirement(
     "grading-status-stale",
     "AI採点の状況を自動で更新できませんでした。「再読み込み」を押して最新の状態を確認してください。",

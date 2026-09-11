@@ -127,3 +127,61 @@ describe("app sidebar (Issue #335)", () => {
     }
   });
 });
+
+/**
+ * Issue #348 (parent #333): the mock draws a floating, rounded panel at
+ * ~208px, not a 240px full-bleed column. These assertions pin the class-level
+ * contract -- the pixel values themselves cannot be measured in jsdom, so the
+ * PR records the screenshots -- and each one is mutation-checked.
+ */
+describe("sidebar mock polish (Issue #348)", () => {
+  it("floats as a rounded, inset panel instead of a full-bleed column", async () => {
+    renderAppAt(AppRoutes.home, { handlers: defaultHandlers });
+    await screen.findByTestId("home-next-up");
+
+    const sidebar = screen.getByTestId(SIDEBAR_TEST_ID);
+    // Mock: rounded panel, left edge x~24, width ~208px (w-52 = 13rem).
+    expect(sidebar.classList.contains("rounded-xl")).toBe(true);
+    expect(sidebar.classList.contains("w-52")).toBe(true);
+    expect(sidebar.classList.contains("w-60")).toBe(false);
+
+    // The inset is the shell's p-xl on all sides; the panel must not be
+    // `top-0 h-screen` (which is exactly the old full-bleed shape).
+    expect(sidebar.classList.contains("top-0")).toBe(false);
+    expect(sidebar.classList.contains("h-screen")).toBe(false);
+    const frame = sidebar.parentElement;
+    expect(frame?.classList.contains("p-xl")).toBe(true);
+    expect(frame?.classList.contains("gap-xl")).toBe(true);
+  });
+
+  it("gives the nav rows the mock's taller rhythm and pill inset", async () => {
+    renderAppAt(AppRoutes.home, { handlers: defaultHandlers });
+    await screen.findByTestId("home-next-up");
+
+    const nav = screen.getByTestId(SIDEBAR_NAV_TEST_ID);
+    // Mock: active pill ~185px wide inside a ~208px panel, so the nav holds a
+    // horizontal inset and the pill is not full-bleed.
+    expect(nav.classList.contains("px-md")).toBe(true);
+    expect(nav.querySelector("ul")?.classList.contains("gap-md")).toBe(true);
+
+    for (const button of within(nav).getAllByRole("button")) {
+      // Mock: row height ~45px (~48px here), icon-to-label gap ~16px.
+      expect(button.classList.contains("min-h-12")).toBe(true);
+      expect(button.classList.contains("gap-lg")).toBe(true);
+      expect(button.classList.contains("gap-xs")).toBe(false);
+    }
+  });
+
+  it("draws solid icons, not the mock-mismatched line drawings", async () => {
+    renderAppAt(AppRoutes.home, { handlers: defaultHandlers });
+    await screen.findByTestId("home-next-up");
+
+    const nav = screen.getByTestId(SIDEBAR_NAV_TEST_ID);
+    const icons = Array.from(nav.querySelectorAll("svg"));
+    expect(icons).toHaveLength(EXPECTED_NAV.length);
+    for (const icon of icons) {
+      expect(icon.getAttribute("fill")).toBe("currentColor");
+      expect(icon.getAttribute("stroke")).toBeNull();
+    }
+  });
+});

@@ -71,12 +71,14 @@ describe("sidecarFetch", () => {
     mockIsPackaged.value = false;
     delete process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"];
     delete process.env["AUTO_SCORING_E2E_STUB_GRADING_JOBS"];
+    delete process.env["AUTO_SCORING_E2E_STUB_BULK_EXPORT"];
   });
 
   afterEach(async () => {
     vi.unstubAllGlobals();
     delete process.env["AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT"];
     delete process.env["AUTO_SCORING_E2E_STUB_GRADING_JOBS"];
+    delete process.env["AUTO_SCORING_E2E_STUB_BULK_EXPORT"];
     await Promise.all(running.map((sidecar) => sidecar.close()));
     running.length = 0;
   });
@@ -248,6 +250,42 @@ describe("sidecarFetch", () => {
     }
     expect(reads[4]).toMatchObject({ state: "succeeded", usable: true });
     expect(fetchSpy).toHaveBeenCalledTimes(5);
+  });
+
+  it("stubs bulk export and its file in E2E (Issue #345)", async () => {
+    process.env["AUTO_SCORING_E2E_STUB_BULK_EXPORT"] = "1";
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const connection = { host: "127.0.0.1", port: 1, token: "unused" };
+
+    const requested = await sidecarFetch(connection, {
+      method: "POST",
+      urlPath: "/tests/t-e2e/export",
+      bodyBase64: Buffer.from(
+        JSON.stringify({ submission_ids: ["sub-1", "sub-2"] }),
+      ).toString("base64"),
+    });
+    const body = JSON.parse(
+      Buffer.from(requested.bodyBase64, "base64").toString("utf8"),
+    ) as {
+      test_id: string;
+      items: { submission_id: string; status: string }[];
+    };
+    expect(body.test_id).toBe("t-e2e");
+    expect(body.items).toEqual([
+      { submission_id: "sub-1", status: "reused", export: expect.anything() },
+      { submission_id: "sub-2", status: "reused", export: expect.anything() },
+    ]);
+
+    const file = await sidecarFetch(connection, {
+      method: "GET",
+      urlPath: "/exports/e2e-export-sub-1/file",
+    });
+    expect(file.status).toBe(200);
+    expect(Buffer.from(file.bodyBase64, "base64").toString("utf8")).toContain(
+      "%PDF-1.4",
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("INV-204: a transport failure never echoes the URL, port, or token", async () => {
