@@ -353,23 +353,18 @@ export function ErrorNotice({
       role="alert"
       className="flex items-start gap-md rounded-xl bg-error-container p-lg text-on-error-container"
     >
-      <svg aria-hidden viewBox="0 0 24 24" className="mt-xs h-5 w-5 shrink-0">
-        <circle
-          cx="12"
-          cy="12"
-          r="9"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        />
-        <path
-          d="M12 7.5v5.5"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-        <circle cx="12" cy="16.5" r="1" fill="currentColor" />
-      </svg>
+      <span className="shrink-0 rounded-md bg-error p-xs text-on-error">
+        <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5">
+          <path
+            d="M12 7v6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+          />
+          <circle cx="12" cy="17" r="1.4" fill="currentColor" />
+        </svg>
+      </span>
       <div className="min-w-0 flex-1 text-body-medium">{children}</div>
       {action === undefined ? null : <div className="shrink-0">{action}</div>}
     </div>
@@ -402,14 +397,32 @@ export function secondaryButtonClass(extra?: string): string {
     .trim();
 }
 
-export function outlineButtonClass(extra?: string): string {
-  return [
-    "inline-flex items-center justify-center gap-sm rounded-md border border-outline bg-transparent px-md py-sm text-ui-label text-on-surface",
-    "transition-colors hover:bg-surface-container-high active:bg-surface-container-highest",
-    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
-    "disabled:cursor-not-allowed disabled:border-disabled-button-outline disabled:text-disabled-button-label",
-    extra ?? "",
-  ]
-    .join(" ")
-    .trim();
+/**
+ * The smallest text level (12px), for stat labels and meta rows.
+ *
+ * The 12px token exists (`--font-size-label-medium`) but is not bridged into a
+ * Tailwind `text-*` utility in `styles/index.css`, and the token layer is out
+ * of scope here, so the value is read straight from the token. That keeps the
+ * four-level hierarchy (page title 28 / card title 17 / body 14 / caption 12)
+ * without a literal size and without editing `styles/`.
+ */
+export function Caption({
+  testId,
+  children,
+}: {
+  testId?: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <span
+      data-testid={testId}
+      style={{
+        fontSize: "var(--font-size-label-medium)",
+        lineHeight: "var(--line-height-ui)",
+      }}
+      className="block text-on-surface-variant"
+    >
+      {children}
+    </span>
+  );
 }

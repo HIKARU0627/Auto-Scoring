@@ -70,6 +70,7 @@ import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { DisabledActionReason } from "../intake/DisabledActionReason.js";
 import {
   BusyNotice,
+  Caption,
   Card,
   CardHeading,
   ErrorNotice,
@@ -77,8 +78,8 @@ import {
   ScreenSkeleton,
   StatusPill,
   StepProgress,
-  outlineButtonClass,
   primaryButtonClass,
+  secondaryButtonClass,
 } from "../ui/screen-ui.js";
 
 type PageGeometryResponse = components["schemas"]["PageGeometryResponse"];
@@ -596,14 +597,13 @@ export function TestSettingsPage(): JSX.Element {
                 max={registrationSteps.length}
               />
             </div>
-            <p
-              data-testid="test-status-label"
-              className="mt-md text-body-medium text-on-surface-variant"
-            >
-              {ready.test.status === "ready"
-                ? "テスト状態: 登録完了"
-                : "テスト状態: 下書き"}
-            </p>
+            <div data-testid="test-status-label" className="mt-md">
+              <Caption>
+                {ready.test.status === "ready"
+                  ? "テスト状態: 登録完了"
+                  : "テスト状態: 下書き"}
+              </Caption>
+            </div>
           </Card>
 
           {actionError !== null ? (
@@ -661,7 +661,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="add-criteria-question-button"
-                className={outlineButtonClass()}
+                className={secondaryButtonClass()}
                 disabled={busy || criteriaConfirmed(ready.criteria)}
                 onClick={() => {
                   setLoadState((current) => {
@@ -749,7 +749,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="save-criteria-button"
-                className={outlineButtonClass()}
+                className={secondaryButtonClass()}
                 disabled={busy || criteriaConfirmed(ready.criteria)}
                 onClick={() => {
                   void runGuarded(WORK.saveCriteria, async () => {
@@ -843,7 +843,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="upload-answer-layout-button"
-                className={outlineButtonClass()}
+                className={secondaryButtonClass()}
                 disabled={busy || profileConfirmed(ready.profile)}
                 onClick={() => {
                   void runGuarded(WORK.uploadLayout, async () => {
@@ -954,7 +954,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="add-region-button"
-                className={outlineButtonClass()}
+                className={secondaryButtonClass()}
                 disabled={addRegionReqs.length > 0}
                 onClick={() => {
                   setLoadState((current) => {
@@ -1038,7 +1038,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="save-profile-button"
-                className={outlineButtonClass()}
+                className={secondaryButtonClass()}
                 disabled={saveProfileReqs.length > 0}
                 onClick={() => {
                   if (regions === null) {
@@ -1296,7 +1296,7 @@ export function TestSettingsPage(): JSX.Element {
                     <button
                       type="button"
                       data-testid="extract-cancel-button"
-                      className={outlineButtonClass(
+                      className={secondaryButtonClass(
                         "shrink-0 whitespace-nowrap",
                       )}
                       onClick={() => {
@@ -1385,7 +1385,7 @@ export function TestSettingsPage(): JSX.Element {
                     <button
                       type="button"
                       data-testid="profile-confirm-undetected-cancel"
-                      className={outlineButtonClass(
+                      className={secondaryButtonClass(
                         "shrink-0 whitespace-nowrap",
                       )}
                       onClick={() => {
@@ -1434,14 +1434,14 @@ function CriteriaQuestionEditor({
   return (
     <div
       data-testid={`criteria-tile-${index}`}
-      className="rounded-md border border-outline-variant p-md"
+      className="rounded-lg bg-surface-container-high p-md"
     >
       <div className="grid gap-sm md:grid-cols-2">
-        <label className="flex flex-col gap-xs text-body-medium">
-          設問番号
+        <label className="flex flex-col gap-xs">
+          <Caption>設問番号</Caption>
           <input
             data-testid={`criteria-number-${index}`}
-            className="rounded-md border border-outline px-sm py-xs"
+            className="rounded-md bg-surface-container px-sm py-xs text-on-surface"
             value={question.number}
             readOnly={readOnly}
             onChange={(event) => {
@@ -1449,11 +1449,11 @@ function CriteriaQuestionEditor({
             }}
           />
         </label>
-        <label className="flex flex-col gap-xs text-body-medium">
-          配点
+        <label className="flex flex-col gap-xs">
+          <Caption>配点</Caption>
           <input
             data-testid={`criteria-points-${index}`}
-            className="rounded-md border border-outline px-sm py-xs"
+            className="rounded-md bg-surface-container px-sm py-xs text-on-surface"
             value={question.points ?? ""}
             readOnly={readOnly}
             inputMode="numeric"
@@ -1467,11 +1467,11 @@ function CriteriaQuestionEditor({
           />
         </label>
       </div>
-      <label className="mt-sm flex flex-col gap-xs text-body-medium">
-        模範解答
+      <label className="mt-sm flex flex-col gap-xs">
+        <Caption>模範解答</Caption>
         <textarea
           data-testid={`criteria-model-answer-${index}`}
-          className="min-h-20 rounded-md border border-outline px-sm py-xs"
+          className="min-h-20 rounded-md bg-surface-container px-sm py-xs text-on-surface"
           value={question.model_answer ?? ""}
           readOnly={readOnly}
           onChange={(event) => {
@@ -1489,7 +1489,7 @@ function CriteriaQuestionEditor({
         <button
           type="button"
           data-testid={`remove-criteria-${index}`}
-          className="mt-sm rounded-md border border-outline px-sm py-xs text-ui-label"
+          className="mt-sm w-fit rounded-md bg-surface-container-high px-sm py-xs text-ui-label text-on-surface"
           onClick={onRemove}
         >
           削除

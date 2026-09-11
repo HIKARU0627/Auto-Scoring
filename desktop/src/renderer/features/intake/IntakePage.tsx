@@ -60,6 +60,7 @@ import { DisabledActionReason } from "./DisabledActionReason.js";
 import { FilePickerRow } from "./FilePickerRow.js";
 import {
   BusyNotice,
+  Caption,
   Card,
   CardHeading,
   ErrorNotice,
@@ -1220,7 +1221,9 @@ function SummaryStat({
 }): JSX.Element {
   return (
     <div className="rounded-lg bg-surface-container-high p-md">
-      <dt className="text-body-medium text-on-surface-variant">{label}</dt>
+      <dt>
+        <Caption>{label}</Caption>
+      </dt>
       <dd
         data-testid={testId}
         className="mt-xs tabular-nums text-title-large font-medium text-on-surface"
