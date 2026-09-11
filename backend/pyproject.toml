@@ -133,3 +133,13 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Live-provider tests (Issue #54) send material to a real, paid OCR/AI
+# provider and need credentials, so they are never part of the default run --
+# `pytest -m live` opts in explicitly. The cleanup check itself is offline and
+# runs by default; this guard is for the paid probe that measures against the
+# real services. `tests/test_live_provider_separation.py` pins the exclusion
+# so a later edit cannot silently start billing on every push.
+addopts = "-m 'not live'"
+markers = [
+    "live: sends one question's material to a real paid OCR/AI provider (Issue #54); excluded from the default run",
+]
