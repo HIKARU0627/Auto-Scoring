@@ -342,9 +342,16 @@ describe("無効理由文の文言規約 (INV-101)", () => {
   const DIAGNOSTIC = /Exception|[Ee]rror|HTTP|[0-9]{3} /;
 
   function allRequirements(): ActionRequirement[] {
-    return Object.values(ActionRequirements).map((value) =>
-      typeof value === "function" ? value(1) : value,
-    );
+    return Object.values(ActionRequirements).map((value) => {
+      if (typeof value !== "function") {
+        return value;
+      }
+      // Every member is exercised with a satisfying argument list so that
+      // adding a function with more than one parameter (Issue #314's
+      // coverage message takes three counts) does not break the enumeration.
+      const invoke = value as (...args: number[]) => ActionRequirement;
+      return invoke(1, 1, 1);
+    });
   }
 
   it("ActionRequirements の全メンバーを列挙できている", () => {

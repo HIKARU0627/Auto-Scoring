@@ -441,4 +441,123 @@ describe("TestSettingsPage registration flow", () => {
       false,
     );
   });
+
+  async function confirmTwoQuestionCriteria(): Promise<void> {
+    fireEvent.click(screen.getByTestId("add-criteria-question-button"));
+    fireEvent.click(screen.getByTestId("add-criteria-question-button"));
+    for (const index of [0, 1]) {
+      fireEvent.change(screen.getByTestId(`criteria-number-${index}`), {
+        target: { value: `問${index + 1}` },
+      });
+      fireEvent.change(screen.getByTestId(`criteria-points-${index}`), {
+        target: { value: "10" },
+      });
+    }
+    fireEvent.click(screen.getByTestId("confirm-criteria-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("confirm-criteria-button")).toHaveProperty(
+        "disabled",
+        true,
+      );
+    });
+  }
+
+  it("stops to ask, with the count, before confirming a partly covered profile (Issue #314)", async () => {
+    const { client, applyLayoutUpload } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), {
+      client,
+      bridge: {
+        choosePdfFile: async () => "/tmp/answer.pdf",
+        sidecarMultipartUpload: async () => ({
+          status: 200,
+          body: applyLayoutUpload(),
+        }),
+      },
+    });
+
+    await screen.findByTestId("criteria-section");
+    await confirmTwoQuestionCriteria();
+    fireEvent.click(screen.getByTestId("upload-answer-layout-button"));
+    await screen.findByTestId("answer-area-editor");
+    fireEvent.click(screen.getByTestId("add-region-button"));
+
+    fireEvent.click(screen.getByTestId("confirm-profile-button"));
+
+    await screen.findByTestId("profile-confirm-undetected-dialog");
+    expect(
+      screen.getByTestId("profile-confirm-undetected-count").textContent,
+    ).toBe(ActionRequirements.profileConfirmUndetected(1).message);
+    // The dialog is a stop: the profile is still a draft until the reviewer
+    // chooses to go ahead, and confirming is still possible afterwards.
+    expect(screen.getByTestId("confirm-profile-button")).toHaveProperty(
+      "disabled",
+      false,
+    );
+
+    fireEvent.click(screen.getByTestId("profile-confirm-undetected-proceed"));
+    await waitFor(() => {
+      expect(screen.getByTestId("confirm-profile-button")).toHaveProperty(
+        "disabled",
+        true,
+      );
+    });
+  });
+
+  it("can go back to drawing from the confirmation dialog without confirming (Issue #314)", async () => {
+    const { client, applyLayoutUpload } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), {
+      client,
+      bridge: {
+        choosePdfFile: async () => "/tmp/answer.pdf",
+        sidecarMultipartUpload: async () => ({
+          status: 200,
+          body: applyLayoutUpload(),
+        }),
+      },
+    });
+
+    await screen.findByTestId("criteria-section");
+    await confirmTwoQuestionCriteria();
+    fireEvent.click(screen.getByTestId("upload-answer-layout-button"));
+    await screen.findByTestId("answer-area-editor");
+    fireEvent.click(screen.getByTestId("add-region-button"));
+
+    fireEvent.click(screen.getByTestId("confirm-profile-button"));
+    await screen.findByTestId("profile-confirm-undetected-dialog");
+    fireEvent.click(screen.getByTestId("profile-confirm-undetected-cancel"));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("profile-confirm-undetected-dialog"),
+      ).toBeNull();
+    });
+    expect(screen.getByTestId("confirm-profile-button")).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("shows how many criteria questions the registered answer areas do not cover (Issue #314)", async () => {
+    const { client, applyLayoutUpload } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), {
+      client,
+      bridge: {
+        choosePdfFile: async () => "/tmp/answer.pdf",
+        sidecarMultipartUpload: async () => ({
+          status: 200,
+          body: applyLayoutUpload(),
+        }),
+      },
+    });
+
+    await screen.findByTestId("criteria-section");
+    await confirmTwoQuestionCriteria();
+    fireEvent.click(screen.getByTestId("upload-answer-layout-button"));
+    await screen.findByTestId("answer-area-editor");
+    fireEvent.click(screen.getByTestId("add-region-button"));
+
+    expect(screen.getByTestId("answer-area-coverage").textContent).toBe(
+      ActionRequirements.answerCoverageIncomplete(2, 1, 1).message,
+    );
+  });
 });
