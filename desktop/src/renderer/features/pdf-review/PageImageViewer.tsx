@@ -64,7 +64,7 @@ export function PageImageViewer({
     <div data-testid="review-page-viewer" className="flex flex-col gap-sm">
       <div
         data-testid="review-page-surface"
-        className="relative mx-auto border border-outline-variant bg-surface-container-lowest"
+        className="relative mx-auto bg-surface-container-lowest"
         style={{ width: renderWidth, height: renderHeight }}
       >
         {pageImage.objectUrl != null ? (

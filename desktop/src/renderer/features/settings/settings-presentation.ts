@@ -1,12 +1,13 @@
 import type { CSSProperties } from "react";
 
 /**
- * Shared presentation for the settings screen (Issue #347).
+ * Shared presentation for the settings screen (Issue #347, parent #333).
  *
- * The mock (parent #333) separates information with a rounded surface, not a
- * border, so every card here is `--radius-xl` on `--color-surface-container`.
- * Class strings live in one place so the two tabs cannot drift apart and so a
- * state's colour is decided once.
+ * The mock separates information with a rounded surface, not a border, so
+ * every card here is `--radius-xl` on `--color-surface-container` and every
+ * secondary control is a filled surface rather than an outline. Class strings
+ * live in one place so the two tabs cannot drift apart and so a state's colour
+ * is decided once.
  */
 
 export const NUMERIC_STYLE: CSSProperties = {
@@ -16,23 +17,35 @@ export const NUMERIC_STYLE: CSSProperties = {
 export const SETTINGS_CARD_CLASS =
   "min-w-0 rounded-xl bg-surface-container p-lg";
 
+/** 20px card heading: the mock keeps four text levels (20 / 16 / 14 / 12). */
+export const SETTINGS_CARD_HEADING_CLASS =
+  "text-xl font-semibold leading-ui text-on-surface";
+
+export const SETTINGS_ITEM_HEADING_CLASS =
+  "text-base font-semibold leading-ui text-on-surface";
+
 export const SETTINGS_BUTTON_PRIMARY_CLASS =
   "inline-flex items-center gap-xs rounded-md bg-primary px-md py-sm text-ui-label font-medium text-on-primary hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
 
+/** Filled, not outlined: the mock has no outline-only button (parent #333 §2). */
 export const SETTINGS_BUTTON_SECONDARY_CLASS =
-  "inline-flex items-center gap-xs rounded-md border border-outline px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+  "inline-flex items-center gap-xs rounded-md bg-surface-container-high px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
 
 export const SETTINGS_BUTTON_DANGER_CLASS =
   "inline-flex items-center gap-xs rounded-md px-md py-sm text-ui-label font-medium text-error hover:bg-error-container/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-error active:opacity-80 disabled:opacity-50";
 
 export const SETTINGS_INPUT_CLASS =
-  "mt-xs w-full rounded-md border border-outline bg-surface px-md py-sm text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
+  "mt-xs w-full rounded-md bg-surface-container-high px-md py-sm text-body-medium text-on-surface placeholder:text-on-surface-variant focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
 
 export const SETTINGS_SELECT_CLASS =
-  "mt-xs w-full rounded-md border border-outline bg-surface px-md py-sm text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
+  "mt-xs w-full rounded-md bg-surface-container-high px-md py-sm text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
 
 export const SETTINGS_LABEL_CLASS =
   "block text-ui-label font-medium text-on-surface";
+
+/** Purple rounded tile + glyph for empty/leading icons (parent #333 §9). */
+export const SETTINGS_ICON_TILE_CLASS =
+  "inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-container text-on-primary-container";
 
 /** Short, colour-independent state pill for one API key slot. */
 export function apiKeyStatePillClass(configured: boolean): string {

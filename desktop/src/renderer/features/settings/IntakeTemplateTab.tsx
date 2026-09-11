@@ -20,6 +20,8 @@ import {
   SETTINGS_BUTTON_PRIMARY_CLASS,
   SETTINGS_BUTTON_SECONDARY_CLASS,
   SETTINGS_CARD_CLASS,
+  SETTINGS_CARD_HEADING_CLASS,
+  SETTINGS_ICON_TILE_CLASS,
   SETTINGS_INPUT_CLASS,
   SETTINGS_LABEL_CLASS,
   SETTINGS_SELECT_CLASS,
@@ -35,7 +37,7 @@ const ALL_ROLES: readonly MaterialRole[] = [
 ];
 
 const RULE_SELECT_CLASS =
-  "rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
+  "rounded-sm bg-surface-container-high px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
 
 function IntakeLoading(): JSX.Element {
   return (
@@ -201,23 +203,28 @@ export function IntakeTemplateTab(): JSX.Element {
   if (templates.length === 0) {
     return (
       <section className={SETTINGS_CARD_CLASS}>
-        <h2 className="text-body-medium font-semibold text-on-surface">
-          取込の型
-        </h2>
-        <p
-          data-testid="settings-intake-empty"
-          className="mt-xs text-body-medium text-on-surface-variant"
-        >
-          取込の型がありません。型を追加して、ファイル名やフォルダ名から役割を決める規則を作ってください。
-        </p>
-        <button
-          type="button"
-          data-testid="settings-add-template"
-          onClick={addTemplate}
-          className={`${SETTINGS_BUTTON_PRIMARY_CLASS} mt-md`}
-        >
-          型を追加
-        </button>
+        <div className="flex items-start gap-md">
+          <span aria-hidden className={SETTINGS_ICON_TILE_CLASS}>
+            +
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className={SETTINGS_CARD_HEADING_CLASS}>取込の型</h2>
+            <p
+              data-testid="settings-intake-empty"
+              className="mt-xs text-body-medium text-on-surface-variant"
+            >
+              取込の型がありません。型を追加して、ファイル名やフォルダ名から役割を決める規則を作ってください。
+            </p>
+            <button
+              type="button"
+              data-testid="settings-add-template"
+              onClick={addTemplate}
+              className={`${SETTINGS_BUTTON_PRIMARY_CLASS} mt-md`}
+            >
+              型を追加
+            </button>
+          </div>
+        </div>
       </section>
     );
   }
@@ -326,7 +333,7 @@ export function IntakeTemplateTab(): JSX.Element {
 
       {/* Rules list */}
       <section className={SETTINGS_CARD_CLASS}>
-        <h2 className="text-body-medium font-semibold text-on-surface">
+        <h2 className={SETTINGS_CARD_HEADING_CLASS}>
           規則（上から順に当てはめます）
         </h2>
         <div className="mt-md flex flex-col gap-sm">
@@ -387,7 +394,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     pattern: e.target.value,
                   })
                 }
-                className="min-w-30 flex-1 rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                className="min-w-30 flex-1 rounded-sm bg-surface-container-high px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 aria-label={`規則${index + 1} のパターン`}
               />
 

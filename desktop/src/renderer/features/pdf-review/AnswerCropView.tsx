@@ -23,7 +23,7 @@ export function AnswerCropView({
           <img
             src={imageUrl}
             alt="AIが見た回答欄の切り出し"
-            className="max-w-full border border-outline-variant"
+            className="max-w-full"
           />
           {unreadableBoxes.map((box, index) => (
             <div

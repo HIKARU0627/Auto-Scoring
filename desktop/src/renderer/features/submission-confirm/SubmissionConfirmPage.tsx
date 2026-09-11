@@ -77,7 +77,7 @@ const BUTTON_PRIMARY_CLASS =
   "inline-flex items-center gap-xs rounded-md bg-primary px-md py-sm text-ui-label font-medium text-on-primary hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
 
 const BUTTON_SECONDARY_CLASS =
-  "inline-flex items-center gap-xs rounded-md border border-outline px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+  "inline-flex items-center gap-xs rounded-md bg-surface-container-high px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
 
 const PILL_SUCCESS_CLASS =
   "inline-flex shrink-0 items-center gap-xs rounded-full bg-success-container px-sm py-xs text-xs text-on-success-container";
@@ -144,6 +144,20 @@ function noticeCardClass(
   }
 }
 
+function noticeGlyph(
+  tone: "attention" | "neutral" | "danger" | "success",
+): string {
+  switch (tone) {
+    case "success":
+      return "✓";
+    case "attention":
+    case "danger":
+      return "!";
+    default:
+      return "−";
+  }
+}
+
 function Notice({
   testId,
   tone,
@@ -158,9 +172,15 @@ function Notice({
       data-testid={testId}
       data-tone={tone}
       role="status"
-      className={`rounded-xl px-lg py-md text-body-medium ${noticeCardClass(tone)}`}
+      className={`flex items-start gap-sm rounded-xl px-lg py-md text-body-medium ${noticeCardClass(tone)}`}
     >
-      {message}
+      <span
+        aria-hidden
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-semibold text-on-primary"
+      >
+        {noticeGlyph(tone)}
+      </span>
+      <span className="min-w-0 flex-1">{message}</span>
     </div>
   );
 }
@@ -592,18 +612,31 @@ export function SubmissionConfirmPage(): JSX.Element {
 
         {loadState.status === "ready" && questions.length === 0 ? (
           <section className={CARD_CLASS}>
-            <p
-              data-testid="confirm-no-questions"
-              className="text-body-medium text-on-surface-variant"
-            >
-              このテストには設問が登録されていません。テスト設定で設問を登録すると、ここで答案を確定できます。
-            </p>
+            <div className="flex items-start gap-md">
+              <span
+                aria-hidden
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-container text-on-primary-container"
+              >
+                ?
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-xl font-semibold leading-ui text-on-surface">
+                  設問がありません
+                </h2>
+                <p
+                  data-testid="confirm-no-questions"
+                  className="mt-xs text-body-medium text-on-surface-variant"
+                >
+                  このテストには設問が登録されていません。テスト設定で設問を登録すると、ここで答案を確定できます。
+                </p>
+              </div>
+            </div>
           </section>
         ) : null}
 
         {loadState.status === "ready" && gradingFinished ? (
           <section data-testid="confirm-ai-usage" className={CARD_CLASS}>
-            <h2 className="text-body-medium font-semibold text-on-surface">
+            <h2 className="text-xl font-semibold leading-ui text-on-surface">
               AI 利用量
             </h2>
             {aiUsageError != null ? (

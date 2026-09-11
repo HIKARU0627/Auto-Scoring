@@ -78,7 +78,7 @@ const BUTTON_PRIMARY_CLASS =
   "inline-flex items-center gap-xs rounded-md bg-primary px-md py-sm text-ui-label font-medium text-on-primary hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
 
 const BUTTON_SECONDARY_CLASS =
-  "inline-flex items-center gap-xs rounded-md border border-outline px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+  "inline-flex items-center gap-xs rounded-md bg-surface-container-high px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
 
 /**
  * Enter on a focused control belongs to that control, not the page (Issue #196).
@@ -690,10 +690,10 @@ export function PdfReviewPage(): JSX.Element {
                     key={question.id}
                     type="button"
                     data-testid={`review-rail-${question.id}`}
-                    className={`rounded-lg border px-sm py-xs text-left text-ui-label ${
+                    className={`rounded-lg px-sm py-xs text-left text-ui-label ${
                       index === selectedIndex
-                        ? "border-primary bg-surface-container-high text-on-surface"
-                        : "border-outline-variant text-on-surface-variant hover:bg-surface-container-high"
+                        ? "border border-primary bg-surface-container-high text-on-surface"
+                        : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
                     }`}
                     aria-label={`問${displayNumber} ${label}`}
                     title={label}
@@ -763,17 +763,25 @@ export function PdfReviewPage(): JSX.Element {
                 <div
                   data-testid="review-unread-material-notice"
                   data-tone="attention"
-                  className="rounded-lg bg-attention-container px-md py-sm text-body-medium text-on-attention-container"
+                  className="flex items-start gap-sm rounded-lg bg-attention-container px-md py-sm text-body-medium text-on-attention-container"
                 >
-                  判断材料が画面外に残っています。すべて読んでから承認してください。
-                  <button
-                    type="button"
-                    data-testid="review-reveal-material-button"
-                    className="mt-xs block text-ui-label underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                    onClick={materialRead.revealRest}
+                  <span
+                    aria-hidden
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-semibold text-on-primary"
                   >
-                    続きを表示
-                  </button>
+                    !
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    判断材料が画面外に残っています。すべて読んでから承認してください。
+                    <button
+                      type="button"
+                      data-testid="review-reveal-material-button"
+                      className="mt-xs block text-ui-label underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                      onClick={materialRead.revealRest}
+                    >
+                      続きを表示
+                    </button>
+                  </span>
                 </div>
               ) : null}
 
@@ -848,7 +856,7 @@ export function PdfReviewPage(): JSX.Element {
                 </span>
                 <textarea
                   data-testid="review-note-field"
-                  className="min-h-20 rounded-md border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="min-h-20 rounded-md bg-surface-container-high px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                   value={note}
                   onChange={(event) => {
                     setNote(event.target.value);
