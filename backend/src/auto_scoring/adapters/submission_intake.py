@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import tempfile
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,7 +35,10 @@ from sqlalchemy.exc import IntegrityError
 
 from auto_scoring.adapters.atomic import FinalizationError, StagedFiles, transactional_operation
 from auto_scoring.adapters.image.ink import ink_coverage
-from auto_scoring.adapters.image.opencv_preprocessor import crop_normalized_rect
+from auto_scoring.adapters.image.opencv_preprocessor import (
+    combine_vertical_crops,
+    crop_normalized_rect,
+)
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.answer_area_detection import (
@@ -205,7 +209,7 @@ def intake_submission(
         submission_id = existing.id if is_retry and existing is not None else id_factory()
 
         questions = uow.questions.list_for_test(test_id)
-        expected_pages = tuple(sorted({q.page for q in questions}))
+        expected_pages = tuple(sorted({p for q in questions for p in q.pages}))
         coverage = PageCoverage(expected_pages=expected_pages, actual_page_count=page_count)
         coverage_issue = describe_coverage_issue(coverage)
         # When coverage has an issue (e.g. extra_pages or missing_pages),
@@ -213,11 +217,6 @@ def intake_submission(
         # Under Issue #215, grading jobs are not queued for such submissions,
         # keeping them in NEEDS_REVIEW waiting for human intervention.
         should_extract = bool(questions) and coverage_issue is None
-
-        questions_by_page: dict[int, list[Question]] = {}
-        if should_extract:
-            for question in questions:
-                questions_by_page.setdefault(question.page, []).append(question)
 
         try:
             final, answer_images = _write_submission(
@@ -235,7 +234,7 @@ def intake_submission(
                 filename=filename,
                 is_retry=is_retry,
                 questions=questions,
-                questions_by_page=questions_by_page,
+                should_extract=should_extract,
                 coverage_issue=coverage_issue,
                 id_factory=id_factory,
                 now=now,
@@ -295,7 +294,7 @@ def _write_submission(
     filename: str,
     is_retry: bool,
     questions: list[Question],
-    questions_by_page: dict[int, list[Question]],
+    should_extract: bool,
     coverage_issue: str | None,
     id_factory: Callable[[], str],
     now: datetime,
@@ -316,6 +315,32 @@ def _write_submission(
         reading_order_conflict_numbers = conflicted_question_numbers(
             questions_reading_order_conflicts(questions, question_numbers)
         )
+        first_page_crops: dict[str, bytes] = {}
+        single_page_by_page: dict[int, list[Question]] = defaultdict(list)
+        two_page_first_by_page: dict[int, list[Question]] = defaultdict(list)
+        two_page_second_by_page: dict[int, list[Question]] = defaultdict(list)
+
+        if should_extract:
+            for question in questions:
+                if question.page_2 is None:
+                    single_page_by_page[question.page].append(question)
+                else:
+                    zero_1 = (
+                        question.answer_area is None
+                        or question.answer_area.width <= 0
+                        or question.answer_area.height <= 0
+                    )
+                    zero_2 = (
+                        question.answer_area_2 is None
+                        or question.answer_area_2.width <= 0
+                        or question.answer_area_2.height <= 0
+                    )
+                    if zero_1 or zero_2:
+                        single_page_by_page[question.page].append(question)
+                    else:
+                        two_page_first_by_page[question.page].append(question)
+                        two_page_second_by_page[question.page_2].append(question)
+
         answer_images: list[AnswerImage] = []
         for page in range(1, page_count + 1):
             # A page can have a page tree and geometry pypdf/page_geometry
@@ -329,7 +354,8 @@ def _write_submission(
                 raise PdfCorruptedError(f"could not render page {page}: {exc}") from exc
             preview = image_preprocessor.preprocess_page(raw_png)
             staged.add(store.submission_page_image_path(submission_id, page), preview.png_bytes)
-            for question in questions_by_page.get(page, ()):
+
+            for question in single_page_by_page.get(page, ()):
                 answer_images.append(
                     _build_answer_image(
                         question=question,
@@ -342,6 +368,57 @@ def _write_submission(
                         reading_order_conflict_numbers=reading_order_conflict_numbers,
                     )
                 )
+
+            for question in two_page_first_by_page.get(page, ()):
+                assert question.answer_area is not None
+                first_page_crops[question.id] = crop_normalized_rect(raw_png, question.answer_area)
+
+            for question in two_page_second_by_page.get(page, ()):
+                assert question.answer_area_2 is not None
+                crop_1 = first_page_crops.pop(question.id, None)
+                if crop_1 is None:
+                    image_path = store.submission_page_image_path(submission_id, question.page)
+                    answer_images.append(
+                        AnswerImage(
+                            id=id_factory(),
+                            submission_id=submission_id,
+                            question_id=question.id,
+                            page=question.page,
+                            image_path=str(image_path.relative_to(store.root)).replace("\\", "/"),
+                            status=AnswerImageStatus.NEEDS_REVIEW,
+                            reason="no_answer_area_defined",
+                            created_at=now,
+                        )
+                    )
+                else:
+                    crop_2 = crop_normalized_rect(raw_png, question.answer_area_2)
+                    combined_crop = combine_vertical_crops(crop_1, crop_2)
+                    image_path = store.submission_question_image_path(submission_id, question.id)
+                    staged.add(image_path, combined_crop)
+                    if question.number in reading_order_conflict_numbers:
+                        status = AnswerImageStatus.NEEDS_REVIEW
+                        reason = READING_ORDER_CONFLICT_REASON
+                    elif is_nearly_blank_crop(ink_coverage(combined_crop)):
+                        status = AnswerImageStatus.NEEDS_REVIEW
+                        reason = NEARLY_BLANK_CROP_REASON
+                    else:
+                        status = AnswerImageStatus.OK
+                        reason = None
+                    answer_images.append(
+                        AnswerImage(
+                            id=id_factory(),
+                            submission_id=submission_id,
+                            question_id=question.id,
+                            page=question.page,
+                            image_path=str(image_path.relative_to(store.root)).replace("\\", "/"),
+                            status=status,
+                            reason=reason,
+                            created_at=now,
+                        )
+                    )
+
+        question_order = {q.id: idx for idx, q in enumerate(questions)}
+        answer_images.sort(key=lambda img: question_order.get(img.question_id, 0))
 
         if not questions:
             submission_state = SubmissionState.NEEDS_REVIEW
@@ -483,10 +560,18 @@ def _build_answer_image(
     degenerate answer area still reaches a human, not a submission that
     quietly landed on ``ai_processed`` with unusable answer data.
     """
-    zero_area = question.answer_area is not None and (
-        question.answer_area.width <= 0 or question.answer_area.height <= 0
+    zero_area = (
+        question.answer_area is not None
+        and (question.answer_area.width <= 0 or question.answer_area.height <= 0)
+    ) or (
+        question.answer_area_2 is not None
+        and (question.answer_area_2.width <= 0 or question.answer_area_2.height <= 0)
     )
-    if question.answer_area is None or zero_area:
+    if (
+        question.answer_area is None
+        or (question.page_2 is not None and question.answer_area_2 is None)
+        or zero_area
+    ):
         image_path = store.submission_page_image_path(submission_id, question.page)
         status = AnswerImageStatus.NEEDS_REVIEW
         reason: str | None = "answer_area_zero_area" if zero_area else "no_answer_area_defined"

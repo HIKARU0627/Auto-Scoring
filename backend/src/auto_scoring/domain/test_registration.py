@@ -73,8 +73,9 @@ class IncompleteRegionsError(TestRegistrationError):
 
 
 class CrossPageRegionError(TestRegistrationError):
-    """A question's area regions are not all on the same page as its
-    `QUESTION` region.
+    """A question's regions span more pages than supported (at most 2 pages
+    for answer areas, Issue #108), or its area regions are not on the same
+    page(s) as its question.
     """
 
 
@@ -465,20 +466,67 @@ def build_questions_and_rubrics(
         model_answer_regions = kinds.get(RegionKind.MODEL_ANSWER, [])
         rubric_regions = kinds.get(RegionKind.RUBRIC, [])
 
-        # The `QUESTION` region names the page when there is one. Otherwise
-        # the first area region does, and a question with no regions at all
-        # falls back to page 1 -- see this function's own docstring.
-        anchor_region = next(
-            iter(question_regions or answer_regions or score_regions or annotation_regions), None
-        )
-        if anchor_region is not None:
-            _require_same_page(
-                number,
-                anchor_region.page_index,
-                answer_regions,
-                score_regions,
-                annotation_regions,
+        # Answer areas may span at most 2 distinct pages (Issue #108).
+        answer_by_page: dict[int, list[Region]] = defaultdict(list)
+        for r in answer_regions:
+            answer_by_page[r.page_index].append(r)
+        ans_pages = sorted(answer_by_page.keys())
+
+        if len(ans_pages) > 2:
+            raise CrossPageRegionError(
+                f"question {number!r}'s ANSWER_AREA regions span {len(ans_pages)} pages; "
+                "answer areas may span at most 2 pages"
             )
+
+        if len(ans_pages) == 2:
+            p1_idx, p2_idx = ans_pages
+            page = p1_idx + 1
+            page_2 = p2_idx + 1
+            answer_area = _union_bbox(answer_by_page[p1_idx])
+            answer_area_2 = _union_bbox(answer_by_page[p2_idx])
+            for group in (question_regions, score_regions, annotation_regions):
+                for region in group:
+                    if region.page_index not in (p1_idx, p2_idx):
+                        raise CrossPageRegionError(
+                            f"question {number!r}'s {region.kind.value} region is on page "
+                            f"{region.page_index + 1}, which does not match any of the question's "
+                            f"answer pages ({page}, {page_2}); areas must be on the same "
+                            "page as their question"
+                        )
+        elif len(ans_pages) == 1:
+            p1_idx = ans_pages[0]
+            page = p1_idx + 1
+            page_2 = None
+            answer_area = _union_bbox(answer_by_page[p1_idx])
+            answer_area_2 = None
+            for group in (question_regions, score_regions, annotation_regions):
+                for region in group:
+                    if region.page_index != p1_idx:
+                        raise CrossPageRegionError(
+                            f"question {number!r}'s {region.kind.value} region is on page "
+                            f"{region.page_index + 1}, but its other regions are on page "
+                            f"{page}; areas must be on the same page as their question"
+                        )
+        else:
+            anchor_region = next(
+                iter(question_regions or score_regions or annotation_regions), None
+            )
+            if anchor_region is not None:
+                p1_idx = anchor_region.page_index
+                page = p1_idx + 1
+                for group in (question_regions, score_regions, annotation_regions):
+                    for region in group:
+                        if region.page_index != p1_idx:
+                            raise CrossPageRegionError(
+                                f"question {number!r}'s {region.kind.value} region is on page "
+                                f"{region.page_index + 1}, but its other regions are on page "
+                                f"{page}; areas must be on the same page as their question"
+                            )
+            else:
+                page = 1
+            page_2 = None
+            answer_area = None
+            answer_area_2 = None
 
         points = _points_from_draft_or_regions(number, draft_question, score_regions)
 
@@ -517,14 +565,12 @@ def build_questions_and_rubrics(
                     )
                 )
 
-        answer_area = _union_bbox(answer_regions) if answer_regions else None
-
         questions.append(
             Question(
                 id=question_id,
                 test_id=test_id,
                 number=number,
-                page=(anchor_region.page_index + 1) if anchor_region is not None else 1,
+                page=page,
                 points=points,
                 # Issue #103 supplies the scoring method and model answer
                 # (the confirmed 採点基準 draft); Issue #105 supplies the
@@ -566,6 +612,8 @@ def build_questions_and_rubrics(
                 comment_area=(
                     _bbox_to_rect(annotation_regions[0].bbox) if annotation_regions else None
                 ),
+                page_2=page_2,
+                answer_area_2=answer_area_2,
             )
         )
 

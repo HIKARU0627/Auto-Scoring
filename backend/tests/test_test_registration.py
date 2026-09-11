@@ -23,13 +23,19 @@ _BBOX = NormalizedBBox(x0=0.1, y0=0.1, x1=0.5, y1=0.2)
 
 
 def _region(
-    kind: RegionKind, label: str, *, page_index: int = 0, text: str | None = None
+    kind: RegionKind,
+    label: str,
+    *,
+    page_index: int = 0,
+    text: str | None = None,
+    bbox: NormalizedBBox = _BBOX,
+    region_id: str | None = None,
 ) -> Region:
     return Region(
-        region_id=f"{kind.value}-{label}",
+        region_id=region_id or f"{kind.value}-{label}-p{page_index}",
         kind=kind,
         page_index=page_index,
-        bbox=_BBOX,
+        bbox=bbox,
         label=label,
         confirmed=True,
         text=text,
@@ -291,6 +297,62 @@ def test_an_annotation_area_on_a_different_page_than_its_question_is_rejected() 
         _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
         _region(RegionKind.SCORE, "1", page_index=0, text="5点"),
         _region(RegionKind.ANNOTATION_AREA, "1", page_index=1),
+    ]
+
+    with pytest.raises(CrossPageRegionError):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_an_answer_area_spanning_two_pages_builds_question_with_page_2_and_answer_area_2() -> None:
+    """Issue #108: a question whose answer area spans 2 pages is supported."""
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
+        _region(
+            RegionKind.ANSWER_AREA,
+            "1",
+            page_index=0,
+            bbox=NormalizedBBox(x0=0.1, y0=0.2, x1=0.9, y1=0.5),
+        ),
+        _region(
+            RegionKind.ANSWER_AREA,
+            "1",
+            page_index=1,
+            bbox=NormalizedBBox(x0=0.1, y0=0.3, x1=0.8, y1=0.6),
+        ),
+        _region(RegionKind.SCORE, "1", page_index=0, text="5点"),
+    ]
+
+    questions, _rubrics = build_questions_and_rubrics("test-1", regions)
+    assert len(questions) == 1
+    q = questions[0]
+    assert q.page == 1
+    assert q.page_2 == 2
+    assert q.pages == (1, 2)
+    assert q.answer_area == _rect(NormalizedBBox(x0=0.1, y0=0.2, x1=0.9, y1=0.5))
+    assert q.answer_area_2 == _rect(NormalizedBBox(x0=0.1, y0=0.3, x1=0.8, y1=0.6))
+
+
+def test_an_answer_area_spanning_three_pages_is_rejected() -> None:
+    """Issue #108: answer areas spanning > 2 pages are rejected."""
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=0),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=1),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=2),
+        _region(RegionKind.SCORE, "1", page_index=0, text="5点"),
+    ]
+
+    with pytest.raises(CrossPageRegionError, match="span 3 pages"):
+        build_questions_and_rubrics("test-1", regions)
+
+
+def test_two_page_question_rejects_region_on_third_page() -> None:
+    """All regions for a 2-page question must reside on one of its 2 pages."""
+    regions = [
+        _region(RegionKind.QUESTION, "1", page_index=0, text="問1"),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=0),
+        _region(RegionKind.ANSWER_AREA, "1", page_index=1),
+        _region(RegionKind.SCORE, "1", page_index=2, text="5点"),
     ]
 
     with pytest.raises(CrossPageRegionError):

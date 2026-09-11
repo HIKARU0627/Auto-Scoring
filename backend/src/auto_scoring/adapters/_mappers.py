@@ -150,6 +150,8 @@ def question_to_row(question: Question) -> QuestionRow:
         answer_area=rect_to_json(question.answer_area),
         score_area=rect_to_json(question.score_area),
         comment_area=rect_to_json(question.comment_area),
+        page_2=question.page_2,
+        answer_area_2=rect_to_json(question.answer_area_2),
     )
 
 
@@ -165,6 +167,8 @@ def question_from_row(row: QuestionRow) -> Question:
         answer_area=rect_from_json(row.answer_area),
         score_area=rect_from_json(row.score_area),
         comment_area=rect_from_json(row.comment_area),
+        page_2=row.page_2,
+        answer_area_2=rect_from_json(row.answer_area_2),
     )
 
 

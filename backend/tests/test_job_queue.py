@@ -30,6 +30,7 @@ from auto_scoring.domain.models import (
     JobKind,
     JobSaveConflict,
     JobState,
+    NormalizedRect,
     SubmissionState,
 )
 from auto_scoring.jobs.clock import Clock
@@ -2940,6 +2941,65 @@ async def test_submit_submission_queues_jobs_normally_when_page_coverage_is_comp
         question_pages={"qa": 1, "qb": 2},
         page_count=2,
     )
+    processor = FakeJobProcessor()
+    service = JobQueueService(session_factory, processor, clock=clock)
+    await service.start()
+    try:
+        created = service.submit_submission(submission_id="sub-1")
+        assert len(created) == 2
+        assert len(service.list_for_submission("sub-1")) == 2
+        await _wait_until(lambda: len(processor.calls) == 2)
+        await _wait_until(
+            lambda: all(
+                _state(service, j.id) is JobState.SUCCEEDED
+                for j in service.list_for_submission("sub-1")
+            )
+        )
+    finally:
+        await service.shutdown()
+
+
+async def test_submit_submission_queues_jobs_for_two_page_question_with_full_coverage(
+    session_factory: sessionmaker[Session], clock: Clock
+) -> None:
+    """Issue #108: A question spanning two pages (e.g. qb on pages 2 and 3)
+    results in expected_pages=(1, 2, 3), allowing a 3-page submission to have complete
+    coverage and queue jobs normally."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test(id="test-1"))
+        uow.questions.add(make_question(id="qa", test_id="test-1", number="問1", page=1))
+        uow.questions.add(
+            make_question(
+                id="qb",
+                test_id="test-1",
+                number="問2",
+                page=2,
+                page_2=3,
+                answer_area=NormalizedRect(x=0.1, y=0.1, width=0.8, height=0.4),
+                answer_area_2=NormalizedRect(x=0.1, y=0.1, width=0.8, height=0.4),
+            )
+        )
+        uow.submissions.add(
+            make_submission(
+                id="sub-1",
+                test_id="test-1",
+                page_count=3,
+                state=SubmissionState.AI_PROCESSED,
+            )
+        )
+        draft = DependencyGraph.from_candidates(
+            id="test-1:v1",
+            test_id="test-1",
+            version=1,
+            question_ids=["qa", "qb"],
+            edges=[],
+            created_at=at(),
+        )
+        uow.dependency_graphs.save(draft)
+        confirmed = draft.confirm(edges=[], confirmed_at=at())
+        assert uow.dependency_graphs.try_confirm(confirmed) is True
+        uow.commit()
+
     processor = FakeJobProcessor()
     service = JobQueueService(session_factory, processor, clock=clock)
     await service.start()
