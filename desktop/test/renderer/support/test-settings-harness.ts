@@ -154,6 +154,18 @@ export function createTestSettingsMockClient(
         });
         return { data: blob, response: new Response(), error: undefined };
       }
+      if (path === "/tests/{test_id}/criteria/estimate") {
+        return {
+          data: {
+            page_count: 1,
+            max_pages: 50,
+            estimated_cost: null,
+            unit_cost: null,
+          },
+          response: new Response(),
+          error: undefined,
+        };
+      }
       return base.GET(path, init);
     }),
     POST: vi.fn(async (path, init) => {
@@ -235,6 +247,35 @@ export function createTestSettingsMockClient(
           response: new Response(),
           error: undefined,
         };
+      }
+      if (path === "/tests/{test_id}/criteria/extract") {
+        criteriaRevision += 1;
+        criteria = {
+          test_id: id,
+          status: "draft",
+          revision: criteriaRevision,
+          extracted: true,
+          questions: [
+            {
+              number: "問1",
+              points: 10,
+              model_answer: "模範解答",
+              criteria: [],
+              source_pages: [1],
+            },
+          ],
+          declared_total_points: null,
+          unreadable_pages: [],
+          note: null,
+          totals: {
+            known_points: 10,
+            unknown_count: 0,
+            declared_total_points: null,
+            declared_difference: null,
+            is_complete: true,
+          },
+        };
+        return { data: criteria, response: new Response(), error: undefined };
       }
       return base.POST(path, init);
     }),

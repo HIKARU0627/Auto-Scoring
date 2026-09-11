@@ -2,6 +2,7 @@ import type {
   SidecarFetchRequest,
   SidecarFetchResponse,
 } from "../shared/sidecar-fetch.js";
+import { readE2eEnv } from "./e2e-env.js";
 import {
   assertLoopbackConnection,
   type InternalSidecarConnection,
@@ -36,10 +37,59 @@ export class SidecarTransportError extends Error {
  * transport failure is collapsed into a sanitized {@link SidecarTransportError}
  * (INV-204) rather than rethrown with its host, port, or token.
  */
+function maybeStubCriteriaExtract(
+  request: SidecarFetchRequest,
+): SidecarFetchResponse | null {
+  if (readE2eEnv("AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT") === undefined) {
+    return null;
+  }
+  const match = /^\/tests\/([^/]+)\/criteria\/extract$/.exec(request.urlPath);
+  if (request.method !== "POST" || match === null) {
+    return null;
+  }
+  const testId = match[1];
+  const body = {
+    test_id: testId,
+    status: "draft",
+    revision: 1,
+    extracted: true,
+    questions: [
+      {
+        number: "問1",
+        points: 10,
+        model_answer: "模範解答",
+        criteria: [],
+        source_pages: [1],
+      },
+    ],
+    declared_total_points: null,
+    unreadable_pages: [],
+    note: null,
+    totals: {
+      known_points: 10,
+      unknown_count: 0,
+      declared_total_points: null,
+      declared_difference: null,
+      is_complete: true,
+    },
+  };
+  return {
+    status: 200,
+    statusText: "OK",
+    headers: { "content-type": "application/json" },
+    bodyBase64: Buffer.from(JSON.stringify(body)).toString("base64"),
+  };
+}
+
 export async function sidecarFetch(
   connection: InternalSidecarConnection,
   request: SidecarFetchRequest,
 ): Promise<SidecarFetchResponse> {
+  const stubbed = maybeStubCriteriaExtract(request);
+  if (stubbed !== null) {
+    return stubbed;
+  }
+
   assertLoopbackConnection(connection);
 
   const url = `http://${connection.host}:${connection.port}${request.urlPath}`;
