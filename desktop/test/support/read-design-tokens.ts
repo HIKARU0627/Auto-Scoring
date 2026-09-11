@@ -10,9 +10,8 @@ const TOKENS_PATH = path.resolve(
 );
 
 const BLOCK_PATTERNS: Record<ThemeName, RegExp> = {
-  light:
-    /:root,\s*\[data-theme="light"\]\s*\{([\s\S]*?)\}\s*\[data-theme="dark"\]/,
-  dark: /\[data-theme="dark"\]\s*\{([\s\S]*?)\}\s*$/,
+  dark: /:root,\s*\[data-theme="dark"\]\s*\{([\s\S]*?)\}\s*\[data-theme="light"\]/,
+  light: /\[data-theme="light"\]\s*\{([\s\S]*?)\}\s*$/,
 };
 
 function parseDeclarations(block: string): Map<string, string> {
