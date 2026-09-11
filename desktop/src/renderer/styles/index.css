@@ -45,6 +45,9 @@
   --color-info-container: var(--color-info-container);
   --color-on-info-container: var(--color-on-info-container);
   --color-progress-track: var(--color-progress-track);
+  --color-chart-grid: var(--color-chart-grid);
+  --color-chart-axis: var(--color-chart-axis);
+  --color-chart-divider: var(--color-chart-divider);
   --color-annotation-mark: var(--color-annotation-mark);
   --color-disabled-button-outline: var(--color-disabled-button-outline);
   --color-disabled-button-label: var(--color-disabled-button-label);
