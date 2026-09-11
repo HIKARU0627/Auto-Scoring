@@ -15,6 +15,22 @@ export const NUMERIC_STYLE: CSSProperties = {
   fontVariantNumeric: "var(--font-variant-numeric-score)",
 };
 
+/**
+ * Panel heading size (Issue #353). The token layer maps no `text-title-*`
+ * utility between body (14px) and title-large (22px), and `features/` may not
+ * add one, so this derives 17.5px from the body token. The mock's panel
+ * headings measure 17.6px; before this the heading equalled the body text and
+ * the hierarchy collapsed (parent #333 evaluation A).
+ */
+export const PANEL_TITLE_STYLE: CSSProperties = {
+  fontSize: "calc(var(--font-size-body-medium) * 1.25)",
+};
+
+/** Table header size (Issue #353): the mock's header is quieter than the body. */
+export const TABLE_HEAD_STYLE: CSSProperties = {
+  fontSize: "var(--font-size-label-medium)",
+};
+
 export function toneDotClass(tone: string): string {
   switch (tone) {
     case "attention":
@@ -49,20 +65,43 @@ export function toneTextClass(tone: string): string {
   }
 }
 
+/**
+ * Status pill fills (Issue #353, parent #333). Each tone is a *solid* vivid
+ * token so the state is legible against the card; the old `*-container` fills
+ * sank into the card (info-container `#1f3a72` vs card `#232b3e`) and only the
+ * label carried the state. The foreground is paired per tone so the text
+ * contrast survives both themes: `text-surface` is dark in the dark theme and
+ * light in the light theme, which is what the light status hues need.
+ */
 export function statusPillClass(badge: HomeTestStatusBadge): string {
   switch (badge.tone) {
     case "attention":
-      return "bg-attention-container text-on-attention-container";
+      return "bg-attention text-surface";
     case "info":
-      return "bg-info-container text-on-info-container";
+      return "bg-primary text-on-primary";
     case "success":
-      return "bg-success-container text-on-success-container";
+      return "bg-success text-surface";
     case "danger":
     case "error":
       return "bg-error-container text-on-error-container";
+    case "muted":
+      return "bg-secondary-container text-on-secondary-container";
+    case "neutral":
+      return "bg-outline text-surface";
     default:
-      return "bg-surface-container-high text-on-surface-variant";
+      return "bg-outline text-surface";
   }
+}
+
+/**
+ * Recharts `paddingAngle` for the test donut (Issue #353). A non-zero gap only
+ * makes sense *between* sectors: with one non-zero sector the ring is a full
+ * circle, and any padding shows up as a bite taken out of the top of the ring.
+ */
+export function donutPaddingAngle(
+  slices: readonly { readonly count: number }[],
+): number {
+  return slices.filter((slice) => slice.count > 0).length > 1 ? 2 : 0;
 }
 
 /** Fill token per donut phase; `preparing` is grey like the mock. */

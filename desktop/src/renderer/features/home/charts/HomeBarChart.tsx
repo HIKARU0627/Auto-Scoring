@@ -99,11 +99,15 @@ export function HomeBarChart({
             contentStyle={TOOLTIP_CONTENT_STYLE}
             formatter={(value) => [`${String(value)}件`, "取込"]}
           />
+          {/* Without a cap Recharts widens a lone bar to fill the category
+              (measured 87px); the mock is a 23px bar on a 64px pitch
+              (Issue 353, evaluation A). */}
           <Bar
             dataKey="count"
             fill="var(--color-primary)"
             shape={DailyBarShape}
             isAnimationActive={false}
+            maxBarSize={28}
           />
         </BarChart>
       </ResponsiveContainer>

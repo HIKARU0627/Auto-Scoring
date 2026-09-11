@@ -66,7 +66,7 @@ export function homeTestPhaseMeta(phase: HomeTestPhase): HomeTestPhaseMeta {
 export interface HomeTestStatusBadge {
   readonly label: string;
   readonly tone:
-    "neutral" | "info" | "attention" | "danger" | "success" | "error";
+    "neutral" | "muted" | "info" | "attention" | "danger" | "success" | "error";
 }
 
 export interface HomeReviewSummary {
@@ -163,7 +163,7 @@ export class HomeTestProgress {
    */
   get statusBadge(): HomeTestStatusBadge {
     if (!this.submissionsAvailable) {
-      return { label: "取得できません", tone: "neutral" };
+      return { label: "取得できません", tone: "muted" };
     }
     if (this.test.status !== "ready") {
       return { label: "準備中", tone: "neutral" };
