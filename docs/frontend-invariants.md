@@ -1204,3 +1204,221 @@ GitHub Issue [#246](https://github.com/HIKARU0627/Auto-Scoring/issues/246)（親
 | UG-13      | 共通基盤     | 共通基盤: 共通UIコンポーネント（関連: 取込、設定）                     | 未引き取り       | 未移植 (共通基盤: 共通UIコンポーネント（関連: 取込、設定）)                     | 長いファイル名がファイル選択ボタンを画面外へ押し出さない                           |
 | UG-14      | 共通基盤     | 共通基盤: サイドカーライフサイクル・起動ゲート                         | 未引き取り       | 未移植 (共通基盤: サイドカーライフサイクル・起動ゲート)                         | 失敗画面が指すログの場所が、サイドカーが実際に書く場所と一致している               |
 | UG-15      | 共通基盤     | 共通基盤: サイドカーライフサイクル・起動ゲート                         | 未引き取り       | 未移植 (共通基盤: サイドカーライフサイクル・起動ゲート)                         | 待たせるときは、待つ理由（初回マイグレーションと Defender スキャン）を出す         |
+
+---
+
+## 18. 共通基盤の未引き取り 52 件の分類（Issue #253）
+
+GitHub Issue [#253](https://github.com/HIKARU0627/Auto-Scoring/issues/253)（親 [#201](https://github.com/HIKARU0627/Auto-Scoring/issues/201)）。
+
+§17 で特定された「共通基盤の未引き取り 52 件」について、いきなりテストを実装せず、実コード・設計根拠に基づく仕分けを行い、以下の 3 つの区分に分類した。
+
+| 分類                                  | 意味                                                            |   件数 | 扱い                                                                     |
+| ------------------------------------- | --------------------------------------------------------------- | -----: | ------------------------------------------------------------------------ |
+| **A: 構造的に起こりえない**           | Electron / 新スタックのアーキテクチャ上、事象自体が発生し得ない |  **8** | 理由と根拠コードを示して記録し、クローズ（テスト不要）                   |
+| **B: 既に別のテストが覆っている**     | 先行 PR や画面移植 PR に含まれるテストが既に保証している        |  **9** | 覆っているテストファイル名と行番号を特定して記録                         |
+| **C: 本当に書く必要がある（要実装）** | 新スタックでも必要な保証であり、まだテストが存在しない          | **35** | 何が必要かを明確化し、後続の独立 Issue に委ねる（本 Issue では書かない） |
+| **合計**                              |                                                                 | **52** | **未分類 0 件（8 + 9 + 35 = 52、完全一致）**                             |
+
+---
+
+### 18.1 分類サマリ一覧表（全 52 件）
+
+| ID             | 区分           | 分類  | 根拠コード／テストファイルと行                                                                                                                      | 分類の理由・必要な実装                                                                                                                                                                        |
+| -------------- | -------------- | :---: | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **INV-001**    | アーキテクチャ | **C** | 未覆い                                                                                                                                              | `src/renderer/api` が `core`/`features` を import できない規則を `desktop/test/architecture.test.ts` に追加し、既存の逆参照（`home-data.ts`, `answer-area-data.ts` 等）を解消する必要がある。 |
+| **INV-002**    | アーキテクチャ | **C** | 未覆い                                                                                                                                              | `src/renderer/core` が `features` を import できない規則を `desktop/test/architecture.test.ts` に追加する必要がある。                                                                         |
+| **INV-004**    | 操作要件       | **C** | 未覆い                                                                                                                                              | 無効操作の判定ロジックと文言が `core/action-requirements.ts` の単一ソースから提供され、各画面が独自文言をインライン作成していないことを検証するテストが必要。                                 |
+| **INV-006**    | ドメイン       | **C** | 未覆い                                                                                                                                              | `desktop/src/renderer/core/question-status.ts` の `deriveQuestionStatus` が job / review / dependent から一元的に状態を導出することを検証する単体テストが必要。                               |
+| **INV-010**    | ルーティング   | **A** | `desktop/src/renderer/navigation/router.tsx:25-33`                                                                                                  | Electron では `go_router` を使用せず、自作ルーターの `RouterContextValue` が公開する API は `push`, `replace`, `pop` のみで `.go()` / `.goNamed()` が存在しないため構造的に起こりえない。     |
+| **INV-011**    | ルーティング   | **A** | `desktop/src/renderer/navigation/router.tsx:25-33`                                                                                                  | 画面間遷移は `RouterContextValue` の `push` / `replace` / `pop` のみに型レベルおよび実装レベルで限定されているため構造的に起こりえない。                                                      |
+| **INV-012**    | ルーティング   | **C** | 未覆い                                                                                                                                              | `AppRoutes` の各 location をレンダリングした際に対応する画面コンポーネントが開くことを検証するテストが必要（Flutter の `app_router_test.dart:41` 相当）。                                     |
+| **INV-013**    | ルーティング   | **C** | 未覆い                                                                                                                                              | URL エンコードが必要な文字を含む ID（`testId`, `submissionId`, `questionId`）が正しくデコードされてコンポーネントに渡ることを検証するテストが必要。                                           |
+| **INV-015**    | ルーティング   | **B** | `desktop/test/renderer/home-escape.test.tsx:71-76`                                                                                                  | covered に登録された全ルートにおいて、スタック空の状態で `BackOrHomeButton` が存在することが既にテストされている。                                                                            |
+| **INV-016**    | ルーティング   | **C** | 未覆い                                                                                                                                              | 700×720 の狭幅ビューポートでも出口ボタンが画面内に収まりクリック可能であることを検証するテストが必要。                                                                                        |
+| **INV-017**    | ルーティング   | **C** | 未覆い                                                                                                                                              | キーボード操作（Tab でフォーカス、Enter で押下）のみで出口ボタンが作動しホームへ復帰することを検証するテストが必要。                                                                          |
+| **INV-019**    | ルーティング   | **B** | `desktop/test/renderer/home-escape.test.tsx:96-106`                                                                                                 | スタックに複数画面が積まれた状態（`[home, testList, intake]`）で出口ボタンを押すと 1 画面戻ることが `INV-019` として明示的にテストされている。                                                |
+| **INV-020**    | ルーティング   | **B** | `desktop/test/renderer/home-escape.test.tsx:55-66`                                                                                                  | 全ルートが covered または skipped（理由付き）に登録されていること、および未登録ルートの存在を検知するメタテストが既に実装されている。                                                         |
+| **INV-033**    | サイドカー     | **C** | 未覆い                                                                                                                                              | レンダラー側で `onSidecarStatusChange` を購読し、push された画面の上でもサイドカー障害時にクラッシュオーバーレイと再起動ボタンを表示するコンポーネントとテストが必要。                        |
+| **INV-080**    | トークン       | **C** | 未覆い                                                                                                                                              | `desktop/src/renderer/features/` 配下のコードにおいてスタイルや色のリテラル直書きを禁止する静的検査テストが必要。                                                                             |
+| **INV-081**    | トークン       | **C** | 未覆い                                                                                                                                              | 主要画面のルート要素が light/dark 両テーマにおいてデザイントークンの surface ramp 背景色を適用していることを検証するテストが必要。                                                            |
+| **INV-082**    | トークン       | **C** | 未覆い                                                                                                                                              | 配布物またはアセットに含まれる Noto Sans JP フォントのグリフ数（≥17000）および可変軸を検証するテストが必要。                                                                                  |
+| **INV-083**    | トークン       | **C** | 未覆い                                                                                                                                              | 点数表示などの数字が等幅（`tabular-nums`）で描画され、更新時に横ジャンプしないことを検証するテストが必要。                                                                                    |
+| **INV-084**    | トークン       | **C** | 未覆い                                                                                                                                              | `fontWeight` の指定が可変フォント軸を正しく駆動することを検証するテストが必要。                                                                                                               |
+| **INV-085**    | トークン       | **C** | 未覆い                                                                                                                                              | すべてのテキストロールが規定の font-family および line-height を網羅していることを検証するテストが必要。                                                                                      |
+| **INV-086**    | トークン       | **C** | 未覆い                                                                                                                                              | 認識文字ロールが body より大きく、letter-spacing > 0 であることを検証するテストが必要。                                                                                                       |
+| **INV-091**    | 共通UI         | **B** | `desktop/test/theme-contrast.test.ts:160-171`                                                                                                       | Material 既定の disabled outline が AA 未達（< 3:1）となる計算と実測がテストとして固定されている。                                                                                            |
+| **INV-092**    | 共通UI         | **A** | `desktop/src/renderer/styles/design-tokens.css`                                                                                                     | Flutter の Material `ButtonTheme` 階層が存在せず、ボタンスタイルは CSS 変数（`--color-disabled-button-outline` 等）で直接解決されるため構造的に起こりえない。                                 |
+| **INV-095**    | トークン       | **A** | `desktop/src/renderer/styles/design-tokens.css`                                                                                                     | Flutter の `ThemeExtension` 機構を使用せず、CSS 変数と Tailwind クラスでスタイルを解決するため、未登録拡張による null check クラッシュ自体が構造的に起こりえない。                            |
+| **INV-096**    | 共通UI         | **C** | 未覆い                                                                                                                                              | `AppErrorBanner` コンポーネントおよび再試行・busy 時 disable・1 回 fade-in で settle する動作を検証するテストが必要。                                                                         |
+| **INV-097**    | 共通UI         | **C** | 未覆い                                                                                                                                              | `QuestionStatus` の全 11 状態で label と icon が固有に設定され、色覚多様性に配慮されていることを検証する単体テストが必要。                                                                    |
+| **INV-100**    | 操作要件       | **B** | `desktop/test/action-requirements.test.ts:28-59, 88-94, 96-101`                                                                                     | 無効操作判定関数が無効時に 1 件以上の理由 ID を返し、有効時に 0 件（空配列）を返すことがテストされている。                                                                                    |
+| **INV-101**    | 操作要件       | **C** | 未覆い                                                                                                                                              | 全無効理由文が「。」で終わること、および例外名や HTTP ステータスコード等の内部診断文を含まないことを検査するテストが必要。                                                                    |
+| **INV-102**    | 操作要件       | **B** | `desktop/test/action-requirements.test.ts:47-51, 82-86, 96-101`                                                                                     | `busy: true` が単独で無効理由 `["busy"]` となることがテストされている。                                                                                                                       |
+| **INV-104**    | 共通UI         | **C** | 未覆い                                                                                                                                              | `DisabledActionReason` に空配列が渡された際、コンポーネントが `null` を返して余白（高さ）を残さないことを検証する単体テストが必要。                                                           |
+| **INV-105**    | 共通UI         | **C** | 未覆い                                                                                                                                              | `DisabledActionReason` の理由が Tooltip ではなくインラインの可視テキスト（`<p>`）として描画されることを確認するテストが必要。                                                                 |
+| **INV-106**    | 共通UI         | **C** | 未覆い                                                                                                                                              | 700×720 の狭幅画面において無効理由テキストが折り返され画面内に正しく表示されることを検証するテストが必要。                                                                                    |
+| **INV-108**    | 共通UI         | **C** | 未覆い                                                                                                                                              | 入力フォーム等で helperText と disabled reason が同時に二重表示されない制御およびそのテストが必要。                                                                                           |
+| **INV-109**    | 共通UI         | **C** | 未覆い                                                                                                                                              | `DisabledActionReason` のテキストが tabIndex を持たず、Tab 移動時にスキップされて次の操作可能要素へフォーカスが移動することを検証するテストが必要。                                           |
+| **INV-152**    | ドメイン       | **C** | 未覆い                                                                                                                                              | `deriveQuestionStatus` において `job.usable === false` かつ後続待ちがある場合に `needsCheck`、待ちがない場合に `graded` となることを検証するテストが必要。                                    |
+| **INV-153**    | ドメイン       | **C** | 未覆い                                                                                                                                              | `deriveQuestionStatus` において人間によるレビュー後は停止したジョブ状態よりもレビューが優先されることを検証するテストが必要。                                                                 |
+| **INV-168**    | 共通UI         | **C** | 未覆い                                                                                                                                              | 採点利用不可状態でのみ表示されるバナーコンポーネントとその表示制御を検証するテストが必要。                                                                                                    |
+| **INV-200**    | API            | **C** | 未覆い                                                                                                                                              | `SidecarClient` に不正なトークンが設定されていても `/healthz` 呼び出しが成功（200）することを API クライアント層で検証するテストが必要。                                                      |
+| **INV-201**    | API            | **C** | 未覆い                                                                                                                                              | `SidecarClient` を通じた正規トークンによる保護 API 呼び出しが成功することを検証するテストが必要。                                                                                             |
+| **INV-202**    | API            | **C** | 未覆い                                                                                                                                              | `SidecarClient` に不正なトークンを設定した際に保護 API 呼び出しが 401 Unauthorized となることを検証するテストが必要。                                                                         |
+| **INV-203**    | API            | **C** | 未覆い                                                                                                                                              | `createSidecarClient` において非 loopback アドレスを拒否し、エラーメッセージにトークンや URL を含めない実装とテストが必要。                                                                   |
+| **INV-204**    | API            | **C** | 未覆い                                                                                                                                              | 通信エラー発生時に内部 URL や接続詳細情報を漏洩させないエラーサニタイズ処理とそのテストが必要。                                                                                               |
+| **INV-205**    | API            | **C** | 未覆い                                                                                                                                              | 409 Conflict 応答のレスポンスボディからサイドカーの拒否コード（`conflictCode`）および設問 ID リストが抽出・保持されることを検証する単体テストが必要。                                         |
+| **INV-201-04** | 操作要件       | **B** | `desktop/test/action-requirements.test.ts:9-59`, `desktop/test/renderer/settings-page.test.tsx:52-99`                                               | 操作を無効にする条件そのものから固有の理由が導出され、条件変更に伴って理由が連動して変化することが明示的にテストされている。                                                                  |
+| **INV-201-07** | 文言検査       | **B** | `desktop/test/renderer/home-page.test.tsx:127-128`, `desktop/test/home-dashboard.test.ts:131-132`, `desktop/test/renderer/intake-page.test.tsx:141` | Flutter の根拠テストに対応し、「模範解答」「採点マニュアル」「画面はまだありません」が表示されないことがテストされている。                                                                    |
+| **UG-02**      | サイドカー     | **A** | `desktop/src/main/sidecar-platform.ts`                                                                                                              | Win32 Job Object を採用せず `--parent-pid` 親監視を採用したため、Job Object の limit 設定失敗という事態自体が構造的に起こりえない。                                                           |
+| **UG-03**      | サイドカー     | **A** | `desktop/src/main/sidecar-platform.ts`                                                                                                              | Win32 Job Object ハンドルを生成・保持・破棄するコードが存在しないため、生存中にハンドルを閉じてしまう事象自体が構造的に起こりえない。                                                         |
+| **UG-04**      | サイドカー     | **A** | `desktop/src/main/sidecar-supervisor.ts:86-94`                                                                                                      | spawn 時にコマンドライン引数 `--parent-pid` を直接渡して起動するため、spawn から Job 登録までの時間的隙間（孤児化の窓）が構造的に起こりえない。                                               |
+| **UG-05**      | ルーティング   | **A** | `desktop/src/main/main.ts:33-39`, `desktop/src/renderer/AppShell.tsx:24`, `desktop/src/renderer/theme/theme.ts:14-16`                               | メインプロセス・レンダラーともに環境変数から起動ルートやテーマを取得する口が存在せず、サンドボックス化されているため構造的に起こりえない。                                                    |
+| **UG-13**      | 共通UI         | **B** | `desktop/test/renderer/file-picker-row.test.tsx:6-21`                                                                                               | 長いファイル名が `truncate` され、ボタン押し出しを起こさないことが `UG-13` として既にテストされている。                                                                                       |
+| **UG-14**      | サイドカー     | **C** | 未覆い                                                                                                                                              | サイドカー起動失敗画面において、実際のログ保存先パス（`logs/sidecar.log`）を表示するレンダラー実装と、その一致を検証するテストが必要。                                                        |
+| **UG-15**      | サイドカー     | **C** | 未覆い                                                                                                                                              | スプラッシュ画面において、初回マイグレーションや Defender スキャンによる待機案内文を表示するレンダラー実装とテストが必要。                                                                    |
+
+---
+
+### 18.2 分類 A: 構造的に起こりえない（8 件）
+
+Electron / 新スタックの採用およびアーキテクチャ設計により、事象の発生基盤そのものが存在しないため、テスト不要としてクローズする。
+
+1. **`UG-02`, `UG-03`, `UG-04`（Win32 Job Object 関連 3 件）**
+   - **根拠コード**: `desktop/src/main/sidecar-supervisor.ts:86-94`, `desktop/src/main/sidecar-platform.ts`
+   - **設計根拠**: 最高責任者の決定（Issue #211, #234, PR #237）により、Linux CI で検証不能な Win32 Job Object ネイティブアドオンは不採用とし、Python サイドカーの親プロセス監視（`--parent-pid`）で代替した。
+   - **理由**:
+     - `UG-02`（limit 設定失敗 Job は持たない）: Job Object API 自体を使用しないため、limit 設定失敗という不完全状態が構造的に発生し得ない。
+     - `UG-03`（Job ハンドルを生存中に閉じない）: Job ハンドルを保持・管理するコードが存在しないため、生存中に誤って閉じるリスクが存在しない。
+     - `UG-04`（spawn 直後に Job へ登録する）: プロセス起動引数として `--parent-pid` を渡し起動直後から監視を開始するため、spawn から登録までの時間差（孤児化の窓）という構造的問題が存在しない。
+2. **`INV-010`, `INV-011`（ルーティング遷移制限 2 件）**
+   - **根拠コード**: `desktop/src/renderer/navigation/router.tsx:25-33, 179-185`
+   - **理由**:
+     - `INV-010`（`features/` で `go_router` の `.go()` / `.goNamed()` を使わない）: Flutter の `go_router` を採用しておらず、React 上の自作ルーターを採用している。ルーターの公開インターフェース `RouterContextValue` には `.go()` や `.goNamed()` というメソッド自体が存在しない。
+     - `INV-011`（画面間移動は `push` / `replace` / `pop` のみ）: `RouterContextValue` が提供する画面操作が型定義および実装レベルで `push`, `replace`, `pop` の 3 メソッドに厳密に制限されており、他の破壊的遷移を呼び出す口が存在しない。
+3. **`INV-092`, `INV-095`（Flutter テーマ構造依存 2 件）**
+   - **根拠コード**: `desktop/src/renderer/styles/design-tokens.css`, `desktop/src/renderer/theme/theme.ts`, `desktop/src/renderer/theme/ThemeProvider.tsx`
+   - **理由**:
+     - `INV-092`（filled/outlined/text 全 ButtonTheme が disabled 色を返す）: Flutter Material の ButtonTheme 階層（`FilledButtonThemeData` / `OutlinedButtonThemeData` / `TextButtonThemeData`）が存在せず、ボタンスタイルは CSS 変数（`--color-disabled-button-outline` 等）により一元適用されるため、特定テーマでの設定漏れが構造的に起こりえない。
+     - `INV-095`（AppStatusColors / AppTextRoles extension 必須）: Flutter の `ThemeExtension` 未登録による null check クラッシュ（`context.statusColors!`）を防ぐための保証である。Electron では CSS 変数と Tailwind クラスを用いて直接スタイルを解決するため、ThemeExtension の登録漏れによるクラッシュが構造的に起こりえない。
+4. **`UG-05`（リリースビルドの環境変数取得 1 件）**
+   - **根拠コード**: `desktop/src/main/main.ts:33-39`, `desktop/src/renderer/AppShell.tsx:24`, `desktop/src/renderer/theme/theme.ts:14-16`
+   - **理由**: メインプロセスおよびレンダラーに起動ルートやテーマを環境変数から取得する処理は存在しない。起動ルートは `AppRoutes.home` に固定され、テーマは `localStorage` または既定値 `"dark"` から解決される。レンダラーはサンドボックス化（`sandbox: true, contextIsolation: true`）されており、OS 環境変数へ直接アクセスする手段も存在しない。
+
+---
+
+### 18.3 分類 B: 既に別のテストが覆っている（9 件）
+
+先行 PR（#225, #235, #240, #252 等）で実装された自動テストが、すでに該当する不変条件の性質を行単位で固定している。
+
+1. **`INV-015`: スタック空で開いた covered ルートすべてに出口ボタンがある**
+   - **覆っているテスト**: `desktop/test/renderer/home-escape.test.tsx:71-76`
+   - **内容**: covered ルートの全画面（スタック長 1 の空スタック状態）をレンダリングし、`BackOrHomeButton`（`data-testid="back-or-home-button"`）が確実に存在することをループ検証している。
+2. **`INV-019`: push で積んだ画面では出口は 1 枚戻る（ホーム直行ではない）**
+   - **覆っているテスト**: `desktop/test/renderer/home-escape.test.tsx:96-106`
+   - **内容**: `escape pops one frame when the stack is not empty (INV-019)` テストケースにおいて、`[home, testList, intake]` と積まれたスタックから出口ボタンを押すと、ホームへ直行せず直前の `testList` に戻ることを明示的に固定している。
+3. **`INV-020`: 新ルート追加時、covered か skipped（理由付き）のどちらかに必ず登録**
+   - **覆っているテスト**: `desktop/test/renderer/home-escape.test.tsx:55-66`
+   - **内容**: メタテスト `every declared route is covered or skipped with a reason` および `flags a route that is declared but not registered` により、未登録ルートが追加された場合にテストが失敗する仕組みを固定している。
+4. **`INV-091`: Material 既定 disabled outline は AA 未達（上書き理由の実測）**
+   - **覆っているテスト**: `desktop/test/theme-contrast.test.ts:160-171`
+   - **内容**: `Material の既定では足りない` テストケースにおいて、Material 3 既定の disabled outline（onSurface 0.12 透過）がコントラスト比 3:1 未達（`toBeLessThan(AA_NON_TEXT)`）となる計算・実測を固定している。
+5. **`INV-100`: 無効操作には理由 id が 1 件以上、有効時 0 件**
+   - **覆っているテスト**: `desktop/test/action-requirements.test.ts:28-59, 88-94, 96-101`
+   - **内容**: 無効状態の組み合わせにおいて 1 件以上の理由 ID が返り、全条件充足時に空配列（0 件）となることを検証している。
+6. **`INV-102`: busy は単独でも理由になる**
+   - **覆っているテスト**: `desktop/test/action-requirements.test.ts:47-51, 82-86, 96-101`
+   - **内容**: 他の条件が充足していても `busy: true` 単独で `["busy"]` が導出されること、および `whileRunningRequirements({ running: true })` が `["busy"]` を返すことを固定している。
+7. **`INV-201-04`: 無効な操作には、無効条件そのものから導いた理由が必ず出る**
+   - **覆っているテスト**: `desktop/test/action-requirements.test.ts:9-59`, `desktop/test/renderer/settings-page.test.tsx:52-99`
+   - **内容**: 操作を無効にしている条件要因（キー未設定、busy、資格情報ストア不可など）からそれぞれの固有理由が導出され、条件の変化に伴って理由が連動して変化することが単体テストおよび画面結合テストで固定されている。
+8. **`INV-201-07`: 廃止した文言が二度と現れない**
+   - **覆っているテスト**: `desktop/test/renderer/home-page.test.tsx:127-128`, `desktop/test/home-dashboard.test.ts:131-132`, `desktop/test/renderer/intake-page.test.tsx:141`
+   - **内容**: Flutter の根拠テスト（`home_page_test.dart:229`, `intake_page_test.dart:522`）に対応し、ホーム画面で「模範解答」「採点マニュアル」が表示されないこと、および取込画面で「画面はまだありません」が表示されないことを固定している。
+9. **`UG-13`: 長いファイル名がファイル選択ボタンを画面外へ押し出さない**
+   - **覆っているテスト**: `desktop/test/renderer/file-picker-row.test.tsx:6-21`
+   - **内容**: `FilePickerRow (UG-13)` テストにおいて、長いファイル名を渡した際に `truncate` クラスによりテキストがボタンの横で正しく省略されることを固定している。
+
+---
+
+### 18.4 分類 C: 本当に書く必要がある（35 件）
+
+これらは新スタックへの移行後も維持すべき約束であり、既存のテストではまだ覆われていない。本 Issue（#253）ではテストを実装せず、各領域の後続 Issue にてテストを整備する。
+
+#### 1. アーキテクチャと依存方向（2 件）
+
+- **`INV-001` (`api` は `core`/`features` を import しない)**: `desktop/test/architecture.test.ts` に sub-layer ルールを追加し、既存の逆参照（`home-data.ts`, `answer-area-data.ts` 等）を解消・整理する。
+- **`INV-002` (`core` は `features` を import しない)**: `desktop/test/architecture.test.ts` に `core` から `features` への import 禁止ルールを追加する。
+
+#### 2. ドメインロジック・設問状態（3 件）
+
+- **`INV-006` (設問ステータスの一元決定)**: `core/question-status.ts` の `deriveQuestionStatus` に対する単体テストを新規作成する。
+- **`INV-152` (`usable=false + waiting → needsCheck`)**: `usable=false` かつ後続待ちがある場合に `needsCheck`、待ちなしで `graded` となる分岐をテストする。
+- **`INV-153` (人間採点後の review 優先)**: 人間レビュー後は停止ジョブ状態よりもレビューが優先される判定をテストする。
+
+#### 3. ナビゲーション・ルーティング残余（4 件）
+
+- **`INV-012` (各 location が対応 Widget を開く)**: `AppRoutes` の全 location をレンダリングし、対応コンポーネントが開くことを検証するテストを作成する。
+- **`INV-013` (パラメータ付き URL のデコード)**: URL エンコード記号を含む ID が正しくデコードされて渡ることを検証するテストを作成する。
+- **`INV-016` (狭幅 700×720 での出口ボタン押下)**: 狭幅環境での出口ボタンクリック可否を検証するテストを作成する。
+- **`INV-017` (Tab→Enter でのホーム脱出)**: キーボード操作によるホーム脱出テストを作成する。
+
+#### 4. サイドカーライフサイクル・起動ゲート残余（3 件）
+
+- **`INV-033` (push 済み画面上でのクラッシュ overlay＋再起動)**: レンダラー側で `onSidecarStatusChange` を購読し、push 画面上でもクラッシュ overlay が表示されるコンポーネントとテストを作成する。
+- **`UG-14` (失敗画面が指すログの場所の一致)**: 起動失敗画面に実際のログ保存パス（`logs/sidecar.log`）を表示する実装とテストを作成する。
+- **`UG-15` (待つ理由の案内文表示)**: スプラッシュ画面で「初回起動には時間がかかることがあります。」を表示する実装とテストを作成する。
+
+#### 5. デザイントークン・アクセシビリティ（7 件）
+
+- **`INV-080` (スタイルリテラル禁止)**: `src/renderer/features/` 配下でのスタイル・色リテラル直書きを禁止する静的検査テストを作成する。
+- **`INV-081` (主要画面の surface ramp 背景色)**: 各画面ルート要素の背景色がトークン由来であることを検証するテストを作成する。
+- **`INV-082` (Noto Sans JP variable グリフ数)**: 配布フォントのグリフ数（≥17000）検査テストを作成する。
+- **`INV-083` (数字の等幅設定)**: 点数等の数字表示スタイルで `tabular-nums` が指定されていることを検証するテストを作成する。
+- **`INV-084` (fontWeight の可変軸駆動)**: 可変フォントのウェイト軸駆動テストを作成する。
+- **`INV-085` (全 text role の bundled family + height)**: 全テキストロールの font-family / line-height 設定を検証するテストを作成する。
+- **`INV-086` (認識文字 role の寸法・字間)**: 認識文字ロールのフォントサイズおよび字間設定テストを作成する。
+
+#### 6. 操作要件・無効理由エンジン残余（2 件）
+
+- **`INV-004` (無効操作の判定・文言は単一ソース)**: 無効理由の判定ロジックと文言が `core/action-requirements.ts` の単一ソースから提供され、画面側で独自文言を直書きしていないことを検証するテストを作成する。
+- **`INV-101` (理由文は「。」終わり・内部診断文非露出)**: 全無効理由文が「。」で終わること、および例外名や HTTP ステータスコードを含まないことを検査するテストを作成する。
+
+#### 7. 共通 UI コンポーネント（8 件）
+
+- **`INV-096` (`AppErrorBanner`)**: エラーバナーの再試行・busy 時 disable・fade-in 安定化テストを作成する。
+- **`INV-097` (`QuestionStatus` の固有 label+icon)**: 全状態に色以外の固有 label+icon が設定されていることを検証するテストを作成する。
+- **`INV-104` (条件充足時の理由消去＋高さ 0)**: `DisabledActionReason` の空時非描画テストを作成する。
+- **`INV-105` (理由はインライン visible Text)**: `DisabledActionReason` が Tooltip でなく可視テキストであることを検証するテストを作成する。
+- **`INV-106` (狭幅 700×720 で理由が画面内)**: 狭幅画面での理由文の折り返し・画面内収容テストを作成する。
+- **`INV-108` (helperText と disabled reason 二重表示禁止)**: フォーム入力での二重表示防止テストを作成する。
+- **`INV-109` (理由 Text が focus を取らない Tab 順)**: Tab 移動時に理由テキストがフォーカスを奪わないテストを作成する。
+- **`INV-168` (採点利用不可バナー)**: 採点サービス利用不可時のみ表示されるバナーの制御テストを作成する。
+
+#### 8. API クライアント層（6 件）
+
+- **`INV-200` (`/healthz` は bogus token でも OK)**: 不正トークン時でも `/healthz` が成功することを検証する API クライアントテストを作成する。
+- **`INV-201` (正 token で protected API 成功)**: 正規トークンでの保護 API 呼び出し成功を検証する API クライアントテストを作成する。
+- **`INV-202` (誤 token→401 unauthorized)**: 不正トークンでの保護 API 呼び出しが 401 となることを検証するテストを作成する。
+- **`INV-203` (非 loopback URL 拒否と資格情報秘匿)**: 非 loopback アドレスを拒否し、エラーにトークンや URL を露出させない処理とテストを作成する。
+- **`INV-204` (unknown transport error での接続詳細非露出)**: 通信エラー発生時の機密情報サニタイズ処理とテストを作成する。
+- **`INV-205` (409 応答からの conflictCode 保持)**: 409 Conflict 応答ボディから拒否コード・設問 ID を抽出・保持する単体テストを作成する。
+
+---
+
+### 18.5 集計と cut-over への影響
+
+本仕分けにより、未引き取りとされていた 52 件の実態が確定した。
+
+```text
+共通基盤 52 件の分類結果
+├─ 分類 A（構造的に起こりえない）:  8 件 (15.4%) → 追加テスト不要でクローズ
+├─ 分類 B（既に別のテストが覆う）:  9 件 (17.3%) → 既存テストで固定済み（引き取り完了）
+└─ 分類 C（本当に書く必要がある）: 35 件 (67.3%) → 後続 Issue でテスト整備が必要
+```
+
+- **分母の圧縮効果**:
+  「共通基盤の未引き取り 52 件」として一括りにされていた課題のうち、**17 件（A の 8 件 + B の 9 件、全体の 32.7%）** は新規にテストを書く必要がないことが判明した。
+- **残余テストの実態**:
+  新規テスト実装が必要なものは **35 件** に絞り込まれた。内訳として「共通 UI コンポーネント（8 件）」「デザイントークン（7 件）」「API クライアント層（6 件）」が主要なボリュームを占めており、それぞれ独立した Issue で着実にテスト整備を進めることが可能となった。
