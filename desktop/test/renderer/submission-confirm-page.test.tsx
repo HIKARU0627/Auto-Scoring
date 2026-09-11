@@ -106,6 +106,12 @@ describe("SubmissionConfirmPage (Issue #245)", () => {
       ).toContain("まだ表示していない設問があります");
       expect(screen.getByTestId("confirm-reach-q-1")).toBeDefined();
       expect(screen.getAllByText("未表示").length).toBeGreaterThan(0);
+      // 未到達が残っている間は確定できない。core の canConfirm を画面が
+      // 見落としても、ここで赤くなる（INV-154）。
+      expect(
+        (screen.getByTestId("confirm-submission-button") as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
     } finally {
       restore();
     }
@@ -233,6 +239,107 @@ describe("SubmissionConfirmPage (Issue #245)", () => {
         screen.getByTestId("confirm-blocked-human-score").textContent,
       ).toContain("問2");
       expect(screen.getByText("点数を入力する")).toBeDefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it("INV-155: one keyboard Enter approves every pending question", async () => {
+    const restore = mockLayout({ fitAll: true });
+    const approved: string[] = [];
+    renderSubmissionConfirm({
+      numbers: ["1", "2"],
+      approveReview: async (_submissionId, questionId) => {
+        approved.push(questionId);
+        return {};
+      },
+    });
+    try {
+      await screen.findByTestId("confirm-question-list");
+      await waitUntilConfirmReady();
+      expect(screen.getByText("2問をまとめて確定 (Enter)")).toBeDefined();
+
+      fireEvent.keyDown(screen.getByTestId("confirm-question-list"), {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+      });
+      await waitFor(() => {
+        expect(approved).toEqual(["q-1", "q-2"]);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("INV-156: the remaining questions can be confirmed again after a partial failure", async () => {
+    const restore = mockLayout({ fitAll: true });
+    const approved: string[] = [];
+    let failOnThird = true;
+    renderSubmissionConfirm({
+      numbers: ["1", "2", "3", "4"],
+      approveReview: async (_submissionId, questionId) => {
+        approved.push(questionId);
+        if (questionId === "q-3" && failOnThird) {
+          throw new Error("他の操作と競合しました");
+        }
+        return {};
+      },
+    });
+    try {
+      await screen.findByTestId("confirm-question-list");
+      await waitUntilConfirmReady();
+      fireEvent.click(screen.getByTestId("confirm-submission-button"));
+      await screen.findByTestId("confirm-outcome-partial");
+      expect(approved).toEqual(["q-1", "q-2", "q-3"]);
+
+      // 失敗のあと、残りだけが確定対象に戻る。押し直すとそこから再開する。
+      failOnThird = false;
+      await waitUntilConfirmReady();
+      fireEvent.click(screen.getByTestId("confirm-submission-button"));
+      await waitFor(() => {
+        expect(approved).toEqual(["q-1", "q-2", "q-3", "q-3", "q-4"]);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("INV-201-02: high confidence does not stand in for having seen the question", async () => {
+    const restore = mockLayout({ containerHeight: 120, rowHeight: 300 });
+    renderSubmissionConfirm({ numbers: ["1", "2", "3"] });
+    try {
+      await screen.findByTestId("confirm-blocked-unreached");
+      // 設問3 の AI 採点は確信度 88%。それでも未到達なら確定できない。
+      expect(
+        screen.getByTestId("confirm-grade-confidence-q-3").textContent,
+      ).toContain("88%");
+      expect(
+        (screen.getByTestId("confirm-submission-button") as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  it("INV-201-08: Enter on the open-question button does not confirm the submission", async () => {
+    const restore = mockLayout({ fitAll: true });
+    const approved: string[] = [];
+    renderSubmissionConfirm({
+      numbers: ["1"],
+      approveReview: async (_submissionId, questionId) => {
+        approved.push(questionId);
+        return {};
+      },
+    });
+    try {
+      await screen.findByTestId("confirm-question-list");
+      await waitUntilConfirmReady();
+      const open = screen.getByTestId("confirm-open-q-1");
+      open.focus();
+      fireEvent.keyDown(open, { key: "Enter", code: "Enter", bubbles: true });
+      expect(approved).toEqual([]);
     } finally {
       restore();
     }
