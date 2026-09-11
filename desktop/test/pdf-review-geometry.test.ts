@@ -64,6 +64,7 @@ function recognitionWithBoxes(
       y: box.rect.y,
       width: box.rect.width,
       height: box.rect.height,
+      unreadable: false,
     })),
   };
 }

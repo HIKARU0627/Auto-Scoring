@@ -10,6 +10,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **height** | **num** |  | 
 **text** | **String** |  | 
+**unreadable** | **bool** |  | [optional] [default to false]
 **width** | **num** |  | 
 **x** | **num** |  | 
 **y** | **num** |  | 
