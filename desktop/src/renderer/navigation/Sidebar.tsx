@@ -35,7 +35,10 @@ export function Sidebar(): JSX.Element {
       className="sticky top-xl flex h-[calc(100vh_-_var(--spacing-xl)*2)] w-52 shrink-0 flex-col rounded-xl bg-surface-dim max-[900px]:w-16"
     >
       <div className="px-md pt-xl pb-xl max-[900px]:px-xs max-[900px]:pt-md max-[900px]:pb-sm">
-        <p className="text-[length:var(--font-size-title-large)] font-semibold leading-ui text-on-surface max-[900px]:hidden">
+        {/* Issue #371 item 6: the mock's brand is a 15px wordmark; the 22px
+            title-large competed with the 28px ホーム page heading. 16px
+            (title-medium) lands in the measured 15-17px. */}
+        <p className="text-[length:var(--font-size-title-medium)] font-semibold leading-ui text-on-surface max-[900px]:hidden">
           {SIDEBAR_PRODUCT_NAME}
         </p>
         <p className="mt-xs text-[length:var(--font-size-label-medium)] leading-ui text-sidebar-subtitle max-[900px]:hidden">

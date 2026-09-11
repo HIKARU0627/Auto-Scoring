@@ -1,8 +1,9 @@
 import type { JSX } from "react";
-import { ArrowRight, FileText } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
+import { AppRoutes } from "../../core/app-routes.js";
 import type { HomeNextAction } from "../../core/home-dashboard.js";
-import { useTheme } from "../../theme/ThemeProvider.js";
+import { NavGlyph } from "../../navigation/SidebarNavIcon.js";
 
 /**
  * 「次の一手」hero card (Issue #336, parent #333 §5). The one thing to press
@@ -20,7 +21,6 @@ export function HomeHeroCard({
   action: HomeNextAction;
   onAction: () => void;
 }): JSX.Element {
-  const { theme } = useTheme();
   return (
     <section
       data-testid="home-next-up"
@@ -32,21 +32,19 @@ export function HomeHeroCard({
           className="flex size-20 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary"
         >
           {/* Issue 360: the mock tile is 83px and its glyph is filled (ink
-              ~66%); the 72px outline glyph read as a thin line drawing. */}
-          <FileText size={36} fill="currentColor" />
+              ~66%); the 72px outline glyph read as a thin line drawing.
+              Issue 371 item 5: the mock icon is the ruled document the sidebar
+              uses, not lucide's plain `FileText`. */}
+          <NavGlyph route={AppRoutes.intake} size={36} />
         </div>
         <div className="min-w-0 flex-1 md:max-w-112">
-          {/* The mock stacks three levels inside the hero: primary accent /
-              pure-white headline / grey body (Issue 360). */}
-          <p className="text-ui-label text-primary">次の一手</p>
-          <h2
-            className={`mt-xs break-words text-title-large font-semibold leading-ui ${
-              theme === "dark" ? "text-on-primary" : "text-on-surface"
-            }`}
-          >
+          {/* The mock stacks three levels inside the hero: accent text /
+              pure-white heading / brighter secondary body (Issue 360, 371). */}
+          <p className="text-ui-label text-primary-text">次の一手</p>
+          <h2 className="mt-xs break-words text-title-large font-semibold leading-ui text-heading">
             {action.headline}
           </h2>
-          <p className="mt-xs break-words text-body-medium text-on-surface-variant">
+          <p className="mt-xs break-words text-body-medium text-on-surface-strong">
             {action.detail}
           </p>
         </div>

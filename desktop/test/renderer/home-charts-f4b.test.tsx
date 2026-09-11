@@ -108,8 +108,8 @@ describe("home charts: two-layer bar (Issue #366 item 2)", () => {
   });
 });
 
-describe("home charts: KPI column rules (Issue #366 item 3)", () => {
-  it("rules the KPI columns apart with a token stroke", async () => {
+describe("home charts: KPI column rules (Issue #366 item 3, Issue #371 item 8)", () => {
+  it("rules the KPI columns apart with a 50px token mark", async () => {
     renderCharts({
       listTestRegistrations: async () => [buildTest({ id: "t1" })],
       listSubmissions: async () => [],
@@ -120,13 +120,27 @@ describe("home charts: KPI column rules (Issue #366 item 3)", () => {
       screen.getByTestId("home-progress-panel").querySelectorAll("dl > div"),
     );
     expect(cells).toHaveLength(4);
-    // The first column has no rule; every column after it does (4-up), and the
-    // 2-up narrow layout only rules the right-hand of its two columns.
-    expect(cells[0]?.className).toContain("sm:first:border-l-0");
-    for (const cell of cells.slice(1)) {
-      expect(cell.className).toContain("sm:border-l");
-      expect(cell.className).toContain("border-chart-divider");
+
+    // The first column has no rule; the other three carry the 1px mark, whose
+    // height is the number block's 50px token rather than a full-cell border.
+    expect(screen.queryByTestId("home-kpi-rule-needsReview")).toBeNull();
+    for (const bucket of ["intakeDone", "processing", "done"]) {
+      const rule = screen.getByTestId(`home-kpi-rule-${bucket}`);
+      expect(rule.className).toContain("bg-chart-divider");
+      expect(rule.className).toContain("h-kpi-rule");
+      expect(rule.className).toContain("w-px");
     }
+    // 2-up narrow rules the right column of each row; 4-up (sm) rules every
+    // column after the first.
+    expect(screen.getByTestId("home-kpi-rule-intakeDone").className).toContain(
+      "block",
+    );
+    const processing = screen.getByTestId("home-kpi-rule-processing");
+    expect(processing.className).toContain("hidden");
+    expect(processing.className).toContain("sm:block");
+    expect(screen.getByTestId("home-kpi-rule-done").className).toContain(
+      "block",
+    );
   });
 });
 

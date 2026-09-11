@@ -11,6 +11,7 @@
   --color-on-primary: var(--color-on-primary);
   --color-primary-container: var(--color-primary-container);
   --color-on-primary-container: var(--color-on-primary-container);
+  --color-primary-text: var(--color-primary-text);
   --color-secondary-container: var(--color-secondary-container);
   --color-on-secondary-container: var(--color-on-secondary-container);
   --color-tertiary-container: var(--color-tertiary-container);
@@ -29,6 +30,9 @@
   --color-surface-container-high: var(--color-surface-container-high);
   --color-surface-container-highest: var(--color-surface-container-highest);
   --color-on-surface-variant: var(--color-on-surface-variant);
+  --color-heading: var(--color-heading);
+  --color-on-surface-strong: var(--color-on-surface-strong);
+  --color-on-surface-muted: var(--color-on-surface-muted);
   --color-outline: var(--color-outline);
   --color-outline-variant: var(--color-outline-variant);
   --color-inverse-surface: var(--color-inverse-surface);
@@ -139,6 +143,12 @@
 
   .max-h-inspector {
     max-height: var(--layout-inspector-max-height);
+  }
+
+  /* Issue #371 item 8: the KPI column rule is the number block's 50px, not
+     the full cell height a border would take. */
+  .h-kpi-rule {
+    height: var(--layout-kpi-rule-height);
   }
 }
 

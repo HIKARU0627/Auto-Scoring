@@ -35,6 +35,10 @@
   --color-on-primary: #ffffff;
   --color-primary-container: #3a2f7a;
   --color-on-primary-container: #ddd8ff;
+  /* Issue #371 item 1: `--color-primary` is a fill (3.0:1 as text on the
+     card). Accent *text* uses the mock's lavender (141,146,249), measured at
+     5.1:1 on the card. Never put `--color-primary` on text. */
+  --color-primary-text: #8d92f9;
   --color-secondary-container: #2f3549;
   --color-on-secondary-container: #c9cfe4;
   --color-tertiary-container: #3c3350;
@@ -55,6 +59,14 @@
   --color-surface-container-high: #293047;
   --color-surface-container-highest: #2f3750;
   --color-on-surface-variant: #b3bcd0;
+  /* Issue #371 items 2-3: the mock measured four secondary steps, not the
+     single `on-surface-variant` the build had, and its card headings are pure
+     white. Three roles are enough: `heading` (255,255,255), the untouched
+     `on-surface-variant` body, `strong` for the prominent 最終更新, and
+     `muted` for axis labels / table headers. */
+  --color-heading: #ffffff;
+  --color-on-surface-strong: #c6d7ee;
+  --color-on-surface-muted: #9eb2d3;
   --color-outline: #8a93a8;
   --color-outline-variant: #3d465e;
   --color-inverse-surface: #e9ebf2;
@@ -65,14 +77,18 @@
   --color-sidebar-subtitle: #8493af;
   --color-sidebar-nav-idle: #9facd7;
 
-  /* Status: pink `#fd6998` 要確認, mint `#69e4d5` 完了, blue `#598ff9` 処理中. */
-  --color-attention: #ff7ba8;
+  /* Status: pink `#fd6998` 要確認, mint `#69e4d5` 完了, blue `#598ff9` 処理中.
+     Issue #371 item 4: the build's hues read pale next to the mock. Attention
+     is *text* on `surface-container-highest`, so it only moves to `#fe74a3`
+     (4.6:1; the mock `#fd6597` is 4.2 and would break AA). Info is the
+     processing dot, a non-text mark, so it takes the mock exactly. */
+  --color-attention: #fe74a3;
   --color-attention-container: #6a2141;
   --color-on-attention-container: #ffd9e3;
   --color-success: #69e4d5;
   --color-success-container: #17453f;
   --color-on-success-container: #c8f5ee;
-  --color-info: #7aa7fb;
+  --color-info: #5784fa;
   --color-info-container: #1f3a72;
   --color-on-info-container: #d6e4ff;
   --color-progress-track: #363d52;
@@ -157,6 +173,9 @@
   --layout-dialog-body-footer-grid-rows: minmax(0, 1fr) auto;
   --layout-hairline: 1px;
   --layout-section-divider: 24px;
+  /* Issue #371 item 8: the mock's KPI column rule is 50px, the number block's
+     height, not the 82px full cell the border used to fill. */
+  --layout-kpi-rule-height: 50px;
   /* React Flow viewport for the question dependency graph. */
   --layout-dag-flow-height: 272px;
   --layout-activity-bar-height: 2px;
@@ -176,6 +195,8 @@
   --color-on-primary: #ffffff;
   --color-primary-container: #e5e1ff;
   --color-on-primary-container: #1c1247;
+  /* Issue #371 item 1: the accent-text role, re-lit for the light card. */
+  --color-primary-text: #4a3ad6;
   --color-secondary-container: #dbe4f5;
   --color-on-secondary-container: #1a2233;
   --color-tertiary-container: #ece0ff;
@@ -195,6 +216,10 @@
   --color-surface-container-high: #dfe2ec;
   --color-surface-container-highest: #d7dbe7;
   --color-on-surface-variant: #4b5366;
+  /* Issue #371 items 2-3: the same three secondary roles, re-lit. */
+  --color-heading: #1b1f2b;
+  --color-on-surface-strong: #2b3245;
+  --color-on-surface-muted: #575f70;
   --color-outline: #6e7688;
   --color-outline-variant: #c2c7d4;
   --color-inverse-surface: #2f3543;
