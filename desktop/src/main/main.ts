@@ -124,7 +124,7 @@ ipcMain.handle(IpcChannel.restartSidecar, async (): Promise<void> => {
 });
 
 ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
-  const override = readE2eEnv("AUTO_SCORING_E2E_FOLDER", app.isPackaged);
+  const override = readE2eEnv("AUTO_SCORING_E2E_FOLDER");
   if (override !== undefined && override.length > 0) {
     return override;
   }
@@ -138,7 +138,7 @@ ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
 });
 
 ipcMain.handle(IpcChannel.choosePdfFile, async (): Promise<string | null> => {
-  const override = readE2eEnv("AUTO_SCORING_E2E_PDF", app.isPackaged);
+  const override = readE2eEnv("AUTO_SCORING_E2E_PDF");
   if (override !== undefined && override.length > 0) {
     return override;
   }
