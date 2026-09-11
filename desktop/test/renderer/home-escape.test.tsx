@@ -6,6 +6,7 @@ import {
   declaredRoutePatterns,
 } from "../../src/renderer/core/app-routes.js";
 import { BACK_OR_HOME_BUTTON_TEST_ID } from "../../src/renderer/navigation/BackOrHomeButton.js";
+import { ROUTE_TABLE } from "../../src/renderer/navigation/route-table.js";
 import { renderAppAt } from "./support/app-harness.js";
 import { buildTest } from "./support/mock-sidecar-client.js";
 
@@ -108,6 +109,25 @@ describe("home escape meta test (INV-201-05)", () => {
     expect(
       uncoveredRoutes([...declaredRoutePatterns, rogue], registered),
     ).toEqual([rogue]);
+  });
+
+  it("INV-020: every skipped route carries a non-empty reason", () => {
+    for (const [route, reason] of Object.entries(skipped)) {
+      expect(reason.trim().length, `${route} の除外理由が空`).toBeGreaterThan(
+        0,
+      );
+    }
+  });
+
+  it("INV-020: a route is covered or skipped, never both", () => {
+    const both = [...covered].filter((route) => route in skipped);
+    expect(both).toEqual([]);
+  });
+
+  it("INV-020: the declared route patterns and the route table agree", () => {
+    const declared = [...declaredRoutePatterns].sort();
+    const table = ROUTE_TABLE.map((route) => route.pattern).sort();
+    expect(declared).toEqual(table);
   });
 
   for (const path of covered) {
