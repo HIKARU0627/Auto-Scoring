@@ -10,6 +10,8 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **detail** | **String** |  | 
 **keySource** | [**ConfigurationSource**](ConfigurationSource.md) |  | 
+**providerAccountLimit** | **num** |  | [optional] 
+**providerAccountUsage** | **num** |  | [optional] 
 **result** | **String** |  | 
 **statusCode** | **int** |  | [optional] 
 

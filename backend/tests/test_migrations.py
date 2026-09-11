@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0019"
+    assert current_revision(db_url) == "0020"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0019"
+    assert current_revision(db_url) == "0020"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0019"
+    assert current_revision(db_url) == "0020"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0019"
+    assert current_revision(db_url) == "0020"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0019"
+    assert current_revision(db_url) == "0020"
 
 
 _CHILD_TABLES = (
@@ -1386,6 +1386,7 @@ def test_migration_file_paths_exist() -> None:
         "0017_grade_result_answer_image_finding.py",
         "0018_review_reference_cascade.py",
         "0019_two_page_question_areas.py",
+        "0020_grade_result_token_usage.py",
     } <= names
 
 
@@ -1410,7 +1411,7 @@ def test_0019_two_page_question_areas_upgrade_and_downgrade(db_url: str) -> None
     finally:
         engine.dispose()
 
-    upgrade(db_url, "head")
+    upgrade(db_url, "0019")
     assert current_revision(db_url) == "0019"
     engine = create_sqlite_engine(db_url)
     try:
@@ -1511,5 +1512,76 @@ def test_0019_question_check_constraints(db_url: str) -> None:
                     "VALUES ('q_null_str', 't1', '5', 1, 5, 'additive', 2, 'null')"
                 )
             )
+    finally:
+        engine.dispose()
+
+
+def test_0020_grade_result_token_usage_upgrade_and_downgrade(db_url: str) -> None:
+    upgrade(db_url, "0019")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t1', 'Test 1', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO submissions "
+                    "(id, test_id, source_pdf_path, source_pdf_sha256, page_count, state, "
+                    "created_at) VALUES ('s1', 't1', 'submissions/s1/source.pdf', :sha, 1, "
+                    "'unprocessed', '2026-01-01')"
+                ),
+                {"sha": "0" * 64},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                    "VALUES ('q1', 't1', '1', 1, 5, 'additive')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO grade_results "
+                    "(id, submission_id, question_id, source, awarded, maximum, confidence, "
+                    "criteria, context, created_at, provider, model, prompt_version) "
+                    "VALUES ('g1', 's1', 'q1', 'ai', 1, 5, 0.9, '[]', '[]', '2026-01-01', "
+                    "'openrouter', 'test/model', 'v1')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+    assert current_revision(db_url) == "0020"
+    engine = create_sqlite_engine(db_url)
+    try:
+        cols = {col["name"] for col in inspect(engine).get_columns("grade_results")}
+        assert {"input_tokens", "output_tokens"} <= cols
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE grade_results SET input_tokens = 10, output_tokens = 5 WHERE id = 'g1'"
+                )
+            )
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE grade_results SET input_tokens = 10, output_tokens = NULL "
+                    "WHERE id = 'g1'"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    downgrade(db_url, "0019")
+    assert current_revision(db_url) == "0019"
+    engine = create_sqlite_engine(db_url)
+    try:
+        cols = {col["name"] for col in inspect(engine).get_columns("grade_results")}
+        assert "input_tokens" not in cols
+        assert "output_tokens" not in cols
     finally:
         engine.dispose()

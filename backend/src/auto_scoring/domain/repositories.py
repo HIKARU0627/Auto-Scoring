@@ -15,6 +15,7 @@ and the human-confirmed value are always retrievable side by side
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol
 
 from auto_scoring.domain.dependency_graph import DependencyGraph
@@ -203,6 +204,8 @@ class GradeResultRepository(Protocol):
     def latest(
         self, submission_id: str, question_id: str, source: GradingSource
     ) -> GradeResult | None: ...
+    def list_ai_for_submission(self, submission_id: str) -> list[GradeResult]: ...
+    def list_ai_since(self, since: datetime) -> list[GradeResult]: ...
 
 
 class AnnotationRepository(Protocol):

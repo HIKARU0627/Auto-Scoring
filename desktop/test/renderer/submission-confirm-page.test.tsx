@@ -261,6 +261,58 @@ describe("SubmissionConfirmPage (Issue #245)", () => {
   });
 });
 
+describe("SubmissionConfirmPage AI usage (Issue #187)", () => {
+  it("採点完了後にトークン数を表示し、単価未設定なら金額を出さない", async () => {
+    const restore = mockLayout({ fitAll: true });
+    renderSubmissionConfirm({
+      numbers: ["1"],
+      submissionAiUsage: {
+        input_tokens: 800,
+        output_tokens: 120,
+        token_unit_cost: null,
+        estimated_cost: null,
+        usage_availability: "known",
+      },
+    });
+    try {
+      await screen.findByTestId("confirm-ai-usage-tokens");
+      expect(
+        screen.getByTestId("confirm-ai-usage-tokens").textContent,
+      ).toContain("入力 800");
+      expect(screen.getByTestId("confirm-ai-usage-cost").textContent).toContain(
+        "単価が未設定",
+      );
+      expect(
+        screen.getByTestId("confirm-ai-usage-cost").textContent,
+      ).not.toMatch(/0(\.0+)?円/);
+    } finally {
+      restore();
+    }
+  });
+
+  it("usage が無いときは不明と表示する", async () => {
+    const restore = mockLayout({ fitAll: true });
+    renderSubmissionConfirm({
+      numbers: ["1"],
+      submissionAiUsage: {
+        input_tokens: null,
+        output_tokens: null,
+        token_unit_cost: null,
+        estimated_cost: null,
+        usage_availability: "unknown",
+      },
+    });
+    try {
+      await screen.findByTestId("confirm-ai-usage-tokens");
+      expect(screen.getByTestId("confirm-ai-usage-tokens").textContent).toBe(
+        "トークン数: 不明",
+      );
+    } finally {
+      restore();
+    }
+  });
+});
+
 describe("SubmissionConfirmPage API usage (Acceptance #5)", () => {
   it("uses generated client POST for approve", async () => {
     const restore = mockLayout({ fitAll: true });

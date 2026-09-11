@@ -34,6 +34,7 @@ export interface SubmissionConfirmHarnessOptions {
     submissionId: string,
     questionId: string,
   ) => Promise<RecognitionResponse[]>;
+  submissionAiUsage?: components["schemas"]["SubmissionAiUsageResponse"];
 }
 
 const DEFAULT_TEST_ID = "test-1";
@@ -157,6 +158,19 @@ export function createSubmissionConfirmClient(
             ? await options.listQuestions()
             : (questions ?? []);
         return { data, response: new Response(), error: undefined };
+      }
+      if (path === "/submissions/{submission_id}/ai-usage") {
+        return {
+          data: options.submissionAiUsage ?? {
+            input_tokens: 1000,
+            output_tokens: 200,
+            token_unit_cost: null,
+            estimated_cost: null,
+            usage_availability: "known",
+          },
+          response: new Response(),
+          error: undefined,
+        };
       }
       if (path === "/submissions/{submission_id}/jobs") {
         const data: JobResponse[] = numbers.map((number) => ({

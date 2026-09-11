@@ -21,6 +21,8 @@ part 'grade_result_response.g.dart';
 /// * [createdAt]
 /// * [criteria]
 /// * [id]
+/// * [inputTokens]
+/// * [outputTokens]
 /// * [questionId]
 /// * [rationale]
 /// * [score]
@@ -47,6 +49,12 @@ abstract class GradeResultResponse
 
   @BuiltValueField(wireName: r'id')
   String get id;
+
+  @BuiltValueField(wireName: r'input_tokens')
+  int? get inputTokens;
+
+  @BuiltValueField(wireName: r'output_tokens')
+  int? get outputTokens;
 
   @BuiltValueField(wireName: r'question_id')
   String get questionId;
@@ -127,6 +135,20 @@ class _$GradeResultResponseSerializer
       object.id,
       specifiedType: const FullType(String),
     );
+    if (object.inputTokens != null) {
+      yield r'input_tokens';
+      yield serializers.serialize(
+        object.inputTokens,
+        specifiedType: const FullType.nullable(int),
+      );
+    }
+    if (object.outputTokens != null) {
+      yield r'output_tokens';
+      yield serializers.serialize(
+        object.outputTokens,
+        specifiedType: const FullType.nullable(int),
+      );
+    }
     yield r'question_id';
     yield serializers.serialize(
       object.questionId,
@@ -223,6 +245,22 @@ class _$GradeResultResponseSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.id = valueDes;
+          break;
+        case r'input_tokens':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(int),
+          ) as int?;
+          if (valueDes == null) continue;
+          result.inputTokens = valueDes;
+          break;
+        case r'output_tokens':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(int),
+          ) as int?;
+          if (valueDes == null) continue;
+          result.outputTokens = valueDes;
           break;
         case r'question_id':
           final valueDes = serializers.deserialize(

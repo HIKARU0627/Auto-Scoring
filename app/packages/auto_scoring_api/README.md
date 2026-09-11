@@ -47,15 +47,13 @@ Please follow the [installation procedure](#installation--usage) and then run th
 import 'package:auto_scoring_api/auto_scoring_api.dart';
 
 
-final api = AutoScoringApi().getCriteriaApi();
-final String testId = testId_example; // String | 
-final ConfirmCriteriaRequest confirmCriteriaRequest = ; // ConfirmCriteriaRequest | 
+final api = AutoScoringApi().getAiUsageApi();
 
 try {
-    final response = await api.confirmCriteriaTestsTestIdCriteriaConfirmPost(testId, confirmCriteriaRequest);
+    final response = await api.getGradingCostGradingCostGet();
     print(response);
 } on DioException catch (e) {
-    print("Exception when calling CriteriaApi->confirmCriteriaTestsTestIdCriteriaConfirmPost: $e\n");
+    print("Exception when calling AiUsageApi->getGradingCostGradingCostGet: $e\n");
 }
 
 ```
@@ -66,6 +64,10 @@ All URIs are relative to *http://localhost*
 
 Class | Method | HTTP request | Description
 ------------ | ------------- | ------------- | -------------
+[*AiUsageApi*](doc/AiUsageApi.md) | [**getGradingCostGradingCostGet**](doc/AiUsageApi.md#getgradingcostgradingcostget) | **GET** /grading-cost | Get Grading Cost
+[*AiUsageApi*](doc/AiUsageApi.md) | [**getMonthlyAiUsageAiUsageMonthlyGet**](doc/AiUsageApi.md#getmonthlyaiusageaiusagemonthlyget) | **GET** /ai-usage/monthly | Get Monthly Ai Usage
+[*AiUsageApi*](doc/AiUsageApi.md) | [**getSubmissionAiUsageSubmissionsSubmissionIdAiUsageGet**](doc/AiUsageApi.md#getsubmissionaiusagesubmissionssubmissionidaiusageget) | **GET** /submissions/{submission_id}/ai-usage | Get Submission Ai Usage
+[*AiUsageApi*](doc/AiUsageApi.md) | [**saveGradingCostGradingCostPut**](doc/AiUsageApi.md#savegradingcostgradingcostput) | **PUT** /grading-cost | Save Grading Cost
 [*CriteriaApi*](doc/CriteriaApi.md) | [**confirmCriteriaTestsTestIdCriteriaConfirmPost**](doc/CriteriaApi.md#confirmcriteriateststestidcriteriaconfirmpost) | **POST** /tests/{test_id}/criteria/confirm | Confirm Criteria
 [*CriteriaApi*](doc/CriteriaApi.md) | [**estimateCriteriaTestsTestIdCriteriaEstimateGet**](doc/CriteriaApi.md#estimatecriteriateststestidcriteriaestimateget) | **GET** /tests/{test_id}/criteria/estimate | Estimate Criteria
 [*CriteriaApi*](doc/CriteriaApi.md) | [**extractCriteriaTestsTestIdCriteriaExtractPost**](doc/CriteriaApi.md#extractcriteriateststestidcriteriaextractpost) | **POST** /tests/{test_id}/criteria/extract | Extract Criteria
@@ -184,6 +186,7 @@ Class | Method | HTTP request | Description
  - [ExportResponse](doc/ExportResponse.md)
  - [GradeResultResponse](doc/GradeResultResponse.md)
  - [GradingAvailabilityResponse](doc/GradingAvailabilityResponse.md)
+ - [GradingCostModel](doc/GradingCostModel.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
  - [IntakeCostModel](doc/IntakeCostModel.md)
  - [IntakePlanResponse](doc/IntakePlanResponse.md)
@@ -194,6 +197,7 @@ Class | Method | HTTP request | Description
  - [ManualGradeRequest](doc/ManualGradeRequest.md)
  - [ManualRecognitionRequest](doc/ManualRecognitionRequest.md)
  - [MaterialRole](doc/MaterialRole.md)
+ - [MonthlyAiUsageResponse](doc/MonthlyAiUsageResponse.md)
  - [NormalizedBBoxModel](doc/NormalizedBBoxModel.md)
  - [NormalizedRectResponse](doc/NormalizedRectResponse.md)
  - [OcrAvailabilityResponse](doc/OcrAvailabilityResponse.md)
@@ -223,6 +227,7 @@ Class | Method | HTTP request | Description
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [ScoreValueResponse](doc/ScoreValueResponse.md)
+ - [SubmissionAiUsageResponse](doc/SubmissionAiUsageResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
  - [SubmissionReviewProgressResponse](doc/SubmissionReviewProgressResponse.md)
  - [TestMaterialResponse](doc/TestMaterialResponse.md)
@@ -232,6 +237,7 @@ Class | Method | HTTP request | Description
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
  - [UpdateCriteriaRequest](doc/UpdateCriteriaRequest.md)
  - [UpdateProfileRequest](doc/UpdateProfileRequest.md)
+ - [UsageAvailability](doc/UsageAvailability.md)
  - [ValidationError](doc/ValidationError.md)
  - [VerifyApiKeyResponse](doc/VerifyApiKeyResponse.md)
 
