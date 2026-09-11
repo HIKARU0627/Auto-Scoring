@@ -367,3 +367,53 @@ describe("action requirements: テスト設定 プロファイル (INV-110, INV-
     }
   });
 });
+
+describe("action requirements: 答案確定・回答欄の理由 (Issue #278)", () => {
+  it("答案確定が止まる理由を core の文言から出す", () => {
+    expect(ActionRequirements.submissionConfirmReady(3).message).toBe(
+      "全設問の判断材料を表示しました。3問をまとめて確定できます。",
+    );
+    expect(ActionRequirements.submissionConfirmNoQuestions.message).toBe(
+      "このテストには設問が登録されていません。",
+    );
+    expect(
+      ActionRequirements.submissionConfirmMaterialUnavailable("問1・問2")
+        .message,
+    ).toBe(
+      "判断材料を読み込めていない設問があります（問1・問2）。再読み込みしてください。",
+    );
+    expect(
+      ActionRequirements.submissionConfirmHumanScoreRequired("問2").message,
+    ).toBe(
+      "AIが採点できなかった設問があります（問2）。その設問を開いて点数を入力すると、まとめて確定できます。",
+    );
+    expect(
+      ActionRequirements.submissionConfirmUnreached("問3", true).message,
+    ).toBe(
+      "まだ表示していない設問があります（問3）。上方向へスクロールすると確定できます。",
+    );
+    expect(
+      ActionRequirements.submissionConfirmUnreached("問3", false).message,
+    ).toBe(
+      "まだ表示していない設問があります（問3）。下方向へスクロールすると確定できます。",
+    );
+    expect(ActionRequirements.submissionConfirmNothingToConfirm.message).toBe(
+      "この答案は全設問を確定済みです。",
+    );
+  });
+
+  it("回答欄が見つからないときの理由も core の文言から出す", () => {
+    expect(ActionRequirements.answerAreaUndetected(2).message).toBe(
+      "回答欄が見つからなかった設問が2件あります。このまま確定もできますが、その設問は答案のページ全体を採点に送り、要確認として人の目に回ります。",
+    );
+    expect(ActionRequirements.answerAreaUndetectedAction.message).toBe(
+      "答案には回答欄があるはずです。設問名を押して枠を引いてください。",
+    );
+    expect(ActionRequirements.answerAreaAbsent(3).message).toBe(
+      "この答案では回答欄を見つけられなかった設問が3件あります。登録した答案が課題の一部のページで、採点基準がそれより広い範囲を含んでいることがあります。まず答案と採点基準を確かめてください。",
+    );
+    expect(ActionRequirements.answerAreaAbsentAction.message).toBe(
+      "答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。",
+    );
+  });
+});

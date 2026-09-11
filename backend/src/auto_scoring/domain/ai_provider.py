@@ -51,6 +51,28 @@ _NonBlankStr = Annotated[str, StringConstraints(strip_whitespace=True, min_lengt
 
 
 @dataclass(frozen=True, kw_only=True)
+class TokenUsage:
+    """Token counts returned by a provider for one call (Issue #187).
+
+    Recorded only when the provider's response actually carries usage --
+    never fabricated as zero when the provider stayed silent.
+    """
+
+    input_tokens: int
+    output_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.input_tokens < 0:
+            raise ValueError(f"TokenUsage.input_tokens must be >= 0, got {self.input_tokens!r}")
+        if self.output_tokens < 0:
+            raise ValueError(f"TokenUsage.output_tokens must be >= 0, got {self.output_tokens!r}")
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProviderAttempt:
     """One failed call, in terms that cannot carry configuration (Issue #97,
     review round 4).
@@ -96,6 +118,22 @@ class ProviderAttempt:
     error: str
     status_code: int | None = None
     detail: str | None = None
+    #: Present only when the provider's response carried usage before the
+    #: call failed (Issue #187). ``None`` means the provider did not report
+    #: token counts -- not zero.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        token_fields = (self.input_tokens, self.output_tokens)
+        if any(v is not None for v in token_fields) and any(v is None for v in token_fields):
+            raise ValueError("ProviderAttempt input_tokens and output_tokens must be set together")
+        for field_name, value in (
+            ("input_tokens", self.input_tokens),
+            ("output_tokens", self.output_tokens),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"ProviderAttempt.{field_name} must be >= 0, got {value!r}")
 
     def __str__(self) -> str:
         status = "" if self.status_code is None else f" status={self.status_code}"
@@ -571,6 +609,9 @@ class GradingResponse:
     annotations: tuple[GradingAnnotationCandidate, ...]
     descriptor: ProviderDescriptor
     latency_seconds: float
+    #: Token counts the provider reported for this call (Issue #187), or
+    #: ``None`` when the provider's response carried no usage field.
+    usage: TokenUsage | None = None
     #: What the provider says the answer image it was given actually shows
     #: (Issue #136), or ``None`` if it reported nothing --
     #: `domain.ai_grading.AIGradingResult.answer_image`, carried through
@@ -594,6 +635,7 @@ def grading_response_from_result(
     criterion_ids: Sequence[str],
     descriptor: ProviderDescriptor,
     latency_seconds: float,
+    usage: TokenUsage | None = None,
 ) -> GradingResponse:
     """Map an already-validated :class:`AIGradingResult` onto the domain response.
 
@@ -648,6 +690,7 @@ def grading_response_from_result(
         ),
         descriptor=descriptor,
         latency_seconds=latency_seconds,
+        usage=usage,
     )
 
 

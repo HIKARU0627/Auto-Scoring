@@ -236,6 +236,63 @@ Add integration / e2e / contract jobs directly to `.github/workflows/ci.yml` as
 separate jobs, and add matching `package.json` scripts. Keep hook-run checks
 fast; put anything slow or environment-heavy in CI only.
 
+## Provider cleanup の検査と live 実測の再現手順（Issue #54）
+
+採用 provider（AI 採点 = Vertex AI Gemini、OCR = Google Document AI）の **cleanup** を
+`backend/tests/test_provider_cleanup.py` が固定する。network も credential も使わない
+（HTTP は `httpx.MockTransport` + fake の ADC token、Codex は scripted app-server
+transport）ため、`pnpm run check` / `uv run pytest` の**既定実行に含まれる**。検査するのは:
+
+- 採用 2 provider の request が**同期 inline**（AI は `inlineData`、Document AI は
+  `rawDocument` + `skipHumanReview: true`）で、リモート batch / review copy を作らない。
+- どの provider 呼び出しも `auto-scoring-*` の一時ディレクトリを残さない。
+- 一時ファイルを書く唯一の経路（Codex app-server フォールバックリンク）は、呼び出し後に
+  workspace（答案画像を含む）を削除する。
+
+### live 実測の再現手順（ADC 前提）
+
+実 provider へ実際に送る live 実測は**通常 gate では実行しない**（毎回課金される）。
+`pytest.mark.live` を付けたテストは `backend/pyproject.toml` の
+`addopts = "-m 'not live'"` で既定から除外され、除外が崩れていないことは
+`backend/tests/test_live_provider_separation.py` が既定 suite で固定する。
+
+**認証は API キーの secret ではなく ADC（Application Default Credentials）**である。
+必要なのはホスト側の credential プロビジョニングと、次の設定（**名前だけ**。値は
+`.env.local` かホスト環境に置き、コミットしない）:
+
+| 変数                                 | 用途                                                         |
+| ------------------------------------ | ------------------------------------------------------------ |
+| `GOOGLE_APPLICATION_CREDENTIALS`     | ADC の service-account / Federation ファイル（リポジトリ外） |
+| `AUTO_SCORING_VERTEX_PROJECT`        | 任意。ADC が解決する課金先 project の上書き                  |
+| `AUTO_SCORING_VERTEX_LOCATION`       | 任意。既定 `global`                                          |
+| `AUTO_SCORING_GEMINI_MODEL`          | AI 採点のモデル（例 `gemini-2.5-flash`）                     |
+| `AUTO_SCORING_DOCUMENT_AI_PROCESSOR` | OCR の processor resource name                               |
+
+値の意味と例はリポジトリ直下の `.env.example`、名前だけの一覧は
+`backend/.env.example` にある。`gcloud auth application-default login` が最も簡単で、
+サーバでは付与済み service account / Workload Identity でもよい。
+
+```bash
+cd backend
+# 1) ADC を用意する（例: gcloud auth application-default login）
+# 2) 設定を export する（上表の名前。値は shell 履歴に残さない）
+# 3) 既存の API 経路（sidecar）で実データを 1 回答分だけ回す
+#    実行後に app-data と OS temp 配下に auto-scoring-* が残っていないこと、および
+#    採用 2 provider が同期 inline 送信でリモート資源を作らないことを確認する
+```
+
+**期待結果**: 認証が通り、送信は 1 設問分で、応答が schema を通り、実行後の
+`auto-scoring-*` 一時ディレクトリが 1 つも増えていない。live-marked の probe がある
+場合は `uv run pytest -m live -q` で明示的に実行できる。
+
+### 記録として残すもの
+
+**認証結果（401/403 でないこと）・request が 1 設問分であること・response が schema を
+通ること・cleanup（一時ファイルとアップロード資源が残らないこと）**だけ。答案本文・
+API キー・access token・processor resource name・生の response body はログにも
+artifact にも出さない（`backend/tests/test_provider_cleanup.py` の docstring と
+adapter 側の例外設計）。
+
 ## ローカル全 green は CI green を意味しない
 
 CI は `windows-latest` の**素のランナー**で走る。開発機に入っていて

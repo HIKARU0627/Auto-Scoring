@@ -358,6 +358,9 @@ class GradeResultRow(Base):
     answer_image_finding: Mapped[AnswerImageFinding | None] = mapped_column(
         _enum(AnswerImageFinding), nullable=True
     )
+    #: Provider-reported token counts (Issue #187). Both or neither.
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
@@ -420,6 +423,56 @@ event.listen(
 event.listen(
     GradeResultRow.__table__, "after_create", _answer_image_finding_gradable_update_trigger
 )
+
+#: Token counts must be paired, non-negative, and AI-only (Issue #187). A
+#: trigger rather than ``CheckConstraint`` for the same reason as
+#: ``answer_image_finding`` above: adding CHECKs would rebuild
+#: ``grade_results`` and drop sibling triggers. Migration ``0020`` installs
+#: the same pair of triggers on upgraded databases.
+_INVALID_TOKEN_MESSAGE = "grade_results token counts invalid"
+
+_token_counts_valid_insert_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_grade_results_token_counts_valid_insert
+    BEFORE INSERT ON grade_results
+    FOR EACH ROW
+    WHEN (
+        (NEW.input_tokens IS NULL) != (NEW.output_tokens IS NULL)
+        OR NEW.input_tokens < 0
+        OR NEW.output_tokens < 0
+        OR (
+            (NEW.input_tokens IS NOT NULL OR NEW.output_tokens IS NOT NULL)
+            AND NEW.source != 'ai'
+        )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, '{_INVALID_TOKEN_MESSAGE}');
+    END;
+    """
+)
+
+_token_counts_valid_update_trigger: DDL = DDL(  # type: ignore[no-untyped-call]
+    f"""
+    CREATE TRIGGER trg_grade_results_token_counts_valid_update
+    BEFORE UPDATE OF input_tokens, output_tokens, source ON grade_results
+    FOR EACH ROW
+    WHEN (
+        (NEW.input_tokens IS NULL) != (NEW.output_tokens IS NULL)
+        OR NEW.input_tokens < 0
+        OR NEW.output_tokens < 0
+        OR (
+            (NEW.input_tokens IS NOT NULL OR NEW.output_tokens IS NOT NULL)
+            AND NEW.source != 'ai'
+        )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, '{_INVALID_TOKEN_MESSAGE}');
+    END;
+    """
+)
+
+event.listen(GradeResultRow.__table__, "after_create", _token_counts_valid_insert_trigger)
+event.listen(GradeResultRow.__table__, "after_create", _token_counts_valid_update_trigger)
 
 
 class AnnotationRow(Base):
