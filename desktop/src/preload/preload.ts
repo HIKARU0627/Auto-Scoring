@@ -7,6 +7,10 @@ import {
 } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type {
+  SidecarHttpRequest,
+  SidecarHttpResponse,
+} from "../shared/sidecar-http.js";
+import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "../shared/sidecar-upload.js";
@@ -46,6 +50,8 @@ const bridge: AutoScoringBridge = {
   },
   chooseFolder: (): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannel.chooseFolder) as Promise<string | null>,
+  choosePdfFile: (): Promise<string | null> =>
+    ipcRenderer.invoke(IpcChannel.choosePdfFile) as Promise<string | null>,
   scanFolder: (directoryPath: string): Promise<ScannedFolder> =>
     ipcRenderer.invoke(
       IpcChannel.scanFolder,
@@ -58,6 +64,11 @@ const bridge: AutoScoringBridge = {
       IpcChannel.sidecarMultipartUpload,
       request,
     ) as Promise<SidecarMultipartResponse>,
+  sidecarFetch: (request: SidecarHttpRequest): Promise<SidecarHttpResponse> =>
+    ipcRenderer.invoke(
+      IpcChannel.sidecarFetch,
+      request,
+    ) as Promise<SidecarHttpResponse>,
 };
 
 contextBridge.exposeInMainWorld("autoScoring", bridge);

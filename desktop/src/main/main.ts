@@ -7,6 +7,10 @@ import {
 } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type {
+  SidecarHttpRequest,
+  SidecarHttpResponse,
+} from "../shared/sidecar-http.js";
+import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "../shared/sidecar-upload.js";
@@ -16,6 +20,7 @@ import {
   sidecarExecutableCandidates,
 } from "./sidecar-paths";
 import { SidecarSupervisor } from "./sidecar-supervisor";
+import { sidecarHttpRequest } from "./sidecar-http.js";
 import { sidecarMultipartUpload } from "./sidecar-upload.js";
 
 /**
@@ -101,8 +106,27 @@ ipcMain.handle(IpcChannel.restartSidecar, async (): Promise<void> => {
 });
 
 ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
+  const override = process.env["AUTO_SCORING_E2E_FOLDER"];
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory"],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0] ?? null;
+});
+
+ipcMain.handle(IpcChannel.choosePdfFile, async (): Promise<string | null> => {
+  const override = process.env["AUTO_SCORING_E2E_PDF"];
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (result.canceled || result.filePaths.length === 0) {
     return null;
@@ -124,6 +148,12 @@ ipcMain.handle(
   ): Promise<SidecarMultipartResponse> => await sidecarMultipartUpload(request),
 );
 
+ipcMain.handle(
+  IpcChannel.sidecarFetch,
+  async (_event, request: SidecarHttpRequest): Promise<SidecarHttpResponse> =>
+    await sidecarHttpRequest(request),
+);
+
 void app.whenReady().then(() => {
   const isWindows = process.platform === "win32";
   const candidates = sidecarExecutableCandidates({
@@ -132,9 +162,14 @@ void app.whenReady().then(() => {
     isWindows,
   });
   const executablePath = resolveSidecarExecutable(candidates);
+  const appDataOverride = process.env["AUTO_SCORING_E2E_APP_DATA"];
 
   supervisor = new SidecarSupervisor({
     executablePath,
+    appDataDirectory:
+      appDataOverride !== undefined && appDataOverride.length > 0
+        ? appDataOverride
+        : null,
     onStatusChange: (status) => {
       notifySidecarStatus(status);
     },
