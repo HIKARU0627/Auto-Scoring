@@ -53,9 +53,12 @@ import type {
   RegionModel,
 } from "../answer-area-editor/answer-area-types.js";
 import { freeRegionId } from "../answer-area-editor/region-helpers.js";
-import { DisabledActionReason } from "../intake/DisabledActionReason.js";
+import type { components } from "../../api/generated/schema.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
+import { DisabledActionReason } from "../intake/DisabledActionReason.js";
+
+type PageGeometryResponse = components["schemas"]["PageGeometryResponse"];
 
 type LoadState =
   | { status: "loading" }
@@ -72,7 +75,7 @@ type LoadState =
       editableEdges: DependencyEdgeModel[] | null;
       questionNumbers: readonly string[];
       pageImages: readonly PageImageState[];
-      layoutPages: readonly { width_pt: number; height_pt: number }[];
+      layoutPages: readonly PageGeometryResponse[];
       answerLayoutPageCount: number | null;
       answerLayoutDetectionAvailable: boolean;
       answerLayoutDetectionReason: string | null;
@@ -108,6 +111,19 @@ function initialEditableRegions(
     return [];
   }
   return null;
+}
+
+function editorPages(
+  profile: ProfileResponse | null,
+  layoutPages: readonly PageGeometryResponse[],
+): readonly { width_pt: number; height_pt: number }[] {
+  if (profile !== null) {
+    return profile.pages;
+  }
+  return layoutPages.map((page) => ({
+    width_pt: page.displayed_width,
+    height_pt: page.displayed_height,
+  }));
 }
 
 export function TestSettingsPage(): JSX.Element {
@@ -325,7 +341,7 @@ export function TestSettingsPage(): JSX.Element {
     if (ready === null || ready.answerLayoutPageCount === null) {
       return null;
     }
-    const pages = ready.profile?.pages ?? ready.layoutPages;
+    const pages = editorPages(ready.profile, ready.layoutPages);
     if (pages.length === 0) {
       return null;
     }

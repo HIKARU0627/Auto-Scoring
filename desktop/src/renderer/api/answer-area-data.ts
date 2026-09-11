@@ -57,8 +57,15 @@ export async function loadAnswerAreaEditorData(
 
   const pageCount = profile?.pages.length ?? layout?.page_count ?? 0;
   let layoutPages: readonly components["schemas"]["PageGeometryResponse"][] =
-    profile?.pages ?? [];
-  if (layoutPages.length === 0 && pageCount > 0) {
+    [];
+  if (profile !== null) {
+    layoutPages = profile.pages.map((page, page_index) => ({
+      page_index,
+      displayed_width: page.width_pt,
+      displayed_height: page.height_pt,
+      rotation: 0,
+    }));
+  } else if (pageCount > 0) {
     const pagesResult = await client.GET(
       "/tests/{test_id}/answer-layout/pages",
       {

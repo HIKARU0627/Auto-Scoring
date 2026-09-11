@@ -14,6 +14,12 @@ type DependencyGraphResponse = components["schemas"]["DependencyGraphResponse"];
 type AnswerLayoutResponse = components["schemas"]["AnswerLayoutResponse"];
 
 const PAGE = { width_pt: 595, height_pt: 842 };
+const LAYOUT_PAGE: components["schemas"]["PageGeometryResponse"] = {
+  page_index: 0,
+  displayed_width: 595,
+  displayed_height: 842,
+  rotation: 0,
+};
 const TINY_PNG = Uint8Array.from(
   atob(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -34,6 +40,7 @@ export function createTestSettingsMockClient(
   let criteria: CriteriaResponse | null = null;
   let graph: DependencyGraphResponse | null = null;
   let layout: AnswerLayoutResponse = {
+    test_id: testId,
     page_count: null,
     detection_available: false,
     detection_unavailable_reason: "E2E stub",
@@ -44,22 +51,34 @@ export function createTestSettingsMockClient(
   let graphVersion = 0;
   const questionNumbers: string[] = [];
 
+  const buildProfile = (
+    overrides: Partial<ProfileResponse> &
+      Pick<ProfileResponse, "revision" | "status" | "regions">,
+  ): ProfileResponse => ({
+    test_id: testId,
+    question_numbers: questionNumbers,
+    unassigned_region_ids: [],
+    undetected_question_numbers: [],
+    absent_question_numbers: [],
+    reading_order_conflicts: [],
+    pages: [PAGE],
+    ...overrides,
+  });
+
   const applyLayoutUpload = (): AnswerLayoutResponse => {
     layout = {
+      test_id: testId,
       page_count: 1,
       detection_available: false,
       detection_unavailable_reason: "stub",
       dropped_region_count: 0,
     };
     profileRevision += 1;
-    profile = {
+    profile = buildProfile({
       status: "draft",
       revision: profileRevision,
-      pages: [PAGE],
       regions: [],
-      absent_question_numbers: [],
-      reading_order_conflicts: [],
-    };
+    });
     return layout;
   };
 
@@ -69,7 +88,7 @@ export function createTestSettingsMockClient(
       buildTest({ id, status: testStatus, name: "E2E 理科" }),
   });
 
-  const client: SidecarClient = {
+  const client = {
     GET: vi.fn(async (path, init) => {
       if (path === "/tests/{test_id}/profile") {
         if (profile === null) {
@@ -103,6 +122,16 @@ export function createTestSettingsMockClient(
       }
       if (path === "/tests/{test_id}/answer-layout") {
         return { data: layout, response: new Response(), error: undefined };
+      }
+      if (path === "/tests/{test_id}/answer-layout/pages") {
+        return {
+          data: {
+            page_count: layout.page_count ?? 0,
+            pages: layout.page_count ? [LAYOUT_PAGE] : [],
+          },
+          response: new Response(),
+          error: undefined,
+        };
       }
       if (path === "/tests/{test_id}/questions") {
         return {
@@ -176,6 +205,7 @@ export function createTestSettingsMockClient(
           layers: [questionNumbers.map((number) => `${id}:${number}`)],
           unresolved: [],
           confirmed_at: null,
+          created_at: "2026-01-01T00:00:00Z",
         };
         return { data: graph, response: new Response(), error: undefined };
       }
@@ -209,7 +239,6 @@ export function createTestSettingsMockClient(
       return base.POST(path, init);
     }),
     PUT: vi.fn(async (path, init) => {
-      const id = init?.params?.path?.test_id ?? testId;
       if (path === "/tests/{test_id}/criteria") {
         criteriaRevision += 1;
         const body = init?.body as {
@@ -217,6 +246,7 @@ export function createTestSettingsMockClient(
           declared_total_points?: number | null;
         };
         criteria = {
+          test_id: testId,
           status: "draft",
           revision: criteriaRevision,
           extracted: false,
@@ -229,6 +259,7 @@ export function createTestSettingsMockClient(
             unknown_count: 0,
             declared_total_points: body.declared_total_points ?? null,
             declared_difference: null,
+            is_complete: true,
           },
         };
         return { data: criteria, response: new Response(), error: undefined };
@@ -236,38 +267,33 @@ export function createTestSettingsMockClient(
       if (path === "/tests/{test_id}/profile") {
         profileRevision += 1;
         const body = init?.body as { regions: ProfileResponse["regions"] };
-        profile = {
+        profile = buildProfile({
           status: "draft",
           revision: profileRevision,
-          pages: [PAGE],
           regions: body.regions,
-          absent_question_numbers: [],
-          reading_order_conflicts: [],
-        };
+        });
         return { data: profile, response: new Response(), error: undefined };
       }
       if (path === "/tests/{test_id}/answer-layout") {
         layout = {
+          test_id: testId,
           page_count: 1,
           detection_available: false,
           detection_unavailable_reason: "stub",
           dropped_region_count: 0,
         };
         profileRevision += 1;
-        profile = {
+        profile = buildProfile({
           status: "draft",
           revision: profileRevision,
-          pages: [PAGE],
           regions: [],
-          absent_question_numbers: [],
-          reading_order_conflicts: [],
-        };
+        });
         return { data: layout, response: new Response(), error: undefined };
       }
       return base.PUT(path, init);
     }),
     use: base.use,
-  };
+  } as unknown as SidecarClient;
 
   return { client, applyLayoutUpload };
 }

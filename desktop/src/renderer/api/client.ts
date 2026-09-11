@@ -75,7 +75,7 @@ export function createSidecarClient(connection: SidecarConnection) {
     window.autoScoring?.sidecarFetch !== undefined;
   const client = createClient<paths>({
     baseUrl,
-    fetch: useIpcFetch ? createIpcSidecarFetch(connection) : undefined,
+    ...(useIpcFetch ? { fetch: createIpcSidecarFetch(connection) } : {}),
   });
 
   const authMiddleware: Middleware = {

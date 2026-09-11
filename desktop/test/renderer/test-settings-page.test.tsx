@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 
-import { AppRoutes, testSettings } from "../../src/renderer/core/app-routes.js";
+import { testSettings } from "../../src/renderer/core/app-routes.js";
 import * as answerAreaData from "../../src/renderer/api/answer-area-data.js";
 import { renderAppAt } from "./support/app-harness.js";
 import { createTestSettingsMockClient } from "./support/test-settings-harness.js";
@@ -11,6 +11,12 @@ const VISIBLE_PAGE_IMAGE = {
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   pixelWidth: 1190,
   pixelHeight: 1684,
+} as const;
+const LAYOUT_PAGE = {
+  page_index: 0,
+  displayed_width: 595,
+  displayed_height: 842,
+  rotation: 0,
 } as const;
 
 vi.spyOn(answerAreaData, "loadAnswerAreaEditorData").mockImplementation(
@@ -31,7 +37,14 @@ vi.spyOn(answerAreaData, "loadAnswerAreaEditorData").mockImplementation(
       profile,
       layout,
       pageImages: Array.from({ length: pageCount }, () => VISIBLE_PAGE_IMAGE),
-      layoutPages: profile?.pages ?? [{ width_pt: 595, height_pt: 842 }],
+      layoutPages: profile?.pages
+        ? profile.pages.map((page, page_index) => ({
+            page_index,
+            displayed_width: page.width_pt,
+            displayed_height: page.height_pt,
+            rotation: 0,
+          }))
+        : [LAYOUT_PAGE],
     };
   },
 );

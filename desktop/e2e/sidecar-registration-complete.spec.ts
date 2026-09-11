@@ -42,12 +42,16 @@ async function waitForHomeReady(page: ElectronPage): Promise<void> {
   await expect(page.getByTestId("home-error")).toHaveCount(0);
 }
 
-function e2eLaunchEnv(): NodeJS.ProcessEnv {
+function e2eLaunchEnv(): Record<string, string> {
   const appDataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), "auto-scoring-e2e-app-data-"),
   );
   return {
-    ...process.env,
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
     AUTO_SCORING_E2E_APP_DATA: appDataDir,
     AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
   };
