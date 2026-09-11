@@ -39,7 +39,9 @@
     "build": "pnpm run build:app && pnpm run build:backend && pnpm run build:desktop",
     "check:pre-commit": "pnpm skills:check && pnpm format:check",
     "check:pre-push": "pnpm lint && pnpm typecheck && pnpm test",
-    "check": "pnpm skills:check && pnpm format:check && pnpm openapi:selftest && pnpm openapi:check && pnpm openapi:check:ts && pnpm lint && pnpm typecheck && pnpm test && pnpm test:desktop:e2e && pnpm build"
+    "check": "pnpm skills:check && pnpm format:check && pnpm openapi:selftest && pnpm openapi:check && pnpm openapi:check:ts && pnpm lint && pnpm typecheck && pnpm test && pnpm test:desktop:e2e && pnpm build",
+    "package:electron": "cd desktop && pnpm run package",
+    "package:electron:smoke": "pwsh -NoProfile -File scripts/smoke-test-electron-package.ps1"
   },
   "devDependencies": {
     "@openapitools/openapi-generator-cli": "^2.41.0",
