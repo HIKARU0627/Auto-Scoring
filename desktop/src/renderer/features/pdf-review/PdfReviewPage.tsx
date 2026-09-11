@@ -39,7 +39,6 @@ import {
   expectedReviewVersion,
   recognitionsForDisplayedAttempt,
 } from "../../core/question-review-state.js";
-import { BackOrHomeButton } from "../../navigation/BackOrHomeButton.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { AnswerCropView } from "./AnswerCropView.js";
@@ -405,10 +404,6 @@ export function PdfReviewPage(): JSX.Element {
 
   return (
     <ShellScreen title="添削レビュー">
-      <div className="mb-md">
-        <BackOrHomeButton />
-      </div>
-
       {loadState.status === "loading" ? (
         <p className="text-body-medium">読み込み中…</p>
       ) : null}
