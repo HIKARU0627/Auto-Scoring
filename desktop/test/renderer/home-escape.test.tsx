@@ -38,6 +38,52 @@ function uncoveredRoutes(
   );
 }
 
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+/**
+ * The elements a browser would move through when Tab is pressed, in document
+ * order. jsdom does not implement sequential focus navigation, so the tests
+ * below walk this list to stand in for pressing Tab.
+ */
+function sequentialFocusOrder(root: ParentNode): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+  ).filter((element) => element.tabIndex >= 0);
+}
+
+/** Pins the viewport to the 700x720 narrow window from INV-016. */
+function withNarrowViewport(): () => void {
+  const width = Object.getOwnPropertyDescriptor(window, "innerWidth");
+  const height = Object.getOwnPropertyDescriptor(window, "innerHeight");
+
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 700,
+  });
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    value: 720,
+  });
+  window.dispatchEvent(new Event("resize"));
+
+  return () => {
+    if (width !== undefined) {
+      Object.defineProperty(window, "innerWidth", width);
+    }
+    if (height !== undefined) {
+      Object.defineProperty(window, "innerHeight", height);
+    }
+    window.dispatchEvent(new Event("resize"));
+  };
+}
+
 const defaultHandlers = {
   listTestRegistrations: async () => [
     buildTest({ id: "test-1", status: "draft" }),
@@ -78,6 +124,49 @@ describe("home escape meta test (INV-201-05)", () => {
     it(`${location}: escape returns to home`, async () => {
       renderAppAt(location, { handlers: defaultHandlers });
       fireEvent.click(await screen.findByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
+      await screen.findByTestId("home-next-up");
+    });
+
+    it(`${location}: escape is clickable at 700x720 (INV-016)`, async () => {
+      const restore = withNarrowViewport();
+      try {
+        renderAppAt(location, { handlers: defaultHandlers });
+        const escape = await screen.findByTestId(BACK_OR_HOME_BUTTON_TEST_ID);
+
+        fireEvent.click(escape);
+        await screen.findByTestId("home-next-up");
+      } finally {
+        restore();
+      }
+    });
+
+    it(`${location}: Tab then Enter alone reaches home (INV-017)`, async () => {
+      renderAppAt(location, { handlers: defaultHandlers });
+      const escape = await screen.findByTestId(BACK_OR_HOME_BUTTON_TEST_ID);
+
+      // The escape control must sit in the sequential focus order, and be
+      // reachable without a pointer.
+      const order = sequentialFocusOrder(document.body);
+      expect(order).toContain(escape);
+
+      let reached = false;
+      for (const element of order) {
+        element.focus();
+        if (element === escape) {
+          reached = true;
+          break;
+        }
+      }
+      expect(reached).toBe(true);
+      expect(document.activeElement).toBe(escape);
+
+      // Chromium turns Enter on a focused <button> into a click; jsdom stops
+      // short of that mapping, so press the key and then dispatch the click it
+      // stands for.
+      fireEvent.keyDown(escape, { key: "Enter", keyCode: 13 });
+      fireEvent.keyUp(escape, { key: "Enter", keyCode: 13 });
+      fireEvent.click(escape);
+
       await screen.findByTestId("home-next-up");
     });
   }
