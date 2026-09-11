@@ -6,15 +6,17 @@ import {
   type SidecarMultipartRequest,
   type SidecarMultipartResponse,
 } from "../shared/sidecar-upload.js";
+import type { InternalSidecarConnection } from "./sidecar-connection.js";
 
 /**
  * Performs a multipart upload from disk paths. File bytes never reach the
- * renderer — only paths cross IPC.
+ * renderer — only paths cross IPC. Authorization is applied in main.
  */
 export async function sidecarMultipartUpload(
+  connection: InternalSidecarConnection,
   request: SidecarMultipartRequest,
 ): Promise<SidecarMultipartResponse> {
-  const { connection, method, urlPath, fileFields, formFields } = request;
+  const { method, urlPath, fileFields, formFields } = request;
   const formData = new FormData();
 
   if (formFields !== undefined) {

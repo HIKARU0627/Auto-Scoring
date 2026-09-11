@@ -128,7 +128,12 @@ describe("SidecarSupervisor unit tests", () => {
     if (supervisor.status.kind === "ready") {
       expect(supervisor.status.connection.host).toBe("127.0.0.1");
       expect(supervisor.status.connection.port).toBe(51234);
-      expect(supervisor.status.connection.token).toBe("secret-token-abc");
+      expect(supervisor.status.connection).not.toHaveProperty("token");
+    }
+    if (supervisor.internalStatus.kind === "ready") {
+      expect(supervisor.internalStatus.connection.token).toBe(
+        "secret-token-abc",
+      );
     }
   });
 
@@ -213,9 +218,11 @@ describe("SidecarSupervisor unit tests", () => {
 
         await supervisor.start();
         expect(supervisor.status.kind).toBe("ready");
-        if (supervisor.status.kind === "ready") {
-          expect(supervisor.status.connection.port).toBe(4321);
-          expect(supervisor.status.connection.token).toBe("valid-token");
+        if (supervisor.internalStatus.kind === "ready") {
+          expect(supervisor.internalStatus.connection.port).toBe(4321);
+          expect(supervisor.internalStatus.connection.token).toBe(
+            "valid-token",
+          );
         }
       });
     }
@@ -400,9 +407,9 @@ describe("SidecarSupervisor unit tests", () => {
 
     expect(firstHandle.killed).toBe(true);
     expect(supervisor.status.kind).toBe("ready");
-    if (supervisor.status.kind === "ready") {
-      expect(supervisor.status.connection.port).toBe(50002);
-      expect(supervisor.status.connection.token).toBe("token-2");
+    if (supervisor.internalStatus.kind === "ready") {
+      expect(supervisor.internalStatus.connection.port).toBe(50002);
+      expect(supervisor.internalStatus.connection.token).toBe("token-2");
     }
     expect(platform.spawns.length).toBe(2);
   });

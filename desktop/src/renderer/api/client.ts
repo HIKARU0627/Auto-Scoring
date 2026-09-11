@@ -9,15 +9,15 @@
  * for dividing click positions.
  */
 
-import createClient, { type Middleware } from "openapi-fetch";
+import createClient from "openapi-fetch";
 
 import type { paths } from "./generated/schema.js";
+import { createIpcFetch } from "./ipc-fetch.js";
 
 /** Loopback connection details from the sidecar handshake file. */
 export interface SidecarConnection {
   readonly host: string;
   readonly port: number;
-  readonly token: string;
 }
 
 export type SidecarClient = ReturnType<typeof createSidecarClient>;
@@ -25,14 +25,8 @@ export type SidecarClient = ReturnType<typeof createSidecarClient>;
 /** Builds the typed fetch client for `paths` from handshake connection info. */
 export function createSidecarClient(connection: SidecarConnection) {
   const baseUrl = `http://${connection.host}:${connection.port}`;
-  const client = createClient<paths>({ baseUrl });
-
-  const authMiddleware: Middleware = {
-    onRequest({ request }) {
-      request.headers.set("Authorization", `Bearer ${connection.token}`);
-    },
-  };
-  client.use(authMiddleware);
-
-  return client;
+  return createClient<paths>({
+    baseUrl,
+    fetch: createIpcFetch(),
+  });
 }

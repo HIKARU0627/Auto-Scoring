@@ -9,12 +9,6 @@ import {
   type MockSidecarHandlers,
 } from "./support/mock-sidecar-client.js";
 
-const CONNECTION = {
-  host: "127.0.0.1",
-  port: 12345,
-  token: "test-token",
-};
-
 function renderExportDialog(
   submissionId: string,
   handlers: MockSidecarHandlers,
@@ -23,7 +17,7 @@ function renderExportDialog(
   const client = createMockSidecarClient(handlers);
   render(
     <ThemeProvider>
-      <SidecarApiProvider client={client} connection={CONNECTION}>
+      <SidecarApiProvider client={client}>
         <ExportDialog
           submissionId={submissionId}
           pollIntervalMs={pollIntervalMs}
