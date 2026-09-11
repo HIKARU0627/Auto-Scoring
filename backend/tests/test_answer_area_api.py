@@ -753,12 +753,61 @@ class TestConfirmGate:
             headers=_auth(),
             json={"revision": saved["revision"]},
         )
+        assert response.status_code == 200, response.text
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            questions = uow.questions.list_for_test(test_id)
+            assert len(questions) == 1
+            assert questions[0].page == 1
+            assert questions[0].page_2 == 2
+            assert questions[0].answer_area is not None
+            assert questions[0].answer_area_2 is not None
+
+    def test_a_question_split_across_three_pages_says_what_to_do_about_it(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """Issue #108: A question split across 3 or more pages is rejected with 422
+        naming the 2-page limit.
+        """
+        detector._body = _detection_body(_area(page=1), _area(page=2), _area(page=3))
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1")
+        _upload_layout(client, test_id, pages=3)
+        detected = _detect(client, test_id).json()
+        assert len(detected["regions"]) == 3
+
+        regions = [
+            *detected["regions"],
+            {
+                "region_id": "question-1",
+                "kind": "question",
+                "page_index": 0,
+                "bbox": {"x0": 0.0, "y0": 0.0, "x1": 0.4, "y1": 0.1},
+                "label": "問1",
+                "confirmed": False,
+                "text": "問1",
+            },
+            {
+                "region_id": "score-1",
+                "kind": "score",
+                "page_index": 0,
+                "bbox": {"x0": 0.8, "y0": 0.0, "x1": 0.9, "y1": 0.1},
+                "label": "問1",
+                "confirmed": False,
+                "text": "5点",
+            },
+        ]
+        saved = client.put(
+            f"/tests/{test_id}/profile", headers=_auth(), json={"regions": regions}
+        ).json()
+        response = client.post(
+            f"/tests/{test_id}/profile/confirm",
+            headers=_auth(),
+            json={"revision": saved["revision"]},
+        )
         assert response.status_code == 422
         detail = response.json()["detail"]
-        assert "複数ページにまたがっています" in detail
-        assert "1ページ分しか扱えません" in detail
-        # Names the way out, not only the rule.
-        assert "残して" in detail
+        assert "3ページ以上にまたがっているか" in detail
+        assert "最大2ページ" in detail
 
     def test_the_profile_response_always_carries_the_question_choices(
         self, client: TestClient, data_root: Path

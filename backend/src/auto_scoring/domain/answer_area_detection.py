@@ -407,15 +407,11 @@ def regions_from_detection(
 
     **Boxes for one question on different pages are not merged**, because a
     union across two pages has no meaning: they are two different coordinate
-    spaces, and ``Question.page`` is a single page. This is also measured --
-    one subject prints a question's first half on page 2 and its
-    continuation on page 3 --
-    and it is deliberately left visible rather than resolved: both regions
-    are kept, and `build_questions_and_rubrics` refuses them at confirm time
-    with `CrossPageRegionError` naming the problem. Representing a genuinely
-    multi-page question needs a `Question` schema change and is its own
-    Issue; guessing which page to drop here would silently discard half of
-    a student's answer.
+    spaces. This is also measured -- one subject prints a question's first half
+    on page 2 and its continuation on page 3. Both regions are kept, and
+    `build_questions_and_rubrics` supports questions spanning up to two pages
+    (`Question.page` and `Question.page_2`, Issue #108). Questions spanning
+    three or more pages are refused at confirm time with `CrossPageRegionError`.
 
     ``existing_regions`` is the profile's current region set. Everything in
     it that is *not* an `ANSWER_AREA` is carried through untouched -- a
@@ -651,22 +647,42 @@ def question_answer_regions(questions: Sequence[Question]) -> tuple[Region, ...]
     regions: list[Region] = []
     for question in questions:
         area = question.answer_area
-        if area is None or area.width <= 0 or area.height <= 0:
-            continue
-        regions.append(
-            Region(
-                region_id=question.id,
-                kind=RegionKind.ANSWER_AREA,
-                page_index=question.page - 1,
-                bbox=NormalizedBBox(
-                    x0=area.x,
-                    y0=area.y,
-                    x1=area.x + area.width,
-                    y1=area.y + area.height,
-                ),
-                label=question.number,
+        if area is not None and area.width > 0 and area.height > 0:
+            regions.append(
+                Region(
+                    region_id=question.id,
+                    kind=RegionKind.ANSWER_AREA,
+                    page_index=question.page - 1,
+                    bbox=NormalizedBBox(
+                        x0=area.x,
+                        y0=area.y,
+                        x1=area.x + area.width,
+                        y1=area.y + area.height,
+                    ),
+                    label=question.number,
+                )
             )
-        )
+        area_2 = question.answer_area_2
+        if (
+            question.page_2 is not None
+            and area_2 is not None
+            and area_2.width > 0
+            and area_2.height > 0
+        ):
+            regions.append(
+                Region(
+                    region_id=f"{question.id}:page2",
+                    kind=RegionKind.ANSWER_AREA,
+                    page_index=question.page_2 - 1,
+                    bbox=NormalizedBBox(
+                        x0=area_2.x,
+                        y0=area_2.y,
+                        x1=area_2.x + area_2.width,
+                        y1=area_2.y + area_2.height,
+                    ),
+                    label=question.number,
+                )
+            )
     return tuple(regions)
 
 
