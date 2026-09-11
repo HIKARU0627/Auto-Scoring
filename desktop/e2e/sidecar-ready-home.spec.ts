@@ -1,9 +1,8 @@
-import { test, expect, _electron as electron } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 
 import {
   closeElectronApp,
-  electronLaunchArgs,
-  isolatedSidecarLaunchEnv,
+  launchElectronApp,
   pollSidecarReady,
 } from "./electron-launch";
 
@@ -14,10 +13,7 @@ import {
 test("sidecar becomes ready and home dashboard loads real API data", async () => {
   test.setTimeout(120_000);
 
-  const app = await electron.launch({
-    args: electronLaunchArgs(),
-    env: isolatedSidecarLaunchEnv(),
-  });
+  const app = await launchElectronApp();
 
   try {
     const page = await app.firstWindow();

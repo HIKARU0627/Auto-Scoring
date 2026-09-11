@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { _electron as electron } from "@playwright/test";
 import type { ElectronApplication, Page } from "@playwright/test";
+
+type ElectronLaunchOptions = NonNullable<Parameters<typeof electron.launch>[0]>;
 
 /** Built app root (`desktop/`). Playwright specs compile as CommonJS. */
 export const PACKAGE_ROOT = path.resolve(__dirname, "..");
@@ -28,7 +31,7 @@ export function isolatedSidecarLaunchEnv(
   };
 }
 
-/** Args passed to `_electron.launch()` for local dev and CI harnesses. */
+/** Args for the dev/CI harness. Specs must launch via {@link launchElectronApp}. */
 export function electronLaunchArgs(): string[] {
   return [
     PACKAGE_ROOT,
@@ -38,6 +41,33 @@ export function electronLaunchArgs(): string[] {
     "--no-sandbox",
     ...(process.platform === "linux" ? ["--ozone-platform=x11"] : []),
   ];
+}
+
+/**
+ * Playwright launch options for the dev/CI harness: built `out/` args plus
+ * per-run isolated app-data. Every spec that drives the unpackaged app should
+ * use {@link launchElectronApp} so a new spec cannot forget the isolation.
+ */
+export function electronLaunchOptions(
+  overrides: Omit<ElectronLaunchOptions, "args" | "env"> & {
+    env?: Record<string, string>;
+  } = {},
+): ElectronLaunchOptions {
+  const { env: extraEnv, ...rest } = overrides;
+  return {
+    args: electronLaunchArgs(),
+    env: isolatedSidecarLaunchEnv(extraEnv ?? {}),
+    ...rest,
+  };
+}
+
+/** Launches the unpackaged Electron app with isolated sidecar app-data. */
+export async function launchElectronApp(
+  overrides: Omit<ElectronLaunchOptions, "args" | "env"> & {
+    env?: Record<string, string>;
+  } = {},
+): Promise<ElectronApplication> {
+  return electron.launch(electronLaunchOptions(overrides));
 }
 
 type SidecarStatus = Awaited<
