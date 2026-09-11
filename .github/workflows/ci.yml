@@ -285,8 +285,6 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - name: Force failure for the required-check mutation test (temporary, Issue #331)
-        run: exit 1
       - name: Checkout
         uses: actions/checkout@v6
       - name: Setup Node.js
