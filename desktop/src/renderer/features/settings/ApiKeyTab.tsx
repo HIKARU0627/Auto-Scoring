@@ -15,6 +15,7 @@ import {
   apiKeySaveRequirements,
   apiKeyVerifyRequirements,
 } from "../../core/action-requirements.js";
+import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { DisabledActionReason } from "../intake/DisabledActionReason.js";
 
 export function ApiKeyTab(): JSX.Element {
@@ -167,23 +168,13 @@ export function ApiKeyTab(): JSX.Element {
 
   if (settings === null) {
     return (
-      <div className="flex flex-col gap-md">
-        <div
-          data-testid="settings-api-key-error"
-          className="rounded-md border border-error bg-error-container p-md text-on-error-container"
-        >
-          <p className="text-body-medium">
-            {error ?? "設定を読み込めませんでした。"}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={load}
-          className="self-start rounded-md bg-primary px-md py-sm text-label-large font-medium text-on-primary"
-        >
-          再試行
-        </button>
-      </div>
+      <AppErrorBanner
+        testId="settings-api-key-error"
+        message={error ?? "設定を読み込めませんでした。"}
+        onRetry={() => {
+          void load();
+        }}
+      />
     );
   }
 
@@ -216,12 +207,11 @@ export function ApiKeyTab(): JSX.Element {
       ) : null}
 
       {error ? (
-        <div
-          data-testid="settings-api-key-error"
-          className="rounded-md border border-error bg-error-container p-md text-on-error-container"
-        >
-          <p className="text-body-medium">{error}</p>
-        </div>
+        <AppErrorBanner
+          testId="settings-api-key-error"
+          message={error}
+          retryable={false}
+        />
       ) : null}
 
       {settings.restart_required ? (

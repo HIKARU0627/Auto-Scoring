@@ -58,6 +58,7 @@ import { freeRegionId } from "../answer-area-editor/region-helpers.js";
 import type { components } from "../../api/generated/schema.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
+import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { DisabledActionReason } from "../intake/DisabledActionReason.js";
 
 type PageGeometryResponse = components["schemas"]["PageGeometryResponse"];
@@ -402,21 +403,13 @@ export function TestSettingsPage(): JSX.Element {
       ) : null}
 
       {loadState.status === "error" ? (
-        <div
-          data-testid="test-settings-error"
-          className="rounded-md border border-error bg-error-container p-lg text-on-error-container"
-        >
-          <p className="text-body-medium">{loadState.message}</p>
-          <button
-            type="button"
-            className="mt-md rounded-md border border-outline px-md py-xs text-ui-label"
-            onClick={() => {
-              void reload();
-            }}
-          >
-            再試行
-          </button>
-        </div>
+        <AppErrorBanner
+          testId="test-settings-error"
+          message={loadState.message}
+          onRetry={() => {
+            void reload();
+          }}
+        />
       ) : null}
 
       {ready !== null ? (
