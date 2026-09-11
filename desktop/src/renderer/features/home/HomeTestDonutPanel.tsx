@@ -9,6 +9,7 @@ import {
   HomeDonutChart,
   type HomePhaseSlice,
 } from "./charts/HomeDonutChart.js";
+import { PANEL_TITLE_STYLE } from "./home-format.js";
 
 /**
  * テストの進捗 panel (Issue #336): preparing / in-progress / done over every
@@ -34,9 +35,9 @@ export function HomeTestDonutPanel({
   return (
     <section
       data-testid="home-tests-panel"
-      className="min-w-0 rounded-xl bg-surface-container p-lg"
+      className="min-w-0 rounded-xl bg-surface-container p-xl"
     >
-      <h2 className="text-body-medium font-semibold text-on-surface">
+      <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
         テストの進捗
       </h2>
       <div className="mt-lg">

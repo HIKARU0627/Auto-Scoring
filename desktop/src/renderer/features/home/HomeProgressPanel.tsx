@@ -6,7 +6,11 @@ import {
   homeWorkBucketMeta,
 } from "../../core/submission-work-bucket.js";
 import { HomeBarChart } from "./charts/HomeBarChart.js";
-import { NUMERIC_STYLE, toneDotClass } from "./home-format.js";
+import {
+  NUMERIC_STYLE,
+  PANEL_TITLE_STYLE,
+  toneDotClass,
+} from "./home-format.js";
 
 const STAT_BUCKETS = [
   { bucket: HomeWorkBucket.needsReview, tone: "attention" },
@@ -30,21 +34,23 @@ export function HomeProgressPanel({
   return (
     <section
       data-testid="home-progress-panel"
-      className="min-w-0 rounded-xl bg-surface-container p-lg"
+      className="min-w-0 rounded-xl bg-surface-container p-xl"
     >
       <div className="flex items-center justify-between gap-md">
-        <h2 className="text-body-medium font-semibold text-on-surface">
+        <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
           全体の進捗
         </h2>
         <span className="text-ui-label text-on-surface-variant">直近7日</span>
       </div>
-      <dl className="mt-lg grid grid-cols-2 gap-md sm:grid-cols-4">
+      {/* Bundled left instead of stretched across the card: the mock's KPI dots
+          sit at a ~128px pitch, not at each quarter of the panel (Issue 353). */}
+      <dl className="mt-lg flex flex-wrap items-start gap-x-xxl gap-y-lg">
         {STAT_BUCKETS.map(({ bucket, tone }) => (
           <div key={bucket} className="flex flex-col gap-xs">
             <dt className="flex items-center gap-sm text-ui-label text-on-surface-variant">
               <span
                 aria-hidden
-                className={`size-3 shrink-0 rounded-full ${toneDotClass(tone)}`}
+                className={`size-4 shrink-0 rounded-full ${toneDotClass(tone)}`}
               />
               {homeWorkBucketMeta(bucket).label}
             </dt>
@@ -71,11 +77,11 @@ export function HomeProgressPanel({
           件。答案取込画面でやり直せます。
         </p>
       ) : null}
-      <div className="mt-lg border-t border-outline-variant pt-lg">
-        <h3 className="text-ui-label text-on-surface-variant">日別の取込</h3>
-        <div className="mt-sm">
-          <HomeBarChart points={daily} />
-        </div>
+      {/* The mock goes straight from the KPIs to the bars; the old
+          「日別の取込」sub-heading and its rule added a fourth type size and
+          broke the card's spacing rhythm (Issue 353, parent 333 §5). */}
+      <div className="mt-lg">
+        <HomeBarChart points={daily} />
       </div>
     </section>
   );

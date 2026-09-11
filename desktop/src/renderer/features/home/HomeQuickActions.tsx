@@ -2,6 +2,7 @@ import type { JSX, ReactNode } from "react";
 import { ChevronRight, FileUp, ListChecks, Settings } from "lucide-react";
 
 import { AppRoutes } from "../../core/app-routes.js";
+import { PANEL_TITLE_STYLE } from "./home-format.js";
 
 function QuickAction({
   testId,
@@ -21,7 +22,7 @@ function QuickAction({
       type="button"
       data-testid={testId}
       onClick={onOpen}
-      className="flex w-full items-center gap-md rounded-lg px-md py-sm text-left hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90"
+      className="flex w-full items-center gap-md rounded-lg bg-surface-container-highest px-md py-md text-left hover:bg-surface-bright focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90"
       style={{
         transitionProperty: "background-color, opacity",
         transitionDuration: "var(--motion-duration-state-change)",
@@ -30,7 +31,7 @@ function QuickAction({
     >
       <span
         aria-hidden
-        className="flex size-9 shrink-0 items-center justify-center rounded-md bg-surface-container-high text-on-surface-variant"
+        className="flex size-9 shrink-0 items-center justify-center text-on-surface"
       >
         {icon}
       </span>
@@ -64,12 +65,14 @@ export function HomeQuickActions({
   return (
     <section
       data-testid="home-quick-actions"
-      className="rounded-xl bg-surface-container p-lg"
+      className="rounded-xl bg-surface-container p-xl"
     >
-      <h2 className="text-body-medium font-semibold text-on-surface">
+      <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
         クイックアクション
       </h2>
-      <div className="mt-md flex flex-col gap-xs">
+      {/* Each row is its own raised surface (page → card → row), so it reads
+          as a pressable item rather than a line of text (Issue 353). */}
+      <div className="mt-md flex flex-col gap-sm">
         <QuickAction
           testId="home-open-intake"
           icon={<FileUp size={18} />}

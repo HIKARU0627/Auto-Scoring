@@ -2,7 +2,7 @@ import type { JSX } from "react";
 import { Pie, PieChart, ResponsiveContainer } from "recharts";
 
 import type { HomeTestPhase } from "../../../core/home-dashboard.js";
-import { NUMERIC_STYLE, phaseFill } from "../home-format.js";
+import { donutPaddingAngle, NUMERIC_STYLE, phaseFill } from "../home-format.js";
 
 export interface HomePhaseSlice {
   readonly phase: HomeTestPhase;
@@ -31,9 +31,18 @@ export function HomeDonutChart({
   const summary = slices
     .map((slice) => `${slice.label}${slice.count}件`)
     .join("、");
+  const paddingAngle = donutPaddingAngle(slices);
+  const singleSector = paddingAngle === 0;
+  // A surface-coloured stroke on a lone 100% sector draws the card colour
+  // across the ring's seam, so a full ring is drawn without a stroke.
+  const sectorStroke = singleSector ? "none" : "var(--color-surface-container)";
 
   return (
-    <div data-testid="home-phase-chart" className="min-w-0">
+    <div
+      data-testid="home-phase-chart"
+      data-padding-angle={paddingAngle}
+      className="min-w-0"
+    >
       <div
         role="img"
         aria-label={`テストの進捗。${summary}。合計${total}テスト。`}
@@ -51,9 +60,9 @@ export function HomeDonutChart({
               outerRadius={82}
               startAngle={90}
               endAngle={-270}
-              paddingAngle={2}
+              paddingAngle={paddingAngle}
               isAnimationActive={false}
-              stroke="var(--color-surface-container)"
+              stroke={sectorStroke}
               rootTabIndex={-1}
             />
           </PieChart>

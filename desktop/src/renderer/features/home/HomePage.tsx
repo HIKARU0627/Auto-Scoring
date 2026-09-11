@@ -39,9 +39,10 @@ function errorText(error: unknown): string {
  * Home repeats the shell's page heading treatment here instead of calling
  * `ShellScreen`: `ShellScreen` always renders the escape control, and home must
  * not show one (INV-018). The subtitle still comes from `page-header.ts` so it
- * is not copied. The heading's size comes from `--font-size-headline-medium`
- * through an inline style because the token layer has no `text-headline-*`
- * utility and `features/` may not add one; see the PR body.
+ * is not copied. The heading's size comes from `--font-size-headline-large`
+ * (the mock's page title is ~14% larger than the shared headline-medium) through
+ * an inline style because the token layer has no `text-headline-*` utility and
+ * `features/` may not add one; see the PR body.
  */
 export function HomePage(): JSX.Element {
   const client = useSidecarClient();
@@ -88,7 +89,7 @@ export function HomePage(): JSX.Element {
           <h1
             data-testid="page-title"
             className="font-medium leading-ui text-on-surface"
-            style={{ fontSize: "var(--font-size-headline-medium)" }}
+            style={{ fontSize: "var(--font-size-headline-large)" }}
           >
             ホーム
           </h1>
@@ -192,26 +193,28 @@ function DashboardBody({
   );
 
   return (
-    <div className="flex flex-col gap-lg">
+    <div className="flex flex-col gap-xl">
       {dashboard.degradedTests.length > 0 ? (
         <DegradedNotice dashboard={dashboard} />
       ) : null}
-      <div className="grid grid-cols-1 gap-lg lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      {/* Two independent stacks rather than one auto-placed grid: with a grid,
+          the taller right rail stretched the hero's row and left 143px of dead
+          page colour under it (Issue 353, evaluation A). The mock keeps the
+          table in the main column, so the table stays here too. */}
+      <div className="flex flex-col gap-xl lg:flex-row lg:items-start">
+        <div className="flex min-w-0 flex-1 flex-col gap-xl">
           <HomeHeroCard
             action={dashboard.nextAction}
             onAction={() => {
               handleAction(dashboard.nextAction);
             }}
           />
-        </div>
-        <HomeQuickActions onOpen={onOpen} />
-        <div className="lg:col-span-2">
           <HomeProgressPanel dashboard={dashboard} />
-        </div>
-        <HomeTestDonutPanel dashboard={dashboard} />
-        <div className="lg:col-span-3">
           <HomeRecentTestsTable dashboard={dashboard} onOpen={onOpen} />
+        </div>
+        <div className="flex min-w-0 flex-col gap-xl lg:w-1/3">
+          <HomeQuickActions onOpen={onOpen} />
+          <HomeTestDonutPanel dashboard={dashboard} />
         </div>
       </div>
     </div>

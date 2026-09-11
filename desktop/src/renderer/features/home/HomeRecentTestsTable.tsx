@@ -17,7 +17,12 @@ import {
   HomeWorkBucket,
   homeWorkBucketMeta,
 } from "../../core/submission-work-bucket.js";
-import { NUMERIC_STYLE, statusPillClass } from "./home-format.js";
+import {
+  NUMERIC_STYLE,
+  PANEL_TITLE_STYLE,
+  statusPillClass,
+  TABLE_HEAD_STYLE,
+} from "./home-format.js";
 
 /**
  * 最近のテスト table (Issue #336): name / status pill / answer count /
@@ -35,10 +40,10 @@ export function HomeRecentTestsTable({
   return (
     <section
       data-testid="home-recent-tests"
-      className="min-w-0 rounded-xl bg-surface-container p-lg"
+      className="min-w-0 rounded-xl bg-surface-container p-xl"
     >
       <div className="flex items-center justify-between gap-md">
-        <h2 className="text-body-medium font-semibold text-on-surface">
+        <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
           最近のテスト
         </h2>
         {dashboard.hiddenTestCount > 0 ? (
@@ -60,7 +65,10 @@ export function HomeRecentTestsTable({
           style={{ minWidth: "40rem" }}
         >
           <thead>
-            <tr className="text-ui-label text-on-surface-variant">
+            <tr
+              className="text-ui-label text-on-surface-variant"
+              style={TABLE_HEAD_STYLE}
+            >
               <th scope="col" className="py-sm pr-md font-normal">
                 テスト名
               </th>
@@ -178,6 +186,8 @@ function ProgressCell({
       </button>
       {summary !== null && percent !== null ? (
         <div className="flex items-center gap-sm">
+          {/* Fixed width keeps the bar inside the 進捗 column instead of
+              letting the table stretch it across the next one (Issue 353). */}
           <div
             role="progressbar"
             data-testid={`home-test-progress-${test.id}`}
@@ -185,7 +195,7 @@ function ProgressCell({
             aria-valuemin={0}
             aria-valuemax={summary.total}
             aria-valuenow={summary.confirmed}
-            className="h-2 min-w-0 flex-1 rounded-sm bg-progress-track"
+            className="h-2 w-32 shrink-0 rounded-sm bg-surface-container-high"
           >
             <div
               data-testid={`home-test-progress-fill-${test.id}`}

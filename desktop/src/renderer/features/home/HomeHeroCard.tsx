@@ -22,14 +22,14 @@ export function HomeHeroCard({
   return (
     <section
       data-testid="home-next-up"
-      className="rounded-xl bg-surface-container p-lg"
+      className="rounded-xl bg-surface-container-high p-xl"
     >
       <div className="flex flex-col gap-lg md:flex-row md:items-center">
         <div
           aria-hidden
-          className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-primary-container text-on-primary-container"
+          className="flex size-18 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary"
         >
-          <FileText size={26} />
+          <FileText size={32} />
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-ui-label text-on-surface-variant">次の一手</p>
