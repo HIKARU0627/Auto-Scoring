@@ -64,7 +64,7 @@ export function PageImageViewer({
     <div data-testid="review-page-viewer" className="flex flex-col gap-sm">
       <div
         data-testid="review-page-surface"
-        className="relative mx-auto border border-outline-variant bg-surface-container-lowest"
+        className="relative mx-auto bg-surface-container-lowest"
         style={{ width: renderWidth, height: renderHeight }}
       >
         {pageImage.objectUrl != null ? (
@@ -105,7 +105,9 @@ export function PageImageViewer({
       </div>
       {resolved.unresolved.length > 0 ? (
         <section data-testid="review-question-comments">
-          <h3 className="text-title-small font-medium">設問コメント</h3>
+          <h3 className="text-ui-label font-semibold text-on-surface">
+            設問コメント
+          </h3>
           <ul className="list-disc pl-lg">
             {resolved.unresolved.map((annotation) => (
               <li key={annotation.id} className="text-body-medium">

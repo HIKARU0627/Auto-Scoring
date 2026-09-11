@@ -4,13 +4,17 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type JSX,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
 
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
-import { ActionRequirements } from "../../core/action-requirements.js";
+import {
+  ActionRequirements,
+  whileRunningRequirements,
+} from "../../core/action-requirements.js";
 import {
   loadQuestionReviewData,
   loadAnswerImageUrl,
@@ -52,15 +56,45 @@ import {
 } from "../../core/submission-confirmation.js";
 import { hasNearlyBlankCrop } from "../../core/submission-review-reason.js";
 import { submissionStatusVisualOf } from "../../core/submission-status.js";
-import { BackOrHomeButton } from "../../navigation/BackOrHomeButton.js";
+import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { AnswerCropView } from "../pdf-review/AnswerCropView.js";
 import { ConfidenceBadge } from "../pdf-review/ConfidenceBadge.js";
+import { DisabledActionReason } from "../intake/DisabledActionReason.js";
 import { useQuestionReadTracking } from "./use-question-read-tracking.js";
 
 type QuestionResponse = components["schemas"]["QuestionResponse"];
 type JobResponse = components["schemas"]["JobResponse"];
 type SubmissionResponse = components["schemas"]["SubmissionResponse"];
+
+const NUMERIC_STYLE: CSSProperties = {
+  fontVariantNumeric: "var(--font-variant-numeric-score)",
+};
+
+const CARD_CLASS = "min-w-0 rounded-xl bg-surface-container p-lg";
+
+const BUTTON_PRIMARY_CLASS =
+  "inline-flex items-center gap-xs rounded-md bg-primary px-md py-sm text-ui-label font-medium text-on-primary hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+
+const BUTTON_SECONDARY_CLASS =
+  "inline-flex items-center gap-xs rounded-md bg-surface-container-high px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+
+const PILL_SUCCESS_CLASS =
+  "inline-flex shrink-0 items-center gap-xs rounded-full bg-success-container px-sm py-xs text-xs text-on-success-container";
+
+const PILL_ATTENTION_CLASS =
+  "inline-flex shrink-0 items-center gap-xs rounded-full bg-attention-container px-sm py-xs text-xs text-on-attention-container";
+
+/**
+ * The bare question number (`1`) whether the stored value is `1` or `問1`.
+ *
+ * Question numbers are stored with their prefix (`問1`), so an unconditional
+ * `問` prepend produced `問問1` on screen. Stripping here keeps every display
+ * site at one prefix; the confirmation logic still receives the raw value.
+ */
+function questionNumberValue(number: string): string {
+  return number.startsWith("問") ? number.slice(1) : number;
+}
 
 interface QuestionMaterialState {
   readonly loading: boolean;
@@ -95,18 +129,32 @@ function EnterActivates({ children }: { children: ReactNode }): JSX.Element {
   );
 }
 
-function toneClass(
+function noticeCardClass(
   tone: "attention" | "neutral" | "danger" | "success",
 ): string {
   switch (tone) {
     case "attention":
-      return "text-attention";
+      return "bg-attention-container text-on-attention-container";
     case "danger":
-      return "text-error";
+      return "bg-error-container text-on-error-container";
     case "success":
-      return "text-success";
+      return "bg-success-container text-on-success-container";
     default:
-      return "text-on-surface-variant";
+      return "bg-surface-container-high text-on-surface-variant";
+  }
+}
+
+function noticeGlyph(
+  tone: "attention" | "neutral" | "danger" | "success",
+): string {
+  switch (tone) {
+    case "success":
+      return "✓";
+    case "attention":
+    case "danger":
+      return "!";
+    default:
+      return "−";
   }
 }
 
@@ -120,9 +168,20 @@ function Notice({
   message: string;
 }): JSX.Element {
   return (
-    <p data-testid={testId} className={`text-body-small ${toneClass(tone)}`}>
-      {message}
-    </p>
+    <div
+      data-testid={testId}
+      data-tone={tone}
+      role="status"
+      className={`flex items-start gap-sm rounded-xl px-lg py-md text-body-medium ${noticeCardClass(tone)}`}
+    >
+      <span
+        aria-hidden
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-semibold text-on-primary"
+      >
+        {noticeGlyph(tone)}
+      </span>
+      <span className="min-w-0 flex-1">{message}</span>
+    </div>
   );
 }
 
@@ -484,277 +543,319 @@ export function SubmissionConfirmPage(): JSX.Element {
       : `${confirmation.pending.length}問をまとめて確定 (Enter)`;
 
   return (
-    <div className="flex min-h-screen flex-col bg-surface text-on-surface">
-      <header className="border-b border-outline-variant px-xl py-md">
-        <div className="flex items-center gap-md">
-          <BackOrHomeButton />
-          <div className="min-w-0 flex-1">
-            <h1 className="text-title-large font-medium leading-ui">
-              {answerName}
-            </h1>
-            {loadState.status === "ready" ? (
-              <p
-                data-testid="confirm-subtitle"
-                className="text-body-small text-on-surface-variant"
+    <ShellScreen title={answerName}>
+      <div className="flex min-w-0 flex-col gap-lg">
+        {loadState.status === "ready" ? (
+          <section className={CARD_CLASS}>
+            <div className="flex flex-wrap items-center justify-between gap-md">
+              <div className="min-w-0 flex-1">
+                <p
+                  data-testid="confirm-subtitle"
+                  className="text-body-medium text-on-surface-variant"
+                  style={NUMERIC_STYLE}
+                >
+                  {subtitle}
+                </p>
+                <span className="mt-xs inline-flex rounded-full bg-surface-container-high px-sm py-xs text-xs text-on-surface-variant">
+                  {submissionStatusVisualOf(loadState.submission.state).label}
+                </span>
+              </div>
+              <button
+                type="button"
+                data-testid="confirm-refresh-button"
+                className={BUTTON_SECONDARY_CLASS}
+                disabled={confirming}
+                onClick={() => {
+                  void reload();
+                }}
               >
-                {subtitle}
-              </p>
-            ) : null}
-          </div>
-          {loadState.status === "ready" ? (
-            <span className="text-ui-label text-on-surface-variant">
-              {submissionStatusVisualOf(loadState.submission.state).label}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            data-testid="confirm-refresh-button"
-            className="rounded-md border border-outline px-md py-xs text-ui-label"
-            disabled={confirming}
-            onClick={() => {
-              void reload();
-            }}
+                再読み込み
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {loadState.status === "loading" ? (
+          <section
+            data-testid="confirm-loading"
+            aria-busy="true"
+            aria-live="polite"
+            className={`${CARD_CLASS} animate-pulse`}
           >
-            再読み込み
-          </button>
-        </div>
-      </header>
+            <span className="sr-only">答案を読み込んでいます…</span>
+            <div className="h-5 w-40 rounded-md bg-surface-container-high" />
+            <div className="mt-md h-4 w-3/4 rounded-md bg-surface-container-high" />
+            <div className="mt-lg h-40 w-full rounded-md bg-surface-container-high" />
+          </section>
+        ) : null}
 
-      {loadState.status === "loading" ? (
-        <div
-          data-testid="confirm-loading"
-          className="flex flex-1 items-center justify-center"
-        >
-          <p className="text-body-medium text-on-surface-variant">
-            読み込み中…
-          </p>
-        </div>
-      ) : null}
-
-      {loadState.status === "error" ? (
-        <div className="flex flex-1 items-center justify-center p-xl">
-          <div className="max-w-lg rounded-md border border-error bg-error-container p-lg text-on-error-container">
-            <p data-testid="confirm-error" className="text-body-medium">
+        {loadState.status === "error" ? (
+          <section
+            data-testid="confirm-error"
+            role="alert"
+            className="rounded-xl bg-error-container px-lg py-md text-on-error-container"
+          >
+            <p className="text-body-medium">
               答案を読み込めませんでした: {loadState.message}
             </p>
             <button
               type="button"
-              className="mt-md rounded-md border border-outline px-md py-xs text-ui-label"
+              className={`${BUTTON_SECONDARY_CLASS} mt-md`}
               onClick={() => {
                 void reload();
               }}
             >
               再読み込み
             </button>
-          </div>
-        </div>
-      ) : null}
+          </section>
+        ) : null}
 
-      {loadState.status === "ready" && questions.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center p-xl">
-          <p
-            data-testid="confirm-no-questions"
-            className="text-body-medium text-on-surface-variant"
-          >
-            このテストには設問が登録されていません。
-          </p>
-        </div>
-      ) : null}
-
-      {loadState.status === "ready" && gradingFinished ? (
-        <section
-          data-testid="confirm-ai-usage"
-          className="border-b border-outline-variant bg-surface-container-low px-xl py-md"
-        >
-          {aiUsageError != null ? (
-            <p className="text-body-small text-on-surface-variant">
-              {aiUsageError}
-            </p>
-          ) : aiUsageDisplay != null ? (
-            <div className="flex flex-col gap-xs">
-              <p
-                data-testid="confirm-ai-usage-tokens"
-                className="text-body-medium text-on-surface"
+        {loadState.status === "ready" && questions.length === 0 ? (
+          <section className={CARD_CLASS}>
+            <div className="flex items-start gap-md">
+              <span
+                aria-hidden
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-container text-on-primary-container"
               >
-                {aiUsageDisplay.tokenLine}
-              </p>
-              {aiUsageDisplay.costLine != null ? (
+                ?
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-xl font-semibold leading-ui text-on-surface">
+                  設問がありません
+                </h2>
                 <p
-                  data-testid="confirm-ai-usage-cost"
-                  className="text-body-medium text-on-surface"
+                  data-testid="confirm-no-questions"
+                  className="mt-xs text-body-medium text-on-surface-variant"
                 >
-                  {aiUsageDisplay.costLine}
+                  このテストには設問が登録されていません。テスト設定で設問を登録すると、ここで答案を確定できます。
                 </p>
-              ) : null}
+              </div>
             </div>
-          ) : (
-            <p className="text-body-small text-on-surface-variant">
-              AI 利用量を読み込み中…
-            </p>
-          )}
-        </section>
-      ) : null}
+          </section>
+        ) : null}
 
-      {loadState.status === "ready" && questions.length > 0 ? (
-        <div
-          className="flex min-h-0 flex-1 flex-col outline-none"
-          tabIndex={-1}
-          onKeyDown={onPageKeyDown}
-        >
-          <div
-            ref={scrollRef}
-            data-testid="confirm-question-list"
-            className="min-h-0 flex-1 overflow-y-auto p-xl"
-          >
-            <div className="mx-auto flex max-w-240 flex-col gap-lg">
-              {questions.map((question) => {
-                const material = materialByQuestion[question.id];
-                const reviews = material?.data?.reviews ?? [];
-                const grades = material?.data?.grades ?? [];
-                const aiGrade = latestAiGrade(grades);
-                const ocr = latestOcrRecognition(
-                  material?.data?.recognitions ?? [],
-                );
-                const humanGrade = displayGrade(grades, reviews);
-                const statusKey = deriveQuestionStatus({
-                  job: latestJobFor(question.id),
-                  review: effectiveReview(reviews),
-                  hasWaitingDependents: loadState.jobs.some(
-                    (job) =>
-                      job.blocked_on_question_id === question.id &&
-                      job.state === "blocked",
-                  ),
-                });
-                const reached = readTracking.isReached(question.id);
-                return (
-                  <article
-                    key={question.id}
-                    data-testid={`confirm-question-${question.id}`}
-                    className="rounded-lg border border-outline-variant bg-surface-container p-lg"
+        {loadState.status === "ready" && gradingFinished ? (
+          <section data-testid="confirm-ai-usage" className={CARD_CLASS}>
+            <h2 className="text-xl font-semibold leading-ui text-on-surface">
+              AI 利用量
+            </h2>
+            {aiUsageError != null ? (
+              <p
+                data-testid="confirm-ai-usage-error"
+                className="mt-xs text-body-medium text-on-surface-variant"
+              >
+                AI 利用量を取得できませんでした: {aiUsageError}
+              </p>
+            ) : aiUsageDisplay != null ? (
+              <div className="mt-xs flex flex-col gap-xs">
+                <p
+                  data-testid="confirm-ai-usage-tokens"
+                  className="text-body-medium text-on-surface"
+                  style={NUMERIC_STYLE}
+                >
+                  {aiUsageDisplay.tokenLine}
+                </p>
+                {aiUsageDisplay.costLine != null ? (
+                  <p
+                    data-testid="confirm-ai-usage-cost"
+                    className="text-body-medium text-on-surface"
+                    style={NUMERIC_STYLE}
                   >
-                    <div className="flex items-center gap-sm">
-                      <h2 className="flex-1 text-title-medium font-medium">
-                        問{question.number}
-                      </h2>
-                      <QuestionStatusBadge status={statusKey} />
-                      <span
-                        data-testid={`confirm-reach-${question.id}`}
-                        className={`text-ui-label ${reached ? "text-success" : "text-attention"}`}
-                      >
-                        {reached ? "表示済み" : "未表示"}
-                      </span>
-                    </div>
-                    <RowMarkers
-                      questionId={question.id}
-                      register={readTracking.registerRowMarkers}
-                    />
-                    {material?.loading ? (
-                      <p className="py-lg text-body-medium text-on-surface-variant">
-                        読み込み中…
-                      </p>
-                    ) : null}
-                    {material?.error != null ? (
-                      <p
-                        data-testid={`confirm-question-error-${question.id}`}
-                        className="py-lg text-body-small text-error"
-                      >
-                        判断材料を読み込めませんでした: {material.error}
-                      </p>
-                    ) : null}
-                    {material?.data != null && !material.loading ? (
-                      <div className="flex flex-col gap-sm py-sm">
-                        <div className="h-45">
-                          <AnswerCropView
-                            imageUrl={material.answerImageUrl}
-                            nearlyBlank={hasNearlyBlankCrop(
-                              loadState.submission.review_reason,
-                              question.id,
+                    {aiUsageDisplay.costLine}
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <div
+                data-testid="confirm-ai-usage-loading"
+                className="mt-xs text-body-medium text-on-surface-variant"
+              >
+                AI 利用量を読み込み中…
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {loadState.status === "ready" && questions.length > 0 ? (
+          <div
+            className="flex min-h-0 flex-col gap-lg"
+            onKeyDown={onPageKeyDown}
+          >
+            <div
+              ref={scrollRef}
+              data-testid="confirm-question-list"
+              className="min-h-0 max-h-inspector overflow-y-auto rounded-xl"
+            >
+              <div className="flex flex-col gap-lg">
+                {questions.map((question) => {
+                  const material = materialByQuestion[question.id];
+                  const reviews = material?.data?.reviews ?? [];
+                  const grades = material?.data?.grades ?? [];
+                  const aiGrade = latestAiGrade(grades);
+                  const ocr = latestOcrRecognition(
+                    material?.data?.recognitions ?? [],
+                  );
+                  const humanGrade = displayGrade(grades, reviews);
+                  const statusKey = deriveQuestionStatus({
+                    job: latestJobFor(question.id),
+                    review: effectiveReview(reviews),
+                    hasWaitingDependents: loadState.jobs.some(
+                      (job) =>
+                        job.blocked_on_question_id === question.id &&
+                        job.state === "blocked",
+                    ),
+                  });
+                  const reached = readTracking.isReached(question.id);
+                  return (
+                    <article
+                      key={question.id}
+                      data-testid={`confirm-question-${question.id}`}
+                      className={CARD_CLASS}
+                    >
+                      <div className="flex flex-wrap items-center gap-sm">
+                        <h3 className="flex-1 text-base font-semibold text-on-surface">
+                          問{questionNumberValue(question.number)}
+                        </h3>
+                        <QuestionStatusBadge status={statusKey} />
+                        <span
+                          data-testid={`confirm-reach-${question.id}`}
+                          className={
+                            reached ? PILL_SUCCESS_CLASS : PILL_ATTENTION_CLASS
+                          }
+                        >
+                          {reached ? "表示済み" : "未表示"}
+                        </span>
+                      </div>
+                      <RowMarkers
+                        questionId={question.id}
+                        register={readTracking.registerRowMarkers}
+                      />
+                      {material?.loading ? (
+                        <div className="mt-md h-40 w-full animate-pulse rounded-lg bg-surface-container-high" />
+                      ) : null}
+                      {material?.error != null ? (
+                        <p
+                          data-testid={`confirm-question-error-${question.id}`}
+                          className="mt-md rounded-lg bg-error-container px-md py-sm text-body-medium text-on-error-container"
+                        >
+                          判断材料を読み込めませんでした: {material.error}
+                        </p>
+                      ) : null}
+                      {material?.data != null && !material.loading ? (
+                        <div className="mt-md grid gap-lg lg:grid-cols-2">
+                          <div className="flex flex-col gap-sm">
+                            <div className="overflow-hidden rounded-lg bg-surface-container-high p-sm">
+                              <AnswerCropView
+                                imageUrl={material.answerImageUrl}
+                                nearlyBlank={hasNearlyBlankCrop(
+                                  loadState.submission.review_reason,
+                                  question.id,
+                                )}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-sm">
+                            <p className="text-ui-label font-medium text-on-surface-variant">
+                              AI認識文字
+                            </p>
+                            {ocr == null ? (
+                              <p className="text-body-medium text-on-surface-variant">
+                                未認識
+                              </p>
+                            ) : (
+                              <>
+                                <p
+                                  data-testid={`confirm-recognition-${question.id}`}
+                                  className="text-role-recognized rounded-lg bg-surface-container-high p-sm text-on-surface"
+                                >
+                                  {ocr.text}
+                                </p>
+                                <ConfidenceBadge
+                                  label="OCR文字認識信頼度"
+                                  confidence={ocr.confidence}
+                                  testId={`confirm-ocr-confidence-${question.id}`}
+                                />
+                              </>
                             )}
-                          />
-                        </div>
-                        <p className="text-label-large">AI認識文字</p>
-                        {ocr == null ? (
-                          <p>未認識</p>
-                        ) : (
-                          <>
-                            <p
-                              data-testid={`confirm-recognition-${question.id}`}
-                            >
-                              {ocr.text}
+                            <p className="mt-sm text-ui-label font-medium text-on-surface-variant">
+                              採点
                             </p>
-                            <ConfidenceBadge
-                              label="OCR文字認識信頼度"
-                              confidence={ocr.confidence}
-                              testId={`confirm-ocr-confidence-${question.id}`}
-                            />
-                          </>
-                        )}
-                        <p className="text-label-large">採点</p>
-                        {aiGrade == null ? (
-                          <p data-testid={`confirm-no-grade-${question.id}`}>
-                            AIの点数がありません。この設問は自分で点数を入力する必要があります。
-                          </p>
-                        ) : (
-                          <>
-                            <p
-                              data-testid={`confirm-score-${question.id}`}
-                              className="text-score"
-                            >
-                              {aiGrade.score.awarded} / {aiGrade.score.maximum}{" "}
-                              点
-                            </p>
-                            <ConfidenceBadge
-                              label="採点信頼度"
-                              confidence={aiGrade.confidence}
-                              testId={`confirm-grade-confidence-${question.id}`}
-                            />
-                            {aiGrade.rationale ? (
+                            {aiGrade == null ? (
                               <p
-                                data-testid={`confirm-rationale-${question.id}`}
+                                data-testid={`confirm-no-grade-${question.id}`}
+                                className="rounded-lg bg-attention-container px-md py-sm text-body-medium text-on-attention-container"
                               >
-                                {aiGrade.rationale}
+                                AIの点数がありません。この設問は自分で点数を入力する必要があります。
+                              </p>
+                            ) : (
+                              <>
+                                <p
+                                  data-testid={`confirm-score-${question.id}`}
+                                  className="text-role-score font-semibold text-on-surface"
+                                  style={NUMERIC_STYLE}
+                                >
+                                  {aiGrade.score.awarded} /{" "}
+                                  {aiGrade.score.maximum} 点
+                                </p>
+                                <ConfidenceBadge
+                                  label="採点信頼度"
+                                  confidence={aiGrade.confidence}
+                                  testId={`confirm-grade-confidence-${question.id}`}
+                                />
+                                {aiGrade.rationale ? (
+                                  <p
+                                    data-testid={`confirm-rationale-${question.id}`}
+                                    className="text-body-medium text-on-surface-variant"
+                                  >
+                                    {aiGrade.rationale}
+                                  </p>
+                                ) : null}
+                              </>
+                            )}
+                            {humanGrade?.source === "human" ? (
+                              <p
+                                data-testid={`confirm-human-score-${question.id}`}
+                                className="rounded-lg bg-success-container px-md py-sm text-body-medium text-on-success-container"
+                                style={NUMERIC_STYLE}
+                              >
+                                人による確定: {humanGrade.score.awarded} /{" "}
+                                {humanGrade.score.maximum} 点
                               </p>
                             ) : null}
-                          </>
-                        )}
-                        {humanGrade?.source === "human" ? (
-                          <p data-testid={`confirm-human-score-${question.id}`}>
-                            人による確定: {humanGrade.score.awarded} /{" "}
-                            {humanGrade.score.maximum} 点
-                          </p>
-                        ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="mt-md flex justify-end">
+                        <EnterActivates>
+                          <button
+                            type="button"
+                            data-testid={`confirm-open-${question.id}`}
+                            className={BUTTON_SECONDARY_CLASS}
+                            onClick={() => {
+                              resetQuestionReadTracking(question.id);
+                              push(
+                                pdfReview(testId, submissionId, question.id),
+                              );
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.stopPropagation();
+                              }
+                            }}
+                          >
+                            {aiGrade == null && !isQuestionConfirmed(reviews)
+                              ? "点数を入力する"
+                              : "この設問を詳しく見る・直す"}
+                          </button>
+                        </EnterActivates>
                       </div>
-                    ) : null}
-                    <div className="mt-sm flex justify-end">
-                      <EnterActivates>
-                        <button
-                          type="button"
-                          data-testid={`confirm-open-${question.id}`}
-                          className="rounded-md border border-outline px-md py-xs text-ui-label"
-                          onClick={() => {
-                            resetQuestionReadTracking(question.id);
-                            push(pdfReview(testId, submissionId, question.id));
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.stopPropagation();
-                            }
-                          }}
-                        >
-                          {aiGrade == null && !isQuestionConfirmed(reviews)
-                            ? "点数を入力する"
-                            : "この設問を詳しく見る・直す"}
-                        </button>
-                      </EnterActivates>
-                    </div>
-                  </article>
-                );
-              })}
+                    </article>
+                  );
+                })}
+              </div>
             </div>
-          </div>
 
-          <footer className="border-t border-outline-variant bg-surface p-lg">
-            <div className="mx-auto flex max-w-240 flex-col gap-sm">
+            <footer className={`${CARD_CLASS} flex flex-col gap-sm`}>
               {outcome != null ? (
                 <Notice
                   testId={
@@ -781,7 +882,7 @@ export function SubmissionConfirmPage(): JSX.Element {
                   <button
                     type="button"
                     data-testid="confirm-defer-button"
-                    className="rounded-md border border-outline px-md py-sm text-ui-label"
+                    className={BUTTON_SECONDARY_CLASS}
                     disabled={confirming}
                     onClick={deferSubmission}
                     onKeyDown={(event) => {
@@ -797,7 +898,7 @@ export function SubmissionConfirmPage(): JSX.Element {
                   <button
                     type="button"
                     data-testid="confirm-reveal-button"
-                    className="rounded-md border border-outline px-md py-sm text-ui-label"
+                    className={BUTTON_SECONDARY_CLASS}
                     onClick={readTracking.revealNext}
                   >
                     未到達の設問を表示
@@ -806,29 +907,34 @@ export function SubmissionConfirmPage(): JSX.Element {
                 <button
                   type="button"
                   data-testid="confirm-submission-button"
-                  className="rounded-md bg-primary px-md py-sm text-ui-label text-on-primary disabled:opacity-50"
+                  className={BUTTON_PRIMARY_CLASS}
                   disabled={!confirmation.canConfirm || confirming}
                   onClick={() => {
                     void confirmSubmission();
                   }}
                 >
-                  {confirmLabel}
+                  {confirming ? "確定中…" : confirmLabel}
                 </button>
               </div>
-            </div>
-          </footer>
-        </div>
-      ) : null}
+              {confirming ? (
+                <DisabledActionReason
+                  requirements={whileRunningRequirements({ running: true })}
+                />
+              ) : null}
+            </footer>
+          </div>
+        ) : null}
 
-      {snackbar != null ? (
-        <div
-          role="status"
-          className="fixed bottom-lg left-1/2 -translate-x-1/2 rounded-md bg-inverse-surface px-lg py-sm text-body-small text-inverse-on-surface"
-        >
-          {snackbar}
-        </div>
-      ) : null}
-    </div>
+        {snackbar != null ? (
+          <div
+            role="status"
+            className="fixed bottom-lg left-1/2 -translate-x-1/2 rounded-xl bg-inverse-surface px-lg py-sm text-body-medium text-inverse-on-surface"
+          >
+            {snackbar}
+          </div>
+        ) : null}
+      </div>
+    </ShellScreen>
   );
 }
 

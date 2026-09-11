@@ -72,6 +72,14 @@ type LoadState =
 const ENTER_ACTIVATES_LOCALLY =
   'button, a[href], input, textarea, select, [role="button"], [contenteditable="true"]';
 
+const CARD_CLASS = "min-w-0 rounded-xl bg-surface-container p-lg";
+
+const BUTTON_PRIMARY_CLASS =
+  "inline-flex items-center gap-xs rounded-md bg-primary px-md py-sm text-ui-label font-medium text-on-primary hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+
+const BUTTON_SECONDARY_CLASS =
+  "inline-flex items-center gap-xs rounded-md bg-surface-container-high px-md py-sm text-ui-label font-medium text-on-surface hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-80 disabled:opacity-50";
+
 /**
  * Enter on a focused control belongs to that control, not the page (Issue #196).
  *
@@ -554,35 +562,75 @@ export function PdfReviewPage(): JSX.Element {
   return (
     <ShellScreen title="添削レビュー">
       {loadState.status === "loading" ? (
-        <p className="text-body-medium">読み込み中…</p>
+        <section
+          aria-busy="true"
+          aria-live="polite"
+          className={`${CARD_CLASS} animate-pulse`}
+        >
+          <p className="text-body-medium text-on-surface-variant">
+            読み込み中…
+          </p>
+          <div className="mt-md h-5 w-40 rounded-md bg-surface-container-high" />
+          <div className="mt-lg h-40 w-full rounded-md bg-surface-container-high" />
+          <div className="mt-md h-4 w-2/3 rounded-md bg-surface-container-high" />
+        </section>
       ) : null}
       {loadState.status === "error" ? (
-        <p className="text-body-medium text-error">{loadState.message}</p>
+        <section
+          role="alert"
+          className="rounded-xl bg-error-container px-lg py-md text-on-error-container"
+        >
+          <p className="text-body-medium">
+            答案を読み込めませんでした: {loadState.message}
+          </p>
+          <button
+            type="button"
+            className={`${BUTTON_SECONDARY_CLASS} mt-md`}
+            onClick={() => {
+              void reloadReview();
+            }}
+          >
+            再読み込み
+          </button>
+        </section>
       ) : null}
 
       {loadState.status === "ready" ? (
-        <div className="flex flex-col gap-lg">
-          <div className="flex items-center justify-end gap-sm">
-            {jobsRefreshStalled ? (
-              <p
-                data-testid="review-refresh-stale-notice"
-                className="text-body-small text-attention"
-              >
-                {ActionRequirements.gradingStatusStale.message}
+        <div className="flex min-w-0 flex-col gap-lg">
+          <section
+            className={`${CARD_CLASS} flex flex-wrap items-center justify-between gap-md`}
+          >
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-on-surface">
+                問{questionNumberValue(selectedQuestion?.number)}{" "}
+                {labelWaitingFor(selectedStatus, selectedWait)}
+              </h2>
+              <p className="mt-xs text-body-medium text-on-surface-variant">
+                設問ごとに判断材料を確認し、承認します
               </p>
-            ) : null}
-            <button
-              type="button"
-              data-testid="review-refresh-button"
-              className="rounded-md border border-outline px-md py-xs text-ui-label"
-              disabled={busy}
-              onClick={() => {
-                void reloadReview();
-              }}
-            >
-              再読み込み
-            </button>
-          </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-sm">
+              {jobsRefreshStalled ? (
+                <p
+                  data-testid="review-refresh-stale-notice"
+                  className="rounded-full bg-attention-container px-sm py-xs text-xs text-on-attention-container"
+                >
+                  {ActionRequirements.gradingStatusStale.message}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                data-testid="review-refresh-button"
+                className={BUTTON_SECONDARY_CLASS}
+                disabled={busy}
+                onClick={() => {
+                  void reloadReview();
+                }}
+              >
+                再読み込み
+              </button>
+            </div>
+          </section>
 
           {dagLayout != null ? (
             <DependencyDagPanel
@@ -597,10 +645,10 @@ export function PdfReviewPage(): JSX.Element {
             />
           ) : null}
 
-          <div className="flex gap-lg">
+          <div className="flex min-w-0 flex-col gap-lg lg:flex-row">
             <nav
               data-testid="review-question-rail"
-              className="flex w-40 shrink-0 flex-col gap-xs"
+              className="flex w-full shrink-0 flex-wrap gap-xs rounded-xl bg-surface-container p-sm lg:w-52 lg:flex-col"
               aria-label="設問一覧"
             >
               {questions.map((question, index) => {
@@ -642,10 +690,10 @@ export function PdfReviewPage(): JSX.Element {
                     key={question.id}
                     type="button"
                     data-testid={`review-rail-${question.id}`}
-                    className={`rounded-md border px-sm py-xs text-left text-ui-label ${
+                    className={`rounded-lg px-sm py-xs text-left text-ui-label ${
                       index === selectedIndex
-                        ? "border-primary"
-                        : "border-outline-variant"
+                        ? "border border-primary bg-surface-container-high text-on-surface"
+                        : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
                     }`}
                     aria-label={`問${displayNumber} ${label}`}
                     title={label}
@@ -661,21 +709,23 @@ export function PdfReviewPage(): JSX.Element {
             </nav>
 
             <div className="min-w-0 flex-1">
-              {pageState != null ? (
-                <PageImageViewer
-                  pageImage={pageState.image}
-                  displayedWidth={pageState.geometry.displayed_width}
-                  displayedHeight={pageState.geometry.displayed_height}
-                  annotations={selectedAnnotations}
-                  recognitions={selectedRecognitions}
-                  questionAnswerArea={selectedQuestion?.answer_area}
-                  zoom={zoom}
-                />
-              ) : null}
+              <div className="min-w-0 overflow-x-auto rounded-xl bg-surface-container-low p-sm">
+                {pageState != null ? (
+                  <PageImageViewer
+                    pageImage={pageState.image}
+                    displayedWidth={pageState.geometry.displayed_width}
+                    displayedHeight={pageState.geometry.displayed_height}
+                    annotations={selectedAnnotations}
+                    recognitions={selectedRecognitions}
+                    questionAnswerArea={selectedQuestion?.answer_area}
+                    zoom={zoom}
+                  />
+                ) : null}
+              </div>
               <div className="mt-sm flex gap-sm">
                 <button
                   type="button"
-                  className="rounded-md border border-outline px-md py-xs"
+                  className={BUTTON_SECONDARY_CLASS}
                   onClick={() => {
                     setZoom((value) => Math.max(1, value - 0.5));
                   }}
@@ -684,7 +734,7 @@ export function PdfReviewPage(): JSX.Element {
                 </button>
                 <button
                   type="button"
-                  className="rounded-md border border-outline px-md py-xs"
+                  className={BUTTON_SECONDARY_CLASS}
                   onClick={() => {
                     setZoom((value) => value + 0.5);
                   }}
@@ -697,10 +747,13 @@ export function PdfReviewPage(): JSX.Element {
             <aside
               ref={inspectorRef}
               data-testid="review-inspector"
-              className="flex w-80 shrink-0 flex-col gap-md overflow-y-auto max-h-inspector border border-outline-variant rounded-md p-md"
+              className="flex w-full shrink-0 flex-col gap-md overflow-y-auto max-h-inspector rounded-xl bg-surface-container p-lg lg:w-80"
             >
-              <div data-testid="review-question-state">
-                <span className="text-body-medium">
+              <div
+                data-testid="review-question-state"
+                className="flex flex-wrap items-center gap-sm"
+              >
+                <span className="text-base font-semibold text-on-surface">
                   問{questionNumberValue(selectedQuestion?.number)}{" "}
                   {labelWaitingFor(selectedStatus, selectedWait)}
                 </span>
@@ -709,17 +762,26 @@ export function PdfReviewPage(): JSX.Element {
               {blockedOnUnread ? (
                 <div
                   data-testid="review-unread-material-notice"
-                  className="rounded-md border border-attention/40 bg-attention-container/20 p-sm text-body-small"
+                  data-tone="attention"
+                  className="flex items-start gap-sm rounded-lg bg-attention-container px-md py-sm text-body-medium text-on-attention-container"
                 >
-                  判断材料が画面外に残っています。すべて読んでから承認してください。
-                  <button
-                    type="button"
-                    data-testid="review-reveal-material-button"
-                    className="mt-xs block text-ui-label underline"
-                    onClick={materialRead.revealRest}
+                  <span
+                    aria-hidden
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-semibold text-on-primary"
                   >
-                    続きを表示
-                  </button>
+                    !
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    判断材料が画面外に残っています。すべて読んでから承認してください。
+                    <button
+                      type="button"
+                      data-testid="review-reveal-material-button"
+                      className="mt-xs block text-ui-label underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                      onClick={materialRead.revealRest}
+                    >
+                      続きを表示
+                    </button>
+                  </span>
                 </div>
               ) : null}
 
@@ -728,14 +790,14 @@ export function PdfReviewPage(): JSX.Element {
                   data-testid="review-score"
                   className="flex flex-col gap-sm"
                 >
-                  <p className="text-title-small font-medium">
+                  <p className="text-role-score font-semibold text-on-surface">
                     {selectedGrade.score.awarded} /{" "}
                     {selectedGrade.score.maximum} 点
                   </p>
                   {selectedGrade.answer_image_finding === "blank" ? (
                     <p
                       data-testid="review-answer-image-blank"
-                      className="text-body-medium"
+                      className="rounded-lg bg-surface-container-high px-md py-sm text-body-medium text-on-surface-variant"
                     >
                       AIは、解答欄に何も書かれていないと報告しました。本当に無記入ならこの0点は正しく、切り出しがずれている場合はテスト設定の回答欄を見直してください。
                     </p>
@@ -743,7 +805,7 @@ export function PdfReviewPage(): JSX.Element {
                   {unreadableBoxes.length > 0 ? (
                     <div
                       data-testid="review-unreadable-spans-notice"
-                      className="rounded-md border border-attention/40 bg-attention-container/20 p-sm text-body-small"
+                      className="rounded-lg bg-attention-container px-md py-sm text-body-medium text-on-attention-container"
                     >
                       OCRが読めなかった箇所が {unreadableBoxes.length}{" "}
                       か所あります（空欄とは別です）。切り出し画像のハイライトと、下の一覧で位置を確認してください。
@@ -789,10 +851,12 @@ export function PdfReviewPage(): JSX.Element {
               />
 
               <label className="flex flex-col gap-xs">
-                <span className="text-ui-label">メモ</span>
+                <span className="text-ui-label font-medium text-on-surface">
+                  メモ
+                </span>
                 <textarea
                   data-testid="review-note-field"
-                  className="min-h-20 rounded-md border border-outline px-sm py-xs"
+                  className="min-h-20 rounded-md bg-surface-container-high px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                   value={note}
                   onChange={(event) => {
                     setNote(event.target.value);
@@ -804,7 +868,7 @@ export function PdfReviewPage(): JSX.Element {
                 <button
                   type="button"
                   data-testid="review-approve-button"
-                  className="rounded-md bg-primary px-md py-xs text-on-primary disabled:opacity-50"
+                  className={BUTTON_PRIMARY_CLASS}
                   disabled={!canApprove}
                   onClick={() => {
                     void performAction("approve");
@@ -815,7 +879,7 @@ export function PdfReviewPage(): JSX.Element {
                 <button
                   type="button"
                   data-testid="review-reject-button"
-                  className="rounded-md border border-outline px-md py-xs"
+                  className={BUTTON_SECONDARY_CLASS}
                   disabled={busy}
                   onClick={() => {
                     void performAction("reject");
@@ -826,7 +890,7 @@ export function PdfReviewPage(): JSX.Element {
                 <button
                   type="button"
                   data-testid="review-regrade-button"
-                  className="rounded-md border border-outline px-md py-xs"
+                  className={BUTTON_SECONDARY_CLASS}
                   disabled={busy}
                   onClick={() => {
                     void performAction("regrade");
@@ -837,7 +901,7 @@ export function PdfReviewPage(): JSX.Element {
                 <button
                   type="button"
                   data-testid="review-undo-button"
-                  className="rounded-md border border-outline px-md py-xs"
+                  className={BUTTON_SECONDARY_CLASS}
                   disabled={busy}
                   onClick={() => {
                     void performAction("undo");
@@ -851,7 +915,7 @@ export function PdfReviewPage(): JSX.Element {
                 <p
                   data-testid="review-approve-reason"
                   data-requirement-id={approveBlockedReason.id}
-                  className="text-body-small text-on-surface-variant"
+                  className="rounded-lg bg-surface-container-high px-md py-sm text-body-medium text-on-surface-variant"
                 >
                   {approveBlockedReason.message}
                 </p>
@@ -863,7 +927,7 @@ export function PdfReviewPage(): JSX.Element {
             <div
               role="status"
               data-testid="review-snackbar"
-              className="fixed bottom-lg left-1/2 -translate-x-1/2 rounded-md bg-inverse-surface px-lg py-md text-inverse-on-surface"
+              className="fixed bottom-lg left-1/2 -translate-x-1/2 rounded-xl bg-inverse-surface px-lg py-md text-body-medium text-inverse-on-surface"
             >
               {materialRead.snackbarMessage}
             </div>
@@ -901,7 +965,7 @@ function MaterialRowView({
       return null;
     }
     return (
-      <div data-material-row-id={row.id} className="text-body-small">
+      <div data-material-row-id={row.id} className="text-sm">
         <span ref={topRef} className="block h-0" aria-hidden />
         <p>{criterion.outcome}</p>
         <span ref={bottomRef} className="block h-0" aria-hidden />
@@ -910,7 +974,7 @@ function MaterialRowView({
   }
 
   return (
-    <div data-material-row-id={row.id} className="text-body-small">
+    <div data-material-row-id={row.id} className="text-sm">
       <span ref={topRef} className="block h-0" aria-hidden />
       <p>{grade.rationale ?? grade.comment ?? "採点結果"}</p>
       <span ref={bottomRef} className="block h-0" aria-hidden />

@@ -15,13 +15,15 @@ export function AnswerCropView({
 }: AnswerCropViewProps): JSX.Element {
   return (
     <section data-testid="review-answer-crop" className="flex flex-col gap-sm">
-      <h3 className="text-title-small font-medium">AIが見た画像</h3>
+      <h3 className="text-ui-label font-semibold text-on-surface">
+        AIが見た画像
+      </h3>
       {imageUrl != null ? (
         <div className="relative inline-block max-w-full">
           <img
             src={imageUrl}
             alt="AIが見た回答欄の切り出し"
-            className="max-w-full border border-outline-variant"
+            className="max-w-full"
           />
           {unreadableBoxes.map((box, index) => (
             <div

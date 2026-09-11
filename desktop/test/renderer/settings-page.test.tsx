@@ -383,3 +383,105 @@ describe("SettingsPage & ApiKeyTab invariants (INV-107 / Issue #249)", () => {
     expect(savedCost).toBeNull();
   });
 });
+
+describe("SettingsPage states (Issue #347, parent #333 §1)", () => {
+  it("読み込み中はスケルトンを見せ、内容が届くまでスロットを描かない", async () => {
+    renderAppAt(AppRoutes.settings, {
+      handlers: {
+        getApiKeySettings: () => new Promise<never>(() => {}),
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId("settings-tab-api-key"));
+
+    const loading = await screen.findByTestId("settings-api-key-loading");
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(loading.querySelector(".animate-pulse")).not.toBeNull();
+    // The skeleton must not be replaced by nothing while the request is open.
+    expect(
+      screen.queryByTestId("settings-api-key-field-openrouter"),
+    ).toBeNull();
+  });
+
+  it("設定済みと未設定を別の表示で区別する", async () => {
+    renderAppAt(AppRoutes.settings, {
+      handlers: {
+        getApiKeySettings: async () =>
+          buildApiKeySettings({
+            keys: [
+              buildApiKeyStatus({
+                id: "openrouter",
+                configured: true,
+                key_source: "credential_store",
+              }),
+              buildApiKeyStatus({ id: "anthropic", configured: false }),
+            ],
+          }),
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId("settings-tab-api-key"));
+    await screen.findByTestId("settings-api-key-status-openrouter");
+
+    const configured = screen
+      .getByTestId("settings-api-key-status-openrouter")
+      .closest("section");
+    const unconfigured = screen
+      .getByTestId("settings-api-key-status-anthropic")
+      .closest("section");
+
+    expect(configured?.textContent).toContain("設定済み");
+    expect(unconfigured?.textContent).toContain("未設定");
+    expect(unconfigured?.textContent).not.toContain("設定済み");
+  });
+
+  it("提供元が1件も無いときは空の案内を出す", async () => {
+    renderAppAt(AppRoutes.settings, {
+      handlers: {
+        getApiKeySettings: async () => buildApiKeySettings({ keys: [] }),
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId("settings-tab-api-key"));
+
+    const empty = await screen.findByTestId("settings-api-key-empty");
+    expect(empty.textContent).toContain("1件も登録されていません");
+  });
+
+  it("疎通確認の失敗はエラーとして読める（成功と同じ見た目にしない）", async () => {
+    renderAppAt(AppRoutes.settings, {
+      handlers: {
+        getApiKeySettings: async () =>
+          buildApiKeySettings({
+            keys: [
+              buildApiKeyStatus({
+                configured: true,
+                key_source: "credential_store",
+              }),
+            ],
+          }),
+        verifyApiKey: async () =>
+          buildVerifyApiKeyResponse({
+            result: "error",
+            detail: "キーが拒否されました。",
+            status_code: 401,
+          }),
+      },
+    });
+
+    fireEvent.click(await screen.findByTestId("settings-tab-api-key"));
+    fireEvent.click(
+      await screen.findByTestId("settings-api-key-verify-openrouter"),
+    );
+
+    const detail = await screen.findByTestId(
+      "settings-api-key-verification-openrouter",
+    );
+    expect(detail.textContent).toBe("キーが拒否されました。");
+    expect(
+      screen
+        .getByTestId("settings-api-key-verification-card-openrouter")
+        .getAttribute("data-tone"),
+    ).toBe("error");
+  });
+});

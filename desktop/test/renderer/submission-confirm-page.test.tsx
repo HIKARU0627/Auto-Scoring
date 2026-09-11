@@ -440,3 +440,42 @@ describe("SubmissionConfirmPage API usage (Acceptance #5)", () => {
     }
   });
 });
+
+describe("SubmissionConfirmPage states (Issue #347, parent #333 §1)", () => {
+  it("全問確定済みは成功の知らせとして出し、失敗に見せない", async () => {
+    const restore = mockLayout({ fitAll: true });
+    renderSubmissionConfirm({
+      numbers: ["1"],
+      alreadyConfirmed: new Set(["q-1"]),
+    });
+    try {
+      const notice = await screen.findByTestId("confirm-blocked-nothing");
+      expect(notice.getAttribute("data-tone")).toBe("success");
+      expect(notice.textContent).toContain("確定済み");
+    } finally {
+      restore();
+    }
+  });
+
+  it("未到達の設問は注意として目立たせる", async () => {
+    const restore = mockLayout({ containerHeight: 120, rowHeight: 300 });
+    renderSubmissionConfirm({ numbers: ["1", "2", "3"] });
+    try {
+      const notice = await screen.findByTestId("confirm-blocked-unreached");
+      expect(notice.getAttribute("data-tone")).toBe("attention");
+    } finally {
+      restore();
+    }
+  });
+
+  it("読み込み中はスケルトンを見せる", async () => {
+    renderSubmissionConfirm({
+      getSubmission: () => new Promise<never>(() => {}),
+    });
+
+    const loading = await screen.findByTestId("confirm-loading");
+    expect(loading.getAttribute("aria-busy")).toBe("true");
+    expect(loading.querySelector(".bg-surface-container-high")).not.toBeNull();
+    expect(screen.queryByTestId("confirm-question-list")).toBeNull();
+  });
+});
