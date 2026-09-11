@@ -32,27 +32,43 @@ export const TABLE_HEAD_STYLE: CSSProperties = {
 };
 
 /**
- * Mock-measured recent-tests row metrics (Issue 365, parent Issue 333). The
- * mock table is one 43px row whose status pill is 73x25px, and its progress
- * track measures 148px. Keeping the track at 140px makes it dominate the 進捗
- * cell, and pinning the pill's height stops the old `py-xs` (32px) from
- * dropping the bucket counts onto a second line.
+ * Status-pill height (Issue 365): the mock's pill is 24px inside a 43px row.
+ * The horizontal padding is the `px-lg` class on the pill (Issue 372), not a
+ * value here, so the two themes share one rule.
  */
-export const PROGRESS_TRACK_STYLE: CSSProperties = {
-  width: "8.75rem",
-};
-
 export const STATUS_PILL_STYLE: CSSProperties = {
   height: "25px",
 };
 
 /**
- * The mock's test name is body weight (32.1% ink against the bold 44.5%) and
- * leaves 92px of slack in a ~200px column, so the name is capped and ellipsized
- * instead of growing to 173px and squeezing the status column to 31px.
+ * Recent-tests column widths (Issue 372, parent Issue 333). The mock's five
+ * content columns are near-even; before this the full-width table kept the old
+ * content-column split (`w-1/6` / `w-16` / `w-1/3` / `w-20` / `w-10`) and left
+ * ~380px of empty 進捗 cell between the progress content and 最終更新. The
+ * percentages below add to 100 and give 状態 / 進捗 / 最終更新 comparable
+ * shares, while 答案数 stays narrow because its values are short. `open` holds
+ * only the row chevron.
+ *
+ * The widths are percentages (not the `w-1/3`-style utilities) because the
+ * mock's measured split is 21/23/11/22/16/7 and Tailwind has no such fraction.
+ * `TEST_NAME_STYLE` is gone: the name cell ellipsizes against the column width
+ * instead of a fixed 9rem, which is what left 380px unused while the name was
+ * still cut (Issue 372 §2).
  */
-export const TEST_NAME_STYLE: CSSProperties = {
-  maxWidth: "9rem",
+export const TABLE_COLUMN_WIDTH_STYLE: {
+  readonly name: CSSProperties;
+  readonly status: CSSProperties;
+  readonly answer: CSSProperties;
+  readonly progress: CSSProperties;
+  readonly updated: CSSProperties;
+  readonly open: CSSProperties;
+} = {
+  name: { width: "21%" },
+  status: { width: "23%" },
+  answer: { width: "11%" },
+  progress: { width: "22%" },
+  updated: { width: "16%" },
+  open: { width: "7%" },
 };
 
 /**

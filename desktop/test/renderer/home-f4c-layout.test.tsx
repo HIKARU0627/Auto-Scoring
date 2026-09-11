@@ -14,9 +14,13 @@ import {
  *
  * jsdom does not lay out pixels, so each test pins the literal the mock and
  * the 1536x1024 / 700x720 screenshots measured: the 32px page gutter, the
- * 360px right rail, the 21px main-column card pitch, the ~48px hero CTA and the
- * full-width 最近のテスト row. The PR's mutation table breaks each literal and
- * names the test that goes red.
+ * 21px main-column card pitch, the ~48px hero CTA and the full-width 最近の
+ * テスト row. The PR's mutation table breaks each literal and names the test
+ * that goes red.
+ *
+ * Issue 372 §6 folded the 360px quick-action rail into the body flow, so the
+ * old `lg:w-90` rail assertion is replaced by the folded layout it must now
+ * produce (one column, quick actions in the main flow).
  *
  * The horizontal-overflow check cannot measure `scrollWidth` in jsdom, so it
  * pins the property that caused the 700px page scroll instead: an absolutely
@@ -68,7 +72,7 @@ function hasPositionedClipAncestor(node: Element, root: Element): boolean {
   return false;
 }
 
-describe("home F4C layout: page gutter and rail width (Issue #367)", () => {
+describe("home F4C layout: page gutter (Issue #367)", () => {
   it("uses the measured 32px page gutter (px-sm) on the header and main", async () => {
     renderDashboard();
     await screen.findByTestId("home-test-card-t1");
@@ -82,13 +86,16 @@ describe("home F4C layout: page gutter and rail width (Issue #367)", () => {
     }
   });
 
-  it("returns the right rail to the mock's 360px (lg:w-90)", async () => {
+  it("folds the 360px rail away so the quick actions sit in the main flow (Issue #372)", async () => {
     renderDashboard();
     await screen.findByTestId("home-test-card-t1");
 
-    const rail = screen.getByTestId("home-quick-actions").parentElement;
-    expect(rail?.className).toContain("lg:w-90");
-    expect(rail?.className).not.toContain("lg:max-w-80");
+    const quickActions = screen.getByTestId("home-quick-actions");
+    const mainColumn = screen.getByTestId("home-next-up").parentElement;
+    // The rail wrapper (and its `lg:w-90`) is gone: the card is a sibling of
+    // the hero inside the main column, so the empty rail half cannot reappear.
+    expect(quickActions.parentElement?.parentElement).toBe(mainColumn);
+    expect(quickActions.parentElement?.className).not.toContain("lg:w-90");
   });
 });
 
