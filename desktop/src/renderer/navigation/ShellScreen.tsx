@@ -1,7 +1,7 @@
 import type { JSX, ReactNode } from "react";
 
 import { BackOrHomeButton } from "./BackOrHomeButton.js";
-import { pageSubtitleFor } from "./page-header.js";
+import { pageSubtitleFor, pageTitleFor } from "./page-header.js";
 import { useRouter } from "./router.js";
 
 /**
@@ -9,20 +9,23 @@ import { useRouter } from "./router.js";
  * one-line subtitle, and the content region (Issue #335).
  *
  * The heading stays a prop because screens override it with live data (a test
- * or answer name); the subtitle is derived from the location. The content
- * region is deliberately a plain, width-fluid container so a screen can lay
- * out a card grid or a split pane inside it.
+ * or answer name). When a screen omits it, the shell derives the screen name
+ * from the location (Issue #348) so the page never falls back to the product
+ * name that the sidebar already shows. The subtitle is derived from the
+ * location. The content region is deliberately a plain, width-fluid container
+ * so a screen can lay out a card grid or a split pane inside it.
  */
 export function ShellScreen({
   title,
   subtitle,
   children,
 }: {
-  title: string;
+  title?: string | undefined;
   subtitle?: string | undefined;
   children?: ReactNode;
 }): JSX.Element {
   const { pathname } = useRouter();
+  const resolvedTitle = title ?? pageTitleFor(pathname) ?? "画面";
   const resolvedSubtitle = subtitle ?? pageSubtitleFor(pathname);
 
   return (
@@ -34,7 +37,7 @@ export function ShellScreen({
             data-testid="page-title"
             className="text-[length:var(--font-size-headline-medium)] font-medium leading-ui text-on-surface"
           >
-            {title}
+            {resolvedTitle}
           </h1>
           {resolvedSubtitle === null ? null : (
             <p className="mt-xs text-body-medium text-on-surface-variant">
