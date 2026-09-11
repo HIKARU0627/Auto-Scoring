@@ -13,6 +13,7 @@ part 'bounding_box_response.g.dart';
 /// Properties:
 /// * [height]
 /// * [text]
+/// * [unreadable]
 /// * [width]
 /// * [x]
 /// * [y]
@@ -24,6 +25,9 @@ abstract class BoundingBoxResponse
 
   @BuiltValueField(wireName: r'text')
   String get text;
+
+  @BuiltValueField(wireName: r'unreadable')
+  bool? get unreadable;
 
   @BuiltValueField(wireName: r'width')
   num get width;
@@ -40,7 +44,7 @@ abstract class BoundingBoxResponse
       _$BoundingBoxResponse;
 
   @BuiltValueHook(initializeBuilder: true)
-  static void _defaults(BoundingBoxResponseBuilder b) => b;
+  static void _defaults(BoundingBoxResponseBuilder b) => b..unreadable = false;
 
   @BuiltValueSerializer(custom: true)
   static Serializer<BoundingBoxResponse> get serializer =>
@@ -73,6 +77,13 @@ class _$BoundingBoxResponseSerializer
       object.text,
       specifiedType: const FullType(String),
     );
+    if (object.unreadable != null) {
+      yield r'unreadable';
+      yield serializers.serialize(
+        object.unreadable,
+        specifiedType: const FullType(bool),
+      );
+    }
     yield r'width';
     yield serializers.serialize(
       object.width,
@@ -126,6 +137,14 @@ class _$BoundingBoxResponseSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.text = valueDes;
+          break;
+        case r'unreadable':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(bool),
+          ) as bool?;
+          if (valueDes == null) continue;
+          result.unreadable = valueDes;
           break;
         case r'width':
           final valueDes = serializers.deserialize(

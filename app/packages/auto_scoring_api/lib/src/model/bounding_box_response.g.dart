@@ -12,6 +12,8 @@ class _$BoundingBoxResponse extends BoundingBoxResponse {
   @override
   final String text;
   @override
+  final bool? unreadable;
+  @override
   final num width;
   @override
   final num x;
@@ -25,6 +27,7 @@ class _$BoundingBoxResponse extends BoundingBoxResponse {
   _$BoundingBoxResponse._(
       {required this.height,
       required this.text,
+      this.unreadable,
       required this.width,
       required this.x,
       required this.y})
@@ -44,6 +47,7 @@ class _$BoundingBoxResponse extends BoundingBoxResponse {
     return other is BoundingBoxResponse &&
         height == other.height &&
         text == other.text &&
+        unreadable == other.unreadable &&
         width == other.width &&
         x == other.x &&
         y == other.y;
@@ -54,6 +58,7 @@ class _$BoundingBoxResponse extends BoundingBoxResponse {
     var _$hash = 0;
     _$hash = $jc(_$hash, height.hashCode);
     _$hash = $jc(_$hash, text.hashCode);
+    _$hash = $jc(_$hash, unreadable.hashCode);
     _$hash = $jc(_$hash, width.hashCode);
     _$hash = $jc(_$hash, x.hashCode);
     _$hash = $jc(_$hash, y.hashCode);
@@ -66,6 +71,7 @@ class _$BoundingBoxResponse extends BoundingBoxResponse {
     return (newBuiltValueToStringHelper(r'BoundingBoxResponse')
           ..add('height', height)
           ..add('text', text)
+          ..add('unreadable', unreadable)
           ..add('width', width)
           ..add('x', x)
           ..add('y', y))
@@ -84,6 +90,10 @@ class BoundingBoxResponseBuilder
   String? _text;
   String? get text => _$this._text;
   set text(String? text) => _$this._text = text;
+
+  bool? _unreadable;
+  bool? get unreadable => _$this._unreadable;
+  set unreadable(bool? unreadable) => _$this._unreadable = unreadable;
 
   num? _width;
   num? get width => _$this._width;
@@ -106,6 +116,7 @@ class BoundingBoxResponseBuilder
     if ($v != null) {
       _height = $v.height;
       _text = $v.text;
+      _unreadable = $v.unreadable;
       _width = $v.width;
       _x = $v.x;
       _y = $v.y;
@@ -134,6 +145,7 @@ class BoundingBoxResponseBuilder
               height, r'BoundingBoxResponse', 'height'),
           text: BuiltValueNullFieldError.checkNotNull(
               text, r'BoundingBoxResponse', 'text'),
+          unreadable: unreadable,
           width: BuiltValueNullFieldError.checkNotNull(
               width, r'BoundingBoxResponse', 'width'),
           x: BuiltValueNullFieldError.checkNotNull(

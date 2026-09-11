@@ -120,6 +120,47 @@ def test_list_recognitions_is_empty_before_any_recognition(client: TestClient) -
     assert response.json() == []
 
 
+def test_list_recognitions_includes_unreadable_on_each_box(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #185: per-span unreadable flags persisted in Issue #158 must
+    reach the review UI through this API."""
+    from auto_scoring.domain.models import BoundingBox, NormalizedRect
+
+    _seed_confirmed(session_factory, question_ids=["qa"])
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.recognitions.add(
+            RecognitionResult(
+                id="recognition:job-1",
+                submission_id="sub-1",
+                question_id="qa",
+                source=GradingSource.AI,
+                text="あい",
+                confidence=0.4,
+                created_at=datetime(2026, 1, 1),
+                boxes=(
+                    BoundingBox(
+                        text="あ",
+                        rect=NormalizedRect(x=0.1, y=0.1, width=0.1, height=0.1),
+                        unreadable=True,
+                    ),
+                    BoundingBox(
+                        text="い",
+                        rect=NormalizedRect(x=0.2, y=0.1, width=0.1, height=0.1),
+                        unreadable=False,
+                    ),
+                ),
+            )
+        )
+        uow.commit()
+
+    response = client.get("/submissions/sub-1/questions/qa/recognitions", headers=_AUTH)
+
+    assert response.status_code == 200
+    boxes = response.json()[0]["boxes"]
+    assert [box["unreadable"] for box in boxes] == [True, False]
+
+
 def test_list_recognitions_distinguishes_ocr_from_grading_stage(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
