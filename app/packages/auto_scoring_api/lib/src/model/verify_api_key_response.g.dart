@@ -12,6 +12,10 @@ class _$VerifyApiKeyResponse extends VerifyApiKeyResponse {
   @override
   final ConfigurationSource keySource;
   @override
+  final num? providerAccountLimit;
+  @override
+  final num? providerAccountUsage;
+  @override
   final String result;
   @override
   final int? statusCode;
@@ -23,6 +27,8 @@ class _$VerifyApiKeyResponse extends VerifyApiKeyResponse {
   _$VerifyApiKeyResponse._(
       {required this.detail,
       required this.keySource,
+      this.providerAccountLimit,
+      this.providerAccountUsage,
       required this.result,
       this.statusCode})
       : super._();
@@ -41,6 +47,8 @@ class _$VerifyApiKeyResponse extends VerifyApiKeyResponse {
     return other is VerifyApiKeyResponse &&
         detail == other.detail &&
         keySource == other.keySource &&
+        providerAccountLimit == other.providerAccountLimit &&
+        providerAccountUsage == other.providerAccountUsage &&
         result == other.result &&
         statusCode == other.statusCode;
   }
@@ -50,6 +58,8 @@ class _$VerifyApiKeyResponse extends VerifyApiKeyResponse {
     var _$hash = 0;
     _$hash = $jc(_$hash, detail.hashCode);
     _$hash = $jc(_$hash, keySource.hashCode);
+    _$hash = $jc(_$hash, providerAccountLimit.hashCode);
+    _$hash = $jc(_$hash, providerAccountUsage.hashCode);
     _$hash = $jc(_$hash, result.hashCode);
     _$hash = $jc(_$hash, statusCode.hashCode);
     _$hash = $jf(_$hash);
@@ -61,6 +71,8 @@ class _$VerifyApiKeyResponse extends VerifyApiKeyResponse {
     return (newBuiltValueToStringHelper(r'VerifyApiKeyResponse')
           ..add('detail', detail)
           ..add('keySource', keySource)
+          ..add('providerAccountLimit', providerAccountLimit)
+          ..add('providerAccountUsage', providerAccountUsage)
           ..add('result', result)
           ..add('statusCode', statusCode))
         .toString();
@@ -80,6 +92,16 @@ class VerifyApiKeyResponseBuilder
   set keySource(ConfigurationSource? keySource) =>
       _$this._keySource = keySource;
 
+  num? _providerAccountLimit;
+  num? get providerAccountLimit => _$this._providerAccountLimit;
+  set providerAccountLimit(num? providerAccountLimit) =>
+      _$this._providerAccountLimit = providerAccountLimit;
+
+  num? _providerAccountUsage;
+  num? get providerAccountUsage => _$this._providerAccountUsage;
+  set providerAccountUsage(num? providerAccountUsage) =>
+      _$this._providerAccountUsage = providerAccountUsage;
+
   String? _result;
   String? get result => _$this._result;
   set result(String? result) => _$this._result = result;
@@ -97,6 +119,8 @@ class VerifyApiKeyResponseBuilder
     if ($v != null) {
       _detail = $v.detail;
       _keySource = $v.keySource;
+      _providerAccountLimit = $v.providerAccountLimit;
+      _providerAccountUsage = $v.providerAccountUsage;
       _result = $v.result;
       _statusCode = $v.statusCode;
       _$v = null;
@@ -124,6 +148,8 @@ class VerifyApiKeyResponseBuilder
               detail, r'VerifyApiKeyResponse', 'detail'),
           keySource: BuiltValueNullFieldError.checkNotNull(
               keySource, r'VerifyApiKeyResponse', 'keySource'),
+          providerAccountLimit: providerAccountLimit,
+          providerAccountUsage: providerAccountUsage,
           result: BuiltValueNullFieldError.checkNotNull(
               result, r'VerifyApiKeyResponse', 'result'),
           statusCode: statusCode,
