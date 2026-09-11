@@ -51,6 +51,11 @@ is a gate of its own rather than part of `test`, because it builds the app first
 and is the only gate that opens a window. It is in `check` and in CI, but not in
 `check:pre-push` — a commit hook that launches Electron is a hook people disable.
 
+E2E asserts only durable outcomes. A state that exists for only part of a run —
+the sidecar splash, a toast, a spinner — is pinned deterministically in Vitest
+(`desktop/test/renderer/`), because a fast machine can move past it before the
+assertion runs and turn an unrelated PR red (Issue #288).
+
 `format` / `format:check` stay on Prettier for the repo-level files and for
 `desktop/`; `app/` and `backend/` are in `.prettierignore` because Dart and Ruff
 own their formatting.
