@@ -3,20 +3,24 @@ import type { JSX } from "react";
 import { AppRoutes } from "../core/app-routes.js";
 
 /**
- * Solid nav glyphs for the sidebar (Issue #335, polished in Issue #348).
+ * Solid nav glyphs for the sidebar (Issue #335, polished in Issue #348, sized in
+ * Issue #361).
  *
  * The mock's icons are filled silhouettes, not 2px line drawings; a line icon
  * reads much lighter than the mock (`#333` evaluation A, item 5). They stay
  * hand-written rather than pulling in an icon package: the renderer needs four
  * glyphs and `lucide-react` ships stroke paths, not fills. The paths follow the
  * Material 24px grid and are filled with `currentColor`, so the active pill
- * turns them `on-primary` and the rest ride `on-surface-variant`. Inner strokes
+ * turns them `on-primary` and the rest ride `sidebar-nav-idle`. Inner strokes
  * (the document rules, the gear hub) are knocked out with `fillRule="evenodd"`
  * so they read as the surface behind them, exactly as the mock does.
+ *
+ * Issue #361: the mock's ~18x24 ink sits ~1.3-1.5x larger than the 20px box the
+ * glyphs had, so the viewBox is rendered at 28px.
  */
 const ICON_PROPS = {
-  width: 20,
-  height: 20,
+  width: 28,
+  height: 28,
   viewBox: "0 0 24 24",
   fill: "currentColor",
   fillRule: "evenodd",

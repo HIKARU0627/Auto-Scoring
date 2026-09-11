@@ -38,7 +38,7 @@ export function Sidebar(): JSX.Element {
         <p className="text-[length:var(--font-size-title-large)] font-semibold leading-ui text-on-surface max-[900px]:hidden">
           {SIDEBAR_PRODUCT_NAME}
         </p>
-        <p className="mt-xs text-[length:var(--font-size-label-medium)] leading-ui text-on-surface-variant max-[900px]:hidden">
+        <p className="mt-xs text-[length:var(--font-size-label-medium)] leading-ui text-sidebar-subtitle max-[900px]:hidden">
           {SIDEBAR_PRODUCT_DESCRIPTION}
         </p>
         <p
@@ -77,7 +77,7 @@ export function Sidebar(): JSX.Element {
                     "max-[900px]:justify-center max-[900px]:px-xs",
                     active
                       ? "bg-primary text-on-primary"
-                      : "text-on-surface-variant hover:bg-surface-container hover:text-on-surface",
+                      : "text-sidebar-nav-idle hover:bg-surface-container hover:text-on-surface",
                   ].join(" ")}
                 >
                   <SidebarNavIcon route={item.route} />

@@ -36,6 +36,25 @@ const PALETTE_TOKENS = [
   "--color-progress-track",
 ] as const;
 
+/** Issue #361: the sidebar's own text roles, sampled from the mock. */
+const SIDEBAR_TOKENS = [
+  "--color-sidebar-subtitle",
+  "--color-sidebar-nav-idle",
+] as const;
+
+/** Issue #361: scrollbar colours are aliases resolved per theme. */
+const SCROLLBAR_TOKENS = [
+  "--color-scrollbar-thumb",
+  "--color-scrollbar-track",
+] as const;
+
+/** Issue #361: headline step utilities the `features/` layer can migrate onto. */
+const HEADLINE_TEXT_TOKENS = [
+  ["--text-headline-large", "--font-size-headline-large"],
+  ["--text-headline-medium", "--font-size-headline-medium"],
+  ["--text-headline-small", "--font-size-headline-small"],
+] as const;
+
 function expectBridged(bridge: string, token: string): void {
   expect(
     bridge,
@@ -72,5 +91,75 @@ describe("mock palette tokens (Issue #334)", () => {
   it("--radius-xl (16px) is defined on the default theme and bridged", () => {
     expect(tokenHex(readThemeTokens("dark"), "--radius-xl")).toBe("16px");
     expectBridged(readFileSync(BRIDGE_PATH, "utf8"), "--radius-xl");
+  });
+});
+
+describe("sidebar text roles (Issue #361)", () => {
+  it("both sidebar roles are defined in light and dark", () => {
+    for (const theme of THEMES) {
+      const tokens = readThemeTokens(theme);
+      for (const token of SIDEBAR_TOKENS) {
+        expect(
+          tokenHex(tokens, token).length,
+          `${theme}: ${token} が空`,
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("both sidebar roles are bridged into Tailwind", () => {
+    const bridge = readFileSync(BRIDGE_PATH, "utf8");
+    for (const token of SIDEBAR_TOKENS) {
+      expectBridged(bridge, token);
+    }
+  });
+
+  it("keeps the sampled mock values on the default (dark) theme", () => {
+    const tokens = readThemeTokens("dark");
+    expect(tokenHex(tokens, "--color-sidebar-subtitle")).toBe("#8493af");
+    expect(tokenHex(tokens, "--color-sidebar-nav-idle")).toBe("#9facd7");
+  });
+});
+
+describe("scrollbar theme (Issue #361)", () => {
+  it("paints the scrollbar from palette alias tokens", () => {
+    const bridge = readFileSync(BRIDGE_PATH, "utf8");
+    expect(bridge).toMatch(
+      /scrollbar-color:\s*var\(--color-scrollbar-thumb\)\s+var\(--color-scrollbar-track\)/,
+    );
+  });
+
+  it("both scrollbar aliases resolve in light and dark", () => {
+    for (const theme of THEMES) {
+      const tokens = readThemeTokens(theme);
+      for (const token of SCROLLBAR_TOKENS) {
+        expect(
+          tokenHex(tokens, token).length,
+          `${theme}: ${token} が空`,
+        ).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("headline text utilities (Issue #361)", () => {
+  it("bridges text-headline-* to the font-size tokens", () => {
+    const bridge = readFileSync(BRIDGE_PATH, "utf8");
+    for (const [utility, sizeToken] of HEADLINE_TEXT_TOKENS) {
+      expect(
+        bridge,
+        `${utility} が ${sizeToken} へブリッジされていない`,
+      ).toMatch(new RegExp(`${utility}:\\s*var\\(${sizeToken}\\)`));
+    }
+  });
+
+  it("the underlying font-size tokens are defined", () => {
+    const tokens = readThemeTokens("dark");
+    for (const [, sizeToken] of HEADLINE_TEXT_TOKENS) {
+      expect(
+        tokenHex(tokens, sizeToken).length,
+        `${sizeToken} が未定義`,
+      ).toBeGreaterThan(0);
+    }
   });
 });

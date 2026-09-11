@@ -42,6 +42,21 @@ type DagFlowNode = Node<DagFlowNodeData, "dagQuestion">;
  */
 const LAYER_STEP_X = 220;
 const ROW_STEP_Y = 88;
+const DAG_NODE_HEIGHT = 64;
+const DAG_FLOW_VERTICAL_PADDING = 24;
+
+/**
+ * React Flow のビューポート高さ（px）。Issue #352: 以前は
+ * `--layout-dag-flow-height`（272px）を常に使い、ノードが 1 個でも点線の
+ * 空キャンバスが 272px を占めていた。最下段のノードまでの距離から内容の
+ * 高さを求め、トークンは上限（`max-height`）としてだけ使う。
+ */
+export function dagFlowHeight(nodes: readonly DagNode[]): number {
+  const rows = nodes.reduce((max, node) => Math.max(max, node.row), 0) + 1;
+  return (
+    (rows - 1) * ROW_STEP_Y + DAG_NODE_HEIGHT + DAG_FLOW_VERTICAL_PADDING * 2
+  );
+}
 
 function DagQuestionNode({
   data,
@@ -203,14 +218,19 @@ export function DependencyDagPanel({
       ))}
 
       {!collapsed ? (
-        <>
-          {layout.edges.length === 0 ? (
-            <p data-testid="dag-empty" className="text-body-small">
-              依存関係はありません（すべて独立した設問）。
-            </p>
-          ) : null}
+        layout.edges.length === 0 ? (
+          <p data-testid="dag-empty" className="text-body-small">
+            依存関係はありません（すべて独立した設問）。
+          </p>
+        ) : (
           <DagQuestionSelectContext.Provider value={onQuestionSelected}>
-            <div style={{ height: "var(--layout-dag-flow-height)" }}>
+            <div
+              data-testid="dag-flow-canvas"
+              style={{
+                height: `${dagFlowHeight(layout.nodes)}px`,
+                maxHeight: "var(--layout-dag-flow-height)",
+              }}
+            >
               <ReactFlow<DagFlowNode, Edge>
                 nodes={nodes}
                 edges={edges}
@@ -230,7 +250,7 @@ export function DependencyDagPanel({
               </ReactFlow>
             </div>
           </DagQuestionSelectContext.Provider>
-        </>
+        )
       ) : null}
     </section>
   );
