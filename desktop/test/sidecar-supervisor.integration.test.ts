@@ -12,6 +12,10 @@ import {
   resolveSidecarExecutable,
   sidecarExecutableCandidates,
 } from "../src/main/sidecar-paths";
+import {
+  resolveSidecarLogPath,
+  sidecarLogPath,
+} from "../src/main/sidecar-log-path";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -203,6 +207,35 @@ describe("SidecarSupervisor integration tests", () => {
           expect(content).not.toContain(String(connection.port));
         }
       }
+    } finally {
+      await supervisor.shutdown();
+    }
+  });
+
+  it("writes its log exactly where the crash screen points (UG-14)", async () => {
+    expect(sidecarExecutable).not.toBeNull();
+    const supervisor = new SidecarSupervisor({
+      executablePath: sidecarExecutable,
+      appDataDirectory: appDataDir,
+    });
+
+    try {
+      await supervisor.start();
+      expect(supervisor.status.kind).toBe("ready");
+
+      // The path the renderer is handed is derived from the same app-data
+      // override the sidecar was launched with...
+      const shown = resolveSidecarLogPath({
+        isPackaged: false,
+        env: { AUTO_SCORING_E2E_APP_DATA: appDataDir },
+        platform: process.platform,
+        homeDirectory: os.homedir(),
+      });
+      expect(shown).toBe(sidecarLogPath(appDataDir));
+
+      // ...and it is where the real sidecar actually wrote. Without this the
+      // screen could name a path that is merely self-consistent.
+      expect(fs.existsSync(shown)).toBe(true);
     } finally {
       await supervisor.shutdown();
     }

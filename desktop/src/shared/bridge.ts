@@ -76,6 +76,12 @@ export type SidecarStatus =
 /** Everything the preload script exposes on `window.autoScoring`. */
 export interface AutoScoringBridge {
   getAppInfo(): Promise<AppInfo>;
+  /**
+   * The file the sidecar writes its rotating log to, for the crash screen to
+   * name (UG-14). Resolved by the main process from the same app-data root the
+   * sidecar uses, so the screen cannot point somewhere the log never reaches.
+   */
+  getSidecarLogPath(): Promise<string>;
   getSidecarStatus(): Promise<SidecarStatus>;
   restartSidecar(): Promise<void>;
   onSidecarStatusChange(callback: (status: SidecarStatus) => void): () => void;
@@ -91,6 +97,7 @@ export interface AutoScoringBridge {
 /** IPC channel names. One place, so main and preload cannot drift apart. */
 export const IpcChannel = {
   getAppInfo: "auto-scoring:get-app-info",
+  getSidecarLogPath: "auto-scoring:get-sidecar-log-path",
   getSidecarStatus: "auto-scoring:get-sidecar-status",
   restartSidecar: "auto-scoring:restart-sidecar",
   sidecarStatusChanged: "auto-scoring:sidecar-status-changed",
