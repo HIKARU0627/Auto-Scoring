@@ -239,8 +239,11 @@ describe("material read gate (INV-201-01, INV-067)", () => {
       },
       { timeout: WAIT_MS },
     );
+    // Whether the reveal moved or not, the reviewer must be told about the
+    // off-screen material (Issue #328, decision 2). jsdom has no layout, so
+    // only the fact that a 判断材料 message appears is stable here.
     expect(screen.getByTestId("review-snackbar").textContent).toContain(
-      "判断材料が画面外に残っていました",
+      "判断材料",
     );
     const reject = screen.getByTestId(
       "review-reject-button",
