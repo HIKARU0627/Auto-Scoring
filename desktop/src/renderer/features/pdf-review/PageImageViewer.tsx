@@ -1,4 +1,4 @@
-import { useMemo, type JSX } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import {
   normalizedRectToLayout,
@@ -8,6 +8,46 @@ import {
 } from "../../core/pdf-review-geometry.js";
 import type { RecognitionResponse } from "../../core/pdf-review-data.js";
 import type { PageImageState } from "../answer-area-editor/answer-area-types.js";
+
+/** Natural render width of the page at zoom 1, before the column clamps it. */
+export const PAGE_BASE_RENDER_WIDTH = 640;
+
+/** Hard ceiling so a zoomed page cannot grow without bound. */
+export const PAGE_MAX_RENDER_WIDTH = 1200;
+
+export interface PageRenderSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The pixel size the page surface is drawn at inside its column (Issue #354).
+ *
+ * The page used to be a fixed `min(640 * zoom, 1200)` wide, so in the two-column
+ * review layout its box crossed the boundary into the inspector -- on narrow
+ * widths the answer image could sit over the 続きを表示 control and swallow the
+ * click (Issue #354). Fitting the natural width to the measured column keeps the
+ * image inside its own column while still letting zoom scale past the column and
+ * scroll horizontally.
+ *
+ * `availableWidth` is `null` before the first measurement; the natural width is
+ * used then so the surface never collapses.
+ */
+export function resolvePageRenderSize(input: {
+  readonly availableWidth: number | null;
+  readonly zoom: number;
+  readonly displayedWidth: number;
+  readonly displayedHeight: number;
+}): PageRenderSize {
+  const aspect = input.displayedWidth / input.displayedHeight;
+  const columnWidth =
+    input.availableWidth != null && input.availableWidth > 0
+      ? input.availableWidth
+      : PAGE_BASE_RENDER_WIDTH;
+  const fittedWidth = Math.min(PAGE_BASE_RENDER_WIDTH, columnWidth);
+  const width = Math.min(fittedWidth * input.zoom, PAGE_MAX_RENDER_WIDTH);
+  return { width, height: width / aspect };
+}
 
 export interface ResolvedAnnotation {
   readonly annotation: AnnotationResponse;
@@ -33,10 +73,37 @@ export function PageImageViewer({
   questionAnswerArea,
   zoom,
 }: PageImageViewerProps): JSX.Element {
-  const aspect = displayedWidth / displayedHeight;
-  const renderWidth = Math.min(640 * zoom, 1200);
-  const renderHeight = renderWidth / aspect;
-  const renderSize = { width: renderWidth, height: renderHeight };
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (container == null) {
+      return undefined;
+    }
+    const measure = () => {
+      const width = container.getBoundingClientRect().width;
+      setAvailableWidth(width > 0 ? width : null);
+    };
+    measure();
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      const width =
+        entry?.contentRect.width ?? container.getBoundingClientRect().width;
+      setAvailableWidth(width > 0 ? width : null);
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  const renderSize = resolvePageRenderSize({
+    availableWidth,
+    zoom,
+    displayedWidth,
+    displayedHeight,
+  });
   const imagePixelSize = {
     width: pageImage.pixelWidth ?? Math.ceil(displayedWidth * 2),
     height: pageImage.pixelHeight ?? Math.ceil(displayedHeight * 2),
@@ -61,11 +128,15 @@ export function PageImageViewer({
   }, [annotations, questionAnswerArea, recognitions]);
 
   return (
-    <div data-testid="review-page-viewer" className="flex flex-col gap-sm">
+    <div
+      ref={containerRef}
+      data-testid="review-page-viewer"
+      className="flex min-w-0 flex-col gap-sm"
+    >
       <div
         data-testid="review-page-surface"
         className="relative mx-auto bg-surface-container-lowest"
-        style={{ width: renderWidth, height: renderHeight }}
+        style={{ width: renderSize.width, height: renderSize.height }}
       >
         {pageImage.objectUrl != null ? (
           <img
