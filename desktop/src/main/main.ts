@@ -17,6 +17,7 @@ import {
   toPublicSidecarStatus,
   type InternalSidecarStatus,
 } from "./sidecar-connection.js";
+import { readE2eEnv } from "./e2e-env.js";
 import { sidecarFetch } from "./sidecar-fetch.js";
 import { resolveSidecarAppDataDirectory } from "./sidecar-app-data.js";
 import { SidecarSupervisor } from "./sidecar-supervisor";
@@ -123,8 +124,27 @@ ipcMain.handle(IpcChannel.restartSidecar, async (): Promise<void> => {
 });
 
 ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
+  const override = readE2eEnv("AUTO_SCORING_E2E_FOLDER");
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory"],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0] ?? null;
+});
+
+ipcMain.handle(IpcChannel.choosePdfFile, async (): Promise<string | null> => {
+  const override = readE2eEnv("AUTO_SCORING_E2E_PDF");
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (result.canceled || result.filePaths.length === 0) {
     return null;
