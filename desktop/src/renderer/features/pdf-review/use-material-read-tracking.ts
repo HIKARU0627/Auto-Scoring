@@ -18,6 +18,10 @@ export interface MaterialRow {
   readonly id: string;
 }
 
+/** Distinguishes "no rows yet" from "confirmed zero material rows". */
+export type MaterialRowsInput =
+  { status: "unknown" } | { status: "known"; rows: readonly MaterialRow[] };
+
 export interface MaterialReadState {
   readonly allRowsCovered: boolean;
   readonly unreadIsAbove: boolean;
@@ -32,9 +36,10 @@ export interface MaterialReadState {
 }
 
 export function useMaterialReadTracking(
-  rows: readonly MaterialRow[],
+  input: MaterialRowsInput,
   scrollContainerRef: RefObject<HTMLElement | null>,
 ): MaterialReadState {
+  const rows = input.status === "known" ? input.rows : [];
   const [rangesByRow, setRangesByRow] = useState<
     Readonly<Record<string, MaterialRange[]>>
   >({});
@@ -114,11 +119,14 @@ export function useMaterialReadTracking(
   }, [measure, scrollContainerRef]);
 
   const allRowsCovered = useMemo(() => {
+    if (input.status === "unknown") {
+      return false;
+    }
     if (rows.length === 0) {
       return true;
     }
     return rows.every((row) => materialRowIsCovered(rangesByRow[row.id]));
-  }, [rangesByRow, rows]);
+  }, [input.status, rangesByRow, rows]);
 
   const unreadIsAbove = useMemo(() => {
     for (const row of rows) {
@@ -141,21 +149,20 @@ export function useMaterialReadTracking(
 
   const revealRest = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (container == null) {
-      return;
-    }
-    const viewport = container.clientHeight * 0.9;
-    if (typeof container.scrollBy === "function") {
-      container.scrollBy({ top: viewport, behavior: "smooth" });
-    } else {
-      container.scrollTop += viewport;
+    if (container != null) {
+      const viewport = container.clientHeight * 0.9;
+      if (typeof container.scrollBy === "function") {
+        container.scrollBy({ top: viewport, behavior: "smooth" });
+      } else {
+        container.scrollTop += viewport;
+      }
+      window.setTimeout(() => {
+        measure();
+      }, 300);
     }
     setSnackbarMessage(
       "判断材料が画面外に残っていました。続きを表示しました。",
     );
-    window.setTimeout(() => {
-      measure();
-    }, 300);
   }, [measure, scrollContainerRef]);
 
   const clearSnackbar = useCallback(() => {

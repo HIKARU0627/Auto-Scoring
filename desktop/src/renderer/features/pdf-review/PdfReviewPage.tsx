@@ -50,6 +50,7 @@ import { setStateIfMounted, useMountedRef } from "./use-mounted-ref.js";
 import {
   useMaterialReadTracking,
   type MaterialRow,
+  type MaterialRowsInput,
 } from "./use-material-read-tracking.js";
 
 type LoadState =
@@ -90,12 +91,15 @@ export function PdfReviewPage(): JSX.Element {
 
   const selectedQuestion = questions[selectedIndex] ?? null;
 
-  const materialRows = useMemo((): MaterialRow[] => {
+  const materialCoverage = useMemo((): MaterialRowsInput => {
     if (loadState.status !== "ready" || selectedQuestion == null) {
-      return [];
+      return { status: "unknown" };
     }
     const data = loadState.questionData.get(selectedQuestion.id);
-    const grade = displayGrade(data?.grades ?? [], data?.reviews ?? []);
+    if (data == null) {
+      return { status: "unknown" };
+    }
+    const grade = displayGrade(data.grades ?? [], data.reviews ?? []);
     const rows: MaterialRow[] = [];
     if (grade != null) {
       rows.push({ id: `grade:${grade.id}` });
@@ -103,10 +107,13 @@ export function PdfReviewPage(): JSX.Element {
         rows.push({ id: `criterion:${criterion.criterion_id}` });
       }
     }
-    return rows;
+    return { status: "known", rows };
   }, [loadState, selectedQuestion]);
 
-  const materialRead = useMaterialReadTracking(materialRows, inspectorRef);
+  const materialRows =
+    materialCoverage.status === "known" ? materialCoverage.rows : [];
+
+  const materialRead = useMaterialReadTracking(materialCoverage, inspectorRef);
 
   const reload = useCallback(async () => {
     if (testId.length === 0 || submissionId.length === 0) {
