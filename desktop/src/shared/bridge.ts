@@ -18,13 +18,13 @@
 
 import type { ScannedFolder } from "./folder-scan.js";
 import type {
-  SidecarHttpRequest,
-  SidecarHttpResponse,
-} from "./sidecar-http.js";
-import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "./sidecar-upload.js";
+import type {
+  SidecarFetchRequest,
+  SidecarFetchResponse,
+} from "./sidecar-fetch.js";
 
 /** Identifies this build to the renderer. Placeholder surface for Phase 2. */
 export interface AppInfo {
@@ -51,18 +51,17 @@ export type SidecarFailure =
   | "startupTimedOut"
   | "crashed";
 
-/** Loopback connection details from the sidecar handshake. */
+/** Loopback connection details exposed to the renderer (no bearer token). */
 export interface SidecarConnectionInfo {
   readonly host: string;
   readonly port: number;
-  readonly token: string;
 }
 
 /**
  * The current state of the Python sidecar.
  *
- * The token is only present in the ready state, never in failed/error states
- * (INV-036).
+ * The bearer token never crosses this boundary (Issue #264). HTTP auth is
+ * applied in the main process.
  */
 export type SidecarStatus =
   | { readonly kind: "starting" }
@@ -86,7 +85,7 @@ export interface AutoScoringBridge {
   sidecarMultipartUpload(
     request: SidecarMultipartRequest,
   ): Promise<SidecarMultipartResponse>;
-  sidecarFetch(request: SidecarHttpRequest): Promise<SidecarHttpResponse>;
+  sidecarFetch(request: SidecarFetchRequest): Promise<SidecarFetchResponse>;
 }
 
 /** IPC channel names. One place, so main and preload cannot drift apart. */

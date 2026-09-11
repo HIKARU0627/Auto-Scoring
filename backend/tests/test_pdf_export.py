@@ -568,6 +568,67 @@ class TestBuildExportMarks:
         assert exported.marks == (), "nothing may be drawn on the answer sheet"
         assert exported.unplaced_notes == ("コメント",)
 
+    def test_cross_line_anchor_annotation_evacuates_to_note_page_with_unplaced_suffix(
+        self,
+    ) -> None:
+        """Issue #260: An annotation spanning across line breaks whose position
+        cannot be placed on a single line (such as UNDERLINE) returns None from
+        resolve_annotation_rect, draws no mark on the answer sheet, and outputs
+        to unplaced_notes with the '（位置特定できず）' suffix."""
+        grade = _grade()
+        annotation = Annotation(
+            id="a-1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.AI,
+            kind=AnnotationKind.UNDERLINE,
+            anchor_text="春はあけぼ",
+            comment="要確認の表現",
+            created_at=_NOW,
+        )
+        recognition = RecognitionResult(
+            id="rec-1",
+            submission_id="sub-1",
+            question_id="q-1",
+            source=GradingSource.AI,
+            text="",
+            confidence=0.9,
+            created_at=_NOW,
+            boxes=(
+                BoundingBox(
+                    text="春", rect=NormalizedRect(x=0.86, y=0.10, width=0.06, height=0.04)
+                ),
+                BoundingBox(
+                    text="は", rect=NormalizedRect(x=0.92, y=0.10, width=0.06, height=0.04)
+                ),
+                BoundingBox(
+                    text="あ", rect=NormalizedRect(x=0.01, y=0.30, width=0.06, height=0.04)
+                ),
+                BoundingBox(
+                    text="け", rect=NormalizedRect(x=0.07, y=0.30, width=0.06, height=0.04)
+                ),
+                BoundingBox(
+                    text="ぼ", rect=NormalizedRect(x=0.13, y=0.30, width=0.06, height=0.04)
+                ),
+            ),
+        )
+
+        exported = build_export_marks(
+            question=_question(
+                score_area=None,
+                comment_area=None,
+                answer_area=NormalizedRect(x=0.1, y=0.2, width=0.8, height=0.3),
+            ),
+            grade=grade,
+            annotations=[annotation],
+            recognitions=[recognition],
+        )
+
+        assert exported.marks == (), (
+            "no shape marks may be drawn on the answer sheet for cross-line underline"
+        )
+        assert exported.unplaced_notes == ("＿ 要確認の表現（位置特定できず）",)
+
     def test_only_annotations_and_recognitions_from_the_grade_s_own_attempt_are_used(
         self,
     ) -> None:

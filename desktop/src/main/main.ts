@@ -1,15 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import * as path from "node:path";
-import {
-  IpcChannel,
-  type AppInfo,
-  type SidecarStatus,
-} from "../shared/bridge.js";
+import { IpcChannel, type AppInfo } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
-import type {
-  SidecarHttpRequest,
-  SidecarHttpResponse,
-} from "../shared/sidecar-http.js";
 import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
@@ -19,9 +11,16 @@ import {
   resolveSidecarExecutable,
   sidecarExecutableCandidates,
 } from "./sidecar-paths";
+import type { SidecarFetchRequest } from "../shared/sidecar-fetch.js";
+import {
+  getReadyConnection,
+  toPublicSidecarStatus,
+  type InternalSidecarStatus,
+} from "./sidecar-connection.js";
+import { sidecarFetch } from "./sidecar-fetch.js";
 import { SidecarSupervisor } from "./sidecar-supervisor";
-import { sidecarHttpRequest } from "./sidecar-http.js";
 import { sidecarMultipartUpload } from "./sidecar-upload.js";
+import type { SidecarStatus } from "../shared/bridge.js";
 
 /**
  * Entry point of the Electron main process.
@@ -45,12 +44,27 @@ const devServerUrl = process.env["VITE_DEV_SERVER_URL"];
 
 let supervisor: SidecarSupervisor | null = null;
 
-function notifySidecarStatus(status: SidecarStatus): void {
+function notifySidecarStatus(status: InternalSidecarStatus): void {
+  const publicStatus = toPublicSidecarStatus(status);
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) {
-      window.webContents.send(IpcChannel.sidecarStatusChanged, status);
+      window.webContents.send(IpcChannel.sidecarStatusChanged, publicStatus);
     }
   }
+}
+
+function requireReadyConnection(): NonNullable<
+  ReturnType<typeof getReadyConnection>
+> {
+  const connection = getReadyConnection(
+    supervisor?.internalStatus ?? {
+      kind: "starting",
+    },
+  );
+  if (connection === null) {
+    throw new Error("Sidecar is not ready");
+  }
+  return connection;
 }
 
 function createWindow(): BrowserWindow {
@@ -98,7 +112,9 @@ ipcMain.handle(IpcChannel.getAppInfo, (): AppInfo => {
 });
 
 ipcMain.handle(IpcChannel.getSidecarStatus, (): SidecarStatus => {
-  return supervisor?.status ?? { kind: "starting" };
+  return toPublicSidecarStatus(
+    supervisor?.internalStatus ?? { kind: "starting" },
+  );
 });
 
 ipcMain.handle(IpcChannel.restartSidecar, async (): Promise<void> => {
@@ -145,13 +161,14 @@ ipcMain.handle(
   async (
     _event,
     request: SidecarMultipartRequest,
-  ): Promise<SidecarMultipartResponse> => await sidecarMultipartUpload(request),
+  ): Promise<SidecarMultipartResponse> =>
+    await sidecarMultipartUpload(requireReadyConnection(), request),
 );
 
 ipcMain.handle(
   IpcChannel.sidecarFetch,
-  async (_event, request: SidecarHttpRequest): Promise<SidecarHttpResponse> =>
-    await sidecarHttpRequest(request),
+  async (_event, request: SidecarFetchRequest) =>
+    await sidecarFetch(requireReadyConnection(), request),
 );
 
 void app.whenReady().then(() => {

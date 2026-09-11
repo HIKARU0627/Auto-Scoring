@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 
-import {
-  useSidecarClient,
-  useSidecarConnection,
-} from "../../api/SidecarApiProvider.js";
+import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   analyzeDependencyGraph,
   buildQuestionTextOverrides,
@@ -128,7 +125,6 @@ function editorPages(
 
 export function TestSettingsPage(): JSX.Element {
   const client = useSidecarClient();
-  const connection = useSidecarConnection();
   const { params } = useRouter();
   const testId = params.testId ?? "";
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
@@ -641,7 +637,7 @@ export function TestSettingsPage(): JSX.Element {
                     if (filePath === null) {
                       return;
                     }
-                    await uploadAnswerLayout(connection, testId, filePath);
+                    await uploadAnswerLayout(testId, filePath);
                     const snapshot = await loadTestSettingsSnapshot(
                       client,
                       testId,

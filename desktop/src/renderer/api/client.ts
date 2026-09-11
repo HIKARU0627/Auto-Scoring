@@ -9,81 +9,24 @@
  * for dividing click positions.
  */
 
-import createClient, { type Middleware } from "openapi-fetch";
+import createClient from "openapi-fetch";
 
 import type { paths } from "./generated/schema.js";
+import { createIpcFetch } from "./ipc-fetch.js";
 
 /** Loopback connection details from the sidecar handshake file. */
 export interface SidecarConnection {
   readonly host: string;
   readonly port: number;
-  readonly token: string;
 }
 
 export type SidecarClient = ReturnType<typeof createSidecarClient>;
 
-function createIpcSidecarFetch(
-  connection: SidecarConnection,
-): (input: Request) => Promise<Response> {
-  const expectedOrigin = `http://${connection.host}:${connection.port}`;
-
-  return async (input: Request) => {
-    const url = new URL(input.url);
-    if (url.origin !== expectedOrigin) {
-      throw new TypeError(
-        `Sidecar client requests must target ${expectedOrigin}`,
-      );
-    }
-
-    const bridge = window.autoScoring;
-    const headers: Record<string, string> = {};
-    input.headers.forEach((value, key) => {
-      headers[key] = value;
-    });
-    const body =
-      input.method === "GET" || input.method === "HEAD"
-        ? null
-        : await input.text();
-
-    const result = await bridge.sidecarFetch({
-      connection,
-      method: input.method,
-      urlPath: `${url.pathname}${url.search}`,
-      headers,
-      body,
-    });
-
-    const responseBody =
-      result.encoding === "base64"
-        ? Uint8Array.from(atob(result.body), (character) =>
-            character.charCodeAt(0),
-          )
-        : result.body;
-
-    return new Response(responseBody, {
-      status: result.status,
-      headers: result.headers,
-    });
-  };
-}
-
 /** Builds the typed fetch client for `paths` from handshake connection info. */
 export function createSidecarClient(connection: SidecarConnection) {
   const baseUrl = `http://${connection.host}:${connection.port}`;
-  const useIpcFetch =
-    typeof window !== "undefined" &&
-    window.autoScoring?.sidecarFetch !== undefined;
-  const client = createClient<paths>({
+  return createClient<paths>({
     baseUrl,
-    ...(useIpcFetch ? { fetch: createIpcSidecarFetch(connection) } : {}),
+    fetch: createIpcFetch(),
   });
-
-  const authMiddleware: Middleware = {
-    onRequest({ request }) {
-      request.headers.set("Authorization", `Bearer ${connection.token}`);
-    },
-  };
-  client.use(authMiddleware);
-
-  return client;
 }

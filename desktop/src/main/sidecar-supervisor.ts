@@ -1,8 +1,9 @@
+import type { SidecarFailure } from "../shared/bridge";
 import type {
-  SidecarConnectionInfo,
-  SidecarFailure,
-  SidecarStatus,
-} from "../shared/bridge";
+  InternalSidecarConnection,
+  InternalSidecarStatus,
+} from "./sidecar-connection.js";
+import { toPublicSidecarStatus } from "./sidecar-connection.js";
 import {
   NodeSidecarPlatform,
   type SidecarPlatform,
@@ -30,7 +31,8 @@ export interface SidecarSupervisorOptions {
   readonly appDataDirectory?: string | null | undefined;
   readonly startupTimeoutMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
-  readonly onStatusChange?: ((status: SidecarStatus) => void) | undefined;
+  readonly onStatusChange?:
+    ((status: InternalSidecarStatus) => void) | undefined;
 }
 
 /**
@@ -43,9 +45,9 @@ export class SidecarSupervisor {
   private readonly _startupTimeoutMs: number;
   private readonly _pollIntervalMs: number;
   private readonly _onStatusChange:
-    ((status: SidecarStatus) => void) | undefined;
+    ((status: InternalSidecarStatus) => void) | undefined;
 
-  private _status: SidecarStatus = { kind: "starting" };
+  private _status: InternalSidecarStatus = { kind: "starting" };
   private _processHandle: SidecarProcessHandle | null = null;
   private _generation = 0;
 
@@ -59,8 +61,12 @@ export class SidecarSupervisor {
     this._onStatusChange = options.onStatusChange;
   }
 
-  get status(): SidecarStatus {
+  get internalStatus(): InternalSidecarStatus {
     return this._status;
+  }
+
+  get status(): ReturnType<typeof toPublicSidecarStatus> {
+    return toPublicSidecarStatus(this._status);
   }
 
   get processHandle(): SidecarProcessHandle | null {
@@ -123,7 +129,7 @@ export class SidecarSupervisor {
     });
 
     const deadline = this._platform.now() + this._startupTimeoutMs;
-    let connection: SidecarConnectionInfo | null = null;
+    let connection: InternalSidecarConnection | null = null;
 
     while (this._platform.now() < deadline) {
       if (generation !== this._generation) {
@@ -206,7 +212,7 @@ export class SidecarSupervisor {
 
   private async _readConnection(
     filePath: string,
-  ): Promise<SidecarConnectionInfo | null> {
+  ): Promise<InternalSidecarConnection | null> {
     const raw = await this._platform.readHandshakeFile(filePath);
     if (!raw || raw.trim().length === 0) {
       return null;
@@ -242,7 +248,7 @@ export class SidecarSupervisor {
     return null;
   }
 
-  private _setStatus(status: SidecarStatus): void {
+  private _setStatus(status: InternalSidecarStatus): void {
     this._status = status;
     this._onStatusChange?.(status);
   }

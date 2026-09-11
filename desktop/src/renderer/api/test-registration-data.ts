@@ -1,6 +1,5 @@
 import type { SidecarClient } from "./client.js";
 import type { components } from "./generated/schema.js";
-import type { SidecarConnectionInfo } from "../../shared/sidecar-upload.js";
 import {
   AnswerAreaDataError,
   loadAnswerAreaEditorData,
@@ -198,7 +197,6 @@ export async function confirmCriteria(
 }
 
 export async function uploadAnswerLayout(
-  connection: SidecarConnectionInfo,
   testId: string,
   filePath: string,
 ): Promise<AnswerLayoutResponse> {
@@ -207,7 +205,6 @@ export async function uploadAnswerLayout(
     throw new TestRegistrationDataError("答案ファイルを選べません");
   }
   const response = await bridge.sidecarMultipartUpload({
-    connection,
     method: "PUT",
     urlPath: `/tests/${encodeURIComponent(testId)}/answer-layout`,
     fileFields: [{ fieldName: "file", filePath }],

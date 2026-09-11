@@ -29,15 +29,13 @@ export function App(): JSX.Element {
     return createSidecarClient(status.connection);
   }, [status]);
 
-  const connection = status.kind === "ready" ? status.connection : null;
-
   const handleRestart = (): void => {
     void window.autoScoring?.restartSidecar();
   };
 
   return (
     <SidecarStartupOverlay status={status} onRestart={handleRestart}>
-      <AppShell client={client} connection={connection} />
+      <AppShell client={client} />
     </SidecarStartupOverlay>
   );
 }

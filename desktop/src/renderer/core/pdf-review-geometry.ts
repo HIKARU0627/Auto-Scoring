@@ -64,6 +64,7 @@ export function resolveAnnotationRect(input: {
       anchorText,
       recognitions,
       effectiveAnswerArea(questionAnswerArea),
+      annotation.kind,
     );
     if (matched != null) {
       return matched;
@@ -85,6 +86,7 @@ function findAnchorTextRect(
   anchorText: string,
   recognitions: readonly RecognitionResponse[],
   answerArea: NormalizedRect,
+  kind?: string | null,
 ): NormalizedRect | null {
   const needle = normalizedForAnchor(anchorText);
   if (needle.length === 0) {
@@ -95,7 +97,7 @@ function findAnchorTextRect(
     if (recognition == null) {
       continue;
     }
-    const matched = shortestBoxRun(needle, recognition.boxes);
+    const matched = shortestBoxRun(needle, recognition.boxes, kind);
     if (matched != null) {
       return cropRelativeToPage(matched, answerArea);
     }
@@ -116,9 +118,29 @@ function normalizedForAnchor(text: string): string {
   return folded.replace(/\s+/g, "");
 }
 
+function isSameLine(b1: BoundingBoxResponse, b2: BoundingBoxResponse): boolean {
+  if (b1.text.includes("\n")) {
+    return false;
+  }
+  const minH = Math.min(b1.height, b2.height);
+  const yOverlap =
+    Math.min(b1.y + b1.height, b2.y + b2.height) - Math.max(b1.y, b2.y);
+  const isHoriz =
+    minH > 0 && yOverlap > 0.5 * minH && b2.x >= b1.x - b1.width * 0.1;
+
+  const minW = Math.min(b1.width, b2.width);
+  const xOverlap =
+    Math.min(b1.x + b1.width, b2.x + b2.width) - Math.max(b1.x, b2.x);
+  const isVert =
+    minW > 0 && xOverlap > 0.5 * minW && b2.y >= b1.y - b1.height * 0.1;
+
+  return isHoriz || isVert;
+}
+
 function shortestBoxRun(
   needle: string,
   boxesIn: readonly BoundingBoxResponse[],
+  kind?: string | null,
 ): NormalizedRect | null {
   const boxes = [...boxesIn];
   const texts = boxes.map((box) => normalizedForAnchor(box.text));
@@ -144,7 +166,27 @@ function shortestBoxRun(
   if (bestStart == null || bestEnd == null) {
     return null;
   }
-  return unionOfBoxes(boxes.slice(bestStart, bestEnd + 1));
+
+  const matchedBoxes = boxes.slice(bestStart, bestEnd + 1);
+  const firstLineBoxes: BoundingBoxResponse[] = [matchedBoxes[0]!];
+  for (let i = 1; i < matchedBoxes.length; i += 1) {
+    if (isSameLine(matchedBoxes[i - 1]!, matchedBoxes[i]!)) {
+      firstLineBoxes.push(matchedBoxes[i]!);
+    } else {
+      break;
+    }
+  }
+
+  const spansLineBreak = firstLineBoxes.length < matchedBoxes.length;
+  if (!spansLineBreak) {
+    return unionOfBoxes(matchedBoxes);
+  }
+
+  const isCross = kind?.toLowerCase() === "cross";
+  if (isCross) {
+    return unionOfBoxes(firstLineBoxes);
+  }
+  return null;
 }
 
 function runLengthLimit(needle: string): number {

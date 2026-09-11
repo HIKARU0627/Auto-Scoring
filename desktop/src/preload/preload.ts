@@ -7,9 +7,9 @@ import {
 } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type {
-  SidecarHttpRequest,
-  SidecarHttpResponse,
-} from "../shared/sidecar-http.js";
+  SidecarFetchRequest,
+  SidecarFetchResponse,
+} from "../shared/sidecar-fetch.js";
 import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
@@ -64,11 +64,11 @@ const bridge: AutoScoringBridge = {
       IpcChannel.sidecarMultipartUpload,
       request,
     ) as Promise<SidecarMultipartResponse>,
-  sidecarFetch: (request: SidecarHttpRequest): Promise<SidecarHttpResponse> =>
+  sidecarFetch: (request: SidecarFetchRequest): Promise<SidecarFetchResponse> =>
     ipcRenderer.invoke(
       IpcChannel.sidecarFetch,
       request,
-    ) as Promise<SidecarHttpResponse>,
+    ) as Promise<SidecarFetchResponse>,
 };
 
 contextBridge.exposeInMainWorld("autoScoring", bridge);

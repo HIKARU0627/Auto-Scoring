@@ -2,7 +2,6 @@ import type { ScannedEntry } from "../../shared/folder-scan.js";
 import {
   materialRoleWireValue,
   PDF_CONTENT_TYPE,
-  type SidecarConnectionInfo,
 } from "../../shared/sidecar-upload.js";
 import type { SidecarClient } from "./client.js";
 import type { components } from "./generated/schema.js";
@@ -38,7 +37,6 @@ export interface IntakeBridge {
     entries: readonly ScannedEntry[];
   }>;
   sidecarMultipartUpload(request: {
-    connection: SidecarConnectionInfo;
     method: "POST" | "PUT";
     urlPath: string;
     fileFields: readonly {
@@ -119,11 +117,9 @@ export async function planIntake(
 
 export async function classifyMaterial(
   bridge: IntakeBridge,
-  connection: SidecarConnectionInfo,
   filePath: string,
 ): Promise<components["schemas"]["RoleProposalResponse"]> {
   const response = await bridge.sidecarMultipartUpload({
-    connection,
     method: "POST",
     urlPath: "/intake/classify",
     fileFields: [{ fieldName: "file", filePath }],
@@ -136,14 +132,12 @@ export async function classifyMaterial(
 
 export async function attributeAnswer(
   bridge: IntakeBridge,
-  connection: SidecarConnectionInfo,
   input: {
     filePath: string;
     candidates: readonly { id: string; label: string }[];
   },
 ): Promise<components["schemas"]["AttributionProposalResponse"]> {
   const response = await bridge.sidecarMultipartUpload({
-    connection,
     method: "POST",
     urlPath: "/intake/attribute",
     fileFields: [{ fieldName: "file", filePath: input.filePath }],
@@ -171,12 +165,10 @@ function isDuplicateSubmission(body: unknown): boolean {
 
 export async function createSubmission(
   bridge: IntakeBridge,
-  connection: SidecarConnectionInfo,
   testId: string,
   filePath: string,
 ): Promise<SubmissionResponse | "duplicate"> {
   const response = await bridge.sidecarMultipartUpload({
-    connection,
     method: "POST",
     urlPath: `/tests/${testId}/submissions`,
     fileFields: [
@@ -194,7 +186,6 @@ export async function createSubmission(
 
 export async function createTest(
   bridge: IntakeBridge,
-  connection: SidecarConnectionInfo,
   input: {
     name: string;
     criteriaPath: string;
@@ -205,7 +196,6 @@ export async function createTest(
     (material) => material.path !== input.criteriaPath,
   );
   const response = await bridge.sidecarMultipartUpload({
-    connection,
     method: "POST",
     urlPath: "/tests",
     fileFields: [
@@ -231,7 +221,6 @@ export async function createTest(
 
 export async function addMaterials(
   bridge: IntakeBridge,
-  connection: SidecarConnectionInfo,
   testId: string,
   materials: readonly { role: MaterialRole; path: string }[],
 ): Promise<number> {
@@ -239,7 +228,6 @@ export async function addMaterials(
     return 0;
   }
   const response = await bridge.sidecarMultipartUpload({
-    connection,
     method: "POST",
     urlPath: `/tests/${testId}/materials`,
     fileFields: materials.map((material) => ({
@@ -299,7 +287,6 @@ function importedAnything(outcome: ImportOutcome): boolean {
 async function importAnswers(
   deps: {
     bridge: IntakeBridge;
-    connection: SidecarConnectionInfo;
     client: SidecarClient;
   },
   testId: string,
@@ -323,7 +310,6 @@ async function importAnswers(
     try {
       const submission = await createSubmission(
         deps.bridge,
-        deps.connection,
         testId,
         answer.absolutePath,
       );
@@ -366,7 +352,6 @@ async function importAnswers(
 async function importRoutedAnswers(
   deps: {
     bridge: IntakeBridge;
-    connection: SidecarConnectionInfo;
     client: SidecarClient;
   },
   group: IntakeGroupState,
@@ -411,7 +396,6 @@ async function importRoutedAnswers(
 async function importGroup(
   deps: {
     bridge: IntakeBridge;
-    connection: SidecarConnectionInfo;
     client: SidecarClient;
   },
   group: IntakeGroupState,
@@ -457,7 +441,7 @@ async function importGroup(
       const extras = materials.filter(
         (material) => material.path !== criteria.absolutePath,
       );
-      const test = await createTest(deps.bridge, deps.connection, {
+      const test = await createTest(deps.bridge, {
         name: group.name.trim(),
         criteriaPath: criteria.absolutePath,
         materials: extras,
@@ -465,12 +449,7 @@ async function importGroup(
       testId = test.id;
       materialCount = extras.length + 1;
     } else if (materials.length > 0 && testId !== null) {
-      materialCount = await addMaterials(
-        deps.bridge,
-        deps.connection,
-        testId,
-        materials,
-      );
+      materialCount = await addMaterials(deps.bridge, testId, materials);
     }
 
     if (testId === null) {
@@ -524,7 +503,6 @@ async function importGroup(
 export async function importReview(
   deps: {
     bridge: IntakeBridge;
-    connection: SidecarConnectionInfo;
     client: SidecarClient;
   },
   review: IntakeReviewState,

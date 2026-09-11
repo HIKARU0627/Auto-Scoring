@@ -65,7 +65,6 @@ async function createDraftTest(page: ElectronPage): Promise<string> {
         throw new Error("sidecar not ready");
       }
       const response = await window.autoScoring.sidecarMultipartUpload({
-        connection: status.connection,
         method: "POST",
         urlPath: "/tests",
         fileFields: [{ fieldName: "criteria", filePath: criteriaPdf }],

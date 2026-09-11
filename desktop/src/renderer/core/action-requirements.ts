@@ -197,7 +197,7 @@ export function answerProfileSaveRequirements(input: {
   return requirements;
 }
 
-/** テスト設定の「プロファイルを確定」 */
+/** テスト設定の「プロファイルを確定」 (INV-110) */
 export function answerProfileConfirmRequirements(input: {
   busy: boolean;
   alreadyConfirmed: boolean;

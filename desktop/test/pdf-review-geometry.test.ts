@@ -249,6 +249,94 @@ describe("resolveAnnotationRect (INV-052–061)", () => {
     expect(resolved?.width).toBeCloseTo(0.12, 9);
   });
 
+  it("INV-057a: cross-line anchor for CROSS restricts to first line (width < 95%)", () => {
+    const multiLineBoxes = [
+      { text: "春", rect: { x: 0.86, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "は", rect: { x: 0.92, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "あ", rect: { x: 0.01, y: 0.3, width: 0.06, height: 0.04 } },
+      { text: "け", rect: { x: 0.07, y: 0.3, width: 0.06, height: 0.04 } },
+      { text: "ぼ", rect: { x: 0.13, y: 0.3, width: 0.06, height: 0.04 } },
+    ];
+    const resolved = resolveAnnotationRect({
+      annotation: annotation({ kind: "cross", anchor_text: "春はあけぼ" }),
+      questionAnswerArea: null,
+      recognitions: [recognitionWithBoxes(multiLineBoxes)],
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved?.x).toBeCloseTo(0.86, 6);
+    expect(resolved?.y).toBeCloseTo(0.1, 6);
+    expect(resolved?.width).toBeCloseTo(0.12, 6);
+    expect(resolved?.height).toBeCloseTo(0.04, 6);
+    expect(resolved!.width).toBeLessThan(0.95);
+  });
+
+  it("INV-057b: cross-line anchor for UNDERLINE and BOX returns null", () => {
+    const multiLineBoxes = [
+      { text: "春", rect: { x: 0.86, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "は", rect: { x: 0.92, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "あ", rect: { x: 0.01, y: 0.3, width: 0.06, height: 0.04 } },
+      { text: "け", rect: { x: 0.07, y: 0.3, width: 0.06, height: 0.04 } },
+      { text: "ぼ", rect: { x: 0.13, y: 0.3, width: 0.06, height: 0.04 } },
+    ];
+    for (const kind of ["underline", "box"]) {
+      const resolved = resolveAnnotationRect({
+        annotation: annotation({ kind, anchor_text: "春はあけぼ" }),
+        questionAnswerArea: null,
+        recognitions: [recognitionWithBoxes(multiLineBoxes)],
+      });
+      expect(resolved).toBeNull();
+    }
+  });
+
+  it("INV-057c: single-line multi-box anchor resolves to union for both cross and underline", () => {
+    const singleLineBoxes = [
+      { text: "春", rect: { x: 0.2, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "は", rect: { x: 0.26, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "あ", rect: { x: 0.32, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "け", rect: { x: 0.38, y: 0.1, width: 0.06, height: 0.04 } },
+      { text: "ぼ", rect: { x: 0.44, y: 0.1, width: 0.06, height: 0.04 } },
+    ];
+    for (const kind of ["cross", "underline"]) {
+      const resolved = resolveAnnotationRect({
+        annotation: annotation({ kind, anchor_text: "春はあけぼ" }),
+        questionAnswerArea: null,
+        recognitions: [recognitionWithBoxes(singleLineBoxes)],
+      });
+      expect(resolved).not.toBeNull();
+      expect(resolved?.x).toBeCloseTo(0.2, 6);
+      expect(resolved?.y).toBeCloseTo(0.1, 6);
+      expect(resolved?.width).toBeCloseTo(0.3, 6);
+      expect(resolved?.height).toBeCloseTo(0.04, 6);
+    }
+  });
+
+  it("INV-057d: vertical text cross-column anchor handling", () => {
+    const verticalBoxes = [
+      { text: "春", rect: { x: 0.8, y: 0.86, width: 0.04, height: 0.06 } },
+      { text: "は", rect: { x: 0.8, y: 0.92, width: 0.04, height: 0.06 } },
+      { text: "あ", rect: { x: 0.6, y: 0.01, width: 0.04, height: 0.06 } },
+      { text: "け", rect: { x: 0.6, y: 0.07, width: 0.04, height: 0.06 } },
+    ];
+    const crossRes = resolveAnnotationRect({
+      annotation: annotation({ kind: "cross", anchor_text: "春はあけ" }),
+      questionAnswerArea: null,
+      recognitions: [recognitionWithBoxes(verticalBoxes)],
+    });
+    expect(crossRes).not.toBeNull();
+    expect(crossRes?.x).toBeCloseTo(0.8, 6);
+    expect(crossRes?.y).toBeCloseTo(0.86, 6);
+    expect(crossRes?.width).toBeCloseTo(0.04, 6);
+    expect(crossRes?.height).toBeCloseTo(0.12, 6);
+    expect(crossRes!.height).toBeLessThan(0.95);
+
+    const ulineRes = resolveAnnotationRect({
+      annotation: annotation({ kind: "underline", anchor_text: "春はあけ" }),
+      questionAnswerArea: null,
+      recognitions: [recognitionWithBoxes(verticalBoxes)],
+    });
+    expect(ulineRes).toBeNull();
+  });
+
   it("INV-058: shortest run wins", () => {
     const tight: NormalizedRect = {
       x: 0.5,

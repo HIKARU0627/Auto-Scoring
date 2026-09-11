@@ -10,12 +10,6 @@ import {
   type MockSidecarHandlers,
 } from "./mock-sidecar-client.js";
 
-const DEFAULT_CONNECTION = {
-  host: "127.0.0.1",
-  port: 12345,
-  token: "test-token",
-};
-
 export function renderAppAt(
   location: string,
   options: {
@@ -34,6 +28,12 @@ export function renderAppAt(
     choosePdfFile: vi.fn(async () => null),
     scanFolder: vi.fn(async () => ({ name: "batch", entries: [] })),
     sidecarMultipartUpload: vi.fn(async () => ({ status: 200, body: {} })),
+    sidecarFetch: vi.fn(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyBase64: "",
+    })),
     restartSidecar: vi.fn(async () => {}),
     ...options.bridge,
   });
@@ -42,7 +42,6 @@ export function renderAppAt(
     <ThemeProvider>
       <AppShell
         client={client}
-        connection={DEFAULT_CONNECTION}
         initialStack={options.initialStack ?? [location]}
       />
     </ThemeProvider>,
