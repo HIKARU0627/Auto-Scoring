@@ -16,6 +16,14 @@ import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import { whileRunningRequirements } from "../../core/action-requirements.js";
 import { materialRoleLabel } from "../../core/material-role-labels.js";
 import { DisabledActionReason } from "../intake/DisabledActionReason.js";
+import {
+  SETTINGS_BUTTON_PRIMARY_CLASS,
+  SETTINGS_BUTTON_SECONDARY_CLASS,
+  SETTINGS_CARD_CLASS,
+  SETTINGS_INPUT_CLASS,
+  SETTINGS_LABEL_CLASS,
+  SETTINGS_SELECT_CLASS,
+} from "./settings-presentation.js";
 
 const ALL_ROLES: readonly MaterialRole[] = [
   "student_answer",
@@ -25,6 +33,31 @@ const ALL_ROLES: readonly MaterialRole[] = [
   "reference",
   "ignore",
 ];
+
+const RULE_SELECT_CLASS =
+  "rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary";
+
+function IntakeLoading(): JSX.Element {
+  return (
+    <div
+      data-testid="settings-intake-loading"
+      aria-busy="true"
+      aria-live="polite"
+      className="flex flex-col gap-lg"
+    >
+      <span className="sr-only">取込の型を読み込んでいます…</span>
+      <div className={`${SETTINGS_CARD_CLASS} animate-pulse`}>
+        <div className="h-5 w-40 rounded-md bg-surface-container-high" />
+        <div className="mt-md h-10 w-full rounded-md bg-surface-container-high" />
+        <div className="mt-lg h-24 w-full rounded-md bg-surface-container-high" />
+      </div>
+      <div className={`${SETTINGS_CARD_CLASS} animate-pulse`}>
+        <div className="h-5 w-32 rounded-md bg-surface-container-high" />
+        <div className="mt-md h-10 w-full rounded-md bg-surface-container-high" />
+      </div>
+    </div>
+  );
+}
 
 export function IntakeTemplateTab(): JSX.Element {
   const client = useSidecarClient();
@@ -162,28 +195,30 @@ export function IntakeTemplateTab(): JSX.Element {
   };
 
   if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <p className="text-body-medium text-on-surface-variant">読み込み中…</p>
-      </div>
-    );
+    return <IntakeLoading />;
   }
 
   if (templates.length === 0) {
     return (
-      <div className="flex flex-col gap-md">
-        <p className="text-body-medium text-on-surface-variant">
-          取込の型がありません。
+      <section className={SETTINGS_CARD_CLASS}>
+        <h2 className="text-body-medium font-semibold text-on-surface">
+          取込の型
+        </h2>
+        <p
+          data-testid="settings-intake-empty"
+          className="mt-xs text-body-medium text-on-surface-variant"
+        >
+          取込の型がありません。型を追加して、ファイル名やフォルダ名から役割を決める規則を作ってください。
         </p>
         <button
           type="button"
           data-testid="settings-add-template"
           onClick={addTemplate}
-          className="self-start rounded-md bg-primary px-md py-sm text-label-large font-medium text-on-primary"
+          className={`${SETTINGS_BUTTON_PRIMARY_CLASS} mt-md`}
         >
           型を追加
         </button>
-      </div>
+      </section>
     );
   }
 
@@ -192,118 +227,133 @@ export function IntakeTemplateTab(): JSX.Element {
 
   return (
     <div className="flex flex-col gap-lg">
-      {/* Template picker and Add button */}
-      <div className="flex items-center gap-md">
-        <div className="flex-1">
-          <label
-            htmlFor="template-picker"
-            className="block text-label-large font-medium text-on-surface"
-          >
-            編集する型
-          </label>
-          <select
-            id="template-picker"
-            data-testid="settings-template-picker"
-            value={selected}
-            onChange={(e) => setSelected(Number(e.target.value))}
-            className="mt-xs w-full rounded-md border border-outline bg-surface px-md py-sm text-body-medium text-on-surface"
-          >
-            {templates.map((template, index) => (
-              <option key={template.id} value={index}>
-                {template.name}
-              </option>
-            ))}
-          </select>
+      {error ? (
+        <div className="rounded-xl bg-error-container px-lg py-md text-on-error-container">
+          <p className="text-body-medium">{error}</p>
         </div>
-        <div className="self-end">
+      ) : null}
+
+      {savedNotice ? (
+        <p
+          data-testid="settings-saved-notice"
+          role="status"
+          className="rounded-xl bg-success-container px-lg py-md text-body-medium text-on-success-container"
+        >
+          {savedNotice}
+        </p>
+      ) : null}
+
+      {/* Template picker and Add button */}
+      <section className={SETTINGS_CARD_CLASS}>
+        <div className="flex flex-wrap items-end gap-md">
+          <div className="min-w-0 flex-1">
+            <label htmlFor="template-picker" className={SETTINGS_LABEL_CLASS}>
+              編集する型
+            </label>
+            <select
+              id="template-picker"
+              data-testid="settings-template-picker"
+              value={selected}
+              onChange={(e) => setSelected(Number(e.target.value))}
+              className={SETTINGS_SELECT_CLASS}
+            >
+              {templates.map((template, index) => (
+                <option key={template.id} value={index}>
+                  {template.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             type="button"
             data-testid="settings-add-template"
             onClick={addTemplate}
             disabled={saving}
-            className="rounded-md border border-outline px-md py-sm text-label-large font-medium text-on-surface disabled:opacity-50"
+            className={SETTINGS_BUTTON_SECONDARY_CLASS}
           >
             型を追加
           </button>
         </div>
-      </div>
 
-      {/* Template Name */}
-      <div>
-        <label
-          htmlFor={`template-name-${currentTemplate.id}`}
-          className="block text-label-large font-medium text-on-surface"
-        >
-          型の名前
-        </label>
-        <input
-          id={`template-name-${currentTemplate.id}`}
-          data-testid={`settings-template-name-${currentTemplate.id}`}
-          type="text"
-          value={currentTemplate.name}
-          onChange={(e) =>
-            updateTemplate((current) => ({
-              ...current,
-              name: e.target.value,
-            }))
-          }
-          className="mt-xs w-full rounded-md border border-outline bg-surface px-md py-sm text-body-medium text-on-surface"
-        />
-      </div>
+        {/* Template Name */}
+        <div className="mt-lg">
+          <label
+            htmlFor={`template-name-${currentTemplate.id}`}
+            className={SETTINGS_LABEL_CLASS}
+          >
+            型の名前
+          </label>
+          <input
+            id={`template-name-${currentTemplate.id}`}
+            data-testid={`settings-template-name-${currentTemplate.id}`}
+            type="text"
+            value={currentTemplate.name}
+            onChange={(e) =>
+              updateTemplate((current) => ({
+                ...current,
+                name: e.target.value,
+              }))
+            }
+            className={SETTINGS_INPUT_CLASS}
+          />
+        </div>
 
-      {/* Split child directories */}
-      <div className="flex items-start gap-sm">
-        <input
-          id="split-child-dirs"
-          data-testid="settings-split-child-directories"
-          type="checkbox"
-          checked={currentTemplate.split_child_directories ?? true}
-          onChange={(e) =>
-            updateTemplate((current) => ({
-              ...current,
-              split_child_directories: e.target.checked,
-            }))
-          }
-          className="mt-xs h-4 w-4 rounded-sm border-outline"
-        />
-        <label htmlFor="split-child-dirs" className="flex flex-col">
-          <span className="text-body-medium font-medium text-on-surface">
-            選んだフォルダの直下の各フォルダを、それぞれ別のテストとして取り込む
-          </span>
-          <span className="text-body-small text-on-surface-variant">
-            教科ごとにフォルダが分かれている資料はこれを有効にします。
-          </span>
-        </label>
-      </div>
+        {/* Split child directories */}
+        <div className="mt-lg flex items-start gap-sm">
+          <input
+            id="split-child-dirs"
+            data-testid="settings-split-child-directories"
+            type="checkbox"
+            checked={currentTemplate.split_child_directories ?? true}
+            onChange={(e) =>
+              updateTemplate((current) => ({
+                ...current,
+                split_child_directories: e.target.checked,
+              }))
+            }
+            className="mt-xs size-4 shrink-0 rounded-sm border-outline accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          />
+          <label htmlFor="split-child-dirs" className="flex min-w-0 flex-col">
+            <span className="text-body-medium font-medium text-on-surface">
+              選んだフォルダの直下の各フォルダを、それぞれ別のテストとして取り込む
+            </span>
+            <span className="text-xs text-on-surface-variant">
+              教科ごとにフォルダが分かれている資料はこれを有効にします。
+            </span>
+          </label>
+        </div>
+      </section>
 
       {/* Rules list */}
-      <div className="flex flex-col gap-sm">
-        <h2 className="text-title-medium font-medium text-on-surface">
+      <section className={SETTINGS_CARD_CLASS}>
+        <h2 className="text-body-medium font-semibold text-on-surface">
           規則（上から順に当てはめます）
         </h2>
-        <div className="flex flex-col gap-sm">
+        <div className="mt-md flex flex-col gap-sm">
           {currentTemplate.rules.map((rule, index) => (
             <div
               key={`rule-${index}`}
-              className="flex flex-wrap items-center gap-sm rounded-md border border-outline-variant bg-surface-container p-sm"
+              className="flex flex-wrap items-center gap-sm rounded-lg bg-surface-container-high p-sm"
             >
               {/* Move up/down buttons */}
               <div className="flex flex-col gap-xs">
                 <button
                   type="button"
                   title="上へ"
+                  aria-label="この規則を上へ"
                   disabled={index === 0}
                   onClick={() => moveRule(index, index - 1)}
-                  className="text-label-small text-on-surface-variant disabled:opacity-25"
+                  className="rounded-sm text-xs text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-25"
                 >
                   ▲
                 </button>
                 <button
                   type="button"
                   title="下へ"
+                  aria-label="この規則を下へ"
                   disabled={index === currentTemplate.rules.length - 1}
                   onClick={() => moveRule(index, index + 1)}
-                  className="text-label-small text-on-surface-variant disabled:opacity-25"
+                  className="rounded-sm text-xs text-on-surface-variant hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-25"
                 >
                   ▼
                 </button>
@@ -319,7 +369,8 @@ export function IntakeTemplateTab(): JSX.Element {
                     scope: e.target.value as RuleScope,
                   })
                 }
-                className="rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className={RULE_SELECT_CLASS}
+                aria-label={`規則${index + 1} の対象`}
               >
                 <option value="file">ファイル名</option>
                 <option value="folder">フォルダ名</option>
@@ -336,7 +387,8 @@ export function IntakeTemplateTab(): JSX.Element {
                     pattern: e.target.value,
                   })
                 }
-                className="min-w-30 flex-1 rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className="min-w-30 flex-1 rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                aria-label={`規則${index + 1} のパターン`}
               />
 
               {/* Role */}
@@ -349,7 +401,8 @@ export function IntakeTemplateTab(): JSX.Element {
                     role: e.target.value as MaterialRole,
                   })
                 }
-                className="rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className={RULE_SELECT_CLASS}
+                aria-label={`規則${index + 1} の役割`}
               >
                 {ALL_ROLES.map((role) => (
                   <option key={role} value={role}>
@@ -368,7 +421,8 @@ export function IntakeTemplateTab(): JSX.Element {
                     requirement: e.target.value as Requirement,
                   })
                 }
-                className="rounded-sm border border-outline bg-surface px-sm py-xs text-body-medium text-on-surface"
+                className={RULE_SELECT_CLASS}
+                aria-label={`規則${index + 1} の必須度`}
               >
                 <option value="required">必須</option>
                 <option value="recommended">推奨</option>
@@ -380,7 +434,7 @@ export function IntakeTemplateTab(): JSX.Element {
                 type="button"
                 data-testid={`settings-remove-rule-${index}`}
                 onClick={() => removeRule(index)}
-                className="rounded-sm px-sm py-xs text-label-medium text-error hover:bg-error-container/20"
+                className="rounded-sm px-sm py-xs text-xs text-error hover:bg-error-container/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-error"
               >
                 削除
               </button>
@@ -392,20 +446,15 @@ export function IntakeTemplateTab(): JSX.Element {
           type="button"
           data-testid="settings-add-rule"
           onClick={addRule}
-          className="self-start rounded-md border border-outline px-md py-sm text-label-large font-medium text-on-surface"
+          className={`${SETTINGS_BUTTON_SECONDARY_CLASS} mt-md`}
         >
           規則を追加
         </button>
-      </div>
-
-      <hr className="border-outline-variant" />
+      </section>
 
       {/* Unit Cost */}
-      <div>
-        <label
-          htmlFor="unit-cost"
-          className="block text-label-large font-medium text-on-surface"
-        >
+      <section className={SETTINGS_CARD_CLASS}>
+        <label htmlFor="unit-cost" className={SETTINGS_LABEL_CLASS}>
           AI判定 1件あたりの単価
         </label>
         <input
@@ -414,27 +463,12 @@ export function IntakeTemplateTab(): JSX.Element {
           type="text"
           value={costText}
           onChange={(e) => setCostText(e.target.value)}
-          className="mt-xs w-full rounded-md border border-outline bg-surface px-md py-sm text-body-medium text-on-surface"
+          className={`${SETTINGS_INPUT_CLASS} max-w-80`}
         />
-        <p className="mt-xs text-body-small text-on-surface-variant">
+        <p className="mt-xs text-xs text-on-surface-variant">
           このアプリは提供元の料金を知りません。空欄のままなら、取込画面では「単価が未設定」と表示します。
         </p>
-      </div>
-
-      {error ? (
-        <div className="rounded-md border border-error bg-error-container p-md text-on-error-container">
-          <p className="text-body-medium">{error}</p>
-        </div>
-      ) : null}
-
-      {savedNotice ? (
-        <p
-          data-testid="settings-saved-notice"
-          className="text-body-medium text-primary"
-        >
-          {savedNotice}
-        </p>
-      ) : null}
+      </section>
 
       <div>
         <button
@@ -442,9 +476,9 @@ export function IntakeTemplateTab(): JSX.Element {
           data-testid="settings-save"
           onClick={() => void onSave()}
           disabled={savingReqs.length > 0}
-          className="rounded-md bg-primary px-md py-sm text-label-large font-medium text-on-primary disabled:opacity-50"
+          className={SETTINGS_BUTTON_PRIMARY_CLASS}
         >
-          保存する
+          {saving ? "保存中…" : "保存する"}
         </button>
         <DisabledActionReason requirements={savingReqs} />
       </div>
