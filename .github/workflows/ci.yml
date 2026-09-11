@@ -266,8 +266,9 @@ jobs:
           echo "app=${{ needs.app.result }}"
           echo "backend=${{ needs.backend.result }}"
           echo "desktop=${{ needs.desktop.result }}"
+          echo "package=${{ needs.package.result }}"
           failed=0
-          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}" "${{ needs.desktop.result }}"; do
+          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}" "${{ needs.desktop.result }}" "${{ needs.package.result }}"; do
             if [ "$result" != "success" ]; then failed=1; fi
           done
           if [ "$failed" -ne 0 ]; then
