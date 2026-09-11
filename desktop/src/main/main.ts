@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import * as os from "node:os";
 import * as path from "node:path";
 import { IpcChannel, type AppInfo } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
@@ -20,6 +21,7 @@ import {
 import { readE2eEnv } from "./e2e-env.js";
 import { sidecarFetch } from "./sidecar-fetch.js";
 import { resolveSidecarAppDataDirectory } from "./sidecar-app-data.js";
+import { resolveSidecarLogPath } from "./sidecar-log-path.js";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 import { sidecarMultipartUpload } from "./sidecar-upload.js";
 import type { SidecarStatus } from "../shared/bridge.js";
@@ -111,6 +113,17 @@ function createWindow(): BrowserWindow {
 
 ipcMain.handle(IpcChannel.getAppInfo, (): AppInfo => {
   return { version: app.getVersion(), platform: process.platform };
+});
+
+ipcMain.handle(IpcChannel.getSidecarLogPath, (): string => {
+  // UG-14: resolved lazily from the same app-data root the supervisor uses, so
+  // the crash screen's path and the sidecar's log file share one source.
+  return resolveSidecarLogPath({
+    isPackaged: app.isPackaged,
+    env: process.env,
+    platform: process.platform,
+    homeDirectory: os.homedir(),
+  });
 });
 
 ipcMain.handle(IpcChannel.getSidecarStatus, (): SidecarStatus => {

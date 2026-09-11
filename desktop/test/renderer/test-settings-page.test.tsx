@@ -313,6 +313,65 @@ describe("TestSettingsPage registration flow", () => {
     ).toContain("provider unavailable");
   });
 
+  it("shows the single-source wait guidance for a rate-limited detection (Issue #304)", async () => {
+    const { client, applyLayoutUpload } = createTestSettingsMockClient({
+      detectAnswerAreas: () => ({
+        kind: "error",
+        status: 503,
+        detail: "Vertex AI request failed with status 429",
+        retryAfterSeconds: 30,
+      }),
+    });
+
+    renderAppAt(testSettings("t-reg"), {
+      client,
+      bridge: {
+        choosePdfFile: async () => "/tmp/answer.pdf",
+        sidecarMultipartUpload: async () => ({
+          status: 200,
+          body: applyLayoutUpload(),
+        }),
+      },
+    });
+
+    await screen.findByTestId("criteria-section");
+    fireEvent.click(screen.getByTestId("add-criteria-question-button"));
+    fireEvent.change(screen.getByTestId("criteria-number-0"), {
+      target: { value: "問1" },
+    });
+    fireEvent.change(screen.getByTestId("criteria-points-0"), {
+      target: { value: "10" },
+    });
+    fireEvent.click(screen.getByTestId("confirm-criteria-button"));
+    await waitFor(() => {
+      expect(screen.getByTestId("confirm-criteria-button")).toHaveProperty(
+        "disabled",
+        true,
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("upload-answer-layout-button"));
+    await screen.findByTestId("answer-area-editor");
+    fireEvent.click(screen.getByTestId("detect-answer-areas-button"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("disabled-reason-answer-detection-rate-limited"),
+      ).toBeDefined();
+    });
+    expect(
+      screen.getByTestId("disabled-reason-answer-detection-rate-limited")
+        .textContent,
+    ).toBe(ActionRequirements.answerDetectionRateLimited(30).message);
+    // The provider's own English must never reach the screen, and the
+    // rate-limited guidance is the outcome message rather than the generic
+    // error banner.
+    expect(
+      screen.queryByText(/Vertex AI request failed with status 429/),
+    ).toBeNull();
+    expect(screen.queryByTestId("test-settings-action-error")).toBeNull();
+  });
+
   it("never leaves two disabled profile actions without visible reasons", async () => {
     const { client, applyLayoutUpload } = createTestSettingsMockClient();
     renderAppAt(testSettings("t-reg"), {

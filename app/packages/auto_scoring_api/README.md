@@ -85,6 +85,9 @@ Class | Method | HTTP request | Description
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**confirmTestsTestIdDependencyGraphConfirmPost**](doc/DependencyGraphApi.md#confirmteststestiddependencygraphconfirmpost) | **POST** /tests/{test_id}/dependency-graph/confirm | Confirm
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**getLatestTestsTestIdDependencyGraphGet**](doc/DependencyGraphApi.md#getlatestteststestiddependencygraphget) | **GET** /tests/{test_id}/dependency-graph | Get Latest
 [*DependencyGraphApi*](doc/DependencyGraphApi.md) | [**listVersionsTestsTestIdDependencyGraphVersionsGet**](doc/DependencyGraphApi.md#listversionsteststestiddependencygraphversionsget) | **GET** /tests/{test_id}/dependency-graph/versions | List Versions
+[*ErrorCatalogApi*](doc/ErrorCatalogApi.md) | [**getErrorCatalogTestsTestIdErrorCatalogGet**](doc/ErrorCatalogApi.md#geterrorcatalogteststestiderrorcatalogget) | **GET** /tests/{test_id}/error-catalog | Get Error Catalog
+[*ErrorCatalogApi*](doc/ErrorCatalogApi.md) | [**importErrorCatalogTestsTestIdErrorCatalogImportPost**](doc/ErrorCatalogApi.md#importerrorcatalogteststestiderrorcatalogimportpost) | **POST** /tests/{test_id}/error-catalog/import | Import Error Catalog
+[*ErrorCatalogApi*](doc/ErrorCatalogApi.md) | [**saveErrorCatalogTestsTestIdErrorCatalogPut**](doc/ErrorCatalogApi.md#saveerrorcatalogteststestiderrorcatalogput) | **PUT** /tests/{test_id}/error-catalog | Save Error Catalog
 [*ExportApi*](doc/ExportApi.md) | [**getExportFileExportsExportIdFileGet**](doc/ExportApi.md#getexportfileexportsexportidfileget) | **GET** /exports/{export_id}/file | Get Export File
 [*ExportApi*](doc/ExportApi.md) | [**listExportsSubmissionsSubmissionIdExportsGet**](doc/ExportApi.md#listexportssubmissionssubmissionidexportsget) | **GET** /submissions/{submission_id}/exports | List Exports
 [*ExportApi*](doc/ExportApi.md) | [**requestBulkExportTestsTestIdExportPost**](doc/ExportApi.md#requestbulkexportteststestidexportpost) | **POST** /tests/{test_id}/export | Request Bulk Export
@@ -159,6 +162,7 @@ Class | Method | HTTP request | Description
  - [BulkExportItemStatus](doc/BulkExportItemStatus.md)
  - [BulkExportRequest](doc/BulkExportRequest.md)
  - [BulkExportResponse](doc/BulkExportResponse.md)
+ - [CatalogState](doc/CatalogState.md)
  - [ClassificationAvailabilityResponse](doc/ClassificationAvailabilityResponse.md)
  - [ClassificationEstimateModel](doc/ClassificationEstimateModel.md)
  - [ClassificationNeed](doc/ClassificationNeed.md)
@@ -181,6 +185,9 @@ Class | Method | HTTP request | Description
  - [DependencyProvision](doc/DependencyProvision.md)
  - [DocumentPagesResponse](doc/DocumentPagesResponse.md)
  - [EditReviewRequest](doc/EditReviewRequest.md)
+ - [ErrorCatalogEntryInput](doc/ErrorCatalogEntryInput.md)
+ - [ErrorCatalogEntryModel](doc/ErrorCatalogEntryModel.md)
+ - [ErrorCatalogResponse](doc/ErrorCatalogResponse.md)
  - [ExportRefusalReason](doc/ExportRefusalReason.md)
  - [ExportRequestResponse](doc/ExportRequestResponse.md)
  - [ExportResponse](doc/ExportResponse.md)
@@ -188,6 +195,8 @@ Class | Method | HTTP request | Description
  - [GradingAvailabilityResponse](doc/GradingAvailabilityResponse.md)
  - [GradingCostModel](doc/GradingCostModel.md)
  - [HTTPValidationError](doc/HTTPValidationError.md)
+ - [ImportConflictPolicy](doc/ImportConflictPolicy.md)
+ - [ImportErrorCatalogRequest](doc/ImportErrorCatalogRequest.md)
  - [IntakeCostModel](doc/IntakeCostModel.md)
  - [IntakePlanResponse](doc/IntakePlanResponse.md)
  - [IntakeRuleModel](doc/IntakeRuleModel.md)
@@ -222,6 +231,7 @@ Class | Method | HTTP request | Description
  - [RubricCriterionResponse](doc/RubricCriterionResponse.md)
  - [RuleScope](doc/RuleScope.md)
  - [SaveApiKeyRequest](doc/SaveApiKeyRequest.md)
+ - [SaveErrorCatalogRequest](doc/SaveErrorCatalogRequest.md)
  - [SaveTemplatesRequest](doc/SaveTemplatesRequest.md)
  - [ScannedFileModel](doc/ScannedFileModel.md)
  - [ScoreRequest](doc/ScoreRequest.md)

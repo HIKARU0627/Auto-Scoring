@@ -1282,6 +1282,52 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tests/{test_id}/error-catalog": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Error Catalog */
+    get: operations["get_error_catalog_tests__test_id__error_catalog_get"];
+    /**
+     * Save Error Catalog
+     * @description Save a reviewed row set, refused if it is based on a stale revision.
+     */
+    put: operations["save_error_catalog_tests__test_id__error_catalog_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/tests/{test_id}/error-catalog/import": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Import Error Catalog
+     * @description Read the registered 添削資料 Excel into the persisted catalogue.
+     *
+     *     The three "we have no catalogue" states are refused with a 409 naming
+     *     which one it is, and an unreadable file is recorded (and answered 422)
+     *     rather than returned as an empty catalogue -- the distinction Issue
+     *     #106 was written to preserve.
+     */
+    post: operations["import_error_catalog_tests__test_id__error_catalog_import_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tests/{test_id}/export": {
     parameters: {
       query?: never;
@@ -1750,6 +1796,27 @@ export interface components {
       /** Test Id */
       test_id: string;
     };
+    /**
+     * CatalogState
+     * @description Why a test has, or has not, a usable 誤答カタログ (Issue #209).
+     *
+     *     The three situations Issue #106's logging used to collapse into one are
+     *     now three distinct wire values, because a person deciding what to do next
+     *     needs to tell "we never received the file" from "we received it and could
+     *     not understand it": the first means attach a 添削資料, the second means
+     *     the one already attached is not a layout this reader knows.
+     *
+     *     ============================ ================================================
+     *     value                        meaning
+     *     ============================ ================================================
+     *     ``not_registered``           no 添削資料 of any kind is attached (a)
+     *     ``word_only``                a 添削資料 is attached, but none is .xls/.xlsx (b)
+     *     ``unreadable``               an Excel 添削資料 is attached but yielded no entries (c)
+     *     ``available``                entries were imported from the attached Excel
+     *     ============================ ================================================
+     * @enum {string}
+     */
+    CatalogState: "not_registered" | "word_only" | "unreadable" | "available";
     /** ClassificationAvailabilityResponse */
     ClassificationAvailabilityResponse: {
       /** Available */
@@ -2047,6 +2114,65 @@ export interface components {
       score_maximum: number;
     };
     /**
+     * ErrorCatalogEntryInput
+     * @description A row as the reviewer saved it. ``edited`` is the server's to set --
+     *     any row that arrives through this route is a human edit by definition, so
+     *     accepting the flag from the body would let a caller claim an AI row it
+     *     never touched.
+     */
+    ErrorCatalogEntryInput: {
+      /** Deduction */
+      deduction?: string | null;
+      /** Mistake */
+      mistake: string;
+      /** Question Label */
+      question_label?: string | null;
+      /** Red Ink */
+      red_ink: string;
+      /** Round Label */
+      round_label?: string | null;
+    };
+    /**
+     * ErrorCatalogEntryModel
+     * @description One catalogue row over the wire.
+     */
+    ErrorCatalogEntryModel: {
+      /** Deduction */
+      deduction?: string | null;
+      /**
+       * Edited
+       * @default false
+       */
+      edited: boolean;
+      /** Mistake */
+      mistake: string;
+      /** Question Label */
+      question_label?: string | null;
+      /** Red Ink */
+      red_ink: string;
+      /** Round Label */
+      round_label?: string | null;
+    };
+    /**
+     * ErrorCatalogResponse
+     * @description A test's 誤答カタログ, as the review screen sees it.
+     */
+    ErrorCatalogResponse: {
+      /** Entries */
+      entries: components["schemas"]["ErrorCatalogEntryModel"][];
+      /** Entry Count */
+      entry_count: number;
+      /** Import Error */
+      import_error?: string | null;
+      /** Imported */
+      imported: boolean;
+      /** Revision */
+      revision: number;
+      state: components["schemas"]["CatalogState"];
+      /** Test Id */
+      test_id: string;
+    };
+    /**
      * ExportRefusalReason
      * @description Why the sidecar refuses to export one submission -- the two gates
      *     `export_refusal` evaluates, and the wire values the client reads.
@@ -2168,6 +2294,23 @@ export interface components {
     HTTPValidationError: {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
+    };
+    /**
+     * ImportConflictPolicy
+     * @description What a re-import does with rows a person edited.
+     *
+     *     Required, never defaulted: a caller that has not decided must not get a
+     *     choice made for it, because both choices lose something -- ``overwrite``
+     *     loses the edit, ``keep_edited`` can leave a stale row beside a fresh one.
+     * @enum {string}
+     */
+    ImportConflictPolicy: "keep_edited" | "overwrite";
+    /**
+     * ImportErrorCatalogRequest
+     * @description The explicit instruction to read the source file again.
+     */
+    ImportErrorCatalogRequest: {
+      on_conflict: components["schemas"]["ImportConflictPolicy"];
     };
     /**
      * IntakeCostModel
@@ -2696,6 +2839,16 @@ export interface components {
     SaveApiKeyRequest: {
       /** Value */
       value: string;
+    };
+    /**
+     * SaveErrorCatalogRequest
+     * @description The reviewed row set, pinned to the revision the reviewer read.
+     */
+    SaveErrorCatalogRequest: {
+      /** Entries */
+      entries: components["schemas"]["ErrorCatalogEntryInput"][];
+      /** Revision */
+      revision: number;
     };
     /** SaveTemplatesRequest */
     SaveTemplatesRequest: {
@@ -4967,6 +5120,107 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["DependencyGraphResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_error_catalog_tests__test_id__error_catalog_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        test_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorCatalogResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  save_error_catalog_tests__test_id__error_catalog_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        test_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SaveErrorCatalogRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorCatalogResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  import_error_catalog_tests__test_id__error_catalog_import_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        test_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ImportErrorCatalogRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorCatalogResponse"];
         };
       };
       /** @description Validation Error */

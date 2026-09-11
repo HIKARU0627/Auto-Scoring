@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -32,6 +33,7 @@ from auto_scoring.adapters.ai.image_call import (
 )
 from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
 from auto_scoring.adapters.answer_area_detection.detector import (
+    DETECT_RATE_LIMIT_MAX_ATTEMPTS,
     SCHEMA_NAME,
     StructuredAnswerAreaDetector,
 )
@@ -56,6 +58,10 @@ _PAGE = b"\x89PNG\r\n\x1a\nfake-page"
 #: body by the tests below, standing in for the material a real response would
 #: quote back.
 _SENSITIVE = "SENSITIVE-MATERIAL-MARKER"
+
+
+def _no_sleep(_seconds: float) -> None:
+    """Never actually wait while a test drives the 429 retry loop (Issue #304)."""
 
 
 def _request(*, pages: int = 1) -> AnswerAreaDetectionRequest:
@@ -90,7 +96,9 @@ class _FakeCredentials(Credentials):
         self.token = "fake-access-token"
 
 
-def _vertex(handler: httpx.MockTransport) -> StructuredAnswerAreaDetector:
+def _vertex(
+    handler: httpx.MockTransport, *, sleep: Callable[[float], None] | None = None
+) -> StructuredAnswerAreaDetector:
     return StructuredAnswerAreaDetector(
         VertexGeminiImageCall(
             model="gemini-test",
@@ -98,11 +106,14 @@ def _vertex(handler: httpx.MockTransport) -> StructuredAnswerAreaDetector:
             temperature=0.0,
             timeout_seconds=1.0,
             client=httpx.Client(transport=handler),
-        )
+        ),
+        sleep=sleep or _no_sleep,
     )
 
 
-def _chat(handler: httpx.MockTransport) -> StructuredAnswerAreaDetector:
+def _chat(
+    handler: httpx.MockTransport, *, sleep: Callable[[float], None] | None = None
+) -> StructuredAnswerAreaDetector:
     return StructuredAnswerAreaDetector(
         ChatCompletionsImageCall(
             provider="openai",
@@ -115,7 +126,8 @@ def _chat(handler: httpx.MockTransport) -> StructuredAnswerAreaDetector:
             temperature=0.0,
             timeout_seconds=1.0,
             client=httpx.Client(transport=handler, base_url="https://example.invalid/v1"),
-        )
+        ),
+        sleep=sleep or _no_sleep,
     )
 
 
@@ -259,6 +271,118 @@ class TestBothTransports:
         detector = _vertex(transport) if kind == "vertex" else _chat(transport)
         with pytest.raises(ProviderTimeoutError):
             detector.detect(_request())
+
+
+@pytest.mark.parametrize("kind", ["vertex", "chat"])
+class TestRateLimitRetry:
+    """Issue #304: a 429 is a transient failure, so the synchronous detection
+    call absorbs it with the repository's own `RetryPolicy` instead of spending
+    the reviewer's click on one attempt.
+    """
+
+    def test_a_transient_429_is_retried_and_then_succeeds(self, kind: str) -> None:
+        calls: list[int] = []
+        slept: list[float] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return httpx.Response(429, text=_SENSITIVE)
+            envelope = (
+                _vertex_response(_valid_body())
+                if kind == "vertex"
+                else _chat_response(_valid_body())
+            )
+            return httpx.Response(200, json=envelope)
+
+        transport = httpx.MockTransport(handle)
+        detector = (
+            _vertex(transport, sleep=slept.append)
+            if kind == "vertex"
+            else _chat(transport, sleep=slept.append)
+        )
+        output = detector.detect(_request())
+        assert [area.question_number for area in output.areas] == ["Q1"]
+        assert len(calls) == 2
+        assert len(slept) == 1
+        assert slept[0] > 0.0
+
+    def test_a_retry_after_is_honoured_exactly(self, kind: str) -> None:
+        calls: list[int] = []
+        slept: list[float] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            if len(calls) == 1:
+                return httpx.Response(429, headers={"Retry-After": "7"}, text=_SENSITIVE)
+            envelope = (
+                _vertex_response(_valid_body())
+                if kind == "vertex"
+                else _chat_response(_valid_body())
+            )
+            return httpx.Response(200, json=envelope)
+
+        transport = httpx.MockTransport(handle)
+        detector = (
+            _vertex(transport, sleep=slept.append)
+            if kind == "vertex"
+            else _chat(transport, sleep=slept.append)
+        )
+        detector.detect(_request())
+        assert slept == [7.0]
+
+    def test_it_gives_up_after_the_attempt_cap(self, kind: str) -> None:
+        calls: list[int] = []
+        slept: list[float] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(429, text=_SENSITIVE)
+
+        transport = httpx.MockTransport(handle)
+        detector = (
+            _vertex(transport, sleep=slept.append)
+            if kind == "vertex"
+            else _chat(transport, sleep=slept.append)
+        )
+        with pytest.raises(ProviderRateLimitedError) as caught:
+            detector.detect(_request())
+        assert _SENSITIVE not in str(caught.value)
+        assert len(calls) == DETECT_RATE_LIMIT_MAX_ATTEMPTS
+        assert len(slept) == DETECT_RATE_LIMIT_MAX_ATTEMPTS - 1
+
+    def test_a_retry_after_past_the_budget_is_not_waited_out(self, kind: str) -> None:
+        calls: list[int] = []
+        slept: list[float] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(429, headers={"Retry-After": "3600"}, text=_SENSITIVE)
+
+        transport = httpx.MockTransport(handle)
+        detector = (
+            _vertex(transport, sleep=slept.append)
+            if kind == "vertex"
+            else _chat(transport, sleep=slept.append)
+        )
+        with pytest.raises(ProviderRateLimitedError) as caught:
+            detector.detect(_request())
+        assert caught.value.retry_after_seconds == 3600.0
+        assert len(calls) == 1
+        assert slept == []
+
+    def test_a_schema_violation_is_not_retried(self, kind: str) -> None:
+        calls: list[int] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(200, json={"unexpected": True})
+
+        transport = httpx.MockTransport(handle)
+        detector = _vertex(transport) if kind == "vertex" else _chat(transport)
+        with pytest.raises(SchemaViolation):
+            detector.detect(_request())
+        assert len(calls) == 1
 
 
 def test_vertex_joins_several_text_parts() -> None:

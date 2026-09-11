@@ -8,9 +8,18 @@ import { SidecarStartupOverlay } from "./features/startup/SidecarStartupOverlay.
 /**
  * Application entry. Subscribes to the sidecar lifecycle bridge (Issue #234)
  * and hands a typed HTTP client to the shell once the sidecar is ready.
+ *
+ * The startup/crash overlay wraps the router from here rather than living as a
+ * route inside it (INV-033): the composition root is the only level that stays
+ * above a pushed screen.
  */
-export function App(): JSX.Element {
+export function App({
+  initialStack,
+}: {
+  initialStack?: readonly string[] | undefined;
+} = {}): JSX.Element {
   const [status, setStatus] = useState<SidecarStatus>({ kind: "starting" });
+  const [logPath, setLogPath] = useState<string | null>(null);
 
   useEffect(() => {
     const bridge = window.autoScoring;
@@ -19,6 +28,7 @@ export function App(): JSX.Element {
     }
 
     void bridge.getSidecarStatus().then(setStatus);
+    void bridge.getSidecarLogPath().then(setLogPath);
     return bridge.onSidecarStatusChange(setStatus);
   }, []);
 
@@ -34,8 +44,12 @@ export function App(): JSX.Element {
   };
 
   return (
-    <SidecarStartupOverlay status={status} onRestart={handleRestart}>
-      <AppShell client={client} />
+    <SidecarStartupOverlay
+      status={status}
+      onRestart={handleRestart}
+      logPath={logPath}
+    >
+      <AppShell client={client} initialStack={initialStack} />
     </SidecarStartupOverlay>
   );
 }

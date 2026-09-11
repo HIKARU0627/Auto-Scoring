@@ -73,6 +73,14 @@ export const ActionRequirements = {
     "answer-sheet-role-mismatch",
     "この答案では設問に対応する回答欄が見つかりませんでした。取り込んだ PDF が答案用紙か確認し、違う資料なら「別の答案に差し替える」で選び直してください。",
   ),
+  answerDetectionRateLimited: (seconds: number | null): ActionRequirement => {
+    const wait =
+      seconds === null ? "少し待って" : `約${Math.ceil(seconds)}秒待って`;
+    return requirement(
+      "answer-detection-rate-limited",
+      `いま AI が混み合っていて、回答欄を検出できませんでした。${wait}から、もう一度「回答欄を自動検出」を押してください。`,
+    );
+  },
   answerDetectionUnavailable: requirement(
     "answer-detection-unavailable",
     "この端末では回答欄の自動検出が使えません。設定を確認するか「領域を手動追加」で引いてください。",
@@ -297,13 +305,21 @@ export function apiKeyVerifyRequirements(input: {
 
 /** 検出が 0 件で終わったときに出す結果の説明 */
 export function answerDetectionOutcomeRequirements(input: {
-  outcome: "none" | "zero-results" | "role-mismatch";
+  outcome: "none" | "zero-results" | "role-mismatch" | "rate-limited";
+  retryAfterSeconds?: number | null;
 }): readonly ActionRequirement[] {
   if (input.outcome === "zero-results") {
     return [ActionRequirements.answerDetectionZeroResults];
   }
   if (input.outcome === "role-mismatch") {
     return [ActionRequirements.answerSheetRoleMismatch];
+  }
+  if (input.outcome === "rate-limited") {
+    return [
+      ActionRequirements.answerDetectionRateLimited(
+        input.retryAfterSeconds ?? null,
+      ),
+    ];
   }
   return [];
 }

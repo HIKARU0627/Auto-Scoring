@@ -14,6 +14,10 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
+from auto_scoring.adapters.excel_error_catalog import (
+    annotation_resource_catalog_path,
+    read_error_catalog,
+)
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
@@ -35,6 +39,7 @@ from auto_scoring.domain.dependency_graph import (
     DependencyGraph,
     DependencyProvision,
 )
+from auto_scoring.domain.error_catalog import CatalogEntry, ErrorCatalogDraft
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.job_execution import ProcessingOutcome
 from auto_scoring.domain.job_scheduling import plan_submission_jobs
@@ -346,16 +351,36 @@ _CATALOG_ROWS = [
 ]
 
 
-async def test_a_registered_excel_annotation_resource_reaches_the_grading_call(
+def _import_catalog(session_factory: sessionmaker[Session], store: LocalFileStore) -> None:
+    """Read the registered Excel once and persist it, as the review API's
+    import endpoint does (Issue #209). Grading then reads only the row."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        materials = uow.test_materials.list_for_test("test-1")
+        path = annotation_resource_catalog_path(store, materials)
+        assert path is not None
+        catalog = read_error_catalog(path)
+        existing = uow.error_catalogs.get("test-1")
+        draft = ErrorCatalogDraft(
+            test_id="test-1",
+            entries=catalog.entries,
+            revision=(existing.revision + 1) if existing else 1,
+            imported=True,
+        )
+        uow.error_catalogs.save(draft, expected_revision=existing.revision if existing else None)
+        uow.commit()
+
+
+async def test_an_imported_excel_annotation_resource_reaches_the_grading_call(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
     ai_provider: _ScriptedAIProvider,
     processor: GradingJobProcessor,
 ) -> None:
-    """Issue #106 end to end: the 添削資料 catalogue is on the request the
-    provider is called with, so the grading prompt can carry it."""
+    """Issue #209 end to end: the imported 添削資料 catalogue is on the
+    request the provider is called with, so the grading prompt can carry it."""
     _seed(session_factory, store)
     _register_annotation_resource(session_factory, store, _CATALOG_ROWS)
+    _import_catalog(session_factory, store)
     ai_provider.script(_response())
 
     await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
@@ -366,32 +391,53 @@ async def test_a_registered_excel_annotation_resource_reaches_the_grading_call(
     assert entry.red_ink == "架空の赤入れA"
 
 
-async def test_grading_proceeds_without_a_catalogue_and_says_why(
+async def test_grading_reads_the_database_and_not_the_excel(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,
     ai_provider: _ScriptedAIProvider,
     processor: GradingJobProcessor,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """添削資料 is optional but recommended (Issue #95 decision 3), so a file
-    whose columns are not recognized must not fail the job -- and must not be
-    indistinguishable from having registered nothing either."""
+    """Judgment 2's acceptance test: a registered *readable* Excel that was
+    never imported must not influence grading at all. Before Issue #209 the
+    grading job opened the file itself, so this returned the file's rows --
+    which is exactly the path that discarded a person's edit."""
     _seed(session_factory, store)
-    _register_annotation_resource(
-        session_factory, store, [["日付", "担当"], ["2026-09-10", "架空の氏名"]]
-    )
+    _register_annotation_resource(session_factory, store, _CATALOG_ROWS)
     ai_provider.script(_response())
 
-    with caplog.at_level(logging.WARNING):
-        result = await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
+    await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
 
-    assert result.outcome is ProcessingOutcome.SUCCEEDED
     assert ai_provider.calls[0].error_catalog == ()
-    assert any(
-        "no catalogue could be read" in record.getMessage()
-        and "no_header_row" in record.getMessage()
-        for record in caplog.records
-    )
+
+
+async def test_a_person_edited_row_is_what_the_next_grading_call_sees(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """The acceptance criterion 「人が編集した行が次の採点で消えない」.
+
+    The Excel still says 架空の誤答A; a person saved 架空の訂正A. If grading
+    reverts to reading the file, this sends the file's row and fails."""
+    _seed(session_factory, store)
+    _register_annotation_resource(session_factory, store, _CATALOG_ROWS)
+    _import_catalog(session_factory, store)
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        existing = uow.error_catalogs.get("test-1")
+        assert existing is not None
+        edited = existing.with_edited_entries(
+            (CatalogEntry(mistake="架空の訂正A", red_ink="架空の訂正赤入れ"),)
+        )
+        uow.error_catalogs.save(edited, expected_revision=existing.revision)
+        uow.commit()
+    ai_provider.script(_response())
+
+    await processor.process(make_job(kind=JobKind.GRADING, question_id="q-1"))
+
+    (entry,) = ai_provider.calls[0].error_catalog
+    assert entry.mistake == "架空の訂正A"
+    assert entry.edited is True
 
 
 async def test_a_test_with_no_annotation_resource_sends_an_empty_catalogue(
