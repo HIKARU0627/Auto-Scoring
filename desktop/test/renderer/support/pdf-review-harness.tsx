@@ -29,6 +29,15 @@ export interface PdfReviewHarnessOptions {
   annotations?: AnnotationResponse[];
   reviews?: ReviewResponse[];
   criterionCount?: number;
+  /** Keep the page in loading until `releaseInitialLoad` is called. */
+  holdInitialLoad?: boolean;
+  /** Keep question review data unloaded until `releaseQuestionData` is called. */
+  holdQuestionData?: boolean;
+}
+
+export interface PdfReviewHarnessHandle {
+  releaseInitialLoad: () => void;
+  releaseQuestionData: () => void;
 }
 
 const DEFAULT_TEST_ID = "test-1";
@@ -85,9 +94,26 @@ export function buildReviewableGrade(
   return buildGrade({ criteria });
 }
 
-export function createPdfReviewClient(
-  options: PdfReviewHarnessOptions,
-): SidecarClient {
+function createLoadGate(enabled: boolean): {
+  promise: Promise<void>;
+  release: () => void;
+} {
+  if (!enabled) {
+    return { promise: Promise.resolve(), release: () => {} };
+  }
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
+  client: SidecarClient;
+  handle: PdfReviewHarnessHandle;
+} {
+  const initialLoadGate = createLoadGate(options.holdInitialLoad === true);
+  const questionDataGate = createLoadGate(options.holdQuestionData === true);
   const questions = options.questions ?? [
     buildQuestion({ id: "q-1", number: "1" }),
   ];
@@ -122,9 +148,10 @@ export function createPdfReviewClient(
   const annotations = options.annotations ?? [];
   const reviews = options.reviews ?? [];
 
-  return {
+  const client = {
     GET: vi.fn(async (path, _init) => {
       if (path === "/submissions/{submission_id}") {
+        await initialLoadGate.promise;
         return {
           data: {
             id: DEFAULT_SUBMISSION_ID,
@@ -192,6 +219,7 @@ export function createPdfReviewClient(
         path ===
         "/submissions/{submission_id}/questions/{question_id}/recognitions"
       ) {
+        await questionDataGate.promise;
         return {
           data: recognitions,
           response: new Response(),
@@ -201,12 +229,14 @@ export function createPdfReviewClient(
       if (
         path === "/submissions/{submission_id}/questions/{question_id}/grades"
       ) {
+        await questionDataGate.promise;
         return { data: grades, response: new Response(), error: undefined };
       }
       if (
         path ===
         "/submissions/{submission_id}/questions/{question_id}/annotations"
       ) {
+        await questionDataGate.promise;
         return {
           data: annotations,
           response: new Response(),
@@ -216,12 +246,14 @@ export function createPdfReviewClient(
       if (
         path === "/submissions/{submission_id}/questions/{question_id}/reviews"
       ) {
+        await questionDataGate.promise;
         return { data: reviews, response: new Response(), error: undefined };
       }
       if (
         path ===
         "/submissions/{submission_id}/questions/{question_id}/answer-image"
       ) {
+        await questionDataGate.promise;
         const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
           type: "image/png",
         });
@@ -244,11 +276,19 @@ export function createPdfReviewClient(
     use: vi.fn(),
     eject: vi.fn(),
   } as unknown as SidecarClient;
+
+  return {
+    client,
+    handle: {
+      releaseInitialLoad: initialLoadGate.release,
+      releaseQuestionData: questionDataGate.release,
+    },
+  };
 }
 
 export function renderPdfReview(
   options: PdfReviewHarnessOptions = {},
-): RenderResult {
+): RenderResult & { harness: PdfReviewHarnessHandle; client: SidecarClient } {
   const testId = options.testId ?? DEFAULT_TEST_ID;
   const submissionId = options.submissionId ?? DEFAULT_SUBMISSION_ID;
   const questionQuery =
@@ -256,9 +296,9 @@ export function renderPdfReview(
       ? `?question=${encodeURIComponent(options.questionId)}`
       : "";
   const location = `/tests/${testId}/submissions/${submissionId}/review${questionQuery}`;
-  const client = createPdfReviewClient(options);
+  const { client, handle } = createPdfReviewClient(options);
 
-  return render(
+  const view = render(
     <ThemeProvider>
       <SidecarApiProvider
         client={client}
@@ -270,4 +310,5 @@ export function renderPdfReview(
       </SidecarApiProvider>
     </ThemeProvider>,
   );
+  return Object.assign(view, { harness: handle, client });
 }
