@@ -17,6 +17,7 @@ import {
   toPublicSidecarStatus,
   type InternalSidecarStatus,
 } from "./sidecar-connection.js";
+import { readE2eEnv } from "./e2e-env.js";
 import { sidecarFetch } from "./sidecar-fetch.js";
 import { SidecarSupervisor } from "./sidecar-supervisor";
 import { sidecarMultipartUpload } from "./sidecar-upload.js";
@@ -122,7 +123,7 @@ ipcMain.handle(IpcChannel.restartSidecar, async (): Promise<void> => {
 });
 
 ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
-  const override = process.env["AUTO_SCORING_E2E_FOLDER"];
+  const override = readE2eEnv("AUTO_SCORING_E2E_FOLDER", app.isPackaged);
   if (override !== undefined && override.length > 0) {
     return override;
   }
@@ -136,7 +137,7 @@ ipcMain.handle(IpcChannel.chooseFolder, async (): Promise<string | null> => {
 });
 
 ipcMain.handle(IpcChannel.choosePdfFile, async (): Promise<string | null> => {
-  const override = process.env["AUTO_SCORING_E2E_PDF"];
+  const override = readE2eEnv("AUTO_SCORING_E2E_PDF", app.isPackaged);
   if (override !== undefined && override.length > 0) {
     return override;
   }
@@ -179,7 +180,10 @@ void app.whenReady().then(() => {
     isWindows,
   });
   const executablePath = resolveSidecarExecutable(candidates);
-  const appDataOverride = process.env["AUTO_SCORING_E2E_APP_DATA"];
+  const appDataOverride = readE2eEnv(
+    "AUTO_SCORING_E2E_APP_DATA",
+    app.isPackaged,
+  );
 
   supervisor = new SidecarSupervisor({
     executablePath,
