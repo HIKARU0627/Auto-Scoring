@@ -61,6 +61,55 @@ export const ActionRequirements = {
     "api-key-not-configured",
     "キーがまだありません。上の欄に入力して「保存する」を押すと疎通を確認できます。",
   ),
+  answerRegionsMissing: requirement(
+    "answer-regions-missing",
+    "回答欄が1つもありません。「回答欄を自動検出」するか「領域を手動追加」で引いてください。",
+  ),
+  answerRegionsUnassigned: (regions: number): ActionRequirement =>
+    requirement(
+      "answer-regions-unassigned",
+      `設問が割り当てられていない回答欄が${regions}件あります。設問を選ぶか削除してください。`,
+    ),
+  answerSheetUnseen: requirement(
+    "answer-sheet-unseen",
+    "回答欄の位置は答案の上で確認します。この様式の答案を1枚登録してください。",
+  ),
+  answerSheetUnrendered: requirement(
+    "answer-sheet-unrendered",
+    "答案を表示できていません。上の「再試行」を押して、実際の答案を出してください。",
+  ),
+  profileAlreadyConfirmed: requirement(
+    "profile-already-confirmed",
+    "テストプロファイルは確定済みです。確定した回答欄は変更できません。",
+  ),
+  dependencyGraphMissing: requirement(
+    "dependency-graph-missing",
+    "設問依存関係グラフがまだありません。「依存関係を分析」を押してください。",
+  ),
+  dependencyGraphAlreadyConfirmed: requirement(
+    "dependency-graph-already-confirmed",
+    "設問依存関係グラフは確定済みです。",
+  ),
+  criteriaUnconfirmed: requirement(
+    "criteria-unconfirmed",
+    "配点と採点基準が未確定です。上の「配点」で確定してください。",
+  ),
+  profileUnconfirmed: requirement(
+    "profile-unconfirmed",
+    "回答欄（テストプロファイル）が未確定です。上の「プロファイルを確定」を押してください。",
+  ),
+  dependencyGraphUnconfirmed: requirement(
+    "dependency-graph-unconfirmed",
+    "設問依存関係グラフが未確定です。上の「依存関係グラフを確定」を押してください。",
+  ),
+  dependencyGraphStale: requirement(
+    "dependency-graph-stale",
+    "設問が変わったため、設問依存関係グラフを分析し直して確定してください。このまま「登録完了」を押すと断られます。",
+  ),
+  registrationAlreadyComplete: requirement(
+    "registration-already-complete",
+    "登録は完了しています。答案を取り込むと採点が始まります。",
+  ),
 } as const;
 
 export function intakeFolderPickRequirements(input: {
@@ -125,6 +174,123 @@ export function apiKeyVerifyRequirements(input: {
   }
   if (!input.configured) {
     requirements.push(ActionRequirements.apiKeyNotConfigured);
+  }
+  return requirements;
+}
+
+/** テスト設定の「修正内容を保存」 */
+export function answerProfileSaveRequirements(input: {
+  busy: boolean;
+  hasRegions: boolean;
+  alreadyConfirmed: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.profileAlreadyConfirmed);
+  }
+  if (!input.hasRegions) {
+    requirements.push(ActionRequirements.answerRegionsMissing);
+  }
+  return requirements;
+}
+
+/** テスト設定の「プロファイルを確定」 */
+export function answerProfileConfirmRequirements(input: {
+  busy: boolean;
+  alreadyConfirmed: boolean;
+  regionCount: number;
+  unassignedRegionCount: number;
+  mustSeeAnswerSheetFirst: boolean;
+  answerSheetRegistered: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.profileAlreadyConfirmed);
+  }
+  if (input.regionCount === 0) {
+    requirements.push(ActionRequirements.answerRegionsMissing);
+  }
+  if (input.unassignedRegionCount > 0) {
+    requirements.push(
+      ActionRequirements.answerRegionsUnassigned(input.unassignedRegionCount),
+    );
+  }
+  if (input.mustSeeAnswerSheetFirst) {
+    requirements.push(
+      input.answerSheetRegistered
+        ? ActionRequirements.answerSheetUnrendered
+        : ActionRequirements.answerSheetUnseen,
+    );
+  }
+  return requirements;
+}
+
+/** テスト設定の「依存関係グラフを確定」 */
+export function dependencyGraphConfirmRequirements(input: {
+  busy: boolean;
+  hasGraph: boolean;
+  alreadyConfirmed: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.dependencyGraphAlreadyConfirmed);
+  }
+  if (!input.hasGraph) {
+    requirements.push(ActionRequirements.dependencyGraphMissing);
+  }
+  return requirements;
+}
+
+/** テスト設定の「登録完了」 */
+export function completeRegistrationRequirements(input: {
+  busy: boolean;
+  alreadyComplete: boolean;
+  profileConfirmed: boolean;
+  dependencyGraphConfirmed: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyComplete) {
+    requirements.push(ActionRequirements.registrationAlreadyComplete);
+  }
+  if (!input.profileConfirmed) {
+    requirements.push(ActionRequirements.profileUnconfirmed);
+  }
+  if (!input.dependencyGraphConfirmed) {
+    requirements.push(ActionRequirements.dependencyGraphUnconfirmed);
+  }
+  return requirements;
+}
+
+/** 採点が始まるまでにテスト設定で残っていること */
+export function gradingStartRequirements(input: {
+  criteriaSettled: boolean;
+  profileConfirmed: boolean;
+  dependencyGraphConfirmed: boolean;
+  dependencyGraphStale: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (!input.criteriaSettled) {
+    requirements.push(ActionRequirements.criteriaUnconfirmed);
+  }
+  if (!input.profileConfirmed) {
+    requirements.push(ActionRequirements.profileUnconfirmed);
+  }
+  if (!input.dependencyGraphConfirmed) {
+    requirements.push(ActionRequirements.dependencyGraphUnconfirmed);
+  } else if (input.dependencyGraphStale) {
+    requirements.push(ActionRequirements.dependencyGraphStale);
   }
   return requirements;
 }

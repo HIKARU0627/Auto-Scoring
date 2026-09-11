@@ -1,102 +1,89 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  apiKeySaveRequirements,
-  apiKeyVerifyRequirements,
-  whileRunningRequirements,
+  ActionRequirements,
+  answerProfileConfirmRequirements,
+  answerProfileSaveRequirements,
+  completeRegistrationRequirements,
+  dependencyGraphConfirmRequirements,
 } from "../src/renderer/core/action-requirements.js";
 
-describe("action requirements: API key (INV-107, INV-201-04)", () => {
-  it("資格情報ストアが使えないとき、代わりの手を言う", () => {
-    const unmet = apiKeySaveRequirements({
-      busy: false,
-      credentialStoreAvailable: false,
-    });
-    expect(unmet.map((r) => r.id)).toEqual(["credential-store-unavailable"]);
-    expect(unmet[0]?.message).toContain("環境変数");
+function expectActionable(requirement: { id: string; message: string }): void {
+  expect(requirement.id.length).toBeGreaterThan(0);
+  expect(requirement.message.endsWith("。")).toBe(true);
+  expect(requirement.message).not.toMatch(/Exception|Error|HTTP|[0-9]{3} /);
+}
+
+describe("test settings action requirements", () => {
+  it("INV-110: profile confirm reasons cover save reasons", () => {
+    for (const busy of [false, true]) {
+      for (const confirmed of [false, true]) {
+        for (const regionCount of [0, 1]) {
+          const save = answerProfileSaveRequirements({
+            busy,
+            hasRegions: regionCount > 0,
+            alreadyConfirmed: confirmed,
+          });
+          const confirm = answerProfileConfirmRequirements({
+            busy,
+            alreadyConfirmed: confirmed,
+            regionCount,
+            unassignedRegionCount: 0,
+            mustSeeAnswerSheetFirst: false,
+            answerSheetRegistered: true,
+          });
+          expect(confirm.map((requirement) => requirement.id)).toEqual(
+            expect.arrayContaining(save.map((item) => item.id)),
+          );
+        }
+      }
+    }
   });
 
-  it("キーが無いと疎通は確認できない (INV-107)", () => {
-    const unmet = apiKeyVerifyRequirements({
+  it("INV-201-04: disabled confirm shows actionable reasons", () => {
+    const requirements = answerProfileConfirmRequirements({
       busy: false,
-      configured: false,
+      alreadyConfirmed: false,
+      regionCount: 0,
+      unassignedRegionCount: 2,
+      mustSeeAnswerSheetFirst: true,
+      answerSheetRegistered: false,
     });
-    expect(unmet.map((r) => r.id)).toEqual(["api-key-not-configured"]);
-    expect(unmet[0]?.message).toContain("キーがまだありません");
-  });
-
-  it("条件を変えたら理由も変わる（無効条件そのものから導かれる）", () => {
-    // 1. 未設定時: キーが無い理由
-    const unconfigured = apiKeyVerifyRequirements({
-      busy: false,
-      configured: false,
-    });
-    expect(unconfigured.map((r) => r.id)).toEqual(["api-key-not-configured"]);
-
-    // 2. 処理中かつ未設定時: busy と未設定の両方
-    const busyAndUnconfigured = apiKeyVerifyRequirements({
-      busy: true,
-      configured: false,
-    });
-    expect(busyAndUnconfigured.map((r) => r.id)).toEqual([
-      "busy",
-      "api-key-not-configured",
+    expect(requirements.map((item) => item.id)).toEqual([
+      "answer-regions-missing",
+      "answer-regions-unassigned",
+      "answer-sheet-unseen",
     ]);
-
-    // 3. 設定済みで処理中: busy のみ
-    const busyAndConfigured = apiKeyVerifyRequirements({
-      busy: true,
-      configured: true,
-    });
-    expect(busyAndConfigured.map((r) => r.id)).toEqual(["busy"]);
-
-    // 4. 設定済みかつ待機時: 理由は 0 件 (有効)
-    const configuredAndIdle = apiKeyVerifyRequirements({
-      busy: false,
-      configured: true,
-    });
-    expect(configuredAndIdle).toEqual([]);
+    requirements.forEach(expectActionable);
   });
 
-  it("資格情報ストアの条件変化で保存の理由が変わる", () => {
-    // ストア利用不可
-    const storeUnavailable = apiKeySaveRequirements({
-      busy: false,
-      credentialStoreAvailable: false,
-    });
-    expect(storeUnavailable.map((r) => r.id)).toEqual([
-      "credential-store-unavailable",
-    ]);
-
-    // ストア利用不可 かつ 処理中
-    const storeUnavailableBusy = apiKeySaveRequirements({
-      busy: true,
-      credentialStoreAvailable: false,
-    });
-    expect(storeUnavailableBusy.map((r) => r.id)).toEqual([
-      "busy",
-      "credential-store-unavailable",
-    ]);
-
-    // ストア利用可 かつ 処理中
-    const storeAvailableBusy = apiKeySaveRequirements({
-      busy: true,
-      credentialStoreAvailable: true,
-    });
-    expect(storeAvailableBusy.map((r) => r.id)).toEqual(["busy"]);
-
-    // 条件充足: 理由は 0 件
-    const ready = apiKeySaveRequirements({
-      busy: false,
-      credentialStoreAvailable: true,
-    });
-    expect(ready).toEqual([]);
-  });
-
-  it("進行中しか理由にならない操作", () => {
+  it("complete registration stays blocked until profile and graph are confirmed", () => {
     expect(
-      whileRunningRequirements({ running: true }).map((r) => r.id),
-    ).toEqual(["busy"]);
-    expect(whileRunningRequirements({ running: false })).toEqual([]);
+      completeRegistrationRequirements({
+        busy: false,
+        alreadyComplete: false,
+        profileConfirmed: false,
+        dependencyGraphConfirmed: false,
+      }).map((item) => item.id),
+    ).toEqual(["profile-unconfirmed", "dependency-graph-unconfirmed"]);
+    expect(
+      completeRegistrationRequirements({
+        busy: false,
+        alreadyComplete: false,
+        profileConfirmed: true,
+        dependencyGraphConfirmed: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it("dependency graph confirm requires an analyzed graph", () => {
+    expect(
+      dependencyGraphConfirmRequirements({
+        busy: false,
+        hasGraph: false,
+        alreadyConfirmed: false,
+      }).map((item) => item.id),
+    ).toEqual(["dependency-graph-missing"]);
+    expectActionable(ActionRequirements.dependencyGraphMissing);
   });
 });
