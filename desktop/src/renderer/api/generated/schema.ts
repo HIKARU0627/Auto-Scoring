@@ -1679,6 +1679,11 @@ export interface components {
       height: number;
       /** Text */
       text: string;
+      /**
+       * Unreadable
+       * @default false
+       */
+      unreadable: boolean;
       /** Width */
       width: number;
       /** X */

@@ -539,6 +539,11 @@
             "title": "Text",
             "type": "string"
           },
+          "unreadable": {
+            "default": false,
+            "title": "Unreadable",
+            "type": "boolean"
+          },
           "width": {
             "title": "Width",
             "type": "number"

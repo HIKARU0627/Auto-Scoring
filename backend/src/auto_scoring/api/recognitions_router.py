@@ -67,6 +67,7 @@ class BoundingBoxResponse(BaseModel):
     y: float
     width: float
     height: float
+    unreadable: bool = False
 
     @classmethod
     def from_domain(cls, box: BoundingBox) -> BoundingBoxResponse:
@@ -76,6 +77,7 @@ class BoundingBoxResponse(BaseModel):
             y=box.rect.y,
             width=box.rect.width,
             height=box.rect.height,
+            unreadable=box.unreadable,
         )
 
 
