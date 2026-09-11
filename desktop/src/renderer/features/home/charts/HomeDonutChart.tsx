@@ -36,6 +36,8 @@ export function HomeDonutChart({
   // A surface-coloured stroke on a lone 100% sector draws the card colour
   // across the ring's seam, so a full ring is drawn without a stroke.
   const sectorStroke = singleSector ? "none" : "var(--color-surface-container)";
+  // Measured from the mock (Issue 366 item 4): 150px outer diameter and a
+  // 23px ring -> radii 75 / 52, down from the 165 / 25 the code drew before.
 
   return (
     <div
@@ -56,8 +58,8 @@ export function HomeDonutChart({
               nameKey="name"
               cx="50%"
               cy="50%"
-              innerRadius={58}
-              outerRadius={82}
+              innerRadius={52}
+              outerRadius={75}
               startAngle={90}
               endAngle={-270}
               paddingAngle={paddingAngle}
@@ -86,11 +88,11 @@ export function HomeDonutChart({
           <li
             key={slice.phase}
             data-testid={`home-phase-${slice.phase}`}
-            className="flex items-center gap-sm text-body-medium"
+            className="flex items-center gap-sm text-body-medium leading-tight"
           >
             <span
               aria-hidden
-              className="size-3 shrink-0 rounded-full"
+              className="size-4 shrink-0 rounded-full"
               style={{ background: phaseFill(slice.phase) }}
             />
             {/* Issue 360: the mock's legend is two columns -- the count lives

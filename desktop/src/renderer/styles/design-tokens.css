@@ -77,6 +77,14 @@
   --color-on-info-container: #d6e4ff;
   --color-progress-track: #363d52;
 
+  /* Issue #366: chart strokes measured from `UI_Home.png`. The grid is a
+     shade below the card, the zero baseline a shade above it, and the KPI
+     rule sits between them. Decorative separators, so — like `outline-variant`
+     — they are not held to the 3:1 UI-component minimum (§3.5). */
+  --color-chart-grid: #202537;
+  --color-chart-axis: #31384e;
+  --color-chart-divider: #2a3247;
+
   /* Annotation ink is not a UI colour: it writes on the (always white) PDF. */
   --color-annotation-mark: #c62828;
 
@@ -206,6 +214,11 @@
   --color-info-container: #dbe6ff;
   --color-on-info-container: #06235c;
   --color-progress-track: #d7dbe7;
+
+  /* Issue #366: the chart strokes re-lit for the light card, same hue family. */
+  --color-chart-grid: #d3d8e6;
+  --color-chart-axis: #aab3c6;
+  --color-chart-divider: #d9dce7;
 
   --color-annotation-mark: #c62828;
 

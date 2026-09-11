@@ -401,6 +401,22 @@ Issue #334（UI刷新 段A、親 #333）でモック `UI_Home.png` の実測パ�
 | カード地       | `rgb(32,40,56)` = `#202838`   | `--color-surface-container-low`（現行画面はまだ `low` を使用。段Cで `container` へ） |
 | 主色（ボタン） | `rgb(110,93,240)` = `#6e5df0` | `--color-primary`                                                                    |
 
+### 3.8 図表の線（Issue #366 段F4B）
+
+ホームの図表が使う罫線・基線・区切り線。モック `UI_Home.png` の 1536x1024 実測で、
+グリッド線はカード面より一段暗く、0 軸の基線は一段明るい。KPI の列間の縦罫も
+同じ面ランプの中間にある。
+
+| トークン                | ダーク    | ライト    | 使いどころ                                 |
+| ----------------------- | --------- | --------- | ------------------------------------------ |
+| `--color-chart-grid`    | `#202537` | `#d3d8e6` | 棒グラフの水平グリッド線（`stroke` 経由）  |
+| `--color-chart-axis`    | `#31384e` | `#aab3c6` | 0 軸の基線（`XAxis axisLine` の `stroke`） |
+| `--color-chart-divider` | `#2a3247` | `#d9dce7` | KPI 列の縦罫（`border-chart-divider`）     |
+
+`--color-outline-variant` と同じく**区切り線**であり、WCAG 1.4.11 が対象とする
+「UI コンポーネントの識別に必要な視覚情報」ではない（§3.5）。両テーマの定義と
+Tailwind への橋渡しは `desktop/test/home-chart-tokens.test.ts` が検査する。
+
 ## 4. 余白・角丸・エレベーション・レイアウト寸法
 
 ### 4.1 余白（`AppSpacing`、4px基準）
