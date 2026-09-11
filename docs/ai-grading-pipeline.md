@@ -901,13 +901,20 @@ Issue #18/#26が既に実装したDAGスケジューリングでそのまま満�
 確認済み**（守りを外す／条件を反転する／見出しを空にする、の 3 通り）。
 
 **読めなかったことは空の結果にしない。** 列構成が想定と違うファイルは
-`ErrorCatalogUnreadable` になり、`adapters.excel_error_catalog.annotation_resource_catalog`
-が理由付きで WARNING を出して採点は続く（添削資料は任意入力・業務ルール §2 (18)）。
-区別されるのは (a) 未登録 (b) Word しか無い (c) 登録済みだが列を解釈できない、の 3 状態で、
-**(c) を (a) と同じ見た目にしない**ことが本 Issue の主眼である。
-**画面へ出すのは Issue #209**（現状は WARNING ログのみ）。
+`ErrorCatalogUnreadable` になり、取り込み時に理由付きで記録される（添削資料は任意入力・
+業務ルール §2 (18)）。区別されるのは (a) 未登録 (b) Word しか無い (c) 登録済みだが列を
+解釈できない、の 3 状態で、**(c) を (a) と同じ見た目にしない**ことが本 Issue の主眼である。
+Issue #209 でこの 3 状態は**ログではなく API の値**（`not_registered` / `word_only` /
+`unreadable` / `available`）として返る（`api/error_catalog_router.py`）。
 
-**永続化していない。** 採点のたびに Excel を読み直す。人が直した内容が残る形は Issue #209。
+**採点のたびに Excel を読み直さない（Issue #209）。** カタログは
+`error_catalogs` テーブルに 1 テスト 1 行で永続化され、採点はそこだけを読む
+（`jobs/grading_processor.py`）。Excel は**取り込み元**であって実体ではない。取り込み直しは
+人が明示的に指示したときだけで、人が編集した行を残すか上書きするかを `on_conflict` で選ぶ
+（既定なし＝無言で上書きしない）。`revision` による compare-and-set が保存と取り込みの
+両方に付く。人が編集した行が次の採点で消えないことは
+`tests/test_grading_processor.py::test_a_person_edited_row_is_what_the_next_grading_call_sees`
+で固定した。
 
 読み取り側の実測（7 教科 / 27 行 / 減点量は 4 教科・17 行にしか無い）と、Word を対象外に
 した代償（**Word のみを持つ 4 教科ではカタログが 1 件も得られない**、Issue #208）は
