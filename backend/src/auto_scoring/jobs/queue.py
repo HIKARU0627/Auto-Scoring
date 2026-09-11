@@ -583,7 +583,7 @@ class JobQueueService:
             # immediately fail with "no answer image recorded", hiding human-required
             # intervention behind a mechanical failure. Keep the submission in
             # NEEDS_REVIEW waiting for human review.
-            expected_pages = tuple(sorted({q.page for q in questions}))
+            expected_pages = tuple(sorted({p for q in questions for p in q.pages}))
             coverage = PageCoverage(
                 expected_pages=expected_pages,
                 actual_page_count=submission.page_count,

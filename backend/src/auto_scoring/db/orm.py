@@ -147,6 +147,13 @@ class QuestionRow(Base):
         UniqueConstraint("test_id", "number", name="uq_questions_test_number"),
         CheckConstraint("page >= 1", name="ck_questions_page_positive"),
         CheckConstraint("points >= 0", name="ck_questions_points_non_negative"),
+        CheckConstraint("page_2 IS NULL OR page_2 >= 1", name="ck_questions_page_2_positive"),
+        CheckConstraint("page_2 IS NULL OR page_2 > page", name="ck_questions_page_2_greater"),
+        CheckConstraint(
+            "(page_2 IS NULL AND (answer_area_2 IS NULL OR answer_area_2 = 'null')) OR "
+            "(page_2 IS NOT NULL AND answer_area_2 IS NOT NULL AND answer_area_2 != 'null')",
+            name="ck_questions_page_2_and_area_2_paired",
+        ),
         Index("ix_questions_test_id", "test_id"),
     )
 
@@ -160,6 +167,8 @@ class QuestionRow(Base):
     answer_area: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
     score_area: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
     comment_area: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    page_2: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    answer_area_2: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
 
 
 class RubricRow(Base):

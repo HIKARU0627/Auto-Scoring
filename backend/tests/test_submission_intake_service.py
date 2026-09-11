@@ -1187,3 +1187,87 @@ def test_wrong_extension_is_rejected_before_any_pdf_parsing(
             limits=_LIMITS,
             now=at(),
         )
+
+
+def test_two_page_question_intake_success_and_extra_pages_safety_gate(
+    make_uow: Callable[[], SqlAlchemyUnitOfWork], store: LocalFileStore
+) -> None:
+    """Issue #108 / Issue #215 integration:
+    1. A test with a 2-page question spanning pages 2 and 3 has expected_pages={1, 2, 3}.
+       A 3-page submission has full coverage: state is AI_PROCESSED, the 2-page question
+       crop is combined vertically, and answer images are sorted by question order.
+    2. A 4-page submission to the same test triggers Issue #215's safety gate:
+       state is NEEDS_REVIEW with review_reason 'extra_pages:4>3'.
+    """
+    q1 = make_question(
+        id="q-1",
+        number="問1",
+        page=1,
+        answer_area=NormalizedRect(x=0.1, y=0.1, width=0.8, height=0.3),
+    )
+    q2 = make_question(
+        id="q-2",
+        number="問2",
+        page=2,
+        answer_area=NormalizedRect(x=0.1, y=0.1, width=0.8, height=0.3),
+    )
+    q3 = make_question(
+        id="q-3",
+        number="問3",
+        page=2,
+        page_2=3,
+        answer_area=NormalizedRect(x=0.1, y=0.5, width=0.8, height=0.4),
+        answer_area_2=NormalizedRect(x=0.1, y=0.1, width=0.8, height=0.4),
+    )
+    _seed_test_with_questions(make_uow, questions=[q1, q2, q3])
+
+    # 1. 3-page submission -> full coverage, Q3 crop combined
+    data_3p = _pdf_bytes(pages=3)
+    with make_uow() as uow:
+        result_3p = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="student-3p.pdf",
+            declared_mime="application/pdf",
+            data=data_3p,
+            student_label="student-3p",
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result_3p.submission.state is SubmissionState.AI_PROCESSED
+    assert result_3p.submission.review_reason is None
+    assert result_3p.submission.page_count == 3
+    assert len(result_3p.answer_images) == 3
+    assert [img.question_id for img in result_3p.answer_images] == ["q-1", "q-2", "q-3"]
+    assert all(img.status is AnswerImageStatus.OK for img in result_3p.answer_images)
+
+    q3_img = next(img for img in result_3p.answer_images if img.question_id == "q-3")
+    assert q3_img.page == 2
+    q3_file = store.root / q3_img.image_path
+    assert q3_file.is_file()
+    assert q3_file.stat().st_size > 0
+
+    # 2. 4-page submission -> genuine coverage mismatch halts at NEEDS_REVIEW
+    data_4p = _pdf_bytes(pages=4)
+    with make_uow() as uow:
+        result_4p = intake_submission(
+            uow,
+            store,
+            _ENGINE,
+            _PREPROCESSOR,
+            test_id="test-1",
+            filename="student-4p.pdf",
+            declared_mime="application/pdf",
+            data=data_4p,
+            student_label="student-4p",
+            limits=_LIMITS,
+            now=at(),
+        )
+
+    assert result_4p.submission.state is SubmissionState.NEEDS_REVIEW
+    assert result_4p.submission.review_reason == "extra_pages:4>3"
+    assert len(result_4p.answer_images) == 0

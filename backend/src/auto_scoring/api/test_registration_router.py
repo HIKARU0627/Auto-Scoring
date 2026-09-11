@@ -1012,28 +1012,14 @@ def build_test_registration_router(
                     criteria=_confirmed_criteria(test_id),
                 )
             except CrossPageRegionError as exc:
-                # Measured, not hypothetical: one of the 11 real subjects
-                # prints a single question's answer space across two pages
-                # ("その1"/"その2"). `Question` holds one page and one rect,
-                # so this app genuinely cannot represent that question yet
-                # (docs/answer-area-detection.md; its own Issue). Detection
-                # deliberately reports the areas on *both* pages rather than
-                # dropping half a student's answer -- which means the
-                # reviewer meets this error, and it has to say what is wrong
-                # and what to do, not just restate the invariant.
-                # Issue #215: forewarn that deleting one page's area means only
-                # the remaining page will be graded, and if a page is left with
-                # no questions, imported answer sheets will be flagged with
-                # extra_pages and will not start automated grading.
+                # Issue #108: a question's answer area may span up to 2 pages.
+                # If answer areas span 3 or more pages or non-answer regions are
+                # on an unrelated page, confirm fails with 422 explaining the limit.
                 raise HTTPException(
                     422,
                     detail=(
-                        f"{exc} —— この設問の回答欄が複数ページにまたがっています。"
-                        "いまは1設問につき1ページ分しか扱えません。"
-                        "どちらか一方のページの回答欄だけを残して確定できますが、"
-                        "残したページの分しか採点されません。"
-                        "また、設問のないページが生じると、答案取込時にページ超過（extra_pages）"
-                        "と判定され、自動採点は開始されず人による確認が必要になります。"
+                        f"{exc} —— この設問の回答欄が3ページ以上にまたがっているか、"
+                        "関連領域のページが不一致です。回答欄は最大2ページまでに収めてください。"
                     ),
                 ) from exc
             except DomainError as exc:
