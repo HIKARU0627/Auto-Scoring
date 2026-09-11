@@ -12,8 +12,6 @@ import { buildTest } from "./support/mock-sidecar-client.js";
 const skipped: Record<string, string> = {
   [AppRoutes.starting]:
     "Not a screen: startup overlay placeholder while the sidecar is unusable.",
-  [AppRoutes.pdfReviewPattern]:
-    "PDF review. Follow-up Issue #192 (same wave as Flutter home_escape_test.dart).",
 };
 
 const covered = new Set<string>([
@@ -23,6 +21,7 @@ const covered = new Set<string>([
   AppRoutes.testSettingsPattern,
   AppRoutes.submissionQueuePattern,
   AppRoutes.submissionConfirmPattern,
+  AppRoutes.pdfReviewPattern,
 ]);
 
 function fill(path: string): string {
@@ -168,6 +167,17 @@ describe("home escape meta test (INV-201-05)", () => {
       fireEvent.click(escape);
 
       await screen.findByTestId("home-next-up");
+    });
+
+    it(`${location}: escape pops one frame on a stacked history (INV-019)`, async () => {
+      renderAppAt(location, {
+        handlers: defaultHandlers,
+        initialStack: [AppRoutes.home, AppRoutes.testList, location],
+      });
+
+      fireEvent.click(await screen.findByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
+      await screen.findByText("テスト一覧");
+      expect(screen.queryByText("まだテストが登録されていません")).toBeNull();
     });
   }
 
