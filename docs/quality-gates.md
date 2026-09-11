@@ -8,6 +8,7 @@ entry in `package.json`, invoked as `pnpm run <script>`.
 | Agent skill mirror         | `pnpm run skills:check`     | App → Check agent skill mirrors               |
 | Formatting                 | `pnpm run format:check`     | App → Check formatting                        |
 | OpenAPI contract self-test | `pnpm run openapi:selftest` | App → OpenAPI contract self-test              |
+| Package alarm self-test    | `pnpm run alarm:selftest`   | App → Package alarm self-test                 |
 | OpenAPI contract           | `pnpm run openapi:check`    | App → OpenAPI contract                        |
 | Lint                       | `pnpm run lint`             | App → Lint (`:app`), Backend → Lint           |
 | Typecheck                  | `pnpm run typecheck`        | App → Typecheck (`:app`), Backend → Typecheck |
@@ -62,17 +63,20 @@ own their formatting.
 
 ## CI のジョブ構成と、必須チェック `Quality`
 
-CI は 5 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は**判定を集約する
-だけ**のジョブで、`package` は独立。`needs` で繋がっているのは `quality` だけなので、
+CI は 6 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は**判定を集約する
+だけ**のジョブで、`package` は独立、`package-alarm` は `package` の結果だけを見る。
+`needs` で繋がっているのは `quality`（3 実作業）と `package-alarm`（`package`）だけで、
 `app` / `backend` / `desktop` / `package` は同時に走る。**待ち時間は和ではなく最大値。**
+`package-alarm` は `package` が終わり次第 `quality` を待たずに走る。
 
-| ジョブ    | 表示名            | 中身                                                               | ツールチェーン                    |
-| --------- | ----------------- | ------------------------------------------------------------------ | --------------------------------- |
-| `app`     | App               | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
-| `backend` | Backend           | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
-| `desktop` | Desktop           | `:desktop` の typecheck/test/build + Playwright (Electron)         | uv + Node（**Flutter SDK なし**） |
-| `quality` | **Quality**       | 上 3 つの結果を判定するだけ                                        | なし（ubuntu）                    |
-| `package` | Package (Windows) | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
+| ジョブ          | 表示名                  | 中身                                                               | ツールチェーン                    |
+| --------------- | ----------------------- | ------------------------------------------------------------------ | --------------------------------- |
+| `app`           | App                     | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
+| `backend`       | Backend                 | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
+| `desktop`       | Desktop                 | `:desktop` の typecheck/test/build + Playwright (Electron)         | uv + Node（**Flutter SDK なし**） |
+| `quality`       | **Quality**             | 上 3 つの結果を判定するだけ                                        | なし（ubuntu）                    |
+| `package`       | Package (Windows)       | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
+| `package-alarm` | Package (Windows) alarm | 上の赤を追跡 Issue にする（`needs: [package]` / ubuntu）           | Node のみ                         |
 
 ### 置き場所の理由
 
@@ -157,6 +161,54 @@ refs/remotes/origin/main`。`pull_request` 側: run 34472340931 で
 `main` 側で並列に走るようになったこと自体は、この変更のマージ後に実際に
 2 件連続でマージされて初めて観測できる。observable acceptance はそちらに
 記録する。
+
+## `main` の `Package (Windows)` の赤に気付く仕組み（Issue #312）
+
+`package` は `Quality` の `needs` に入っていない（上のとおり意図的）。そのため
+`main` で `Package (Windows)` が赤でもマージは止まらず、**run を開かない限り
+誰も気付かない。** Windows 成果物を作れるのはこのジョブだけ（PyInstaller は
+クロスコンパイル不可、`pnpm run build:app` = `flutter build windows` は Linux 不可）
+なので、この赤は「出荷する Windows ビルドが壊れた」の唯一の signal である。
+
+採用した案は **案 C**（cut-over 直前だけ `Package (Windows)` を必須 check に
+する）。案 A（いま必須化する）は、ネットワーク断のような変更と無関係の赤で
+全 PR を 45 分ジョブに依存させるため採らない。案 B（現状維持 + 気付く仕組み）は
+案 C の前半そのもの。**「必須化」だけは本番構成変更であり、オーナーが
+cut-over 直前に判断する**（`docs/agent-orchestration.md` §6 の委譲範囲外）。
+この Issue はその判断を待たず、いま欠けている「赤に気付く仕組み」だけを入れる。
+
+仕組みは `ci.yml` の `package-alarm` ジョブと `scripts/package-alarm.mjs`:
+
+- `needs: [package]` + `if: always()` で `package` の結果を必ず受け取る。
+  `if: always()` が無いと失敗時に skip され、GitHub は skip を成功として扱う。
+- `main` への push で `package` が `success` 以外なら、追跡 Issue
+  `main: Package (Windows) is failing` を作成する（既に開いていればコメントする）。
+  `success` に戻ったらその Issue を閉じる。
+- `main` 以外（PR）では追跡 Issue を作らず、**このジョブ自身を赤くする**。
+  これにより、マージ前に PR 上で仕組みの反応を変異検査できる。
+- 未知の結果・`GITHUB_TOKEN` 不足・API の非 2xx は**例外で落ちる**。
+  「権限が無いので何もしない」という経路を作らない。
+- 権限はジョブ単位で `issues: write` を要求する。リポジトリ既定の
+  `default_workflow_permissions` は `read` だが、ジョブの `permissions` が
+  それを上書きする（fork からの PR だけは read に落ちるが、その経路は
+  Issue を触らない）。
+- **`package-alarm` は `Quality` の `needs` に入れない。** 入れた時点で
+  `Package (Windows)` が必須 check になり、オーナーの判断を先取りしてしまう。
+
+### 沈黙する監視にしない
+
+`Package (Windows)` という表示名と `package` というジョブ ID への依存は、
+`scripts/package-alarm.test.mjs`（`pnpm run alarm:selftest`）が**実ファイル**に
+対して検査する:
+
+- `ci.yml` の `package` ジョブの `name:` が `Package (Windows)` のままである
+  こと（リネームしたら赤くなる）。
+- `package-alarm` が `needs: [package]` と `if: always()` を持つこと
+  （条件式を壊したら赤くなる）。
+
+さらに、報告分岐すべて（Issue 作成・コメント・回復で close・PR で赤・
+未知の結果で fail-closed・API 拒否で fail-closed）を同じテストが fake fetch で
+通す。`pnpm run check` と CI の App ジョブに含まれる。
 
 ## git hooks vs CI
 
