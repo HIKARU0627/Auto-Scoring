@@ -494,7 +494,7 @@ export function ApiKeyTab(): JSX.Element {
                 <div className="mt-md flex flex-col gap-xs rounded-md bg-surface p-sm">
                   <div className="flex items-start gap-sm">
                     <span
-                      className={`inline-block h-2 w-2 rounded-full mt-1.5 ${
+                      className={`inline-block h-2 w-2 rounded-full mt-sm ${
                         verification.result === "ok" ? "bg-primary" : "bg-error"
                       }`}
                     />

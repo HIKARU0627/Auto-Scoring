@@ -86,8 +86,8 @@ Flutter 版の cut-over（`app/` 削除）に向け、Electron (`desktop/`) 側�
      2. PDF 座標計算・ドラッグ描画における動的絶対配置（`style={{ left, top, width, height }}`）および進捗率のパーセンテージ幅（`style={{ width: \`\${pct}%\` }}`）: 画面の寸法規律ではなく、PDF ページの動的幾何変換（`normalized-coordinates`）やランタイム状態の計算値であるため。
 2. **既存残存違反の扱い（厳密な同一性 allowlist 方式）**:
    - 件数ベースの baseline は採らず、`(file, symbol, rule, literal)` の組で 1 件ずつ列挙した allowlist で許可する。`line` は記録時点の参考値であり照合キーには含めない（`features/` は並行編集で行番号が動くため）。これにより既存違反があるファイル内でも、列挙に無い新規違反（新しいリテラル）は即座に赤となる。
-   - allowlist のエントリ数は定数上限（27 件）で拘束され、勝手に追加するとテストが赤になる（減る方向のみ許可）。
-   - 各エントリの `removalIssue` には撤去先の Issue を付与する。司令塔が起票するまで番号を発明せず `TODO(owner)` を置く。他人のファイルを勝手に書き換えて解消せず、allowlist で隔離して撤去 Issue を通じて計画的に解消する。
+   - allowlist は Issue #295 で空になった。上限は `EXPECTED_ALLOWLIST_COUNT = 0` で、以後は新規違反を allowlist に登録できない（増やす方向は赤、減らす方向のみ許可）。
+   - 新しく `features/` にスタイルを足すときは allowlist ではなく、`design-tokens.css` / `index.css` のトークン・ユーティリティクラスを使う（§4.6）。
 
 ## 2. タイポグラフィ
 
@@ -440,6 +440,22 @@ Issue #85 で、この高さの決め方に2つの上限を足した。
 | `max-h-dialog-viewport`                  | 上記 max-height を適用                                       | 確認ダイアログなど、ビューポート内に収めるパネル                                     |
 | `--layout-dialog-body-footer-grid-rows`  | `minmax(0, 1fr) auto`                                        | 本文行はスクロール、最下行（キャンセル/確定）は固定                                  |
 | `grid-dialog-body-footer`                | 上記 grid-template-rows を適用                               | 本文＋固定アクション行の 2 行グリッド。同形の確認ダイアログで再利用                  |
+
+### 4.6 Issue #295 で features から移したトークン
+
+`features/` に残っていた直書き値のうち、値が一意なものを
+`desktop/src/renderer/styles/design-tokens.css` と `index.css` へ移した。
+
+| トークン / ユーティリティ        | 値                 | 使いどころ                                             |
+| -------------------------------- | ------------------ | ------------------------------------------------------ |
+| `--color-overlay-scrim`          | `rgb(0 0 0 / 50%)` | モーダルの背景（`bg-overlay-scrim`）                   |
+| `--border-width-region`          | `1.5px`            | 未選択の回答領域の枠（`border-region`）                |
+| `--border-width-region-selected` | `3px`              | 選択中の回答領域の枠（`border-region-selected`）       |
+| `--layout-inspector-max-height`  | `80vh`             | 添削レビュー Inspector の最大高さ（`max-h-inspector`） |
+
+寸法（`max-w-*`, `h-*`, `min-w-*`）と字サイズ（`text-5xl`）は Tailwind の
+spacing / 字サイズスケールから取る。sub-grid の spacing（旧 `py-0.5`,
+`mt-1.5`, `mt-1`）は §4.1 の 4px スケールへ寄せた。
 
 ## 5. モーション
 
