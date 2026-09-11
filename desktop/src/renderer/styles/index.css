@@ -33,6 +33,8 @@
   --color-outline-variant: var(--color-outline-variant);
   --color-inverse-surface: var(--color-inverse-surface);
   --color-on-inverse-surface: var(--color-on-inverse-surface);
+  --color-sidebar-subtitle: var(--color-sidebar-subtitle);
+  --color-sidebar-nav-idle: var(--color-sidebar-nav-idle);
   --color-attention: var(--color-attention);
   --color-attention-container: var(--color-attention-container);
   --color-on-attention-container: var(--color-on-attention-container);
@@ -67,6 +69,9 @@
   --text-ui-label: var(--font-size-label-large);
   --text-recognized: var(--font-size-recognized-text);
   --text-score: var(--font-size-headline-small);
+  --text-headline-large: var(--font-size-headline-large);
+  --text-headline-medium: var(--font-size-headline-medium);
+  --text-headline-small: var(--font-size-headline-small);
 
   --leading-ui: var(--line-height-ui);
   --leading-reading: var(--line-height-reading);
@@ -142,6 +147,10 @@
     letter-spacing: 0;
     color: var(--color-on-surface);
     background-color: var(--color-surface);
+    /* Issue #361: keep the OS scrollbar inside the navy palette instead of the
+       default grey band. `scrollbar-color` inherits to inner scrollers. */
+    scrollbar-color: var(--color-scrollbar-thumb) var(--color-scrollbar-track);
+    scrollbar-width: thin;
   }
 
   body {
