@@ -22,6 +22,7 @@ from auto_scoring.adapters.sqlalchemy_repositories import (
     SqlAlchemyAnnotationRepository,
     SqlAlchemyAnswerImageRepository,
     SqlAlchemyDependencyGraphRepository,
+    SqlAlchemyErrorCatalogRepository,
     SqlAlchemyExportRepository,
     SqlAlchemyGradeResultRepository,
     SqlAlchemyJobRepository,
@@ -40,6 +41,7 @@ class SqlAlchemyUnitOfWork:
 
     tests: SqlAlchemyTestRepository
     test_materials: SqlAlchemyTestMaterialRepository
+    error_catalogs: SqlAlchemyErrorCatalogRepository
     questions: SqlAlchemyQuestionRepository
     rubrics: SqlAlchemyRubricRepository
     submissions: SqlAlchemySubmissionRepository
@@ -61,6 +63,7 @@ class SqlAlchemyUnitOfWork:
         session = self._session
         self.tests = SqlAlchemyTestRepository(session)
         self.test_materials = SqlAlchemyTestMaterialRepository(session)
+        self.error_catalogs = SqlAlchemyErrorCatalogRepository(session)
         self.questions = SqlAlchemyQuestionRepository(session)
         self.rubrics = SqlAlchemyRubricRepository(session)
         self.submissions = SqlAlchemySubmissionRepository(session)

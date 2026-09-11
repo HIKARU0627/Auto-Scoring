@@ -27,6 +27,7 @@ from auto_scoring.db.orm import (
     AnswerImageRow,
     DependencyEdgeRow,
     DependencyGraphRow,
+    ErrorCatalogRow,
     ExportRow,
     GradeResultRow,
     JobRow,
@@ -43,6 +44,11 @@ from auto_scoring.domain.dependency_graph import (
     DependencyGraph,
     DependencyGraphError,
     DependencyGraphStatus,
+)
+from auto_scoring.domain.error_catalog import (
+    CatalogEntry,
+    ErrorCatalogConflict,
+    ErrorCatalogDraft,
 )
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
@@ -142,6 +148,83 @@ class SqlAlchemyTestMaterialRepository:
             )
         ).first()
         return m.test_material_from_row(row) if row is not None else None
+
+
+class SqlAlchemyErrorCatalogRepository:
+    """One test's reviewed 誤答カタログ (Issue #209), keyed by ``test_id``."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get(self, test_id: str) -> ErrorCatalogDraft | None:
+        row = self._session.get(ErrorCatalogRow, test_id)
+        return None if row is None else error_catalog_from_row(row)
+
+    def save(self, draft: ErrorCatalogDraft, *, expected_revision: int | None) -> None:
+        """Insert, or replace iff the row is still at ``expected_revision``.
+
+        The conditional ``UPDATE ... WHERE revision = expected_revision`` is
+        the compare-and-set: SQLite evaluates it against the row's state at
+        execution time, not against whatever this session read earlier, so a
+        concurrent save that already landed makes this one a no-op and it
+        reports ``ErrorCatalogConflict`` instead of overwriting an edit it
+        never saw (mirrors ``SqlAlchemyDependencyGraphRepository.save``).
+        """
+        entries = [entry.to_dict() for entry in draft.entries]
+        if expected_revision is None:
+            if self._session.get(ErrorCatalogRow, draft.test_id) is not None:
+                raise ErrorCatalogConflict(
+                    f"error catalogue for test {draft.test_id!r} already exists"
+                )
+            self._session.add(
+                ErrorCatalogRow(
+                    test_id=draft.test_id,
+                    revision=draft.revision,
+                    imported=draft.imported,
+                    import_error=draft.import_error,
+                    note=draft.note,
+                    entries=entries,
+                )
+            )
+            self._session.flush()
+            return
+
+        result = cast(
+            "CursorResult[Any]",
+            self._session.execute(
+                update(ErrorCatalogRow)
+                .where(
+                    ErrorCatalogRow.test_id == draft.test_id,
+                    ErrorCatalogRow.revision == expected_revision,
+                )
+                .values(
+                    revision=draft.revision,
+                    imported=draft.imported,
+                    import_error=draft.import_error,
+                    note=draft.note,
+                    entries=entries,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            raise ErrorCatalogConflict(
+                f"error catalogue for test {draft.test_id!r} has changed since revision "
+                f"{expected_revision}; reload and re-review before saving"
+            )
+        cached = self._session.get(ErrorCatalogRow, draft.test_id)
+        if cached is not None:
+            self._session.refresh(cached)
+
+
+def error_catalog_from_row(row: ErrorCatalogRow) -> ErrorCatalogDraft:
+    return ErrorCatalogDraft(
+        test_id=row.test_id,
+        entries=tuple(CatalogEntry.from_dict(entry) for entry in row.entries),
+        revision=row.revision,
+        imported=bool(row.imported),
+        import_error=row.import_error,
+        note=row.note,
+    )
 
 
 class SqlAlchemyQuestionRepository:

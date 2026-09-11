@@ -17,9 +17,13 @@ import pytest
 
 from auto_scoring.domain.error_catalog import (
     CatalogEntry,
+    CatalogState,
     CatalogUnreadableReason,
+    ErrorCatalogDraft,
     ErrorCatalogUnreadable,
     build_error_catalog,
+    catalog_state,
+    merge_import,
 )
 
 # The four measured layouts, as headers only (section 5.1). Values below them
@@ -237,3 +241,50 @@ def test_a_sheet_that_fails_inside_a_readable_workbook_is_reported_not_dropped()
     assert [(p.sheet_number, p.reason) for p in catalog.unreadable_sheets] == [
         (1, CatalogUnreadableReason.NO_HEADER_ROW)
     ]
+
+
+def test_merge_import_keeps_an_edited_row_and_takes_the_fresh_otherwise() -> None:
+    """Issue #209 judgment 2: a re-import must not discard a human correction,
+    and must not keep an untouched row in place of the file's newer one."""
+    existing = [
+        CatalogEntry(mistake="人の訂正", red_ink="人の赤入れ", edited=True),
+        CatalogEntry(mistake="機械の古い行", red_ink="機械の赤入れ", edited=False),
+    ]
+    imported = [
+        CatalogEntry(mistake="ファイルA", red_ink="赤入れA"),
+        CatalogEntry(mistake="ファイルB", red_ink="赤入れB"),
+    ]
+    merged = merge_import(existing, imported, overwrite_edited=False)
+    assert [entry.mistake for entry in merged] == ["人の訂正", "ファイルB"]
+
+
+def test_merge_import_overwrite_takes_the_file_wholesale() -> None:
+    existing = [CatalogEntry(mistake="人の訂正", red_ink="人の赤入れ", edited=True)]
+    imported = [CatalogEntry(mistake="ファイルA", red_ink="赤入れA")]
+    merged = merge_import(existing, imported, overwrite_edited=True)
+    assert [(entry.mistake, entry.edited) for entry in merged] == [("ファイルA", False)]
+
+
+def test_catalog_state_separates_the_three_no_catalogue_situations() -> None:
+    """(c) を (a) と同じ値にしない -- the point Issue #106 was written for."""
+    not_registered = catalog_state(has_annotation_resource=False, has_excel=False, imported=False)
+    word_only = catalog_state(has_annotation_resource=True, has_excel=False, imported=False)
+    unreadable = catalog_state(has_annotation_resource=True, has_excel=True, imported=False)
+    available = catalog_state(has_annotation_resource=True, has_excel=True, imported=True)
+    assert len({not_registered, word_only, unreadable, available}) == 4
+    assert (not_registered, word_only, unreadable, available) == (
+        CatalogState.NOT_REGISTERED,
+        CatalogState.WORD_ONLY,
+        CatalogState.UNREADABLE,
+        CatalogState.AVAILABLE,
+    )
+
+
+def test_a_draft_round_trips_through_its_json_shape() -> None:
+    draft = ErrorCatalogDraft(
+        test_id="t",
+        entries=(CatalogEntry(mistake="m", red_ink="r", edited=True),),
+        revision=3,
+        imported=True,
+    )
+    assert ErrorCatalogDraft.from_dict(draft.to_dict()) == draft
