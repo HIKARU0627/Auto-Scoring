@@ -93,6 +93,11 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > 記録する。失敗した試行は `Job`（kind=`export`、Issue #11 の時点で
 > `JobKind` に存在していたが本Issueまで生成する経路が無かった）の
 > `state=failed` にのみ残る。詳細は [`pdf-export.md`](./pdf-export.md)。
+>
+> `Question` の `page_2` / `answer_area_2`（マイグレーション
+> `0019_two_page_question_areas`）は Issue #108 で追加した、1つの設問の解答欄が
+> 2ページにまたがる答案（実測: 11教科中1教科）を表現するための列。
+> 1ページ完結の既存設問は全て `NULL` のまま。詳細は §4.2。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、
@@ -223,6 +228,47 @@ review 行も消える」を意味する。現行コードに `grade_results` / 
 `test_migrations.py::test_upgrade_repairs_a_review_history_that_could_not_be_deleted`
 （0017 で赤 → `head` で緑を1つのテスト内で押さえる）。
 
+### 4.2 設問の2ページ解答欄対応（Issue #108）
+
+実機再検証 #6 で、実資料 11 教科中 1 教科において、1 つの設問の回答欄が 2 ページにまたがる
+（「問N（その1）」が2ページ目、「問N（その2）」が3ページ目）答案が確認された。
+従来のデータモデルでは `Question` は `page: int` と矩形 1 つしか持てず、確定時に
+`CrossPageRegionError` で片方のページを削除するよう指示していたが、指示に従って削除すると
+設問のないページが生じて取込時に `extra_pages` となり、答案画像が抽出されず採点ジョブも
+投入されない（#215 の抑止）という問題を引き起こしていた。
+
+**決定: `Question` に `page_2` と `answer_area_2` 列を追加し、1 つの設問エンティティで 2 ページの解答欄を保持する。**
+
+**採用した設計と理由:**
+
+- `Question` テーブルに `page_2` (INTEGER NULL) と `answer_area_2` (JSON NULL) を追加（マイグレーション `0019_two_page_question_areas`）。
+- 既存の 1 ページ完結設問は `page_2 = NULL`, `answer_area_2 = NULL` のままであり、完全な後方互換性を維持。
+- `QuestionResponse` などの既存 API スキーマを破壊せず、進行中のフロントエンド移植（`docs/frontend-migration.md`「バックエンド Issue はそのまま進めてよい。API は変わらない」）に影響を与えない。
+- 答案取込・切り出しパイプライン（`submission_intake`）は、2 ページにまたがる設問について各ページから該当矩形を切り出し、垂直に結合（白パディングで幅を揃えて結合）して 1 つの `AnswerImage` を生成。これにより AI 採点（`GradingJobProcessor`）および OCR（`RecognitionJobProcessor`）は設問全体の解答を閲覧・採点できる。
+- `PageCoverage` の期待ページ集合（`expected_pages`）は全設問の全ページ（`q.pages`）を参照するため、3 ページ答案が正しく完全被覆として認識され、誤った `extra_pages` 判定を防ぐ。
+
+**捨てた案と、捨てた理由:**
+
+- **案1: 解答領域を別テーブル（`question_answer_areas`）に完全分離する:**
+  1 設問が複数ページにまたがるのは実測 11 教科中 1 教科のみである。領域を別テーブルに分離すると、全クエリ・リポジトリ・マッパー・OpenAPI スキーマへの波及が過大であり、`QuestionResponse.page` や `answer_area` の変更を強いるためフロントエンド移行と衝突する（YAGNI原則に反する）。
+- **案2: 設問を小問（問N-1, 問N-2）に分割して別々の `Question` 行にする:**
+  採点基準 PDF（配点表）には設問合算の配点しかなく、小問ごとの配点が不明なため機械的に配点を分割できない。また、AI 採点は設問全体の解答文脈（途中式と結論、記述の論理性）を総合してルーブリック判定を行う必要があるため、小問分割すると総合採点が不可能になる。
+- **案3: 3ページ以上の任意ページ跨ぎの一般化:**
+  実資料でまたがるのは「その1」「その2」の 2 ページのみであり、3 ページ以上の跨がりは実在しない。2 ページまでに制約することで、スキーマ・切り出し・インク判定を極めてシンプルかつ堅牢に保てる。3 ページ以上が登録された場合は `CrossPageRegionError` (422) で正直に拒絶し、適切な修正指示を返す。
+
+**DB 制約 (CHECK):**
+
+- `ck_questions_page_positive`: `page >= 1`
+- `ck_questions_page_2_positive`: `page_2 IS NULL OR page_2 >= 1`
+- `ck_questions_page_2_greater`: `page_2 IS NULL OR page_2 > page`（ページ番号の順序性を保証）
+- `ck_questions_page_2_and_area_2_paired`: `(page_2 IS NULL AND answer_area_2 IS NULL) OR (page_2 IS NOT NULL AND answer_area_2 IS NOT NULL)`（2ページ目番号と領域の整合性を保証）
+
+**マイグレーション運用:**
+
+- `0019_two_page_question_areas`: `questions` テーブルに `page_2` と `answer_area_2` を追加。
+- 既存データは全て `NULL` のためデータ移行・バックフィルは不要。
+- 復旧: `downgrade()` で列と制約を削除（1 ページ完結のデータは無傷で維持）。
+
 ## 5. `app-data/` のファイル保存規則
 
 簡易設計書 §23 のレイアウトをそのまま採用する。
@@ -302,6 +348,9 @@ app-data/
     `PRAGMA foreign_key_check(reviews)` で孤児が無いことを確かめてから終わる。
     復旧: 変更は `reviews` 1テーブルに閉じており、`downgrade` が同じコピーで
     `SET NULL` に戻す（並び順依存も一緒に戻る）。
+  - `0019_two_page_question_areas` — `questions` テーブルに `page_2` と `answer_area_2`
+    列を追加（Issue #108、§4.2）。1設問の解答欄が2ページにまたがる答案を表現する。
+    データ移行は不要（既存行は `NULL` のまま）。復旧: `downgrade` で列と CHECK 制約を削除。
 - スキーマを変更したら `db/orm.py` を直し、`uv run alembic revision --autogenerate`
   で新しい revision を作る。`alembic.command.check`（`test_head_schema_matches_orm_metadata`）
   が ORM とマイグレーション履歴の乖離を検出する。
