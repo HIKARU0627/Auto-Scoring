@@ -93,6 +93,77 @@ export const E2E_EXTRACT_STUB_ENV = {
   AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT: "1",
 } as const;
 
+/**
+ * Drives the テスト設定 screen from criteria extraction to a `ready` test.
+ * Shared by the registration spec and the Issue #306 intake spec so both fix
+ * the same registration path.
+ */
+export async function completeRegistrationFromTestSettings(
+  page: Page,
+): Promise<void> {
+  await expect(page.getByTestId("criteria-section")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await openExtractConfirmDialog(page);
+  await page.getByTestId("extract-confirm-button").click();
+  await expect(page.getByTestId("extract-confirm-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("criteria-number-0")).toHaveValue("問1");
+  await page.getByTestId("confirm-criteria-button").click();
+  await expect(page.getByTestId("criteria-section")).toContainText("確認済み");
+
+  await page.getByTestId("upload-answer-layout-button").click();
+  await expect(page.getByTestId("add-region-button")).toBeEnabled({
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("answer-area-editor")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByTestId("add-region-button").click();
+  await page.getByTestId("confirm-profile-button").click();
+  await expect(page.getByTestId("profile-section")).toContainText("確認済み", {
+    timeout: 15_000,
+  });
+
+  await page.getByTestId("analyze-dependency-graph-button").click();
+  await expect(page.getByTestId("dependency-graph-empty")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByTestId("confirm-dependency-graph-button").click();
+  await expect(page.getByTestId("dependency-graph-section")).toContainText(
+    "確認済み",
+    { timeout: 15_000 },
+  );
+
+  await page.getByTestId("complete-registration-button").click();
+  await expect(page.getByTestId("test-status-label")).toHaveText(
+    "テスト状態: 登録完了",
+    { timeout: 15_000 },
+  );
+}
+
+/** Pops back to the home dashboard from wherever the router currently is. */
+export async function goHome(page: Page): Promise<void> {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (
+      await page
+        .getByTestId("home-open-intake")
+        .isVisible()
+        .catch(() => false)
+    ) {
+      return;
+    }
+    const back = page.getByTestId("app-back-or-home");
+    if (await back.isVisible().catch(() => false)) {
+      await back.click();
+    }
+    await page.waitForTimeout(200);
+  }
+  await expect(page.getByTestId("home-open-intake")).toBeVisible({
+    timeout: 15_000,
+  });
+}
+
 export async function openExtractConfirmDialog(page: Page): Promise<void> {
   await page.getByTestId("extract-criteria-button").click();
   await expect(page.getByTestId("extract-confirm-dialog")).toBeVisible({

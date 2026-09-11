@@ -1,56 +1,13 @@
 import { test, expect } from "@playwright/test";
-import type { Page } from "@playwright/test";
 
 import { closeElectronApp, launchElectronApp } from "./electron-launch";
 import {
   ANSWER_SHEET_PDF,
+  completeRegistrationFromTestSettings,
   createDraftTest,
   openDraftTestSettings,
-  openExtractConfirmDialog,
   waitForHomeReady,
 } from "./registration-helpers";
-
-async function completeRegistrationFromTestSettings(page: Page): Promise<void> {
-  await expect(page.getByTestId("criteria-section")).toBeVisible({
-    timeout: 15_000,
-  });
-
-  await openExtractConfirmDialog(page);
-  await page.getByTestId("extract-confirm-button").click();
-  await expect(page.getByTestId("extract-confirm-dialog")).toHaveCount(0);
-  await expect(page.getByTestId("criteria-number-0")).toHaveValue("問1");
-  await page.getByTestId("confirm-criteria-button").click();
-  await expect(page.getByTestId("criteria-section")).toContainText("確認済み");
-
-  await page.getByTestId("upload-answer-layout-button").click();
-  await expect(page.getByTestId("add-region-button")).toBeEnabled({
-    timeout: 30_000,
-  });
-  await expect(page.getByTestId("answer-area-editor")).toBeVisible({
-    timeout: 15_000,
-  });
-  await page.getByTestId("add-region-button").click();
-  await page.getByTestId("confirm-profile-button").click();
-  await expect(page.getByTestId("profile-section")).toContainText("確認済み", {
-    timeout: 15_000,
-  });
-
-  await page.getByTestId("analyze-dependency-graph-button").click();
-  await expect(page.getByTestId("dependency-graph-empty")).toBeVisible({
-    timeout: 15_000,
-  });
-  await page.getByTestId("confirm-dependency-graph-button").click();
-  await expect(page.getByTestId("dependency-graph-section")).toContainText(
-    "確認済み",
-    { timeout: 15_000 },
-  );
-
-  await page.getByTestId("complete-registration-button").click();
-  await expect(page.getByTestId("test-status-label")).toHaveText(
-    "テスト状態: 登録完了",
-    { timeout: 15_000 },
-  );
-}
 
 /**
  * Issue #255 acceptance: home → test settings → registration complete on the real

@@ -5,6 +5,10 @@ import {
 } from "../../shared/sidecar-upload.js";
 import type { SidecarClient } from "../api/client.js";
 import type { components } from "../api/generated/schema.js";
+import {
+  submissionImportFailureRequirement,
+  type SubmissionImportFailureKind,
+} from "./action-requirements.js";
 import { gradingKickoffFailureFromStatus } from "./grading-kickoff.js";
 import type { MaterialRole } from "./material-role-labels.js";
 import {
@@ -12,6 +16,7 @@ import {
   includedFiles,
   IntakeTargetKind,
   intakeFileName,
+  targetTestAcceptsAnswers,
   type IntakeFileState,
   type IntakeGroupState,
   type IntakeReviewState,
@@ -27,6 +32,28 @@ export class IntakeDataError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "IntakeDataError";
+  }
+}
+
+/**
+ * 答案 1 件の取込が失敗した理由 (Issue #306)。`status` と `detail` を捨てずに
+ * 呼び出し元へ渡し、画面は `core/action-requirements.ts` の文言で理由を出す。
+ */
+export class SubmissionIntakeError extends IntakeDataError {
+  readonly status: number;
+  readonly kind: SubmissionImportFailureKind;
+  readonly detail: string | null;
+
+  constructor(input: {
+    status: number;
+    kind: SubmissionImportFailureKind;
+    detail: string | null;
+  }) {
+    super(submissionImportFailureRequirement(input.kind).message);
+    this.name = "SubmissionIntakeError";
+    this.status = input.status;
+    this.kind = input.kind;
+    this.detail = input.detail;
   }
 }
 
@@ -82,8 +109,16 @@ export async function loadClassificationAvailability(
   return response.data;
 }
 
-export async function listTests(client: SidecarClient): Promise<TestSummary[]> {
-  const response = await client.GET("/tests");
+/**
+ * 登録済みテストを**状態つき**で取得する (Issue #306)。答案を受け付けるのは
+ * `ready` だけなので、取込の段分けはこの `status` から機械的に決める。`GET /tests`
+ * は `ready` しか返さないため、登録途中のテストも再利用できる `GET /test-registrations`
+ * を使う。
+ */
+export async function listTests(
+  client: SidecarClient,
+): Promise<TestResponse[]> {
+  const response = await client.GET("/test-registrations");
   if (response.error !== undefined) {
     throw new IntakeDataError("登録済みテストを取得できません");
   }
@@ -152,15 +187,64 @@ export async function attributeAnswer(
   return response.body as components["schemas"]["AttributionProposalResponse"];
 }
 
-function isDuplicateSubmission(body: unknown): boolean {
+function detailOf(body: unknown): unknown {
   if (typeof body !== "object" || body === null) {
-    return false;
+    return undefined;
   }
-  const detail = (body as { detail?: unknown }).detail;
-  if (typeof detail !== "object" || detail === null) {
-    return false;
+  return (body as { detail?: unknown }).detail;
+}
+
+function isDuplicateSubmission(body: unknown): boolean {
+  const detail = detailOf(body);
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    "existing_submission_id" in detail
+  );
+}
+
+function isRetryConflictSubmission(body: unknown): boolean {
+  const detail = detailOf(body);
+  return (
+    typeof detail === "object" && detail !== null && "submission_id" in detail
+  );
+}
+
+/** バックエンドの `detail`（文字列か `{message}`）から人が読める 1 行を取り出す。 */
+function submissionDetailText(body: unknown): string | null {
+  const detail = detailOf(body);
+  if (typeof detail === "string") {
+    return detail.length > 0 ? detail : null;
   }
-  return "existing_submission_id" in detail;
+  if (typeof detail === "object" && detail !== null) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) {
+      return message;
+    }
+  }
+  return null;
+}
+
+/**
+ * 失敗の種類を HTTP status と `detail` の形から決める。文言は付けない
+ * （それは `core/action-requirements.ts` の仕事）。
+ *
+ * - 409 + `existing_submission_id` は重複なので `createSubmission` が先に握る。
+ * - 409 + `submission_id` は再取込の競合。
+ * - それ以外の 409 は `TestNotReadyError`（登録未完了）。
+ * - 5xx は再試行できる一時障害、その他の 4xx は入力そのものの拒否。
+ */
+function submissionFailureKind(
+  status: number,
+  body: unknown,
+): SubmissionImportFailureKind {
+  if (status === 409) {
+    return isRetryConflictSubmission(body) ? "retry-conflict" : "not-ready";
+  }
+  if (status >= 500) {
+    return "server";
+  }
+  return "rejected";
 }
 
 export async function createSubmission(
@@ -179,7 +263,11 @@ export async function createSubmission(
     return "duplicate";
   }
   if (response.status >= 400) {
-    throw new IntakeDataError("答案の取込に失敗しました");
+    throw new SubmissionIntakeError({
+      status: response.status,
+      kind: submissionFailureKind(response.status, response.body),
+      detail: submissionDetailText(response.body),
+    });
   }
   return response.body as SubmissionResponse;
 }
@@ -266,14 +354,28 @@ export interface ImportOutcome {
   readonly groupKey: string;
   readonly name: string;
   readonly testId: string | null;
+  /** 取込先テストの status（`draft` / `ready`）。未確定なら `null`。 */
+  readonly testStatus: string | null;
   readonly createdTest: boolean;
   readonly materialCount: number;
   readonly submissionCount: number;
   readonly duplicateCount: number;
+  /**
+   * 登録が済んでいないため、この取込では上げなかった答案の件数 (Issue #306 第 1 段)。
+   * 登録完了後に同じフォルダをもう一度取り込むと 0 になる。
+   */
+  readonly answersDeferred: number;
   readonly gradingStartedCount: number;
   readonly gradingFailure: string | null;
   readonly error: string | null;
   readonly failedFiles: readonly string[];
+}
+
+/** 取込に必要な外部依存。`testStatusById` は perAnswer の振り分け先の段判定に使う。 */
+export interface ImportDeps {
+  readonly bridge: IntakeBridge;
+  readonly client: SidecarClient;
+  readonly testStatusById?: ReadonlyMap<string, string>;
 }
 
 function importedAnything(outcome: ImportOutcome): boolean {
@@ -285,10 +387,7 @@ function importedAnything(outcome: ImportOutcome): boolean {
 }
 
 async function importAnswers(
-  deps: {
-    bridge: IntakeBridge;
-    client: SidecarClient;
-  },
+  deps: ImportDeps,
   testId: string,
   answers: readonly IntakeFileState[],
 ): Promise<{
@@ -334,7 +433,7 @@ async function importAnswers(
       failure ??=
         error instanceof IntakeDataError
           ? error.message
-          : "答案の取込に失敗しました";
+          : submissionImportFailureRequirement("server").message;
       failedFiles.push(intakeFileName(answer));
     }
   }
@@ -350,15 +449,13 @@ async function importAnswers(
 }
 
 async function importRoutedAnswers(
-  deps: {
-    bridge: IntakeBridge;
-    client: SidecarClient;
-  },
+  deps: ImportDeps,
   group: IntakeGroupState,
   answers: readonly IntakeFileState[],
 ): Promise<ImportOutcome> {
   let imported = 0;
   let duplicates = 0;
+  let deferred = 0;
   let gradingStarted = 0;
   let gradingFailure: string | null = null;
   let failure: string | null = null;
@@ -367,6 +464,12 @@ async function importRoutedAnswers(
   for (const answer of answers) {
     const testId = answer.answerTestId;
     if (testId === null) {
+      continue;
+    }
+    // 段は振り分け先テストの status から機械的に決める (Issue #306 案 A)。
+    const status = deps.testStatusById?.get(testId) ?? null;
+    if (!targetTestAcceptsAnswers(status)) {
+      deferred++;
       continue;
     }
     const result = await importAnswers(deps, testId, [answer]);
@@ -382,10 +485,12 @@ async function importRoutedAnswers(
     groupKey: group.key,
     name: group.name,
     testId: null,
+    testStatus: null,
     createdTest: false,
     materialCount: 0,
     submissionCount: imported,
     duplicateCount: duplicates,
+    answersDeferred: deferred,
     gradingStartedCount: gradingStarted,
     gradingFailure,
     error: failure,
@@ -394,10 +499,7 @@ async function importRoutedAnswers(
 }
 
 async function importGroup(
-  deps: {
-    bridge: IntakeBridge;
-    client: SidecarClient;
-  },
+  deps: ImportDeps,
   group: IntakeGroupState,
 ): Promise<ImportOutcome> {
   const included = includedFiles(group);
@@ -416,7 +518,11 @@ async function importGroup(
     return await importRoutedAnswers(deps, group, answers);
   }
 
+  const createdTest = group.targetKind === IntakeTargetKind.create;
   let testId = group.targetTestId;
+  // 既存テストを再利用するときの status は、画面の一時状態ではなく
+  // 読み込み済みの `TestResponse.status` から渡される (Issue #306)。
+  let testStatus = group.targetTestStatus;
   let materialCount = 0;
   try {
     if (group.targetKind === IntakeTargetKind.create) {
@@ -428,10 +534,12 @@ async function importGroup(
           groupKey: group.key,
           name: group.name,
           testId: null,
+          testStatus: null,
           createdTest: true,
           materialCount: 0,
           submissionCount: 0,
           duplicateCount: 0,
+          answersDeferred: answers.length,
           gradingStartedCount: 0,
           gradingFailure: null,
           error: "採点基準のファイルが選ばれていません。",
@@ -447,8 +555,12 @@ async function importGroup(
         materials: extras,
       });
       testId = test.id;
+      testStatus = test.status;
       materialCount = extras.length + 1;
     } else if (materials.length > 0 && testId !== null) {
+      // `POST /tests/{id}/materials` は同一 (role, 内容) を再送しても既存を返すので、
+      // 差分だけが増える（`docs/test-registration.md`）。profile・依存グラフ・配点には
+      // 触れない。
       materialCount = await addMaterials(deps.bridge, testId, materials);
     }
 
@@ -457,13 +569,35 @@ async function importGroup(
         groupKey: group.key,
         name: group.name,
         testId: null,
-        createdTest: false,
+        testStatus: null,
+        createdTest,
         materialCount: 0,
         submissionCount: 0,
         duplicateCount: 0,
+        answersDeferred: answers.length,
         gradingStartedCount: 0,
         gradingFailure: null,
         error: "取込先のテストが選ばれていません。",
+        failedFiles: [],
+      };
+    }
+
+    // 第 1 段: テストが `ready` でないなら答案は上げない (Issue #306 案 A)。
+    // 登録が済んでから同じフォルダをもう一度取り込むと第 2 段で入る。
+    if (!targetTestAcceptsAnswers(testStatus)) {
+      return {
+        groupKey: group.key,
+        name: group.name,
+        testId,
+        testStatus,
+        createdTest,
+        materialCount,
+        submissionCount: 0,
+        duplicateCount: 0,
+        answersDeferred: answers.length,
+        gradingStartedCount: 0,
+        gradingFailure: null,
+        error: null,
         failedFiles: [],
       };
     }
@@ -473,10 +607,12 @@ async function importGroup(
       groupKey: group.key,
       name: group.name,
       testId,
-      createdTest: group.targetKind === IntakeTargetKind.create,
+      testStatus,
+      createdTest,
       materialCount,
       submissionCount: answersResult.imported,
       duplicateCount: answersResult.duplicates,
+      answersDeferred: 0,
       gradingStartedCount: answersResult.gradingStarted,
       gradingFailure: answersResult.gradingFailure,
       error: answersResult.failure,
@@ -487,10 +623,12 @@ async function importGroup(
       groupKey: group.key,
       name: group.name,
       testId: testId ?? null,
-      createdTest: group.targetKind === IntakeTargetKind.create,
+      testStatus,
+      createdTest,
       materialCount,
       submissionCount: 0,
       duplicateCount: 0,
+      answersDeferred: 0,
       gradingStartedCount: 0,
       gradingFailure: null,
       error:
@@ -501,10 +639,7 @@ async function importGroup(
 }
 
 export async function importReview(
-  deps: {
-    bridge: IntakeBridge;
-    client: SidecarClient;
-  },
+  deps: ImportDeps,
   review: IntakeReviewState,
 ): Promise<readonly ImportOutcome[]> {
   const outcomes: ImportOutcome[] = [];

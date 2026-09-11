@@ -96,7 +96,6 @@ export function scannedFolder(paths: readonly string[]): {
 export interface IntakeMockHandlers extends MockSidecarHandlers {
   listIntakeTemplates?: () => Promise<IntakeTemplateModel[]>;
   intakeCost?: () => Promise<number | null>;
-  listTests?: () => Promise<components["schemas"]["TestSummary"][]>;
   classificationAvailability?: () => Promise<
     components["schemas"]["ClassificationAvailabilityResponse"]
   >;
@@ -127,13 +126,6 @@ export function createIntakeMockClient(
               ? await handlers.intakeCost()
               : null,
           },
-          response: new Response(),
-          error: undefined,
-        };
-      }
-      if (path === "/tests") {
-        return {
-          data: handlers.listTests ? await handlers.listTests() : [],
           response: new Response(),
           error: undefined,
         };

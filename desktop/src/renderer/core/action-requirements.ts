@@ -130,7 +130,51 @@ export const ActionRequirements = {
     "registration-already-complete",
     "登録は完了しています。答案を取り込むと採点が始まります。",
   ),
+  answersDeferredUntilRegistered: requirement(
+    "answers-deferred-until-registered",
+    "このテストはまだ登録が済んでいないので、答案はこのあと取り込みます。",
+  ),
+  submissionTestNotReady: requirement(
+    "submission-test-not-ready",
+    "このテストはまだ登録が済んでいないため、答案を取り込めません。先に登録を完了してから、同じフォルダをもう一度取り込んでください。",
+  ),
+  submissionDuplicate: requirement(
+    "submission-duplicate",
+    "同じ答案がすでに取り込まれています。取り込み直す必要はありません。",
+  ),
+  submissionRetryConflict: requirement(
+    "submission-retry-conflict",
+    "この答案はほかの操作で再取り込み中です。少し待ってからもう一度取り込んでください。",
+  ),
+  submissionRejected: requirement(
+    "submission-rejected",
+    "この答案ファイルは取り込めませんでした。PDFかどうか、暗号化されていないかを確認してください。",
+  ),
+  submissionServerError: requirement(
+    "submission-server-error",
+    "一時的な問題で答案を取り込めませんでした。時間をおいてもう一度取り込んでください。",
+  ),
 } as const;
+
+/** 答案の取込が失敗したときの種類。`createSubmission` が返す区分。 */
+export type SubmissionImportFailureKind =
+  "not-ready" | "retry-conflict" | "rejected" | "server";
+
+/** 失敗の種類ごとに、画面へ出す理由文を 1 箇所から返す (INV-004)。 */
+export function submissionImportFailureRequirement(
+  kind: SubmissionImportFailureKind,
+): ActionRequirement {
+  switch (kind) {
+    case "not-ready":
+      return ActionRequirements.submissionTestNotReady;
+    case "retry-conflict":
+      return ActionRequirements.submissionRetryConflict;
+    case "rejected":
+      return ActionRequirements.submissionRejected;
+    case "server":
+      return ActionRequirements.submissionServerError;
+  }
+}
 
 export function intakeFolderPickRequirements(input: {
   busy: boolean;

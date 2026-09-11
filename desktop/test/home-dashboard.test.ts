@@ -131,4 +131,25 @@ describe("HomeDashboard next action", () => {
     expect(dashboard.nextAction.detail).not.toContain("模範解答");
     expect(dashboard.nextAction.detail).not.toContain("採点マニュアル");
   });
+
+  it("Issue #306: 登録途中のテストがあれば答案取込より先に登録を案内する", () => {
+    const dashboard = buildDashboard({}, [
+      buildTest({
+        id: "draft-1",
+        name: "国語",
+        status: "draft",
+        createdDay: 2,
+      }),
+      buildTest({
+        id: "ready-1",
+        name: "数学",
+        status: "ready",
+        createdDay: 1,
+      }),
+    ]);
+
+    expect(dashboard.nextAction.actionLabel).toBe("登録を続ける");
+    expect(dashboard.nextAction.route).toBe(`/tests/draft-1/settings`);
+    expect(dashboard.nextAction.actionLabel).not.toBe("答案を取り込む");
+  });
 });

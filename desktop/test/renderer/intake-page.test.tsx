@@ -8,7 +8,10 @@ import {
   buildPlan,
   plannedFile,
 } from "./support/intake-harness.js";
+import { buildTest } from "./support/mock-sidecar-client.js";
 import { renderAppAt } from "./support/app-harness.js";
+
+const READY_TEST = () => [buildTest({ id: "test-1", name: "subject-a" })];
 
 const RULE_MATCHED = [
   plannedFile("subject-a/01_answers.pdf", { role: "student_answer" }),
@@ -142,6 +145,28 @@ describe("IntakePage invariants", () => {
     expect(screen.queryByText(/Issue #103/)).toBeNull();
   });
 
+  it("Issue #306: 第 1 段で答案 0 件のとき「取り込んだ答案」と言わない", async () => {
+    await openReview();
+    fireEvent.click(screen.getByTestId("intake-import"));
+    await screen.findByTestId("intake-done-heading");
+    expect(screen.queryByText(/取り込んだ答案/)).toBeNull();
+    expect(screen.queryByText(/答案 0件/)).toBeNull();
+    expect(screen.getByTestId("intake-deferred-subject-a")).toBeDefined();
+    expect(
+      screen.getAllByText(/このテストはまだ登録が済んでいないので/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("Issue #306: ready なテストへの取込は答案件数を事実どおり出す", async () => {
+    await openReview({
+      handlers: { listTestRegistrations: async () => READY_TEST() },
+    });
+    fireEvent.click(screen.getByTestId("intake-import"));
+    await screen.findByTestId("intake-done-heading");
+    expect(screen.getByText(/答案 1件を取り込みました/)).toBeDefined();
+    expect(screen.queryByTestId("intake-deferred-subject-a")).toBeNull();
+  });
+
   it("INV-131: partial failure keeps earlier submissions", async () => {
     let created = 0;
     await openReview({
@@ -171,6 +196,7 @@ describe("IntakePage invariants", () => {
           }
         },
       }),
+      handlers: { listTestRegistrations: async () => READY_TEST() },
     });
     fireEvent.click(screen.getByTestId("intake-import"));
     await screen.findByTestId("intake-outcome-subject-a");
@@ -178,10 +204,11 @@ describe("IntakePage invariants", () => {
     expect(screen.getByText(/取り込めませんでした/)).toBeDefined();
   });
 
-  it("INV-132: starts grading after successful import", async () => {
+  it("INV-132: starts grading after successful import into a ready test", async () => {
     const graded: string[] = [];
     await openReview({
       handlers: {
+        listTestRegistrations: async () => READY_TEST(),
         startGrading: async (submissionId) => {
           graded.push(submissionId);
         },
@@ -195,6 +222,7 @@ describe("IntakePage invariants", () => {
   it("INV-133: grading kickoff failure still counts as import success", async () => {
     await openReview({
       handlers: {
+        listTestRegistrations: async () => READY_TEST(),
         startGrading: async () => {
           throw new Error("no confirmed dependency graph");
         },
