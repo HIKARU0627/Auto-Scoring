@@ -11,12 +11,15 @@ import {
 } from "./support/mock-sidecar-client.js";
 
 /**
- * Regression tests for the Issue 365 recent-tests row (parent Issue 333).
+ * Regression tests for the Issue 365 recent-tests row (parent Issue 333),
+ * updated by Issue 372 (parent #333).
  *
- * jsdom does not lay out pixels, so every assertion pins the literal the mock
- * measured at 1536x1024: the 140px progress track, the 25px status pill, the
- * body-weight name and its 9rem cap. The PR's mutation table breaks each
- * literal and names the test that goes red.
+ * jsdom does not lay out pixels, so every assertion pins the value the mock and
+ * the 1536x1024 screenshot measured. Issue 372 replaced the fixed 140px track
+ * with a track that fills the 進捗 cell and removed the name's fixed 9rem cap,
+ * so the two Issue-365 literals are now asserted as "no fixed cap / fills the
+ * column" instead. The PR's mutation table names the test that goes red for
+ * each changed literal.
  */
 
 function tableHandlers(
@@ -37,12 +40,16 @@ function tableHandlers(
   };
 }
 
-describe("home recent-tests row: progress track (Issue 365)", () => {
-  it("holds the mock's 140px track and keeps 確認済み out of the visible cell", async () => {
+describe("home recent-tests row: progress track (Issue 365 / 372)", () => {
+  it("fills its cell instead of a fixed width, and keeps 確認済み out of the visible cell", async () => {
     renderAppAt(AppRoutes.home, { handlers: tableHandlers() });
 
     const track = await screen.findByTestId("home-test-progress-t1");
-    expect(track.style.width).toBe("8.75rem");
+    // Issue 372: a fixed track left the 進捗 cell's slack as the ~380px gap to
+    // 最終更新, so the track now fills the cell (`flex-1`, no inline width).
+    expect(track.style.width).toBe("");
+    expect(track.className).toContain("flex-1");
+    expect(track.className).not.toContain("shrink-0");
     expect(track.getAttribute("aria-valuenow")).toBe("3");
     expect(track.getAttribute("aria-valuemax")).toBe("8");
     expect(
@@ -108,7 +115,7 @@ describe("home recent-tests row: name cell (Issue 365)", () => {
     expect(name.className).not.toContain("font-medium");
   });
 
-  it("caps and ellipsizes the name so it cannot squeeze the status column", async () => {
+  it("ellipsizes the name against its own column instead of a fixed 9rem cap", async () => {
     const longName =
       "とても長いテスト名がここに入り、狭い画面でもレイアウトを壊さないことを確かめるための名前";
     renderAppAt(AppRoutes.home, {
@@ -120,8 +127,12 @@ describe("home recent-tests row: name cell (Issue 365)", () => {
     });
 
     const name = await screen.findByTestId("home-test-name-t1");
+    // Issue 372: the 9rem cap was measured against the 867px body column and
+    // truncated the name while 380px of the full-width table sat empty. The
+    // cell width is now the only bound.
     expect(name.className).toContain("truncate");
-    expect(name.style.maxWidth).toBe("9rem");
+    expect(name.className).toContain("min-w-0");
+    expect(name.style.maxWidth).toBe("");
     expect(name.getAttribute("title")).toBe(longName);
   });
 });

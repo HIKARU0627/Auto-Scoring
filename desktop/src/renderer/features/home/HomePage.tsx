@@ -217,18 +217,17 @@ function DashboardBody({
       {dashboard.degradedTests.length > 0 ? (
         <DegradedNotice dashboard={dashboard} />
       ) : null}
-      {/* Issue 367 (F4C): the right rail ends with the hero + graph row and
-          the 最近のテスト table spans the full page width beneath it, instead
-          of leaving the rail's lower half empty. The mock has no お知らせ /
-          最近の作業 / ユーザー行 and this product has no source for them
-          (parent Issue 333 §4), so the rail is not padded out with invented
-          cards. The left column keeps the two side-by-side graph cards from
-          Issue 360. */}
-      <div className="flex flex-col gap-xl lg:flex-row lg:items-start">
-        <div
-          className="flex min-w-0 flex-1 flex-col"
-          style={MAIN_COLUMN_GAP_STYLE}
-        >
+      {/* Issue 367 (F4C): the 最近のテスト table spans the full page width in a
+          row below the hero + graph row. The mock has no お知らせ / 最近の作業 /
+          ユーザー行 and this product has no source for them (parent Issue 333
+          §4), so the right rail is not padded out with invented cards.
+          Issue 372 (§6): the rail is folded away instead of leaving one
+          クイックアクション card stranded above ~360x279px of bare surface. The
+          quick actions move into the main column, and at `lg` their three rows
+          become three horizontal tiles across the body width (the wrapper's
+          child selector; `HomeQuickActions.tsx` itself is untouched). */}
+      <div className="flex flex-col">
+        <div className="flex min-w-0 flex-col" style={MAIN_COLUMN_GAP_STYLE}>
           <HomeHeroCard
             action={dashboard.nextAction}
             onAction={() => {
@@ -246,10 +245,9 @@ function DashboardBody({
               <HomeTestDonutPanel dashboard={dashboard} />
             </div>
           </div>
-        </div>
-        {/* The mock's 361px rail: the space token `w-90` is exactly 360px. */}
-        <div className="flex min-w-0 flex-col lg:w-90 lg:shrink-0">
-          <HomeQuickActions onOpen={onOpen} />
+          <div className="[&>section>div]:grid [&>section>div]:gap-md lg:[&>section>div]:grid-cols-3">
+            <HomeQuickActions onOpen={onOpen} />
+          </div>
         </div>
       </div>
       <HomeRecentTestsTable dashboard={dashboard} onOpen={onOpen} />

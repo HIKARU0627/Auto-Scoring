@@ -415,9 +415,12 @@ describe("home dashboard: states and accessibility (Issue #336)", () => {
     const name = await screen.findByTestId("home-test-name-t1");
     expect(name.className).toContain("truncate");
     expect(name.getAttribute("title")).toBe(longName);
-    const scroller = screen
-      .getByTestId("home-recent-tests")
-      .querySelector(".overflow-x-auto");
-    expect(scroller).not.toBeNull();
+    // Issue 372: the table no longer wraps in an `overflow-x-auto` box. Its
+    // columns are percentages inside `table-fixed`, so a long name cannot
+    // widen it and no horizontal scrollbar (the page's brightest element at
+    // 700px) can appear.
+    const card = screen.getByTestId("home-recent-tests");
+    expect(card.querySelector(".overflow-x-auto")).toBeNull();
+    expect(card.querySelector("table")?.className).toContain("table-fixed");
   });
 });
