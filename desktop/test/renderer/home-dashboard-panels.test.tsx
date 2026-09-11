@@ -372,10 +372,9 @@ describe("home dashboard: states and accessibility (Issue #336)", () => {
     // this test owns the dashboard's internal order and does not repeat it.
     //
     // Issue #353 made the dashboard two independent stacks (main column, then
-    // the quick-action rail) so the hero no longer stretches to the rail's
-    // height. The main column comes first in document order, so its controls
-    // are reached before the rail's; the rail destinations are also in the
-    // sidebar, so they stay keyboard-reachable either way.
+    // the quick-action rail), and Issue #367 moved 最近のテスト out of the main
+    // column to a full-width row below both. The hero and quick actions stay
+    // first (they share the top row), then the full-width table's controls.
     const order = focusOrder(screen.getByTestId("home-page")).map(
       (element) => ({
         testId: element.getAttribute("data-testid"),
@@ -386,14 +385,14 @@ describe("home dashboard: states and accessibility (Issue #336)", () => {
     expect(ids).toEqual([
       "home-refresh",
       "home-next-up-action",
+      "home-open-intake",
+      "home-open-test-list-footer",
+      "home-open-settings",
       "home-open-all-tests",
       "home-open-queue-work-1",
       "home-resume-review-work-1",
       "home-open-queue-draft-1",
       "home-resume-registration-draft-1",
-      "home-open-intake",
-      "home-open-test-list-footer",
-      "home-open-settings",
     ]);
     // Every focusable control has a visible focus treatment.
     for (const entry of order) {

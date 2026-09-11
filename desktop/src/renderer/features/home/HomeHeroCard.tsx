@@ -54,7 +54,7 @@ export function HomeHeroCard({
           type="button"
           data-testid="home-next-up-action"
           onClick={onAction}
-          className="inline-flex shrink-0 items-center justify-center gap-sm rounded-md bg-primary px-lg py-sm text-ui-label font-semibold text-on-primary hover:bg-primary-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90 disabled:opacity-50"
+          className="inline-flex min-h-12 shrink-0 items-center justify-center gap-sm rounded-md bg-primary px-lg py-sm text-ui-label font-semibold text-on-primary hover:bg-primary-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90 disabled:opacity-50"
           style={{
             transitionProperty: "background-color, opacity",
             transitionDuration: "var(--motion-duration-state-change)",
