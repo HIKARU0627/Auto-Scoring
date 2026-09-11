@@ -945,6 +945,13 @@ def build_test_registration_router(
                     existing.format_id,
                     existing.signature,
                     [region.to_domain() for region in request.regions],
+                    # Issue #314: a save must not forget which questions
+                    # detection explicitly reported as having no answer space
+                    # on the registered sheet. Dropping the stored list here
+                    # turned every one of them back into a plain undetected
+                    # question the moment the reviewer saved, so the two
+                    # causes could no longer be told apart on the next read.
+                    absent_question_numbers=existing.absent_question_numbers,
                 )
             except ValueError as exc:
                 raise HTTPException(422, detail=str(exc)) from exc

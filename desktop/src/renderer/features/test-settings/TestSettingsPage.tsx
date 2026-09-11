@@ -29,10 +29,13 @@ import {
   type TestResponse,
 } from "../../api/test-registration-data.js";
 import {
+  ActionRequirements,
+  answerCoverageRequirements,
   answerDetectRequirements,
   answerDetectionOutcomeRequirements,
   answerProfileConfirmRequirements,
   answerProfileSaveRequirements,
+  answerProfileUndetectedConfirmRequirements,
   answerRegionAddRequirements,
   completeRegistrationRequirements,
   dependencyGraphConfirmRequirements,
@@ -43,6 +46,7 @@ import {
   type AnswerDetectionOutcome,
 } from "../../core/answer-detection-outcome.js";
 import {
+  answerAreaCoverage,
   missingAnswerAreas,
   mustSeeAnswerSheetFirst,
   unassignedAnswerAreas,
@@ -152,6 +156,7 @@ export function TestSettingsPage(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [extractEstimateOpen, setExtractEstimateOpen] = useState(false);
+  const [undetectedConfirmOpen, setUndetectedConfirmOpen] = useState(false);
   const [extractEstimate, setExtractEstimate] = useState<{
     pageCount: number;
     maxPages: number;
@@ -278,6 +283,18 @@ export function TestSettingsPage(): JSX.Element {
     regions: workingRegions,
   });
 
+  const coverage = answerAreaCoverage({
+    questionNumbers: ready?.questionNumbers ?? [],
+    regions: workingRegions,
+  });
+  const coverageReqs = answerCoverageRequirements({
+    expected: coverage.expected,
+    covered: coverage.covered,
+  });
+  const undetectedConfirmReqs = answerProfileUndetectedConfirmRequirements({
+    undetectedQuestionCount: missing.undetected.length,
+  });
+
   const answerAreaRegionCount = workingRegions.filter(
     (region) => region.kind === "answer_area",
   ).length;
@@ -402,6 +419,40 @@ export function TestSettingsPage(): JSX.Element {
       readOnly: busy || profileConfirmed(ready.profile),
     };
   }, [busy, missing.absent, missing.undetected, ready, workingRegions]);
+
+  const runConfirmProfile = useCallback(() => {
+    if (regions === null) {
+      return;
+    }
+    void runGuarded(async () => {
+      const saved = await updateProfile(client, testId, regions);
+      const confirmed = await confirmProfile(client, testId, saved.revision);
+      const snapshot = await loadTestSettingsSnapshot(client, testId);
+      setLoadState((current) => {
+        if (current.status !== "ready") {
+          return current;
+        }
+        return {
+          ...current,
+          profile: confirmed,
+          editableRegions: confirmed.regions.map((region) => ({
+            ...region,
+            bbox: { ...region.bbox },
+          })),
+          questionNumbers: snapshot.questionNumbers,
+          pageImages: snapshot.editor.pageImages,
+        };
+      });
+    });
+  }, [client, regions, runGuarded, testId]);
+
+  const confirmProfileWithGuard = useCallback(() => {
+    if (undetectedConfirmReqs.length > 0) {
+      setUndetectedConfirmOpen(true);
+      return;
+    }
+    runConfirmProfile();
+  }, [runConfirmProfile, undetectedConfirmReqs.length]);
 
   return (
     <ShellScreen title={ready?.test.name ?? "テスト設定"}>
@@ -852,6 +903,15 @@ export function TestSettingsPage(): JSX.Element {
               </div>
             ) : null}
 
+            {coverageReqs.length > 0 ? (
+              <p
+                data-testid="answer-area-coverage"
+                className="mt-md text-body-small text-on-surface-variant"
+              >
+                {coverageReqs[0]?.message}
+              </p>
+            ) : null}
+
             <div className="mt-md flex flex-wrap gap-sm">
               <button
                 type="button"
@@ -875,38 +935,7 @@ export function TestSettingsPage(): JSX.Element {
                 data-testid="confirm-profile-button"
                 className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
                 disabled={confirmProfileReqs.length > 0}
-                onClick={() => {
-                  if (regions === null) {
-                    return;
-                  }
-                  void runGuarded(async () => {
-                    const saved = await updateProfile(client, testId, regions);
-                    const confirmed = await confirmProfile(
-                      client,
-                      testId,
-                      saved.revision,
-                    );
-                    const snapshot = await loadTestSettingsSnapshot(
-                      client,
-                      testId,
-                    );
-                    setLoadState((current) => {
-                      if (current.status !== "ready") {
-                        return current;
-                      }
-                      return {
-                        ...current,
-                        profile: confirmed,
-                        editableRegions: confirmed.regions.map((region) => ({
-                          ...region,
-                          bbox: { ...region.bbox },
-                        })),
-                        questionNumbers: snapshot.questionNumbers,
-                        pageImages: snapshot.editor.pageImages,
-                      };
-                    });
-                  });
-                }}
+                onClick={confirmProfileWithGuard}
               >
                 プロファイルを確定
               </button>
@@ -1154,6 +1183,67 @@ export function TestSettingsPage(): JSX.Element {
                       }}
                     >
                       実行
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {undetectedConfirmOpen && missing.undetected.length > 0
+        ? createPortal(
+            <div
+              data-testid="profile-confirm-undetected-dialog"
+              className="fixed inset-0 z-50 overflow-y-auto bg-scrim/40"
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex min-h-full items-center justify-center p-lg">
+                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-lg border border-outline bg-surface shadow-lg">
+                  <div className="overflow-y-auto p-lg">
+                    <h3 className="text-title-medium font-medium">
+                      回答欄が見つかっていない設問があります
+                    </h3>
+                    <p
+                      data-testid="profile-confirm-undetected-count"
+                      className="mt-sm text-body-medium"
+                    >
+                      {
+                        ActionRequirements.profileConfirmUndetected(
+                          missing.undetected.length,
+                        ).message
+                      }
+                    </p>
+                    <p className="mt-sm text-body-small text-on-surface-variant">
+                      {
+                        ActionRequirements.profileConfirmUndetectedAction
+                          .message
+                      }
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-row flex-nowrap items-center justify-end gap-sm border-t border-outline-variant p-lg pt-md">
+                    <button
+                      type="button"
+                      data-testid="profile-confirm-undetected-cancel"
+                      className="shrink-0 whitespace-nowrap rounded-md border border-outline px-md py-sm"
+                      onClick={() => {
+                        setUndetectedConfirmOpen(false);
+                      }}
+                    >
+                      戻って直す
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="profile-confirm-undetected-proceed"
+                      className="shrink-0 whitespace-nowrap rounded-md bg-primary px-md py-sm text-on-primary"
+                      onClick={() => {
+                        setUndetectedConfirmOpen(false);
+                        runConfirmProfile();
+                      }}
+                    >
+                      このまま確定
                     </button>
                   </div>
                 </div>

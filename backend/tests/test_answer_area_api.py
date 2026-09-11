@@ -934,6 +934,32 @@ class TestMissingQuestionsAreSplitByCause:
         assert saved["absent_question_numbers"] == []
         assert saved["undetected_question_numbers"] == []
 
+    def test_a_save_keeps_a_declared_absent_apart_from_an_undetected_question(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """Issue #314: saving the profile must not turn a question detection
+        explicitly reported as having no answer space into a plain undetected
+        one. The two causes decide opposite reviewer actions, so they have to
+        stay distinguishable in the API response after a save and reload."""
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1", "問2", "問3")
+        _upload_layout(client, test_id)
+        detector.set_body(_detection_body(_area(number="問1"), absent=["問3"]))
+        detected = _detect(client, test_id).json()
+
+        saved = client.put(
+            f"/tests/{test_id}/profile",
+            headers=_auth(),
+            json={"regions": detected["regions"]},
+        ).json()
+
+        assert saved["undetected_question_numbers"] == ["問2"]
+        assert saved["absent_question_numbers"] == ["問3"]
+
+        reloaded = client.get(f"/tests/{test_id}/profile", headers=_auth()).json()
+        assert reloaded["undetected_question_numbers"] == ["問2"]
+        assert reloaded["absent_question_numbers"] == ["問3"]
+
     def test_a_rerun_replaces_what_the_previous_run_said(
         self, client: TestClient, data_root: Path, detector: _FakeDetector
     ) -> None:

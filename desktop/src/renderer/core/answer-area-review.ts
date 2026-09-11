@@ -43,6 +43,34 @@ export function unassignedAnswerAreas(input: {
 }
 
 /**
+ * How much of the criteria's question list the registered answer areas cover
+ * (Issue #314).
+ *
+ * `uncovered` is every criteria question with no `answer_area` region,
+ * whether detection declared it absent from the sheet or simply never found a
+ * box for it. The screen shows this so a reviewer can see that the registered
+ * pages are only part of the assignment before confirming the profile.
+ */
+export function answerAreaCoverage(input: {
+  questionNumbers: readonly string[];
+  regions: readonly RegionModel[];
+}): { expected: number; covered: number; uncovered: number } {
+  const coveredLabels = new Set(
+    input.regions
+      .filter((region) => region.kind === "answer_area")
+      .map((region) => region.label),
+  );
+  const covered = input.questionNumbers.filter((number) =>
+    coveredLabels.has(number),
+  ).length;
+  return {
+    expected: input.questionNumbers.length,
+    covered,
+    uncovered: input.questionNumbers.length - covered,
+  };
+}
+
+/**
  * Whether profile confirm must wait until the answer sheet is visible on screen.
  * Empty region lists do not open the gate — that is a separate requirement.
  */

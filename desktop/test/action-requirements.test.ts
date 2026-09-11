@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   ActionRequirements,
+  answerCoverageRequirements,
   answerDetectRequirements,
   answerDetectionOutcomeRequirements,
   answerProfileConfirmRequirements,
   answerProfileSaveRequirements,
+  answerProfileUndetectedConfirmRequirements,
   answerRegionAddRequirements,
   apiKeySaveRequirements,
   apiKeyVerifyRequirements,
@@ -435,5 +437,39 @@ describe("action requirements: 答案確定・回答欄の理由 (Issue #278)", 
     expect(ActionRequirements.answerAreaAbsentAction.message).toBe(
       "答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。",
     );
+  });
+});
+
+describe("action requirements: 未検出のまま確定 (Issue #314)", () => {
+  it("未検出が残っているときだけ、件数を示す確認を求める", () => {
+    expect(
+      answerProfileUndetectedConfirmRequirements({
+        undetectedQuestionCount: 0,
+      }),
+    ).toEqual([]);
+    const pending = answerProfileUndetectedConfirmRequirements({
+      undetectedQuestionCount: 3,
+    });
+    expect(pending.map((item) => item.id)).toEqual([
+      "profile-confirm-undetected",
+    ]);
+    expect(pending[0]?.message).toContain("3件");
+    expect(pending[0]?.message).toContain("ページ全体を採点に送り");
+    expect(pending[0]?.message).not.toContain("absent");
+  });
+
+  it("覆えていない件数だけを示し、すべて覆えていれば完了を言う", () => {
+    expect(answerCoverageRequirements({ expected: 0, covered: 0 })).toEqual([]);
+    const partial = answerCoverageRequirements({ expected: 5, covered: 2 });
+    expect(partial.map((item) => item.id)).toEqual([
+      "answer-coverage-incomplete",
+    ]);
+    expect(partial[0]?.message).toContain("覆えていない設問が3件");
+
+    const complete = answerCoverageRequirements({ expected: 5, covered: 5 });
+    expect(complete.map((item) => item.id)).toEqual([
+      "answer-coverage-complete",
+    ]);
+    expect(complete[0]?.message).toContain("5件すべて");
   });
 });

@@ -191,6 +191,29 @@ export const ActionRequirements = {
     "answer-area-absent-action",
     "答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。",
   ),
+  profileConfirmUndetected: (count: number): ActionRequirement =>
+    requirement(
+      "profile-confirm-undetected",
+      `回答欄が見つかっていない設問が${count}件あります。このまま確定すると、その設問は答案のページ全体を採点に送り、要確認として人の目に回ります。`,
+    ),
+  profileConfirmUndetectedAction: requirement(
+    "profile-confirm-undetected-action",
+    "設問名を押して枠を引くか、内容を確かめたうえで確定してください。",
+  ),
+  answerCoverageIncomplete: (
+    expected: number,
+    covered: number,
+    uncovered: number,
+  ): ActionRequirement =>
+    requirement(
+      "answer-coverage-incomplete",
+      `採点基準の設問は${expected}件、登録済み答案で回答欄が覆えているのは${covered}件です。覆えていない設問が${uncovered}件あります。`,
+    ),
+  answerCoverageComplete: (covered: number): ActionRequirement =>
+    requirement(
+      "answer-coverage-complete",
+      `採点基準の設問${covered}件すべてに回答欄があります。`,
+    ),
 } as const;
 
 export function intakeFolderPickRequirements(input: {
@@ -441,4 +464,50 @@ export function gradingStartRequirements(input: {
     requirements.push(ActionRequirements.dependencyGraphStale);
   }
   return requirements;
+}
+
+/**
+ * 未検出の設問が残ったままプロファイルを確定しようとしたときの確認 (Issue #314).
+ *
+ * The list is deliberately separate from `answerProfileConfirmRequirements`:
+ * that function drives the confirm button's disabled state, and an undetected
+ * question must not disable it -- it must open a confirmation that names the
+ * count, so a partial registration cannot be signed off without the reviewer
+ * seeing what is uncovered.
+ */
+export function answerProfileUndetectedConfirmRequirements(input: {
+  undetectedQuestionCount: number;
+}): readonly ActionRequirement[] {
+  if (input.undetectedQuestionCount <= 0) {
+    return [];
+  }
+  return [
+    ActionRequirements.profileConfirmUndetected(input.undetectedQuestionCount),
+  ];
+}
+
+/**
+ * 登録済み答案が採点基準の設問をどれだけ覆えているか (Issue #314).
+ *
+ * `uncovered` counts every criteria question with no `answer_area` region,
+ * whether detection declared it absent from the sheet or simply never found a
+ * box for it: either way the registered pages do not cover that question.
+ */
+export function answerCoverageRequirements(input: {
+  expected: number;
+  covered: number;
+}): readonly ActionRequirement[] {
+  if (input.expected <= 0) {
+    return [];
+  }
+  if (input.covered >= input.expected) {
+    return [ActionRequirements.answerCoverageComplete(input.expected)];
+  }
+  return [
+    ActionRequirements.answerCoverageIncomplete(
+      input.expected,
+      input.covered,
+      input.expected - input.covered,
+    ),
+  ];
 }
