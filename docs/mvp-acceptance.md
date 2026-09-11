@@ -149,6 +149,92 @@ DB直書きの代替も、同じIssueで外して実経路に繋いだ。
 別の理由（採点 provider の恒久失敗 #117 / #121、回答欄の検出ずれ #122）で止まる
 設問が観測されており、それらは本節の対象外である。
 
+### 2.2 live provider 検証 — 実機検証 #6 と #10 の実測
+
+実 provider へ実際にデータを送る **live 実測の再現手順**は
+`docs/quality-gates.md` の「Provider cleanup の検査と live 実測の再現手順（Issue #54）」
+にある。**本節は再現手順を重複して書かず、その手順で得られた実測の記録だけを残す。**
+実データの内容（答案・設問文・解答文・赤入れの文言・教科名・ファイル名）は一切書かない。
+件数・比率・秒・費用だけを載せる。
+
+#### 出典
+
+| 出典                                                           | 内容                                                                                                            | 参照                                                                                   |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 実機検証 #6                                                    | 2026-09-10、main `23fb26a`。GUI を使わず `auto-scoring-sidecar` の HTTP API を直接叩いた run                    | Issue [#3](https://github.com/HIKARU0627/Auto-Scoring/issues/3) の 2026-09-10 コメント |
+| 実機検証 #10                                                   | 2026-09-11、main `3e51d3f` のビルド。Electron の画面操作で 11 教科の登録段取りを通した run                      | Issue [#3](https://github.com/HIKARU0627/Auto-Scoring/issues/3) の 2026-09-11 コメント |
+| PR [#309](https://github.com/HIKARU0627/Auto-Scoring/pull/309) | Issue [#54](https://github.com/HIKARU0627/Auto-Scoring/issues/54)。cleanup の offline 検査と ADC 前提の再現手順 | PR #309                                                                                |
+
+#### provider と認証
+
+- AI 採点・採点基準の抽出: **Vertex AI Gemini**（#6 は `gemini-2.5-flash`）。
+- OCR: **Google Document AI**。
+- 認証は **いずれも ADC（Application Default Credentials）** である。**API キーを secret として
+  CI のジョブへ渡す方式では動かない。** `gcloud auth application-default login`、またはホストに
+  付与済みの service account / Workload Identity を使う。必要な環境変数の**名前だけ**は
+  `backend/.env.example`（PR #309）に列挙してある。
+
+#### 認証の結果（実機検証 #6）
+
+| provider / 経路            | 結果                                                                                                            |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Vertex AI（抽出・AI 採点） | 呼び出し **45 回すべて 200**。入力 156,768 / 出力 159,243 トークン。`ProviderUnavailable`・429 は **0 件**      |
+| Google Document AI（OCR）  | リクエスト **23 回すべて 200**（gRPC status 0）                                                                 |
+| 採点基準の抽出             | 11 教科で完走。crashed **0** / schema violations **0** / provider unavailable **0**、questions extracted **51** |
+
+#### request の形（1 設問分）
+
+- 1 採点ジョブ = 1 設問。provider へ送られた各回は、当該設問 1 つ分の**回答欄 crop のみ**で、
+  生徒識別情報・ファイル名・設問 id を送らない（自動 assertion は #25 の
+  `test_no_student_identifying_data_reaches_either_provider`）。
+- AI 採点は crop を **`inlineData`** で同期送信する。Document AI は **`rawDocument` +
+  `skipHumanReview: true`** の単発 POST で送る。どちらも upload / batch / GCS 経路を持たない。
+
+#### response schema 適合
+
+- AI 採点: **22 件すべて**が `AIGradingResult` として永続化。schema 違反として分類された恒久失敗は
+  **0 件**（唯一の恒久失敗は AI 自身が返した `crop_not_the_answer` 1 件）。
+- 採点基準の抽出: 11 教科で完走し **schema violations 0**（PR #107 の記録と一致）。
+- 自由文 parse への fallback は無い。応答は毎回 `parse_ai_grading_result` で再検証される
+  （`docs/ai-grading-pipeline.md`）。
+
+#### cleanup
+
+- **offline 検査（PR #309）**: `backend/tests/test_provider_cleanup.py` が、採用 2 provider の送信が
+  同期・インラインで、リモート資源も `auto-scoring-*` 一時ディレクトリも残さないこと、一時ファイルを
+  書く唯一の経路（Codex app-server フォールバック）が呼び出し後に workspace を削除することを、
+  network・credential 無しで固定する。既定の `uv run pytest` に含まれる。
+- **live 実測: 未計測。** #6 のレポートにも `out/` にも、実行後に一時ファイル / アップロード資源が
+  消えたことの記録は無い。実データ経路での cleanup の実測は #54 から切り出されて残っている。
+
+#### 件数（実機検証 #6、11 教科）
+
+| 項目                   | 値                               |
+| ---------------------- | -------------------------------- |
+| 対象教科               | 11                               |
+| 端から端まで通った教科 | 10 / 11（残る 1 教科は #215）    |
+| crashed                | 0                                |
+| schema violations      | 0                                |
+| provider unavailable   | 0                                |
+| questions extracted    | 51                               |
+| Document AI リクエスト | 23（すべて 200）                 |
+| AI 採点が付いた設問    | 22                               |
+| 費用                   | $0.4796（≒ 74 円、11 教科 1 回） |
+
+#### #10 による独立した裏付け
+
+実機検証 #10（2026-09-11、main `3e51d3f` のビルド）は、**Electron の画面操作だけ**で 11 教科の
+登録段取り（ホーム → 取り込み → 配点の AI 抽出 → 回答欄の自動検出 → 回答欄確定 → 依存グラフ確定
+→ 登録完了）を通した。登録到達 **11/11**、検出エラー **0 件**、抽出設問の合計は **51** で、
+**#6 の `questions extracted: 51` と一致**した。
+
+#6 は API 直叩き、#10 は Electron の画面操作で、**経路（API 直叩き vs 画面操作）が違うのに同じ 51**
+になった。したがって **Electron 経路でも認証・抽出・schema 適合が #6 と同じに効いている**と言える
+（#54 の棚卸しコメントが「#8 が通れば追加の裏付けになる」としていた項目）。
+
+ただし **#10 が通ったのは登録段取りまで**で、採点・確定・PDF 出力には到達していない。
+費用表示は単価未設定のため「0 円」ではなく未設定を表示した（#187 の受入条件どおり）。
+
 ---
 
 ## 3. 決定論 — 時間に依存するassertionを書かないための方針
