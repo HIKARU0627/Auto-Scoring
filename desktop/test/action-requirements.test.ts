@@ -101,11 +101,67 @@ describe("action requirements: API key (INV-107, INV-201-04)", () => {
     expect(ready).toEqual([]);
   });
 
-  it("進行中しか理由にならない操作", () => {
+  it("進行中しか理由にならない操作 (INV-102)", () => {
     expect(
       whileRunningRequirements({ running: true }).map((r) => r.id),
     ).toEqual(["busy"]);
     expect(whileRunningRequirements({ running: false })).toEqual([]);
+  });
+});
+
+describe("action requirements: 無効理由の基本契約 (INV-100, INV-102)", () => {
+  it("INV-100: 無効な状態では理由が 1 件以上、条件が揃えば 0 件", () => {
+    const disabled = [
+      apiKeySaveRequirements({ busy: false, credentialStoreAvailable: false }),
+      apiKeyVerifyRequirements({ busy: false, configured: false }),
+      answerRegionAddRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: false,
+      }),
+      dependencyGraphConfirmRequirements({
+        busy: false,
+        hasGraph: false,
+        alreadyConfirmed: false,
+      }),
+    ];
+    for (const reasons of disabled) {
+      expect(reasons.length).toBeGreaterThan(0);
+      for (const reason of reasons) {
+        expect(reason.id.length, "理由 id が空").toBeGreaterThan(0);
+      }
+    }
+
+    const enabled = [
+      apiKeySaveRequirements({ busy: false, credentialStoreAvailable: true }),
+      apiKeyVerifyRequirements({ busy: false, configured: true }),
+      answerRegionAddRequirements({
+        busy: false,
+        alreadyConfirmed: false,
+        answerSheetRegistered: true,
+      }),
+      whileRunningRequirements({ running: false }),
+    ];
+    for (const reasons of enabled) {
+      expect(reasons).toEqual([]);
+    }
+  });
+
+  it("INV-102: busy は他の条件が揃っていても単独で理由になる", () => {
+    expect(
+      whileRunningRequirements({ running: true }).map((r) => r.id),
+    ).toEqual(["busy"]);
+    expect(
+      apiKeyVerifyRequirements({ busy: true, configured: true }).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["busy"]);
+    expect(
+      apiKeySaveRequirements({
+        busy: true,
+        credentialStoreAvailable: true,
+      }).map((r) => r.id),
+    ).toEqual(["busy"]);
   });
 });
 
