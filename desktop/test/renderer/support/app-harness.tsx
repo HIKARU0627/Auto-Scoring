@@ -3,7 +3,7 @@ import { render, type RenderResult } from "@testing-library/react";
 
 import { AppShell } from "../../../src/renderer/AppShell.js";
 import type { SidecarClient } from "../../../src/renderer/api/client.js";
-import type { IntakeBridge } from "../../../src/renderer/api/intake-data.js";
+import type { AutoScoringBridge } from "../../../src/shared/bridge.js";
 import { ThemeProvider } from "../../../src/renderer/theme/ThemeProvider.js";
 import {
   createMockSidecarClient,
@@ -21,7 +21,7 @@ export function renderAppAt(
   options: {
     handlers?: MockSidecarHandlers;
     client?: SidecarClient;
-    bridge?: IntakeBridge;
+    bridge?: Partial<AutoScoringBridge>;
     initialStack?: readonly string[];
   } = {},
 ): RenderResult {
@@ -33,6 +33,7 @@ export function renderAppAt(
     chooseFolder: vi.fn(async () => "/tmp/batch"),
     scanFolder: vi.fn(async () => ({ name: "batch", entries: [] })),
     sidecarMultipartUpload: vi.fn(async () => ({ status: 200, body: {} })),
+    restartSidecar: vi.fn(async () => {}),
     ...options.bridge,
   });
 

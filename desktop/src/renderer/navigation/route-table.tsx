@@ -6,6 +6,7 @@ import { IntakePage } from "../features/intake/IntakePage.js";
 import { PdfReviewPage } from "../features/pdf-review/PdfReviewPage.js";
 import { SubmissionQueuePage } from "../features/review-queue/SubmissionQueuePage.js";
 import { SubmissionConfirmPage } from "../features/submission-confirm/SubmissionConfirmPage.js";
+import { SettingsPage } from "../features/settings/SettingsPage.js";
 import { TestSettingsPage } from "../features/test-settings/TestSettingsPage.js";
 import { ShellScreen } from "./ShellScreen.js";
 import { matchRoutePattern } from "./router.js";
@@ -49,7 +50,7 @@ export const ROUTE_TABLE: readonly RouteDefinition[] = [
   },
   {
     pattern: AppRoutes.settings,
-    render: () => <PlaceholderScreen title="設定" />,
+    render: () => <SettingsPage />,
   },
   {
     pattern: AppRoutes.testList,
