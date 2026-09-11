@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import { createPortal } from "react-dom";
 
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
@@ -990,68 +991,95 @@ export function TestSettingsPage(): JSX.Element {
         </div>
       ) : null}
 
-      {extractEstimateOpen && extractEstimate !== null ? (
-        <div
-          data-testid="extract-confirm-dialog"
-          className="fixed inset-0 flex items-center justify-center bg-scrim/40 p-lg"
-        >
-          <div className="max-w-md rounded-lg border border-outline bg-surface p-lg shadow-lg">
-            <h3 className="text-title-medium font-medium">
-              採点基準PDFから抽出
-            </h3>
-            <p data-testid="extract-page-count" className="mt-sm">
-              {extractEstimate.pageCount} ページを AI provider に送信します。
-            </p>
-            <p data-testid="extract-cost" className="mt-xs text-body-small">
-              {extractEstimate.estimatedCost === null
-                ? "概算費用: 1ページあたりの単価が未設定です（設定画面で入力できます）"
-                : `概算費用: 約${extractEstimate.estimatedCost.toFixed(2)}`}
-            </p>
-            <div className="mt-md flex justify-end gap-sm">
-              <button
-                type="button"
-                data-testid="extract-cancel-button"
-                className="rounded-md border border-outline px-md py-sm"
-                onClick={() => {
-                  setExtractEstimateOpen(false);
-                  setExtractEstimate(null);
-                }}
-              >
-                キャンセル
-              </button>
-              <button
-                type="button"
-                data-testid="extract-confirm-button"
-                className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
-                disabled={extractEstimate.pageCount > extractEstimate.maxPages}
-                onClick={() => {
-                  setExtractEstimateOpen(false);
-                  setExtractEstimate(null);
-                  void runGuarded(async () => {
-                    const criteria = await extractCriteria(client, testId);
-                    setLoadState((current) => {
-                      if (current.status !== "ready") {
-                        return current;
+      {extractEstimateOpen && extractEstimate !== null
+        ? createPortal(
+            <div
+              data-testid="extract-confirm-dialog"
+              className="fixed inset-0 z-50 overflow-y-auto bg-scrim/40"
+              role="dialog"
+              aria-modal="true"
+            >
+              <div className="flex min-h-full items-center justify-center p-lg">
+                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-lg border border-outline bg-surface shadow-lg">
+                  <div className="overflow-y-auto p-lg">
+                    <h3 className="text-title-medium font-medium">
+                      採点基準PDFから抽出
+                    </h3>
+                    <p data-testid="extract-page-count" className="mt-sm">
+                      {extractEstimate.pageCount} ページを AI provider
+                      に送信します。
+                    </p>
+                    <p
+                      data-testid="extract-cost"
+                      className="mt-xs text-body-small"
+                    >
+                      {extractEstimate.estimatedCost === null
+                        ? "概算費用: 1ページあたりの単価が未設定です（設定画面で入力できます）"
+                        : `概算費用: 約${extractEstimate.estimatedCost.toFixed(2)}`}
+                    </p>
+                    {extractEstimate.pageCount > extractEstimate.maxPages ? (
+                      <p
+                        data-testid="extract-over-limit"
+                        className="mt-sm text-body-small text-attention"
+                      >
+                        一度に読めるのは {extractEstimate.maxPages}{" "}
+                        ページまでです。このまま実行しても失敗します。ファイルを分割してください。
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-row flex-nowrap items-center justify-end gap-sm border-t border-outline-variant p-lg pt-md">
+                    <button
+                      type="button"
+                      data-testid="extract-cancel-button"
+                      className="shrink-0 whitespace-nowrap rounded-md border border-outline px-md py-sm"
+                      onClick={() => {
+                        setExtractEstimateOpen(false);
+                        setExtractEstimate(null);
+                      }}
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="extract-confirm-button"
+                      className="shrink-0 whitespace-nowrap rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+                      disabled={
+                        extractEstimate.pageCount > extractEstimate.maxPages
                       }
-                      return {
-                        ...current,
-                        criteria,
-                        editableCriteria: criteria.questions.map(
-                          (question) => ({ ...question }),
-                        ),
-                        declaredTotalPoints:
-                          criteria.declared_total_points ?? null,
-                      };
-                    });
-                  });
-                }}
-              >
-                実行
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+                      onClick={() => {
+                        setExtractEstimateOpen(false);
+                        setExtractEstimate(null);
+                        void runGuarded(async () => {
+                          const criteria = await extractCriteria(
+                            client,
+                            testId,
+                          );
+                          setLoadState((current) => {
+                            if (current.status !== "ready") {
+                              return current;
+                            }
+                            return {
+                              ...current,
+                              criteria,
+                              editableCriteria: criteria.questions.map(
+                                (question) => ({ ...question }),
+                              ),
+                              declaredTotalPoints:
+                                criteria.declared_total_points ?? null,
+                            };
+                          });
+                        });
+                      }}
+                    >
+                      実行
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </ShellScreen>
   );
 }

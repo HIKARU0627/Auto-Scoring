@@ -126,4 +126,42 @@ describe("TestSettingsPage registration flow", () => {
       screen.getByTestId("disabled-reason-answer-regions-missing"),
     ).toBeDefined();
   });
+
+  it("opens the extract cost dialog and applies a stubbed extraction", async () => {
+    const { client } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), { client });
+    await screen.findByTestId("criteria-section");
+
+    fireEvent.click(screen.getByTestId("extract-criteria-button"));
+    await screen.findByTestId("extract-confirm-dialog");
+    expect(screen.getByTestId("extract-page-count").textContent).toContain(
+      "1 ページ",
+    );
+
+    fireEvent.click(screen.getByTestId("extract-confirm-button"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("extract-confirm-dialog")).toBeNull();
+    });
+    expect(
+      (screen.getByTestId("criteria-number-0") as HTMLInputElement).value,
+    ).toBe("問1");
+  });
+
+  it("closes the extract cost dialog when cancel is pressed", async () => {
+    const { client } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), { client });
+    await screen.findByTestId("criteria-section");
+
+    fireEvent.click(screen.getByTestId("extract-criteria-button"));
+    await screen.findByTestId("extract-confirm-dialog");
+    fireEvent.click(screen.getByTestId("extract-cancel-button"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("extract-confirm-dialog")).toBeNull();
+    });
+    expect(screen.getByTestId("extract-criteria-button")).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
 });

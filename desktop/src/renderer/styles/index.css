@@ -103,6 +103,14 @@
     line-height: var(--line-height-ui);
     letter-spacing: 0;
   }
+
+  .max-h-dialog-viewport {
+    max-height: var(--layout-dialog-viewport-max-height);
+  }
+
+  .grid-dialog-body-footer {
+    grid-template-rows: var(--layout-dialog-body-footer-grid-rows);
+  }
 }
 
 @layer base {

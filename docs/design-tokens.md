@@ -427,6 +427,20 @@ Issue #85 で、この高さの決め方に2つの上限を足した。
   （`dagNodeWidth` で既に読める）。ピクセル上限ではなく倍数なのは、
   ギャップの基準値を将来変えても意味が変わらないようにするため。
 
+### 4.5 Electron レンダラーのモーダルダイアログレイアウト（Issue #293）
+
+`desktop/src/renderer/styles/design-tokens.css` の CSS 変数と、
+`desktop/src/renderer/styles/index.css` のユーティリティクラスで定義する。
+`features/` からはクラス名だけ参照し、任意ブラケット値は使わない（INV-080）。
+
+| トークン / ユーティリティ                | 値                                                           | 使いどころ                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `--layout-dialog-viewport-padding-block` | `spacing-xxl` + `spacing-lg`（48px）                         | ビューポート中央に置くモーダルの外側余白（上下合計）。オーバーレイの `p-lg` と揃える |
+| `--layout-dialog-viewport-max-height`    | `calc(100dvh - var(--layout-dialog-viewport-padding-block))` | モーダルパネルの最大高さ。画面高から外側余白を引いた高さ                             |
+| `max-h-dialog-viewport`                  | 上記 max-height を適用                                       | 確認ダイアログなど、ビューポート内に収めるパネル                                     |
+| `--layout-dialog-body-footer-grid-rows`  | `minmax(0, 1fr) auto`                                        | 本文行はスクロール、最下行（キャンセル/確定）は固定                                  |
+| `grid-dialog-body-footer`                | 上記 grid-template-rows を適用                               | 本文＋固定アクション行の 2 行グリッド。同形の確認ダイアログで再利用                  |
+
 ## 5. モーション
 
 **長時間見る画面なので、常時動くものを作らない。** モーションは「今まさに状態が

@@ -1,90 +1,24 @@
-import * as path from "node:path";
-
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+import { closeElectronApp, launchElectronApp } from "./electron-launch";
 import {
-  closeElectronApp,
-  launchElectronApp,
-  pollSidecarReady,
-  PACKAGE_ROOT,
-} from "./electron-launch";
-
-const FIXTURE_ROOT = path.join(
-  PACKAGE_ROOT,
-  "e2e/fixtures/registration-intake",
-);
-const CRITERIA_PDF = path.join(FIXTURE_ROOT, "subject-a/02_criteria.pdf");
-const ANSWER_SHEET_PDF = path.join(
-  PACKAGE_ROOT,
-  "e2e/fixtures/answer-sheet.pdf",
-);
-
-async function waitForHomeReady(page: Page): Promise<void> {
-  await pollSidecarReady(page);
-  await expect(page.getByTestId("home-open-intake")).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(page.getByTestId("home-next-up")).toBeVisible({
-    timeout: 60_000,
-  });
-  await expect(page.getByTestId("home-error")).toHaveCount(0);
-}
-
-async function createDraftTest(page: Page): Promise<string> {
-  return page.evaluate(
-    async ({ criteriaPdf }) => {
-      const status = await window.autoScoring.getSidecarStatus();
-      if (status.kind !== "ready") {
-        throw new Error("sidecar not ready");
-      }
-      const response = await window.autoScoring.sidecarMultipartUpload({
-        method: "POST",
-        urlPath: "/tests",
-        fileFields: [{ fieldName: "criteria", filePath: criteriaPdf }],
-        formFields: { name: "E2E 理科", subject: "理科" },
-      });
-      if (response.status !== 201) {
-        throw new Error(
-          `create test failed: ${response.status} ${JSON.stringify(response.body)}`,
-        );
-      }
-      const body = response.body as { id?: string };
-      if (body.id === undefined) {
-        throw new Error("create test response missing id");
-      }
-      return body.id;
-    },
-    { criteriaPdf: CRITERIA_PDF },
-  );
-}
-
-async function openDraftTestSettings(
-  page: Page,
-  testId: string,
-): Promise<void> {
-  await page.getByTestId("home-refresh").click();
-  await expect(page.getByTestId(`home-test-card-${testId}`)).toBeVisible({
-    timeout: 60_000,
-  });
-  await page.getByTestId(`home-resume-registration-${testId}`).click();
-  await expect(page.getByTestId("criteria-section")).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(page.getByTestId("test-status-label")).toHaveText(
-    "テスト状態: 下書き",
-  );
-}
+  ANSWER_SHEET_PDF,
+  createDraftTest,
+  openDraftTestSettings,
+  openExtractConfirmDialog,
+  waitForHomeReady,
+} from "./registration-helpers";
 
 async function completeRegistrationFromTestSettings(page: Page): Promise<void> {
   await expect(page.getByTestId("criteria-section")).toBeVisible({
     timeout: 15_000,
   });
 
-  await page.getByTestId("add-criteria-question-button").click();
-  await page.getByTestId("criteria-number-0").fill("問1");
-  await page.getByTestId("criteria-points-0").fill("10");
-  await page.getByTestId("criteria-model-answer-0").fill("模範解答");
+  await openExtractConfirmDialog(page);
+  await page.getByTestId("extract-confirm-button").click();
+  await expect(page.getByTestId("extract-confirm-dialog")).toHaveCount(0);
+  await expect(page.getByTestId("criteria-number-0")).toHaveValue("問1");
   await page.getByTestId("confirm-criteria-button").click();
   await expect(page.getByTestId("criteria-section")).toContainText("確認済み");
 
@@ -127,7 +61,10 @@ test("registers a test through test settings on the real sidecar path", async ()
   test.setTimeout(180_000);
 
   const app = await launchElectronApp({
-    env: { AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF },
+    env: {
+      AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
+      AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT: "1",
+    },
   });
 
   try {
@@ -155,7 +92,10 @@ test("requires confirm buttons to reach ready", async () => {
   test.setTimeout(180_000);
 
   const app = await launchElectronApp({
-    env: { AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF },
+    env: {
+      AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
+      AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT: "1",
+    },
   });
 
   try {
