@@ -28,7 +28,7 @@ export function DisabledActionReason({
   }
   return (
     <div className="mt-sm flex items-start gap-sm">
-      <span className="shrink-0 rounded-md bg-surface-container-high p-xs text-info">
+      <span className="shrink-0 rounded-md bg-primary-container p-xs text-on-primary-container">
         <svg aria-hidden viewBox="0 0 24 24" className="h-5 w-5">
           <path
             d="M12 11v6"
