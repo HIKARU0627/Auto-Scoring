@@ -43,6 +43,7 @@ from auto_scoring.adapters.ai_grading._http import (
     CONVERTIBLE_HTTP_ERRORS,
     raise_classified_unavailable,
 )
+from auto_scoring.adapters.ai_grading._usage import parse_gemini_usage
 from auto_scoring.adapters.ai_grading._prompt import (
     GRADING_SYSTEM_INSTRUCTIONS,
     build_grading_user_content,
@@ -244,6 +245,7 @@ class VertexGeminiAIProvider:
         model_version = data.get("modelVersion")
         if isinstance(model_version, str) and model_version.strip():
             self._last_model_version = model_version.strip()
+        usage = parse_gemini_usage(data)
 
         try:
             parsed_result = parse_ai_grading_result(_response_text(data))
@@ -268,4 +270,5 @@ class VertexGeminiAIProvider:
             criterion_ids=request.criterion_ids,
             descriptor=self.describe(),
             latency_seconds=latency_seconds,
+            usage=usage,
         )

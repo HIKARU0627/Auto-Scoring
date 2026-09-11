@@ -316,6 +316,20 @@ class GradeResultRow(Base):
             "dependency_graph_version IS NULL OR dependency_graph_version >= 1",
             name="ck_grade_results_dependency_graph_version_positive",
         ),
+        CheckConstraint(
+            "(input_tokens IS NULL AND output_tokens IS NULL) OR "
+            "(input_tokens IS NOT NULL AND output_tokens IS NOT NULL)",
+            name="ck_grade_results_token_counts_paired",
+        ),
+        CheckConstraint(
+            "(input_tokens IS NULL OR input_tokens >= 0) AND "
+            "(output_tokens IS NULL OR output_tokens >= 0)",
+            name="ck_grade_results_token_counts_non_negative",
+        ),
+        CheckConstraint(
+            "(input_tokens IS NULL AND output_tokens IS NULL) OR source = 'ai'",
+            name="ck_grade_results_token_counts_ai_only",
+        ),
         Index("ix_grade_results_submission_question", "submission_id", "question_id"),
     )
 
@@ -358,6 +372,9 @@ class GradeResultRow(Base):
     answer_image_finding: Mapped[AnswerImageFinding | None] = mapped_column(
         _enum(AnswerImageFinding), nullable=True
     )
+    #: Provider-reported token counts (Issue #187). Both or neither.
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 

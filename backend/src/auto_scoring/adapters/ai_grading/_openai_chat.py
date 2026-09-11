@@ -33,6 +33,7 @@ from auto_scoring.adapters.ai_grading._http import (
     CONVERTIBLE_HTTP_ERRORS,
     raise_classified_unavailable,
 )
+from auto_scoring.adapters.ai_grading._usage import parse_openai_chat_usage
 from auto_scoring.adapters.ai_grading._prompt import (
     GRADING_SYSTEM_INSTRUCTIONS,
     build_grading_user_content,
@@ -237,6 +238,7 @@ class ChatCompletionsAIProvider:
         # Recorded before validating the completion's structure/content any
         # further: see the `_last_route` docstring above.
         self._last_route = _routing_fingerprint(data)
+        usage = parse_openai_chat_usage(data)
 
         try:
             content = data["choices"][0]["message"]["content"]
@@ -277,4 +279,5 @@ class ChatCompletionsAIProvider:
             criterion_ids=request.criterion_ids,
             descriptor=self.describe(),
             latency_seconds=latency_seconds,
+            usage=usage,
         )

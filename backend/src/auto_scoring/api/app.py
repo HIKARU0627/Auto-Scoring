@@ -48,6 +48,8 @@ from auto_scoring.adapters.submission_intake import (
 )
 from auto_scoring.adapters.test_intake import repair_incomplete_test_registrations
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.adapters.local.grading_cost_store import GradingCostStore
+from auto_scoring.api.ai_usage_router import build_ai_usage_router
 from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.criteria_router import build_criteria_router
@@ -993,6 +995,9 @@ def create_app(
     protected.include_router(build_recognitions_router(session_factory, store))
     protected.include_router(build_review_router(session_factory, store, queue_service))
     protected.include_router(build_export_router(session_factory, store, queue_service))
+    protected.include_router(
+        build_ai_usage_router(session_factory, GradingCostStore(store.root))
+    )
 
     app.include_router(protected)
     return app
