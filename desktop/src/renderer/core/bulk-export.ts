@@ -3,7 +3,7 @@
  */
 
 import type { SidecarClient } from "../api/client.js";
-import type { ExportResponse } from "../api/export-data.js";
+import type { ExportResponse } from "./export-data.js";
 import {
   cancelJob,
   ExportDataError,
@@ -11,7 +11,7 @@ import {
   getJob,
   listExports,
   requestBulkExport,
-} from "../api/export-data.js";
+} from "./export-data.js";
 import { bulkExportRefusalReason } from "./export-conflict.js";
 import {
   bulkExportFileName,

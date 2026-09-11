@@ -3,10 +3,10 @@ import {
   materialRoleWireValue,
   PDF_CONTENT_TYPE,
 } from "../../shared/sidecar-upload.js";
-import type { SidecarClient } from "./client.js";
-import type { components } from "./generated/schema.js";
-import { gradingKickoffFailureFromStatus } from "../core/grading-kickoff.js";
-import type { MaterialRole } from "../core/material-role-labels.js";
+import type { SidecarClient } from "../api/client.js";
+import type { components } from "../api/generated/schema.js";
+import { gradingKickoffFailureFromStatus } from "./grading-kickoff.js";
+import type { MaterialRole } from "./material-role-labels.js";
 import {
   effectiveRole,
   includedFiles,
@@ -15,7 +15,7 @@ import {
   type IntakeFileState,
   type IntakeGroupState,
   type IntakeReviewState,
-} from "../core/intake-review.js";
+} from "./intake-review.js";
 
 export type IntakeTemplateModel = components["schemas"]["IntakeTemplateModel"];
 export type IntakePlanResponse = components["schemas"]["IntakePlanResponse"];

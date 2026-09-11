@@ -18,7 +18,7 @@ import {
   loadAnswerImageUrl,
   type QuestionReviewData,
   type SubmissionPageState,
-} from "../../api/pdf-review-data.js";
+} from "../../core/pdf-review-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   buildDependencyDagLayout,

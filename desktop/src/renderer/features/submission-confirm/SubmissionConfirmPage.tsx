@@ -13,13 +13,13 @@ import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   loadQuestionReviewData,
   loadAnswerImageUrl,
-} from "../../api/pdf-review-data.js";
+} from "../../core/pdf-review-data.js";
 import {
   approveQuestionReview,
   loadSubmissionConfirmData,
   SubmissionConfirmDataError,
   type QuestionReviewData,
-} from "../../api/submission-confirm-data.js";
+} from "../../core/submission-confirm-data.js";
 import type { components } from "../../api/generated/schema.js";
 import { pdfReview, submissionConfirm } from "../../core/app-routes.js";
 import {
