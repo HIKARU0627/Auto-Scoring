@@ -1,6 +1,6 @@
-import { test, expect, _electron as electron } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 
-import { electronLaunchArgs } from "./electron-launch";
+import { closeElectronApp, launchElectronApp } from "./electron-launch";
 
 /**
  * Issue #264 acceptance: blob URLs are allowed by img-src so page and answer
@@ -9,7 +9,7 @@ import { electronLaunchArgs } from "./electron-launch";
 test("blob image URLs load in the renderer", async () => {
   test.setTimeout(60_000);
 
-  const app = await electron.launch({ args: electronLaunchArgs() });
+  const app = await launchElectronApp();
 
   try {
     const page = await app.firstWindow();
@@ -36,6 +36,6 @@ test("blob image URLs load in the renderer", async () => {
 
     expect(result.naturalWidth).toBeGreaterThan(0);
   } finally {
-    await app.close();
+    await closeElectronApp(app);
   }
 });

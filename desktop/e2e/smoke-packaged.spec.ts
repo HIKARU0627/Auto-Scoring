@@ -1,6 +1,8 @@
 import { test, expect, _electron as electron } from "@playwright/test";
 import * as path from "node:path";
 
+import { closeElectronApp, pollSidecarReady } from "./electron-launch";
+
 const packagedAppPath = process.env["PACKAGED_APP_PATH"];
 
 test.describe("Packaged Electron app smoke test (Issue #265)", () => {
@@ -26,17 +28,7 @@ test.describe("Packaged Electron app smoke test (Issue #265)", () => {
       const page = await app.firstWindow();
 
       // 1. Wait for sidecar status to become "ready"
-      await expect
-        .poll(
-          async () => {
-            const sidecarStatus = await page.evaluate(async () => {
-              return window.autoScoring?.getSidecarStatus();
-            });
-            return sidecarStatus?.kind;
-          },
-          { timeout: 60_000 },
-        )
-        .toBe("ready");
+      await pollSidecarReady(page);
 
       // 2. Acceptance Criterion 3: No home-error shown
       await expect(
@@ -53,7 +45,7 @@ test.describe("Packaged Electron app smoke test (Issue #265)", () => {
       expect(bodyText).not.toMatch(/Bearer\s+\S+/i);
       expect(bodyText).not.toContain("test-token");
     } finally {
-      await app.close();
+      await closeElectronApp(app);
     }
   });
 });
