@@ -338,11 +338,24 @@ def test_create_submission_accepts_a_student_label_at_the_length_limit(
 class _SlowPdfEngine:
     """Delegates to a real ``PdfEngine`` but sleeps before every page render --
     standing in for a submission whose rasterization genuinely takes a while.
+
+    ``render_started`` / ``render_finished`` let a test synchronize on the slow
+    render itself (started when it begins, finished once the delegate returns)
+    instead of racing it with a fixed ``sleep``.
     """
 
-    def __init__(self, delegate: PdfEngine, *, delay_seconds: float) -> None:
+    def __init__(
+        self,
+        delegate: PdfEngine,
+        *,
+        delay_seconds: float,
+        render_started: threading.Event | None = None,
+        render_finished: threading.Event | None = None,
+    ) -> None:
         self._delegate = delegate
         self._delay_seconds = delay_seconds
+        self._render_started = render_started
+        self._render_finished = render_finished
 
     def page_count(self, source: Path) -> int:
         return self._delegate.page_count(source)
@@ -354,8 +367,14 @@ class _SlowPdfEngine:
         return self._delegate.page_geometry(source, page_index)
 
     def render_page_png(self, source: Path, page_index: int, *, scale: float) -> bytes:
+        if self._render_started is not None:
+            self._render_started.set()
         time.sleep(self._delay_seconds)
-        return self._delegate.render_page_png(source, page_index, scale=scale)
+        try:
+            return self._delegate.render_page_png(source, page_index, scale=scale)
+        finally:
+            if self._render_finished is not None:
+                self._render_finished.set()
 
     def stamp_markers(
         self,
@@ -387,12 +406,26 @@ def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) ->
     event loop (``with TestClient(...) as client`` -- without the ``with``,
     Starlette's TestClient gives each request its own throwaway event loop,
     which would pass this test even without the fix).
+
+    The assertion is deliberately not a wall-clock deadline: /healthz must be
+    answered *while the slow render is still in flight*, which is exactly what
+    "not blocked" means. An absolute duration would instead measure the CI
+    runner's speed (Issue #357: a cosmetic PR once failed here with
+    ``assert elapsed < 0.5`` under parallel load). If intake ran inline, the
+    healthz request could not be served until after ``render_finished`` was set.
     """
+    render_started = threading.Event()
+    render_finished = threading.Event()
     app = create_app(
         api_token=_TOKEN,
         data_root=data_root,
         intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
-        pdf_engine=_SlowPdfEngine(PdfiumPypdfEngine(), delay_seconds=1.0),
+        pdf_engine=_SlowPdfEngine(
+            PdfiumPypdfEngine(),
+            delay_seconds=1.0,
+            render_started=render_started,
+            render_finished=render_finished,
+        ),
     )
     _seed_test(data_root)
 
@@ -409,17 +442,18 @@ def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) ->
 
         intake_thread = threading.Thread(target=_run_intake)
         intake_thread.start()
-        time.sleep(0.2)  # let the slow render actually start
+        # Wait for the slow render to actually be in flight -- not a fixed
+        # sleep -- so the probe below cannot race intake's startup.
+        assert render_started.wait(timeout=5), "intake never reached the slow render"
         assert not intake_done.is_set()
 
-        start = time.monotonic()
         response = client.get("/healthz")
-        elapsed = time.monotonic() - start
 
         assert response.status_code == 200
-        # Far under the 1s render delay: the event loop answered this while
-        # intake was still running on its worker thread, not after it.
-        assert elapsed < 0.5
+        # The event loop answered /healthz while the intake worker was still
+        # inside that render. Inline intake would have had to finish the render
+        # before this request could be served.
+        assert not render_finished.is_set()
         intake_thread.join(timeout=5)
         assert intake_done.is_set()
 
