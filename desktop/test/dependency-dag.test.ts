@@ -78,4 +78,14 @@ describe("DependencyDagLayout (INV-160–162, INV-201-03)", () => {
     expect(failedQ3.statusLabel).toBe("問2 失敗で停止");
     expect(blockedQ3.statusLabel).not.toBe(failedQ3.statusLabel);
   });
+
+  it("returns no layout (empty state) when there are no questions", () => {
+    expect(
+      buildDependencyDagLayout({
+        questions: [],
+        edges: [],
+        releasedQuestionIds: new Set(),
+      }),
+    ).toBeNull();
+  });
 });
