@@ -21,9 +21,11 @@
     "test:e2e": "pnpm run build && playwright test"
   },
   "dependencies": {
+    "lucide-react": "^0.550.0",
     "openapi-fetch": "^0.17.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
