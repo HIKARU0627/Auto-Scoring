@@ -16,6 +16,7 @@
  * the rule is enforced rather than merely written down here.
  */
 
+import type { BulkExportWriteRequest } from "./bulk-export-write.js";
 import type { ScannedFolder } from "./folder-scan.js";
 import type {
   SidecarMultipartRequest,
@@ -87,6 +88,16 @@ export interface AutoScoringBridge {
   onSidecarStatusChange(callback: (status: SidecarStatus) => void): () => void;
   chooseFolder(): Promise<string | null>;
   choosePdfFile(): Promise<string | null>;
+  /** UG-09 overwrite protection lives in main; the final name is returned. */
+  bulkExportWriteFile(request: BulkExportWriteRequest): Promise<string>;
+  bulkExportFileExists(
+    directoryPath: string,
+    fileName: string,
+  ): Promise<boolean>;
+  bulkExportReadFile(
+    directoryPath: string,
+    fileName: string,
+  ): Promise<string | null>;
   scanFolder(directoryPath: string): Promise<ScannedFolder>;
   sidecarMultipartUpload(
     request: SidecarMultipartRequest,
@@ -103,6 +114,9 @@ export const IpcChannel = {
   sidecarStatusChanged: "auto-scoring:sidecar-status-changed",
   chooseFolder: "auto-scoring:choose-folder",
   choosePdfFile: "auto-scoring:choose-pdf-file",
+  bulkExportWriteFile: "auto-scoring:bulk-export-write-file",
+  bulkExportFileExists: "auto-scoring:bulk-export-file-exists",
+  bulkExportReadFile: "auto-scoring:bulk-export-read-file",
   scanFolder: "auto-scoring:scan-folder",
   sidecarMultipartUpload: "auto-scoring:sidecar-multipart-upload",
   sidecarFetch: "auto-scoring:sidecar-fetch",
