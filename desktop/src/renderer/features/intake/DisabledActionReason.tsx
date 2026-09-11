@@ -28,12 +28,27 @@ export function DisabledActionReason({
   }
   return (
     <div className="mt-sm flex items-start gap-sm">
-      <span
+      <svg
         aria-hidden
-        className="material-symbols-outlined shrink-0 text-body-medium text-on-surface-variant"
+        viewBox="0 0 24 24"
+        className="mt-xs h-5 w-5 shrink-0 text-on-surface-variant"
       >
-        info_outline
-      </span>
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M12 11v5"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+        <circle cx="12" cy="8" r="1" fill="currentColor" />
+      </svg>
       {/* `min-w-0 flex-1`: without them the row cannot shrink below the text's
           intrinsic width and the reason runs off a 700px window instead of
           wrapping. `break-words` lets a long unbroken run wrap too. */}

@@ -6,6 +6,7 @@ import {
   createIntakeBridge,
   createIntakeMockClient,
   buildPlan,
+  defaultTemplate,
   plannedFile,
 } from "./support/intake-harness.js";
 import { buildTest } from "./support/mock-sidecar-client.js";
@@ -17,6 +18,25 @@ const RULE_MATCHED = [
   plannedFile("subject-a/01_answers.pdf", { role: "student_answer" }),
   plannedFile("subject-a/02_criteria.pdf", { role: "grading_criteria" }),
 ];
+
+const STRAY_PATHS = [
+  "subject-a/01_answers.pdf",
+  "subject-a/02_criteria.pdf",
+  "subject-a/stray.pdf",
+];
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 async function openReview(
   options: {
@@ -243,5 +263,84 @@ describe("IntakePage invariants", () => {
     const name = screen.getByTestId("file-picker-name");
     expect(name.className).toContain("truncate");
     expect(name.className).toContain("min-w-0");
+  });
+
+  it("Issue #346: the steps show folder → routing → import progress", async () => {
+    await openReview();
+    expect(
+      screen.getByTestId("intake-steps-choose").getAttribute("data-state"),
+    ).toBe("done");
+    const review = screen.getByTestId("intake-steps-review");
+    expect(review.getAttribute("data-state")).toBe("current");
+    expect(review.getAttribute("aria-current")).toBe("step");
+    expect(
+      screen.getByTestId("intake-steps-done").getAttribute("data-state"),
+    ).toBe("upcoming");
+  });
+
+  it("Issue #346: classification says what is running and how far it is", async () => {
+    const gate = deferred<unknown>();
+    await openReview({
+      plan: buildPlan(
+        [
+          ...RULE_MATCHED,
+          plannedFile("subject-a/stray.pdf", { classification: "pending" }),
+        ],
+        1,
+      ),
+      paths: STRAY_PATHS,
+      bridge: createIntakeBridge({
+        folderPaths: STRAY_PATHS,
+        classifyMaterial: () => gate.promise,
+      }),
+    });
+
+    fireEvent.click(screen.getByTestId("intake-run-classification"));
+
+    const notice = await screen.findByTestId("intake-running-notice");
+    expect(notice.textContent).toContain("AIが資料の役割を判定しています");
+    expect(notice.textContent).toContain("数秒から十数秒");
+    const progress = screen.getByTestId("intake-running-progress");
+    expect(
+      progress
+        .querySelector('[role="progressbar"]')
+        ?.getAttribute("aria-valuemax"),
+    ).toBe("1");
+
+    gate.resolve({ role: "reference", confidence: 1, cached: false });
+  });
+
+  it("Issue #346: failed imports list the failing file names", async () => {
+    await openReview({
+      handlers: { listTestRegistrations: async () => READY_TEST() },
+      bridge: createIntakeBridge({
+        folderPaths: ["subject-a/01_answers.pdf", "subject-a/02_criteria.pdf"],
+        createSubmission: async () => {
+          throw new Error("simulated disk failure");
+        },
+      }),
+    });
+
+    fireEvent.click(screen.getByTestId("intake-import"));
+
+    await screen.findByTestId("intake-failed-subject-a");
+    const list = screen.getByTestId("intake-failed-files-subject-a");
+    expect(list.querySelectorAll("li")).toHaveLength(1);
+    expect(list.textContent).toContain("01_answers.pdf");
+  });
+
+  it("Issue #346: the folder step shows a skeleton before data arrives", async () => {
+    const gate = deferred<ReturnType<typeof defaultTemplate>[]>();
+    renderAppAt(AppRoutes.intake, {
+      client: createIntakeMockClient({
+        listIntakeTemplates: () => gate.promise,
+      }),
+      bridge: createIntakeBridge(),
+    });
+
+    expect(screen.getByTestId("intake-loading")).toBeDefined();
+
+    gate.resolve([defaultTemplate()]);
+    await screen.findByTestId("intake-template-picker");
   });
 });
