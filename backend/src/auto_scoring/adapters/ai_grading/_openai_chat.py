@@ -39,6 +39,7 @@ from auto_scoring.adapters.ai_grading._prompt import (
     sniff_image_format,
 )
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
+from auto_scoring.adapters.ai_grading._usage import parse_openai_chat_usage
 from auto_scoring.domain.ai_grading import (
     describe_schema_violation,
     parse_ai_grading_result,
@@ -237,6 +238,7 @@ class ChatCompletionsAIProvider:
         # Recorded before validating the completion's structure/content any
         # further: see the `_last_route` docstring above.
         self._last_route = _routing_fingerprint(data)
+        usage = parse_openai_chat_usage(data)
 
         try:
             content = data["choices"][0]["message"]["content"]
@@ -277,4 +279,5 @@ class ChatCompletionsAIProvider:
             criterion_ids=request.criterion_ids,
             descriptor=self.describe(),
             latency_seconds=latency_seconds,
+            usage=usage,
         )

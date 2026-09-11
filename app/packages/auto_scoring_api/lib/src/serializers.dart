@@ -55,6 +55,7 @@ import 'package:auto_scoring_api/src/model/export_request_response.dart';
 import 'package:auto_scoring_api/src/model/export_response.dart';
 import 'package:auto_scoring_api/src/model/grade_result_response.dart';
 import 'package:auto_scoring_api/src/model/grading_availability_response.dart';
+import 'package:auto_scoring_api/src/model/grading_cost_model.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
 import 'package:auto_scoring_api/src/model/intake_cost_model.dart';
 import 'package:auto_scoring_api/src/model/intake_plan_response.dart';
@@ -65,6 +66,7 @@ import 'package:auto_scoring_api/src/model/location_inner.dart';
 import 'package:auto_scoring_api/src/model/manual_grade_request.dart';
 import 'package:auto_scoring_api/src/model/manual_recognition_request.dart';
 import 'package:auto_scoring_api/src/model/material_role.dart';
+import 'package:auto_scoring_api/src/model/monthly_ai_usage_response.dart';
 import 'package:auto_scoring_api/src/model/normalized_b_box_model.dart';
 import 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
 import 'package:auto_scoring_api/src/model/ocr_availability_response.dart';
@@ -94,6 +96,7 @@ import 'package:auto_scoring_api/src/model/scanned_file_model.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
 import 'package:auto_scoring_api/src/model/score_value_response.dart';
+import 'package:auto_scoring_api/src/model/submission_ai_usage_response.dart';
 import 'package:auto_scoring_api/src/model/submission_response.dart';
 import 'package:auto_scoring_api/src/model/submission_review_progress_response.dart';
 import 'package:auto_scoring_api/src/model/test_material_response.dart';
@@ -103,6 +106,7 @@ import 'package:auto_scoring_api/src/model/undo_review_request.dart';
 import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 import 'package:auto_scoring_api/src/model/update_criteria_request.dart';
 import 'package:auto_scoring_api/src/model/update_profile_request.dart';
+import 'package:auto_scoring_api/src/model/usage_availability.dart';
 import 'package:auto_scoring_api/src/model/validation_error.dart';
 import 'package:auto_scoring_api/src/model/verify_api_key_response.dart';
 
@@ -150,6 +154,7 @@ part 'serializers.g.dart';
   ExportResponse,
   GradeResultResponse,
   GradingAvailabilityResponse,
+  GradingCostModel,
   HTTPValidationError,
   IntakeCostModel,
   IntakePlanResponse,
@@ -160,6 +165,7 @@ part 'serializers.g.dart';
   ManualGradeRequest,
   ManualRecognitionRequest,
   MaterialRole,
+  MonthlyAiUsageResponse,
   NormalizedBBoxModel,
   NormalizedRectResponse,
   OcrAvailabilityResponse,
@@ -189,6 +195,7 @@ part 'serializers.g.dart';
   ScoreRequest,
   ScoreResponse,
   ScoreValueResponse,
+  SubmissionAiUsageResponse,
   SubmissionResponse,
   SubmissionReviewProgressResponse,
   TestMaterialResponse,
@@ -198,6 +205,7 @@ part 'serializers.g.dart';
   UnresolvedQuestionModel,
   UpdateCriteriaRequest,
   UpdateProfileRequest,
+  UsageAvailability,
   ValidationError,
   VerifyApiKeyResponse,
 ])

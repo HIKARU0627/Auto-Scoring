@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, type Dirent } from "node:fs";
 import * as path from "node:path";
 
 import {
@@ -50,87 +50,43 @@ interface DetectedReason {
 }
 
 /**
- * ここに列挙したものは #255 が `features/` を編集中のため本 Issue では直せない
- * 既存の違反である。**件数ではなく文面の同一性**で持つので、同じファイルに
- * 新しい違反を足しても (下の「許容済み」検査に無い) 赤くなる。
+ * Issue #271 が #255 との衝突を避けるために残した既存の違反リスト。Issue #278 で
+ * `BlockerNotice` の message 6 件と `AnswerAreaEditor.MissingGroup` の message 2 件 /
+ * action 2 件を `core/action-requirements.ts` へ移したため、いまは空である。
  *
- * 内訳: `BlockerNotice` の message 6 件 + `AnswerAreaEditor.MissingGroup` の
- * message 2 件 / action 2 件 = 10 件。
- *
- * 撤去先: Issue #278。
+ * 実物を数えると 10 件だった（Issue #278 の本文は 9 件と書いているが、allowlist
+ * の実物は BlockerNotice 6 + MissingGroup message 2 / action 2 の 10 件である）。
+ * 以後は同じファイルに新しい違反を足しても (下の「許容済み」検査に無い) 赤くなる。
  */
 const OUTSTANDING_REASONS: readonly {
   readonly file: string;
   readonly component: string;
   readonly message: string;
-}[] = [
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    component: "BlockerNotice",
-    message: "全設問の判断材料を表示しました。${…}問をまとめて確定できます。",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    component: "BlockerNotice",
-    message: "このテストには設問が登録されていません。",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    component: "BlockerNotice",
-    message:
-      "判断材料を読み込めていない設問があります（${…}）。再読み込みしてください。",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    component: "BlockerNotice",
-    message:
-      "AIが採点できなかった設問があります（${…}）。その設問を開いて点数を入力すると、まとめて確定できます。",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    component: "BlockerNotice",
-    message:
-      "まだ表示していない設問があります（${…}）。${…}方向へスクロールすると確定できます。",
-  },
-  {
-    file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
-    component: "BlockerNotice",
-    message: "この答案は全設問を確定済みです。",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    component: "MissingGroup",
-    message:
-      "回答欄が見つからなかった設問が${…}件あります。このまま確定もできますが、その設問は答案のページ全体を採点に送り、要確認として人の目に回ります。",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    component: "MissingGroup",
-    message: "答案には回答欄があるはずです。設問名を押して枠を引いてください。",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    component: "MissingGroup",
-    message:
-      "この答案では回答欄を見つけられなかった設問が${…}件あります。登録した答案が課題の一部のページで、採点基準がそれより広い範囲を含んでいることがあります。まず答案と採点基準を確かめてください。",
-  },
-  {
-    file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
-    component: "MissingGroup",
-    message:
-      "答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。",
-  },
-];
+}[] = [];
 
 /** この数は allowlist を増やしたら赤くなるための固定値である。 */
-const OUTSTANDING_REASON_COUNT = 10;
+const OUTSTANDING_REASON_COUNT = 0;
+
+/**
+ * 走査対象が 0 件になったら赤くするための下限。`design-tokens-lint.test.ts` の
+ * `EXPECTED_MIN_FILES` と同じ役割で、否定形アサーションが空振りするのを防ぐ。
+ */
+const EXPECTED_MIN_FEATURE_FILES = 24;
 
 function featureFiles(): string[] {
   const found: string[] = [];
-  for (const entry of readdirSync(FEATURES_DIR, {
-    withFileTypes: true,
-    recursive: true,
-  })) {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(FEATURES_DIR, {
+      withFileTypes: true,
+      recursive: true,
+    });
+  } catch {
+    // 走査ディレクトリが無いときは空を返し、件数の下限検査で赤くする。
+    // ここで例外を投げると「赤」ではあるが、件数アサーションの失敗ではなくなる。
+    return [];
+  }
+  for (const entry of entries) {
     if (!entry.isFile() || !SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
       continue;
     }
@@ -324,8 +280,12 @@ function readAttributeValue(source: string, start: number): string | null {
 }
 
 describe("無効理由の単一ソース性 (INV-004)", () => {
-  it("走査対象のファイルが存在する（0 件なら無条件に緑にしない）", () => {
-    expect(featureFiles().length).toBeGreaterThan(0);
+  it("走査対象の件数を下限で固定する（0 件なら無条件に緑にしない）", () => {
+    const files = featureFiles();
+    expect(
+      files.length,
+      `Expected >= ${EXPECTED_MIN_FEATURE_FILES} features files to be scanned, found ${files.length}`,
+    ).toBeGreaterThanOrEqual(EXPECTED_MIN_FEATURE_FILES);
   });
 
   it("走査器は理由文の直書きを拾い、そうでない文は拾わない", () => {

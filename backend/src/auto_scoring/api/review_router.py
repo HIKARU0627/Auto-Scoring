@@ -209,6 +209,8 @@ class GradeResultResponse(BaseModel):
     #: 持っている。`None` は「providerが何も申告しなかった」で、`answer` とは
     #: 別物である(誰も見ていない切り出しを保証したことにしない)。
     answer_image_finding: AnswerImageFinding | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     created_at: datetime
 
     @classmethod
@@ -236,6 +238,8 @@ class GradeResultResponse(BaseModel):
             rationale=grade.rationale,
             comment=grade.comment,
             answer_image_finding=grade.answer_image_finding,
+            input_tokens=grade.input_tokens,
+            output_tokens=grade.output_tokens,
             created_at=grade.created_at.replace(tzinfo=UTC),
         )
 

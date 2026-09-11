@@ -364,6 +364,8 @@ def grade_to_row(result: GradeResult) -> GradeResultRow:
         dependency_graph_version=result.dependency_graph_version,
         context=[_context_entry_to_json(c) for c in result.context],
         answer_image_finding=result.answer_image_finding,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
         created_at=result.created_at,
     )
 
@@ -389,6 +391,8 @@ def grade_from_row(row: GradeResultRow) -> GradeResult:
             if row.answer_image_finding is None
             else AnswerImageFinding(row.answer_image_finding)
         ),
+        input_tokens=row.input_tokens,
+        output_tokens=row.output_tokens,
         created_at=row.created_at,
     )
 

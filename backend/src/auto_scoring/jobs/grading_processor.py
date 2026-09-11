@@ -422,6 +422,8 @@ class GradingJobProcessor:
             # store it. ``blank`` is recorded and otherwise
             # ignored on purpose -- see `AnswerImageFinding`.
             answer_image_finding=response.answer_image_finding,
+            input_tokens=response.usage.input_tokens if response.usage is not None else None,
+            output_tokens=response.usage.output_tokens if response.usage is not None else None,
             created_at=now,
         )
         # The grader's own recognition reading (Issue #20 review, P1): a

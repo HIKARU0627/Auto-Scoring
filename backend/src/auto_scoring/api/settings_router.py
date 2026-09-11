@@ -110,6 +110,10 @@ class VerifyApiKeyResponse(BaseModel):
     #: Which key was tried -- the stored one or the environment's. Without
     #: it, "it works" on a machine with both is an ambiguous answer.
     key_source: ConfigurationSource
+    #: OpenRouter account figures from ``GET /key`` (Issue #187). Separate
+    #: from this app's own usage accumulation -- shown on its own line.
+    provider_account_usage: float | None = None
+    provider_account_limit: float | None = None
 
 
 def _status_model(status_: ApiKeyStatus) -> ApiKeyStatusModel:
@@ -211,4 +215,6 @@ def _verification_model(
         detail=outcome.detail,
         status_code=outcome.status_code,
         key_source=source,
+        provider_account_usage=outcome.provider_account_usage,
+        provider_account_limit=outcome.provider_account_limit,
     )
