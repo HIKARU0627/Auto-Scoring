@@ -63,10 +63,11 @@ own their formatting.
 
 ## CI のジョブ構成と、必須チェック `Quality`
 
-CI は 6 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は**判定を集約する
-だけ**のジョブで、`package` は独立、`package-alarm` は `package` の結果だけを見る。
-`needs` で繋がっているのは `quality`（3 実作業）と `package-alarm`（`package`）だけで、
-`app` / `backend` / `desktop` / `package` は同時に走る。**待ち時間は和ではなく最大値。**
+CI は 6 ジョブ。`app` / `backend` / `desktop` / `package` が実作業、`quality` は
+**判定を集約するだけ**のジョブ、`package-alarm` は `package` の結果だけを見る。
+`needs` で繋がっているのは `quality`（**4 実作業**。`package` を含む。Issue #331）と
+`package-alarm`（`package`）だけで、`app` / `backend` / `desktop` / `package` は
+同時に走る。**待ち時間は和ではなく最大値。**
 `package-alarm` は `package` が終わり次第 `quality` を待たずに走る。
 
 | ジョブ          | 表示名                  | 中身                                                               | ツールチェーン                    |
@@ -74,7 +75,7 @@ CI は 6 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は*
 | `app`           | App                     | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
 | `backend`       | Backend                 | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
 | `desktop`       | Desktop                 | `:desktop` の typecheck/test/build + Playwright (Electron)         | uv + Node（**Flutter SDK なし**） |
-| `quality`       | **Quality**             | 上 3 つの結果を判定するだけ                                        | なし（ubuntu）                    |
+| `quality`       | **Quality**             | 上 4 つの結果を判定するだけ                                        | なし（ubuntu）                    |
 | `package`       | Package (Windows)       | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
 | `package-alarm` | Package (Windows) alarm | 上の赤を追跡 Issue にする（`needs: [package]` / ubuntu）           | Node のみ                         |
 
@@ -103,7 +104,7 @@ CI は 6 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は*
   `backend` / `package` ジョブにも Electron のバイナリ（約 100 MB）を落としてくる。
   各ジョブは自分が動かすパッケージだけを入れる。
 
-### `Quality` が必須チェックである以上、外してはいけない 2 点
+### `Quality` が必須チェックである以上、外してはいけない 3 点
 
 `main` の ruleset が要求する status check の context は **`Quality` の 1 つだけ**。
 この名前のチェックが消えると、以後すべての PR がマージ不能になる。したがって
@@ -113,6 +114,14 @@ CI は 6 ジョブ。`app` / `backend` / `desktop` が実作業、`quality` は*
 判定して失敗させること。`needs` が失敗すると依存ジョブは **skipped** になり、
 **GitHub は skipped の必須チェックを成功として扱う。** ここを外すと、ビルドが
 赤いままマージゲートだけが緑に見える。到達したこと自体は何の成功の証拠でもない。
+
+**`needs` に足したら、判定ループにも足す。** `needs` に入れただけでは結果は
+「取得」されるが「検査」されないので、そのジョブが赤でも `Quality` は緑になる。
+`package` は Issue #331 でこの一覧に入った。`pnpm run alarm:selftest` が実
+`ci.yml` を読み、`quality` の `needs` に `package` があることを検査する（外すと
+赤くなる）。判定ループ側は自己検査に含めない -- 含めると、`needs` だけ足して
+ループを忘れた状態でも App ジョブが赤くなり、ループの追加自体が効いていることを
+CI の実測で切り分けられなくなるためである。
 
 ### `concurrency`: PR は ref 単位で打ち切り、`main` はコミットごとに独立させる
 
@@ -164,18 +173,25 @@ refs/remotes/origin/main`。`pull_request` 側: run 34472340931 で
 
 ## `main` の `Package (Windows)` の赤に気付く仕組み（Issue #312）
 
-`package` は `Quality` の `needs` に入っていない（上のとおり意図的）。そのため
-`main` で `Package (Windows)` が赤でもマージは止まらず、**run を開かない限り
+`package` は **Issue #331 で `Quality` の `needs` に入った**（上のとおり）。したがって
+**PR では** `Package (Windows)` が赤なら `Quality` が赤くなり、マージが止まる。
+それでもアラームが要るのは、**PR を経由せず `main` に直接入った変更**（管理者の
+push・ruleset の例外・将来の設定変更）では必須 check が走らないからである。その
+ときは `main` で `Package (Windows)` が赤でもマージは止まらず、**run を開かない限り
 誰も気付かない。** Windows 成果物を作れるのはこのジョブだけ（PyInstaller は
 クロスコンパイル不可、`pnpm run build:app` = `flutter build windows` は Linux 不可）
 なので、この赤は「出荷する Windows ビルドが壊れた」の唯一の signal である。
 
-採用した案は **案 C**（cut-over 直前だけ `Package (Windows)` を必須 check に
-する）。案 A（いま必須化する）は、ネットワーク断のような変更と無関係の赤で
-全 PR を 45 分ジョブに依存させるため採らない。案 B（現状維持 + 気付く仕組み）は
-案 C の前半そのもの。**「必須化」だけは本番構成変更であり、オーナーが
-cut-over 直前に判断する**（`docs/agent-orchestration.md` §6 の委譲範囲外）。
-この Issue はその判断を待たず、いま欠けている「赤に気付く仕組み」だけを入れる。
+Issue #312 / PR #327 の時点では **案 C**（cut-over 直前だけ `Package (Windows)` を
+必須 check にする）を採り、この仕組みだけを入れた。その後の **オーナー裁定
+（2026-09-12, Issue #331）で方針は案 A に変わり、cut-over を待たずいますぐ必須化
+する**ことが決まった。代償（`#309` のような Corepack の `ECONNRESET` で、変更と
+無関係の PR も 45 分ジョブに依存して止まる）は承知のうえで選んでいる。必須化の
+実装は**本番構成（ruleset）を触らない**: `Quality` を
+`needs: [app, backend, desktop, package]` にし、判定ループにも
+`needs.package.result` を足すだけで、ruleset が参照する必須 check 名 `Quality` は
+1 文字も変えない。`package` ジョブは `if` も `needs` も持たないので、PR / push の
+両方で必ず走り、`skipped` で `Quality` を巻き込むことはない。
 
 仕組みは `ci.yml` の `package-alarm` ジョブと `scripts/package-alarm.mjs`:
 
@@ -192,8 +208,9 @@ cut-over 直前に判断する**（`docs/agent-orchestration.md` §6 の委譲�
   `default_workflow_permissions` は `read` だが、ジョブの `permissions` が
   それを上書きする（fork からの PR だけは read に落ちるが、その経路は
   Issue を触らない）。
-- **`package-alarm` は `Quality` の `needs` に入れない。** 入れた時点で
-  `Package (Windows)` が必須 check になり、オーナーの判断を先取りしてしまう。
+- **`package-alarm` は `Quality` の `needs` に入れない。** 必須化されるのは
+  `package`（Issue #331）であって、この監視ジョブではない。入れると `Quality` の
+  判定対象が監視ジョブ自身になり、その赤がゲートを左右する。
 
 ### 沈黙する監視にしない
 
@@ -205,6 +222,8 @@ cut-over 直前に判断する**（`docs/agent-orchestration.md` §6 の委譲�
   こと（リネームしたら赤くなる）。
 - `package-alarm` が `needs: [package]` と `if: always()` を持つこと
   （条件式を壊したら赤くなる）。
+- `quality` が `needs` に `package` を持つこと（Issue #331 の必須化を外したら
+  赤くなる）。
 
 さらに、報告分岐すべて（Issue 作成・コメント・回復で close・PR で赤・
 未知の結果で fail-closed・API 拒否で fail-closed）を同じテストが fake fetch で

@@ -6,8 +6,10 @@
 // `main`, so this file covers every branch of `scripts/package-alarm.mjs`:
 //
 //   * the workflow wiring (the job is still named `Package (Windows)`, the
-//     alarm still `needs: [package]` and still runs `if: always()`), because a
-//     rename or a wrong condition would create a monitor that never fires;
+//     alarm still `needs: [package]` and still runs `if: always()`, and
+//     `quality` still needs `package`), because a rename, a wrong condition or
+//     a dropped dependency would create a monitor that never fires -- or a
+//     merge gate that no longer waits for `Package (Windows)` (Issue #331);
 //   * the reporting branches (open an issue, comment on one, close it on
 //     recovery, go red on a PR, fail closed on an unknown result or a refused
 //     API call).
@@ -23,6 +25,7 @@ import { test } from "node:test";
 import {
   ALARM_JOB_ID,
   PACKAGE_JOB_ID,
+  QUALITY_JOB_ID,
   TRACKING_ISSUE_TITLE,
   runPackageAlarm,
   verifyWorkflowWiring,
@@ -96,7 +99,9 @@ test("renaming Package (Windows) in ci.yml is caught", () => {
 });
 
 // Synthetic, because `if: always()` also appears on the `quality` job and a
-// naive string mutation would edit the wrong job.
+// naive string mutation would edit the wrong job. `package-alarm` is listed
+// before `quality` on purpose: the `if: always()` mutation test replaces the
+// first occurrence, and it must hit the alarm's.
 const HEALTHY_WIRING = [
   "jobs:",
   "  package:",
@@ -106,6 +111,9 @@ const HEALTHY_WIRING = [
   "    needs: [package]",
   "    if: always()",
   "    runs-on: ubuntu-latest",
+  "  quality:",
+  "    needs: [app, backend, desktop, package]",
+  "    if: always()",
 ].join("\n");
 
 test("the wiring check accepts a healthy job block", () => {
@@ -141,6 +149,17 @@ test("an alarm without `if: always()` is caught", () => {
   assert.match(
     verifyWorkflowWiring(without).join("\n"),
     /has no `if: always\(\)`/,
+  );
+});
+
+test("a quality job that does not need package is caught", () => {
+  const without = HEALTHY_WIRING.replace(
+    "needs: [app, backend, desktop, package]",
+    "needs: [app, backend, desktop]",
+  );
+  assert.match(
+    verifyWorkflowWiring(without).join("\n"),
+    new RegExp(`\`${QUALITY_JOB_ID}\` does not need \`${PACKAGE_JOB_ID}\``),
   );
 });
 
