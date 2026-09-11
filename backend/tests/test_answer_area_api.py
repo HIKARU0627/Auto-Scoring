@@ -31,7 +31,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
-from auto_scoring.domain.ai_provider import ProviderUnavailable, SchemaViolation
+from auto_scoring.domain.ai_provider import (
+    ProviderRateLimitedError,
+    ProviderUnavailable,
+    SchemaViolation,
+)
 from auto_scoring.domain.answer_area_detection import (
     UNASSIGNED_QUESTION_LABEL,
     AnswerAreaDetectionOutput,
@@ -499,6 +503,45 @@ class TestDetection:
 
         assert _detect(client, test_id).status_code == 503
         assert client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["regions"] == []
+
+    def test_a_rate_limited_provider_carries_retry_after_in_header_and_body(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """Issue #304: the 429 stays a 503, but the parsed `Retry-After` the
+        old parent-class catch discarded is carried out -- the standard header
+        for any client, and `retry_after_seconds` in the body for the screen.
+        """
+        detector._body = ProviderRateLimitedError(
+            "Vertex AI request failed with status 429",
+            status_code=429,
+            retry_after_seconds=30.0,
+        )
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1")
+        _upload_layout(client, test_id)
+
+        response = _detect(client, test_id)
+        assert response.status_code == 503
+        assert response.headers["Retry-After"] == "30"
+        assert response.json()["detail"]["retry_after_seconds"] == 30.0
+        assert client.get(f"/tests/{test_id}/profile", headers=_auth()).json()["regions"] == []
+
+    def test_a_rate_limit_without_a_retry_after_invents_no_number(
+        self, client: TestClient, data_root: Path, detector: _FakeDetector
+    ) -> None:
+        """The screen must not be handed a made-up wait: no header, and the
+        body says the value is unknown rather than defaulting it."""
+        detector._body = ProviderRateLimitedError(
+            "Vertex AI request failed with status 429", status_code=429
+        )
+        test_id = _register_test(client)
+        _confirm_questions(data_root, test_id, "問1")
+        _upload_layout(client, test_id)
+
+        response = _detect(client, test_id)
+        assert response.status_code == 503
+        assert "Retry-After" not in response.headers
+        assert response.json()["detail"]["retry_after_seconds"] is None
 
     def test_a_schema_violation_is_502(
         self, client: TestClient, data_root: Path, detector: _FakeDetector

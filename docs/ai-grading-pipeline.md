@@ -660,6 +660,34 @@ Job内部でOCR→採点をどう分けるかはJobProcessor実装側の自由�
 pydantic の種別コード**（値ではない）が `describe_schema_violation` 経由で
 `ProviderAttempt.detail` に載る（Issue #121。前掲）。
 
+### 同期の回答欄検出は、その場で短く再試行する（Issue #304）
+
+429 は一時的なレート制限であり、登録画面の「回答欄を自動検出」は利用者が押した
+1回の操作でそれに当たると失敗表示になっていた。採点キュー側は Issue #153 で
+`retry_policy.RetryPolicy` による backoff と `Retry-After` の尊重を決めていたが、
+同期の検出だけがその外にあった。検出アダプタ
+`adapters.answer_area_detection.detector` は同じ `RetryPolicy` を使い、
+`ProviderRateLimitedError`（429）だけを再試行する。独自の backoff は作らない。
+
+| 決めたこと         | 値                                   | 理由                                                                                                   |
+| ------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| 全体の試行回数     | 3（初回 + 最大2回）                  | 実測の検出は成功時13〜21秒。利用者を待たせ続けず、瞬間的な混雑を吸収するのに十分な回数。               |
+| 合計待ち時間の上限 | 20秒                                 | 押した人が画面を見ている。待ちがこれを超えるなら、その場で待つより「待って押し直す」を伝える方がよい。 |
+| 初回 backoff       | 4.0秒（等分割 jitter で実待ち2.0秒） | `RetryPolicy` の `rate_limited_*` スケジュール。以後 ×2・上限16秒（実待ち8.0秒）。                     |
+| `Retry-After`      | あれば必ず尊重                       | Issue #153 と同じ決定。ただし上限を超える値は待たずに諦める。                                          |
+
+待ち時間の上限は「名目のスケジュール」だけでなく**実際に待った合計**でも見る。
+`Retry-After` は名目 delay を置き換えるので、複数回の `Retry-After` が積み上がると
+名目の予算を超えうるためである。タイムアウト（`ProviderTimeoutError`）と5xxは
+再試行しない: 検出は全ページを1回で運ぶ300秒の呼び出しで、タイムアウトを
+やり直すと最悪ケースを二度払うことになる。
+
+再試行を使い切った 429 は登録APIで 503 のまま返す。応答には解析済みの
+`Retry-After` ヘッダと、本文の `retry_after_seconds` が載る（取れなければ
+`null`。ヘッダも付けない）。画面はこの値だけを使い「約N秒待ってから
+もう一度」と案内する。provider の英語文字列は表示しない
+（単一ソースは `desktop/src/renderer/core/action-requirements.ts`）。
+
 ### provider requestで全rubric意味論を保持する
 
 `GradingRequest.rubric_text`は当初、各criterionの`description`と

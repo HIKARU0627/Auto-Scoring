@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   analyzeDependencyGraph,
+  AnswerDetectionRateLimitedError,
   buildQuestionTextOverrides,
   completeRegistration,
   confirmCriteria,
@@ -37,7 +38,10 @@ import {
   dependencyGraphConfirmRequirements,
   gradingStartRequirements,
 } from "../../core/action-requirements.js";
-import { classifyAnswerDetectionOutcome } from "../../core/answer-detection-outcome.js";
+import {
+  classifyAnswerDetectionOutcome,
+  type AnswerDetectionOutcome,
+} from "../../core/answer-detection-outcome.js";
 import {
   missingAnswerAreas,
   mustSeeAnswerSheetFirst,
@@ -82,7 +86,8 @@ type LoadState =
       answerLayoutPageCount: number | null;
       answerLayoutDetectionAvailable: boolean;
       answerLayoutDetectionReason: string | null;
-      detectionOutcome: "none" | "zero-results" | "role-mismatch";
+      detectionOutcome: AnswerDetectionOutcome;
+      detectionRetryAfterSeconds: number | null;
     };
 
 function criteriaConfirmed(criteria: CriteriaResponse | null): boolean {
@@ -188,6 +193,7 @@ export function TestSettingsPage(): JSX.Element {
         answerLayoutDetectionReason:
           snapshot.answerLayout?.detection_unavailable_reason ?? null,
         detectionOutcome: "none",
+        detectionRetryAfterSeconds: null,
       });
     } catch (error) {
       const message =
@@ -245,6 +251,7 @@ export function TestSettingsPage(): JSX.Element {
           answerLayoutDetectionReason:
             editor.layout?.detection_unavailable_reason ?? null,
           detectionOutcome: current.detectionOutcome,
+          detectionRetryAfterSeconds: current.detectionRetryAfterSeconds,
         };
       });
     },
@@ -302,6 +309,7 @@ export function TestSettingsPage(): JSX.Element {
   });
   const detectionOutcomeReqs = answerDetectionOutcomeRequirements({
     outcome: ready?.detectionOutcome ?? "none",
+    retryAfterSeconds: ready?.detectionRetryAfterSeconds ?? null,
   });
   const confirmGraphReqs = dependencyGraphConfirmRequirements({
     busy,
@@ -697,6 +705,7 @@ export function TestSettingsPage(): JSX.Element {
                           snapshot.answerLayout?.detection_unavailable_reason ??
                           null,
                         detectionOutcome: "none",
+                        detectionRetryAfterSeconds: null,
                       };
                     });
                   });
@@ -713,7 +722,31 @@ export function TestSettingsPage(): JSX.Element {
                 disabled={detectReqs.length > 0}
                 onClick={() => {
                   void runGuarded(async () => {
-                    const profile = await detectAnswerAreas(client, testId);
+                    let profile: ProfileResponse;
+                    try {
+                      profile = await detectAnswerAreas(client, testId);
+                    } catch (error) {
+                      if (error instanceof AnswerDetectionRateLimitedError) {
+                        // The provider refused the call. Nothing was detected
+                        // *because of the rate limit*, which is a different
+                        // fact from "detection found no boxes" -- show the
+                        // single-source wording that says to wait and press
+                        // again, with the server's own seconds when it gave
+                        // one (Issue #304).
+                        setLoadState((current) => {
+                          if (current.status !== "ready") {
+                            return current;
+                          }
+                          return {
+                            ...current,
+                            detectionOutcome: "rate-limited",
+                            detectionRetryAfterSeconds: error.retryAfterSeconds,
+                          };
+                        });
+                        return;
+                      }
+                      throw error;
+                    }
                     const nextRegions = profileRegions(profile);
                     const detectionOutcome = classifyAnswerDetectionOutcome({
                       questionNumbers: ready.questionNumbers,
@@ -730,6 +763,7 @@ export function TestSettingsPage(): JSX.Element {
                         profile,
                         editableRegions: nextRegions,
                         detectionOutcome,
+                        detectionRetryAfterSeconds: null,
                       };
                     });
                   });
@@ -764,6 +798,7 @@ export function TestSettingsPage(): JSX.Element {
                         }),
                       ],
                       detectionOutcome: "none",
+                      detectionRetryAfterSeconds: null,
                     };
                   });
                 }}

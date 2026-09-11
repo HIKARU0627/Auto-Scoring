@@ -29,6 +29,53 @@ export class TestRegistrationDataError extends Error {
   }
 }
 
+/**
+ * The provider answered 429 while detecting answer areas (Issue #304).
+ *
+ * A distinct type, not a message to parse: the screen must offer "wait and
+ * press again" rather than showing the provider's English, and it needs the
+ * server-parsed `Retry-After` to say how long. `retryAfterSeconds` is `null`
+ * when the provider sent no usable `Retry-After` -- the caller must then omit
+ * the number rather than invent one.
+ */
+export class AnswerDetectionRateLimitedError extends TestRegistrationDataError {
+  readonly retryAfterSeconds: number | null;
+
+  constructor(retryAfterSeconds: number | null) {
+    super("回答欄の自動検出は、いま混み合っています。");
+    this.name = "AnswerDetectionRateLimitedError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/**
+ * Read `retry_after_seconds` out of a rate-limited 503 body, or `undefined`
+ * when the body is not one. `null` means "it was a rate limit, but the
+ * provider sent no wait", which is a real answer distinct from "not a rate
+ * limit at all".
+ */
+function readRateLimitRetryAfter(body: unknown): number | null | undefined {
+  if (typeof body !== "object" || body === null || !("detail" in body)) {
+    return undefined;
+  }
+  const detail = (body as { detail: unknown }).detail;
+  if (
+    typeof detail !== "object" ||
+    detail === null ||
+    !("retry_after_seconds" in detail)
+  ) {
+    return undefined;
+  }
+  const value = (detail as { retry_after_seconds: unknown })
+    .retry_after_seconds;
+  if (value === null) {
+    return null;
+  }
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
 export interface TestSettingsSnapshot {
   readonly test: TestResponse;
   readonly profile: ProfileResponse | null;
@@ -225,6 +272,10 @@ export async function detectAnswerAreas(
     params: { path: { test_id: testId } },
   });
   if (result.error !== undefined) {
+    const retryAfter = readRateLimitRetryAfter(result.error);
+    if (retryAfter !== undefined) {
+      throw new AnswerDetectionRateLimitedError(retryAfter);
+    }
     throw new TestRegistrationDataError(
       readErrorMessage("回答欄を検出できません", result.error),
     );
