@@ -185,3 +185,44 @@ describe("sidebar mock polish (Issue #348)", () => {
     }
   });
 });
+
+/**
+ * Issue #361 (parent #333): the mock's filled glyphs sit ~1.3-1.5x larger than
+ * the 20px box Issue #348 left them in, and the brand subtitle / idle nav read
+ * back too neutral. These pin the class-level contract; the PR body carries the
+ * before/after pixel measurements.
+ */
+describe("sidebar icon scale and text colours (Issue #361)", () => {
+  it("renders the nav glyphs at the mock's enlarged size", async () => {
+    renderAppAt(AppRoutes.home, { handlers: defaultHandlers });
+    await screen.findByTestId("home-next-up");
+
+    const nav = screen.getByTestId(SIDEBAR_NAV_TEST_ID);
+    const icons = Array.from(nav.querySelectorAll("svg"));
+    expect(icons).toHaveLength(EXPECTED_NAV.length);
+    for (const icon of icons) {
+      expect(icon.getAttribute("width")).toBe("28");
+      expect(icon.getAttribute("height")).toBe("28");
+    }
+  });
+
+  it("takes the subtitle colour from its own token, not the shared variant", async () => {
+    renderAppAt(AppRoutes.home, { handlers: defaultHandlers });
+    await screen.findByTestId("home-next-up");
+
+    const subtitle = within(screen.getByTestId(SIDEBAR_TEST_ID)).getByText(
+      SIDEBAR_PRODUCT_DESCRIPTION,
+    );
+    expect(subtitle.className).toContain("text-sidebar-subtitle");
+    expect(subtitle.className).not.toContain("text-on-surface-variant");
+  });
+
+  it("takes the idle nav colour from its own token, not the shared variant", async () => {
+    renderAppAt(AppRoutes.home, { handlers: defaultHandlers });
+    await screen.findByTestId("home-next-up");
+
+    const idle = screen.getByTestId("sidebar-nav-intake");
+    expect(idle.className).toContain("text-sidebar-nav-idle");
+    expect(idle.className).not.toContain("text-on-surface-variant");
+  });
+});

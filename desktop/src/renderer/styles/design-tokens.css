@@ -60,6 +60,11 @@
   --color-inverse-surface: #e9ebf2;
   --color-on-inverse-surface: #1e2435;
 
+  /* Issue #361 (parent #333): sidebar text roles sampled from the mock. The
+     subtitle steps back from the title; the idle nav keeps a violet cast. */
+  --color-sidebar-subtitle: #8493af;
+  --color-sidebar-nav-idle: #9facd7;
+
   /* Status: pink `#fd6998` 要確認, mint `#69e4d5` 完了, blue `#598ff9` 処理中. */
   --color-attention: #ff7ba8;
   --color-attention-container: #6a2141;
@@ -79,6 +84,10 @@
   --color-disabled-button-outline: var(--color-outline);
   --color-disabled-button-label: var(--color-on-surface-variant);
   --color-disabled-button-container: var(--color-surface-container-highest);
+
+  /* Issue #361 — the OS scrollbar sat as a grey band in the navy palette. */
+  --color-scrollbar-thumb: var(--color-outline);
+  --color-scrollbar-track: var(--color-surface);
 
   --spacing-xs: 4px;
   --spacing-sm: 8px;
@@ -183,6 +192,10 @@
   --color-inverse-surface: #2f3543;
   --color-on-inverse-surface: #f5f6f9;
 
+  /* Issue #361: same roles re-lit for the kept light theme (AA on surface-dim). */
+  --color-sidebar-subtitle: #525b70;
+  --color-sidebar-nav-idle: #48527a;
+
   --color-attention: #b81d56;
   --color-attention-container: #ffd9e3;
   --color-on-attention-container: #5c0a2a;
@@ -199,6 +212,9 @@
   --color-disabled-button-outline: var(--color-outline);
   --color-disabled-button-label: var(--color-on-surface-variant);
   --color-disabled-button-container: var(--color-surface-container-highest);
+
+  --color-scrollbar-thumb: var(--color-outline);
+  --color-scrollbar-track: var(--color-surface);
 
   --elevation-raised: 0 3px 6px rgb(27 31 34 / 12%);
   --elevation-modal: 0 6px 16px rgb(27 31 34 / 16%);
