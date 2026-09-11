@@ -1,10 +1,12 @@
 import * as path from "node:path";
 
-import { test, expect, _electron as electron } from "@playwright/test";
+import { test, expect } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import {
-  electronLaunchArgs,
-  isolatedSidecarLaunchEnv,
+  closeElectronApp,
+  launchElectronApp,
+  pollSidecarReady,
   PACKAGE_ROOT,
 } from "./electron-launch";
 
@@ -18,23 +20,8 @@ const ANSWER_SHEET_PDF = path.join(
   "e2e/fixtures/answer-sheet.pdf",
 );
 
-type ElectronPage = Awaited<
-  ReturnType<Awaited<ReturnType<typeof electron.launch>>["firstWindow"]>
->;
-
-async function waitForSidecarReady(page: ElectronPage): Promise<void> {
-  await expect
-    .poll(async () => {
-      const sidecarStatus = await page.evaluate(async () => {
-        return window.autoScoring.getSidecarStatus();
-      });
-      return sidecarStatus.kind;
-    })
-    .toBe("ready");
-}
-
-async function waitForHomeReady(page: ElectronPage): Promise<void> {
-  await waitForSidecarReady(page);
+async function waitForHomeReady(page: Page): Promise<void> {
+  await pollSidecarReady(page);
   await expect(page.getByTestId("home-open-intake")).toBeVisible({
     timeout: 15_000,
   });
@@ -44,13 +31,7 @@ async function waitForHomeReady(page: ElectronPage): Promise<void> {
   await expect(page.getByTestId("home-error")).toHaveCount(0);
 }
 
-function e2eLaunchEnv(): Record<string, string> {
-  return isolatedSidecarLaunchEnv({
-    AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
-  });
-}
-
-async function createDraftTest(page: ElectronPage): Promise<string> {
+async function createDraftTest(page: Page): Promise<string> {
   return page.evaluate(
     async ({ criteriaPdf }) => {
       const status = await window.autoScoring.getSidecarStatus();
@@ -79,7 +60,7 @@ async function createDraftTest(page: ElectronPage): Promise<string> {
 }
 
 async function openDraftTestSettings(
-  page: ElectronPage,
+  page: Page,
   testId: string,
 ): Promise<void> {
   await page.getByTestId("home-refresh").click();
@@ -95,9 +76,7 @@ async function openDraftTestSettings(
   );
 }
 
-async function completeRegistrationFromTestSettings(
-  page: ElectronPage,
-): Promise<void> {
+async function completeRegistrationFromTestSettings(page: Page): Promise<void> {
   await expect(page.getByTestId("criteria-section")).toBeVisible({
     timeout: 15_000,
   });
@@ -147,9 +126,8 @@ async function completeRegistrationFromTestSettings(
 test("registers a test through test settings on the real sidecar path", async () => {
   test.setTimeout(180_000);
 
-  const app = await electron.launch({
-    args: electronLaunchArgs(),
-    env: e2eLaunchEnv(),
+  const app = await launchElectronApp({
+    env: { AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF },
   });
 
   try {
@@ -160,7 +138,7 @@ test("registers a test through test settings on the real sidecar path", async ()
     await openDraftTestSettings(page, testId);
     await completeRegistrationFromTestSettings(page);
   } finally {
-    await app.close();
+    await closeElectronApp(app);
   }
 });
 
@@ -176,9 +154,8 @@ test("requires confirm buttons to reach ready", async () => {
   );
   test.setTimeout(180_000);
 
-  const app = await electron.launch({
-    args: electronLaunchArgs(),
-    env: e2eLaunchEnv(),
+  const app = await launchElectronApp({
+    env: { AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF },
   });
 
   try {
@@ -194,6 +171,6 @@ test("requires confirm buttons to reach ready", async () => {
       "テスト状態: 下書き",
     );
   } finally {
-    await app.close();
+    await closeElectronApp(app);
   }
 });

@@ -1,8 +1,9 @@
-import { test, expect, _electron as electron } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 
 import {
-  electronLaunchArgs,
-  isolatedSidecarLaunchEnv,
+  closeElectronApp,
+  launchElectronApp,
+  pollSidecarReady,
 } from "./electron-launch";
 
 /**
@@ -12,22 +13,12 @@ import {
 test("sidecar becomes ready and home dashboard loads real API data", async () => {
   test.setTimeout(120_000);
 
-  const app = await electron.launch({
-    args: electronLaunchArgs(),
-    env: isolatedSidecarLaunchEnv(),
-  });
+  const app = await launchElectronApp();
 
   try {
     const page = await app.firstWindow();
 
-    await expect
-      .poll(async () => {
-        const sidecarStatus = await page.evaluate(async () => {
-          return window.autoScoring.getSidecarStatus();
-        });
-        return sidecarStatus.kind;
-      })
-      .toBe("ready");
+    await pollSidecarReady(page);
 
     const sidecarStatus = await page.evaluate(async () => {
       return window.autoScoring.getSidecarStatus();
@@ -58,6 +49,6 @@ test("sidecar becomes ready and home dashboard loads real API data", async () =>
     expect(bodyText).not.toMatch(/Bearer\s+\S+/i);
     expect(bodyText).not.toContain("test-token");
   } finally {
-    await app.close();
+    await closeElectronApp(app);
   }
 });
