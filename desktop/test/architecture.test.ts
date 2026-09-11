@@ -157,7 +157,42 @@ interface LayerRule {
   readonly mayImportFrom: readonly string[];
   /** Returns why the package is forbidden here, or `null` if it is allowed. */
   readonly forbiddenPackage: (specifier: string) => string | null;
+  /**
+   * Relative imports this rule tolerates because they already exist and are
+   * owned by another in-flight change. Kept as exact (file, target) pairs, not
+   * a count: adding another violation to the same file still fails.
+   */
+  readonly allowlist?: readonly AllowedSubLayerImport[];
 }
+
+interface AllowedSubLayerImport {
+  /** Importing file, relative to `desktop/`. */
+  readonly file: string;
+  /** Resolved target of the relative import, relative to `desktop/`. */
+  readonly target: string;
+}
+
+/**
+ * INV-001: `api` must not import `core` / `features`; INV-002: `core` must not
+ * import `features`.
+ *
+ * The six hand-written `api/*-data.ts` loaders that pulled in `core` (domain
+ * models, errors, review state) were moved to `core/`, because composing an API
+ * response into a domain object is a core responsibility. The one remaining
+ * reverse reference is owned by Issue #255, which is editing that file, so it is
+ * allowed here by exact pair. Remove the entry once #255 lands.
+ *
+ * TODO(owner): replace with the Issue number that removes this allowlist entry.
+ */
+const OUTSTANDING_API_IMPORTS: readonly AllowedSubLayerImport[] = [
+  {
+    file: "src/renderer/api/answer-area-data.ts",
+    target: "src/renderer/features/answer-area-editor/answer-area-types.js",
+  },
+];
+
+/** Fixed so that appending another allowlisted violation turns the test red. */
+const OUTSTANDING_API_IMPORT_COUNT = 1;
 
 const RULES: readonly LayerRule[] = [
   {
@@ -172,6 +207,23 @@ const RULES: readonly LayerRule[] = [
       }
       return null;
     },
+  },
+  {
+    // INV-001: `api` is the backend client. It may talk to another `api` module
+    // or the shared bridge contract, but it must not reach up into `core`
+    // (domain) or `features` (screens) -- those depend on it, not the reverse.
+    layer: "src/renderer/api",
+    mayImportFrom: ["src/renderer/api", "src/shared"],
+    forbiddenPackage: () => null,
+    allowlist: OUTSTANDING_API_IMPORTS,
+  },
+  {
+    // INV-002: `core` may use the generated client (`api`) and the shared
+    // contract, but it must not import a screen (`features`). `core` is where
+    // domain logic lives, so `features -> core -> api` stays one-way.
+    layer: "src/renderer/core",
+    mayImportFrom: ["src/renderer/core", "src/renderer/api", "src/shared"],
+    forbiddenPackage: () => null,
   },
   {
     layer: "src/preload",
@@ -239,6 +291,13 @@ describe("dependency direction", () => {
                 (dir) => target === dir || target.startsWith(`${dir}/`),
               );
               if (!allowed) {
+                const allowlisted =
+                  rule.allowlist?.some(
+                    (entry) => entry.file === file && entry.target === target,
+                  ) ?? false;
+                if (allowlisted) {
+                  continue;
+                }
                 violations.push(
                   `${specifier} -> ${target}: ${rule.layer} may only import from ${rule.mayImportFrom.join(", ")}`,
                 );
@@ -257,6 +316,19 @@ describe("dependency direction", () => {
       }
     });
   }
+});
+
+describe("INV-001 tolerated reverse references", () => {
+  it("are a fixed-size, unambiguous list", () => {
+    // The count is a tripwire, not a budget: growing the allowlist (or adding a
+    // second matching violation) has to edit this test, which is what a
+    // reviewer notices. Unique pairs keep one entry from hiding two imports.
+    expect(OUTSTANDING_API_IMPORTS).toHaveLength(OUTSTANDING_API_IMPORT_COUNT);
+    const keys = OUTSTANDING_API_IMPORTS.map(
+      (entry) => `${entry.file}\0${entry.target}`,
+    );
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });
 
 describe("the bridge carries no raw bytes", () => {
