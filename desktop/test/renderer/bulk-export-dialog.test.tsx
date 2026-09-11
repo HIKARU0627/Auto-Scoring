@@ -102,6 +102,11 @@ describe("BulkExportDialog (INV-188..189)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("bulk-export-progress")).toBeDefined();
     });
+    // 排他: 走っている間に開始ボタンは無い (二重に走らせられない)。中止だけが残る。
+    // 「開始ボタンが無い」だけでは、ボタン自体が消えても緑になるので、
+    // confirm 段で開始できた事実と中止ボタンの存在を肯定形で併せて固定する。
+    expect(screen.queryByTestId("bulk-export-start-button")).toBeNull();
+    expect(screen.getByTestId("bulk-export-cancel-button")).toBeDefined();
 
     jobState = "succeeded";
     await waitFor(() => {

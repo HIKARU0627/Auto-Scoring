@@ -222,8 +222,8 @@ describe("SubmissionQueuePage (Issue #113 / Issue #242 / INV-021, 140..146, 158,
     expect(screen.getByText("再読み込み")).toBeDefined();
   });
 
-  describe("PDF出力 (INV-145 / INV-146)", () => {
-    it("確定し終えた答案の行から出力できる (INV-145)", async () => {
+  describe("PDF出力 (INV-145 / INV-146 / INV-190)", () => {
+    it("確定し終えた答案の行から、レビュー画面を開かずに出力できる (INV-190)", async () => {
       const requestedFor: string[] = [];
       renderAppAt(submissionQueue("t1"), {
         handlers: {

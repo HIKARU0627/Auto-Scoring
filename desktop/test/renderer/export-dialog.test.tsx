@@ -295,4 +295,34 @@ describe("ExportDialog (INV-180..187)", () => {
     });
     expect(retryJobCalled).toBe(false);
   });
+
+  it("gives up instead of polling forever when a succeeded job's export can never be fetched (INV-186)", async () => {
+    // ジョブは succeeded なのに listExports だけが失敗し続ける筋書き。getJob の
+    // 成功で transient カウンタを毎回 0 に戻すと上限に永久に届かず、出力が
+    // 終わっているのに回り続ける (Flutter 版 P2 round 2)。
+    let listExportsAttempts = 0;
+    renderExportDialog(
+      "sub-1",
+      {
+        requestExport: async () => ({
+          decision: "accept_new",
+          job_id: "job-1",
+        }),
+        getJob: async () => buildJob("succeeded"),
+        listExports: async () => {
+          listExportsAttempts += 1;
+          throw new Error("timed out");
+        },
+      },
+      1,
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("export-dialog-error")).toBeDefined();
+      },
+      { timeout: 3000 },
+    );
+    expect(listExportsAttempts).toBe(5);
+  });
 });
