@@ -590,3 +590,23 @@ describe("grading completion follow (Issue #319)", () => {
     ).not.toContain("問問1");
   });
 });
+
+describe("review states (Issue #347, parent #333 §1)", () => {
+  it("未読の判断材料は注意の表示で示す", async () => {
+    stubShortInspectorViewport();
+    renderPdfReview({ grades: [buildReviewableGrade(12)] });
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("review-unread-material-notice"),
+        ).toBeDefined();
+      },
+      { timeout: WAIT_MS },
+    );
+    expect(
+      screen
+        .getByTestId("review-unread-material-notice")
+        .getAttribute("data-tone"),
+    ).toBe("attention");
+  });
+});

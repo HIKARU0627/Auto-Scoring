@@ -105,7 +105,9 @@ export function PageImageViewer({
       </div>
       {resolved.unresolved.length > 0 ? (
         <section data-testid="review-question-comments">
-          <h3 className="text-title-small font-medium">設問コメント</h3>
+          <h3 className="text-ui-label font-semibold text-on-surface">
+            設問コメント
+          </h3>
           <ul className="list-disc pl-lg">
             {resolved.unresolved.map((annotation) => (
               <li key={annotation.id} className="text-body-medium">

@@ -24,7 +24,7 @@ export function ConfidenceBadge({
   return (
     <div
       data-testid={testId}
-      className="flex items-center gap-xs text-body-small"
+      className="flex items-center gap-xs text-sm"
       aria-label={`${label} ${percent}% ${levelLabel}`}
     >
       <span>
