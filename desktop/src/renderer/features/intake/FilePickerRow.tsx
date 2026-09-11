@@ -21,7 +21,7 @@ export function FilePickerRow({
       <button
         type="button"
         data-testid={buttonTestId}
-        className="shrink-0 rounded-md border border-outline px-md py-sm text-ui-label"
+        className="shrink-0 rounded-md bg-surface-container-high px-md py-sm text-ui-label text-on-surface transition-colors hover:bg-surface-container-highest focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:bg-disabled-button-container disabled:text-disabled-button-label"
         onClick={onPressed ?? undefined}
         disabled={onPressed === null}
       >

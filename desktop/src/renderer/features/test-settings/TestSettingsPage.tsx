@@ -68,8 +68,79 @@ import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { DisabledActionReason } from "../intake/DisabledActionReason.js";
+import {
+  BusyNotice,
+  Caption,
+  Card,
+  CardHeading,
+  ErrorNotice,
+  ProgressMeter,
+  ScreenSkeleton,
+  StatusPill,
+  StepProgress,
+  primaryButtonClass,
+  secondaryButtonClass,
+} from "../ui/screen-ui.js";
 
 type PageGeometryResponse = components["schemas"]["PageGeometryResponse"];
+
+interface RunningWork {
+  readonly title: string;
+  readonly detail: string;
+}
+
+/**
+ * What each long-running button is doing, and roughly how long it takes
+ * (Issue #346). The measured waits are 14-21s for answer-area detection and
+ * 9-63s for criteria extraction, so a bare "処理中…" would leave the reviewer
+ * staring at a frozen screen.
+ */
+const WORK = {
+  extractEstimate: {
+    title: "採点基準を確認しています",
+    detail: "AIへ送るページ数と概算費用を計算しています。",
+  },
+  extract: {
+    title: "採点基準PDFから抽出しています",
+    detail: "AIが設問と配点を読み取っています。9〜63秒ほどかかります。",
+  },
+  saveCriteria: {
+    title: "配点と採点基準を保存しています",
+    detail: "保存が終わると内容が最新の状態に更新されます。",
+  },
+  confirmCriteria: {
+    title: "配点と採点基準を確定しています",
+    detail: "確定すると「回答欄を自動検出」ができるようになります。",
+  },
+  uploadLayout: {
+    title: "答案を取り込んでいます",
+    detail: "答案のページを読み込んでいます。",
+  },
+  detect: {
+    title: "回答欄を検出しています",
+    detail: "AIが答案を見ています。通常14〜21秒ほどかかります。",
+  },
+  saveProfile: {
+    title: "回答欄を保存しています",
+    detail: "保存が終わると内容が最新の状態に更新されます。",
+  },
+  confirmProfile: {
+    title: "プロファイルを確定しています",
+    detail: "回答欄の位置を確定しています。",
+  },
+  analyzeGraph: {
+    title: "設問の依存関係を分析しています",
+    detail: "AIが設問どうしの関係を読んでいます。数十秒かかることがあります。",
+  },
+  confirmGraph: {
+    title: "依存関係グラフを確定しています",
+    detail: "分析した依存関係を確定しています。",
+  },
+  complete: {
+    title: "登録を完了しています",
+    detail: "登録が終わると答案を取り込んで採点を始められます。",
+  },
+} as const satisfies Record<string, RunningWork>;
 
 type LoadState =
   | { status: "loading" }
@@ -155,6 +226,7 @@ export function TestSettingsPage(): JSX.Element {
   const testId = params.testId ?? "";
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
+  const [runningWork, setRunningWork] = useState<RunningWork | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [extractEstimateOpen, setExtractEstimateOpen] = useState(false);
   const [undetectedConfirmOpen, setUndetectedConfirmOpen] = useState(false);
@@ -215,23 +287,28 @@ export function TestSettingsPage(): JSX.Element {
     void reload();
   }, [reload]);
 
-  const runGuarded = useCallback(async (action: () => Promise<void>) => {
-    setBusy(true);
-    setActionError(null);
-    try {
-      await action();
-    } catch (error) {
-      const message =
-        error instanceof TestRegistrationDataError
-          ? error.message
-          : error instanceof Error
+  const runGuarded = useCallback(
+    async (work: RunningWork, action: () => Promise<void>) => {
+      setBusy(true);
+      setRunningWork(work);
+      setActionError(null);
+      try {
+        await action();
+      } catch (error) {
+        const message =
+          error instanceof TestRegistrationDataError
             ? error.message
-            : String(error);
-      setActionError(message);
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        setActionError(message);
+      } finally {
+        setBusy(false);
+        setRunningWork(null);
+      }
+    },
+    [],
+  );
 
   const applyEditorReload = useCallback(
     async (nextProfile: ProfileResponse | null) => {
@@ -388,6 +465,26 @@ export function TestSettingsPage(): JSX.Element {
     return [...shown.values()];
   }, [completeReqs, graphStale, hasFallbackScoreRegions, ready]);
 
+  const registrationSteps = [
+    {
+      id: "criteria",
+      label: "配点・採点基準",
+      complete: criteriaConfirmed(ready?.criteria ?? null),
+    },
+    {
+      id: "profile",
+      label: "回答欄の確認",
+      complete: profileConfirmed(ready?.profile ?? null),
+    },
+    {
+      id: "dependency",
+      label: "依存関係",
+      complete: graphConfirmed(ready?.dependencyGraph ?? null),
+    },
+  ];
+  const currentRegistrationStep =
+    registrationSteps.find((step) => !step.complete)?.id ?? null;
+
   const graphLayers =
     ready === null ||
     ready.dependencyGraph === null ||
@@ -425,7 +522,7 @@ export function TestSettingsPage(): JSX.Element {
     if (regions === null) {
       return;
     }
-    void runGuarded(async () => {
+    void runGuarded(WORK.confirmProfile, async () => {
       const saved = await updateProfile(client, testId, regions);
       const confirmed = await confirmProfile(client, testId, saved.revision);
       const snapshot = await loadTestSettingsSnapshot(client, testId);
@@ -458,7 +555,7 @@ export function TestSettingsPage(): JSX.Element {
   return (
     <ShellScreen title={ready?.test.name ?? "テスト設定"}>
       {loadState.status === "loading" ? (
-        <p className="text-body-medium text-on-surface-variant">読み込み中…</p>
+        <ScreenSkeleton testId="test-settings-loading" />
       ) : null}
 
       {loadState.status === "error" ? (
@@ -473,48 +570,78 @@ export function TestSettingsPage(): JSX.Element {
 
       {ready !== null ? (
         <div className="flex flex-col gap-xl">
-          <section
-            data-testid="test-settings-status"
-            className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-          >
-            <p data-testid="test-status-label" className="text-body-medium">
-              {ready.test.status === "ready"
-                ? "テスト状態: 登録完了"
-                : "テスト状態: 下書き"}
-            </p>
-          </section>
+          <Card testId="test-settings-status">
+            <CardHeading
+              title="登録の確認ステップ"
+              description="3つの確認を済ませると登録完了になります。"
+              aside={
+                <StatusPill
+                  tone={ready.test.status === "ready" ? "success" : "attention"}
+                >
+                  {ready.test.status === "ready" ? "登録完了" : "下書き"}
+                </StatusPill>
+              }
+            />
+            <div className="mt-lg">
+              <StepProgress
+                testId="test-settings-steps"
+                steps={registrationSteps}
+                currentId={currentRegistrationStep}
+              />
+            </div>
+            <div className="mt-lg">
+              <ProgressMeter
+                testId="test-settings-progress"
+                label="確認済みのステップ"
+                value={registrationSteps.filter((step) => step.complete).length}
+                max={registrationSteps.length}
+              />
+            </div>
+            <div data-testid="test-status-label" className="mt-md">
+              <Caption>
+                {ready.test.status === "ready"
+                  ? "テスト状態: 登録完了"
+                  : "テスト状態: 下書き"}
+              </Caption>
+            </div>
+          </Card>
 
           {actionError !== null ? (
-            <div
-              data-testid="test-settings-action-error"
-              className="rounded-md border border-error bg-error-container p-md text-on-error-container"
-            >
+            <ErrorNotice testId="test-settings-action-error">
               {actionError}
-            </div>
+            </ErrorNotice>
           ) : null}
 
           {busy ? (
-            <p className="text-body-medium text-on-surface-variant">処理中…</p>
+            <BusyNotice
+              testId="test-settings-busy"
+              title={runningWork?.title ?? "処理しています"}
+              detail={runningWork?.detail ?? "完了すると表示が更新されます。"}
+            />
           ) : null}
 
-          <section
-            data-testid="criteria-section"
-            className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-          >
-            <div className="mb-md flex items-center justify-between gap-md">
-              <h2 className="text-title-medium font-medium">配点と採点基準</h2>
-              <span className="text-body-small text-on-surface-variant">
-                {criteriaConfirmed(ready.criteria) ? "確認済み" : "未確認"}
-              </span>
-            </div>
-            <div className="mb-md flex flex-wrap gap-sm">
+          <Card testId="criteria-section">
+            <CardHeading
+              title="配点と採点基準"
+              description="設問ごとの配点と模範解答を確認します。"
+              aside={
+                <StatusPill
+                  tone={
+                    criteriaConfirmed(ready.criteria) ? "success" : "attention"
+                  }
+                >
+                  {criteriaConfirmed(ready.criteria) ? "確認済み" : "未確認"}
+                </StatusPill>
+              }
+            />
+            <div className="mt-lg flex flex-wrap gap-sm">
               <button
                 type="button"
                 data-testid="extract-criteria-button"
-                className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+                className={primaryButtonClass()}
                 disabled={busy || criteriaConfirmed(ready.criteria)}
                 onClick={() => {
-                  void runGuarded(async () => {
+                  void runGuarded(WORK.extractEstimate, async () => {
                     const estimate = await estimateCriteriaExtract(
                       client,
                       testId,
@@ -534,7 +661,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="add-criteria-question-button"
-                className="rounded-md border border-outline px-md py-sm text-ui-label disabled:opacity-40"
+                className={secondaryButtonClass()}
                 disabled={busy || criteriaConfirmed(ready.criteria)}
                 onClick={() => {
                   setLoadState((current) => {
@@ -555,10 +682,10 @@ export function TestSettingsPage(): JSX.Element {
               </button>
             </div>
 
-            {totals !== null ? (
+            {totals !== null && ready.editableCriteria.length > 0 ? (
               <p
                 data-testid="criteria-totals-label"
-                className="text-title-small"
+                className="mt-md tabular-nums text-body-medium text-on-surface"
               >
                 {totals.unknownCount === 0
                   ? `配点の合計 ${totals.knownPoints} 点`
@@ -612,7 +739,7 @@ export function TestSettingsPage(): JSX.Element {
             {criteriaBlock !== null && !criteriaConfirmed(ready.criteria) ? (
               <p
                 data-testid="criteria-blocking-reason"
-                className="mt-md text-body-small text-attention"
+                className="mt-md text-body-medium text-attention"
               >
                 {criteriaBlock}
               </p>
@@ -622,10 +749,10 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="save-criteria-button"
-                className="rounded-md border border-outline px-md py-sm text-ui-label disabled:opacity-40"
+                className={secondaryButtonClass()}
                 disabled={busy || criteriaConfirmed(ready.criteria)}
                 onClick={() => {
-                  void runGuarded(async () => {
+                  void runGuarded(WORK.saveCriteria, async () => {
                     const saved = await updateCriteria(client, testId, {
                       questions: ready.editableCriteria,
                       declaredTotalPoints: ready.declaredTotalPoints,
@@ -652,7 +779,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="confirm-criteria-button"
-                className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+                className={primaryButtonClass()}
                 disabled={
                   busy ||
                   criteriaConfirmed(ready.criteria) ||
@@ -660,7 +787,7 @@ export function TestSettingsPage(): JSX.Element {
                   ready.editableCriteria.length === 0
                 }
                 onClick={() => {
-                  void runGuarded(async () => {
+                  void runGuarded(WORK.confirmCriteria, async () => {
                     const saved = await updateCriteria(client, testId, {
                       questions: ready.editableCriteria,
                       declaredTotalPoints: ready.declaredTotalPoints,
@@ -695,29 +822,31 @@ export function TestSettingsPage(): JSX.Element {
                 確定して設問に反映
               </button>
             </div>
-          </section>
+          </Card>
 
-          <section
-            data-testid="profile-section"
-            className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-          >
-            <div className="mb-md flex items-center justify-between gap-md">
-              <h2 className="text-title-medium font-medium">
-                テストプロファイル（設問・回答欄・添削記号領域の位置）
-              </h2>
-              <span className="text-body-small text-on-surface-variant">
-                {profileConfirmed(ready.profile) ? "確認済み" : "未確認"}
-              </span>
-            </div>
+          <Card testId="profile-section">
+            <CardHeading
+              title="テストプロファイル（設問・回答欄・添削記号領域の位置）"
+              description="答案の上で回答欄の位置を確認します。"
+              aside={
+                <StatusPill
+                  tone={
+                    profileConfirmed(ready.profile) ? "success" : "attention"
+                  }
+                >
+                  {profileConfirmed(ready.profile) ? "確認済み" : "未確認"}
+                </StatusPill>
+              }
+            />
 
-            <div className="mb-md flex flex-wrap gap-sm">
+            <div className="mt-lg flex flex-wrap gap-sm">
               <button
                 type="button"
                 data-testid="upload-answer-layout-button"
-                className="rounded-md border border-outline px-md py-sm text-ui-label disabled:opacity-40"
+                className={secondaryButtonClass()}
                 disabled={busy || profileConfirmed(ready.profile)}
                 onClick={() => {
-                  void runGuarded(async () => {
+                  void runGuarded(WORK.uploadLayout, async () => {
                     const bridge = window.autoScoring;
                     if (bridge === undefined) {
                       throw new TestRegistrationDataError(
@@ -769,10 +898,10 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="detect-answer-areas-button"
-                className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+                className={primaryButtonClass()}
                 disabled={detectReqs.length > 0}
                 onClick={() => {
-                  void runGuarded(async () => {
+                  void runGuarded(WORK.detect, async () => {
                     let profile: ProfileResponse;
                     try {
                       profile = await detectAnswerAreas(client, testId);
@@ -825,7 +954,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="add-region-button"
-                className="rounded-md border border-outline px-md py-sm text-ui-label disabled:opacity-40"
+                className={secondaryButtonClass()}
                 disabled={addRegionReqs.length > 0}
                 onClick={() => {
                   setLoadState((current) => {
@@ -862,7 +991,7 @@ export function TestSettingsPage(): JSX.Element {
             {ready.answerLayoutPageCount === null ? (
               <p
                 data-testid="answer-layout-missing"
-                className="mb-md text-body-small text-on-surface-variant"
+                className="mb-md text-body-medium text-on-surface-variant"
               >
                 回答欄は答案そのものの上で決めます。この様式の答案を1枚選んでください。
               </p>
@@ -899,7 +1028,7 @@ export function TestSettingsPage(): JSX.Element {
             {coverageReqs.length > 0 ? (
               <p
                 data-testid="answer-area-coverage"
-                className="mt-md text-body-small text-on-surface-variant"
+                className="mt-md text-body-medium text-on-surface-variant"
               >
                 {coverageReqs[0]?.message}
               </p>
@@ -909,13 +1038,13 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="save-profile-button"
-                className="rounded-md border border-outline px-md py-sm text-ui-label disabled:opacity-40"
+                className={secondaryButtonClass()}
                 disabled={saveProfileReqs.length > 0}
                 onClick={() => {
                   if (regions === null) {
                     return;
                   }
-                  void runGuarded(async () => {
+                  void runGuarded(WORK.saveProfile, async () => {
                     const saved = await updateProfile(client, testId, regions);
                     await applyEditorReload(saved);
                   });
@@ -926,7 +1055,7 @@ export function TestSettingsPage(): JSX.Element {
               <button
                 type="button"
                 data-testid="confirm-profile-button"
-                className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+                className={primaryButtonClass()}
                 disabled={confirmProfileReqs.length > 0}
                 onClick={confirmProfileWithGuard}
               >
@@ -935,27 +1064,33 @@ export function TestSettingsPage(): JSX.Element {
             </div>
             <DisabledActionReason requirements={addRegionReqs} />
             <DisabledActionReason requirements={confirmProfileReqs} />
-          </section>
+          </Card>
 
-          <section
-            data-testid="dependency-graph-section"
-            className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-          >
-            <div className="mb-md flex items-center justify-between gap-md">
-              <h2 className="text-title-medium font-medium">
-                設問依存関係グラフ
-              </h2>
-              <span className="text-body-small text-on-surface-variant">
-                {graphConfirmed(ready.dependencyGraph) ? "確認済み" : "未確認"}
-              </span>
-            </div>
+          <Card testId="dependency-graph-section">
+            <CardHeading
+              title="設問依存関係グラフ"
+              description="設問どうしの依存関係を確認します。"
+              aside={
+                <StatusPill
+                  tone={
+                    graphConfirmed(ready.dependencyGraph)
+                      ? "success"
+                      : "attention"
+                  }
+                >
+                  {graphConfirmed(ready.dependencyGraph)
+                    ? "確認済み"
+                    : "未確認"}
+                </StatusPill>
+              }
+            />
             <button
               type="button"
               data-testid="analyze-dependency-graph-button"
-              className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+              className={primaryButtonClass()}
               disabled={busy || !profileConfirmed(ready.profile)}
               onClick={() => {
-                void runGuarded(async () => {
+                void runGuarded(WORK.analyzeGraph, async () => {
                   const graph = await analyzeDependencyGraph(
                     client,
                     testId,
@@ -1001,7 +1136,9 @@ export function TestSettingsPage(): JSX.Element {
                 )}
                 {graphLayers !== null ? (
                   <div className="mt-md">
-                    <p className="text-title-small">並列実行可能な層</p>
+                    <p className="text-recognized font-medium text-on-surface">
+                      並列実行可能な層
+                    </p>
                     {graphLayers.map((layer, index) => (
                       <p key={`layer-${index}`}>
                         第{index + 1}層: {layer.join(", ")}
@@ -1024,7 +1161,7 @@ export function TestSettingsPage(): JSX.Element {
                 ) {
                   return;
                 }
-                void runGuarded(async () => {
+                void runGuarded(WORK.confirmGraph, async () => {
                   const confirmed = await confirmDependencyGraph(
                     client,
                     testId,
@@ -1051,47 +1188,71 @@ export function TestSettingsPage(): JSX.Element {
               依存関係グラフを確定
             </button>
             <DisabledActionReason requirements={confirmGraphReqs} />
-          </section>
+          </Card>
 
-          <section data-testid="complete-registration-section">
-            <button
-              type="button"
-              data-testid="complete-registration-button"
-              className="rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
-              disabled={completeReqs.length > 0}
-              onClick={() => {
-                void runGuarded(async () => {
-                  const result = await completeRegistration(client, testId);
-                  setLoadState((current) => {
-                    if (current.status !== "ready") {
-                      return current;
-                    }
-                    return { ...current, test: result.test };
+          <Card testId="complete-registration-section">
+            <CardHeading
+              title="登録完了"
+              description="3つの確認が済むと登録を完了できます。"
+              aside={
+                <StatusPill
+                  tone={ready.test.status === "ready" ? "success" : "attention"}
+                >
+                  {ready.test.status === "ready" ? "登録完了" : "未完了"}
+                </StatusPill>
+              }
+            />
+            <div className="mt-lg">
+              <button
+                type="button"
+                data-testid="complete-registration-button"
+                className={primaryButtonClass()}
+                disabled={completeReqs.length > 0}
+                onClick={() => {
+                  void runGuarded(WORK.complete, async () => {
+                    const result = await completeRegistration(client, testId);
+                    setLoadState((current) => {
+                      if (current.status !== "ready") {
+                        return current;
+                      }
+                      return { ...current, test: result.test };
+                    });
                   });
-                });
-              }}
-            >
-              {ready.test.status === "ready" ? "登録完了済み" : "登録完了"}
-            </button>
-            <div data-testid="remaining-work-label" className="mt-sm">
-              {remainingWork.length === 0 ? (
-                <p className="text-body-small text-on-surface-variant">
-                  「登録完了」を押すと採点を開始できる状態になります。
+                }}
+              >
+                {ready.test.status === "ready" ? "登録完了済み" : "登録完了"}
+              </button>
+              <div
+                data-testid="remaining-work-label"
+                className="mt-md flex flex-col gap-xs"
+              >
+                <p
+                  data-testid="remaining-work-count"
+                  className="text-body-medium font-medium text-on-surface"
+                >
+                  {remainingWork.length === 0
+                    ? "残りの確認はありません"
+                    : `残りの確認 ${remainingWork.length}件`}
                 </p>
-              ) : (
-                remainingWork.map((item) => (
-                  <p
-                    key={item.id}
-                    data-testid={`remaining-work-${item.id}`}
-                    className="text-body-small text-on-surface-variant"
-                  >
-                    {item.message}
+                {remainingWork.length === 0 ? (
+                  <p className="text-body-medium text-on-surface-variant">
+                    「登録完了」を押すと採点を開始できる状態になります。
                   </p>
-                ))
-              )}
+                ) : (
+                  remainingWork.map((item) => (
+                    <p
+                      key={item.id}
+                      data-testid={`remaining-work-${item.id}`}
+                      className="text-body-medium text-on-surface-variant"
+                    >
+                      {item.message}
+                    </p>
+                  ))
+                )}
+              </div>
+              <DisabledActionReason requirements={completeReqs} />
             </div>
-            <DisabledActionReason requirements={completeReqs} />
-          </section>
+          </Card>
         </div>
       ) : null}
 
@@ -1099,14 +1260,14 @@ export function TestSettingsPage(): JSX.Element {
         ? createPortal(
             <div
               data-testid="extract-confirm-dialog"
-              className="fixed inset-0 z-50 overflow-y-auto bg-scrim/40"
+              className="fixed inset-0 z-50 overflow-y-auto bg-overlay-scrim"
               role="dialog"
               aria-modal="true"
             >
               <div className="flex min-h-full items-center justify-center p-lg">
-                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-lg border border-outline bg-surface shadow-lg">
+                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-xl bg-surface-container-high shadow-lg">
                   <div className="overflow-y-auto p-lg">
-                    <h3 className="text-title-medium font-medium">
+                    <h3 className="text-recognized font-medium leading-ui text-on-surface">
                       採点基準PDFから抽出
                     </h3>
                     <p data-testid="extract-page-count" className="mt-sm">
@@ -1115,7 +1276,7 @@ export function TestSettingsPage(): JSX.Element {
                     </p>
                     <p
                       data-testid="extract-cost"
-                      className="mt-xs text-body-small"
+                      className="mt-xs text-body-medium"
                     >
                       {extractEstimate.estimatedCost === null
                         ? "概算費用: 1ページあたりの単価が未設定です（設定画面で入力できます）"
@@ -1124,7 +1285,7 @@ export function TestSettingsPage(): JSX.Element {
                     {extractEstimate.pageCount > extractEstimate.maxPages ? (
                       <p
                         data-testid="extract-over-limit"
-                        className="mt-sm text-body-small text-attention"
+                        className="mt-sm text-body-medium text-attention"
                       >
                         一度に読めるのは {extractEstimate.maxPages}{" "}
                         ページまでです。このまま実行しても失敗します。ファイルを分割してください。
@@ -1135,7 +1296,9 @@ export function TestSettingsPage(): JSX.Element {
                     <button
                       type="button"
                       data-testid="extract-cancel-button"
-                      className="shrink-0 whitespace-nowrap rounded-md border border-outline px-md py-sm"
+                      className={secondaryButtonClass(
+                        "shrink-0 whitespace-nowrap",
+                      )}
                       onClick={() => {
                         setExtractEstimateOpen(false);
                         setExtractEstimate(null);
@@ -1146,14 +1309,16 @@ export function TestSettingsPage(): JSX.Element {
                     <button
                       type="button"
                       data-testid="extract-confirm-button"
-                      className="shrink-0 whitespace-nowrap rounded-md bg-primary px-md py-sm text-on-primary disabled:opacity-40"
+                      className={primaryButtonClass(
+                        "shrink-0 whitespace-nowrap",
+                      )}
                       disabled={
                         extractEstimate.pageCount > extractEstimate.maxPages
                       }
                       onClick={() => {
                         setExtractEstimateOpen(false);
                         setExtractEstimate(null);
-                        void runGuarded(async () => {
+                        void runGuarded(WORK.extract, async () => {
                           const criteria = await extractCriteria(
                             client,
                             testId,
@@ -1189,14 +1354,14 @@ export function TestSettingsPage(): JSX.Element {
         ? createPortal(
             <div
               data-testid="profile-confirm-undetected-dialog"
-              className="fixed inset-0 z-50 overflow-y-auto bg-scrim/40"
+              className="fixed inset-0 z-50 overflow-y-auto bg-overlay-scrim"
               role="dialog"
               aria-modal="true"
             >
               <div className="flex min-h-full items-center justify-center p-lg">
-                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-lg border border-outline bg-surface shadow-lg">
+                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-xl bg-surface-container-high shadow-lg">
                   <div className="overflow-y-auto p-lg">
-                    <h3 className="text-title-medium font-medium">
+                    <h3 className="text-recognized font-medium leading-ui text-on-surface">
                       回答欄が見つかっていない設問があります
                     </h3>
                     <p
@@ -1209,7 +1374,7 @@ export function TestSettingsPage(): JSX.Element {
                         ).message
                       }
                     </p>
-                    <p className="mt-sm text-body-small text-on-surface-variant">
+                    <p className="mt-sm text-body-medium text-on-surface-variant">
                       {
                         ActionRequirements.profileConfirmUndetectedAction
                           .message
@@ -1220,7 +1385,9 @@ export function TestSettingsPage(): JSX.Element {
                     <button
                       type="button"
                       data-testid="profile-confirm-undetected-cancel"
-                      className="shrink-0 whitespace-nowrap rounded-md border border-outline px-md py-sm"
+                      className={secondaryButtonClass(
+                        "shrink-0 whitespace-nowrap",
+                      )}
                       onClick={() => {
                         setUndetectedConfirmOpen(false);
                       }}
@@ -1230,7 +1397,9 @@ export function TestSettingsPage(): JSX.Element {
                     <button
                       type="button"
                       data-testid="profile-confirm-undetected-proceed"
-                      className="shrink-0 whitespace-nowrap rounded-md bg-primary px-md py-sm text-on-primary"
+                      className={primaryButtonClass(
+                        "shrink-0 whitespace-nowrap",
+                      )}
                       onClick={() => {
                         setUndetectedConfirmOpen(false);
                         runConfirmProfile();
@@ -1265,14 +1434,14 @@ function CriteriaQuestionEditor({
   return (
     <div
       data-testid={`criteria-tile-${index}`}
-      className="rounded-md border border-outline-variant p-md"
+      className="rounded-lg bg-surface-container-high p-md"
     >
       <div className="grid gap-sm md:grid-cols-2">
-        <label className="flex flex-col gap-xs text-body-small">
-          設問番号
+        <label className="flex flex-col gap-xs">
+          <Caption>設問番号</Caption>
           <input
             data-testid={`criteria-number-${index}`}
-            className="rounded-md border border-outline px-sm py-xs"
+            className="rounded-md bg-surface-container px-sm py-xs text-on-surface"
             value={question.number}
             readOnly={readOnly}
             onChange={(event) => {
@@ -1280,11 +1449,11 @@ function CriteriaQuestionEditor({
             }}
           />
         </label>
-        <label className="flex flex-col gap-xs text-body-small">
-          配点
+        <label className="flex flex-col gap-xs">
+          <Caption>配点</Caption>
           <input
             data-testid={`criteria-points-${index}`}
-            className="rounded-md border border-outline px-sm py-xs"
+            className="rounded-md bg-surface-container px-sm py-xs text-on-surface"
             value={question.points ?? ""}
             readOnly={readOnly}
             inputMode="numeric"
@@ -1298,11 +1467,11 @@ function CriteriaQuestionEditor({
           />
         </label>
       </div>
-      <label className="mt-sm flex flex-col gap-xs text-body-small">
-        模範解答
+      <label className="mt-sm flex flex-col gap-xs">
+        <Caption>模範解答</Caption>
         <textarea
           data-testid={`criteria-model-answer-${index}`}
-          className="min-h-20 rounded-md border border-outline px-sm py-xs"
+          className="min-h-20 rounded-md bg-surface-container px-sm py-xs text-on-surface"
           value={question.model_answer ?? ""}
           readOnly={readOnly}
           onChange={(event) => {
@@ -1320,7 +1489,7 @@ function CriteriaQuestionEditor({
         <button
           type="button"
           data-testid={`remove-criteria-${index}`}
-          className="mt-sm rounded-md border border-outline px-sm py-xs text-ui-label"
+          className="mt-sm w-fit rounded-md bg-surface-container-high px-sm py-xs text-ui-label text-on-surface"
           onClick={onRemove}
         >
           削除

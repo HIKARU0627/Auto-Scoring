@@ -58,10 +58,38 @@ import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { DisabledActionReason } from "./DisabledActionReason.js";
 import { FilePickerRow } from "./FilePickerRow.js";
+import {
+  BusyNotice,
+  Caption,
+  Card,
+  CardHeading,
+  ErrorNotice,
+  ProgressMeter,
+  ScreenSkeleton,
+  SectionHeading,
+  StatusPill,
+  StepProgress,
+  primaryButtonClass,
+  secondaryButtonClass,
+} from "../ui/screen-ui.js";
 
 type Step = "choose" | "review" | "done";
 
 const CLASSIFY_CONCURRENCY = 3;
+
+const MATERIAL_ROLE_OPTIONS = [
+  "student_answer",
+  "grading_criteria",
+  "annotation_resource",
+  "annotation_sample",
+  "reference",
+  "ignore",
+] as const;
+
+interface RunningWork {
+  readonly title: string;
+  readonly detail: string;
+}
 
 export interface IntakePageProps {
   readonly bridge?: IntakeBridge;
@@ -72,9 +100,12 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const { push } = useRouter();
   const fileBridge = bridge ?? intakeBridgeFromWindow();
 
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [step, setStep] = useState<Step>("choose");
   const [busy, setBusy] = useState(false);
+  const [busyNote, setBusyNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [templates, setTemplates] = useState<
     Awaited<ReturnType<typeof loadIntakeTemplates>>
   >([]);
@@ -88,8 +119,10 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const [narrowedTestIds, setNarrowedTestIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [, setClassifiedCount] = useState(0);
+  const [classifiedCount, setClassifiedCount] = useState(0);
+  const [classificationTotal, setClassificationTotal] = useState(0);
   const [classifying, setClassifying] = useState(false);
+  const [runningWork, setRunningWork] = useState<RunningWork | null>(null);
   const [cancelClassification, setCancelClassification] = useState(false);
   const [outcomes, setOutcomes] = useState<readonly ImportOutcome[]>([]);
   const [chosenFolderName, setChosenFolderName] = useState<string | null>(null);
@@ -107,6 +140,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   }, []);
 
   const loadSettings = useCallback(async () => {
+    setLoadFailed(false);
     try {
       const [loadedTemplates, cost, tests, loadedAvailability] =
         await Promise.all([
@@ -128,9 +162,12 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         current === null ? current : { ...current, unitCost: cost },
       );
     } catch (loadError) {
+      setLoadFailed(true);
       setError(
         loadError instanceof Error ? loadError.message : String(loadError),
       );
+    } finally {
+      setSettingsLoaded(true);
     }
   }, [applyExistingTests, client]);
 
@@ -165,6 +202,9 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       return;
     }
     setBusy(true);
+    setBusyNote(
+      "フォルダを読み、取込の型で振り分けを準備しています。ファイル数によって数秒かかります。",
+    );
     setError(null);
     try {
       const path = await fileBridge.chooseFolder();
@@ -200,6 +240,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       );
     } finally {
       setBusy(false);
+      setBusyNote(null);
     }
   }, [applyExistingTests, client, fileBridge, templateId, templates, unitCost]);
 
@@ -215,6 +256,12 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         return;
       }
       setClassifying(true);
+      setRunningWork({
+        title: "AIが資料の役割を判定しています",
+        detail:
+          "1件あたり数秒から十数秒かかります。結果は見つかった順に一覧へ反映されます。",
+      });
+      setClassificationTotal(pending.length);
       setCancelClassification(false);
       setClassifiedCount(0);
       setError(null);
@@ -263,6 +310,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         );
       } finally {
         setClassifying(false);
+        setRunningWork(null);
       }
     },
     [cancelClassification, fileBridge, review],
@@ -305,6 +353,12 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       }
 
       setClassifying(true);
+      setRunningWork({
+        title: "AIが答案の取り込み先を判定しています",
+        detail:
+          "答案1件ずつ、どのテストのものかを照合します。十数秒かかることがあります。",
+      });
+      setClassificationTotal(toAsk.length);
       setCancelClassification(false);
       setClassifiedCount(0);
       setError(null);
@@ -339,6 +393,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         }
       } finally {
         setClassifying(false);
+        setRunningWork(null);
       }
     },
     [candidates, fileBridge, review, reviewerChoseOne],
@@ -349,6 +404,9 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       return;
     }
     setBusy(true);
+    setBusyNote(
+      "取り込んでいます。ファイルのコピーと、答案の登録・採点の開始を進めています。",
+    );
     setError(null);
     const imported: ImportOutcome[] = [];
     try {
@@ -370,6 +428,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       setStep("done");
     } finally {
       setBusy(false);
+      setBusyNote(null);
     }
   }, [client, fileBridge, review, testStatusById]);
 
@@ -400,6 +459,19 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       ? null
       : reviewState.unitCost * totalCalls;
 
+  const includedTotal =
+    reviewState === null
+      ? 0
+      : reviewState.groups.reduce(
+          (sum, group) => sum + includedFiles(group).length,
+          0,
+        );
+  const confirmableCount =
+    reviewState === null ? 0 : confirmableProposals(reviewState).length;
+  const blockingRequirements =
+    reviewState === null ? [] : importRequirements(reviewState);
+  const readyToImport = blockingRequirements.length === 0;
+
   const failedOutcomeCount = outcomes.filter(
     (outcome) => outcome.error !== null,
   ).length;
@@ -411,308 +483,389 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     (sum, outcome) => sum + outcome.submissionCount,
     0,
   );
+  const importedMaterialCount = outcomes.reduce(
+    (sum, outcome) => sum + outcome.materialCount,
+    0,
+  );
   const doneHeading =
     failedOutcomeCount === 0
       ? "取込が完了しました"
       : "取込に失敗した項目があります";
 
+  const importReqs = intakeImportRequirements({
+    busy,
+    classifying,
+    folderRequirements: blockingRequirements,
+  });
+
+  const steps = [
+    { id: "choose", label: "フォルダを選ぶ", complete: step !== "choose" },
+    { id: "review", label: "振り分けを確認", complete: step === "done" },
+    { id: "done", label: "取り込む", complete: step === "done" },
+  ] as const;
+
   return (
     <ShellScreen title="資料の取込">
-      {step === "choose" ? (
-        <div className="mx-auto flex max-w-180 flex-col gap-lg">
-          <p className="text-body-medium text-on-surface-variant">
-            塾から受け取ったフォルダをそのまま選んでください。中身の役割は取込の型で自動的に振り分け、取り込む前に一覧で確認できます。
-          </p>
-          <label className="flex flex-col gap-xs">
-            <span className="text-ui-label">取込の型</span>
-            <select
-              data-testid="intake-template-picker"
-              className="rounded-md border border-outline bg-surface px-md py-sm"
-              value={templateId ?? ""}
-              disabled={busy}
-              onChange={(event) => {
-                setTemplateId(event.target.value);
-              }}
-            >
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {availability?.available === false ? (
-            <p className="rounded-md border border-outline-variant bg-surface-container-low p-md text-body-medium">
-              この端末ではAIによる自動判定を使えません。取込の型で振り分けられなかったファイルは、一覧で役割を選んでください。
-              {availability.reason !== null && availability.reason !== undefined
-                ? `\n理由: ${availability.reason}`
-                : ""}
-            </p>
-          ) : null}
-          <FilePickerRow
-            buttonTestId="intake-choose-folder"
-            buttonLabel="フォルダを選ぶ"
-            fileName={chosenFolderName}
-            onPressed={folderPickRequirements.length === 0 ? pickFolder : null}
-          />
-          <DisabledActionReason requirements={folderPickRequirements} />
-          {error !== null ? (
-            <p className="text-body-medium text-error">{error}</p>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="flex flex-col gap-xl">
+        <StepProgress testId="intake-steps" steps={steps} currentId={step} />
 
-      {step === "review" && reviewState !== null ? (
-        <div className="flex flex-col gap-md">
-          <section
-            data-testid="intake-call-estimate"
-            className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
+        {!settingsLoaded ? (
+          <ScreenSkeleton testId="intake-loading" cardCount={2} />
+        ) : null}
+
+        {settingsLoaded && error !== null && step === "choose" ? (
+          <ErrorNotice
+            testId="intake-error"
+            action={
+              loadFailed ? (
+                <button
+                  type="button"
+                  className={secondaryButtonClass()}
+                  onClick={() => {
+                    void loadSettings();
+                  }}
+                >
+                  読み込みを再試行
+                </button>
+              ) : undefined
+            }
           >
-            <p className="text-title-medium font-medium">
-              AIに問い合わせる件数: 合計{totalCalls}件
-            </p>
-            <p
-              data-testid="intake-call-breakdown"
-              className="mt-xs text-body-medium"
-            >
-              内訳: 役割の判定 {billable}件 / 答案の振り分け {attributionCalls}
-              件
-            </p>
-            <p
-              data-testid="intake-cost-estimate"
-              className="mt-xs text-body-medium"
-            >
-              {estimatedCost === null || reviewState.unitCost === null
-                ? "概算費用: 1件あたりの単価が未設定です（設定画面で入力できます）"
-                : `概算費用: 約${estimatedCost.toFixed(2)}（1件あたり${reviewState.unitCost.toFixed(2)}）`}
-            </p>
-          </section>
+            {error}
+          </ErrorNotice>
+        ) : null}
 
-          {readyTests.length > 0 ? (
-            <section>
-              <p className="text-body-medium font-medium">
-                このバッチはどのテストの答案ですか
+        {busyNote !== null ? (
+          <BusyNotice
+            testId="intake-busy"
+            title="処理しています"
+            detail={busyNote}
+          />
+        ) : null}
+
+        {runningWork !== null ? (
+          <Card testId="intake-running" className="bg-surface-container-high">
+            <BusyNotice
+              testId="intake-running-notice"
+              title={runningWork.title}
+              detail={runningWork.detail}
+            />
+            {classificationTotal > 0 ? (
+              <div className="mt-md">
+                <ProgressMeter
+                  testId="intake-running-progress"
+                  label="処理したファイル"
+                  value={classifiedCount}
+                  max={classificationTotal}
+                />
+              </div>
+            ) : null}
+          </Card>
+        ) : null}
+
+        {settingsLoaded && step === "choose" ? (
+          <div className="flex flex-col gap-lg">
+            <Card testId="intake-choose-card">
+              <CardHeading
+                title="取込の型"
+                description="塾から受け取ったフォルダをそのまま選んでください。中身の役割は取込の型で自動的に振り分け、取り込む前に一覧で確認できます。"
+              />
+              <label className="mt-lg flex flex-col gap-xs">
+                <span className="text-ui-label">取込の型</span>
+                <select
+                  data-testid="intake-template-picker"
+                  className="rounded-md bg-surface-container-high px-md py-sm text-on-surface"
+                  value={templateId ?? ""}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setTemplateId(event.target.value);
+                  }}
+                >
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {availability?.available === false ? (
+                <p className="mt-md rounded-lg bg-surface-container-high p-md text-body-medium text-on-surface-variant">
+                  この端末ではAIによる自動判定を使えません。取込の型で振り分けられなかったファイルは、一覧で役割を選んでください。
+                  {availability.reason !== null &&
+                  availability.reason !== undefined
+                    ? `\n理由: ${availability.reason}`
+                    : ""}
+                </p>
+              ) : null}
+            </Card>
+
+            <Card testId="intake-folder-card">
+              <CardHeading
+                title="フォルダを選ぶ"
+                description="取り込むフォルダを1つ選んでください。選んだあと、ファイルごとの振り分けを確認できます。"
+              />
+              <div className="mt-lg">
+                <FilePickerRow
+                  buttonTestId="intake-choose-folder"
+                  buttonLabel="フォルダを選ぶ"
+                  fileName={chosenFolderName}
+                  onPressed={
+                    folderPickRequirements.length === 0 ? pickFolder : null
+                  }
+                />
+              </div>
+              <DisabledActionReason requirements={folderPickRequirements} />
+            </Card>
+          </div>
+        ) : null}
+
+        {settingsLoaded && step === "review" && reviewState !== null ? (
+          <div className="flex flex-col gap-lg">
+            <Card testId="intake-review-summary">
+              <CardHeading
+                title="振り分けの確認"
+                description="AIの提案を確認し、各フォルダの取り込み先を決めてください。"
+                aside={
+                  <StatusPill tone={readyToImport ? "success" : "attention"}>
+                    {readyToImport ? "取り込めます" : "要確認"}
+                  </StatusPill>
+                }
+              />
+              <dl className="mt-lg grid gap-md sm:grid-cols-3">
+                <SummaryStat
+                  label="取込対象ファイル"
+                  value={`${includedTotal}件`}
+                  testId="intake-summary-files"
+                />
+                <SummaryStat
+                  label="確認待ちの提案"
+                  value={`${confirmableCount}件`}
+                  testId="intake-summary-proposals"
+                />
+                <SummaryStat
+                  label="取り込みを止めている項目"
+                  value={`${blockingRequirements.length}件`}
+                  testId="intake-summary-blocking"
+                />
+              </dl>
+            </Card>
+
+            <Card testId="intake-call-estimate">
+              <p className="text-recognized font-medium leading-ui text-on-surface">
+                AIに問い合わせる件数: 合計{totalCalls}件
               </p>
               <p
-                data-testid="intake-narrowing-benefit"
-                className="text-body-medium text-on-surface-variant"
+                data-testid="intake-call-breakdown"
+                className="mt-sm text-body-medium text-on-surface-variant"
               >
-                1件だけ選ぶと、AIに問い合わせません。費用が0件になり、答案のページ全体も送りません。
+                内訳: 役割の判定 {billable}件 / 答案の振り分け{" "}
+                {attributionCalls}件
               </p>
-              <div className="mt-sm flex flex-wrap gap-sm">
-                {readyTests.map((test) => (
-                  <button
-                    key={test.id}
-                    type="button"
-                    data-testid={`intake-narrow-${test.id}`}
-                    className={`rounded-md border px-md py-xs text-ui-label ${
-                      narrowedTestIds.has(test.id)
-                        ? "border-primary bg-primary-container"
-                        : "border-outline"
-                    }`}
-                    onClick={() => {
-                      setNarrowedTestIds((current) => {
-                        const next = new Set(current);
-                        if (next.has(test.id)) {
-                          next.delete(test.id);
-                        } else {
-                          next.add(test.id);
-                        }
-                        setReview((reviewCurrent) =>
-                          reviewCurrent === null
-                            ? reviewCurrent
-                            : dropRoutingOutsideCandidates(
-                                reviewCurrent,
-                                new Set(
-                                  attributionCandidates(readyTests, next).map(
-                                    (entry) => entry.id,
-                                  ),
-                                ),
-                              ),
-                        );
-                        return next;
-                      });
-                    }}
-                  >
-                    {test.name}
-                  </button>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {reviewState.groups.map((group) => {
-            const missing = unmetRequirements(group);
-            return (
-              <section
-                key={group.key}
-                data-testid={`intake-group-${group.key}`}
-                className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
+              <p
+                data-testid="intake-cost-estimate"
+                className="mt-xs text-body-medium text-on-surface-variant"
               >
-                <div className="flex flex-col gap-sm">
-                  <select
-                    data-testid={`intake-target-${group.key}`}
-                    className="rounded-md border border-outline bg-surface px-md py-sm"
-                    value={
-                      group.targetKind === IntakeTargetKind.create
-                        ? "__new__"
-                        : group.targetKind === IntakeTargetKind.perAnswer
-                          ? "__per_answer__"
-                          : (group.targetTestId ?? "")
+                {estimatedCost === null || reviewState.unitCost === null
+                  ? "概算費用: 1件あたりの単価が未設定です（設定画面で入力できます）"
+                  : `概算費用: 約${estimatedCost.toFixed(2)}（1件あたり${reviewState.unitCost.toFixed(2)}）`}
+              </p>
+            </Card>
+
+            {readyTests.length > 0 ? (
+              <Card testId="intake-narrowing">
+                <CardHeading title="このバッチはどのテストの答案ですか" />
+                <p
+                  data-testid="intake-narrowing-benefit"
+                  className="mt-xs text-body-medium text-on-surface-variant"
+                >
+                  1件だけ選ぶと、AIに問い合わせません。費用が0件になり、答案のページ全体も送りません。
+                </p>
+                <div className="mt-md flex flex-wrap gap-sm">
+                  {readyTests.map((test) => {
+                    const selected = narrowedTestIds.has(test.id);
+                    return (
+                      <button
+                        key={test.id}
+                        type="button"
+                        data-testid={`intake-narrow-${test.id}`}
+                        aria-pressed={selected}
+                        className={
+                          selected
+                            ? primaryButtonClass()
+                            : secondaryButtonClass()
+                        }
+                        onClick={() => {
+                          setNarrowedTestIds((current) => {
+                            const next = new Set(current);
+                            if (next.has(test.id)) {
+                              next.delete(test.id);
+                            } else {
+                              next.add(test.id);
+                            }
+                            setReview((reviewCurrent) =>
+                              reviewCurrent === null
+                                ? reviewCurrent
+                                : dropRoutingOutsideCandidates(
+                                    reviewCurrent,
+                                    new Set(
+                                      attributionCandidates(
+                                        readyTests,
+                                        next,
+                                      ).map((entry) => entry.id),
+                                    ),
+                                  ),
+                            );
+                            return next;
+                          });
+                        }}
+                      >
+                        {test.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Card>
+            ) : null}
+
+            <SectionHeading
+              title="フォルダごとの振り分け"
+              count={reviewState.groups.length}
+            />
+
+            {reviewState.groups.map((group) => {
+              const missing = unmetRequirements(group);
+              const files = group.files;
+              return (
+                <Card key={group.key} testId={`intake-group-${group.key}`}>
+                  <CardHeading
+                    title={
+                      group.name.length > 0 ? group.name : "（名前未設定）"
                     }
-                    disabled={busy}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setReview((current) =>
-                        current === null
-                          ? current
-                          : withGroup(current, group.key, (entry) => {
-                              if (value === "__new__") {
-                                return copyIntakeGroup(entry, {
-                                  targetKind: IntakeTargetKind.create,
-                                  targetTestId: null,
-                                  targetTestStatus: null,
-                                });
-                              }
-                              if (value === "__per_answer__") {
-                                return copyIntakeGroup(entry, {
-                                  targetKind: IntakeTargetKind.perAnswer,
-                                  targetTestId: null,
-                                  targetTestStatus: null,
-                                });
-                              }
-                              const chosen = existingTests.find(
-                                (test) => test.id === value,
-                              );
-                              return copyIntakeGroup(entry, {
-                                targetKind: IntakeTargetKind.existing,
-                                targetTestId: value,
-                                targetTestStatus: chosen?.status ?? null,
-                              });
-                            }),
-                      );
-                    }}
-                  >
-                    <option value="__new__">新しいテストとして登録する</option>
-                    {readyTests.length > 0 ? (
-                      <option value="__per_answer__">
-                        答案ごとに登録済みのテストへ振り分ける
-                      </option>
-                    ) : null}
-                    {existingTests.map((test) => (
-                      <option key={test.id} value={test.id}>
-                        登録済み: {test.name}
-                        {targetTestAcceptsAnswers(test.status)
-                          ? ""
-                          : "（登録途中）"}
-                      </option>
-                    ))}
-                  </select>
-                  {group.targetKind === IntakeTargetKind.create ? (
-                    <input
-                      data-testid={`intake-name-${group.key}`}
-                      className="rounded-md border border-outline bg-surface px-md py-sm"
-                      value={group.name}
+                    description={`${includedFiles(group).length}件のファイル`}
+                    aside={
+                      <StatusPill
+                        tone={missing.length > 0 ? "attention" : "neutral"}
+                      >
+                        {missing.length > 0 ? "要確認" : group.key}
+                      </StatusPill>
+                    }
+                  />
+                  <div className="mt-lg flex flex-col gap-sm">
+                    <select
+                      data-testid={`intake-target-${group.key}`}
+                      aria-label="このフォルダの取り込み先"
+                      className="rounded-md bg-surface-container-high px-md py-sm text-on-surface"
+                      value={
+                        group.targetKind === IntakeTargetKind.create
+                          ? "__new__"
+                          : group.targetKind === IntakeTargetKind.perAnswer
+                            ? "__per_answer__"
+                            : (group.targetTestId ?? "")
+                      }
+                      disabled={busy}
                       onChange={(event) => {
+                        const value = event.target.value;
                         setReview((current) =>
                           current === null
                             ? current
-                            : withGroup(current, group.key, (entry) =>
-                                copyIntakeGroup(entry, {
-                                  name: event.target.value,
-                                }),
-                              ),
+                            : withGroup(current, group.key, (entry) => {
+                                if (value === "__new__") {
+                                  return copyIntakeGroup(entry, {
+                                    targetKind: IntakeTargetKind.create,
+                                    targetTestId: null,
+                                    targetTestStatus: null,
+                                  });
+                                }
+                                if (value === "__per_answer__") {
+                                  return copyIntakeGroup(entry, {
+                                    targetKind: IntakeTargetKind.perAnswer,
+                                    targetTestId: null,
+                                    targetTestStatus: null,
+                                  });
+                                }
+                                const chosen = existingTests.find(
+                                  (test) => test.id === value,
+                                );
+                                return copyIntakeGroup(entry, {
+                                  targetKind: IntakeTargetKind.existing,
+                                  targetTestId: value,
+                                  targetTestStatus: chosen?.status ?? null,
+                                });
+                              }),
                         );
                       }}
-                    />
-                  ) : null}
-                  {missing.length > 0 ? (
-                    <p
-                      data-testid={`intake-unmet-${group.key}`}
-                      className="text-body-medium text-error"
                     >
-                      不足: {missing.map(materialRoleLabel).join("、")}
-                    </p>
-                  ) : null}
-                  {group.targetKind !== IntakeTargetKind.unassigned &&
-                  group.targetKind !== IntakeTargetKind.perAnswer &&
-                  !targetTestAcceptsAnswers(group.targetTestStatus) ? (
-                    <p
-                      data-testid={`intake-stage-notice-${group.key}`}
-                      className="text-body-medium text-on-surface-variant"
-                    >
-                      {
-                        ActionRequirements.answersDeferredUntilRegistered
-                          .message
-                      }
-                    </p>
-                  ) : null}
-                </div>
-                <div className="mt-md flex flex-col gap-sm">
-                  {group.files.map((file) => (
-                    <div
-                      key={file.relativePath}
-                      className="flex flex-wrap items-center gap-sm"
-                    >
-                      <input
-                        type="checkbox"
-                        data-testid={`intake-include-${file.relativePath}`}
-                        checked={!file.excluded}
-                        onChange={(event) => {
-                          setReview((current) =>
-                            current === null
-                              ? current
-                              : withFile(current, file.relativePath, (entry) =>
-                                  copyIntakeFile(entry, {
-                                    excluded: !event.target.checked,
-                                  }),
-                                ),
-                          );
-                        }}
-                      />
-                      <span className="min-w-0 flex-1 truncate">
-                        {intakeFileName(file)}
-                      </span>
-                      <select
-                        data-testid={`intake-role-${file.relativePath}`}
-                        className="rounded-md border border-outline bg-surface px-sm py-xs"
-                        value={effectiveRole(file) ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value as MaterialRole;
-                          setReview((current) =>
-                            current === null
-                              ? current
-                              : withFile(current, file.relativePath, (entry) =>
-                                  copyIntakeFile(entry, {
-                                    humanRole: value,
-                                    proposalConfirmed: true,
-                                  }),
-                                ),
-                          );
-                        }}
+                      <option value="__new__">
+                        新しいテストとして登録する
+                      </option>
+                      {readyTests.length > 0 ? (
+                        <option value="__per_answer__">
+                          答案ごとに登録済みのテストへ振り分ける
+                        </option>
+                      ) : null}
+                      {existingTests.map((test) => (
+                        <option key={test.id} value={test.id}>
+                          登録済み: {test.name}
+                          {targetTestAcceptsAnswers(test.status)
+                            ? ""
+                            : "（登録途中）"}
+                        </option>
+                      ))}
+                    </select>
+                    {group.targetKind === IntakeTargetKind.create ? (
+                      <label className="flex flex-col gap-xs">
+                        <span className="text-ui-label">テスト名</span>
+                        <input
+                          data-testid={`intake-name-${group.key}`}
+                          className="rounded-md bg-surface-container-high px-md py-sm text-on-surface"
+                          value={group.name}
+                          onChange={(event) => {
+                            setReview((current) =>
+                              current === null
+                                ? current
+                                : withGroup(current, group.key, (entry) =>
+                                    copyIntakeGroup(entry, {
+                                      name: event.target.value,
+                                    }),
+                                  ),
+                            );
+                          }}
+                        />
+                      </label>
+                    ) : null}
+                    {missing.length > 0 ? (
+                      <p
+                        data-testid={`intake-unmet-${group.key}`}
+                        className="text-body-medium text-attention"
                       >
-                        <option value="">未判定</option>
-                        {(
-                          [
-                            "student_answer",
-                            "grading_criteria",
-                            "annotation_resource",
-                            "annotation_sample",
-                            "reference",
-                            "ignore",
-                          ] as const
-                        ).map((role) => (
-                          <option key={role} value={role}>
-                            {materialRoleLabel(role)}
-                          </option>
-                        ))}
-                      </select>
-                      {file.proposedRole !== null && !file.proposalConfirmed ? (
-                        <button
-                          type="button"
-                          data-testid={`intake-confirm-${file.relativePath}`}
-                          className="text-ui-label text-primary"
-                          onClick={() => {
+                        不足: {missing.map(materialRoleLabel).join("、")}
+                      </p>
+                    ) : null}
+                    {group.targetKind !== IntakeTargetKind.unassigned &&
+                    group.targetKind !== IntakeTargetKind.perAnswer &&
+                    !targetTestAcceptsAnswers(group.targetTestStatus) ? (
+                      <p
+                        data-testid={`intake-stage-notice-${group.key}`}
+                        className="text-body-medium text-on-surface-variant"
+                      >
+                        {
+                          ActionRequirements.answersDeferredUntilRegistered
+                            .message
+                        }
+                      </p>
+                    ) : null}
+                  </div>
+                  <ul className="mt-md flex flex-col gap-sm">
+                    {files.map((file) => (
+                      <li
+                        key={file.relativePath}
+                        className="flex flex-wrap items-center gap-sm rounded-lg bg-surface-container-high px-md py-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          data-testid={`intake-include-${file.relativePath}`}
+                          aria-label={`${intakeFileName(file)} を取り込む`}
+                          checked={!file.excluded}
+                          onChange={(event) => {
                             setReview((current) =>
                               current === null
                                 ? current
@@ -721,225 +874,362 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                                     file.relativePath,
                                     (entry) =>
                                       copyIntakeFile(entry, {
+                                        excluded: !event.target.checked,
+                                      }),
+                                  ),
+                            );
+                          }}
+                        />
+                        <span className="min-w-0 flex-1 truncate text-body-medium">
+                          {intakeFileName(file)}
+                        </span>
+                        <select
+                          data-testid={`intake-role-${file.relativePath}`}
+                          aria-label={`${intakeFileName(file)} の役割`}
+                          className="rounded-md bg-surface-container px-sm py-xs text-ui-label"
+                          value={effectiveRole(file) ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value as MaterialRole;
+                            setReview((current) =>
+                              current === null
+                                ? current
+                                : withFile(
+                                    current,
+                                    file.relativePath,
+                                    (entry) =>
+                                      copyIntakeFile(entry, {
+                                        humanRole: value,
                                         proposalConfirmed: true,
                                       }),
                                   ),
                             );
                           }}
                         >
-                          この役割でよい
-                        </button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-                {group.targetKind === IntakeTargetKind.perAnswer ? (
+                          <option value="">未判定</option>
+                          {MATERIAL_ROLE_OPTIONS.map((role) => (
+                            <option key={role} value={role}>
+                              {materialRoleLabel(role)}
+                            </option>
+                          ))}
+                        </select>
+                        {file.proposedRole !== null &&
+                        !file.proposalConfirmed ? (
+                          <button
+                            type="button"
+                            data-testid={`intake-confirm-${file.relativePath}`}
+                            className={secondaryButtonClass()}
+                            onClick={() => {
+                              setReview((current) =>
+                                current === null
+                                  ? current
+                                  : withFile(
+                                      current,
+                                      file.relativePath,
+                                      (entry) =>
+                                        copyIntakeFile(entry, {
+                                          proposalConfirmed: true,
+                                        }),
+                                    ),
+                              );
+                            }}
+                          >
+                            この役割でよい
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  {group.targetKind === IntakeTargetKind.perAnswer ? (
+                    <button
+                      type="button"
+                      data-testid={`intake-attribute-${group.key}`}
+                      className={`mt-md ${secondaryButtonClass()}`}
+                      onClick={() => {
+                        void attributeAnswers(group.key);
+                      }}
+                    >
+                      {reviewerChoseOne
+                        ? "すべての答案を振り分ける"
+                        : "AIで振り分ける"}
+                    </button>
+                  ) : null}
+                </Card>
+              );
+            })}
+
+            <Card testId="intake-actions" className="bg-surface-container-high">
+              <CardHeading
+                title="取り込み"
+                description="内容を確認したら取り込みます。あとから同じフォルダを取り込むこともできます。"
+                aside={
+                  <StatusPill tone={readyToImport ? "success" : "attention"}>
+                    {readyToImport ? "準備完了" : "未解決あり"}
+                  </StatusPill>
+                }
+              />
+              <div className="mt-lg flex flex-wrap gap-md">
+                {cachedOnly > 0 ? (
                   <button
                     type="button"
-                    data-testid={`intake-attribute-${group.key}`}
-                    className="mt-md rounded-md border border-outline px-md py-sm text-ui-label"
+                    data-testid="intake-fetch-cached"
+                    className={secondaryButtonClass()}
                     onClick={() => {
-                      void attributeAnswers(group.key);
+                      void runClassification(true);
                     }}
                   >
-                    {reviewerChoseOne
-                      ? "すべての答案を振り分ける"
-                      : "AIで振り分ける"}
+                    前回の判定を取得する ({cachedOnly}件・無料)
                   </button>
                 ) : null}
-              </section>
-            );
-          })}
-
-          <div className="flex flex-wrap gap-md">
-            {cachedOnly > 0 ? (
-              <button
-                type="button"
-                data-testid="intake-fetch-cached"
-                className="rounded-md border border-outline px-md py-sm text-ui-label"
-                onClick={() => {
-                  void runClassification(true);
-                }}
-              >
-                前回の判定を取得する ({cachedOnly}件・無料)
-              </button>
-            ) : null}
-            {billable > 0 && availability?.available !== false ? (
-              <button
-                type="button"
-                data-testid="intake-run-classification"
-                className="rounded-md bg-secondary-container px-md py-sm text-ui-label text-on-secondary-container"
-                onClick={() => {
-                  void runClassification(false);
-                }}
-              >
-                AIで判定する ({billable}件)
-              </button>
-            ) : null}
-            <button
-              type="button"
-              data-testid="intake-import"
-              className="rounded-md bg-primary px-md py-sm text-ui-label text-on-primary"
-              disabled={
-                intakeImportRequirements({
-                  busy,
-                  classifying,
-                  folderRequirements: importRequirements(reviewState),
-                }).length > 0
-              }
-              onClick={() => {
-                void runImport();
-              }}
-            >
-              この内容で取り込む
-            </button>
-          </div>
-          <DisabledActionReason
-            requirements={intakeImportRequirements({
-              busy,
-              classifying,
-              folderRequirements: importRequirements(reviewState),
-            })}
-          />
-
-          {confirmableProposals(reviewState).length > 0 ? (
-            <button
-              type="button"
-              data-testid="intake-confirm-all"
-              className="text-ui-label text-primary"
-              onClick={() => {
-                setReview((current) =>
-                  current === null ? current : confirmAllProposals(current),
-                );
-              }}
-            >
-              AIの提案 {confirmableProposals(reviewState).length}
-              件をまとめて確認済みにする
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
-      {step === "done" ? (
-        <div className="flex flex-col gap-md">
-          <section className="rounded-lg border border-outline-variant bg-surface-container-low p-lg">
-            <h2
-              data-testid="intake-done-heading"
-              className="text-title-large font-medium"
-            >
-              {doneHeading}
-            </h2>
-            {failedOutcomeCount > 0 ? (
-              <p
-                data-testid="intake-failure-summary"
-                className="mt-sm text-body-medium text-error"
-              >
-                {failedOutcomeCount}件のグループで取り込みに失敗しました（全
-                {outcomes.length}件中）。内容は下の一覧で確認できます。
-              </p>
-            ) : null}
-            {deferredAnswerCount > 0 ? (
-              <p
-                data-testid="intake-next-step-notice"
-                className="mt-sm text-body-medium text-on-surface-variant"
-              >
-                採点にはこのあと配点と採点基準の確定が必要です。下のテストごとの「テスト設定を開く」から入力・確定してください。
-                {ActionRequirements.answersDeferredUntilRegistered.message}
-                登録が済んだら、同じフォルダをもう一度取り込むと答案が入ります。
-              </p>
-            ) : importedSubmissionCount > 0 ? (
-              <p
-                data-testid="intake-next-step-notice"
-                className="mt-sm text-body-medium text-on-surface-variant"
-              >
-                答案を取り込みました。AI採点の開始状況は下の一覧で確認できます。
-              </p>
-            ) : null}
-          </section>
-          {outcomes.map((outcome) => (
-            <section
-              key={outcome.groupKey}
-              data-testid={`intake-outcome-${outcome.groupKey}`}
-              className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
-            >
-              <h3 className="text-title-medium font-medium">{outcome.name}</h3>
-              {outcome.materialCount > 0 ? (
-                <p
-                  data-testid={`intake-imported-materials-${outcome.groupKey}`}
-                >
-                  資料 {outcome.materialCount}件を取り込みました
-                </p>
-              ) : null}
-              {outcome.submissionCount > 0 ? (
-                <p
-                  data-testid={`intake-imported-submissions-${outcome.groupKey}`}
-                >
-                  答案 {outcome.submissionCount}件を取り込みました
-                </p>
-              ) : null}
-              {outcome.duplicateCount > 0 ? (
-                <p data-testid={`intake-duplicate-${outcome.groupKey}`}>
-                  {ActionRequirements.submissionDuplicate.message}（
-                  {outcome.duplicateCount}件）
-                </p>
-              ) : null}
-              {outcome.answersDeferred > 0 ? (
-                <p
-                  data-testid={`intake-deferred-${outcome.groupKey}`}
-                  className="text-body-medium text-on-surface-variant"
-                >
-                  {ActionRequirements.answersDeferredUntilRegistered.message}（
-                  {outcome.answersDeferred}件）
-                </p>
-              ) : null}
-              {outcome.gradingStartedCount > 0 ? (
-                <p>うち{outcome.gradingStartedCount}件のAI採点を開始しました</p>
-              ) : null}
-              {outcome.gradingFailure !== null ? (
-                <p className="text-error">{outcome.gradingFailure}</p>
-              ) : null}
-              {outcome.error !== null ? (
-                <p
-                  data-testid={`intake-failed-${outcome.groupKey}`}
-                  className="text-error"
-                >
-                  {importedAnything(outcome)
-                    ? `一部を取り込めませんでした: ${outcome.error}`
-                    : `取り込めませんでした: ${outcome.error}`}
-                  {outcome.failedFiles.length > 0
-                    ? ` 失敗したファイル: ${outcome.failedFiles.join("、")}`
-                    : ""}
-                </p>
-              ) : null}
-              {outcome.testId !== null ? (
+                {billable > 0 && availability?.available !== false ? (
+                  <button
+                    type="button"
+                    data-testid="intake-run-classification"
+                    className={secondaryButtonClass()}
+                    onClick={() => {
+                      void runClassification(false);
+                    }}
+                  >
+                    AIで判定する ({billable}件)
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  data-testid={`intake-open-test-settings-${outcome.groupKey}`}
-                  className="mt-sm rounded-md border border-outline px-md py-sm text-ui-label"
+                  data-testid="intake-import"
+                  className={primaryButtonClass()}
+                  disabled={importReqs.length > 0}
                   onClick={() => {
-                    push(testSettings(outcome.testId!));
+                    void runImport();
                   }}
                 >
-                  テスト設定を開く
+                  この内容で取り込む
+                </button>
+              </div>
+              <DisabledActionReason requirements={importReqs} />
+
+              {reviewState !== null &&
+              confirmableProposals(reviewState).length > 0 ? (
+                <button
+                  type="button"
+                  data-testid="intake-confirm-all"
+                  className={`mt-md ${secondaryButtonClass()}`}
+                  onClick={() => {
+                    setReview((current) =>
+                      current === null ? current : confirmAllProposals(current),
+                    );
+                  }}
+                >
+                  AIの提案 {confirmableProposals(reviewState).length}
+                  件をまとめて確認済みにする
                 </button>
               ) : null}
-            </section>
-          ))}
-          <button
-            type="button"
-            data-testid="intake-start-over"
-            className="rounded-md border border-outline px-md py-sm text-ui-label"
-            onClick={() => {
-              setStep("choose");
-              setReview(null);
-              setOutcomes([]);
-              setError(null);
-            }}
-          >
-            別のフォルダを取り込む
-          </button>
-        </div>
-      ) : null}
+            </Card>
+          </div>
+        ) : null}
+
+        {settingsLoaded && step === "done" ? (
+          <div className="flex flex-col gap-lg">
+            <Card testId="intake-done-summary">
+              <CardHeading
+                title={doneHeading}
+                titleTestId="intake-done-heading"
+                aside={
+                  <StatusPill
+                    tone={failedOutcomeCount === 0 ? "success" : "attention"}
+                  >
+                    {failedOutcomeCount === 0 ? "完了" : "一部失敗"}
+                  </StatusPill>
+                }
+              />
+              {failedOutcomeCount > 0 ? (
+                <p
+                  data-testid="intake-failure-summary"
+                  className="mt-sm text-body-medium text-attention"
+                >
+                  {failedOutcomeCount}件のグループで取り込みに失敗しました（全
+                  {outcomes.length}件中）。内容は下の一覧で確認できます。
+                </p>
+              ) : null}
+              {deferredAnswerCount > 0 ? (
+                <p
+                  data-testid="intake-next-step-notice"
+                  className="mt-sm text-body-medium text-on-surface-variant"
+                >
+                  採点にはこのあと配点と採点基準の確定が必要です。下のテストごとの「テスト設定を開く」から入力・確定してください。
+                  {ActionRequirements.answersDeferredUntilRegistered.message}
+                  登録が済んだら、同じフォルダをもう一度取り込むと答案が入ります。
+                </p>
+              ) : importedSubmissionCount > 0 ? (
+                <p
+                  data-testid="intake-next-step-notice"
+                  className="mt-sm text-body-medium text-on-surface-variant"
+                >
+                  答案を取り込みました。AI採点の開始状況は下の一覧で確認できます。
+                </p>
+              ) : null}
+              <dl className="mt-lg grid gap-md sm:grid-cols-3">
+                <SummaryStat
+                  label="資料"
+                  value={`${importedMaterialCount}件`}
+                  testId="intake-done-materials"
+                />
+                <SummaryStat
+                  label="答案"
+                  value={`${importedSubmissionCount}件`}
+                  testId="intake-done-submissions"
+                />
+                <SummaryStat
+                  label="配点確定待ち"
+                  value={`${deferredAnswerCount}件`}
+                  testId="intake-done-deferred"
+                />
+              </dl>
+            </Card>
+
+            <h2 className="sr-only">取り込み結果</h2>
+            {outcomes.map((outcome) => {
+              const hadFailure = outcome.error !== null;
+              return (
+                <Card
+                  key={outcome.groupKey}
+                  testId={`intake-outcome-${outcome.groupKey}`}
+                >
+                  <CardHeading
+                    title={outcome.name}
+                    aside={
+                      <StatusPill tone={hadFailure ? "attention" : "success"}>
+                        {hadFailure ? "一部失敗" : "完了"}
+                      </StatusPill>
+                    }
+                  />
+                  <ul className="mt-sm flex flex-col gap-xs text-body-medium">
+                    {outcome.materialCount > 0 ? (
+                      <li
+                        data-testid={`intake-imported-materials-${outcome.groupKey}`}
+                      >
+                        資料 {outcome.materialCount}件を取り込みました
+                      </li>
+                    ) : null}
+                    {outcome.submissionCount > 0 ? (
+                      <li
+                        data-testid={`intake-imported-submissions-${outcome.groupKey}`}
+                      >
+                        答案 {outcome.submissionCount}件を取り込みました
+                      </li>
+                    ) : null}
+                    {outcome.duplicateCount > 0 ? (
+                      <li data-testid={`intake-duplicate-${outcome.groupKey}`}>
+                        {ActionRequirements.submissionDuplicate.message}（
+                        {outcome.duplicateCount}件）
+                      </li>
+                    ) : null}
+                    {outcome.answersDeferred > 0 ? (
+                      <li
+                        data-testid={`intake-deferred-${outcome.groupKey}`}
+                        className="text-on-surface-variant"
+                      >
+                        {
+                          ActionRequirements.answersDeferredUntilRegistered
+                            .message
+                        }
+                        （{outcome.answersDeferred}件）
+                      </li>
+                    ) : null}
+                    {outcome.gradingStartedCount > 0 ? (
+                      <li>
+                        うち{outcome.gradingStartedCount}
+                        件のAI採点を開始しました
+                      </li>
+                    ) : null}
+                    {outcome.gradingFailure !== null ? (
+                      <li className="text-attention">
+                        {outcome.gradingFailure}
+                      </li>
+                    ) : null}
+                  </ul>
+
+                  {outcome.error !== null ? (
+                    <ErrorNotice testId={`intake-failed-${outcome.groupKey}`}>
+                      {importedAnything(outcome)
+                        ? `一部を取り込めませんでした: ${outcome.error}`
+                        : `取り込めませんでした: ${outcome.error}`}
+                      {outcome.failedFiles.length > 0 ? (
+                        <>
+                          <span className="mt-xs block font-medium">
+                            失敗したファイル（{outcome.failedFiles.length}件）
+                          </span>
+                          <ul
+                            data-testid={`intake-failed-files-${outcome.groupKey}`}
+                            className="mt-xs flex flex-col gap-xs"
+                          >
+                            {outcome.failedFiles.map((name) => (
+                              <li key={name} className="truncate">
+                                {name}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : null}
+                    </ErrorNotice>
+                  ) : null}
+
+                  {outcome.testId !== null ? (
+                    <button
+                      type="button"
+                      data-testid={`intake-open-test-settings-${outcome.groupKey}`}
+                      className={`mt-md ${secondaryButtonClass()}`}
+                      onClick={() => {
+                        push(testSettings(outcome.testId!));
+                      }}
+                    >
+                      テスト設定を開く
+                    </button>
+                  ) : null}
+                </Card>
+              );
+            })}
+
+            <div>
+              <button
+                type="button"
+                data-testid="intake-start-over"
+                className={secondaryButtonClass()}
+                onClick={() => {
+                  setStep("choose");
+                  setReview(null);
+                  setOutcomes([]);
+                  setError(null);
+                }}
+              >
+                別のフォルダを取り込む
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </ShellScreen>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  testId,
+}: {
+  label: string;
+  value: string;
+  testId: string;
+}): JSX.Element {
+  return (
+    <div className="rounded-lg bg-surface-container-high p-md">
+      <dt>
+        <Caption>{label}</Caption>
+      </dt>
+      <dd
+        data-testid={testId}
+        className="mt-xs tabular-nums text-title-large font-medium text-on-surface"
+      >
+        {value}
+      </dd>
+    </div>
   );
 }
