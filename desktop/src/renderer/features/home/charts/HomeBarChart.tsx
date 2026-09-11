@@ -64,7 +64,11 @@ export function HomeBarChart({
       className="min-w-0"
       style={{ margin: 0 }}
     >
-      <ResponsiveContainer width="100%" height={200}>
+      {/* Issue 360: the mock's plot is ~110px tall and its grid sits *below*
+          the card colour; at 200px the empty space above the bars doubled the
+          card height, and an outline-variant grid (+L12) outshone the bars.
+          surface-container-low is the token one step darker than the card. */}
+      <ResponsiveContainer width="100%" height={150}>
         <BarChart
           data={[...points]}
           margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
@@ -72,7 +76,7 @@ export function HomeBarChart({
         >
           <CartesianGrid
             vertical={false}
-            stroke="var(--color-outline-variant)"
+            stroke="var(--color-surface-container-low)"
           />
           <XAxis
             dataKey="label"

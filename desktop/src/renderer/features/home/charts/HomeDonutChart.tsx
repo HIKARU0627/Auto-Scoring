@@ -46,7 +46,7 @@ export function HomeDonutChart({
       <div
         role="img"
         aria-label={`テストの進捗。${summary}。合計${total}テスト。`}
-        className="relative h-52 w-full"
+        className="relative h-48 w-full"
       >
         <ResponsiveContainer width="100%" height="100%">
           <PieChart accessibilityLayer={false}>
@@ -93,11 +93,14 @@ export function HomeDonutChart({
               className="size-3 shrink-0 rounded-full"
               style={{ background: phaseFill(slice.phase) }}
             />
-            <span className="min-w-0 flex-1 truncate text-on-surface">
-              {slice.label}
-            </span>
-            <span style={NUMERIC_STYLE} className="shrink-0 tabular-nums">
-              {slice.count}
+            {/* Issue 360: the mock's legend is two columns -- the count lives
+                inside the label as `準備中 (3)`, and the percent sits alone on
+                the right. The old three-column form read label / count / %. */}
+            <span
+              style={NUMERIC_STYLE}
+              className="min-w-0 flex-1 truncate text-on-surface"
+            >
+              {slice.label} ({slice.count})
             </span>
             <span
               style={NUMERIC_STYLE}

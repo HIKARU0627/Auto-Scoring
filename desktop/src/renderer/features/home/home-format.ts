@@ -31,6 +31,24 @@ export const TABLE_HEAD_STYLE: CSSProperties = {
   fontSize: "var(--font-size-label-medium)",
 };
 
+/**
+ * 全体の進捗 KPI number (Issue 360). At 24px it read as another panel heading;
+ * the mock's number is 22px against an 18px heading (1.22x). Our heading is
+ * 17.5px, so 1.4x title-large lands at ~30.8px -- the mock's "30px級".
+ */
+export const KPI_VALUE_STYLE: CSSProperties = {
+  fontSize: "calc(var(--font-size-title-large) * 1.4)",
+};
+
+/**
+ * Quick-action subtitle (Issue 360). The heading and subtitle both measured
+ * 14px, so the two stacked lines read as one paragraph and the row grew to
+ * 82px. Dropping the subtitle to the body-small token gives the 12px step.
+ */
+export const QUICK_ACTION_SUBTITLE_STYLE: CSSProperties = {
+  fontSize: "var(--font-size-body-small)",
+};
+
 export function toneDotClass(tone: string): string {
   switch (tone) {
     case "attention":

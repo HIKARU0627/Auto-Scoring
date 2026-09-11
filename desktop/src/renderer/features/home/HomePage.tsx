@@ -105,7 +105,7 @@ export function HomePage(): JSX.Element {
             onClick={() => {
               void reload();
             }}
-            className="inline-flex items-center gap-sm rounded-md border border-outline px-md py-xs text-ui-label text-on-surface hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-sm rounded-md bg-surface-container-high px-md py-xs text-ui-label text-on-surface hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:opacity-90 disabled:opacity-50"
           >
             <RefreshCw aria-hidden size={15} />
             最新の状況に更新
@@ -209,12 +209,21 @@ function DashboardBody({
               handleAction(dashboard.nextAction);
             }}
           />
-          <HomeProgressPanel dashboard={dashboard} />
+          {/* Issue 360: the mock splits the main column into 全体の進捗 (wider)
+              and テストの進捗 (narrower) side by side, instead of stacking the
+              donut under the quick-action rail. Roughly 543 : 317 = 3 : 2. */}
+          <div className="grid min-w-0 gap-xl lg:grid-cols-5">
+            <div className="min-w-0 lg:col-span-3">
+              <HomeProgressPanel dashboard={dashboard} />
+            </div>
+            <div className="min-w-0 lg:col-span-2">
+              <HomeTestDonutPanel dashboard={dashboard} />
+            </div>
+          </div>
           <HomeRecentTestsTable dashboard={dashboard} onOpen={onOpen} />
         </div>
-        <div className="flex min-w-0 flex-col gap-xl lg:w-1/3">
+        <div className="flex min-w-0 flex-col gap-xl lg:w-1/3 lg:max-w-80">
           <HomeQuickActions onOpen={onOpen} />
-          <HomeTestDonutPanel dashboard={dashboard} />
         </div>
       </div>
     </div>

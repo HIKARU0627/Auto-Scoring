@@ -35,7 +35,7 @@ export function HomeTestDonutPanel({
   return (
     <section
       data-testid="home-tests-panel"
-      className="min-w-0 rounded-xl bg-surface-container p-xl"
+      className="h-full min-w-0 rounded-xl bg-surface-container p-xl"
     >
       <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
         テストの進捗

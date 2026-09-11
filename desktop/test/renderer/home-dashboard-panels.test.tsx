@@ -386,10 +386,11 @@ describe("home dashboard: states and accessibility (Issue #336)", () => {
     expect(ids).toEqual([
       "home-refresh",
       "home-next-up-action",
-      "home-resume-review-work-1",
+      "home-open-all-tests",
       "home-open-queue-work-1",
-      "home-resume-registration-draft-1",
+      "home-resume-review-work-1",
       "home-open-queue-draft-1",
+      "home-resume-registration-draft-1",
       "home-open-intake",
       "home-open-test-list-footer",
       "home-open-settings",
