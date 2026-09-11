@@ -94,3 +94,79 @@ export function materialRowGapStart(
   }
   return first[0] > MATERIAL_COVER_EPSILON ? 0 : first[1];
 }
+
+/**
+ * How far inside the viewport the unread point is aimed, in CSS pixels.
+ *
+ * Aiming it exactly at the top edge is what a naive `scrollIntoView` does, but
+ * the browser rounds the scroll offset to a device pixel. The measured
+ * container landed the first unread row 0.56px above the top edge, so the gate
+ * recorded the leading 0.4% of the row as still unread; pressing again tried to
+ * scroll up by that fraction and the browser refused, stalling forever. Aiming
+ * a pixel *inside* the edge survives the rounding without weakening the gate:
+ * anything genuinely unread is still off the visible range.
+ */
+export const MATERIAL_REVEAL_EDGE_MARGIN_PX = 1;
+
+export interface MaterialRevealInput {
+  readonly scrollTop: number;
+  readonly maxScrollTop: number;
+  readonly viewportHeight: number;
+  /**
+   * Viewport-space y of the first not-yet-read point of the first unread row
+   * (`rowTop + gapStart * rowHeight`). Independently of which way it lies, the
+   * target below brings that point just inside the top of the viewport.
+   */
+  readonly unreadTop: number;
+  /** Viewport-space y of the scroll container's own top edge. */
+  readonly containerTop: number;
+}
+
+export interface MaterialRevealPlan {
+  readonly scrollTop: number;
+  /**
+   * False only when the container cannot move at all (no scroll range), which
+   * the caller must surface instead of silently pretending to have revealed
+   * anything (Issue #328, decision 2).
+   */
+  readonly moved: boolean;
+}
+
+/**
+ * Where to put the scroll container so the first unread row comes into view,
+ * rather than paging by whole viewports (Issue #328).
+ *
+ * Relative viewport paging (`scrollBy({ top: ±clientHeight })`) is not
+ * guaranteed to accumulate: on the measured container it moved to one page and
+ * then no-ops, leaving the unread rows off-screen and 承認 permanently
+ * disabled. Aiming at the unread point itself both guarantees the direction
+ * (#319) and guarantees that each press gets closer. The point is its own
+ * fraction of the row, so a row taller than the viewport also advances.
+ *
+ * When the unread point is already at the top, aligning to it would be a
+ * no-op, so advance one viewport; if even that is impossible the container has
+ * no scroll range and `moved` is false.
+ */
+export function planMaterialReveal(
+  input: MaterialRevealInput,
+): MaterialRevealPlan {
+  const limit = Math.max(input.maxScrollTop, 0);
+  const clamp = (value: number) => Math.min(Math.max(value, 0), limit);
+  const aligned = clamp(
+    input.scrollTop +
+      (input.unreadTop - input.containerTop) -
+      MATERIAL_REVEAL_EDGE_MARGIN_PX,
+  );
+  if (aligned !== input.scrollTop) {
+    return { scrollTop: aligned, moved: true };
+  }
+  const down = clamp(input.scrollTop + input.viewportHeight);
+  if (down !== input.scrollTop) {
+    return { scrollTop: down, moved: true };
+  }
+  const up = clamp(input.scrollTop - input.viewportHeight);
+  if (up !== input.scrollTop) {
+    return { scrollTop: up, moved: true };
+  }
+  return { scrollTop: input.scrollTop, moved: false };
+}

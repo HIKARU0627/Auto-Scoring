@@ -11,13 +11,28 @@ import {
   materialRowGapStart,
   materialRowIsCovered,
   mergeMaterialRange,
+  planMaterialReveal,
   sameMaterialRanges,
   type MaterialRange,
+  type MaterialRevealPlan,
 } from "../../core/material-read-ranges.js";
 
 export interface MaterialRow {
   readonly id: string;
 }
+
+/** Shown after the unread material was actually brought into view. */
+const MATERIAL_REVEALED_MESSAGE =
+  "判断材料が画面外に残っていました。続きを表示しました。";
+
+/**
+ * Shown when the button could not move the container at all (Issue #328,
+ * decision 2). Scrolling is not the only way to read the material -- the gate
+ * also opens when the reviewer scrolls by hand -- so point them there instead
+ * of leaving a silent no-op.
+ */
+const MATERIAL_REVEAL_STALLED_MESSAGE =
+  "これ以上「続きを表示」では進めませんでした。判断材料を手動でスクロールして確認してください。";
 
 /** Distinguishes "no rows yet" from "confirmed zero material rows". */
 export type MaterialRowsInput =
@@ -158,26 +173,61 @@ export function useMaterialReadTracking(
 
   const revealRest = useCallback(() => {
     const container = scrollContainerRef.current;
-    if (container != null) {
-      const viewport = container.clientHeight * 0.9;
-      // Towards the unread material, which is not always downwards (Issue
-      // #319, ported from `_revealRestOfMaterial`). While parked at the
-      // bottom, a row replaced above the fold leaves the gate closed with
-      // nowhere to go, and a button that scrolls the wrong way does nothing.
-      const delta = unreadIsAbove ? -viewport : viewport;
-      if (typeof container.scrollBy === "function") {
-        container.scrollBy({ top: delta, behavior: "smooth" });
-      } else {
-        container.scrollTop += delta;
-      }
-      window.setTimeout(() => {
-        measure();
-      }, 300);
+    if (container == null) {
+      setSnackbarMessage(MATERIAL_REVEAL_STALLED_MESSAGE);
+      return;
     }
+    // Aim at the first unread row itself instead of paging by whole viewports
+    // (Issue #328). Relative viewport paging is not guaranteed to accumulate:
+    // on the measured container it reached one page and then stopped, leaving
+    // the material off-screen and 承認 disabled forever. The unread point is a
+    // fraction of its own row, so a row taller than the viewport still moves.
+    const containerTop = container.getBoundingClientRect().top;
+    let plan: MaterialRevealPlan | null = null;
+    for (const row of rows) {
+      const ranges = rangesByRow[row.id];
+      if (materialRowIsCovered(ranges)) {
+        continue;
+      }
+      const markers = rowRefs.current.get(row.id);
+      if (markers == null) {
+        continue;
+      }
+      const rowTop = markers.top.getBoundingClientRect().top;
+      const rowBottom = markers.bottom.getBoundingClientRect().bottom;
+      const rowHeight = rowBottom - rowTop;
+      if (rowHeight <= 0) {
+        continue;
+      }
+      const gapStart = materialRowGapStart(ranges) ?? 0;
+      plan = planMaterialReveal({
+        scrollTop: container.scrollTop,
+        maxScrollTop: Math.max(
+          0,
+          container.scrollHeight - container.clientHeight,
+        ),
+        viewportHeight: container.clientHeight,
+        unreadTop: rowTop + gapStart * rowHeight,
+        containerTop,
+      });
+      break;
+    }
+    if (plan == null) {
+      setSnackbarMessage(MATERIAL_REVEAL_STALLED_MESSAGE);
+      return;
+    }
+    const before = container.scrollTop;
+    container.scrollTop = plan.scrollTop;
+    // A stalled smooth scroll used to leave this button silent: the fact that
+    // nothing moved must reach the screen (Issue #328, decision 2).
+    const moved = container.scrollTop !== before;
+    window.setTimeout(() => {
+      measure();
+    }, 300);
     setSnackbarMessage(
-      "判断材料が画面外に残っていました。続きを表示しました。",
+      moved ? MATERIAL_REVEALED_MESSAGE : MATERIAL_REVEAL_STALLED_MESSAGE,
     );
-  }, [measure, scrollContainerRef, unreadIsAbove]);
+  }, [measure, rangesByRow, rows, scrollContainerRef]);
 
   const clearSnackbar = useCallback(() => {
     setSnackbarMessage(null);
