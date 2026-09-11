@@ -28,6 +28,7 @@ import 'package:auto_scoring_api/src/model/bulk_export_item_response.dart';
 import 'package:auto_scoring_api/src/model/bulk_export_item_status.dart';
 import 'package:auto_scoring_api/src/model/bulk_export_request.dart';
 import 'package:auto_scoring_api/src/model/bulk_export_response.dart';
+import 'package:auto_scoring_api/src/model/catalog_state.dart';
 import 'package:auto_scoring_api/src/model/classification_availability_response.dart';
 import 'package:auto_scoring_api/src/model/classification_estimate_model.dart';
 import 'package:auto_scoring_api/src/model/classification_need.dart';
@@ -50,6 +51,9 @@ import 'package:auto_scoring_api/src/model/dependency_graph_response.dart';
 import 'package:auto_scoring_api/src/model/dependency_provision.dart';
 import 'package:auto_scoring_api/src/model/document_pages_response.dart';
 import 'package:auto_scoring_api/src/model/edit_review_request.dart';
+import 'package:auto_scoring_api/src/model/error_catalog_entry_input.dart';
+import 'package:auto_scoring_api/src/model/error_catalog_entry_model.dart';
+import 'package:auto_scoring_api/src/model/error_catalog_response.dart';
 import 'package:auto_scoring_api/src/model/export_refusal_reason.dart';
 import 'package:auto_scoring_api/src/model/export_request_response.dart';
 import 'package:auto_scoring_api/src/model/export_response.dart';
@@ -57,6 +61,8 @@ import 'package:auto_scoring_api/src/model/grade_result_response.dart';
 import 'package:auto_scoring_api/src/model/grading_availability_response.dart';
 import 'package:auto_scoring_api/src/model/grading_cost_model.dart';
 import 'package:auto_scoring_api/src/model/http_validation_error.dart';
+import 'package:auto_scoring_api/src/model/import_conflict_policy.dart';
+import 'package:auto_scoring_api/src/model/import_error_catalog_request.dart';
 import 'package:auto_scoring_api/src/model/intake_cost_model.dart';
 import 'package:auto_scoring_api/src/model/intake_plan_response.dart';
 import 'package:auto_scoring_api/src/model/intake_rule_model.dart';
@@ -91,6 +97,7 @@ import 'package:auto_scoring_api/src/model/role_source.dart';
 import 'package:auto_scoring_api/src/model/rubric_criterion_response.dart';
 import 'package:auto_scoring_api/src/model/rule_scope.dart';
 import 'package:auto_scoring_api/src/model/save_api_key_request.dart';
+import 'package:auto_scoring_api/src/model/save_error_catalog_request.dart';
 import 'package:auto_scoring_api/src/model/save_templates_request.dart';
 import 'package:auto_scoring_api/src/model/scanned_file_model.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
@@ -127,6 +134,7 @@ part 'serializers.g.dart';
   BulkExportItemStatus,
   BulkExportRequest,
   BulkExportResponse,
+  CatalogState,
   ClassificationAvailabilityResponse,
   ClassificationEstimateModel,
   ClassificationNeed,
@@ -149,6 +157,9 @@ part 'serializers.g.dart';
   DependencyProvision,
   DocumentPagesResponse,
   EditReviewRequest,
+  ErrorCatalogEntryInput,
+  ErrorCatalogEntryModel,
+  ErrorCatalogResponse,
   ExportRefusalReason,
   ExportRequestResponse,
   ExportResponse,
@@ -156,6 +167,8 @@ part 'serializers.g.dart';
   GradingAvailabilityResponse,
   GradingCostModel,
   HTTPValidationError,
+  ImportConflictPolicy,
+  ImportErrorCatalogRequest,
   IntakeCostModel,
   IntakePlanResponse,
   IntakeRuleModel,
@@ -190,6 +203,7 @@ part 'serializers.g.dart';
   RubricCriterionResponse,
   RuleScope,
   SaveApiKeyRequest,
+  SaveErrorCatalogRequest,
   SaveTemplatesRequest,
   ScannedFileModel,
   ScoreRequest,
@@ -213,6 +227,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(PlannedGroupModel)]),
         () => ListBuilder<PlannedGroupModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(ErrorCatalogEntryInput)]),
+        () => ListBuilder<ErrorCatalogEntryInput>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltMap, [FullType(String), FullType(String)]),
@@ -283,6 +301,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(RegionModel)]),
         () => ListBuilder<RegionModel>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(ErrorCatalogEntryModel)]),
+        () => ListBuilder<ErrorCatalogEntryModel>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(AnnotationResponse)]),

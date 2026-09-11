@@ -98,7 +98,7 @@ def annotation_resource_catalog(
     several 添削資料 and quietly switching between them when another is
     attached would change grading input with nobody asking for it.
     """
-    path = _annotation_resource_path(store, materials)
+    path = annotation_resource_catalog_path(store, materials)
     if path is None:
         return None
     try:
@@ -127,9 +127,16 @@ def annotation_resource_catalog(
     return catalog
 
 
-def _annotation_resource_path(
+def annotation_resource_catalog_path(
     store: LocalFileStore, materials: Sequence[TestMaterial]
 ) -> Path | None:
+    """The oldest readable-format (Excel) 添削資料's path, or ``None``.
+
+    ``None`` covers both "no 添削資料 registered at all" and "only a Word
+    one"; a caller that needs to tell those apart (Issue #209's three-state
+    API) inspects the materials itself. A Word-only test has no catalogue to
+    read, so this reader never pretends otherwise.
+    """
     for material in materials:
         if (
             material.role is MaterialRole.ANNOTATION_RESOURCE

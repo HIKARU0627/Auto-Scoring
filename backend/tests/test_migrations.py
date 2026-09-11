@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0020"
+    assert current_revision(db_url) == "0021"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0020"
+    assert current_revision(db_url) == "0021"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0020"
+    assert current_revision(db_url) == "0021"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0020"
+    assert current_revision(db_url) == "0021"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0020"
+    assert current_revision(db_url) == "0021"
 
 
 _CHILD_TABLES = (
@@ -1387,6 +1387,7 @@ def test_migration_file_paths_exist() -> None:
         "0018_review_reference_cascade.py",
         "0019_two_page_question_areas.py",
         "0020_grade_result_token_usage.py",
+        "0021_error_catalog.py",
     } <= names
 
 
@@ -1555,7 +1556,7 @@ def test_0020_grade_result_token_usage_upgrade_and_downgrade(db_url: str) -> Non
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0020"
+    assert current_revision(db_url) == "0021"
     engine = create_sqlite_engine(db_url)
     try:
         cols = {col["name"] for col in inspect(engine).get_columns("grade_results")}
@@ -1585,3 +1586,72 @@ def test_0020_grade_result_token_usage_upgrade_and_downgrade(db_url: str) -> Non
         assert "output_tokens" not in cols
     finally:
         engine.dispose()
+
+
+def test_0021_error_catalog_upgrade_and_downgrade(db_url: str) -> None:
+    """Issue #209: the reviewed 誤答カタログ becomes a real table, one row per
+    test, with its revision and entries checked by the database."""
+    upgrade(db_url, "0020")
+    assert current_revision(db_url) == "0020"
+    assert "error_catalogs" not in _tables(db_url)
+
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t1', 'Test 1', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+    assert current_revision(db_url) == "0021"
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t2', 'Test 2', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t3', 'Test 3', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO error_catalogs "
+                    "(test_id, revision, imported, import_error, note, entries) "
+                    "VALUES ('t1', 1, 0, NULL, NULL, "
+                    '\'[{"mistake": "x", "red_ink": "y", "edited": true}]\')'
+                )
+            )
+        # A row written outside the domain must still respect the constraints.
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO error_catalogs "
+                    "(test_id, revision, imported, import_error, note, entries) "
+                    "VALUES ('t2', 0, 0, NULL, NULL, '[]')"
+                )
+            )
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO error_catalogs "
+                    "(test_id, revision, imported, import_error, note, entries) "
+                    "VALUES ('t3', 1, 0, NULL, NULL, '{}')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    downgrade(db_url, "0020")
+    assert current_revision(db_url) == "0020"
+    assert "error_catalogs" not in _tables(db_url)

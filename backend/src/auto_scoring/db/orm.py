@@ -141,6 +141,44 @@ class TestMaterialRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+class ErrorCatalogRow(Base):
+    """A test's reviewed 誤答カタログ, imported from its Excel 添削資料 once and
+    edited by a person afterwards (Issue #209).
+
+    One row per test holding the whole tuple as JSON, mirroring how
+    ``CriteriaDraft`` is one ``criteria.json`` per test: the draft is read
+    whole, written whole, never queried across tests, and its rows
+    (``entries``) are prose rather than something SQL would filter on. The
+    Excel file is only the import source; grading reads this table
+    (judgment 2).
+
+    ``revision`` is the compare-and-set token the review API saves against
+    (``domain.error_catalog.ErrorCatalogDraft``): a save names the revision
+    it read, and the repository's conditional ``UPDATE`` rejects it if the
+    row moved on. ``ck_error_catalogs_entries_is_array`` keeps a row written
+    outside the domain (repair, import, direct SQL) from persisting a
+    non-JSON-array ``entries`` that ``from_dict`` would choke on later.
+    """
+
+    __tablename__ = "error_catalogs"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_error_catalogs_revision_positive"),
+        CheckConstraint(
+            "json_valid(entries) AND json_type(entries) = 'array'",
+            name="ck_error_catalogs_entries_is_array",
+        ),
+    )
+
+    test_id: Mapped[str] = mapped_column(
+        ForeignKey("tests.id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    imported: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    import_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    entries: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+
+
 class QuestionRow(Base):
     __tablename__ = "questions"
     __table_args__ = (
