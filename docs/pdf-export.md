@@ -1120,3 +1120,26 @@ Windows ノートではないし、生成ノイズは手書きのスキャンで
 - `backend/poc/issue_142_bulk_export/report.py`: §12.3 の実測。probe であって
   テストではない —— repro コマンド・期待・実測・決定は §12.3、撤去条件は
   probe 自身の docstring にある。
+
+### 12.7 Electron 側の出力先と書き込み（Issue #345）
+
+- **出力先は `window.autoScoring.chooseFolder` から取る。**`BulkExportDialog` の
+  `defaultChooseDestination` がこれを通すので、取込と同じ
+  `AUTO_SCORING_E2E_FOLDER`（`readE2eEnv`）が一括出力にもそのまま効く。
+  以前は Web の `window.showDirectoryPicker` を直接呼んでおり、この差し替え口の
+  外にあったため、E2E でも実機プローブでも最後の1手だけ自動化できなかった。
+- **書き込みは main プロセスが行う**（`src/main/bulk-export-write.ts`）。レンダラは
+  sandbox で Node を持たないため、選んだフォルダのパスと base64 の bytes を
+  ブリッジ（`src/shared/bulk-export-write.ts`）で渡す。ファイル名は main で
+  basename に落とし、既存があれば `_2`, `_3` へ逃がす（UG-09）。**上書き防止の
+  最終権限は main にあり**、レンダラ側の `exists` と二重に守る。
+- **保存先が選べないときは理由を画面に出す。**`chooseFolder` が無い場合は
+  `core/action-requirements.ts` の
+  `bulkExportDestinationUnavailable` を `bulk-export-destination-error` に表示する。
+  ユーザーが自分で閉じたキャンセル（`null`）は無言のままにする。
+- **E2E は `desktop/e2e/sidecar-bulk-export.spec.ts`。**`launchElectronApp()` で
+  起動し、`chooseFolder` → 実ファイル書き出しまで通して、書き出した PDF の件数を
+  数える（中身は見ない）。PDF エンジンの日本語フォントは Windows 専用（§3.2）な
+  ので、レンダラを要さない `AUTO_SCORING_E2E_STUB_BULK_EXPORT` が
+  `POST /tests/{id}/export` と `GET /exports/{id}/file` を返す。**実バックエンドの
+  出力は実機プローブで確認する**（`probe_full` 経由、§12.6 の対象外）。

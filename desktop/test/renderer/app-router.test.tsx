@@ -37,7 +37,7 @@ function fill(path: string): string {
 const covered: Readonly<
   Record<string, { readonly text: string } | { readonly testId: string }>
 > = {
-  [AppRoutes.home]: { text: "Auto-Scoring" },
+  [AppRoutes.home]: { testId: "home-refresh" },
   [AppRoutes.starting]: { testId: "route-starting" },
   [AppRoutes.intake]: { text: "資料の取込" },
   [AppRoutes.settings]: { text: "設定" },

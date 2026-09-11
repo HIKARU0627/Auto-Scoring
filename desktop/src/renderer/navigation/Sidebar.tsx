@@ -14,6 +14,13 @@ export const SIDEBAR_NAV_TEST_ID = "app-sidebar-nav";
  * the mock's user block is deliberately absent (`#333` ruling 4). Below the
  * wide breakpoint (`--layout-narrow-breakpoint`, 900px) the labels collapse to
  * icons so a 700px window keeps its content width instead of scrolling.
+ *
+ * Issue #348: the mock draws the sidebar as a floating, rounded panel inset
+ * from the window edges (left ~24px, width ~208px, ~24px from the bottom), not
+ * a full-bleed column. The panel owns the inset height (`100vh` minus the
+ * `p-xl` page padding on both sides) so it stays a panel while the window
+ * scrolls, and the nav rows use a ~48px row with a 12px gap to match the mock's
+ * ~45px height / ~62px pitch.
  */
 export const SIDEBAR_PRODUCT_NAME = "Auto-Scoring";
 /** Existing wording from `docs/simplified-design-specification.md` §1.1. */
@@ -25,9 +32,9 @@ export function Sidebar(): JSX.Element {
   return (
     <aside
       data-testid={SIDEBAR_TEST_ID}
-      className="sticky top-0 flex h-screen w-60 shrink-0 flex-col bg-surface-dim max-[900px]:w-16"
+      className="sticky top-xl flex h-[calc(100vh_-_var(--spacing-xl)*2)] w-52 shrink-0 flex-col rounded-xl bg-surface-dim max-[900px]:w-16"
     >
-      <div className="px-md pt-lg pb-md max-[900px]:px-xs max-[900px]:pt-md max-[900px]:pb-sm">
+      <div className="px-md pt-xl pb-xl max-[900px]:px-xs max-[900px]:pt-md max-[900px]:pb-sm">
         <p className="text-[length:var(--font-size-title-large)] font-semibold leading-ui text-on-surface max-[900px]:hidden">
           {SIDEBAR_PRODUCT_NAME}
         </p>
@@ -47,7 +54,7 @@ export function Sidebar(): JSX.Element {
         data-testid={SIDEBAR_NAV_TEST_ID}
         className="min-w-0 flex-1 px-md max-[900px]:px-xs"
       >
-        <ul className="flex flex-col gap-xs">
+        <ul className="flex flex-col gap-md">
           {SIDEBAR_NAV_ITEMS.map((item) => {
             const active = isSidebarItemActive(pathname, item.route);
             return (
@@ -64,7 +71,7 @@ export function Sidebar(): JSX.Element {
                     }
                   }}
                   className={[
-                    "flex w-full items-center gap-sm rounded-lg px-sm py-sm text-left text-ui-label",
+                    "flex min-h-12 w-full items-center gap-lg rounded-lg px-md py-sm text-left text-ui-label",
                     "transition-colors duration-[var(--motion-duration-state-change)] ease-[var(--motion-easing-standard)]",
                     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
                     "max-[900px]:justify-center max-[900px]:px-xs",

@@ -8,7 +8,43 @@
 export interface BulkExportStorage {
   exists(fileName: string): Promise<boolean>;
   read(fileName: string): Promise<Uint8Array | null>;
-  write(fileName: string, bytes: Uint8Array): Promise<void>;
+  /** Returns the name actually written; main may suffix to avoid overwriting. */
+  write(fileName: string, bytes: Uint8Array): Promise<string>;
+}
+
+/**
+ * The slice of `window.autoScoring` the path-backed storage needs.
+ *
+ * Declared structurally (rather than importing the whole bridge) so the writer
+ * stays testable with a fake and `core` does not depend on the preload surface.
+ */
+export interface BulkExportPathBridge {
+  bulkExportFileExists(
+    directoryPath: string,
+    fileName: string,
+  ): Promise<boolean>;
+  bulkExportReadFile(
+    directoryPath: string,
+    fileName: string,
+  ): Promise<string | null>;
+  bulkExportWriteFile(request: {
+    readonly directoryPath: string;
+    readonly fileName: string;
+    readonly bytesBase64: string;
+  }): Promise<string>;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
 }
 
 /**
@@ -39,8 +75,7 @@ export async function writeBulkExportFile(
   const freeName = await resolveFreeExportPath(fileName, (name) =>
     storage.exists(name),
   );
-  await storage.write(freeName, bytes);
-  return freeName;
+  return await storage.write(freeName, bytes);
 }
 
 /** In-memory storage for widget tests and UG-09 assertions. */
@@ -58,38 +93,34 @@ export function createMemoryBulkExportStorage(
     read: async (fileName) => files.get(fileName) ?? null,
     write: async (fileName, bytes) => {
       files.set(fileName, new Uint8Array(bytes));
+      return fileName;
     },
   };
 }
 
-/** Production write target via the File System Access API. */
-export function createDirectoryHandleStorage(
-  handle: FileSystemDirectoryHandle,
+/**
+ * Production write target: a folder path returned by `chooseFolder`.
+ *
+ * All filesystem work happens in the main process (Issue #345). This is what
+ * makes `AUTO_SCORING_E2E_FOLDER` reach the bulk export the same way it already
+ * reaches intake: both go through `window.autoScoring.chooseFolder`.
+ */
+export function createPathBulkExportStorage(
+  directoryPath: string,
+  bridge: BulkExportPathBridge,
 ): BulkExportStorage {
   return {
-    exists: async (fileName) => {
-      try {
-        await handle.getFileHandle(fileName);
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    exists: (fileName) => bridge.bulkExportFileExists(directoryPath, fileName),
     read: async (fileName) => {
-      try {
-        const fileHandle = await handle.getFileHandle(fileName);
-        const file = await fileHandle.getFile();
-        return new Uint8Array(await file.arrayBuffer());
-      } catch {
-        return null;
-      }
+      const base64 = await bridge.bulkExportReadFile(directoryPath, fileName);
+      return base64 === null ? null : base64ToBytes(base64);
     },
-    write: async (fileName, bytes) => {
-      const fileHandle = await handle.getFileHandle(fileName, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(new Uint8Array(bytes));
-      await writable.close();
-    },
+    write: (fileName, bytes) =>
+      bridge.bulkExportWriteFile({
+        directoryPath,
+        fileName,
+        bytesBase64: bytesToBase64(bytes),
+      }),
   };
 }
 

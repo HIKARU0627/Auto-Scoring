@@ -27,6 +27,9 @@ export function renderAppAt(
     getSidecarLogPath: vi.fn(async () => "/tmp/app-data/logs/sidecar.log"),
     chooseFolder: vi.fn(async () => "/tmp/batch"),
     choosePdfFile: vi.fn(async () => null),
+    bulkExportWriteFile: vi.fn(async () => "export.pdf"),
+    bulkExportFileExists: vi.fn(async () => false),
+    bulkExportReadFile: vi.fn(async () => null),
     scanFolder: vi.fn(async () => ({ name: "batch", entries: [] })),
     sidecarMultipartUpload: vi.fn(async () => ({ status: 200, body: {} })),
     sidecarFetch: vi.fn(async () => ({

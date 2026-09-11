@@ -19,9 +19,13 @@ function SidecarConnectionPlaceholder(): JSX.Element {
 }
 
 /**
- * The application frame: a persistent sidebar beside the routed screen
- * (Issue #335). The sidebar only appears once the sidecar is usable, so the
- * startup and crash states keep the full window.
+ * The application frame: a floating sidebar panel beside the routed screen
+ * (Issue #335; panel inset in Issue #348). The sidebar only appears once the
+ * sidecar is usable, so the startup and crash states keep the full window.
+ *
+ * Issue #348: `p-xl` around the frame is what makes the sidebar read as a
+ * floating panel (mock: left edge x ~24, bottom edge clear of the window) and
+ * `gap-xl` is the ~24px gutter between panel and content.
  */
 export function AppShell({
   client,
@@ -36,7 +40,7 @@ export function AppShell({
         {client === null ? (
           <SidecarConnectionPlaceholder />
         ) : (
-          <div className="flex min-h-screen bg-surface text-on-surface">
+          <div className="flex min-h-screen gap-xl bg-surface p-xl text-on-surface">
             <Sidebar />
             <div className="flex min-w-0 flex-1 flex-col">
               <RouteOutlet />
