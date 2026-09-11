@@ -21,12 +21,6 @@ export function materialRoleWireValue(role: MaterialRole): string {
 /** PDF uploads must declare application/pdf (INV-135). */
 export const PDF_CONTENT_TYPE = "application/pdf";
 
-export interface SidecarConnectionInfo {
-  readonly host: string;
-  readonly port: number;
-  readonly token: string;
-}
-
 export interface SidecarFileField {
   readonly fieldName: string;
   readonly filePath: string;
@@ -34,7 +28,6 @@ export interface SidecarFileField {
 }
 
 export interface SidecarMultipartRequest {
-  readonly connection: SidecarConnectionInfo;
   readonly method: "POST" | "PUT";
   readonly urlPath: string;
   readonly fileFields: readonly SidecarFileField[];

@@ -143,10 +143,18 @@ describe("SidecarSupervisor integration tests", () => {
         return;
       }
 
-      const connection = supervisor.status.connection;
+      const connection =
+        supervisor.internalStatus.kind === "ready"
+          ? supervisor.internalStatus.connection
+          : null;
+      expect(connection).not.toBeNull();
+      if (connection === null) {
+        return;
+      }
       expect(connection.host).toBe("127.0.0.1");
       expect(connection.port).toBeGreaterThan(0);
       expect(connection.token).toBeTruthy();
+      expect(supervisor.status.connection).not.toHaveProperty("token");
 
       const pid = supervisor.processHandle?.pid;
       expect(pid).toBeDefined();

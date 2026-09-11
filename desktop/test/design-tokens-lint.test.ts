@@ -37,14 +37,14 @@ export interface AllowlistEntry {
  * Each entry is tagged with its removal issue.
  */
 export const ALLOWLIST: readonly AllowlistEntry[] = [
-  // Issue #276: answer-area-editor custom handle and box borders
+  // answer-area-editor: カスタムハンドルと枠線のリテラル
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
     symbol: "RegionOverlay",
     rule: "arbitrary-bracket",
     literal: "border-[3px]",
     line: 704,
-    removalIssue: "Issue #276 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
@@ -52,7 +52,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "border-[1.5px]",
     line: 704,
-    removalIssue: "Issue #276 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
@@ -60,7 +60,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "h-[14px]",
     line: 743,
-    removalIssue: "Issue #276 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/answer-area-editor/AnswerAreaEditor.tsx",
@@ -68,47 +68,47 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "w-[14px]",
     line: 743,
-    removalIssue: "Issue #276 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #277: home page dashboard max width
+  // home: ダッシュボード最大幅のリテラル
   {
     file: "src/renderer/features/home/HomePage.tsx",
     symbol: "HomePage",
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 91,
-    removalIssue: "Issue #277 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #278: intake page layout constraint
+  // intake: ページレイアウト幅制約のリテラル
   {
     file: "src/renderer/features/intake/IntakePage.tsx",
     symbol: "IntakePage",
     rule: "arbitrary-bracket",
     literal: "max-w-[720px]",
-    line: 404,
-    removalIssue: "Issue #278 (司令官起票)",
+    line: 399,
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #279: pdf-review inspector max-height constraint
+  // pdf-review: インスペクター最大高さ制約のリテラル
   {
     file: "src/renderer/features/pdf-review/PdfReviewPage.tsx",
     symbol: "PdfReviewPage",
     rule: "arbitrary-bracket",
     literal: "max-h-[80vh]",
     line: 531,
-    removalIssue: "Issue #279 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #280: review-queue dialog backdrops (bg-black/50)
+  // review-queue: ダイアログバックドロップの背景色リテラル (bg-black/50)
   {
     file: "src/renderer/features/review-queue/BulkExportDialog.tsx",
     symbol: "BulkExportDialog",
     rule: "non-token-color",
     literal: "bg-black/50",
     line: 127,
-    removalIssue: "Issue #280 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/review-queue/ExportDialog.tsx",
@@ -116,17 +116,17 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "non-token-color",
     literal: "bg-black/50",
     line: 255,
-    removalIssue: "Issue #280 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #281: submission-queue table and chip styles
+  // submission-queue: テーブルおよびチップのスタイルリテラル
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
     symbol: "SubmissionQueuePage",
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 140,
-    removalIssue: "Issue #281 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
@@ -134,7 +134,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "numeric-spacing",
     literal: "py-0.5",
     line: 214,
-    removalIssue: "Issue #281 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
@@ -142,7 +142,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 214,
-    removalIssue: "Issue #281 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/review-queue/SubmissionQueuePage.tsx",
@@ -150,27 +150,27 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 253,
-    removalIssue: "Issue #281 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #282: settings api-key dot spacing
+  // settings: APIキー設定タブのドット間隔リテラル
   {
     file: "src/renderer/features/settings/ApiKeyTab.tsx",
     symbol: "ApiKeyTab",
     rule: "numeric-spacing",
     literal: "mt-1.5",
     line: 387,
-    removalIssue: "Issue #282 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #283: settings intake template table styling
+  // settings: 取込テンプレートタブのテーブルスタイルリテラル
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
     symbol: "IntakeTemplateTab",
     rule: "numeric-spacing",
     literal: "mt-1",
     line: 267,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -178,7 +178,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 267,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -186,7 +186,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 322,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -194,7 +194,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "min-w-[120px]",
     line: 339,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -202,7 +202,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 339,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -210,7 +210,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 352,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -218,7 +218,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 371,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/settings/IntakeTemplateTab.tsx",
@@ -226,17 +226,17 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "bare-rounded",
     literal: "rounded",
     line: 383,
-    removalIssue: "Issue #283 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #284: startup overlay error icon size and constraint
+  // startup: 起動オーバーレイのエラーアイコンサイズと幅制約リテラル
   {
     file: "src/renderer/features/startup/SidecarStartupOverlay.tsx",
     symbol: "SidecarErrorScreen",
     rule: "arbitrary-bracket",
     literal: "max-w-[560px]",
     line: 72,
-    removalIssue: "Issue #284 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/startup/SidecarStartupOverlay.tsx",
@@ -244,17 +244,17 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "text-[48px]",
     line: 75,
-    removalIssue: "Issue #284 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 
-  // Issue #285: submission-confirm max-width and crop height
+  // submission-confirm: 答案確定画面の最大幅と切り抜き高さリテラル
   {
     file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
     symbol: "SubmissionConfirmPage",
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 531,
-    removalIssue: "Issue #285 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
@@ -262,7 +262,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "h-[180px]",
     line: 590,
-    removalIssue: "Issue #285 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
   {
     file: "src/renderer/features/submission-confirm/SubmissionConfirmPage.tsx",
@@ -270,7 +270,7 @@ export const ALLOWLIST: readonly AllowlistEntry[] = [
     rule: "arbitrary-bracket",
     literal: "max-w-[960px]",
     line: 681,
-    removalIssue: "Issue #285 (司令官起票)",
+    removalIssue: "未起票（司令塔が起票予定。#270 の allowlist 由来）",
   },
 ];
 

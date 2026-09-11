@@ -337,13 +337,13 @@ AGPL/商用ライセンス問題は無い）を`PdfEngine`実装の内部での�
 
 ## 4. 配布・パッケージング
 
-| 論点                    | 決定                                                                                                                                             |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Python サイドカーの同梱 | **PyInstaller の onedir** で「インタプリタ＋依存＋DLL」を 1 ディレクトリにまとめ、Flutter の実行ファイル群に同梱                                 |
-| 却下した案              | Nuitka（起動・実行は速いがフックエコシステムが弱く、OpenCV/PyMuPDF 同梱で詰まりやすい）。PyInstaller onefile（一時展開が遅く AV 誤検知が増える） |
-| Windows インストーラ    | **Inno Setup（Issue #24 で確定）**。第一候補だった MSIX は、署名必須でありながら証明書が未準備のため「unsigned test artifact」を作れず不適合     |
-| 署名                    | Windows コード署名証明書が必要（SmartScreen 対策）。取得はユーザー側手配事項。CI は unsigned のみ、署名は人間だけが行う                          |
-| 自動更新                | MVP では対象外（§31 後回し候補に準拠）。将来 `msix` + 配布サーバ or `auto_updater`                                                               |
+| 論点                    | 決定                                                                                                                                                                                                                  |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Python サイドカーの同梱 | **PyInstaller の onedir** で「インタプリタ＋依存＋DLL」を 1 ディレクトリにまとめ、実行ファイル群に同梱                                                                                                                |
+| 却下した案              | Nuitka（起動・実行は速いがフックエコシステムが弱く、OpenCV/PyMuPDF 同梱で詰まりやすい）。PyInstaller onefile（一時展開が遅く AV 誤検知が増える）                                                                      |
+| Windows インストーラ    | **Inno Setup（Flutter 版、Issue #24）** / **electron-builder（Electron 版、Issue #265）**。第一候補だった MSIX は、署名必須でありながら証明書が未準備のため「unsigned test artifact」を作れず不適合。いずれも未署名。 |
+| 署名                    | Windows コード署名証明書が必要（SmartScreen 対策）。取得はユーザー側手配事項。CI は unsigned のみ、署名は人間だけが行う                                                                                               |
+| 自動更新                | MVP では対象外（§31 後回し候補に準拠）。将来 `msix` + 配布サーバ or `auto_updater`                                                                                                                                    |
 
 配布物の構成・`app-data/` の場所・ライフサイクル・障害復旧・署名手順は
 [`windows-distribution.md`](./windows-distribution.md)（GitHub Issue #24）が正本。
@@ -519,7 +519,7 @@ Flutter/Python は `pnpm run` から各ツールを呼び出すラッパーに�
 | OCR          | `OCRProvider` 抽象。**Google Document AI**（Issue #81。クラウド不可時ローカル OCR）                                                                |
 | AI           | `AIProvider` 抽象。**優先度つきフォールバック** Gemini API → Codex App Server → OpenRouter → OpenAI API（Issue #81）。出力は JSON スキーマで構造化 |
 | プロセス連携 | Flutter が Python サイドカーを子プロセス起動、localhost + 起動時トークン、動的ポート                                                               |
-| 配布         | PyInstaller onedir で Python 同梱、**Inno Setup**（MSIX は署名必須で不適合）、署名は人間の手作業                                                   |
+| 配布         | PyInstaller onedir で Python 同梱、**Inno Setup**（Flutter）/ **electron-builder**（Electron）、署名は人間の手作業                                 |
 | API 契約     | FastAPI OpenAPI schema を正本に Dart クライアントをコード生成しコミット                                                                            |
 
 ---

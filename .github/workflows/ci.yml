@@ -287,10 +287,8 @@ jobs:
           version: "0.10.7"
           enable-cache: true
       - name: Install Node dependencies
-        # `--filter` on the root package: `desktop/` is a workspace package
-        # (pnpm-workspace.yaml) and nothing in this job runs it, so there is no
-        # reason to spend a minute downloading the Electron binary here.
-        run: pnpm install --frozen-lockfile --filter auto-scoring
+        # Install workspace dependencies including desktop/ for Electron packaging.
+        run: pnpm install --frozen-lockfile
       - name: Restore Flutter packages
         run: flutter pub get
         working-directory: app
@@ -325,6 +323,20 @@ jobs:
         with:
           name: auto-scoring-installer-unsigned
           path: installer/output/*.exe
+          if-no-files-found: error
+
+      - name: Package the Electron desktop application
+        run: pnpm run package:electron
+
+      - name: Smoke-test the packaged Electron application
+        run: pnpm run package:electron:smoke
+
+      # Unsigned, and named so (docs/windows-distribution.md §8).
+      - name: Upload the unsigned Electron installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-scoring-electron-installer-unsigned
+          path: desktop/dist/*-unsigned.exe
           if-no-files-found: error
 
       # The bundle on its own, for reproducing a sidecar-only problem on a
