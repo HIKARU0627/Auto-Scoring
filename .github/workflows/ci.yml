@@ -236,12 +236,21 @@ jobs:
     name: Quality
     # The context main's ruleset requires, kept under its original name so
     # splitting the work above stays invisible to branch protection. It holds
-    # the verdict for `app` + `backend` + `desktop`, which is exactly what the
-    # single Quality job used to cover -- `package` was never a required check
-    # and is not made into one here. A new job that is not in `needs` below is
-    # a job whose failure cannot block a merge, so adding one means adding it
-    # in both places.
-    needs: [app, backend, desktop]
+    # the verdict for `app` + `backend` + `desktop` + `package`.
+    #
+    # `package` was deliberately outside this list until Issue #331: when the
+    # job was split (Issue #129) `Package (Windows)` was not a required check,
+    # and the owner later chose to keep it that way until cut-over (Issue #312,
+    # PR #327). The owner reversed that on 2026-09-12 (Issue #331): a red
+    # `Package (Windows)` now blocks every merge immediately, before cut-over.
+    # The ruleset is unchanged -- `package` is folded into `Quality`, the one
+    # context it already requires.
+    #
+    # A new job that is not in `needs` below is a job whose failure cannot
+    # block a merge, so adding one means adding it in both places: the `needs`
+    # list and the result loop below. `needs` alone is not enough -- a job that
+    # is not asserted there can fail while `Quality` still reports success.
+    needs: [app, backend, desktop, package]
     # `if: always()` is load-bearing. Without it, a failing `needs` leaves
     # this job *skipped*, and GitHub counts a skipped required check as a
     # pass -- the build would be red while the merge gate showed green. The
@@ -257,8 +266,9 @@ jobs:
           echo "app=${{ needs.app.result }}"
           echo "backend=${{ needs.backend.result }}"
           echo "desktop=${{ needs.desktop.result }}"
+          echo "package=${{ needs.package.result }}"
           failed=0
-          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}" "${{ needs.desktop.result }}"; do
+          for result in "${{ needs.app.result }}" "${{ needs.backend.result }}" "${{ needs.desktop.result }}" "${{ needs.package.result }}"; do
             if [ "$result" != "success" ]; then failed=1; fi
           done
           if [ "$failed" -ne 0 ]; then
@@ -358,18 +368,24 @@ jobs:
 
   package-alarm:
     name: Package (Windows) alarm
-    # `package` is deliberately not in `quality`'s `needs` (the comment there
-    # says so, and that is the owner's call), so a red `Package (Windows)` on
-    # `main` cannot block a merge and nothing forces anyone to open the run.
-    # Windows is the only place the shipped Windows artifacts can be built or
-    # verified (PyInstaller cannot cross-compile, `build:app` cannot run on
-    # Linux), so that red is the only signal that the Windows build broke.
+    # As of Issue #331 (owner ruling, 2026-09-12) `package` is in `quality`'s
+    # `needs` and in `quality`'s result loop, so on a pull request a red
+    # `Package (Windows)` blocks the merge itself. This alarm still exists for
+    # the case a required check cannot cover: a change that reaches `main`
+    # without a pull request (an owner or admin push, a ruleset exception, a
+    # later configuration change). There is no required check to run there,
+    # nothing forces anyone to open the run, and Windows is the only place the
+    # shipped Windows artifacts can be built or verified (PyInstaller cannot
+    # cross-compile, `pnpm run build:app` cannot run on Linux), so that red
+    # would otherwise be invisible.
     #
     # This job is the counterweight: it watches the `package` result and puts
     # the failure where a person will see it -- a tracking issue on `main`
-    # (Issue #312). It is deliberately NOT in `quality`'s `needs`: adding it
-    # there would make `Package (Windows)` a required check, which is the
-    # owner's decision just before cut-over, not this change.
+    # (Issue #312). It is deliberately NOT in `quality`'s `needs`: it is a
+    # monitor, not a gate, and adding it there would require *this* job rather
+    # than `package`. Its self-test (`pnpm run alarm:selftest`) also asserts
+    # that `quality` still needs `package`, so dropping Issue #331's
+    # required-check dependency turns this gate red.
     #
     # `if: always()` is load-bearing for the same reason it is on `quality`: a
     # failing `needs` would otherwise skip this job, and GitHub shows a skipped

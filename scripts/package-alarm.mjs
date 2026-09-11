@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // Package (Windows) alarm -- Issue #312.
 //
-// `Quality` is the only status check the `main` ruleset requires, and its
-// `needs` deliberately do not include `package` (the comment in ci.yml says so
-// and that decision is out of scope here). A red `Package (Windows)` therefore
-// cannot block a merge and nobody is forced to open the run.
+// `Quality` is the only status check the `main` ruleset requires. Issue #331
+// (owner ruling, 2026-09-12) added `package` to `Quality`'s `needs`, so on a
+// pull request a red `Package (Windows)` now blocks the merge itself. This
+// alarm covers what a required check cannot: a change that reaches `main`
+// without a pull request (an owner or admin push, a ruleset exception, a later
+// configuration change). There is no required check to run there and nobody is
+// forced to open the run.
 //
 // That matters because Windows is the only place the shipped Windows artifacts
 // can be built or verified: PyInstaller cannot cross-compile, and
 // `pnpm run build:app` (`flutter build windows`) cannot run on Linux. When
-// `Package (Windows)` is red, the only signal that the Windows build broke is
-// that red job. This script turns it into something a person will actually see:
+// `Package (Windows)` is red on `main`, the only signal that the Windows build
+// broke is that red job. This script turns it into something a person will see:
 //
 //   * a push to `main` opens (or comments on) a tracking issue, and closes it
 //     again once the job is green;
@@ -18,15 +21,19 @@
 //     can be mutation-tested from a pull request before it ever reaches `main`.
 //
 // The job that runs this is `package-alarm` in `.github/workflows/ci.yml`. It
-// is deliberately not in `Quality`'s `needs`: adding it there would turn
-// `Package (Windows)` into a required check, which is the owner's decision to
-// make just before cut-over (`docs/quality-gates.md`).
+// is deliberately not in `Quality`'s `needs`: it is a monitor, not a gate. The
+// wiring self-test below (`verifyWorkflowWiring`) also asserts that `quality`
+// still needs `package`, so a change that silently drops Issue #331's
+// required-check wiring turns `pnpm run alarm:selftest` red.
 
 import { pathToFileURL } from "node:url";
 
 export const PACKAGE_JOB_ID = "package";
 export const PACKAGE_JOB_NAME = "Package (Windows)";
 export const ALARM_JOB_ID = "package-alarm";
+// Issue #331 folds `package` into this job's verdict; the self-test below
+// guards that wiring.
+export const QUALITY_JOB_ID = "quality";
 export const TRACKING_ISSUE_TITLE = `main: ${PACKAGE_JOB_NAME} is failing`;
 
 // Every job result GitHub can report for `package`. Anything else means the
@@ -258,11 +265,30 @@ export function jobBlock(ciYaml, jobId) {
   return block;
 }
 
+/** Splits the `needs:` value of a job block into a list of job IDs. */
+function parseNeeds(needsLine) {
+  if (needsLine === undefined) {
+    return [];
+  }
+  return needsLine
+    .slice(needsLine.indexOf(":") + 1)
+    .replace(/[[\]]/g, "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+}
+
 /**
  * The failure mode this exists to prevent (Issue #312 acceptance 2): renaming
  * `Package (Windows)` or mis-writing the alarm's condition must not leave a
  * monitor that silently never fires. Returns a list of problems; empty is
  * healthy.
+ *
+ * Issue #331 added a second wiring to guard: `quality` must need `package`.
+ * (`quality` must also assert `needs.package.result` in its result loop, but
+ * that is mutation-tested in real CI rather than guarded here -- a guard would
+ * turn the "needs-only" mutation red through a different job and hide the
+ * evidence that the loop is what blocks the merge.)
  */
 export function verifyWorkflowWiring(ciYaml) {
   const problems = [];
@@ -284,22 +310,30 @@ export function verifyWorkflowWiring(ciYaml) {
     }
   }
 
+  const qualityBlock = jobBlock(ciYaml, QUALITY_JOB_ID);
+  if (qualityBlock === null) {
+    problems.push(`ci.yml has no \`${QUALITY_JOB_ID}\` job`);
+  } else {
+    const qualityNeeds = parseNeeds(
+      qualityBlock.find((line) => /^    needs:\s*/.test(line)),
+    );
+    if (!qualityNeeds.includes(PACKAGE_JOB_ID)) {
+      problems.push(
+        `\`${QUALITY_JOB_ID}\` does not need \`${PACKAGE_JOB_ID}\`; a red ` +
+          `\`${PACKAGE_JOB_NAME}\` cannot block a merge (Issue #331)`,
+      );
+    }
+  }
+
   const alarmBlock = jobBlock(ciYaml, ALARM_JOB_ID);
   if (alarmBlock === null) {
     problems.push(`ci.yml has no \`${ALARM_JOB_ID}\` job`);
     return problems;
   }
 
-  const needsLine = alarmBlock.find((line) => /^    needs:\s*/.test(line));
-  const needs =
-    needsLine === undefined
-      ? []
-      : needsLine
-          .slice(needsLine.indexOf(":") + 1)
-          .replace(/[[\]]/g, "")
-          .split(",")
-          .map((entry) => entry.trim())
-          .filter((entry) => entry !== "");
+  const needs = parseNeeds(
+    alarmBlock.find((line) => /^    needs:\s*/.test(line)),
+  );
   if (!needs.includes(PACKAGE_JOB_ID)) {
     problems.push(
       `\`${ALARM_JOB_ID}\` does not need \`${PACKAGE_JOB_ID}\`; it would run ` +
