@@ -584,6 +584,8 @@ class Question:
     answer_area: NormalizedRect | None = None
     score_area: NormalizedRect | None = None
     comment_area: NormalizedRect | None = None
+    page_2: int | None = None
+    answer_area_2: NormalizedRect | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("Question.id", self.id)
@@ -593,6 +595,19 @@ class Question:
             raise DomainError("Question.page must be >= 1")
         if self.points < 0:
             raise ScoreOutOfRange("Question.points must be non-negative")
+        if self.page_2 is not None:
+            if self.page_2 < 1:
+                raise DomainError("Question.page_2 must be >= 1")
+            if self.page_2 <= self.page:
+                raise DomainError("Question.page_2 must be greater than Question.page")
+            if self.answer_area_2 is None:
+                raise DomainError("Question.answer_area_2 must be provided when page_2 is set")
+        if self.page_2 is None and self.answer_area_2 is not None:
+            raise DomainError("Question.page_2 must be set when answer_area_2 is provided")
+
+    @property
+    def pages(self) -> tuple[int, ...]:
+        return (self.page, self.page_2) if self.page_2 is not None else (self.page,)
 
 
 @dataclass(frozen=True, kw_only=True)

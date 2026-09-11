@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0018"
+    assert current_revision(db_url) == "0019"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0018"
+    assert current_revision(db_url) == "0019"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0018"
+    assert current_revision(db_url) == "0019"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0018"
+    assert current_revision(db_url) == "0019"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0018"
+    assert current_revision(db_url) == "0019"
 
 
 _CHILD_TABLES = (
@@ -1377,4 +1377,139 @@ def test_migration_file_paths_exist() -> None:
         "0008_job_queue_fields.py",
         "0009_job_usable_allows_failed.py",
         "0010_recognition_text_length.py",
+        "0011_test_status.py",
+        "0012_grade_result_ai_metadata.py",
+        "0013_review_history_edit.py",
+        "0014_exports.py",
+        "0015_test_materials.py",
+        "0016_manual_grade_without_ai.py",
+        "0017_grade_result_answer_image_finding.py",
+        "0018_review_reference_cascade.py",
+        "0019_two_page_question_areas.py",
     } <= names
+
+
+def test_0019_two_page_question_areas_upgrade_and_downgrade(db_url: str) -> None:
+    upgrade(db_url, "0018")
+    assert current_revision(db_url) == "0018"
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t1', 'Test 1', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                    "VALUES ('q1', 't1', '1', 1, 5, 'additive')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+    assert current_revision(db_url) == "0019"
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT id, page, page_2, answer_area_2 FROM questions WHERE id = 'q1'")
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "q1"
+            assert row[1] == 1
+            assert row[2] is None
+            assert row[3] is None
+
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method, "
+                    "page_2, answer_area_2) "
+                    "VALUES ('q2', 't1', '2', 1, 10, 'additive', 2, :area)"
+                ),
+                {"area": '{"x": 0.1}'},
+            )
+    finally:
+        engine.dispose()
+
+    downgrade(db_url, "0018")
+    assert current_revision(db_url) == "0018"
+    engine = create_sqlite_engine(db_url)
+    try:
+        cols = {col["name"] for col in inspect(engine).get_columns("questions")}
+        assert "page_2" not in cols
+        assert "answer_area_2" not in cols
+    finally:
+        engine.dispose()
+
+
+def test_0019_question_check_constraints(db_url: str) -> None:
+    upgrade(db_url, "head")
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t1', 'Test 1', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+
+        # 1. page_2 < 1 fails ck_questions_page_2_positive
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method, "
+                    "page_2, answer_area_2) "
+                    "VALUES ('q_bad_p2', 't1', '1', 1, 5, 'additive', 0, :area)"
+                ),
+                {"area": '{"x": 0.1}'},
+            )
+
+        # 2. page_2 <= page fails ck_questions_page_2_greater
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method, "
+                    "page_2, answer_area_2) "
+                    "VALUES ('q_bad_order', 't1', '2', 2, 5, 'additive', 2, :area)"
+                ),
+                {"area": '{"x": 0.1}'},
+            )
+
+        # 3. page_2 without answer_area_2 fails ck_questions_page_2_and_area_2_paired
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method, "
+                    "page_2, answer_area_2) "
+                    "VALUES ('q_missing_area2', 't1', '3', 1, 5, 'additive', 2, NULL)"
+                )
+            )
+
+        # 4. answer_area_2 without page_2 fails ck_questions_page_2_and_area_2_paired
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method, "
+                    "page_2, answer_area_2) "
+                    "VALUES ('q_missing_page2', 't1', '4', 1, 5, 'additive', NULL, :area)"
+                ),
+                {"area": '{"x": 0.1}'},
+            )
+
+        # 5. answer_area_2 = 'null' with page_2 is rejected
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method, "
+                    "page_2, answer_area_2) "
+                    "VALUES ('q_null_str', 't1', '5', 1, 5, 'additive', 2, 'null')"
+                )
+            )
+    finally:
+        engine.dispose()
