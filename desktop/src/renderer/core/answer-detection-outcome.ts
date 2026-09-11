@@ -1,9 +1,14 @@
 /**
  * Classify what happened when answer-area detection finishes with zero boxes.
  * Wording for each outcome lives in `action-requirements.ts`.
+ *
+ * `"rate-limited"` is not a zero-box *result*: it is the provider refusing the
+ * call, and its message must be distinguishable from a run that genuinely
+ * found nothing (Issue #304).
  */
 
-export type AnswerDetectionOutcome = "none" | "zero-results" | "role-mismatch";
+export type AnswerDetectionOutcome =
+  "none" | "zero-results" | "role-mismatch" | "rate-limited";
 
 export function countAnswerAreaRegions(
   regions: readonly { kind: string }[],

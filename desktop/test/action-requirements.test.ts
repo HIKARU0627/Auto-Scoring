@@ -122,6 +122,26 @@ describe("action requirements: 回答欄検出 (Issue #294)", () => {
     expect(answerDetectionOutcomeRequirements({ outcome: "none" })).toEqual([]);
   });
 
+  it("provider のレート制限を 0 件と別の系統として、次にやることを言う (Issue #304)", () => {
+    const withWait = answerDetectionOutcomeRequirements({
+      outcome: "rate-limited",
+      retryAfterSeconds: 30,
+    });
+    expect(withWait.map((item) => item.id)).toEqual([
+      "answer-detection-rate-limited",
+    ]);
+    expect(withWait[0]?.message).toContain("30秒");
+    expect(withWait[0]?.message).toContain("回答欄を自動検出");
+    expect(withWait[0]?.id).not.toBe("answer-detection-zero-results");
+
+    const withoutWait = answerDetectionOutcomeRequirements({
+      outcome: "rate-limited",
+      retryAfterSeconds: null,
+    });
+    expect(withoutWait[0]?.id).toBe("answer-detection-rate-limited");
+    expect(withoutWait[0]?.message).not.toMatch(/[0-9０-９]+秒/);
+  });
+
   it("手動追加は答案登録後なら有効", () => {
     expect(
       answerRegionAddRequirements({
