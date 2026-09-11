@@ -12,11 +12,12 @@ import {
   planIntake,
   type ImportOutcome,
   type IntakeBridge,
-  type TestSummary,
+  type TestResponse,
   importedAnything,
 } from "../../core/intake-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
+  ActionRequirements,
   intakeFolderPickRequirements,
   intakeImportRequirements,
 } from "../../core/action-requirements.js";
@@ -42,6 +43,7 @@ import {
   pendingClassification,
   pruneStaleTargets,
   requiredRolesOf,
+  targetTestAcceptsAnswers,
   unmetRequirements,
   unroutedAnswers,
   withFile,
@@ -78,7 +80,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   >([]);
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [unitCost, setUnitCost] = useState<number | null>(null);
-  const [existingTests, setExistingTests] = useState<TestSummary[]>([]);
+  const [existingTests, setExistingTests] = useState<TestResponse[]>([]);
   const [availability, setAvailability] = useState<Awaited<
     ReturnType<typeof loadClassificationAvailability>
   > | null>(null);
@@ -92,7 +94,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const [outcomes, setOutcomes] = useState<readonly ImportOutcome[]>([]);
   const [chosenFolderName, setChosenFolderName] = useState<string | null>(null);
 
-  const applyExistingTests = useCallback((tests: TestSummary[]) => {
+  const applyExistingTests = useCallback((tests: TestResponse[]) => {
     setExistingTests(tests);
     const known = new Set(tests.map((test) => test.id));
     setNarrowedTestIds((current) => {
@@ -136,9 +138,21 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     void loadSettings();
   }, [loadSettings]);
 
+  // 答案を振り分けられるのは `ready` のテストだけ。draft は登録の途中で、答案を
+  // 上げても 409 になるため候補から外す (Issue #306)。
+  const readyTests = useMemo(
+    () => existingTests.filter((test) => targetTestAcceptsAnswers(test.status)),
+    [existingTests],
+  );
+
+  const testStatusById = useMemo(
+    () => new Map(existingTests.map((test) => [test.id, test.status])),
+    [existingTests],
+  );
+
   const candidates = useMemo(
-    () => attributionCandidates(existingTests, narrowedTestIds),
-    [existingTests, narrowedTestIds],
+    () => attributionCandidates(readyTests, narrowedTestIds),
+    [readyTests, narrowedTestIds],
   );
 
   const reviewerChoseOne = reviewerChoseOneTest(
@@ -176,6 +190,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           folder,
           requiredRoles: requiredRolesOf(templates, templateId),
           unitCost,
+          existingTests: tests,
         }),
       );
       setStep("review");
@@ -342,7 +357,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           continue;
         }
         const partial = await importReview(
-          { bridge: fileBridge, client },
+          { bridge: fileBridge, client, testStatusById },
           {
             ...review,
             groups: [group],
@@ -356,7 +371,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     } finally {
       setBusy(false);
     }
-  }, [client, fileBridge, review]);
+  }, [client, fileBridge, review, testStatusById]);
 
   const folderPickRequirements = intakeFolderPickRequirements({
     busy,
@@ -388,6 +403,14 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const failedOutcomeCount = outcomes.filter(
     (outcome) => outcome.error !== null,
   ).length;
+  const deferredAnswerCount = outcomes.reduce(
+    (sum, outcome) => sum + outcome.answersDeferred,
+    0,
+  );
+  const importedSubmissionCount = outcomes.reduce(
+    (sum, outcome) => sum + outcome.submissionCount,
+    0,
+  );
   const doneHeading =
     failedOutcomeCount === 0
       ? "取込が完了しました"
@@ -465,7 +488,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
             </p>
           </section>
 
-          {existingTests.length > 0 ? (
+          {readyTests.length > 0 ? (
             <section>
               <p className="text-body-medium font-medium">
                 このバッチはどのテストの答案ですか
@@ -477,7 +500,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                 1件だけ選ぶと、AIに問い合わせません。費用が0件になり、答案のページ全体も送りません。
               </p>
               <div className="mt-sm flex flex-wrap gap-sm">
-                {existingTests.map((test) => (
+                {readyTests.map((test) => (
                   <button
                     key={test.id}
                     type="button"
@@ -501,10 +524,9 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                             : dropRoutingOutsideCandidates(
                                 reviewCurrent,
                                 new Set(
-                                  attributionCandidates(
-                                    existingTests,
-                                    next,
-                                  ).map((entry) => entry.id),
+                                  attributionCandidates(readyTests, next).map(
+                                    (entry) => entry.id,
+                                  ),
                                 ),
                               ),
                         );
@@ -549,24 +571,30 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                                 return copyIntakeGroup(entry, {
                                   targetKind: IntakeTargetKind.create,
                                   targetTestId: null,
+                                  targetTestStatus: null,
                                 });
                               }
                               if (value === "__per_answer__") {
                                 return copyIntakeGroup(entry, {
                                   targetKind: IntakeTargetKind.perAnswer,
                                   targetTestId: null,
+                                  targetTestStatus: null,
                                 });
                               }
+                              const chosen = existingTests.find(
+                                (test) => test.id === value,
+                              );
                               return copyIntakeGroup(entry, {
                                 targetKind: IntakeTargetKind.existing,
                                 targetTestId: value,
+                                targetTestStatus: chosen?.status ?? null,
                               });
                             }),
                       );
                     }}
                   >
                     <option value="__new__">新しいテストとして登録する</option>
-                    {existingTests.length > 0 ? (
+                    {readyTests.length > 0 ? (
                       <option value="__per_answer__">
                         答案ごとに登録済みのテストへ振り分ける
                       </option>
@@ -574,6 +602,9 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                     {existingTests.map((test) => (
                       <option key={test.id} value={test.id}>
                         登録済み: {test.name}
+                        {targetTestAcceptsAnswers(test.status)
+                          ? ""
+                          : "（登録途中）"}
                       </option>
                     ))}
                   </select>
@@ -601,6 +632,19 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                       className="text-body-medium text-error"
                     >
                       不足: {missing.map(materialRoleLabel).join("、")}
+                    </p>
+                  ) : null}
+                  {group.targetKind !== IntakeTargetKind.unassigned &&
+                  group.targetKind !== IntakeTargetKind.perAnswer &&
+                  !targetTestAcceptsAnswers(group.targetTestStatus) ? (
+                    <p
+                      data-testid={`intake-stage-notice-${group.key}`}
+                      className="text-body-medium text-on-surface-variant"
+                    >
+                      {
+                        ActionRequirements.answersDeferredUntilRegistered
+                          .message
+                      }
                     </p>
                   ) : null}
                 </div>
@@ -794,12 +838,23 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                 {outcomes.length}件中）。内容は下の一覧で確認できます。
               </p>
             ) : null}
-            <p
-              data-testid="intake-next-step-notice"
-              className="mt-sm text-body-medium text-on-surface-variant"
-            >
-              採点にはこのあと配点と採点基準の確定が必要です。下のテストごとの「テスト設定を開く」から入力・確定してください。それまでは、取り込んだ答案はまだ採点できません。
-            </p>
+            {deferredAnswerCount > 0 ? (
+              <p
+                data-testid="intake-next-step-notice"
+                className="mt-sm text-body-medium text-on-surface-variant"
+              >
+                採点にはこのあと配点と採点基準の確定が必要です。下のテストごとの「テスト設定を開く」から入力・確定してください。
+                {ActionRequirements.answersDeferredUntilRegistered.message}
+                登録が済んだら、同じフォルダをもう一度取り込むと答案が入ります。
+              </p>
+            ) : importedSubmissionCount > 0 ? (
+              <p
+                data-testid="intake-next-step-notice"
+                className="mt-sm text-body-medium text-on-surface-variant"
+              >
+                答案を取り込みました。AI採点の開始状況は下の一覧で確認できます。
+              </p>
+            ) : null}
           </section>
           {outcomes.map((outcome) => (
             <section
@@ -808,11 +863,33 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
               className="rounded-lg border border-outline-variant bg-surface-container-low p-lg"
             >
               <h3 className="text-title-medium font-medium">{outcome.name}</h3>
-              {importedAnything(outcome) ? (
-                <p data-testid={`intake-imported-${outcome.groupKey}`}>
-                  資料 {outcome.materialCount}件 / 答案{" "}
-                  {outcome.submissionCount}
-                  件を取り込みました
+              {outcome.materialCount > 0 ? (
+                <p
+                  data-testid={`intake-imported-materials-${outcome.groupKey}`}
+                >
+                  資料 {outcome.materialCount}件を取り込みました
+                </p>
+              ) : null}
+              {outcome.submissionCount > 0 ? (
+                <p
+                  data-testid={`intake-imported-submissions-${outcome.groupKey}`}
+                >
+                  答案 {outcome.submissionCount}件を取り込みました
+                </p>
+              ) : null}
+              {outcome.duplicateCount > 0 ? (
+                <p data-testid={`intake-duplicate-${outcome.groupKey}`}>
+                  {ActionRequirements.submissionDuplicate.message}（
+                  {outcome.duplicateCount}件）
+                </p>
+              ) : null}
+              {outcome.answersDeferred > 0 ? (
+                <p
+                  data-testid={`intake-deferred-${outcome.groupKey}`}
+                  className="text-body-medium text-on-surface-variant"
+                >
+                  {ActionRequirements.answersDeferredUntilRegistered.message}（
+                  {outcome.answersDeferred}件）
                 </p>
               ) : null}
               {outcome.gradingStartedCount > 0 ? (

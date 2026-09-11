@@ -44,6 +44,7 @@ function group(
     requiredRoles: ["grading_criteria"],
     targetKind: IntakeTargetKind.create,
     targetTestId: null,
+    targetTestStatus: null,
     ...patch,
   };
 }

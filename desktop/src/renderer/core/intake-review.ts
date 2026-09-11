@@ -172,6 +172,57 @@ export interface IntakeGroupState {
   readonly requiredRoles: readonly MaterialRole[];
   readonly targetKind: IntakeTargetKind;
   readonly targetTestId: string | null;
+  /**
+   * 対象テストの `status`（`TestResponse.status`）。`create` や未割当では `null`。
+   * 答案を取り込む段かどうかは、画面の状態変数ではなくこの値から機械的に決める
+   * （Issue #306 案 A）。`ready` だけが答案を受け付ける。
+   */
+  readonly targetTestStatus: string | null;
+}
+
+/**
+ * 対象テストが答案を受け付けるか。バックエンドの `TestNotReadyError`（409）と
+ * 同じ規則を 1 箇所に固定する。
+ */
+export function targetTestAcceptsAnswers(
+  status: string | null | undefined,
+): boolean {
+  return status === "ready";
+}
+
+export type ReusableTest = {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+  readonly created_at: string;
+};
+
+/**
+ * 同じ名前の既存テストを探す（Issue #306 の再利用規則）。
+ *
+ * グループ名は取り込みプランがフォルダの第 1 階層から作る `suggested_name` で、
+ * テスト名もこれで登録される。同じフォルダを再度取り込んだときは、まず同じ名前の
+ * `ready` なテストを再利用する（`ready` が無ければ同じ名前の `draft`、それも無ければ
+ * 直近のもの）。名前を唯一の手掛かりにするのは、フォルダ側にそれ以外の永続的な
+ * 識別子が無いため。名前変更や同名テストの併存は再利用の対象外になる。
+ */
+export function findReusableTest<T extends ReusableTest>(
+  existingTests: readonly T[],
+  name: string,
+): T | undefined {
+  const wanted = name.trim();
+  if (wanted.length === 0) {
+    return undefined;
+  }
+  const matches = existingTests.filter((test) => test.name.trim() === wanted);
+  if (matches.length === 0) {
+    return undefined;
+  }
+  const ready = matches.filter((test) => test.status === "ready");
+  const pool = ready.length > 0 ? ready : matches;
+  return [...pool].sort(
+    (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
+  )[0];
 }
 
 export function includedFiles(
@@ -457,6 +508,7 @@ export function pruneStaleTargets(
         return copyIntakeGroup(group, {
           targetKind: IntakeTargetKind.unassigned,
           targetTestId: null,
+          targetTestStatus: null,
         });
       }
       if (
@@ -465,6 +517,7 @@ export function pruneStaleTargets(
       ) {
         return copyIntakeGroup(group, {
           targetKind: IntakeTargetKind.unassigned,
+          targetTestStatus: null,
         });
       }
       return group;
@@ -477,38 +530,49 @@ export function buildReviewState(input: {
   folder: ScannedFolder;
   requiredRoles: readonly MaterialRole[];
   unitCost: number | null;
+  existingTests?: readonly ReusableTest[];
 }): IntakeReviewState {
   const byPath = new Map(
     input.folder.entries.map((entry) => [entry.relativePath, entry]),
   );
   return {
     unitCost: input.unitCost,
-    groups: input.plan.groups.map((group) => ({
-      key: group.key,
-      name: group.suggested_name,
-      requiredRoles: input.requiredRoles,
-      targetKind: IntakeTargetKind.create,
-      targetTestId: null,
-      files: group.files.map((file) => {
-        const scanned = byPath.get(file.relative_path);
-        return {
-          relativePath: file.relative_path,
-          absolutePath: scanned?.absolutePath ?? "",
-          sha256: file.sha256,
-          sizeBytes: file.size_bytes,
-          ruleRole: file.role ?? null,
-          needsClassification: file.classification === "pending",
-          cachedClassification: file.classification === "cached",
-          classificationAttempted: false,
-          proposedRole: null,
-          proposalConfirmed: false,
-          humanRole: null,
-          excluded: file.role === "ignore",
-          answerTestId: null,
-          proposedAnswerTestId: null,
-          attributionAttempted: false,
-        };
-      }),
-    })),
+    groups: input.plan.groups.map((group) => {
+      const reusable = findReusableTest(
+        input.existingTests ?? [],
+        group.suggested_name,
+      );
+      return {
+        key: group.key,
+        name: group.suggested_name,
+        requiredRoles: input.requiredRoles,
+        targetKind:
+          reusable === undefined
+            ? IntakeTargetKind.create
+            : IntakeTargetKind.existing,
+        targetTestId: reusable?.id ?? null,
+        targetTestStatus: reusable?.status ?? null,
+        files: group.files.map((file) => {
+          const scanned = byPath.get(file.relative_path);
+          return {
+            relativePath: file.relative_path,
+            absolutePath: scanned?.absolutePath ?? "",
+            sha256: file.sha256,
+            sizeBytes: file.size_bytes,
+            ruleRole: file.role ?? null,
+            needsClassification: file.classification === "pending",
+            cachedClassification: file.classification === "cached",
+            classificationAttempted: false,
+            proposedRole: null,
+            proposalConfirmed: false,
+            humanRole: null,
+            excluded: file.role === "ignore",
+            answerTestId: null,
+            proposedAnswerTestId: null,
+            attributionAttempted: false,
+          };
+        }),
+      };
+    }),
   };
 }
