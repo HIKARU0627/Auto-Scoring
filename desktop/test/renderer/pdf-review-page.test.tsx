@@ -277,6 +277,42 @@ describe("review actions (INV-071)", () => {
   });
 });
 
+describe("Enter follows focus (Issue #196)", () => {
+  it("does not approve the question when Enter is pressed on another button", async () => {
+    const view = renderPdfReview({ grades: [] });
+    const approve = (await screen.findByTestId(
+      "review-approve-button",
+    )) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(approve.disabled).toBe(false);
+    });
+
+    const reject = screen.getByTestId("review-reject-button");
+    reject.focus();
+    expect(document.activeElement).toBe(reject);
+
+    fireEvent.keyDown(reject, { key: "Enter", code: "Enter", bubbles: true });
+
+    expect(view.client.POST).not.toHaveBeenCalled();
+  });
+
+  it("does not approve the question when Enter is pressed in the note field", async () => {
+    const view = renderPdfReview({ grades: [] });
+    const approve = (await screen.findByTestId(
+      "review-approve-button",
+    )) as HTMLButtonElement;
+    await waitFor(() => {
+      expect(approve.disabled).toBe(false);
+    });
+
+    const note = screen.getByTestId("review-note-field");
+    note.focus();
+    fireEvent.keyDown(note, { key: "Enter", code: "Enter", bubbles: true });
+
+    expect(view.client.POST).not.toHaveBeenCalled();
+  });
+});
+
 describe("three-place status consistency (INV-070)", () => {
   it("rail and DAG node use the same status label", async () => {
     renderPdfReview({
