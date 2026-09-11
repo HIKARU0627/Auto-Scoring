@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local.grading_cost_store import GradingCostStore
-from auto_scoring.adapters.local.intake_template_store import IntakeTemplateError
+from auto_scoring.domain.intake_template import IntakeTemplateError
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_usage import (
     AiUsageSummary,
@@ -42,15 +42,15 @@ class MonthlyAiUsageResponse(BaseModel):
     month: str
 
 
-def _to_response(summary: AiUsageSummary) -> dict[str, object]:
+def _to_submission_response(summary: AiUsageSummary) -> SubmissionAiUsageResponse:
     totals = summary.totals
-    return {
-        "input_tokens": totals.input_tokens if totals is not None else None,
-        "output_tokens": totals.output_tokens if totals is not None else None,
-        "token_unit_cost": summary.token_unit_cost,
-        "estimated_cost": summary.estimated_cost,
-        "usage_availability": summary.availability,
-    }
+    return SubmissionAiUsageResponse(
+        input_tokens=totals.input_tokens if totals is not None else None,
+        output_tokens=totals.output_tokens if totals is not None else None,
+        token_unit_cost=summary.token_unit_cost,
+        estimated_cost=summary.estimated_cost,
+        usage_availability=summary.availability,
+    )
 
 
 def build_ai_usage_router(
@@ -85,7 +85,7 @@ def build_ai_usage_router(
             summarize_ai_grade_tokens(grades),
             grading_costs.load(),
         )
-        return SubmissionAiUsageResponse(**_to_response(summary))
+        return _to_submission_response(summary)
 
     @router.get("/ai-usage/monthly", response_model=MonthlyAiUsageResponse)
     def get_monthly_ai_usage() -> MonthlyAiUsageResponse:
@@ -97,8 +97,13 @@ def build_ai_usage_router(
             summarize_ai_grade_tokens(grades),
             grading_costs.load(),
         )
+        base = _to_submission_response(summary)
         return MonthlyAiUsageResponse(
-            **_to_response(summary),
+            input_tokens=base.input_tokens,
+            output_tokens=base.output_tokens,
+            token_unit_cost=base.token_unit_cost,
+            estimated_cost=base.estimated_cost,
+            usage_availability=base.usage_availability,
             month=month_start.strftime("%Y-%m"),
         )
 
