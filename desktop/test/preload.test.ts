@@ -44,6 +44,19 @@ describe("preload script bridge", () => {
     expect(result).toEqual({ version: "0.1.0", platform: "linux" });
   });
 
+  it("getSidecarLogPath invokes getSidecarLogPath IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce(
+      "C:\\Users\\tester\\AppData\\Local\\Auto-Scoring\\app-data\\logs\\sidecar.log",
+    );
+    const result = await exposedBridge!.getSidecarLogPath();
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:get-sidecar-log-path",
+    );
+    expect(result).toBe(
+      "C:\\Users\\tester\\AppData\\Local\\Auto-Scoring\\app-data\\logs\\sidecar.log",
+    );
+  });
+
   it("getSidecarStatus invokes getSidecarStatus IPC channel", async () => {
     const readyStatus: SidecarStatus = {
       kind: "ready",

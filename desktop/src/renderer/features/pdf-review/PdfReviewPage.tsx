@@ -29,10 +29,9 @@ import { sortQuestionsForReview } from "../../core/question-order.js";
 import {
   deriveQuestionStatus,
   labelWaitingFor,
-  QuestionStatus,
   resolveQuestionWait,
-  type QuestionStatusKey,
 } from "../../core/question-status.js";
+import { QuestionStatusBadge } from "../../core/QuestionStatusBadge.js";
 import {
   annotationsForDisplayedAttempt,
   displayGrade,
@@ -64,10 +63,6 @@ type LoadState =
       pages: readonly SubmissionPageState[];
       questionData: Map<string, QuestionReviewData>;
     };
-
-function statusIcon(status: QuestionStatusKey): string {
-  return QuestionStatus[status].icon;
-}
 
 const ENTER_ACTIVATES_LOCALLY =
   'button, a[href], input, textarea, select, [role="button"], [contenteditable="true"]';
@@ -505,7 +500,7 @@ export function PdfReviewPage(): JSX.Element {
                       setSelectedIndex(index);
                     }}
                   >
-                    <span aria-hidden>{statusIcon(status)}</span>
+                    <QuestionStatusBadge status={status} />
                     <span> 問{question.number}</span>
                   </button>
                 );

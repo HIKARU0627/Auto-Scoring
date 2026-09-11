@@ -1,6 +1,16 @@
-import type { JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
 import type { SidecarFailure, SidecarStatus } from "../../../shared/bridge.js";
+
+/**
+ * How long the splash waits before telling the user why it is slow (UG-15).
+ *
+ * Gated on elapsed time rather than shown always: a start that finishes in
+ * 300ms does not need an explanation, and a notice that appears instantly is
+ * read as decoration. 5s is comfortably past a warm start and well inside the
+ * 12-15s measured for a first start with migrations (UG-08 allows 60s).
+ */
+export const SLOW_START_HINT_DELAY_MS = 5_000;
 
 function failureHeadline(failure: SidecarFailure): string {
   switch (failure) {
@@ -17,15 +27,49 @@ function failureHeadline(failure: SidecarFailure): string {
   }
 }
 
-function failureDetail(failure: SidecarFailure): string {
+/**
+ * The one line the user can act on per failure. `null` when the only thing to
+ * say is the log location and it has not arrived from the main process yet.
+ */
+function failureDetail(
+  failure: SidecarFailure,
+  logPath: string | null,
+): string | null {
   switch (failure) {
     case "executableMissing":
       return "インストーラーから再インストールしてください。";
     case "alreadyRunning":
       return "すでに開いているウィンドウをご利用ください。閉じた直後の場合は、少し待ってから再起動してください。";
     default:
-      return "ログ: %LOCALAPPDATA%\\Auto-Scoring\\app-data\\logs\\sidecar.log";
+      return logPath === null ? null : `ログ: ${logPath}`;
   }
+}
+
+/**
+ * The first-launch hint (UG-15), shown only once the start has taken long
+ * enough to look like a hang. Rendered from inside the splash so unmounting
+ * the splash (the sidecar became ready) clears the timer.
+ */
+function SlowStartHint(): JSX.Element | null {
+  const [elapsed, setElapsed] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setElapsed(true), SLOW_START_HINT_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (!elapsed) {
+    return null;
+  }
+
+  return (
+    <p
+      data-testid="sidecar-slow-start-hint"
+      className="text-body-small text-on-surface-variant"
+    >
+      初回起動には時間がかかることがあります。
+    </p>
+  );
 }
 
 function SidecarSplash({
@@ -47,9 +91,7 @@ function SidecarSplash({
           className="size-8 animate-spin rounded-full border-2 border-outline border-t-primary"
         />
         <p className="text-body-medium">{message}</p>
-        <p className="text-body-small text-on-surface-variant">
-          初回起動には時間がかかることがあります。
-        </p>
+        <SlowStartHint />
       </div>
     </main>
   );
@@ -58,12 +100,15 @@ function SidecarSplash({
 function SidecarErrorScreen({
   failure,
   exitCode,
+  logPath,
   onRestart,
 }: {
   failure: SidecarFailure;
   exitCode: number | null;
+  logPath: string | null;
   onRestart: () => void;
 }): JSX.Element {
+  const detail = failureDetail(failure, logPath);
   return (
     <main
       data-testid="sidecar-error"
@@ -77,9 +122,14 @@ function SidecarErrorScreen({
           error_outline
         </span>
         <h1 className="mt-lg text-title-medium">{failureHeadline(failure)}</h1>
-        <p className="mt-md text-body-small text-on-surface-variant">
-          {failureDetail(failure)}
-        </p>
+        {detail !== null ? (
+          <p
+            data-testid="sidecar-error-detail"
+            className="mt-md text-body-small text-on-surface-variant"
+          >
+            {detail}
+          </p>
+        ) : null}
         {exitCode !== null ? (
           <p className="mt-xs text-body-small text-on-surface-variant">
             終了コード: {exitCode}
@@ -100,15 +150,23 @@ function SidecarErrorScreen({
 
 /**
  * Covers the app while the sidecar is not usable: splash during startup and a
- * recoverable error screen when it has failed (INV-030, INV-032, INV-036).
+ * recoverable error screen when it has failed (INV-030, INV-032, INV-033,
+ * INV-036, UG-14, UG-15).
+ *
+ * `children` stays mounted underneath rather than being replaced, so a crash
+ * after the reviewer pushed a screen does not tear their route apart, and the
+ * overlay is a sibling of the whole routed subtree -- which is what keeps it
+ * visible over any depth of `push`.
  */
 export function SidecarStartupOverlay({
   status,
   onRestart,
+  logPath = null,
   children,
 }: {
   status: SidecarStatus;
   onRestart: () => void;
+  logPath?: string | null;
   children: JSX.Element;
 }): JSX.Element {
   const overlay = (() => {
@@ -124,6 +182,7 @@ export function SidecarStartupOverlay({
           <SidecarErrorScreen
             failure={status.failure}
             exitCode={status.exitCode}
+            logPath={logPath}
             onRestart={onRestart}
           />
         );
@@ -137,7 +196,9 @@ export function SidecarStartupOverlay({
   return (
     <div className="relative min-h-screen">
       {children}
-      <div className="absolute inset-0 z-50">{overlay}</div>
+      <div data-testid="sidecar-overlay" className="absolute inset-0 z-50">
+        {overlay}
+      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Protocol
 
 from auto_scoring.domain.dependency_graph import DependencyGraph
+from auto_scoring.domain.error_catalog import ErrorCatalogDraft
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.models import (
     Annotation,
@@ -79,6 +80,29 @@ class TestMaterialRepository(Protocol):
 
         Lets a retry of a partially-failed batch recognize a write that
         actually succeeded, instead of attaching a second copy of the file.
+        """
+        ...
+
+
+class ErrorCatalogRepository(Protocol):
+    """One test's reviewed 誤答カタログ (Issue #209).
+
+    ``save`` is a compare-and-set on ``revision`` -- the same contract as
+    ``domain.criteria_extraction.CriteriaDraft``'s confirm. A save names the
+    revision the caller read; the row is updated only if it is still at that
+    revision, so a second client's edit cannot be silently overwritten by a
+    save that never saw it. Raises ``ErrorCatalogConflict`` on a lost race.
+    """
+
+    def get(self, test_id: str) -> ErrorCatalogDraft | None: ...
+
+    def save(self, draft: ErrorCatalogDraft, *, expected_revision: int | None) -> None:
+        """Insert when there is no row (``expected_revision is None``) or
+        replace the row iff it is still at ``expected_revision``.
+
+        A non-``None`` ``expected_revision`` with no matching row also raises
+        ``ErrorCatalogConflict``: the caller believes a draft exists and is
+        about to overwrite something that has since been deleted.
         """
         ...
 
@@ -431,6 +455,7 @@ class UnitOfWork(Protocol):
 
     tests: TestRepository
     test_materials: TestMaterialRepository
+    error_catalogs: ErrorCatalogRepository
     questions: QuestionRepository
     rubrics: RubricRepository
     submissions: SubmissionRepository

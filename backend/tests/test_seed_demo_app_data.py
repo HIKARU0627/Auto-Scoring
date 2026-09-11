@@ -52,6 +52,7 @@ CASCADE_REACHABLE_TABLES = {
     "answer_images",
     "dependency_edges",
     "dependency_graphs",
+    "error_catalogs",
     "exports",
     "grade_results",
     "jobs",

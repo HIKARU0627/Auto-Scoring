@@ -513,6 +513,27 @@ LLM 抽出は同じ入力から同じ結果を返さない（簡易設計書 §4
 **#209 の画面が無い現時点では訂正率を実測できない**（人が数える道具が無いため）。
 #209 の実装後に実資料 4 教科で実測する。
 
+#### 誤答カタログの確認・編集（Issue #209 のバックエンド。画面は別 PR）
+
+Issue #209 はまず**バックエンドと API** を実装した。画面は `features/` を複数ワーカーが
+触っているため別 PR に切る（司令官の設計判断 5）。
+
+- **永続化は `CriteriaDraft` と同じ流儀。** 1 テスト 1 行の `error_catalogs` テーブル
+  （migration `0021`）に、機械が取り込んだ行を人が編集して保存する。`revision` による
+  compare-and-set を保存と取り込みの両方に付け、**2 人目の保存が 1 人目の見ていない減点量を
+  黙って上書きしない**ようにした（`CriteriaDraft` の docstring と同じ理由）。
+- **Excel は取り込み元であって実体ではない。** 採点（`jobs/grading_processor.py`）は
+  DB のカタログだけを読み、Excel を開き直さない。人が直した行が次の採点で消えないことは
+  テストで固定した。取り込み直しは人明示の API 呼び出しのみで、`on_conflict`
+  （`keep_edited` / `overwrite`）を必須にして**無言で上書きしない**。
+- **3 状態は API の値で分ける。** `not_registered`（未登録）/ `word_only`（Word しか無い）/
+  `unreadable`（登録済みだが列を解釈できない）/ `available`（取り込み済み）。
+  (c) を (a) と同じ値にしない（#106 の主眼）。画面はこの値で分岐し、文言は
+  `desktop/src/renderer/core/action-requirements.ts` を単一ソースにする（INV-004）。
+- **AI の出力で機械的に上書きしない**（簡易設計書 §25.2）。確定は人の仕事。
+- API は `GET /tests/{test_id}/error-catalog`、`PUT`（revision 必須）、
+  `POST .../import`（`on_conflict` 必須）。OpenAPI 生成物は再生成して緑。
+
 ---
 
 ### 5.7 依存を足さない — 標準ライブラリで段落テキストが取れる（技術検証・Issue #208）

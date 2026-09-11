@@ -21,6 +21,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(BulkExportItemStatus.serializer)
       ..add(BulkExportRequest.serializer)
       ..add(BulkExportResponse.serializer)
+      ..add(CatalogState.serializer)
       ..add(ClassificationAvailabilityResponse.serializer)
       ..add(ClassificationEstimateModel.serializer)
       ..add(ClassificationNeed.serializer)
@@ -43,6 +44,9 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(DependencyProvision.serializer)
       ..add(DocumentPagesResponse.serializer)
       ..add(EditReviewRequest.serializer)
+      ..add(ErrorCatalogEntryInput.serializer)
+      ..add(ErrorCatalogEntryModel.serializer)
+      ..add(ErrorCatalogResponse.serializer)
       ..add(ExportRefusalReason.serializer)
       ..add(ExportRequestResponse.serializer)
       ..add(ExportResponse.serializer)
@@ -50,6 +54,8 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(GradingAvailabilityResponse.serializer)
       ..add(GradingCostModel.serializer)
       ..add(HTTPValidationError.serializer)
+      ..add(ImportConflictPolicy.serializer)
+      ..add(ImportErrorCatalogRequest.serializer)
       ..add(IntakeCostModel.serializer)
       ..add(IntakePlanResponse.serializer)
       ..add(IntakeRuleModel.serializer)
@@ -84,6 +90,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(RubricCriterionResponse.serializer)
       ..add(RuleScope.serializer)
       ..add(SaveApiKeyRequest.serializer)
+      ..add(SaveErrorCatalogRequest.serializer)
       ..add(SaveTemplatesRequest.serializer)
       ..add(ScannedFileModel.serializer)
       ..add(ScoreRequest.serializer)
@@ -177,6 +184,14 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(
               BuiltList, const [const FullType(DependencyProvision)]),
           () => ListBuilder<DependencyProvision>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(ErrorCatalogEntryInput)]),
+          () => ListBuilder<ErrorCatalogEntryInput>())
+      ..addBuilderFactory(
+          const FullType(
+              BuiltList, const [const FullType(ErrorCatalogEntryModel)]),
+          () => ListBuilder<ErrorCatalogEntryModel>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(IntakeRuleModel)]),
           () => ListBuilder<IntakeRuleModel>())

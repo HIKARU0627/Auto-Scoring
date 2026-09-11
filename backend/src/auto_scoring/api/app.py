@@ -54,6 +54,7 @@ from auto_scoring.api.auth import generate_token, require_token
 from auto_scoring.api.body_size_limit import MaxBodySizeMiddleware
 from auto_scoring.api.criteria_router import build_criteria_router
 from auto_scoring.api.dependency_graph_router import build_dependency_graph_router
+from auto_scoring.api.error_catalog_router import build_error_catalog_router
 from auto_scoring.api.export_router import build_export_router
 from auto_scoring.api.intake_router import ClassifierFactory, build_intake_router
 from auto_scoring.api.jobs_router import build_jobs_router
@@ -942,6 +943,7 @@ def create_app(
     # same two artefacts, and a private registry per router would let them
     # interleave into a set missing one of the two (api.test_artifact_lock).
     test_artifact_locks = TestArtifactLocks()
+    protected.include_router(build_error_catalog_router(session_factory, store))
     protected.include_router(
         build_test_registration_router(
             session_factory,

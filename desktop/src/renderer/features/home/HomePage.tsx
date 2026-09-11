@@ -16,6 +16,7 @@ import {
   homeWorkBucketMeta,
 } from "../../core/submission-work-bucket.js";
 import { HomeDataError, loadHomeDashboard } from "../../core/home-data.js";
+import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import { useRouter } from "../../navigation/router.js";
 
@@ -96,23 +97,13 @@ export function HomePage(): JSX.Element {
         ) : null}
 
         {loadState.status === "error" ? (
-          <div
-            data-testid="home-error"
-            className="rounded-md border border-error bg-error-container p-lg text-on-error-container"
-          >
-            <p className="text-body-medium">
-              作業状況を取得できません: {loadState.message}
-            </p>
-            <button
-              type="button"
-              className="mt-md rounded-md border border-outline px-md py-xs text-ui-label"
-              onClick={() => {
-                void reload();
-              }}
-            >
-              再試行
-            </button>
-          </div>
+          <AppErrorBanner
+            testId="home-error"
+            message={`作業状況を取得できません: ${loadState.message}`}
+            onRetry={() => {
+              void reload();
+            }}
+          />
         ) : null}
 
         {loadState.status === "ready" ? (
