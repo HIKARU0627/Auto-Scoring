@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.local.intake_template_store import IntakeTemplateError
+from auto_scoring.adapters.local_storage import LocalFileStore
 
 
 class GradingCostStore:
@@ -37,7 +37,9 @@ class GradingCostStore:
         return float(value) if value >= 0 else None
 
     def save(self, token_unit_cost: float | None) -> None:
-        if token_unit_cost is not None and (token_unit_cost < 0 or token_unit_cost != token_unit_cost):
+        if token_unit_cost is not None and (
+            token_unit_cost < 0 or token_unit_cost != token_unit_cost
+        ):
             raise IntakeTemplateError("the token unit cost must be zero or more")
         data = json.dumps({"token_unit_cost": token_unit_cost}).encode("utf-8")
         self._files.write_atomic(self.path(), data)

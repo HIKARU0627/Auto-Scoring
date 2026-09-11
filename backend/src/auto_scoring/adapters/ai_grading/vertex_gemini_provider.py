@@ -43,13 +43,13 @@ from auto_scoring.adapters.ai_grading._http import (
     CONVERTIBLE_HTTP_ERRORS,
     raise_classified_unavailable,
 )
-from auto_scoring.adapters.ai_grading._usage import parse_gemini_usage
 from auto_scoring.adapters.ai_grading._prompt import (
     GRADING_SYSTEM_INSTRUCTIONS,
     build_grading_user_content,
     sniff_image_format,
 )
 from auto_scoring.adapters.ai_grading._schema import strict_ai_grading_result_schema
+from auto_scoring.adapters.ai_grading._usage import parse_gemini_usage
 from auto_scoring.domain.ai_grading import (
     describe_schema_violation,
     parse_ai_grading_result,

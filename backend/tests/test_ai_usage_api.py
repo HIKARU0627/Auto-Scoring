@@ -91,12 +91,11 @@ def test_submission_ai_usage_with_unit_cost(
 
 
 def test_verify_openrouter_returns_provider_balance_separately() -> None:
+    import httpx
+
     from auto_scoring.adapters.credentials.verification import (
-        VerificationOutcome,
-        VerificationResult,
         _read_key_response,
     )
-    import httpx
 
     response = httpx.Response(
         200,

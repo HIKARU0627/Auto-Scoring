@@ -65,9 +65,7 @@ def summarize_ai_grade_tokens(grades: Sequence[GradeResult]) -> AiUsageSummary:
         input_tokens=sum(grade.input_tokens or 0 for grade in known),
         output_tokens=sum(grade.output_tokens or 0 for grade in known),
     )
-    availability = (
-        UsageAvailability.KNOWN if unknown_count == 0 else UsageAvailability.PARTIAL
-    )
+    availability = UsageAvailability.KNOWN if unknown_count == 0 else UsageAvailability.PARTIAL
     return AiUsageSummary(
         totals=totals,
         availability=availability,

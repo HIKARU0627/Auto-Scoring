@@ -12,6 +12,7 @@ from auto_scoring.adapters.local.grading_cost_store import GradingCostStore
 from auto_scoring.adapters.local.intake_template_store import IntakeTemplateError
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_usage import (
+    AiUsageSummary,
     UsageAvailability,
     apply_token_unit_cost,
     summarize_ai_grade_tokens,

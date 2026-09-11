@@ -835,7 +835,10 @@ class GradeResult:
             )
         if self.source is not GradingSource.AI and any(v is not None for v in token_fields):
             raise DomainError("GradeResult token counts are only recorded for AI-sourced rows")
-        for field_name, value in (("input_tokens", self.input_tokens), ("output_tokens", self.output_tokens)):
+        for field_name, value in (
+            ("input_tokens", self.input_tokens),
+            ("output_tokens", self.output_tokens),
+        ):
             if value is not None and value < 0:
                 raise DomainError(f"GradeResult.{field_name} must be >= 0, got {value!r}")
 

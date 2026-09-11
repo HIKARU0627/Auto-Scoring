@@ -128,7 +128,10 @@ class ProviderAttempt:
         token_fields = (self.input_tokens, self.output_tokens)
         if any(v is not None for v in token_fields) and any(v is None for v in token_fields):
             raise ValueError("ProviderAttempt input_tokens and output_tokens must be set together")
-        for field_name, value in (("input_tokens", self.input_tokens), ("output_tokens", self.output_tokens)):
+        for field_name, value in (
+            ("input_tokens", self.input_tokens),
+            ("output_tokens", self.output_tokens),
+        ):
             if value is not None and value < 0:
                 raise ValueError(f"ProviderAttempt.{field_name} must be >= 0, got {value!r}")
 
