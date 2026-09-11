@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
+import { ActionRequirements } from "../../core/action-requirements.js";
 import {
   loadQuestionReviewData,
   loadAnswerImageUrl,
@@ -769,7 +770,10 @@ function BlockerNotice({
       <Notice
         testId="confirm-ready-notice"
         tone="success"
-        message={`全設問の判断材料を表示しました。${confirmation.pending.length}問をまとめて確定できます。`}
+        message={
+          ActionRequirements.submissionConfirmReady(confirmation.pending.length)
+            .message
+        }
       />
     );
   }
@@ -779,7 +783,7 @@ function BlockerNotice({
         <Notice
           testId="confirm-blocked-no-questions"
           tone="neutral"
-          message="このテストには設問が登録されていません。"
+          message={ActionRequirements.submissionConfirmNoQuestions.message}
         />
       );
     case SubmissionConfirmBlock.materialUnavailable:
@@ -787,7 +791,11 @@ function BlockerNotice({
         <Notice
           testId="confirm-blocked-unavailable"
           tone="danger"
-          message={`判断材料を読み込めていない設問があります（${formatQuestionNumbers(confirmation.unloaded)}）。再読み込みしてください。`}
+          message={
+            ActionRequirements.submissionConfirmMaterialUnavailable(
+              formatQuestionNumbers(confirmation.unloaded),
+            ).message
+          }
         />
       );
     case SubmissionConfirmBlock.humanScoreRequired:
@@ -795,7 +803,11 @@ function BlockerNotice({
         <Notice
           testId="confirm-blocked-human-score"
           tone="attention"
-          message={`AIが採点できなかった設問があります（${formatQuestionNumbers(confirmation.needingHumanScore)}）。その設問を開いて点数を入力すると、まとめて確定できます。`}
+          message={
+            ActionRequirements.submissionConfirmHumanScoreRequired(
+              formatQuestionNumbers(confirmation.needingHumanScore),
+            ).message
+          }
         />
       );
     case SubmissionConfirmBlock.unreached:
@@ -803,7 +815,12 @@ function BlockerNotice({
         <Notice
           testId="confirm-blocked-unreached"
           tone="attention"
-          message={`まだ表示していない設問があります（${formatQuestionNumbers(confirmation.unreached)}）。${unreadIsAbove ? "上" : "下"}方向へスクロールすると確定できます。`}
+          message={
+            ActionRequirements.submissionConfirmUnreached(
+              formatQuestionNumbers(confirmation.unreached),
+              unreadIsAbove,
+            ).message
+          }
         />
       );
     case SubmissionConfirmBlock.nothingToConfirm:
@@ -811,7 +828,7 @@ function BlockerNotice({
         <Notice
           testId="confirm-blocked-nothing"
           tone="success"
-          message="この答案は全設問を確定済みです。"
+          message={ActionRequirements.submissionConfirmNothingToConfirm.message}
         />
       );
     default:
