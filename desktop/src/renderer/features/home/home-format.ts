@@ -32,6 +32,30 @@ export const TABLE_HEAD_STYLE: CSSProperties = {
 };
 
 /**
+ * Mock-measured recent-tests row metrics (Issue 365, parent Issue 333). The
+ * mock table is one 43px row whose status pill is 73x25px, and its progress
+ * track measures 148px. Keeping the track at 140px makes it dominate the 進捗
+ * cell, and pinning the pill's height stops the old `py-xs` (32px) from
+ * dropping the bucket counts onto a second line.
+ */
+export const PROGRESS_TRACK_STYLE: CSSProperties = {
+  width: "8.75rem",
+};
+
+export const STATUS_PILL_STYLE: CSSProperties = {
+  height: "25px",
+};
+
+/**
+ * The mock's test name is body weight (32.1% ink against the bold 44.5%) and
+ * leaves 92px of slack in a ~200px column, so the name is capped and ellipsized
+ * instead of growing to 173px and squeezing the status column to 31px.
+ */
+export const TEST_NAME_STYLE: CSSProperties = {
+  maxWidth: "9rem",
+};
+
+/**
  * 全体の進捗 KPI number (Issue 360). At 24px it read as another panel heading;
  * the mock's number is 22px against an 18px heading (1.22x). Our heading is
  * 17.5px, so 1.4x title-large lands at ~30.8px -- the mock's "30px級".
