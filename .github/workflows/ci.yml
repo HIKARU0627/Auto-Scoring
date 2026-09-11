@@ -275,6 +275,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
+      - name: Force failure for the alarm mutation test (temporary, Issue #312)
+        run: exit 1
       - name: Checkout
         uses: actions/checkout@v6
       - name: Setup Node.js
