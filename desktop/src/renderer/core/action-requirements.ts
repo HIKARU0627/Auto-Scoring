@@ -65,6 +65,26 @@ export const ActionRequirements = {
     "answer-regions-missing",
     "回答欄が1つもありません。「回答欄を自動検出」するか「領域を手動追加」で引いてください。",
   ),
+  answerDetectionZeroResults: requirement(
+    "answer-detection-zero-results",
+    "自動検出は終わりましたが、回答欄が1件も見つかりませんでした。「領域を手動追加」で枠を引くか、別の答案を選んで再度検出してください。",
+  ),
+  answerSheetRoleMismatch: requirement(
+    "answer-sheet-role-mismatch",
+    "この答案では設問に対応する回答欄が見つかりませんでした。取り込んだ PDF が答案用紙か確認し、違う資料なら「別の答案に差し替える」で選び直してください。",
+  ),
+  answerDetectionUnavailable: requirement(
+    "answer-detection-unavailable",
+    "この端末では回答欄の自動検出が使えません。設定を確認するか「領域を手動追加」で引いてください。",
+  ),
+  answerDetectCriteriaUnconfirmed: requirement(
+    "answer-detect-criteria-unconfirmed",
+    "先に配点と採点基準を確定してください。検出した回答欄は設問に割り当てます。",
+  ),
+  answerDetectLayoutMissing: requirement(
+    "answer-detect-layout-missing",
+    "答案がまだ登録されていません。「回答欄を決める答案を選ぶ」でこの様式の答案を1枚登録してください。",
+  ),
   answerRegionsUnassigned: (regions: number): ActionRequirement =>
     requirement(
       "answer-regions-unassigned",
@@ -174,6 +194,65 @@ export function apiKeyVerifyRequirements(input: {
   }
   if (!input.configured) {
     requirements.push(ActionRequirements.apiKeyNotConfigured);
+  }
+  return requirements;
+}
+
+/** 検出が 0 件で終わったときに出す結果の説明 */
+export function answerDetectionOutcomeRequirements(input: {
+  outcome: "none" | "zero-results" | "role-mismatch";
+}): readonly ActionRequirement[] {
+  if (input.outcome === "zero-results") {
+    return [ActionRequirements.answerDetectionZeroResults];
+  }
+  if (input.outcome === "role-mismatch") {
+    return [ActionRequirements.answerSheetRoleMismatch];
+  }
+  return [];
+}
+
+/** テスト設定の「回答欄を自動検出」 */
+export function answerDetectRequirements(input: {
+  busy: boolean;
+  alreadyConfirmed: boolean;
+  answerSheetRegistered: boolean;
+  detectionAvailable: boolean;
+  criteriaConfirmed: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.profileAlreadyConfirmed);
+  }
+  if (!input.criteriaConfirmed) {
+    requirements.push(ActionRequirements.answerDetectCriteriaUnconfirmed);
+  }
+  if (!input.answerSheetRegistered) {
+    requirements.push(ActionRequirements.answerDetectLayoutMissing);
+  }
+  if (!input.detectionAvailable) {
+    requirements.push(ActionRequirements.answerDetectionUnavailable);
+  }
+  return requirements;
+}
+
+/** テスト設定の「領域を手動追加」 */
+export function answerRegionAddRequirements(input: {
+  busy: boolean;
+  alreadyConfirmed: boolean;
+  answerSheetRegistered: boolean;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.alreadyConfirmed) {
+    requirements.push(ActionRequirements.profileAlreadyConfirmed);
+  }
+  if (!input.answerSheetRegistered) {
+    requirements.push(ActionRequirements.answerSheetUnseen);
   }
   return requirements;
 }
