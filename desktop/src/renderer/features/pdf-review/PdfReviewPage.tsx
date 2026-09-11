@@ -39,6 +39,10 @@ import {
   expectedReviewVersion,
   recognitionsForDisplayedAttempt,
 } from "../../core/question-review-state.js";
+import {
+  unreadableBoxesFromOcr,
+  latestOcrRecognition,
+} from "../../core/unreadable-spans.js";
 import { BackOrHomeButton } from "../../navigation/BackOrHomeButton.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
@@ -277,6 +281,8 @@ export function PdfReviewPage(): JSX.Element {
     selectedData?.annotations ?? [],
     selectedGrade,
   );
+  const unreadableBoxes = unreadableBoxesFromOcr(selectedRecognitions);
+  const ocrRecognition = latestOcrRecognition(selectedRecognitions);
 
   const selectedJob =
     jobs.find((j) => j.question_id === selectedQuestion?.id) ?? null;
@@ -591,10 +597,30 @@ export function PdfReviewPage(): JSX.Element {
                       AIは、解答欄に何も書かれていないと報告しました。本当に無記入ならこの0点は正しく、切り出しがずれている場合はテスト設定の回答欄を見直してください。
                     </p>
                   ) : null}
-                  {selectedRecognitions[0] != null ? (
+                  {unreadableBoxes.length > 0 ? (
+                    <div
+                      data-testid="review-unreadable-spans-notice"
+                      className="rounded-md border border-attention/40 bg-attention-container/20 p-sm text-body-small"
+                    >
+                      OCRが読めなかった箇所が {unreadableBoxes.length}{" "}
+                      か所あります（空欄とは別です）。切り出し画像のハイライトと、下の一覧で位置を確認してください。
+                      <ul className="mt-xs list-disc pl-lg">
+                        {unreadableBoxes.map((box, index) => (
+                          <li
+                            key={`${box.x}-${box.y}-${index}`}
+                            data-testid={`review-unreadable-span-${index}`}
+                          >
+                            {index + 1} 番目の語
+                            {box.text.length > 0 ? `（${box.text}）` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {ocrRecognition != null ? (
                     <ConfidenceBadge
                       label="OCR文字認識信頼度"
-                      confidence={selectedRecognitions[0].confidence}
+                      confidence={ocrRecognition.confidence}
                       testId="review-recognition-confidence"
                     />
                   ) : null}
@@ -614,7 +640,10 @@ export function PdfReviewPage(): JSX.Element {
                 </div>
               ) : null}
 
-              <AnswerCropView imageUrl={answerImageUrl} />
+              <AnswerCropView
+                imageUrl={answerImageUrl}
+                unreadableBoxes={unreadableBoxes}
+              />
 
               <label className="flex flex-col gap-xs">
                 <span className="text-ui-label">メモ</span>
