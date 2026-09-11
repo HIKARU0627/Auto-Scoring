@@ -16,6 +16,7 @@ from auto_scoring.domain.annotation_layout import (
     annotations_for_attempt,
     recognitions_up_to_attempt,
     resolve_annotation_rect,
+    resolve_annotation_rects,
 )
 from auto_scoring.domain.models import (
     Annotation,
@@ -214,12 +215,10 @@ class TestResolveAnnotationRect:
         assert resolved.height == pytest.approx(0.04)
         assert resolved.width < 0.95
 
-    def test_cross_line_anchor_for_underline_and_box_returns_none_to_prevent_full_width_box(
+    def test_cross_line_anchor_for_underline_and_box_resolves_to_per_line_rects(
         self,
     ) -> None:
-        """Issue #260: Multi-line UNDERLINE and BOX annotations return None (evacuated
-        to the comment area per §12.4), preventing full-width bounding box creation
-        until multi-rect support is implemented in Issue #256."""
+        """Issue #256: Multi-line UNDERLINE and BOX split into one rect per line."""
         recognition = _recognition(
             boxes=(
                 BoundingBox(text="春", rect=_rect(0.86, 0.10, 0.06, 0.04)),
@@ -232,10 +231,27 @@ class TestResolveAnnotationRect:
 
         for kind in (AnnotationKind.UNDERLINE, AnnotationKind.BOX):
             annotation = _annotation(kind=kind, anchor_text="春はあけぼ", rect=None)
-            resolved = resolve_annotation_rect(
+            resolved = resolve_annotation_rects(
                 annotation, question=_question(answer_area=None), recognitions=(recognition,)
             )
-            assert resolved is None
+            assert resolved is not None
+            assert len(resolved) == 2
+            assert resolved[0].x == pytest.approx(0.86)
+            assert resolved[0].y == pytest.approx(0.10)
+            assert resolved[0].width == pytest.approx(0.12)
+            assert resolved[0].height == pytest.approx(0.04)
+            assert resolved[0].width < 0.95
+            assert resolved[1].x == pytest.approx(0.01)
+            assert resolved[1].y == pytest.approx(0.30)
+            assert resolved[1].width == pytest.approx(0.18)
+            assert resolved[1].height == pytest.approx(0.04)
+            assert resolved[1].width < 0.95
+            assert (
+                resolve_annotation_rect(
+                    annotation, question=_question(answer_area=None), recognitions=(recognition,)
+                )
+                is None
+            )
 
     def test_single_line_multi_box_anchor_resolves_to_union_for_both_cross_and_underline(
         self,
@@ -287,10 +303,13 @@ class TestResolveAnnotationRect:
         assert cross_res.height < 0.95
 
         uline_anno = _annotation(kind=AnnotationKind.UNDERLINE, anchor_text="春はあけ", rect=None)
-        uline_res = resolve_annotation_rect(
+        uline_res = resolve_annotation_rects(
             uline_anno, question=_question(answer_area=None), recognitions=(recognition,)
         )
-        assert uline_res is None
+        assert uline_res is not None
+        assert len(uline_res) == 2
+        assert uline_res[0].width < 0.95
+        assert uline_res[1].width < 0.95
 
     def test_a_full_width_anchor_matches_the_ascii_the_ocr_read(self) -> None:
         box_rect = _rect(0.4, 0.1, 0.05, 0.03)

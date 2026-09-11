@@ -2492,26 +2492,31 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
     if (review == null) return const [];
     final widgets = <Widget>[];
     for (final annotation in review.annotationsForDisplayedAttempt) {
-      final resolved = resolveAnnotationRect(
+      final resolved = resolveAnnotationRects(
         annotation: annotation,
         questionAnswerArea: question.answerArea,
         recognitions: review.recognitionsForDisplayedAttempt,
       );
-      if (resolved == null) continue;
-      final rect = normalizedRectToLocal(resolved, pageSize);
-      widgets.add(
-        Positioned(
-          key: Key('annotation-${annotation.id}'),
-          left: rect.left,
-          top: rect.top,
-          width: rect.width,
-          height: rect.height,
-          child: _AnnotationMark(
-            annotation: annotation,
-            displayGrade: review.displayGrade,
+      if (resolved == null || resolved.isEmpty) continue;
+      for (var index = 0; index < resolved.length; index++) {
+        final rect = normalizedRectToLocal(resolved[index], pageSize);
+        final overlayKey = resolved.length == 1
+            ? 'annotation-${annotation.id}'
+            : 'annotation-${annotation.id}-$index';
+        widgets.add(
+          Positioned(
+            key: Key(overlayKey),
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            child: _AnnotationMark(
+              annotation: annotation,
+              displayGrade: review.displayGrade,
+            ),
           ),
-        ),
-      );
+        );
+      }
     }
     return widgets;
   }
@@ -2525,7 +2530,7 @@ class _PdfReviewPageState extends ConsumerState<PdfReviewPage> {
   ) => review.annotationsForDisplayedAttempt
       .where(
         (a) =>
-            resolveAnnotationRect(
+            resolveAnnotationRects(
               annotation: a,
               questionAnswerArea: question.answerArea,
               recognitions: review.recognitionsForDisplayedAttempt,

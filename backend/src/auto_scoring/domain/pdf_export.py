@@ -30,7 +30,7 @@ from math import ceil
 from auto_scoring.domain.annotation_layout import (
     annotations_for_attempt,
     recognitions_up_to_attempt,
-    resolve_annotation_rect,
+    resolve_annotation_rects,
 )
 from auto_scoring.domain.models import (
     Annotation,
@@ -829,12 +829,12 @@ def build_export_marks(
         # so drawing it too would just stack the same string on itself.
         if annotation.kind is AnnotationKind.SCORE:
             continue
-        rect = resolve_annotation_rect(
+        rects = resolve_annotation_rects(
             annotation, question=question, recognitions=attempt_recognitions
         )
-        if rect is not None and annotation.kind is not AnnotationKind.COMMENT:
-            marks.append(AnnotationMark(kind=annotation.kind, rect=rect))
-        note = _note_text(annotation, placed=rect is not None)
+        if rects is not None and annotation.kind is not AnnotationKind.COMMENT:
+            marks.extend(AnnotationMark(kind=annotation.kind, rect=rect) for rect in rects)
+        note = _note_text(annotation, placed=rects is not None)
         if note is not None:
             notes.append(note)
     if question.comment_area is None:

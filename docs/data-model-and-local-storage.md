@@ -57,6 +57,13 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 | `AnswerImage`                | 設問ごとの回答欄切り出し画像（Issue #17）     | —            |
 | `Export`                     | 成功した添削済みPDF出力（Issue #23）          | **追記のみ** |
 
+`Annotation` は永続化上 **矩形 0〜1 個**（`rect: NormalizedRect \| null`）のみ持つ。
+改行をまたぐ下線・囲みの **行ごと複数矩形** は DB 列では表現しない（Issue #256）:
+`anchor_text` とその attempt の `RecognitionResult.boxes` から、描画直前に
+`resolve_annotation_rects`（Python）／`resolveAnnotationRects`（Electron・Flutter）で
+0〜N 個の page 正規化矩形へ解決する。N>1 は UNDERLINE / BOX に限り、CROSS は N=1（先頭行）
+のまま。詳細は [`pdf-export.md`](./pdf-export.md) §2.6.5。
+
 > `AnswerImage` と `Submission` の `source_pdf_sha256` / `page_count` /
 > `original_filename` / `review_reason` は Issue #17（答案取込・画像前処理）で
 > マイグレーション `0005_answer_intake` により追加した。詳細は
