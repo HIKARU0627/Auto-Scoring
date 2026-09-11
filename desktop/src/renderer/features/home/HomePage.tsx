@@ -88,7 +88,7 @@ export function HomePage(): JSX.Element {
         </button>
       </header>
 
-      <main className="mx-auto max-w-[960px] p-xl">
+      <main className="mx-auto max-w-240 p-xl">
         {loadState.status === "loading" ? (
           <p className="text-body-medium text-on-surface-variant">
             読み込み中…
