@@ -1,7 +1,8 @@
 import type { JSX, ReactNode } from "react";
-import { ChevronRight, FileUp, ListChecks, Settings } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 
 import { AppRoutes } from "../../core/app-routes.js";
+import { NavGlyph } from "../../navigation/SidebarNavIcon.js";
 import {
   PANEL_TITLE_STYLE,
   QUICK_ACTION_SUBTITLE_STYLE,
@@ -75,15 +76,20 @@ export function HomeQuickActions({
       data-testid="home-quick-actions"
       className="rounded-xl bg-surface-container p-xl"
     >
-      <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
+      <h2 className="font-semibold text-heading" style={PANEL_TITLE_STYLE}>
         クイックアクション
       </h2>
       {/* Each row is its own raised surface (page → card → row), so it reads
-          as a pressable item rather than a line of text (Issue 353). */}
-      <div className="mt-md flex flex-col gap-sm">
+          as a pressable item rather than a line of text (Issue 353).
+
+          Issue 371 item 11: at the 700px single column the card is ~548px and
+          a 191px text block left ~245px of dead space before the chevron. The
+          rows fold to two columns while the card is wide (sm..lg) and stay one
+          column in the mock's 360px rail. */}
+      <div className="mt-md grid grid-cols-1 gap-sm sm:grid-cols-2 lg:grid-cols-1">
         <QuickAction
           testId="home-open-intake"
-          icon={<FileUp size={24} fill="currentColor" />}
+          icon={<NavGlyph route={AppRoutes.intake} size={24} />}
           label="資料を取り込む"
           description="採点基準と答案をまとめて取り込む"
           onOpen={() => {
@@ -92,7 +98,7 @@ export function HomeQuickActions({
         />
         <QuickAction
           testId="home-open-test-list-footer"
-          icon={<ListChecks size={24} fill="currentColor" />}
+          icon={<NavGlyph route={AppRoutes.testList} size={24} />}
           label="テスト一覧"
           description="登録したテストと進み具合を見る"
           onOpen={() => {
@@ -101,7 +107,7 @@ export function HomeQuickActions({
         />
         <QuickAction
           testId="home-open-settings"
-          icon={<Settings size={24} fill="currentColor" />}
+          icon={<NavGlyph route={AppRoutes.settings} size={24} />}
           label="設定"
           description="AI の接続と資料の型を整える"
           onOpen={() => {

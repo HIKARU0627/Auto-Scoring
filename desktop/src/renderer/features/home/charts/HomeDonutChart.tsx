@@ -43,12 +43,16 @@ export function HomeDonutChart({
     <div
       data-testid="home-phase-chart"
       data-padding-angle={paddingAngle}
-      className="min-w-0"
+      className="flex min-w-0 flex-col gap-md max-lg:flex-row max-lg:items-center"
     >
+      {/* Issue 371 item 10: in the 700px single column the card is ~548px and
+          the 150px donut left ~200px dead on each side. Below `lg` the legend
+          moves beside the ring and takes the spare width; the ring geometry
+          itself is the mock's 150/23 (radii 75/52) at every width. */}
       <div
         role="img"
         aria-label={`テストの進捗。${summary}。合計${total}テスト。`}
-        className="relative h-48 w-full"
+        className="relative h-48 w-full max-lg:w-44 max-lg:shrink-0"
       >
         <ResponsiveContainer width="100%" height="100%">
           <PieChart accessibilityLayer={false}>
@@ -82,7 +86,7 @@ export function HomeDonutChart({
       </div>
       <ul
         data-testid="home-phase-legend"
-        className="mt-md flex flex-col gap-sm"
+        className="flex min-w-0 flex-col gap-sm max-lg:flex-1"
       >
         {slices.map((slice) => (
           <li

@@ -38,7 +38,7 @@ export function HomeProgressPanel({
       className="flex h-full min-w-0 flex-col rounded-xl bg-surface-container p-xl"
     >
       <div className="flex items-center justify-between gap-md">
-        <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
+        <h2 className="font-semibold text-heading" style={PANEL_TITLE_STYLE}>
           全体の進捗
         </h2>
         <span className="text-ui-label text-on-surface-variant">直近7日</span>
@@ -46,14 +46,21 @@ export function HomeProgressPanel({
       {/* Issue 360: the mock's four KPI columns span ~88% of the card at a
           ~128px pitch. A quarter-width grid reproduces that, where the old
           label-hugging flex left ~49% of the card empty. Issue 366 item 3:
-          the mock rules the columns apart, so the cell boundary carries a 1px
-          vertical stroke (the 2-up narrow layout rules its two columns too). */}
+          the mock rules the columns apart. Issue 371 item 8: that rule is the
+          number block's 50px, not the 82px full cell a border filled, so it is
+          a 1px mark (like the chart strokes) rather than a cell border. */}
       <dl className="mt-lg grid grid-cols-2 gap-x-md gap-y-lg sm:grid-cols-4">
-        {STAT_BUCKETS.map(({ bucket, tone }) => (
-          <div
-            key={bucket}
-            className="flex flex-col gap-xs border-chart-divider even:border-l sm:border-l sm:first:border-l-0"
-          >
+        {STAT_BUCKETS.map(({ bucket, tone }, index) => (
+          <div key={bucket} className="relative flex flex-col gap-xs">
+            {index > 0 ? (
+              <span
+                aria-hidden
+                data-testid={`home-kpi-rule-${bucket}`}
+                className={`absolute bottom-0 -left-xs h-kpi-rule w-px bg-chart-divider ${
+                  index % 2 === 1 ? "block" : "hidden sm:block"
+                }`}
+              />
+            ) : null}
             <dt className="flex items-center gap-sm text-ui-label text-on-surface-variant">
               <span
                 aria-hidden

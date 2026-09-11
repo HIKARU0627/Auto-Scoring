@@ -99,14 +99,25 @@ export function HomeBarChart({
             accessibilityLayer={false}
           >
             {/* Two dark grid lines and a brighter zero baseline, the mock's
-                measured strokes (Issue 366 item 1). */}
-            <CartesianGrid vertical={false} stroke="var(--color-chart-grid)" />
+                measured strokes (Issue 366 item 1). Issue 371 item 7: the
+                lines straddled a half-pixel boundary and split across two rows
+                at half strength, so `shapeRendering="crispEdges"` snaps each
+                stroke to a single integer pixel. The token values are the
+                mock's and do not change. */}
+            <CartesianGrid
+              vertical={false}
+              stroke="var(--color-chart-grid)"
+              shapeRendering="crispEdges"
+            />
             <XAxis
               dataKey="label"
               tickLine={false}
-              axisLine={{ stroke: "var(--color-chart-axis)" }}
+              axisLine={{
+                stroke: "var(--color-chart-axis)",
+                shapeRendering: "crispEdges",
+              }}
               tick={{
-                fill: "var(--color-on-surface-variant)",
+                fill: "var(--color-on-surface-muted)",
                 fontSize: 12,
               }}
             />
@@ -117,7 +128,7 @@ export function HomeBarChart({
               tickLine={false}
               axisLine={false}
               tick={{
-                fill: "var(--color-on-surface-variant)",
+                fill: "var(--color-on-surface-muted)",
                 fontSize: 12,
               }}
             />
