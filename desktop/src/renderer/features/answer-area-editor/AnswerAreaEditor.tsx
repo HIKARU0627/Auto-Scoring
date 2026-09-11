@@ -8,6 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+import { ActionRequirements } from "../../core/action-requirements.js";
 import {
   MAX_PAGE_WIDTH_PX,
   UNASSIGNED_QUESTION_DISPLAY_LABEL,
@@ -300,8 +301,10 @@ function UndetectedBanner({
       {undetected.length > 0 ? (
         <MissingGroup
           keyPrefix="answer-area-undetected"
-          message={`回答欄が見つからなかった設問が${undetected.length}件あります。このまま確定もできますが、その設問は答案のページ全体を採点に送り、要確認として人の目に回ります。`}
-          action="答案には回答欄があるはずです。設問名を押して枠を引いてください。"
+          message={
+            ActionRequirements.answerAreaUndetected(undetected.length).message
+          }
+          action={ActionRequirements.answerAreaUndetectedAction.message}
           numbers={undetected}
           readOnly={readOnly}
           onSelect={onSelectDrawTarget}
@@ -310,8 +313,8 @@ function UndetectedBanner({
       {absent.length > 0 ? (
         <MissingGroup
           keyPrefix="answer-area-absent"
-          message={`この答案では回答欄を見つけられなかった設問が${absent.length}件あります。登録した答案が課題の一部のページで、採点基準がそれより広い範囲を含んでいることがあります。まず答案と採点基準を確かめてください。`}
-          action="答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。"
+          message={ActionRequirements.answerAreaAbsent(absent.length).message}
+          action={ActionRequirements.answerAreaAbsentAction.message}
           numbers={absent}
           readOnly={readOnly}
           onSelect={onSelectDrawTarget}

@@ -1551,6 +1551,28 @@
             "title": "Id",
             "type": "string"
           },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
           "question_id": {
             "title": "Question Id",
             "type": "string"
@@ -1614,6 +1636,25 @@
           "available"
         ],
         "title": "GradingAvailabilityResponse",
+        "type": "object"
+      },
+      "GradingCostModel": {
+        "description": "Per-1000-token unit price, or ``null`` when not set.",
+        "properties": {
+          "token_unit_cost": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Unit Cost"
+          }
+        },
+        "title": "GradingCostModel",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1968,6 +2009,67 @@
         ],
         "title": "MaterialRole",
         "type": "string"
+      },
+      "MonthlyAiUsageResponse": {
+        "properties": {
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "month": {
+            "title": "Month",
+            "type": "string"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "token_unit_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Unit Cost"
+          },
+          "usage_availability": {
+            "$ref": "#/components/schemas/UsageAvailability"
+          }
+        },
+        "required": [
+          "usage_availability",
+          "month"
+        ],
+        "title": "MonthlyAiUsageResponse",
+        "type": "object"
       },
       "NormalizedBBoxModel": {
         "properties": {
@@ -2948,6 +3050,62 @@
         "title": "ScoreValueResponse",
         "type": "object"
       },
+      "SubmissionAiUsageResponse": {
+        "properties": {
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "token_unit_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Unit Cost"
+          },
+          "usage_availability": {
+            "$ref": "#/components/schemas/UsageAvailability"
+          }
+        },
+        "required": [
+          "usage_availability"
+        ],
+        "title": "SubmissionAiUsageResponse",
+        "type": "object"
+      },
       "SubmissionResponse": {
         "properties": {
           "created_at": {
@@ -3244,6 +3402,16 @@
         "title": "UpdateProfileRequest",
         "type": "object"
       },
+      "UsageAvailability": {
+        "description": "Whether token totals are complete for the rows being summarized.",
+        "enum": [
+          "known",
+          "partial",
+          "unknown"
+        ],
+        "title": "UsageAvailability",
+        "type": "string"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -3294,6 +3462,28 @@
           "key_source": {
             "$ref": "#/components/schemas/ConfigurationSource"
           },
+          "provider_account_limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Account Limit"
+          },
+          "provider_account_usage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Account Usage"
+          },
           "result": {
             "title": "Result",
             "type": "string"
@@ -3333,6 +3523,32 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/ai-usage/monthly": {
+      "get": {
+        "operationId": "get_monthly_ai_usage_ai_usage_monthly_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MonthlyAiUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Monthly Ai Usage",
+        "tags": [
+          "ai-usage"
+        ]
+      }
+    },
     "/exports/{export_id}/file": {
       "get": {
         "description": "The produced PDF itself, so the app can write it wherever the\nreviewer asked (Issue #142).\n\nThe sidecar does not copy files out of ``app-data/`` on request: the\ndestination is a folder a human picked in a desktop file dialog, and\n`LocalFileStore` exists precisely to guarantee nothing the sidecar\nwrites lands outside its own root. Handing over bytes keeps the\n\"where do the reviewer's files go\" decision entirely on the app side,\nwhere the dialog is, and mirrors how the review screen already gets\n`GET /submissions/{id}/source-pdf`.",
@@ -3379,6 +3595,76 @@
         "summary": "Get Export File",
         "tags": [
           "export"
+        ]
+      }
+    },
+    "/grading-cost": {
+      "get": {
+        "operationId": "get_grading_cost_grading_cost_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradingCostModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grading Cost",
+        "tags": [
+          "ai-usage"
+        ]
+      },
+      "put": {
+        "operationId": "save_grading_cost_grading_cost_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GradingCostModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradingCostModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Grading Cost",
+        "tags": [
+          "ai-usage"
         ]
       }
     },
@@ -4178,6 +4464,53 @@
           }
         ],
         "summary": "Get Submission"
+      }
+    },
+    "/submissions/{submission_id}/ai-usage": {
+      "get": {
+        "operationId": "get_submission_ai_usage_submissions__submission_id__ai_usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "submission_id",
+            "required": true,
+            "schema": {
+              "title": "Submission Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmissionAiUsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Submission Ai Usage",
+        "tags": [
+          "ai-usage"
+        ]
       }
     },
     "/submissions/{submission_id}/export": {

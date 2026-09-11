@@ -10,7 +10,18 @@ import {
   type ApiKeyStatusModel,
   type VerifyApiKeyResponse,
 } from "../../api/settings-data.js";
+import {
+  loadGradingTokenUnitCost,
+  loadMonthlyAiUsage,
+  saveGradingTokenUnitCost,
+  UsageDataError,
+} from "../../core/usage-data.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
+import {
+  formatAiUsageDisplay,
+  formatProviderAccountBalance,
+  type AiUsageNumbers,
+} from "../../core/ai-usage-display.js";
 import {
   apiKeySaveRequirements,
   apiKeyVerifyRequirements,
@@ -30,13 +41,22 @@ export function ApiKeyTab(): JSX.Element {
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [restarting, setRestarting] = useState<boolean>(false);
   const [restartError, setRestartError] = useState<string | null>(null);
+  const [monthlyUsage, setMonthlyUsage] = useState<AiUsageNumbers | null>(null);
+  const [gradingUnitCostInput, setGradingUnitCostInput] = useState<string>("");
+  const [gradingCostBusy, setGradingCostBusy] = useState<boolean>(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await loadApiKeySettings(client);
+      const [data, monthly, unitCost] = await Promise.all([
+        loadApiKeySettings(client),
+        loadMonthlyAiUsage(client).catch(() => null),
+        loadGradingTokenUnitCost(client).catch(() => null),
+      ]);
       setSettings(data);
+      setMonthlyUsage(monthly);
+      setGradingUnitCostInput(unitCost == null ? "" : String(unitCost));
     } catch (err) {
       setError(
         err instanceof SettingsDataError
@@ -188,6 +208,35 @@ export function ApiKeyTab(): JSX.Element {
   }
 
   const canSave = settings.store_unavailable_reason == null;
+  const monthlyDisplay =
+    monthlyUsage != null ? formatAiUsageDisplay(monthlyUsage) : null;
+
+  const onSaveGradingUnitCost = async () => {
+    const trimmed = gradingUnitCostInput.trim();
+    const parsed = trimmed.length === 0 ? null : Number.parseFloat(trimmed);
+    if (trimmed.length > 0 && !Number.isFinite(parsed)) {
+      setError("1000トークンあたりの単価は数字で入力してください。");
+      return;
+    }
+    setGradingCostBusy(true);
+    setError(null);
+    try {
+      const saved = await saveGradingTokenUnitCost(client, parsed);
+      setGradingUnitCostInput(saved == null ? "" : String(saved));
+      const monthly = await loadMonthlyAiUsage(client);
+      setMonthlyUsage(monthly);
+    } catch (err) {
+      setError(
+        err instanceof UsageDataError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
+    } finally {
+      setGradingCostBusy(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-lg">
@@ -254,6 +303,66 @@ export function ApiKeyTab(): JSX.Element {
           )}
         </div>
       ) : null}
+
+      <div
+        data-testid="settings-monthly-ai-usage"
+        className="rounded-md border border-outline-variant bg-surface-container p-md"
+      >
+        <h2 className="text-title-medium font-medium text-on-surface">
+          今月の AI 採点（このアプリの積算）
+        </h2>
+        {monthlyDisplay != null ? (
+          <div className="mt-xs flex flex-col gap-xs">
+            <p
+              data-testid="settings-monthly-ai-usage-tokens"
+              className="text-body-medium text-on-surface"
+            >
+              {monthlyDisplay.tokenLine}
+            </p>
+            {monthlyDisplay.costLine != null ? (
+              <p
+                data-testid="settings-monthly-ai-usage-cost"
+                className="text-body-medium text-on-surface"
+              >
+                {monthlyDisplay.costLine}
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <p className="mt-xs text-body-small text-on-surface-variant">
+            読み込み中…
+          </p>
+        )}
+        <div className="mt-md">
+          <label
+            htmlFor="grading-token-unit-cost"
+            className="block text-label-large font-medium text-on-surface"
+          >
+            採点 1000 トークンあたりの単価
+          </label>
+          <input
+            id="grading-token-unit-cost"
+            data-testid="settings-grading-unit-cost"
+            type="text"
+            inputMode="decimal"
+            value={gradingUnitCostInput}
+            onChange={(event) => setGradingUnitCostInput(event.target.value)}
+            className="mt-xs w-full max-w-xs rounded-md border border-outline bg-surface px-md py-sm text-body-medium text-on-surface"
+          />
+          <p className="mt-xs text-body-small text-on-surface-variant">
+            空欄のままなら金額は出さず、トークン数だけ表示します。
+          </p>
+          <button
+            type="button"
+            data-testid="settings-grading-unit-cost-save"
+            disabled={gradingCostBusy}
+            onClick={() => void onSaveGradingUnitCost()}
+            className="mt-sm rounded-md bg-primary px-md py-sm text-label-large font-medium text-on-primary disabled:opacity-50"
+          >
+            単価を保存
+          </button>
+        </div>
+      </div>
 
       {/* Transport order card */}
       <div className="rounded-md border border-outline-variant bg-surface-container p-md">
@@ -382,22 +491,38 @@ export function ApiKeyTab(): JSX.Element {
               <DisabledActionReason requirements={verifyReqs} />
 
               {verification ? (
-                <div className="mt-md flex items-start gap-sm rounded-md bg-surface p-sm">
-                  <span
-                    className={`inline-block h-2 w-2 rounded-full mt-sm ${
-                      verification.result === "ok" ? "bg-primary" : "bg-error"
-                    }`}
-                  />
-                  <p
-                    data-testid={`settings-api-key-verification-${slot.id}`}
-                    className={`text-body-medium ${
-                      verification.result === "ok"
-                        ? "text-primary"
-                        : "text-error"
-                    }`}
-                  >
-                    {verification.detail}
-                  </p>
+                <div className="mt-md flex flex-col gap-xs rounded-md bg-surface p-sm">
+                  <div className="flex items-start gap-sm">
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full mt-sm ${
+                        verification.result === "ok" ? "bg-primary" : "bg-error"
+                      }`}
+                    />
+                    <p
+                      data-testid={`settings-api-key-verification-${slot.id}`}
+                      className={`text-body-medium ${
+                        verification.result === "ok"
+                          ? "text-primary"
+                          : "text-error"
+                      }`}
+                    >
+                      {verification.detail}
+                    </p>
+                  </div>
+                  {formatProviderAccountBalance(
+                    verification.provider_account_usage,
+                    verification.provider_account_limit,
+                  ) != null ? (
+                    <p
+                      data-testid={`settings-api-key-provider-balance-${slot.id}`}
+                      className="text-body-small text-on-surface-variant"
+                    >
+                      {formatProviderAccountBalance(
+                        verification.provider_account_usage,
+                        verification.provider_account_limit,
+                      )}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
             </div>

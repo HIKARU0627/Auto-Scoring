@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+  "/ai-usage/monthly": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Monthly Ai Usage */
+    get: operations["get_monthly_ai_usage_ai_usage_monthly_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/exports/{export_id}/file": {
     parameters: {
       query?: never;
@@ -26,6 +43,24 @@ export interface paths {
      */
     get: operations["get_export_file_exports__export_id__file_get"];
     put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/grading-cost": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Grading Cost */
+    get: operations["get_grading_cost_grading_cost_get"];
+    /** Save Grading Cost */
+    put: operations["save_grading_cost_grading_cost_put"];
     post?: never;
     delete?: never;
     options?: never;
@@ -364,6 +399,23 @@ export interface paths {
     };
     /** Get Submission */
     get: operations["get_submission_submissions__submission_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/submissions/{submission_id}/ai-usage": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Submission Ai Usage */
+    get: operations["get_submission_ai_usage_submissions__submission_id__ai_usage_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -2069,6 +2121,10 @@ export interface components {
       criteria: components["schemas"]["CriterionResultResponse"][];
       /** Id */
       id: string;
+      /** Input Tokens */
+      input_tokens?: number | null;
+      /** Output Tokens */
+      output_tokens?: number | null;
       /** Question Id */
       question_id: string;
       /** Rationale */
@@ -2099,6 +2155,14 @@ export interface components {
       available: boolean;
       /** Reason */
       reason?: string | null;
+    };
+    /**
+     * GradingCostModel
+     * @description Per-1000-token unit price, or ``null`` when not set.
+     */
+    GradingCostModel: {
+      /** Token Unit Cost */
+      token_unit_cost?: number | null;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -2241,6 +2305,20 @@ export interface components {
       | "annotation_sample"
       | "reference"
       | "ignore";
+    /** MonthlyAiUsageResponse */
+    MonthlyAiUsageResponse: {
+      /** Estimated Cost */
+      estimated_cost?: number | null;
+      /** Input Tokens */
+      input_tokens?: number | null;
+      /** Month */
+      month: string;
+      /** Output Tokens */
+      output_tokens?: number | null;
+      /** Token Unit Cost */
+      token_unit_cost?: number | null;
+      usage_availability: components["schemas"]["UsageAvailability"];
+    };
     /** NormalizedBBoxModel */
     NormalizedBBoxModel: {
       /** X0 */
@@ -2662,6 +2740,18 @@ export interface components {
       /** Ratio */
       ratio: number;
     };
+    /** SubmissionAiUsageResponse */
+    SubmissionAiUsageResponse: {
+      /** Estimated Cost */
+      estimated_cost?: number | null;
+      /** Input Tokens */
+      input_tokens?: number | null;
+      /** Output Tokens */
+      output_tokens?: number | null;
+      /** Token Unit Cost */
+      token_unit_cost?: number | null;
+      usage_availability: components["schemas"]["UsageAvailability"];
+    };
     /** SubmissionResponse */
     SubmissionResponse: {
       /**
@@ -2795,6 +2885,12 @@ export interface components {
       /** Regions */
       regions: components["schemas"]["RegionModel"][];
     };
+    /**
+     * UsageAvailability
+     * @description Whether token totals are complete for the rows being summarized.
+     * @enum {string}
+     */
+    UsageAvailability: "known" | "partial" | "unknown";
     /** ValidationError */
     ValidationError: {
       /** Context */
@@ -2816,6 +2912,10 @@ export interface components {
       /** Detail */
       detail: string;
       key_source: components["schemas"]["ConfigurationSource"];
+      /** Provider Account Limit */
+      provider_account_limit?: number | null;
+      /** Provider Account Usage */
+      provider_account_usage?: number | null;
       /** Result */
       result: string;
       /** Status Code */
@@ -2830,6 +2930,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  get_monthly_ai_usage_ai_usage_monthly_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MonthlyAiUsageResponse"];
+        };
+      };
+    };
+  };
   get_export_file_exports__export_id__file_get: {
     parameters: {
       query?: never;
@@ -2848,6 +2968,59 @@ export interface operations {
         };
         content: {
           "application/pdf": string;
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_grading_cost_grading_cost_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GradingCostModel"];
+        };
+      };
+    };
+  };
+  save_grading_cost_grading_cost_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["GradingCostModel"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GradingCostModel"];
         };
       };
       /** @description Validation Error */
@@ -3418,6 +3591,37 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SubmissionResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_submission_ai_usage_submissions__submission_id__ai_usage_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        submission_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SubmissionAiUsageResponse"];
         };
       };
       /** @description Validation Error */

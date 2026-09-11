@@ -138,6 +138,59 @@ export const ActionRequirements = {
     "registration-already-complete",
     "登録は完了しています。答案を取り込むと採点が始まります。",
   ),
+  submissionConfirmReady: (pending: number): ActionRequirement =>
+    requirement(
+      "submission-confirm-ready",
+      `全設問の判断材料を表示しました。${pending}問をまとめて確定できます。`,
+    ),
+  submissionConfirmNoQuestions: requirement(
+    "submission-confirm-no-questions",
+    "このテストには設問が登録されていません。",
+  ),
+  submissionConfirmMaterialUnavailable: (
+    numbers: string | number,
+  ): ActionRequirement =>
+    requirement(
+      "submission-confirm-material-unavailable",
+      `判断材料を読み込めていない設問があります（${numbers}）。再読み込みしてください。`,
+    ),
+  submissionConfirmHumanScoreRequired: (
+    numbers: string | number,
+  ): ActionRequirement =>
+    requirement(
+      "submission-confirm-human-score-required",
+      `AIが採点できなかった設問があります（${numbers}）。その設問を開いて点数を入力すると、まとめて確定できます。`,
+    ),
+  submissionConfirmUnreached: (
+    numbers: string | number,
+    unreadIsAbove = false,
+  ): ActionRequirement =>
+    requirement(
+      "submission-confirm-unreached",
+      `まだ表示していない設問があります（${numbers}）。${unreadIsAbove ? "上" : "下"}方向へスクロールすると確定できます。`,
+    ),
+  submissionConfirmNothingToConfirm: requirement(
+    "submission-confirm-nothing-to-confirm",
+    "この答案は全設問を確定済みです。",
+  ),
+  answerAreaUndetected: (count: number): ActionRequirement =>
+    requirement(
+      "answer-area-undetected",
+      `回答欄が見つからなかった設問が${count}件あります。このまま確定もできますが、その設問は答案のページ全体を採点に送り、要確認として人の目に回ります。`,
+    ),
+  answerAreaUndetectedAction: requirement(
+    "answer-area-undetected-action",
+    "答案には回答欄があるはずです。設問名を押して枠を引いてください。",
+  ),
+  answerAreaAbsent: (count: number): ActionRequirement =>
+    requirement(
+      "answer-area-absent",
+      `この答案では回答欄を見つけられなかった設問が${count}件あります。登録した答案が課題の一部のページで、採点基準がそれより広い範囲を含んでいることがあります。まず答案と採点基準を確かめてください。`,
+    ),
+  answerAreaAbsentAction: requirement(
+    "answer-area-absent-action",
+    "答案に回答欄があるのに挙がっているときは、設問名を押して枠を引いてください。",
+  ),
 } as const;
 
 export function intakeFolderPickRequirements(input: {

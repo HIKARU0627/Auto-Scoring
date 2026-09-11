@@ -799,6 +799,11 @@ class GradeResult:
     #: trigger (`db.orm`, migration ``0017``), are what keep a later code
     #: path from quietly persisting one anyway.
     answer_image_finding: AnswerImageFinding | None = None
+    #: Provider-reported input tokens for this AI grade (Issue #187), or
+    #: ``None`` when the provider did not report usage. Human rows leave
+    #: both token fields ``None``.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty("GradeResult.id", self.id)
@@ -823,6 +828,19 @@ class GradeResult:
                 "GradeResult.answer_image_finding must not be 'not_the_answer': a grade "
                 "cannot be recorded for an image the grader said is not this question's answer"
             )
+        token_fields = (self.input_tokens, self.output_tokens)
+        if any(v is not None for v in token_fields) and any(v is None for v in token_fields):
+            raise DomainError(
+                "GradeResult.input_tokens and output_tokens must be set together or not at all"
+            )
+        if self.source is not GradingSource.AI and any(v is not None for v in token_fields):
+            raise DomainError("GradeResult token counts are only recorded for AI-sourced rows")
+        for field_name, value in (
+            ("input_tokens", self.input_tokens),
+            ("output_tokens", self.output_tokens),
+        ):
+            if value is not None and value < 0:
+                raise DomainError(f"GradeResult.{field_name} must be >= 0, got {value!r}")
 
 
 _ANCHORED_KINDS = frozenset({AnnotationKind.UNDERLINE, AnnotationKind.BOX})
