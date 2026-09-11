@@ -7,6 +7,7 @@ import {
 } from "../../core/submission-work-bucket.js";
 import { HomeBarChart } from "./charts/HomeBarChart.js";
 import {
+  KPI_VALUE_STYLE,
   NUMERIC_STYLE,
   PANEL_TITLE_STYLE,
   toneDotClass,
@@ -34,7 +35,7 @@ export function HomeProgressPanel({
   return (
     <section
       data-testid="home-progress-panel"
-      className="min-w-0 rounded-xl bg-surface-container p-xl"
+      className="h-full min-w-0 rounded-xl bg-surface-container p-xl"
     >
       <div className="flex items-center justify-between gap-md">
         <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
@@ -42,9 +43,10 @@ export function HomeProgressPanel({
         </h2>
         <span className="text-ui-label text-on-surface-variant">直近7日</span>
       </div>
-      {/* Bundled left instead of stretched across the card: the mock's KPI dots
-          sit at a ~128px pitch, not at each quarter of the panel (Issue 353). */}
-      <dl className="mt-lg flex flex-wrap items-start gap-x-xxl gap-y-lg">
+      {/* Issue 360: the mock's four KPI columns span ~88% of the card at a
+          ~128px pitch. A quarter-width grid reproduces that, where the old
+          label-hugging flex left ~49% of the card empty. */}
+      <dl className="mt-lg grid grid-cols-2 gap-x-md gap-y-lg sm:grid-cols-4">
         {STAT_BUCKETS.map(({ bucket, tone }) => (
           <div key={bucket} className="flex flex-col gap-xs">
             <dt className="flex items-center gap-sm text-ui-label text-on-surface-variant">
@@ -56,8 +58,8 @@ export function HomeProgressPanel({
             </dt>
             <dd
               data-testid={`home-bucket-${bucket}`}
-              className="text-score font-semibold text-on-surface"
-              style={NUMERIC_STYLE}
+              className="font-semibold text-on-surface"
+              style={{ ...NUMERIC_STYLE, ...KPI_VALUE_STYLE }}
             >
               {dashboard.count(bucket)}
             </dd>

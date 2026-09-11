@@ -46,22 +46,39 @@ export function HomeRecentTestsTable({
         <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
           最近のテスト
         </h2>
-        {dashboard.hiddenTestCount > 0 ? (
+        <div className="flex shrink-0 items-center gap-lg">
+          {/* The overflow count is real data (151); the mock always shows the
+              plain destination link, so both live here (Issue 360). */}
+          {dashboard.hiddenTestCount > 0 ? (
+            <button
+              type="button"
+              data-testid="home-open-hidden-tests"
+              onClick={() => {
+                onOpen(AppRoutes.testList);
+              }}
+              className="rounded-sm text-ui-label text-on-surface-variant hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              他{dashboard.hiddenTestCount}件を見る
+            </button>
+          ) : null}
           <button
             type="button"
-            data-testid="home-open-hidden-tests"
+            data-testid="home-open-all-tests"
             onClick={() => {
               onOpen(AppRoutes.testList);
             }}
-            className="shrink-0 rounded-sm text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            className="rounded-sm text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           >
-            他{dashboard.hiddenTestCount}件を見る
+            すべて見る
           </button>
-        ) : null}
+        </div>
       </div>
+      {/* table-fixed + explicit column widths (Issue 360): the old
+          label-hugging auto layout gave the name only ~100px (the mock is
+          ~200px) while the 進捗 column held 158px of slack. */}
       <div className="mt-md overflow-x-auto">
         <table
-          className="w-full border-collapse text-left text-body-medium"
+          className="w-full table-fixed border-collapse text-left text-body-medium"
           style={{ minWidth: "40rem" }}
         >
           <thead>
@@ -69,20 +86,26 @@ export function HomeRecentTestsTable({
               className="text-ui-label text-on-surface-variant"
               style={TABLE_HEAD_STYLE}
             >
-              <th scope="col" className="py-sm pr-md font-normal">
+              <th scope="col" className="w-1/4 py-sm pr-md font-normal">
                 テスト名
               </th>
-              <th scope="col" className="py-sm pr-md font-normal">
+              <th scope="col" className="w-1/6 py-sm pr-md font-normal">
                 状態
               </th>
-              <th scope="col" className="py-sm pr-md text-right font-normal">
+              <th
+                scope="col"
+                className="w-16 py-sm pr-md text-right font-normal"
+              >
                 答案数
               </th>
-              <th scope="col" className="py-sm pr-md font-normal">
+              <th scope="col" className="w-1/3 py-sm pr-md font-normal">
                 進捗
               </th>
-              <th scope="col" className="py-sm font-normal">
+              <th scope="col" className="w-20 py-sm font-normal">
                 最終更新
+              </th>
+              <th scope="col" className="w-10 py-sm font-normal">
+                <span className="sr-only">開く</span>
               </th>
             </tr>
           </thead>
@@ -114,7 +137,7 @@ function TestRow({
       data-testid={`home-test-card-${test.id}`}
       className="border-t border-outline-variant align-top"
     >
-      <th scope="row" className="max-w-xs py-md pr-md font-medium">
+      <th scope="row" className="py-md pr-md font-medium">
         <span
           data-testid={`home-test-name-${test.id}`}
           className="block truncate text-on-surface"
@@ -122,9 +145,9 @@ function TestRow({
         >
           {test.name}
         </span>
-        <BucketCounts progress={progress} />
-        {resumeAction(progress, onOpen)}
       </th>
+      {/* Secondary state detail moves out of the name cell into this column so
+          no row stacks name / counts / link (Issue 360). */}
       <td className="py-md pr-md">
         <span
           data-testid={`home-test-status-${test.id}`}
@@ -132,6 +155,7 @@ function TestRow({
         >
           {progress.statusBadge.label}
         </span>
+        <BucketCounts progress={progress} />
       </td>
       <td
         className="py-md pr-md text-right text-on-surface"
@@ -144,6 +168,9 @@ function TestRow({
       </td>
       <td className="py-md text-on-surface-variant" style={NUMERIC_STYLE}>
         {formatHomeDate(progress.lastUpdatedAt)}
+      </td>
+      <td className="py-md pl-sm text-right">
+        <RowChevron progress={progress} onOpen={onOpen} />
       </td>
     </tr>
   );
@@ -171,23 +198,25 @@ function ProgressCell({
     );
   }
 
+  // Issue 360: one line only. The old stacked form put the queue link above
+  // the bar and % (41px of ink / two lines); the mock keeps all three inline.
   return (
-    <div className="flex min-w-0 flex-col gap-xs">
+    <div className="flex min-w-0 items-center gap-sm whitespace-nowrap">
       <button
         type="button"
         data-testid={`home-open-queue-${test.id}`}
         onClick={() => {
           onOpen(submissionQueue(test.id));
         }}
-        className="inline-flex w-fit items-center gap-xs rounded-sm text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        className="shrink-0 rounded-sm text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
       >
         確認済み {progress.doneCount} / {progress.total}
-        <ChevronRight aria-hidden size={14} />
       </button>
       {summary !== null && percent !== null ? (
-        <div className="flex items-center gap-sm">
-          {/* Fixed width keeps the bar inside the 進捗 column instead of
-              letting the table stretch it across the next one (Issue 353). */}
+        <>
+          {/* The track uses --color-progress-track (L+17 over the card); the
+              old surface-container-high sat only L+6 away and vanished on 0%
+              rows (Issue 360). */}
           <div
             role="progressbar"
             data-testid={`home-test-progress-${test.id}`}
@@ -195,7 +224,7 @@ function ProgressCell({
             aria-valuemin={0}
             aria-valuemax={summary.total}
             aria-valuenow={summary.confirmed}
-            className="h-2 w-32 shrink-0 rounded-sm bg-surface-container-high"
+            className="h-2 w-14 shrink-0 rounded-sm bg-progress-track"
           >
             <div
               data-testid={`home-test-progress-fill-${test.id}`}
@@ -205,16 +234,16 @@ function ProgressCell({
           </div>
           <span
             data-testid={`home-test-progress-percent-${test.id}`}
-            className="w-10 shrink-0 text-right text-ui-label text-on-surface-variant"
+            className="w-9 shrink-0 text-right text-ui-label text-on-surface-variant"
             style={NUMERIC_STYLE}
           >
             {percent}%
           </span>
-        </div>
+        </>
       ) : (
         <span
           data-testid={`home-test-progress-unavailable-${test.id}`}
-          className="text-ui-label text-on-surface-variant"
+          className="truncate text-ui-label text-on-surface-variant"
         >
           設問の進捗を取得できませんでした
         </span>
@@ -224,15 +253,20 @@ function ProgressCell({
 }
 
 /**
- * The two "continue where I left off" entry points. They are kept even though
- * the mock table has no such column: `home-resume-registration-<id>` and
- * `home-resume-review-<id>` are depended on by the E2E registration spec and
- * the must-not-break list in Issue #336.
+ * The row-end `›` from the mock (Issue 360) doubles as the "continue where I
+ * left off" entry point: `home-resume-registration-<id>` and
+ * `home-resume-review-<id>` are depended on by the E2E specs and the
+ * must-not-break list in Issue #336, and their old inline label was being
+ * truncated mid-word. The full label stays as the accessible name/tooltip;
+ * a row with nothing to resume still shows the same chevron as the mock.
  */
-function resumeAction(
-  progress: HomeTestProgress,
-  onOpen: (route: string) => void,
-): JSX.Element | null {
+function RowChevron({
+  progress,
+  onOpen,
+}: {
+  progress: HomeTestProgress;
+  onOpen: (route: string) => void;
+}): JSX.Element {
   const test = progress.test;
   if (progress.isDraft) {
     return (
@@ -242,16 +276,20 @@ function resumeAction(
         onClick={() => {
           onOpen(testSettings(test.id));
         }}
-        className="mt-xs block rounded-sm text-left text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        aria-label="登録を続ける"
+        title="登録を続ける"
+        className="inline-flex rounded-sm text-on-surface-variant hover:text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
       >
-        登録を続ける
+        <ChevronRight aria-hidden size={18} />
       </button>
     );
   }
 
   const resumable = progress.resumableSubmission;
   if (resumable === null) {
-    return null;
+    return (
+      <ChevronRight aria-hidden size={18} className="text-on-surface-variant" />
+    );
   }
   const label =
     resumable.student_label === null || resumable.student_label === undefined
@@ -264,10 +302,11 @@ function resumeAction(
       onClick={() => {
         onOpen(pdfReview(test.id, resumable.id));
       }}
-      className="mt-xs block max-w-full truncate rounded-sm text-left text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+      aria-label={label}
       title={label}
+      className="inline-flex rounded-sm text-on-surface-variant hover:text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
     >
-      {label}
+      <ChevronRight aria-hidden size={18} />
     </button>
   );
 }

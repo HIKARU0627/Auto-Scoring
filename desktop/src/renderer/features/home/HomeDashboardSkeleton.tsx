@@ -33,8 +33,8 @@ export function HomeDashboardSkeleton(): JSX.Element {
           <Bar className="h-10 w-32 shrink-0" />
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-lg lg:grid-cols-3">
-        <div className="rounded-xl bg-surface-container p-lg lg:col-span-2">
+      <div className="grid grid-cols-1 gap-lg lg:grid-cols-5">
+        <div className="rounded-xl bg-surface-container p-lg lg:col-span-3">
           <Bar className="h-4 w-24" />
           <div className="mt-lg grid grid-cols-2 gap-md sm:grid-cols-4">
             <Bar className="h-12" />
@@ -42,9 +42,9 @@ export function HomeDashboardSkeleton(): JSX.Element {
             <Bar className="h-12" />
             <Bar className="h-12" />
           </div>
-          <Bar className="mt-lg h-52" />
+          <Bar className="mt-lg h-32" />
         </div>
-        <div className="rounded-xl bg-surface-container p-lg">
+        <div className="rounded-xl bg-surface-container p-lg lg:col-span-2">
           <Bar className="h-4 w-24" />
           <Bar className="mt-lg h-52" />
           <Bar className="mt-md h-4 w-full" />

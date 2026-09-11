@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import { ArrowRight, FileText } from "lucide-react";
 
 import type { HomeNextAction } from "../../core/home-dashboard.js";
+import { useTheme } from "../../theme/ThemeProvider.js";
 
 /**
  * 「次の一手」hero card (Issue #336, parent #333 §5). The one thing to press
@@ -19,21 +20,30 @@ export function HomeHeroCard({
   action: HomeNextAction;
   onAction: () => void;
 }): JSX.Element {
+  const { theme } = useTheme();
   return (
     <section
       data-testid="home-next-up"
       className="rounded-xl bg-surface-container-high p-xl"
     >
-      <div className="flex flex-col gap-lg md:flex-row md:items-center">
+      <div className="flex flex-col gap-lg md:flex-row md:items-center md:justify-between md:gap-xxl">
         <div
           aria-hidden
-          className="flex size-18 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary"
+          className="flex size-20 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary"
         >
-          <FileText size={32} />
+          {/* Issue 360: the mock tile is 83px and its glyph is filled (ink
+              ~66%); the 72px outline glyph read as a thin line drawing. */}
+          <FileText size={36} fill="currentColor" />
         </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-ui-label text-on-surface-variant">次の一手</p>
-          <h2 className="mt-xs break-words text-title-large font-semibold leading-ui">
+        <div className="min-w-0 flex-1 md:max-w-112">
+          {/* The mock stacks three levels inside the hero: primary accent /
+              pure-white headline / grey body (Issue 360). */}
+          <p className="text-ui-label text-primary">次の一手</p>
+          <h2
+            className={`mt-xs break-words text-title-large font-semibold leading-ui ${
+              theme === "dark" ? "text-on-primary" : "text-on-surface"
+            }`}
+          >
             {action.headline}
           </h2>
           <p className="mt-xs break-words text-body-medium text-on-surface-variant">
