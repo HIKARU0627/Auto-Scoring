@@ -6,6 +6,7 @@ import {
   type SidecarStatus,
 } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
+import type { BulkExportWriteRequest } from "../shared/bulk-export-write.js";
 import type {
   SidecarFetchRequest,
   SidecarFetchResponse,
@@ -54,6 +55,29 @@ const bridge: AutoScoringBridge = {
     ipcRenderer.invoke(IpcChannel.chooseFolder) as Promise<string | null>,
   choosePdfFile: (): Promise<string | null> =>
     ipcRenderer.invoke(IpcChannel.choosePdfFile) as Promise<string | null>,
+  bulkExportWriteFile: (request: BulkExportWriteRequest): Promise<string> =>
+    ipcRenderer.invoke(
+      IpcChannel.bulkExportWriteFile,
+      request,
+    ) as Promise<string>,
+  bulkExportFileExists: (
+    directoryPath: string,
+    fileName: string,
+  ): Promise<boolean> =>
+    ipcRenderer.invoke(
+      IpcChannel.bulkExportFileExists,
+      directoryPath,
+      fileName,
+    ) as Promise<boolean>,
+  bulkExportReadFile: (
+    directoryPath: string,
+    fileName: string,
+  ): Promise<string | null> =>
+    ipcRenderer.invoke(
+      IpcChannel.bulkExportReadFile,
+      directoryPath,
+      fileName,
+    ) as Promise<string | null>,
   scanFolder: (directoryPath: string): Promise<ScannedFolder> =>
     ipcRenderer.invoke(
       IpcChannel.scanFolder,

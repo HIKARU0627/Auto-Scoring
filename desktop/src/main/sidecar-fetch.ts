@@ -20,6 +20,17 @@ function headersToRecord(headers: Headers): Readonly<Record<string, string>> {
 const E2E_GRADING_JOBS_STUB_ENV = "AUTO_SCORING_E2E_STUB_GRADING_JOBS";
 
 /**
+ * E2E-only switch that serves the bulk-export endpoints from a stub.
+ *
+ * The PDF engine resolves only Windows-shipped Japanese fonts
+ * (`adapters/pdf/pdfium_pypdf_engine.py`), so a real export cannot render on a
+ * non-Windows E2E runner. This stub lets the spec exercise the part under test
+ * -- `chooseFolder` and the main-process file write -- without the renderer.
+ * Never active in a packaged build (`readE2eEnv`).
+ */
+const E2E_BULK_EXPORT_STUB_ENV = "AUTO_SCORING_E2E_STUB_BULK_EXPORT";
+
+/**
  * How many times a submission's job list is served as "running" before the
  * E2E stub reports it finished. More than one so a spec can enter the review
  * screen, observe the in-progress state, and then see it settle without any
@@ -95,6 +106,77 @@ function maybeStubCriteriaExtract(
   };
 }
 
+function jsonResponse(status: number, body: unknown): SidecarFetchResponse {
+  return {
+    status,
+    statusText: status === 200 ? "OK" : String(status),
+    headers: { "content-type": "application/json" },
+    bodyBase64: Buffer.from(JSON.stringify(body)).toString("base64"),
+  };
+}
+
+/**
+ * Serves `POST /tests/{id}/export` and `GET /exports/{id}/file` from the E2E
+ * bulk-export stub. Reusing an already-exported file is what the real API
+ * returns when nothing changed, so the runner skips its job polling and goes
+ * straight to the write this spec is about.
+ */
+function maybeStubBulkExport(
+  request: SidecarFetchRequest,
+): SidecarFetchResponse | null {
+  if (readE2eEnv(E2E_BULK_EXPORT_STUB_ENV) === undefined) {
+    return null;
+  }
+  if (request.method === "POST") {
+    const match = /^\/tests\/([^/]+)\/export$/.exec(request.urlPath);
+    if (match === null) {
+      return null;
+    }
+    let submissionIds: string[] = [];
+    try {
+      const body = JSON.parse(
+        Buffer.from(request.bodyBase64 ?? "", "base64").toString("utf8"),
+      ) as { submission_ids?: unknown };
+      if (Array.isArray(body.submission_ids)) {
+        submissionIds = body.submission_ids.filter(
+          (id): id is string => typeof id === "string",
+        );
+      }
+    } catch {
+      return null;
+    }
+    return jsonResponse(200, {
+      test_id: match[1],
+      items: submissionIds.map((submissionId) => ({
+        submission_id: submissionId,
+        status: "reused",
+        export: {
+          id: `e2e-export-${submissionId}`,
+          job_id: `e2e-job-${submissionId}`,
+          submission_id: submissionId,
+          file_path: `exports/${submissionId}_corrected.pdf`,
+          file_sha256: "0".repeat(64),
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      })),
+    });
+  }
+  if (request.method === "GET") {
+    const match = /^\/exports\/([^/]+)\/file$/.exec(request.urlPath);
+    if (match === null) {
+      return null;
+    }
+    const bytes = Buffer.from("%PDF-1.4\n% e2e stub\n%%EOF\n", "utf8");
+    return {
+      status: 200,
+      statusText: "OK",
+      headers: { "content-type": "application/pdf" },
+      bodyBase64: bytes.toString("base64"),
+    };
+  }
+  return null;
+}
+
 /**
  * Rewrites a real `GET /submissions/{id}/jobs` body so grading appears to take
  * a moment, without calling an external AI. Only the job `state`/`usable`
@@ -148,6 +230,11 @@ export async function sidecarFetch(
   const stubbed = maybeStubCriteriaExtract(request);
   if (stubbed !== null) {
     return stubbed;
+  }
+
+  const stubbedExport = maybeStubBulkExport(request);
+  if (stubbedExport !== null) {
+    return stubbedExport;
   }
 
   assertLoopbackConnection(connection);

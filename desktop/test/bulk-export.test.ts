@@ -157,4 +157,42 @@ describe("BulkExportRunner (INV-189)", () => {
       new Uint8Array([1, 2, 3]),
     );
   });
+
+  it("writes every target, not just the first (Issue #345)", async () => {
+    const storage = createMemoryBulkExportStorage();
+    const client = createMockSidecarClient({
+      requestBulkExport: async (_testId, submissionIds) => ({
+        test_id: "t1",
+        items: submissionIds.map((submissionId) => ({
+          submission_id: submissionId,
+          status: "reused",
+          export: {
+            id: `exp-${submissionId}`,
+            job_id: `job-${submissionId}`,
+            submission_id: submissionId,
+            file_path: `exports/${submissionId}_corrected.pdf`,
+            file_sha256: "0".repeat(64),
+            created_at: new Date().toISOString(),
+          },
+        })),
+      }),
+      getExportFile: async () => new Uint8Array([1]),
+    });
+
+    const result = await new BulkExportRunner().run({
+      client,
+      testId: "t1",
+      targets: [
+        { submissionId: "sub-1", label: "出席1" },
+        { submissionId: "sub-2", label: "出席2" },
+      ],
+      storage,
+      destinationLabel: "/out",
+      pollIntervalMs: 1,
+    });
+
+    expect(result.writtenCount).toBe(2);
+    expect(await storage.exists("sub-1_corrected.pdf")).toBe(true);
+    expect(await storage.exists("sub-2_corrected.pdf")).toBe(true);
+  });
 });

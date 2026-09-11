@@ -2,13 +2,17 @@ import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
+  ActionRequirements,
+  type ActionRequirement,
+} from "../../core/action-requirements.js";
+import {
   BulkExportPlan,
   BulkExportProgress,
   BulkExportRunner,
   type BulkExportTarget,
 } from "../../core/bulk-export.js";
 import {
-  createDirectoryHandleStorage,
+  createPathBulkExportStorage,
   type BulkExportStorage,
 } from "../../core/bulk-export-writer.js";
 import type { ReviewQueue } from "../../core/review-queue.js";
@@ -18,24 +22,45 @@ export interface BulkExportDestination {
   readonly storage: BulkExportStorage;
 }
 
+/**
+ * Why the picker returned nothing.
+ *
+ * `cancelled` is the user closing the dialog: silent by design. `unavailable`
+ * means there is no picker at all, which must say so on screen rather than
+ * leave the button looking broken (Issue #345).
+ */
+export type BulkExportDestinationChoice =
+  | { readonly kind: "chosen"; readonly destination: BulkExportDestination }
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "unavailable" };
+
 export interface BulkExportDialogProps {
   readonly testId: string;
   readonly queue: ReviewQueue;
   readonly onClose: () => void;
-  readonly chooseDestination?: () => Promise<BulkExportDestination | null>;
+  readonly chooseDestination?: () => Promise<BulkExportDestinationChoice>;
   readonly pollIntervalMs?: number;
 }
 
 type DialogStage = "confirm" | "running" | "finished";
 
-async function defaultChooseDestination(): Promise<BulkExportDestination | null> {
-  if (typeof window.showDirectoryPicker !== "function") {
-    return null;
+async function defaultChooseDestination(): Promise<BulkExportDestinationChoice> {
+  const bridge = window.autoScoring;
+  if (typeof bridge?.chooseFolder !== "function") {
+    return { kind: "unavailable" };
   }
-  const handle = await window.showDirectoryPicker();
+  // `chooseFolder` honors `AUTO_SCORING_E2E_FOLDER` in unpackaged builds, so
+  // this is the one path both a person and the E2E harness go through.
+  const directoryPath = await bridge.chooseFolder();
+  if (directoryPath === null) {
+    return { kind: "cancelled" };
+  }
   return {
-    label: handle.name,
-    storage: createDirectoryHandleStorage(handle),
+    kind: "chosen",
+    destination: {
+      label: directoryPath,
+      storage: createPathBulkExportStorage(directoryPath, bridge),
+    },
   };
 }
 
@@ -53,6 +78,9 @@ export function BulkExportDialog({
     plan.targets,
   );
   const [destinationLabel, setDestinationLabel] = useState<string | null>(null);
+  const [startFailure, setStartFailure] = useState<ActionRequirement | null>(
+    null,
+  );
   const [progress, setProgress] = useState<BulkExportProgress | null>(null);
   const runnerRef = useRef<BulkExportRunner | null>(null);
   const storageRef = useRef<BulkExportStorage | null>(null);
@@ -94,11 +122,16 @@ export function BulkExportDialog({
   );
 
   const handleStart = useCallback(async () => {
-    const destination = await chooseDestination();
-    if (destination === null) {
+    setStartFailure(null);
+    const choice = await chooseDestination();
+    if (choice.kind === "unavailable") {
+      setStartFailure(ActionRequirements.bulkExportDestinationUnavailable);
       return;
     }
-    await runWithDestination(plan.targets, destination);
+    if (choice.kind === "cancelled") {
+      return;
+    }
+    await runWithDestination(plan.targets, choice.destination);
   }, [chooseDestination, plan.targets, runWithDestination]);
 
   const handleRetryFailures = useCallback(async () => {
@@ -171,6 +204,16 @@ export function BulkExportDialog({
               </div>
             ) : null}
           </div>
+        ) : null}
+
+        {startFailure !== null ? (
+          <p
+            data-testid="bulk-export-destination-error"
+            role="alert"
+            className="text-body-small text-error py-sm"
+          >
+            {startFailure.message}
+          </p>
         ) : null}
 
         {stage === "running" && progress !== null ? (
