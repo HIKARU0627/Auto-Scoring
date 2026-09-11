@@ -66,3 +66,31 @@ export function materialRowIsCovered(
   const [start, end] = first;
   return start <= MATERIAL_COVER_EPSILON && end >= 1 - MATERIAL_COVER_EPSILON;
 }
+
+/**
+ * Where the first not-yet-covered part of a row begins, as a fraction of the
+ * row's height, or `null` when the row is covered end to end.
+ *
+ * A tall row seen only from its top has its gap *below* the viewport even
+ * though the row's own top has scrolled above it, so `rowTop < containerTop`
+ * cannot tell which way the remaining material lies. The fraction can
+ * (`_firstGapY` in the Flutter original).
+ */
+export function materialRowGapStart(
+  ranges: readonly MaterialRange[] | null | undefined,
+): number | null {
+  if (ranges == null || ranges.length === 0) {
+    return 0;
+  }
+  const first = ranges[0];
+  if (first == null) {
+    return 0;
+  }
+  if (
+    first[0] <= MATERIAL_COVER_EPSILON &&
+    first[1] >= 1 - MATERIAL_COVER_EPSILON
+  ) {
+    return null;
+  }
+  return first[0] > MATERIAL_COVER_EPSILON ? 0 : first[1];
+}

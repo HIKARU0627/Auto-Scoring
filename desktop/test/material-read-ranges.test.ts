@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MATERIAL_COVER_EPSILON,
+  materialRowGapStart,
   materialRowIsCovered,
   mergeMaterialRange,
   sameMaterialRanges,
@@ -69,5 +70,22 @@ describe("mergeMaterialRange (INV-065, INV-066)", () => {
     const merged = mergeMaterialRange([[0, 0.5]], 0.5 + gap, 1);
     expect(merged).toHaveLength(1);
     expect(materialRowIsCovered(merged)).toBe(true);
+  });
+
+  it("INV-319: reports where the first unread part of a row begins", () => {
+    expect(materialRowGapStart(null)).toBe(0);
+    expect(materialRowGapStart([])).toBe(0);
+    expect(materialRowGapStart([[0, 1]])).toBeNull();
+    // Seen from the top only: the gap is below the seen part.
+    expect(materialRowGapStart([[0, 0.6]])).toBe(0.6);
+    // Seen from the bottom only: the gap is above.
+    expect(materialRowGapStart([[0.4, 1]])).toBe(0);
+    // A middle gap after a first pass.
+    expect(
+      materialRowGapStart([
+        [0, 0.3],
+        [0.6, 1],
+      ]),
+    ).toBe(0.3);
   });
 });

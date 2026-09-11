@@ -8,6 +8,7 @@ import {
 } from "react";
 
 import {
+  materialRowGapStart,
   materialRowIsCovered,
   mergeMaterialRange,
   sameMaterialRanges,
@@ -129,20 +130,28 @@ export function useMaterialReadTracking(
   }, [input.status, rangesByRow, rows]);
 
   const unreadIsAbove = useMemo(() => {
+    const container = scrollContainerRef.current;
+    if (container == null) {
+      return false;
+    }
+    const containerTop = container.getBoundingClientRect().top;
     for (const row of rows) {
-      if (!materialRowIsCovered(rangesByRow[row.id])) {
-        const markers = rowRefs.current.get(row.id);
-        if (markers == null) {
-          continue;
-        }
-        const container = scrollContainerRef.current;
-        if (container == null) {
-          return false;
-        }
-        const rowTop = markers.top.getBoundingClientRect().top;
-        const containerTop = container.getBoundingClientRect().top;
-        return rowTop < containerTop;
+      const ranges = rangesByRow[row.id];
+      const gapStart = materialRowGapStart(ranges);
+      if (gapStart == null) {
+        continue;
       }
+      const markers = rowRefs.current.get(row.id);
+      if (markers == null) {
+        continue;
+      }
+      const rowTop = markers.top.getBoundingClientRect().top;
+      const rowBottom = markers.bottom.getBoundingClientRect().bottom;
+      const rowHeight = rowBottom - rowTop;
+      if (rowHeight <= 0) {
+        continue;
+      }
+      return rowTop + gapStart * rowHeight < containerTop;
     }
     return false;
   }, [rangesByRow, rows, scrollContainerRef]);
@@ -151,10 +160,15 @@ export function useMaterialReadTracking(
     const container = scrollContainerRef.current;
     if (container != null) {
       const viewport = container.clientHeight * 0.9;
+      // Towards the unread material, which is not always downwards (Issue
+      // #319, ported from `_revealRestOfMaterial`). While parked at the
+      // bottom, a row replaced above the fold leaves the gate closed with
+      // nowhere to go, and a button that scrolls the wrong way does nothing.
+      const delta = unreadIsAbove ? -viewport : viewport;
       if (typeof container.scrollBy === "function") {
-        container.scrollBy({ top: viewport, behavior: "smooth" });
+        container.scrollBy({ top: delta, behavior: "smooth" });
       } else {
-        container.scrollTop += viewport;
+        container.scrollTop += delta;
       }
       window.setTimeout(() => {
         measure();
@@ -163,7 +177,7 @@ export function useMaterialReadTracking(
     setSnackbarMessage(
       "判断材料が画面外に残っていました。続きを表示しました。",
     );
-  }, [measure, scrollContainerRef]);
+  }, [measure, scrollContainerRef, unreadIsAbove]);
 
   const clearSnackbar = useCallback(() => {
     setSnackbarMessage(null);
