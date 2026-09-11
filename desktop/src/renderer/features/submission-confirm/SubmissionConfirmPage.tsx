@@ -20,6 +20,14 @@ import {
   SubmissionConfirmDataError,
   type QuestionReviewData,
 } from "../../core/submission-confirm-data.js";
+import {
+  loadSubmissionAiUsage,
+  UsageDataError,
+} from "../../core/usage-data.js";
+import {
+  formatAiUsageDisplay,
+  type AiUsageNumbers,
+} from "../../core/ai-usage-display.js";
 import type { components } from "../../api/generated/schema.js";
 import { pdfReview, submissionConfirm } from "../../core/app-routes.js";
 import {
@@ -174,6 +182,8 @@ export function SubmissionConfirmPage(): JSX.Element {
     null,
   );
   const [snackbar, setSnackbar] = useState<string | null>(null);
+  const [aiUsage, setAiUsage] = useState<AiUsageNumbers | null>(null);
+  const [aiUsageError, setAiUsageError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const questions =
@@ -316,6 +326,41 @@ export function SubmissionConfirmPage(): JSX.Element {
     () => createSubmissionConfirmation(confirmationInputs),
     [confirmationInputs],
   );
+
+  const gradingFinished = useMemo(() => {
+    if (loadState.status !== "ready") {
+      return false;
+    }
+    const active = new Set(["queued", "running", "blocked"]);
+    return !loadState.jobs.some(
+      (job) => job.kind === "grading" && active.has(job.state),
+    );
+  }, [loadState]);
+
+  useEffect(() => {
+    if (!gradingFinished || submissionId.length === 0) {
+      setAiUsage(null);
+      setAiUsageError(null);
+      return;
+    }
+    void loadSubmissionAiUsage(client, submissionId)
+      .then((usage) => {
+        setAiUsage(usage);
+        setAiUsageError(null);
+      })
+      .catch((error: unknown) => {
+        setAiUsage(null);
+        setAiUsageError(
+          error instanceof UsageDataError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : String(error),
+        );
+      });
+  }, [client, gradingFinished, submissionId]);
+
+  const aiUsageDisplay = aiUsage != null ? formatAiUsageDisplay(aiUsage) : null;
 
   const latestJobFor = useCallback(
     (questionId: string): JobResponse | null => {
@@ -515,6 +560,40 @@ export function SubmissionConfirmPage(): JSX.Element {
             このテストには設問が登録されていません。
           </p>
         </div>
+      ) : null}
+
+      {loadState.status === "ready" && gradingFinished ? (
+        <section
+          data-testid="confirm-ai-usage"
+          className="border-b border-outline-variant bg-surface-container-low px-xl py-md"
+        >
+          {aiUsageError != null ? (
+            <p className="text-body-small text-on-surface-variant">
+              {aiUsageError}
+            </p>
+          ) : aiUsageDisplay != null ? (
+            <div className="flex flex-col gap-xs">
+              <p
+                data-testid="confirm-ai-usage-tokens"
+                className="text-body-medium text-on-surface"
+              >
+                {aiUsageDisplay.tokenLine}
+              </p>
+              {aiUsageDisplay.costLine != null ? (
+                <p
+                  data-testid="confirm-ai-usage-cost"
+                  className="text-body-medium text-on-surface"
+                >
+                  {aiUsageDisplay.costLine}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-body-small text-on-surface-variant">
+              AI 利用量を読み込み中…
+            </p>
+          )}
+        </section>
       ) : null}
 
       {loadState.status === "ready" && questions.length > 0 ? (

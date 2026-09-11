@@ -20,6 +20,10 @@ class _$GradeResultResponse extends GradeResultResponse {
   @override
   final String id;
   @override
+  final int? inputTokens;
+  @override
+  final int? outputTokens;
+  @override
   final String questionId;
   @override
   final String? rationale;
@@ -41,6 +45,8 @@ class _$GradeResultResponse extends GradeResultResponse {
       required this.createdAt,
       required this.criteria,
       required this.id,
+      this.inputTokens,
+      this.outputTokens,
       required this.questionId,
       this.rationale,
       required this.score,
@@ -66,6 +72,8 @@ class _$GradeResultResponse extends GradeResultResponse {
         createdAt == other.createdAt &&
         criteria == other.criteria &&
         id == other.id &&
+        inputTokens == other.inputTokens &&
+        outputTokens == other.outputTokens &&
         questionId == other.questionId &&
         rationale == other.rationale &&
         score == other.score &&
@@ -82,6 +90,8 @@ class _$GradeResultResponse extends GradeResultResponse {
     _$hash = $jc(_$hash, createdAt.hashCode);
     _$hash = $jc(_$hash, criteria.hashCode);
     _$hash = $jc(_$hash, id.hashCode);
+    _$hash = $jc(_$hash, inputTokens.hashCode);
+    _$hash = $jc(_$hash, outputTokens.hashCode);
     _$hash = $jc(_$hash, questionId.hashCode);
     _$hash = $jc(_$hash, rationale.hashCode);
     _$hash = $jc(_$hash, score.hashCode);
@@ -100,6 +110,8 @@ class _$GradeResultResponse extends GradeResultResponse {
           ..add('createdAt', createdAt)
           ..add('criteria', criteria)
           ..add('id', id)
+          ..add('inputTokens', inputTokens)
+          ..add('outputTokens', outputTokens)
           ..add('questionId', questionId)
           ..add('rationale', rationale)
           ..add('score', score)
@@ -140,6 +152,14 @@ class GradeResultResponseBuilder
   String? get id => _$this._id;
   set id(String? id) => _$this._id = id;
 
+  int? _inputTokens;
+  int? get inputTokens => _$this._inputTokens;
+  set inputTokens(int? inputTokens) => _$this._inputTokens = inputTokens;
+
+  int? _outputTokens;
+  int? get outputTokens => _$this._outputTokens;
+  set outputTokens(int? outputTokens) => _$this._outputTokens = outputTokens;
+
   String? _questionId;
   String? get questionId => _$this._questionId;
   set questionId(String? questionId) => _$this._questionId = questionId;
@@ -174,6 +194,8 @@ class GradeResultResponseBuilder
       _createdAt = $v.createdAt;
       _criteria = $v.criteria.toBuilder();
       _id = $v.id;
+      _inputTokens = $v.inputTokens;
+      _outputTokens = $v.outputTokens;
       _questionId = $v.questionId;
       _rationale = $v.rationale;
       _score = $v.score.toBuilder();
@@ -211,6 +233,8 @@ class GradeResultResponseBuilder
             criteria: criteria.build(),
             id: BuiltValueNullFieldError.checkNotNull(
                 id, r'GradeResultResponse', 'id'),
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
             questionId: BuiltValueNullFieldError.checkNotNull(
                 questionId, r'GradeResultResponse', 'questionId'),
             rationale: rationale,

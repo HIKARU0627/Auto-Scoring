@@ -15,6 +15,7 @@ constraint violation at the offending call rather than at ``commit``.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, and_, delete, func, or_, select, update
@@ -385,6 +386,28 @@ class SqlAlchemyGradeResultRepository:
             .limit(1)
         ).one_or_none()
         return m.grade_from_row(row) if row is not None else None
+
+    def list_ai_for_submission(self, submission_id: str) -> list[GradeResult]:
+        rows = self._session.scalars(
+            select(GradeResultRow)
+            .where(
+                GradeResultRow.submission_id == submission_id,
+                GradeResultRow.source == GradingSource.AI,
+            )
+            .order_by(GradeResultRow.created_at)
+        )
+        return [m.grade_from_row(row) for row in rows]
+
+    def list_ai_since(self, since: datetime) -> list[GradeResult]:
+        rows = self._session.scalars(
+            select(GradeResultRow)
+            .where(
+                GradeResultRow.source == GradingSource.AI,
+                GradeResultRow.created_at >= since,
+            )
+            .order_by(GradeResultRow.created_at)
+        )
+        return [m.grade_from_row(row) for row in rows]
 
 
 class SqlAlchemyAnnotationRepository:

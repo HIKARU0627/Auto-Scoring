@@ -14,6 +14,8 @@ part 'verify_api_key_response.g.dart';
 /// Properties:
 /// * [detail]
 /// * [keySource]
+/// * [providerAccountLimit]
+/// * [providerAccountUsage]
 /// * [result]
 /// * [statusCode]
 @BuiltValue()
@@ -25,6 +27,12 @@ abstract class VerifyApiKeyResponse
   @BuiltValueField(wireName: r'key_source')
   ConfigurationSource get keySource;
   // enum keySourceEnum {  credential_store,  environment,  builtin_default,  none,  };
+
+  @BuiltValueField(wireName: r'provider_account_limit')
+  num? get providerAccountLimit;
+
+  @BuiltValueField(wireName: r'provider_account_usage')
+  num? get providerAccountUsage;
 
   @BuiltValueField(wireName: r'result')
   String get result;
@@ -71,6 +79,20 @@ class _$VerifyApiKeyResponseSerializer
       object.keySource,
       specifiedType: const FullType(ConfigurationSource),
     );
+    if (object.providerAccountLimit != null) {
+      yield r'provider_account_limit';
+      yield serializers.serialize(
+        object.providerAccountLimit,
+        specifiedType: const FullType.nullable(num),
+      );
+    }
+    if (object.providerAccountUsage != null) {
+      yield r'provider_account_usage';
+      yield serializers.serialize(
+        object.providerAccountUsage,
+        specifiedType: const FullType.nullable(num),
+      );
+    }
     yield r'result';
     yield serializers.serialize(
       object.result,
@@ -121,6 +143,22 @@ class _$VerifyApiKeyResponseSerializer
             specifiedType: const FullType(ConfigurationSource),
           ) as ConfigurationSource;
           result.keySource = valueDes;
+          break;
+        case r'provider_account_limit':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(num),
+          ) as num?;
+          if (valueDes == null) continue;
+          result.providerAccountLimit = valueDes;
+          break;
+        case r'provider_account_usage':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(num),
+          ) as num?;
+          if (valueDes == null) continue;
+          result.providerAccountUsage = valueDes;
           break;
         case r'result':
           final valueDes = serializers.deserialize(

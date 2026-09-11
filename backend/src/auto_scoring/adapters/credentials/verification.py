@@ -71,6 +71,10 @@ class VerificationOutcome:
     #: credential, which is why it is the one thing from the response that
     #: is allowed out.
     status_code: int | None = None
+    #: OpenRouter ``GET /key`` account usage/limit (Issue #187). Shown on a
+    #: separate line from this app's own token accumulation -- never mixed.
+    provider_account_usage: float | None = None
+    provider_account_limit: float | None = None
 
 
 NOT_CONFIGURED = VerificationOutcome(
@@ -154,10 +158,24 @@ def _read_key_response(response: httpx.Response) -> VerificationOutcome:
         return ok
     limit = data.get("limit")
     usage = data.get("usage")
-    if isinstance(limit, int | float) and isinstance(usage, int | float) and usage >= limit:
+    provider_usage = float(usage) if isinstance(usage, int | float) else None
+    provider_limit = float(limit) if isinstance(limit, int | float) else None
+    if (
+        provider_limit is not None
+        and provider_usage is not None
+        and provider_usage >= provider_limit
+    ):
         return VerificationOutcome(
             VerificationResult.NO_CREDIT,
             "キーは有効ですが、利用上限に達しています。provider 側で残高か上限を確認してください。",
             status_code=status,
+            provider_account_usage=provider_usage,
+            provider_account_limit=provider_limit,
         )
-    return ok
+    return VerificationOutcome(
+        VerificationResult.OK,
+        ok.detail,
+        status_code=status,
+        provider_account_usage=provider_usage,
+        provider_account_limit=provider_limit,
+    )

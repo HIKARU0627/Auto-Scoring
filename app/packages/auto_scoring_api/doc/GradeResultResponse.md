@@ -14,6 +14,8 @@ Name | Type | Description | Notes
 **createdAt** | [**DateTime**](DateTime.md) |  | 
 **criteria** | [**BuiltList&lt;CriterionResultResponse&gt;**](CriterionResultResponse.md) |  | 
 **id** | **String** |  | 
+**inputTokens** | **int** |  | [optional] 
+**outputTokens** | **int** |  | [optional] 
 **questionId** | **String** |  | 
 **rationale** | **String** |  | [optional] 
 **score** | [**ScoreValueResponse**](ScoreValueResponse.md) |  | 
