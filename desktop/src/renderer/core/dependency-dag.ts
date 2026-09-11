@@ -158,17 +158,10 @@ export function buildDagQuestion(input: {
   };
 }
 
-export interface LayoutRect {
-  readonly left: number;
-  readonly top: number;
-  readonly width: number;
-  readonly height: number;
-}
-
 export interface DagNode {
   readonly question: DagQuestion;
   readonly layer: number;
-  readonly rect: LayoutRect;
+  readonly row: number;
   readonly waitingOn: QuestionWait | null;
   readonly statusLabel: string;
 }
@@ -195,31 +188,6 @@ export interface DependencyDagLayout {
   readonly progressSummary: string;
   readonly failures: readonly DagFailure[];
   readonly statusById: Readonly<Record<string, QuestionStatusKey>>;
-}
-
-export interface DagMetrics {
-  readonly nodeWidth: number;
-  readonly nodeHeight: number;
-  readonly columnGap: number;
-  readonly rowGap: number;
-  readonly padding: number;
-}
-
-export const DEFAULT_DAG_METRICS: DagMetrics = {
-  nodeWidth: 120,
-  nodeHeight: 56,
-  columnGap: 48,
-  rowGap: 16,
-  padding: 16,
-};
-
-function rectAt(metrics: DagMetrics, layer: number, row: number): LayoutRect {
-  return {
-    left: metrics.padding + layer * (metrics.nodeWidth + metrics.columnGap),
-    top: metrics.padding + row * (metrics.nodeHeight + metrics.rowGap),
-    width: metrics.nodeWidth,
-    height: metrics.nodeHeight,
-  };
 }
 
 function formatQuestionNames(labels: readonly string[]): string {
@@ -293,9 +261,7 @@ export function buildDependencyDagLayout(input: {
   questions: readonly DagQuestion[];
   edges: readonly DependencyEdge[];
   releasedQuestionIds: ReadonlySet<string>;
-  metrics?: DagMetrics;
 }): DependencyDagLayout | null {
-  const metrics = input.metrics ?? DEFAULT_DAG_METRICS;
   if (input.questions.length === 0) {
     return null;
   }
@@ -329,7 +295,7 @@ export function buildDependencyDagLayout(input: {
       nodes.push({
         question,
         layer: layerIndex,
-        rect: rectAt(metrics, layerIndex, row),
+        row,
         waitingOn,
         statusLabel: labelWaitingFor(question.status, waitingOn),
       });

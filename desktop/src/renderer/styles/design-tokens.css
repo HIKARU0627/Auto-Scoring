@@ -122,11 +122,8 @@
   --layout-dialog-body-footer-grid-rows: minmax(0, 1fr) auto;
   --layout-hairline: 1px;
   --layout-section-divider: 24px;
-  --layout-dag-node-width: 116px;
-  --layout-dag-node-height: 64px;
-  --layout-dag-panel-height: 272px;
-  --layout-dag-panel-max-height-fraction: 0.3;
-  --layout-dag-column-gap-spread-limit: 3;
+  /* React Flow viewport for the question dependency graph. */
+  --layout-dag-flow-height: 272px;
   --layout-activity-bar-height: 2px;
 
   /* Issue #295 — literals promoted out of `src/renderer/features/`. */

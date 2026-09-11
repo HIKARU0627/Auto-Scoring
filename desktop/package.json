@@ -21,6 +21,7 @@
     "test:e2e": "pnpm run build && playwright test"
   },
   "dependencies": {
+    "@xyflow/react": "^12.11.6",
     "openapi-fetch": "^0.17.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
