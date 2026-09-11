@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local.grading_cost_store import GradingCostStore
-from auto_scoring.domain.intake_template import IntakeTemplateError
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.domain.ai_usage import (
     AiUsageSummary,
@@ -17,6 +16,7 @@ from auto_scoring.domain.ai_usage import (
     apply_token_unit_cost,
     summarize_ai_grade_tokens,
 )
+from auto_scoring.domain.intake_template import IntakeTemplateError
 
 
 class GradingCostModel(BaseModel):

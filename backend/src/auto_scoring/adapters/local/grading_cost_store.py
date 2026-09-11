@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from auto_scoring.domain.intake_template import IntakeTemplateError
 from auto_scoring.adapters.local_storage import LocalFileStore
+from auto_scoring.domain.intake_template import IntakeTemplateError
 
 
 class GradingCostStore:
