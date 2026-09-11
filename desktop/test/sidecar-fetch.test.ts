@@ -1,11 +1,73 @@
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { sidecarFetch } from "../src/main/sidecar-fetch.js";
+import {
+  SidecarTransportError,
+  sidecarFetch,
+} from "../src/main/sidecar-fetch.js";
+import { UnsafeSidecarConnectionError } from "../src/main/sidecar-connection.js";
+
+/**
+ * A stand-in for the Python sidecar's auth semantics: `/healthz` is
+ * unauthenticated, every other route needs the session token. Real HTTP over
+ * loopback, so `sidecarFetch` builds the URL, attaches the header, and reads
+ * the status the way it does in production.
+ */
+const GOOD_TOKEN = "the-session-token";
+
+interface FakeSidecar {
+  readonly host: string;
+  readonly port: number;
+  close(): Promise<void>;
+}
+
+async function startFakeSidecar(): Promise<FakeSidecar> {
+  const server = http.createServer((request, response) => {
+    const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (path === "/healthz") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+    if (request.headers["authorization"] === `Bearer ${GOOD_TOKEN}`) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(JSON.stringify({ detail: "unauthorized" }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  return {
+    host: "127.0.0.1",
+    port: address.port,
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) =>
+          error === undefined ? resolve() : reject(error),
+        ),
+      ),
+  };
+}
 
 describe("sidecarFetch", () => {
-  afterEach(() => {
+  const running: FakeSidecar[] = [];
+
+  afterEach(async () => {
     vi.unstubAllGlobals();
+    await Promise.all(running.map((sidecar) => sidecar.close()));
+    running.length = 0;
   });
+
+  async function fakeSidecar(): Promise<FakeSidecar> {
+    const sidecar = await startFakeSidecar();
+    running.push(sidecar);
+    return sidecar;
+  }
 
   it("attaches Authorization in main and returns base64 bodies", async () => {
     const pngBytes = Uint8Array.from([
@@ -34,5 +96,99 @@ describe("sidecarFetch", () => {
     expect(Buffer.from(response.bodyBase64, "base64")).toEqual(
       Buffer.from(pngBytes),
     );
+  });
+
+  it("INV-200: /healthz succeeds even though the token is bogus", async () => {
+    const sidecar = await fakeSidecar();
+
+    const response = await sidecarFetch(
+      { host: sidecar.host, port: sidecar.port, token: "bogus-token" },
+      { method: "GET", urlPath: "/healthz" },
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("INV-201: a protected path succeeds with the session token", async () => {
+    const sidecar = await fakeSidecar();
+
+    const response = await sidecarFetch(
+      { host: sidecar.host, port: sidecar.port, token: GOOD_TOKEN },
+      { method: "GET", urlPath: "/tests" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      JSON.parse(Buffer.from(response.bodyBase64, "base64").toString("utf8")),
+    ).toEqual({ ok: true });
+  });
+
+  it("INV-202: a protected path answers 401 with the wrong token", async () => {
+    const sidecar = await fakeSidecar();
+
+    const response = await sidecarFetch(
+      { host: sidecar.host, port: sidecar.port, token: "not-the-token" },
+      { method: "GET", urlPath: "/tests" },
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("INV-203: rejects a non-loopback host before any request is sent", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const secret = "must-not-escape-token";
+
+    let caught: unknown;
+    try {
+      await sidecarFetch(
+        { host: "collector.example", port: 54321, token: secret },
+        { method: "GET", urlPath: "/tests" },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(UnsafeSidecarConnectionError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const rendered = [
+      String(caught),
+      (caught as Error).stack ?? "",
+      inspect(caught),
+    ].join("\n");
+    expect(rendered).not.toContain(secret);
+    expect(rendered).not.toContain("collector.example");
+    expect(rendered).not.toContain("54321");
+  });
+
+  it("INV-204: a transport failure never echoes the URL, port, or token", async () => {
+    const secret = "must-not-escape-token";
+    const leaked = `connect ECONNREFUSED http://127.0.0.1:54321 token=${secret}`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error(leaked);
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      await sidecarFetch(
+        { host: "127.0.0.1", port: 54321, token: secret },
+        { method: "GET", urlPath: "/tests" },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SidecarTransportError);
+    const rendered = [
+      String(caught),
+      (caught as Error).stack ?? "",
+      inspect(caught),
+    ].join("\n");
+    expect(rendered).not.toContain(secret);
+    expect(rendered).not.toContain("54321");
+    expect(rendered).not.toContain("http://127.0.0.1");
   });
 });
