@@ -401,7 +401,7 @@ void main() {
     );
 
     test(
-      'cross-line anchor for UNDERLINE and BOX returns null (evacuated to comment)',
+      'cross-line anchor for UNDERLINE and BOX resolves to per-line rects',
       () {
         final multiLineBoxes = [
           (
@@ -457,12 +457,31 @@ void main() {
         ];
 
         for (final kind in ['underline', 'box']) {
-          final resolved = resolveAnnotationRect(
+          final resolved = resolveAnnotationRects(
             annotation: annotation(kind: kind, anchorText: '春はあけぼ'),
             questionAnswerArea: null,
             recognitions: [recognitionWithBoxes(multiLineBoxes)],
           );
-          expect(resolved, isNull);
+          expect(resolved, isNotNull);
+          expect(resolved, hasLength(2));
+          expect(resolved![0].x, closeTo(0.86, 1e-6));
+          expect(resolved[0].y, closeTo(0.10, 1e-6));
+          expect(resolved[0].width, closeTo(0.12, 1e-6));
+          expect(resolved[0].height, closeTo(0.04, 1e-6));
+          expect(resolved[0].width, lessThan(0.95));
+          expect(resolved[1].x, closeTo(0.01, 1e-6));
+          expect(resolved[1].y, closeTo(0.30, 1e-6));
+          expect(resolved[1].width, closeTo(0.18, 1e-6));
+          expect(resolved[1].height, closeTo(0.04, 1e-6));
+          expect(resolved[1].width, lessThan(0.95));
+          expect(
+            resolveAnnotationRect(
+              annotation: annotation(kind: kind, anchorText: '春はあけぼ'),
+              questionAnswerArea: null,
+              recognitions: [recognitionWithBoxes(multiLineBoxes)],
+            ),
+            isNull,
+          );
         }
       },
     );

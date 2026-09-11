@@ -66,6 +66,23 @@ function statusIcon(status: QuestionStatusKey): string {
   return QuestionStatus[status].icon;
 }
 
+const ENTER_ACTIVATES_LOCALLY =
+  'button, a[href], input, textarea, select, [role="button"], [contenteditable="true"]';
+
+/**
+ * Enter on a focused control belongs to that control, not the page (Issue #196).
+ *
+ * The page-wide listener below runs wherever focus is, so without this guard
+ * Tab-ing to 却下/再判定/取り消し/続きを表示/戻る and pressing Enter would approve
+ * the question instead of running the button the reviewer actually reached.
+ * Returning early leaves the key to the browser's own activation.
+ */
+function enterActivatesLocally(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element && target.closest(ENTER_ACTIVATES_LOCALLY) != null
+  );
+}
+
 export function PdfReviewPage(): JSX.Element {
   const client = useSidecarClient();
   const { params } = useRouter();
@@ -367,6 +384,9 @@ export function PdfReviewPage(): JSX.Element {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+        if (enterActivatesLocally(event.target)) {
+          return;
+        }
         if (!canApprove) {
           if (blockedOnUnread) {
             materialRead.revealRest();

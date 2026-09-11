@@ -76,14 +76,14 @@ final NormalizedRectResponse _fullPageArea = NormalizedRectResponse(
 /// on the review screen as well as in the export, since this function is
 /// what both of them ask. §12.4 already said not to
 /// ("無理に本文付近へ配置しない").
-NormalizedRectResponse? resolveAnnotationRect({
+List<NormalizedRectResponse>? resolveAnnotationRects({
   required AnnotationResponse annotation,
   required NormalizedRectResponse? questionAnswerArea,
   required List<RecognitionResponse> recognitions,
 }) {
-  if (annotation.rect != null) return annotation.rect;
+  if (annotation.rect != null) return [annotation.rect!];
   if (annotation.anchorText case final anchorText? when anchorText.isNotEmpty) {
-    final matched = _findAnchorTextRect(
+    final matched = _findAnchorTextRects(
       anchorText,
       recognitions,
       _effectiveAnswerArea(questionAnswerArea),
@@ -92,6 +92,20 @@ NormalizedRectResponse? resolveAnnotationRect({
     if (matched != null) return matched;
   }
   return null;
+}
+
+NormalizedRectResponse? resolveAnnotationRect({
+  required AnnotationResponse annotation,
+  required NormalizedRectResponse? questionAnswerArea,
+  required List<RecognitionResponse> recognitions,
+}) {
+  final rects = resolveAnnotationRects(
+    annotation: annotation,
+    questionAnswerArea: questionAnswerArea,
+    recognitions: recognitions,
+  );
+  if (rects == null || rects.length != 1) return null;
+  return rects.first;
 }
 
 /// The answer-area crop to map an OCR box through, treating a `null` *or*
@@ -140,7 +154,7 @@ NormalizedRectResponse _effectiveAnswerArea(
 /// Must stay identical to `domain/annotation_layout.py`'s
 /// `_find_anchor_text_rect` -- the review screen and the PDF export have to
 /// agree on where a mark goes (`docs/pdf-export.md` §2).
-NormalizedRectResponse? _findAnchorTextRect(
+List<NormalizedRectResponse>? _findAnchorTextRects(
   String anchorText,
   List<RecognitionResponse> recognitions,
   NormalizedRectResponse answerArea, {
@@ -150,9 +164,28 @@ NormalizedRectResponse? _findAnchorTextRect(
   if (needle.isEmpty) return null;
   for (final recognition in recognitions.reversed) {
     final matched = _shortestBoxRun(needle, recognition.boxes, kind: kind);
-    if (matched != null) return _cropRelativeToPage(matched, answerArea);
+    if (matched != null) {
+      return [
+        for (final rect in matched) _cropRelativeToPage(rect, answerArea),
+      ];
+    }
   }
   return null;
+}
+
+List<List<BoundingBoxResponse>> _lineGroups(List<BoundingBoxResponse> boxes) {
+  if (boxes.isEmpty) return const [];
+  final groups = <List<BoundingBoxResponse>>[
+    [boxes.first],
+  ];
+  for (var index = 1; index < boxes.length; index++) {
+    if (_isSameLine(boxes[index - 1], boxes[index])) {
+      groups.last.add(boxes[index]);
+    } else {
+      groups.add([boxes[index]]);
+    }
+  }
+  return groups;
 }
 
 /// [text] reduced to what an anchor and an OCR box can be compared on: no
@@ -194,10 +227,10 @@ bool _isSameLine(BoundingBoxResponse b1, BoundingBoxResponse b2) {
 ///
 /// When the matched run spans across a line break:
 /// - Single bounding boxes across line breaks are forbidden (Issue #260).
-/// - For CROSS (×): restricted to the boxes in the anchor's first token line.
-/// - For other kinds (UNDERLINE, BOX, etc.): returns `null`, evacuating to
-///   the comment area per §12.4 (multi-rect support deferred to Issue #256).
-NormalizedRectResponse? _shortestBoxRun(
+/// - For CROSS (×): one rect from the anchor's first token line only.
+/// - For UNDERLINE / BOX: one rect per line group (Issue #256).
+/// - For other kinds: `null` (§12.4 evacuate).
+List<NormalizedRectResponse>? _shortestBoxRun(
   String needle,
   Iterable<BoundingBoxResponse> boxesIn, {
   String? kind,
@@ -225,23 +258,19 @@ NormalizedRectResponse? _shortestBoxRun(
   if (bestStart == null) return null;
 
   final matchedBoxes = boxes.sublist(bestStart, bestEnd! + 1);
-  final firstLineBoxes = <BoundingBoxResponse>[matchedBoxes.first];
-  for (var i = 1; i < matchedBoxes.length; i++) {
-    if (_isSameLine(matchedBoxes[i - 1], matchedBoxes[i])) {
-      firstLineBoxes.add(matchedBoxes[i]);
-    } else {
-      break;
-    }
-  }
-
-  final spansLineBreak = firstLineBoxes.length < matchedBoxes.length;
-  if (!spansLineBreak) {
-    return _unionOfBoxes(matchedBoxes);
+  final lineGroups = _lineGroups(matchedBoxes);
+  if (lineGroups.length == 1) {
+    return [_unionOfBoxes(matchedBoxes)];
   }
 
   final isCross = kind?.toLowerCase() == 'cross';
   if (isCross) {
-    return _unionOfBoxes(firstLineBoxes);
+    return [_unionOfBoxes(lineGroups.first)];
+  }
+
+  final kindLower = kind?.toLowerCase();
+  if (kindLower == 'underline' || kindLower == 'box') {
+    return [for (final group in lineGroups) _unionOfBoxes(group)];
   }
   return null;
 }

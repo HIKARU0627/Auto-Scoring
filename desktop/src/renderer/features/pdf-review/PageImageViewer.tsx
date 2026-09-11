@@ -2,7 +2,7 @@ import { useMemo, type JSX } from "react";
 
 import {
   normalizedRectToLayout,
-  resolveAnnotationRect,
+  resolveAnnotationRects,
   type AnnotationResponse,
   type NormalizedRect,
 } from "../../core/pdf-review-geometry.js";
@@ -11,7 +11,7 @@ import type { PageImageState } from "../answer-area-editor/answer-area-types.js"
 
 export interface ResolvedAnnotation {
   readonly annotation: AnnotationResponse;
-  readonly rect: NormalizedRect;
+  readonly rects: readonly NormalizedRect[];
 }
 
 export interface PageImageViewerProps {
@@ -46,15 +46,15 @@ export function PageImageViewer({
     const placed: ResolvedAnnotation[] = [];
     const unresolved: AnnotationResponse[] = [];
     for (const annotation of annotations) {
-      const rect = resolveAnnotationRect({
+      const rects = resolveAnnotationRects({
         annotation,
         questionAnswerArea,
         recognitions,
       });
-      if (rect == null) {
+      if (rects == null || rects.length === 0) {
         unresolved.push(annotation);
       } else {
-        placed.push({ annotation, rect });
+        placed.push({ annotation, rects });
       }
     }
     return { placed, unresolved };
@@ -79,27 +79,29 @@ export function PageImageViewer({
             ページ画像を読み込めませんでした
           </div>
         )}
-        {resolved.placed.map(({ annotation, rect }) => {
-          const layout = normalizedRectToLayout(
-            rect,
-            renderSize,
-            imagePixelSize,
-          );
-          return (
-            <div
-              key={annotation.id}
-              data-testid={`annotation-${annotation.id}`}
-              className="pointer-events-none absolute border-2 border-error"
-              style={{
-                left: layout.left,
-                top: layout.top,
-                width: layout.width,
-                height: layout.height,
-              }}
-              aria-hidden
-            />
-          );
-        })}
+        {resolved.placed.flatMap(({ annotation, rects }) =>
+          rects.map((rect, index) => {
+            const layout = normalizedRectToLayout(
+              rect,
+              renderSize,
+              imagePixelSize,
+            );
+            return (
+              <div
+                key={`${annotation.id}-${index}`}
+                data-testid={`annotation-${annotation.id}-${index}`}
+                className="pointer-events-none absolute border-2 border-error"
+                style={{
+                  left: layout.left,
+                  top: layout.top,
+                  width: layout.width,
+                  height: layout.height,
+                }}
+                aria-hidden
+              />
+            );
+          }),
+        )}
       </div>
       {resolved.unresolved.length > 0 ? (
         <section data-testid="review-question-comments">
