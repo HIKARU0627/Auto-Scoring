@@ -185,6 +185,33 @@ class TestResolveAnnotationRect:
         assert resolved.width == pytest.approx(0.12)
         assert resolved.height == pytest.approx(0.04)
 
+    def test_an_anchor_spanning_across_line_breaks_unions_into_full_width_box(self) -> None:
+        """Issue #152: When an anchor's matched boxes cross a line break,
+        ``_shortest_box_run`` unions all boxes across the two lines into a single
+        bounding box. Because line 1 ends near the right edge (x=0.98) and line 2
+        starts near the left edge (x=0.01), the resulting union rect covers nearly
+        the entire line width (>95%), explaining the oversized 'x' symptom."""
+        annotation = _annotation(kind=AnnotationKind.CROSS, anchor_text="春はあけぼ", rect=None)
+        recognition = _recognition(
+            boxes=(
+                BoundingBox(text="春", rect=_rect(0.86, 0.10, 0.06, 0.04)),
+                BoundingBox(text="は", rect=_rect(0.92, 0.10, 0.06, 0.04)),
+                BoundingBox(text="あ", rect=_rect(0.01, 0.30, 0.06, 0.04)),
+                BoundingBox(text="け", rect=_rect(0.07, 0.30, 0.06, 0.04)),
+                BoundingBox(text="ぼ", rect=_rect(0.13, 0.30, 0.06, 0.04)),
+            )
+        )
+
+        resolved = resolve_annotation_rect(
+            annotation, question=_question(answer_area=None), recognitions=(recognition,)
+        )
+
+        assert resolved is not None
+        assert resolved.x == pytest.approx(0.01)
+        assert resolved.y == pytest.approx(0.10)
+        assert resolved.width == pytest.approx(0.97)
+        assert resolved.height == pytest.approx(0.24)
+
     def test_a_full_width_anchor_matches_the_ascii_the_ocr_read(self) -> None:
         box_rect = _rect(0.4, 0.1, 0.05, 0.03)
         annotation = _annotation(kind=AnnotationKind.CIRCLE, anchor_text="\uff41", rect=None)
