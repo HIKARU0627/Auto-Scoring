@@ -46,6 +46,10 @@ contain, how to recover — is in
 
 ### Worker rules
 
+- Before starting, run the pre-flight in `docs/agent-orchestration.md` §4.2: pull
+  the latest `origin/main`, run `node scripts/inflight.mjs` to see which files
+  other worktrees and open PRs touch (and whether your base is behind), and read
+  the Issue's comments as well as its body — a PR may already exist.
 - Do only the assigned task. Carve anything out of scope into its own Issue.
 - Ask a blocking question through the preamble's `ask` command. A local prompt
   the coordinator cannot see stalls the whole run.
