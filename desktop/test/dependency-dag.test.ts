@@ -3,11 +3,34 @@ import { describe, expect, it } from "vitest";
 import {
   buildDagQuestion,
   buildDependencyDagLayout,
+  deriveStatusesFromJobs,
   type DagQuestion,
 } from "../src/renderer/core/dependency-dag.js";
 import type { components } from "../src/renderer/api/generated/schema.js";
 
 type DependencyEdge = components["schemas"]["DependencyEdgeModel"];
+type JobResponse = components["schemas"]["JobResponse"];
+type ReviewResponse = components["schemas"]["ReviewResponse"];
+
+function jobAt(
+  id: string,
+  createdAt: string,
+  overrides: Partial<JobResponse> = {},
+): JobResponse {
+  return {
+    id,
+    kind: "grading",
+    submission_id: "sub-1",
+    question_id: "q-1",
+    state: "succeeded",
+    usable: true,
+    attempts: 1,
+    max_attempts: 3,
+    created_at: createdAt,
+    updated_at: createdAt,
+    ...overrides,
+  };
+}
 
 function edge(from: string, to: string): DependencyEdge {
   return {
@@ -87,5 +110,34 @@ describe("DependencyDagLayout (INV-160–162, INV-201-03)", () => {
         releasedQuestionIds: new Set(),
       }),
     ).toBeNull();
+  });
+});
+
+describe("deriveStatusesFromJobs (Issue #402)", () => {
+  const regradeRequest: ReviewResponse = {
+    id: "review-regrade",
+    submission_id: "sub-1",
+    question_id: "q-1",
+    action: "regrade_requested",
+    version: 1,
+    regrade_job_id: "job-regrade",
+    created_at: "2026-01-01T00:00:01Z",
+  };
+
+  it("derives the DAG node status from the newest job per question", () => {
+    const oldJob = jobAt("job-old", "2026-01-01T00:00:00Z");
+    const regradeJob = jobAt("job-regrade", "2026-01-01T00:00:02Z", {
+      state: "running",
+      usable: null,
+    });
+
+    const statuses = deriveStatusesFromJobs({
+      questions: [{ id: "q-1", label: "1" }],
+      jobs: [oldJob, regradeJob],
+      reviewsByQuestion: { "q-1": regradeRequest },
+    });
+
+    // With the oldest job this would read 再判定待ち forever.
+    expect(statuses[0]!.status).toBe("running");
   });
 });

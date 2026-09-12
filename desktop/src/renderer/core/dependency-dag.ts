@@ -6,6 +6,7 @@ import {
 import {
   deriveQuestionStatus,
   labelWaitingFor,
+  latestJobFor,
   resolveQuestionWait,
   type QuestionStatusKey,
   type QuestionWait,
@@ -344,7 +345,7 @@ export function deriveStatusesFromJobs(input: {
   reviewsByQuestion: Readonly<Record<string, ReviewResponse | null>>;
 }): DagQuestion[] {
   return input.questions.map((question) => {
-    const job = input.jobs.find((j) => j.question_id === question.id) ?? null;
+    const job = latestJobFor(input.jobs, question.id);
     const review = input.reviewsByQuestion[question.id] ?? null;
     const status = deriveQuestionStatus({
       job,

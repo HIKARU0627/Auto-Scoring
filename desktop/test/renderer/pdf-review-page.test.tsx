@@ -11,6 +11,7 @@ import {
   buildGrade,
   buildJob,
   buildQuestion,
+  buildReview,
   buildReviewableGrade,
   renderPdfReview,
 } from "./support/pdf-review-harness.js";
@@ -588,6 +589,172 @@ describe("grading completion follow (Issue #319)", () => {
     expect(
       screen.getByTestId("review-question-state").textContent,
     ).not.toContain("問問1");
+  });
+});
+
+describe("regrade follow (Issue #402)", () => {
+  const OLD_JOB = buildJob({
+    id: "job-old",
+    state: "succeeded",
+    usable: true,
+    created_at: "2026-01-01T00:00:00Z",
+  });
+  const REGRADE_REVIEW = buildReview({
+    id: "review-regrade",
+    action: "regrade_requested",
+    regrade_job_id: "job-regrade",
+    created_at: "2026-01-01T00:01:00Z",
+  });
+  const regradeJob = (state: "running" | "failed") =>
+    buildJob({
+      id: "job-regrade",
+      state,
+      usable: state === "running" ? null : false,
+      created_at: "2026-01-01T00:01:00Z",
+    });
+
+  function railLabel(): string {
+    return screen.getByTestId("review-rail-q-1").getAttribute("aria-label")!;
+  }
+
+  it("shows 再判定中 while the request itself is still in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = renderPdfReview({
+        grades: [buildGrade()],
+        holdReviewAction: true,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByTestId("review-regrade-in-progress")).toBeNull();
+
+      fireEvent.click(screen.getByTestId("review-regrade-button"));
+      await flushAsync();
+
+      // The jobs still read as before, so only the pending request explains
+      // the message -- and the reviewer is not left guessing.
+      expect(screen.getByTestId("review-regrade-in-progress")).toBeDefined();
+
+      view.harness.releaseReviewAction();
+      await flushAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows 再判定中 right after the press, then settles the rail with no user action", async () => {
+    vi.useFakeTimers();
+    try {
+      const view = renderPdfReview({
+        grades: [buildGrade()],
+        jobsSequence: [
+          [OLD_JOB],
+          [OLD_JOB, regradeJob("running")],
+          [
+            OLD_JOB,
+            buildJob({
+              id: "job-regrade",
+              state: "succeeded",
+              usable: true,
+              created_at: "2026-01-01T00:01:00Z",
+            }),
+          ],
+        ],
+        reviewsSequence: [[], [REGRADE_REVIEW], [REGRADE_REVIEW]],
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(railLabel()).toContain("レビュー待ち");
+      expect(screen.queryByTestId("review-regrade-in-progress")).toBeNull();
+
+      fireEvent.click(screen.getByTestId("review-regrade-button"));
+      await flushAsync();
+
+      // 押した直後: the reviewer must see that the request is being carried out.
+      expect(screen.getByTestId("review-regrade-in-progress")).toBeDefined();
+      expect(
+        screen.getByTestId("review-regrade-in-progress").textContent,
+      ).toContain("再判定中");
+      expect(railLabel()).toContain("AI処理中");
+      const regradeCalls = (
+        view.client.POST as ReturnType<typeof vi.fn>
+      ).mock.calls.filter((call) =>
+        String(call[0]).endsWith("/review/regrade"),
+      );
+      expect(regradeCalls).toHaveLength(1);
+
+      // No click: the screen's own polling lands the replacement grade.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS);
+      });
+      await flushAsync();
+
+      expect(railLabel()).toContain("レビュー待ち");
+      expect(screen.queryByTestId("review-regrade-in-progress")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces a failed replacement attempt instead of staying on 再判定待ち", async () => {
+    vi.useFakeTimers();
+    try {
+      renderPdfReview({
+        grades: [buildGrade()],
+        jobsSequence: [
+          [OLD_JOB],
+          [OLD_JOB, regradeJob("running")],
+          [OLD_JOB, regradeJob("failed")],
+        ],
+        reviewsSequence: [[], [REGRADE_REVIEW], [REGRADE_REVIEW]],
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      fireEvent.click(screen.getByTestId("review-regrade-button"));
+      await flushAsync();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS);
+      });
+      await flushAsync();
+
+      expect(railLabel()).toContain("失敗");
+      expect(screen.queryByTestId("review-regrade-in-progress")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells the reviewer what to do when automatic following gives up", async () => {
+    vi.useFakeTimers();
+    try {
+      renderPdfReview({
+        grades: [buildGrade()],
+        jobsSequence: [[OLD_JOB], [OLD_JOB, regradeJob("running")]],
+        reviewsSequence: [[], [REGRADE_REVIEW]],
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      fireEvent.click(screen.getByTestId("review-regrade-button"));
+      await flushAsync();
+
+      for (let tick = 0; tick < JOB_POLL_MAX_ATTEMPTS; tick += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(JOB_POLL_INTERVAL_MS);
+        });
+      }
+
+      const stale = screen.getByTestId("review-refresh-stale-notice");
+      expect(stale.textContent).toContain("再読み込み");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

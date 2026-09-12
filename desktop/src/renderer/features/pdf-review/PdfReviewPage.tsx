@@ -34,6 +34,7 @@ import {
   deriveQuestionStatus,
   jobIsInProgress,
   labelWaitingFor,
+  latestJobFor,
   resolveQuestionWait,
 } from "../../core/question-status.js";
 import { QuestionStatusBadge } from "../../core/QuestionStatusBadge.js";
@@ -148,6 +149,7 @@ export function PdfReviewPage(): JSX.Element {
   const [note, setNote] = useState("");
   const [answerImageUrl, setAnswerImageUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [regradePending, setRegradePending] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [pageIndex, setPageIndex] = useState(0);
   const [jobsRefreshStalled, setJobsRefreshStalled] = useState(false);
@@ -422,7 +424,7 @@ export function PdfReviewPage(): JSX.Element {
   const ocrRecognition = latestOcrRecognition(selectedRecognitions);
 
   const selectedJob =
-    jobs.find((j) => j.question_id === selectedQuestion?.id) ?? null;
+    selectedQuestion == null ? null : latestJobFor(jobs, selectedQuestion.id);
   const selectedReview = selectedQuestion
     ? (reviewsByQuestion[selectedQuestion.id] ?? null)
     : null;
@@ -436,10 +438,9 @@ export function PdfReviewPage(): JSX.Element {
   const selectedWait = selectedQuestion
     ? resolveQuestionWait(selectedQuestion.id, {
         blockedOn: (id) =>
-          jobs.find((j) => j.question_id === id)?.blocked_on_question_id ??
-          null,
+          latestJobFor(jobs, id)?.blocked_on_question_id ?? null,
         statusOf: (id) => {
-          const job = jobs.find((j) => j.question_id === id) ?? null;
+          const job = latestJobFor(jobs, id);
           const review = reviewsByQuestion[id] ?? null;
           return deriveQuestionStatus({
             job,
@@ -467,12 +468,29 @@ export function PdfReviewPage(): JSX.Element {
     ? null
     : (reviewApproveRequirements({ busy, gradingInProgress })[0] ?? null);
 
+  /**
+   * Feedback that the 再判定 request is being carried out (Issue #402).
+   *
+   * A regrade is the one review action whose completion is not a new `Review`
+   * row, so the question's own status is the only signal -- and until the
+   * replacement job shows up it is easy to read the screen as "nothing
+   * happened". `regradePending` covers the moment between the press and the
+   * job appearing; the second half covers the whole run, including a fresh
+   * visit to the question while it is still going.
+   */
+  const regradeInFlight =
+    regradePending ||
+    (selectedReview?.action === "regrade_requested" && gradingInProgress);
+
   const performAction = useCallback(
     async (action: "approve" | "reject" | "regrade" | "undo") => {
       if (selectedQuestion == null || selectedData == null) {
         return;
       }
       setBusy(true);
+      if (action === "regrade") {
+        setStateIfMounted(mounted, setRegradePending, true);
+      }
       try {
         const version = expectedReviewVersion(selectedData.reviews);
         const pathBase = {
@@ -529,6 +547,7 @@ export function PdfReviewPage(): JSX.Element {
         setStateIfMounted(mounted, setJobs, refreshedJobs);
       } finally {
         setStateIfMounted(mounted, setBusy, false);
+        setStateIfMounted(mounted, setRegradePending, false);
       }
     },
     [client, mounted, note, selectedData, selectedQuestion, submissionId],
@@ -673,8 +692,7 @@ export function PdfReviewPage(): JSX.Element {
               aria-label="設問一覧"
             >
               {questions.map((question, index) => {
-                const job =
-                  jobs.find((j) => j.question_id === question.id) ?? null;
+                const job = latestJobFor(jobs, question.id);
                 const review = reviewsByQuestion[question.id] ?? null;
                 const status = deriveQuestionStatus({
                   job,
@@ -685,11 +703,9 @@ export function PdfReviewPage(): JSX.Element {
                 });
                 const wait = resolveQuestionWait(question.id, {
                   blockedOn: (id) =>
-                    jobs.find((j) => j.question_id === id)
-                      ?.blocked_on_question_id ?? null,
+                    latestJobFor(jobs, id)?.blocked_on_question_id ?? null,
                   statusOf: (id) => {
-                    const j =
-                      jobs.find((item) => item.question_id === id) ?? null;
+                    const j = latestJobFor(jobs, id);
                     const r = reviewsByQuestion[id] ?? null;
                     return deriveQuestionStatus({
                       job: j,
@@ -831,6 +847,16 @@ export function PdfReviewPage(): JSX.Element {
                   {labelWaitingFor(selectedStatus, selectedWait)}
                 </span>
               </div>
+
+              {regradeInFlight ? (
+                <p
+                  role="status"
+                  data-testid="review-regrade-in-progress"
+                  className="rounded-lg bg-surface-container-high px-md py-sm text-body-medium text-on-surface-variant"
+                >
+                  再判定中です。AIの処理が終わると、この画面は自動で更新されます。
+                </p>
+              ) : null}
 
               {blockedOnUnread ? (
                 <div
