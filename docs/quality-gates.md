@@ -233,11 +233,55 @@ Issue #312 / PR #327 の時点では **案 C**（cut-over 直前だけ `Package 
 
 - `.githooks/pre-commit` runs `pnpm run check:pre-commit` (skill mirror +
   formatting): fast, deterministic, non-destructive.
-- `.githooks/pre-push` runs `pnpm run check:pre-push` (lint + typecheck + test).
+- `.githooks/pre-push` runs `pnpm run check:pre-push`, which first runs the
+  pre-push scope self-test and then **only the stacks the pushed diff touches**
+  (Issue #409; see below). When it cannot scope a push it falls back to the old
+  `lint + typecheck + test` over all three stacks.
 - Hooks can be bypassed with `--no-verify`, so GitHub Actions runs the full set
   as a merge gate. Make the real checks required in the branch ruleset.
 - `pnpm run bootstrap` points the current worktree at `.githooks/`
   (`git config core.hooksPath .githooks`).
+
+### pre-push scopes the gates to the pushed diff (Issue #409)
+
+`pnpm run check:pre-push` used to run `pnpm lint && pnpm typecheck && pnpm test`
+for every push, so a push that touched only `desktop/` still paid for
+`flutter test` and `pytest`. `git push` starts the hook itself, so the push
+cannot be wrapped in `heavy-gate.sh`, and several workers pushing at once ran
+whole test suites concurrently outside the serialising lock -- one PR that
+touched no `app/` file was OOM-killed twice by `flutter test` inside the hook.
+
+`scripts/pre-push.mjs` reads git's pre-push stdin (one line per pushed ref,
+`<local ref> <local sha> <remote ref> <remote sha>`) and narrows the gates:
+
+| Pushed ref                              | Base for the diff        |
+| --------------------------------------- | ------------------------ |
+| `local sha` all zeros (branch deletion) | nothing to inspect       |
+| `remote sha` all zeros (new branch)     | `merge-base origin/main` |
+| otherwise                               | `remote sha..local sha`  |
+
+Several refs on stdin are unioned. Changed paths are then mapped by prefix:
+`app/` -> the Flutter stack, `backend/` -> Python, `desktop/` -> Electron.
+**Any path outside those three prefixes -- `package.json`, `pnpm-lock.yaml`,
+`.github/`, `scripts/`, `tsconfig*`, a root config, `docs/` -- widens the run
+back to every stack on purpose.** The cost of guessing narrow is a broken push
+that the hook waves through, so "when in doubt, run everything" is the rule. The
+same fallback covers a non-branch ref, a missing `origin/main`, a git error, and
+unparseable stdin.
+
+This does not weaken the merge gate. The hook is an early signal and is
+bypassable by design; **CI (`.github/workflows/ci.yml`) still runs every gate on
+every PR, and `Quality` requires `app`, `backend`, `desktop` and `package`, so a
+broken push that skips or fakes a hook is still stopped before merge.** The hook
+only decides how much of that work is worth doing before the push, not whether
+the checks exist.
+
+`scripts/pre-push.test.mjs` (`pnpm run test:pre-push`, `node --test`) pins every
+branch of the classification: parsing, deletions, new vs existing branches,
+multi-ref unions, the unknown-path/all fallback, the exact command order, and
+short-circuiting. It runs both as part of `pnpm run check` and at the top of
+`check:pre-push`, so a regression in the scope logic blocks the push that would
+have used it. `.github/workflows/` is deliberately not touched by Issue #409.
 
 ### Hook files must carry the executable bit
 
