@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+} from "react";
 
 import {
   attributeAnswer,
@@ -7,11 +14,17 @@ import {
   intakeBridgeFromWindow,
   loadClassificationAvailability,
   loadIntakeCost,
+  loadIntakeSession,
   loadIntakeTemplates,
   listTests,
   planIntake,
+  resetIntakeSession,
+  saveIntakeSession,
+  sessionMatchesScan,
   type ImportOutcome,
   type IntakeBridge,
+  type IntakeSession,
+  type IntakeStep,
   type TestResponse,
   importedAnything,
 } from "../../core/intake-data.js";
@@ -48,6 +61,7 @@ import {
   unroutedAnswers,
   withFile,
   withGroup,
+  type IntakeGroupState,
   type IntakeReviewState,
 } from "../../core/intake-review.js";
 import {
@@ -73,9 +87,54 @@ import {
   secondaryButtonClass,
 } from "../ui/screen-ui.js";
 
-type Step = "choose" | "review" | "done";
+type Step = IntakeStep;
+
+/** 復元の表示。`none` は通常起動、`restored` は復元できた、`stale` は現物と不一致。 */
+type RestoreNotice = "none" | "restored" | "stale";
 
 const CLASSIFY_CONCURRENCY = 3;
+
+/** グループ全件の取込状態。`some` がチェックの中間状態。 */
+function groupIncludeState(group: IntakeGroupState): "all" | "some" | "none" {
+  const total = group.files.length;
+  if (total === 0) {
+    return "none";
+  }
+  const included = includedFiles(group).length;
+  if (included === 0) {
+    return "none";
+  }
+  return included === total ? "all" : "some";
+}
+
+/** グループ全件をまとめて取り込む／外す。個別チェックはこの後で上書きできる。 */
+function setGroupFilesIncluded(
+  review: IntakeReviewState,
+  key: string,
+  included: boolean,
+): IntakeReviewState {
+  return withGroup(review, key, (group) =>
+    copyIntakeGroup(group, {
+      files: group.files.map((file) =>
+        copyIntakeFile(file, { excluded: !included }),
+      ),
+    }),
+  );
+}
+
+/** 復元前に、選んだフォルダを読み直してセッションと突き合わせる。読めなければ false。 */
+async function folderMatchesSession(
+  bridge: IntakeBridge,
+  path: string,
+  review: IntakeReviewState,
+): Promise<boolean> {
+  try {
+    const folder = await bridge.scanFolder(path);
+    return sessionMatchesScan(review, folder.entries);
+  } catch {
+    return false;
+  }
+}
 
 const MATERIAL_ROLE_OPTIONS = [
   "student_answer",
@@ -100,8 +159,12 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const { push } = useRouter();
   const fileBridge = bridge ?? intakeBridgeFromWindow();
 
+  // 画面を離れると unmount して選択が消えるため、前回のセッションを読む
+  // (Issue #384)。復元してよいかは loadSettings でフォルダを読み直して確かめる。
+  const [initialSession] = useState(() => loadIntakeSession());
+
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [step, setStep] = useState<Step>("choose");
+  const [step, setStep] = useState<Step>(initialSession?.step ?? "choose");
   const [busy, setBusy] = useState(false);
   const [busyNote, setBusyNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -109,23 +172,62 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const [templates, setTemplates] = useState<
     Awaited<ReturnType<typeof loadIntakeTemplates>>
   >([]);
-  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [templateId, setTemplateId] = useState<string | null>(
+    initialSession?.templateId ?? null,
+  );
   const [unitCost, setUnitCost] = useState<number | null>(null);
   const [existingTests, setExistingTests] = useState<TestResponse[]>([]);
   const [availability, setAvailability] = useState<Awaited<
     ReturnType<typeof loadClassificationAvailability>
   > | null>(null);
-  const [review, setReview] = useState<IntakeReviewState | null>(null);
+  const [review, setReview] = useState<IntakeReviewState | null>(
+    initialSession?.review ?? null,
+  );
   const [narrowedTestIds, setNarrowedTestIds] = useState<Set<string>>(
-    () => new Set(),
+    () => new Set(initialSession?.narrowedTestIds ?? []),
   );
   const [classifiedCount, setClassifiedCount] = useState(0);
   const [classificationTotal, setClassificationTotal] = useState(0);
   const [classifying, setClassifying] = useState(false);
   const [runningWork, setRunningWork] = useState<RunningWork | null>(null);
   const [cancelClassification, setCancelClassification] = useState(false);
-  const [outcomes, setOutcomes] = useState<readonly ImportOutcome[]>([]);
-  const [chosenFolderName, setChosenFolderName] = useState<string | null>(null);
+  const [outcomes, setOutcomes] = useState<readonly ImportOutcome[]>(
+    initialSession?.outcomes ?? [],
+  );
+  const [chosenFolderName, setChosenFolderName] = useState<string | null>(
+    initialSession?.chosenFolderName ?? null,
+  );
+  const [chosenFolderPath, setChosenFolderPath] = useState<string | null>(
+    initialSession?.chosenFolderPath ?? null,
+  );
+  const [restoreNotice, setRestoreNotice] = useState<RestoreNotice>("none");
+  /** 取込成功などで「捨てた」あと、unmount 時に保存し直さないためのフラグ。 */
+  const skipSaveRef = useRef(false);
+  const restoreCheckedRef = useRef(false);
+  const sessionSnapshotRef = useRef<IntakeSession | null>(null);
+  sessionSnapshotRef.current = {
+    step,
+    templateId,
+    chosenFolderName,
+    chosenFolderPath,
+    review,
+    narrowedTestIds: [...narrowedTestIds],
+    outcomes,
+  };
+
+  useEffect(
+    () => () => {
+      const snapshot = sessionSnapshotRef.current;
+      if (
+        !skipSaveRef.current &&
+        snapshot !== null &&
+        snapshot.review !== null
+      ) {
+        saveIntakeSession(snapshot);
+      }
+    },
+    [],
+  );
 
   const applyExistingTests = useCallback((tests: TestResponse[]) => {
     setExistingTests(tests);
@@ -139,6 +241,20 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     );
   }, []);
 
+  /** いまの選択を捨てて最初からやり直す。復元の破棄もこれを使う。 */
+  const startOver = useCallback(() => {
+    skipSaveRef.current = false;
+    resetIntakeSession();
+    setStep("choose");
+    setReview(null);
+    setOutcomes([]);
+    setError(null);
+    setChosenFolderName(null);
+    setChosenFolderPath(null);
+    setNarrowedTestIds(new Set());
+    setRestoreNotice("none");
+  }, []);
+
   const loadSettings = useCallback(async () => {
     setLoadFailed(false);
     try {
@@ -149,6 +265,34 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           listTests(client),
           loadClassificationAvailability(client),
         ]);
+      // 復元した選択が実ファイルと合っているかを一度だけ確かめる。合わなければ
+      // 復元せず、理由を画面に出して選び直してもらう (Issue #384, 裁定 #5)。
+      if (!restoreCheckedRef.current) {
+        restoreCheckedRef.current = true;
+        const restored = initialSession;
+        if (restored?.review != null) {
+          const usable =
+            restored.chosenFolderPath !== null &&
+            (await folderMatchesSession(
+              fileBridge,
+              restored.chosenFolderPath,
+              restored.review,
+            ));
+          if (usable) {
+            setRestoreNotice("restored");
+          } else {
+            skipSaveRef.current = false;
+            resetIntakeSession();
+            setStep("choose");
+            setReview(null);
+            setOutcomes([]);
+            setChosenFolderName(null);
+            setChosenFolderPath(null);
+            setNarrowedTestIds(new Set());
+            setRestoreNotice("stale");
+          }
+        }
+      }
       applyExistingTests(tests);
       setTemplates(loadedTemplates);
       setTemplateId((current) =>
@@ -169,7 +313,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     } finally {
       setSettingsLoaded(true);
     }
-  }, [applyExistingTests, client]);
+  }, [applyExistingTests, client, fileBridge, initialSession]);
 
   useEffect(() => {
     void loadSettings();
@@ -211,10 +355,17 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       if (path === null) {
         return;
       }
+      // 別のフォルダを選び直したら、前の選択は捨てる (Issue #384, 裁定 #4)。
+      skipSaveRef.current = false;
+      resetIntakeSession();
+      setRestoreNotice("none");
+      setOutcomes([]);
+      setNarrowedTestIds(new Set());
       const tests = await listTests(client);
       applyExistingTests(tests);
       const folder = await fileBridge.scanFolder(path);
       setChosenFolderName(folder.name);
+      setChosenFolderPath(path);
       if (folder.entries.length === 0) {
         setError("このフォルダには取り込めるファイルがありません。");
         return;
@@ -426,6 +577,15 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       }
       setOutcomes(imported);
       setStep("done");
+      // 最後まで成功したら保持を捨てる。失敗した分は残して再試行できるようにする
+      // (Issue #384, 裁定 #4)。
+      if (
+        imported.length > 0 &&
+        imported.every((outcome) => outcome.error === null)
+      ) {
+        skipSaveRef.current = true;
+        resetIntakeSession();
+      }
     } finally {
       setBusy(false);
       setBusyNote(null);
@@ -562,6 +722,36 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           </Card>
         ) : null}
 
+        {settingsLoaded && restoreNotice === "restored" ? (
+          <Card
+            testId="intake-restore-notice"
+            className="bg-surface-container-high"
+          >
+            <p className="text-body-medium text-on-surface">
+              前回の選択を復元しました。フォルダ・ファイルの役割・取込先はそのまま続けられます。
+            </p>
+            <button
+              type="button"
+              data-testid="intake-restore-discard"
+              className={`mt-md ${secondaryButtonClass()}`}
+              onClick={startOver}
+            >
+              やり直す
+            </button>
+          </Card>
+        ) : null}
+
+        {settingsLoaded && restoreNotice === "stale" ? (
+          <Card
+            testId="intake-restore-stale"
+            className="bg-surface-container-high"
+          >
+            <p className="text-body-medium text-attention">
+              前回選んだフォルダの中身が変わっていたため、前回の選択は復元できませんでした。もう一度フォルダを選んでください。
+            </p>
+          </Card>
+        ) : null}
+
         {settingsLoaded && step === "choose" ? (
           <div className="flex flex-col gap-lg">
             <Card testId="intake-choose-card">
@@ -672,12 +862,12 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
 
             {readyTests.length > 0 ? (
               <Card testId="intake-narrowing">
-                <CardHeading title="このバッチはどのテストの答案ですか" />
+                <CardHeading title="このフォルダの答案は、どのテストのものですか" />
                 <p
                   data-testid="intake-narrowing-benefit"
                   className="mt-xs text-body-medium text-on-surface-variant"
                 >
-                  1件だけ選ぶと、AIに問い合わせません。費用が0件になり、答案のページ全体も送りません。
+                  テストを1つ選ぶと、AIに問い合わせずにそのテストへ振り分けます。答案のページを送らず、費用もかかりません。選ばない場合は、AIが答案1枚ごとにどのテストのものかを判定します（1枚につき1回、費用がかかります）。
                 </p>
                 <div className="mt-md flex flex-wrap gap-sm">
                   {readyTests.map((test) => {
@@ -734,6 +924,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
             {reviewState.groups.map((group) => {
               const missing = unmetRequirements(group);
               const files = group.files;
+              const includeState = groupIncludeState(group);
               return (
                 <Card key={group.key} testId={`intake-group-${group.key}`}>
                   <CardHeading
@@ -853,6 +1044,45 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                         }
                       </p>
                     ) : null}
+                  </div>
+                  <div className="mt-md flex flex-wrap items-center justify-between gap-sm">
+                    <label className="flex items-center gap-sm">
+                      <input
+                        type="checkbox"
+                        data-testid={`intake-group-include-${group.key}`}
+                        aria-label={`${group.name.length > 0 ? group.name : "（名前未設定）"} のファイルをすべて取り込む`}
+                        checked={includeState === "all"}
+                        ref={(element) => {
+                          if (element !== null) {
+                            element.indeterminate = includeState === "some";
+                          }
+                        }}
+                        onChange={(event) => {
+                          const included = event.target.checked;
+                          setReview((current) =>
+                            current === null
+                              ? current
+                              : setGroupFilesIncluded(
+                                  current,
+                                  group.key,
+                                  included,
+                                ),
+                          );
+                        }}
+                      />
+                      <span className="text-ui-label">
+                        {includeState === "all"
+                          ? "すべて外す"
+                          : "すべて取り込む"}
+                      </span>
+                    </label>
+                    <span
+                      data-testid={`intake-group-include-summary-${group.key}`}
+                      className="text-body-medium text-on-surface-variant"
+                    >
+                      {includedFiles(group).length}/{group.files.length}
+                      件を取り込み
+                    </span>
                   </div>
                   <ul className="mt-md flex flex-col gap-sm">
                     {files.map((file) => (
@@ -1193,12 +1423,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                 type="button"
                 data-testid="intake-start-over"
                 className={secondaryButtonClass()}
-                onClick={() => {
-                  setStep("choose");
-                  setReview(null);
-                  setOutcomes([]);
-                  setError(null);
-                }}
+                onClick={startOver}
               >
                 別のフォルダを取り込む
               </button>
