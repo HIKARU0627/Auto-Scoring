@@ -70,6 +70,9 @@ Issue #97 で無くなっている（下記「アプリ本体への接続」）�
 `AUTO_SCORING_AI_GRADING_TRANSPORT`を**カンマ区切りの優先度リスト**として受け取り
 （既定の並びは `gemini,codex_app_server,openrouter,openai`）、**認証情報が揃っている
 ものだけをチェーンに組む**（揃っていないproviderで失敗を1段消費しない。#35 で実装）。
+Issue #386 以降、この環境変数は設定画面で保存した順番（無ければ環境変数）から
+組み立てられる（`adapters.credentials.api_keys.ApiKeySettings.effective_environment`）。
+キーと同じく、保存した順番は次回起動時のプロバイダ構築に反映される。
 1つも揃っていなければ空のチェーンを作らず`AIProviderConfigError`で落とす
 （「設定済みに見えるのに1問も採点しない」状態を作らないため）。値が1つだけのときは
 チェーンを作らずそのアダプタ自体を返すので、既存の呼び出し・`.env.local`はそのまま

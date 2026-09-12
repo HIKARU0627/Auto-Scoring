@@ -1200,6 +1200,16 @@ gcloud auth application-default set-quota-project <your-gcp-project>
 （`_google_adc.AdcTokenSource`）。本書・`.env.example`・コミットに実値が入らない
 のはこのためである（`AGENTS.md`「Security」）。
 
+**配布物では設定画面から設定する（Issue #386）。** 画面の「API キー」タブには
+OpenRouter・OpenAI・Gemini・Codex app-server の 4 スロットが並ぶ。キーを保存
+できるのは OpenRouter と OpenAI だけで、**Gemini のスロットにキー欄は無い**
+（この節のとおり ADC のみ。`AUTO_SCORING_GEMINI_API_KEY` の経路は存在しない）。
+Gemini では `AUTO_SCORING_GEMINI_MODEL` / `AUTO_SCORING_VERTEX_PROJECT` /
+`AUTO_SCORING_VERTEX_LOCATION` の 3 項目を保存でき、疎通確認は ADC のトークン
+解決で行う。Codex はキーも設定項目も持たず、`codex` 実行ファイルの有無だけを
+表示し、疎通確認はその有無を見る。利用順（`AUTO_SCORING_AI_GRADING_TRANSPORT`）
+も画面で並べ替えられ、保存した順番は環境変数より優先される（`docs/windows-distribution.md` §9.1）。
+
 構造化出力は `generationConfig.responseJsonSchema` に
 `_schema.strict_ai_grading_result_schema()` をそのまま渡す。Vertex の旧来の
 `responseSchema`（OpenAPI 3.0 サブセット。`$defs`/`$ref` 不可）ではなく
