@@ -1,6 +1,7 @@
 import { useEffect, useState, type JSX } from "react";
 
 import type { SidecarFailure, SidecarStatus } from "../../../shared/bridge.js";
+import { MaterialSymbolIcon } from "../../core/MaterialSymbolIcon.js";
 
 /**
  * How long the splash waits before telling the user why it is slow (UG-15).
@@ -115,12 +116,11 @@ function SidecarErrorScreen({
       className="flex min-h-screen items-center justify-center bg-surface p-xl text-on-surface"
     >
       <div className="max-w-140 text-center">
-        <span
-          aria-hidden
-          className="material-symbols-outlined text-5xl text-error"
-        >
-          error_outline
-        </span>
+        <MaterialSymbolIcon
+          name="error_outline"
+          label="エラー"
+          className="inline-block text-5xl text-error"
+        />
         <h1 className="mt-lg text-title-medium">{failureHeadline(failure)}</h1>
         {detail !== null ? (
           <p

@@ -1,5 +1,7 @@
 import { useEffect, useState, type JSX } from "react";
 
+import { MaterialSymbolIcon } from "./MaterialSymbolIcon.js";
+
 /**
  * The recoverable-failure banner every screen shows in the same place and the
  * same shape (INV-096, Issue #272): what failed, in Japanese, and the one
@@ -62,13 +64,12 @@ export function AppErrorBanner({
         transition: `opacity ${ENTER_MS}ms var(--motion-easing-enter), transform ${ENTER_MS}ms var(--motion-easing-enter)`,
       }}
     >
-      <span
-        aria-hidden
-        data-testid={`${testId}-icon`}
-        className="material-symbols-outlined shrink-0"
-      >
-        error_outline
-      </span>
+      <MaterialSymbolIcon
+        name="error_outline"
+        label="エラー"
+        className="shrink-0"
+        testId={`${testId}-icon`}
+      />
       <p
         data-testid={messageTestId}
         className="min-w-0 flex-1 text-body-medium"

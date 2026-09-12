@@ -1,6 +1,7 @@
 import type { JSX, ReactNode } from "react";
 
 import type { components } from "../api/generated/schema.js";
+import { MaterialSymbolIcon } from "./MaterialSymbolIcon.js";
 
 export type GradingAvailability =
   components["schemas"]["GradingAvailabilityResponse"];
@@ -33,12 +34,11 @@ export function GradingUnavailableBanner({
         role="status"
         className="flex items-start gap-sm bg-surface-container-highest p-lg"
       >
-        <span
-          aria-hidden
-          className="material-symbols-outlined shrink-0 text-attention"
-        >
-          warning_amber
-        </span>
+        <MaterialSymbolIcon
+          name="warning_amber"
+          label="警告"
+          className="shrink-0 text-attention"
+        />
         <div className="min-w-0 flex-1">
           <p
             data-testid="grading-unavailable-headline"

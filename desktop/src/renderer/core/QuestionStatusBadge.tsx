@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 
+import { MaterialSymbolIcon } from "./MaterialSymbolIcon.js";
 import {
   QuestionStatus,
   type QuestionStatusKey,
@@ -39,14 +40,15 @@ export function QuestionStatusBadge({
       data-status={status}
       className={`inline-flex items-center gap-xs text-ui-label ${TONE_CLASS[meta.tone]}`}
     >
+      <MaterialSymbolIcon
+        name={meta.icon}
+        label={meta.label}
+        testId={testId === undefined ? undefined : `${testId}-icon`}
+      />
       <span
         aria-hidden
-        data-testid={testId === undefined ? undefined : `${testId}-icon`}
-        className="material-symbols-outlined"
+        data-testid={testId === undefined ? undefined : `${testId}-label`}
       >
-        {meta.icon}
-      </span>
-      <span data-testid={testId === undefined ? undefined : `${testId}-label`}>
         {meta.label}
       </span>
     </span>

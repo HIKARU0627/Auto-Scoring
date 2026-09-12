@@ -33,10 +33,15 @@ describe("QuestionStatusBadge (INV-097)", () => {
       );
 
       const label = screen.getByTestId(`${testId}-label`).textContent ?? "";
-      const icon = screen.getByTestId(`${testId}-icon`).textContent ?? "";
+      const iconElement = screen.getByTestId(`${testId}-icon`);
+      const icon = iconElement.getAttribute("data-icon") ?? "";
 
       expect(label.length, `${status} has no label`).toBeGreaterThan(0);
       expect(icon.length, `${status} has no icon`).toBeGreaterThan(0);
+      // Issue #392: the icon is an inline SVG, not the ligature name rendered
+      // as text by a font that was never shipped.
+      expect(iconElement.tagName.toLowerCase(), `${status} icon`).toBe("svg");
+      expect(iconElement.textContent, `${status} icon text`).toBe("");
       expect(labels.has(label), `${status} reuses the label ${label}`).toBe(
         false,
       );
