@@ -222,6 +222,7 @@ Class | Method | HTTP request | Description
  - [PlannedGroupModel](doc/PlannedGroupModel.md)
  - [ProfileResponse](doc/ProfileResponse.md)
  - [QuestionResponse](doc/QuestionResponse.md)
+ - [QuestionScorePlacementResponse](doc/QuestionScorePlacementResponse.md)
  - [QuestionTextOverride](doc/QuestionTextOverride.md)
  - [ReasonedReviewRequest](doc/ReasonedReviewRequest.md)
  - [RecognitionResponse](doc/RecognitionResponse.md)

@@ -73,6 +73,7 @@ from auto_scoring.domain.models import (
     Review,
     latest_job_for_question,
 )
+from auto_scoring.domain.pdf_export import ScorePlacement, score_placements
 from auto_scoring.domain.review_workflow import (
     ReviewVersionConflict,
     count_confirmed_questions,
@@ -134,6 +135,25 @@ class RubricCriterionResponse(BaseModel):
     position: int
 
 
+class QuestionScorePlacementResponse(BaseModel):
+    """Where this question's confirmed score is written on the exported sheet
+    (Issue #406), so the review screen can draw the same score in the same
+    place -- and can say *before* an export is attempted that this question has
+    nowhere to put it.
+
+    ``target`` is `domain.pdf_export.ScorePlacementTarget`'s value:
+    ``"own"`` (at `score_area`), ``"margin"`` (the page's fallback strip), or
+    ``"none"`` (the export will refuse with ``no_room_for_score``). ``rect`` is
+    the page-normalized destination for the first two and ``None`` for
+    ``"none"``. It is produced by `domain.pdf_export.score_placements`, i.e.
+    the same judgment the export gate and renderer use, never re-derived here
+    or on the client.
+    """
+
+    target: str
+    rect: NormalizedRectResponse | None = None
+
+
 class QuestionResponse(BaseModel):
     id: str
     test_id: str
@@ -148,10 +168,16 @@ class QuestionResponse(BaseModel):
     rubric: list[RubricCriterionResponse]
     #: Whether grading includes this question (Issue #449). Defaults true.
     is_scoring_target: bool = True
+    #: Issue #406. Absent on responses built without the whole test's question
+    #: list; `list_questions` always fills it.
+    score_placement: QuestionScorePlacementResponse | None = None
 
     @classmethod
     def from_domain(
-        cls, question: Question, rubric_criteria: list[RubricCriterionResponse]
+        cls,
+        question: Question,
+        rubric_criteria: list[RubricCriterionResponse],
+        score_placement: QuestionScorePlacementResponse | None = None,
     ) -> QuestionResponse:
         return cls(
             id=question.id,
@@ -166,11 +192,18 @@ class QuestionResponse(BaseModel):
             comment_area=_rect(question.comment_area),
             rubric=rubric_criteria,
             is_scoring_target=question.is_scoring_target,
+            score_placement=score_placement,
         )
 
 
 def _rect(rect: NormalizedRect | None) -> NormalizedRectResponse | None:
     return None if rect is None else NormalizedRectResponse.from_domain(rect)
+
+
+def _score_placement(
+    placement: ScorePlacement,
+) -> QuestionScorePlacementResponse:
+    return QuestionScorePlacementResponse(target=placement.target.value, rect=_rect(placement.rect))
 
 
 class ScoreValueResponse(BaseModel):
@@ -510,6 +543,10 @@ def build_review_router(
             questions = uow.questions.list_for_test(
                 test_id, scoring_targets_only=not include_excluded_questions
             )
+            # Issue #406: the export gate and renderer consult these two
+            # functions over exactly this question set, so the screen's score
+            # preview is the export's own judgment, not a second opinion.
+            placements = score_placements(questions)
             responses = []
             for question in sorted(questions, key=lambda q: (q.page, q.number)):
                 rubric = uow.rubrics.get_for_question(question.id)
@@ -526,7 +563,16 @@ def build_review_router(
                     if rubric is not None
                     else []
                 )
-                responses.append(QuestionResponse.from_domain(question, criteria))
+                placement = placements.get(question.id)
+                responses.append(
+                    QuestionResponse.from_domain(
+                        question,
+                        criteria,
+                        score_placement=(
+                            None if placement is None else _score_placement(placement)
+                        ),
+                    )
+                )
         return responses
 
     @router.get(

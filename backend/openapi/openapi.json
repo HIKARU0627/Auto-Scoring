@@ -2715,6 +2715,16 @@
               }
             ]
           },
+          "score_placement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionScorePlacementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scoring_method": {
             "title": "Scoring Method",
             "type": "string"
@@ -2734,6 +2744,30 @@
           "rubric"
         ],
         "title": "QuestionResponse",
+        "type": "object"
+      },
+      "QuestionScorePlacementResponse": {
+        "description": "Where this question's confirmed score is written on the exported sheet\n(Issue #406), so the review screen can draw the same score in the same\nplace -- and can say *before* an export is attempted that this question has\nnowhere to put it.\n\n``target`` is `domain.pdf_export.ScorePlacementTarget`'s value:\n``\"own\"`` (at `score_area`), ``\"margin\"`` (the page's fallback strip), or\n``\"none\"`` (the export will refuse with ``no_room_for_score``). ``rect`` is\nthe page-normalized destination for the first two and ``None`` for\n``\"none\"``. It is produced by `domain.pdf_export.score_placements`, i.e.\nthe same judgment the export gate and renderer use, never re-derived here\nor on the client.",
+        "properties": {
+          "rect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NormalizedRectResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "title": "QuestionScorePlacementResponse",
         "type": "object"
       },
       "QuestionTextOverride": {

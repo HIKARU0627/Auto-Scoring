@@ -105,6 +105,61 @@ def test_list_questions_includes_areas_and_rubric(
     assert [c["id"] for c in question["rubric"]] == ["c-1", "c-2"]
 
 
+def test_list_questions_reports_where_the_export_will_draw_each_score(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #406: the screen is told where the score goes by the same
+    judgment the export uses, instead of deriving it a second time."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="問1"))
+        uow.questions.add(
+            make_question(
+                id="q-2",
+                number="問2",
+                score_area=NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05),
+            )
+        )
+        uow.commit()
+
+    response = client.get("/tests/test-1/questions", headers=_AUTH)
+
+    assert response.status_code == 200
+    by_id = {question["id"]: question for question in response.json()}
+    assert by_id["q-1"]["score_placement"]["target"] == "margin"
+    assert by_id["q-1"]["score_placement"]["rect"] is not None
+    assert by_id["q-2"]["score_placement"] == {
+        "target": "own",
+        "rect": {"x": 0.8, "y": 0.6, "width": 0.2, "height": 0.05},
+    }
+
+
+def test_list_questions_reports_no_room_for_score_before_an_export_is_tried(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The point of Issue #406: a page that cannot hold every margin score is
+    visible on the review screen, not only in the export's 409."""
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.tests.add(make_test())
+        for index in range(19):
+            uow.questions.add(make_question(id=f"q-{index}", number=f"問{index}"))
+        uow.commit()
+
+    response = client.get("/tests/test-1/questions", headers=_AUTH)
+
+    assert response.status_code == 200
+    body = response.json()
+    refused = [question for question in body if question["score_placement"]["target"] == "none"]
+    # The strip holds 18; the 19th question of the page has nowhere to go. Which
+    # id that is depends on the repository's own order (the export allocates in
+    # the same order), so only the count and the emptied rect are pinned here.
+    assert len(refused) == 1
+    assert refused[0]["score_placement"]["rect"] is None
+    placeable = [q for q in body if q["score_placement"]["target"] == "margin"]
+    assert len(placeable) == 18
+    assert all(q["score_placement"]["rect"] is not None for q in placeable)
+
+
 def test_get_source_pdf_returns_404_for_unknown_submission(client: TestClient) -> None:
     response = client.get("/submissions/no-such-submission/source-pdf", headers=_AUTH)
     assert response.status_code == 404

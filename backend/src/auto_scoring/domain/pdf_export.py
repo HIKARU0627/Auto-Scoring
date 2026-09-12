@@ -185,6 +185,71 @@ def unplaceable_question_ids(questions: Iterable[Question]) -> list[str]:
     ]
 
 
+class ScorePlacementTarget(StrEnum):
+    """Where one question's confirmed score is written on the exported sheet
+    (Issue #406).
+
+    The review screen draws the *same* score the export draws, at the *same*
+    place, so the reviewer can see the paper the export will produce before
+    approving anything. Which place that is is one of three, and it is exactly
+    the three outcomes `build_export_marks` already has:
+
+    * :attr:`OWN` -- the question has its own `Question.score_area`, and the
+      score goes there as ``awarded/maximum``;
+    * :attr:`MARGIN` -- no `score_area` of its own, so it goes to its page's
+      left-margin strip (`fallback_score_areas`, Issue #150) as
+      ``awarded/maximum 問N``;
+    * :attr:`NONE` -- neither fits, which is the state
+      `unplaceable_question_ids` refuses the export for (Issue #120).
+
+    The screen is deliberately given this instead of re-deriving it: the value
+    is produced by the same two functions the export gate and renderer use, so
+    a change to either cannot leave the screen telling the reviewer the score
+    will be drawn somewhere the export will not draw it.
+    """
+
+    OWN = "own"
+    MARGIN = "margin"
+    NONE = "none"
+
+
+@dataclass(frozen=True, kw_only=True)
+class ScorePlacement:
+    """One question's score destination: ``target`` plus the page-normalized
+    rect for :attr:`ScorePlacementTarget.OWN`/:attr:`ScorePlacementTarget.
+    MARGIN` (``None`` for :attr:`ScorePlacementTarget.NONE`)."""
+
+    target: ScorePlacementTarget
+    rect: NormalizedRect | None
+
+
+def score_placements(questions: Sequence[Question]) -> dict[str, ScorePlacement]:
+    """Where each question's score will be written, keyed by question id.
+
+    A thin composition of `fallback_score_areas` and `unplaceable_question_ids`
+    -- the two functions the export itself consults -- so the value a client
+    displays and the value the export acts on cannot drift. The rect for a
+    :attr:`ScorePlacementTarget.MARGIN` question comes from the *shared*
+    `fallback_score_areas` result, so two questions on one page can never be
+    shown (or later drawn) in the same slice.
+    """
+    fallback = fallback_score_areas(questions)
+    unplaceable = set(unplaceable_question_ids(questions))
+    placements: dict[str, ScorePlacement] = {}
+    for question in questions:
+        if question.id in unplaceable:
+            placements[question.id] = ScorePlacement(target=ScorePlacementTarget.NONE, rect=None)
+        elif question.score_area is not None:
+            placements[question.id] = ScorePlacement(
+                target=ScorePlacementTarget.OWN, rect=question.score_area
+            )
+        else:
+            placements[question.id] = ScorePlacement(
+                target=ScorePlacementTarget.MARGIN, rect=fallback[question.id]
+            )
+    return placements
+
+
 class ExportRefusalReason(StrEnum):
     """Why the sidecar refuses to export one submission -- the two gates
     `export_refusal` evaluates, and the wire values the client reads.
@@ -847,12 +912,15 @@ __all__ = [
     "NoteEntry",
     "QuestionExport",
     "ReexportDecision",
+    "ScorePlacement",
+    "ScorePlacementTarget",
     "build_export_marks",
     "build_note_pages",
     "decide_reexport",
     "fallback_score_areas",
     "note_page_heading",
     "review_version_snapshot",
+    "score_placements",
     "unconfirmed_question_ids",
     "unplaceable_question_ids",
 ]
