@@ -7,6 +7,7 @@ import type {
   ExportResponse,
   JobResponse,
 } from "../../../src/renderer/core/export-data.js";
+import type { GradingAvailability } from "../../../src/renderer/core/grading-availability.js";
 import type {
   SubmissionResponse,
   SubmissionReviewProgressResponse,
@@ -21,6 +22,7 @@ import type {
 } from "../../../src/renderer/api/settings-data.js";
 
 export interface MockSidecarHandlers {
+  getGradingAvailability?: () => Promise<GradingAvailability>;
   listTestRegistrations?: () => Promise<TestResponse[]>;
   getTest?: (testId: string) => Promise<TestResponse>;
   listSubmissions?: (testId: string) => Promise<SubmissionResponse[]>;
@@ -168,6 +170,22 @@ export function createMockSidecarClient(
 ): SidecarClient {
   return {
     GET: vi.fn(async (path, init) => {
+      if (path === "/grading/availability") {
+        try {
+          const data = handlers.getGradingAvailability
+            ? await handlers.getGradingAvailability()
+            : { available: true };
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
       if (path === "/test-registrations") {
         const data = handlers.listTestRegistrations
           ? await handlers.listTestRegistrations()
