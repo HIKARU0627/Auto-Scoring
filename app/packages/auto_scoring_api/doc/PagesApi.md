@@ -10,8 +10,10 @@ All URIs are relative to *http://localhost*
 Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**getAnswerLayoutPageImageTestsTestIdAnswerLayoutPagesPageIndexImageGet**](PagesApi.md#getanswerlayoutpageimageteststestidanswerlayoutpagespageindeximageget) | **GET** /tests/{test_id}/answer-layout/pages/{page_index}/image | Get Answer Layout Page Image
+[**getMaterialPageImageTestsTestIdMaterialsMaterialIdPagesPageIndexImageGet**](PagesApi.md#getmaterialpageimageteststestidmaterialsmaterialidpagespageindeximageget) | **GET** /tests/{test_id}/materials/{material_id}/pages/{page_index}/image | Get Material Page Image
 [**getSubmissionPageImageSubmissionsSubmissionIdPagesPageIndexImageGet**](PagesApi.md#getsubmissionpageimagesubmissionssubmissionidpagespageindeximageget) | **GET** /submissions/{submission_id}/pages/{page_index}/image | Get Submission Page Image
 [**listAnswerLayoutPagesTestsTestIdAnswerLayoutPagesGet**](PagesApi.md#listanswerlayoutpagesteststestidanswerlayoutpagesget) | **GET** /tests/{test_id}/answer-layout/pages | List Answer Layout Pages
+[**listMaterialPagesTestsTestIdMaterialsMaterialIdPagesGet**](PagesApi.md#listmaterialpagesteststestidmaterialsmaterialidpagesget) | **GET** /tests/{test_id}/materials/{material_id}/pages | List Material Pages
 [**listSubmissionPagesSubmissionsSubmissionIdPagesGet**](PagesApi.md#listsubmissionpagessubmissionssubmissionidpagesget) | **GET** /submissions/{submission_id}/pages | List Submission Pages
 
 
@@ -44,6 +46,55 @@ try {
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **testId** | **String**|  | 
+ **pageIndex** | **int**| 0-based page index. | 
+ **scale** | **num**| Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one. | [optional] [default to 2.0]
+
+### Return type
+
+[**Uint8List**](Uint8List.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: image/png, application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **getMaterialPageImageTestsTestIdMaterialsMaterialIdPagesPageIndexImageGet**
+> Uint8List getMaterialPageImageTestsTestIdMaterialsMaterialIdPagesPageIndexImageGet(testId, materialId, pageIndex, scale)
+
+Get Material Page Image
+
+One page of a registered material, rasterized by the same pdfium as the answer pages. Only PDF materials can be rasterized; a Word/Excel material answers 415 instead of being served as raw bytes (`docs/sidecar-api.md` §7.5).
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getPagesApi();
+final String testId = testId_example; // String | 
+final String materialId = materialId_example; // String | 
+final int pageIndex = 56; // int | 0-based page index.
+final num scale = 8.14; // num | Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.
+
+try {
+    final response = api.getMaterialPageImageTestsTestIdMaterialsMaterialIdPagesPageIndexImageGet(testId, materialId, pageIndex, scale);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling PagesApi->getMaterialPageImageTestsTestIdMaterialsMaterialIdPagesPageIndexImageGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+ **materialId** | **String**|  | 
  **pageIndex** | **int**| 0-based page index. | 
  **scale** | **num**| Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one. | [optional] [default to 2.0]
 
@@ -136,6 +187,51 @@ try {
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **testId** | **String**|  | 
+
+### Return type
+
+[**DocumentPagesResponse**](DocumentPagesResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **listMaterialPagesTestsTestIdMaterialsMaterialIdPagesGet**
+> DocumentPagesResponse listMaterialPagesTestsTestIdMaterialsMaterialIdPagesGet(testId, materialId)
+
+List Material Pages
+
+Page count, displayed size and rotation of one registered material, for paging through it in the material window. Only PDF materials have pages; a Word/Excel material answers 415. The geometry is not a basis for coordinates here -- the material viewer has no annotations -- but it is carried for layout.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getPagesApi();
+final String testId = testId_example; // String | 
+final String materialId = materialId_example; // String | 
+
+try {
+    final response = api.listMaterialPagesTestsTestIdMaterialsMaterialIdPagesGet(testId, materialId);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling PagesApi->listMaterialPagesTestsTestIdMaterialsMaterialIdPagesGet: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+ **materialId** | **String**|  | 
 
 ### Return type
 
