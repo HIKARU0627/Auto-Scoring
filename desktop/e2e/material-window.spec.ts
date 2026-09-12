@@ -1,6 +1,10 @@
 import { test, expect } from "@playwright/test";
 
-import { closeElectronApp, launchElectronApp } from "./electron-launch";
+import {
+  clickClosingPage,
+  closeElectronApp,
+  launchElectronApp,
+} from "./electron-launch";
 import {
   ANSWER_SHEET_PDF,
   createDraftTest,
@@ -62,10 +66,14 @@ test("a material opens in a reused second window and closes without stopping the
     expect(app.windows()).toHaveLength(2);
 
     // Decision 4: closing the material window leaves the main window working.
-    await materialWindow.getByTestId("material-close-button").click();
-    await expect
-      .poll(() => materialWindow.isClosed(), { timeout: 15_000 })
-      .toBe(true);
+    // Issue #466: the clicked 閉じる closes its own page, so the click's
+    // finalisation races the teardown; `clickClosingPage` drops that reject and
+    // leaves the verdict on `materialWindow.isClosed()`.
+    await clickClosingPage(
+      materialWindow.getByTestId("material-close-button"),
+      materialWindow,
+      15_000,
+    );
     expect(app.windows()).toHaveLength(1);
     await expect(mainWindow.getByTestId("test-settings-status")).toBeVisible();
   } finally {
