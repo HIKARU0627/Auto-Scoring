@@ -162,20 +162,70 @@ try {
     Write-Host "    Sidecar listening on port: $port"
 
     Write-Step "Probing http://127.0.0.1:$port/healthz"
+    # 60s, not the bare 30 this used to be: the same budget the shipped Electron
+    # supervisor allows this sidecar to become ready
+    # (`SIDECAR_STARTUP_TIMEOUT_MS` in desktop/src/main/sidecar-supervisor.ts),
+    # so the smoke test waits exactly as long as the product does.
+    #
+    # Why 30 was not enough (Issue #399): a Windows CI run found this sidecar's
+    # pid 0.5s after launch and its listening port ~3s in -- the same timings a
+    # *passing* run shows -- and /healthz still had not answered when the old
+    # 30s deadline expired. The OS reports a port as `Listen` only after uvicorn
+    # has called listen(), which happens after ASGI startup, so the script was
+    # not probing an unready port: the second sidecar had reached serving and
+    # its HTTP response stalled. That is the same undiagnosed loopback stall
+    # already recorded for this product on Windows
+    # (docs/answer-intake-and-preprocessing.md section 22,
+    # docs/windows-distribution.md section 7.3); the remedy there was a
+    # realistic budget plus evidence on the next failure, which is what the
+    # probe log below adds. No fixed sleep: the loop still polls.
+    $healthBudgetSeconds = 60
+    $probeStartedAt = Get-Date
+    $healthDeadline = $probeStartedAt.AddSeconds($healthBudgetSeconds)
     $healthy = $false
-    $healthDeadline = (Get-Date).AddSeconds(30)
+    $probeResponses = [System.Collections.Generic.List[string]]::new()
     while ((Get-Date) -lt $healthDeadline) {
+        # Fail fast, and name which process died, rather than spend the whole
+        # budget on a port nothing can answer on.
+        if ($electronProc.HasExited) {
+            throw "Electron process exited during the health probe with code $($electronProc.ExitCode)"
+        }
+        if (-not (Get-Process -Id $sidecarPid -ErrorAction SilentlyContinue)) {
+            throw "Sidecar process $sidecarPid exited during the health probe"
+        }
+
+        $elapsedSeconds = [int](((Get-Date) - $probeStartedAt).TotalSeconds)
         try {
             $res = Invoke-RestMethod -Uri "http://127.0.0.1:$port/healthz" -TimeoutSec 3
             if ($res.status -eq "ok") {
                 $healthy = $true
                 break
             }
+            $probeResponses.Add("${elapsedSeconds}s: 2xx but status='$($res.status)'")
+            Start-Sleep -Milliseconds 250
         } catch {
+            # The message is what tells a refusal (nobody listening on the port)
+            # apart from a timeout (listening, but no HTTP response): the two
+            # failures this probe exists to distinguish. First line only -- the
+            # nested exception text under it repeats the same thing.
+            $reason = ($_.Exception.Message -split "`r?`n")[0]
+            $probeResponses.Add("${elapsedSeconds}s: $reason")
             Start-Sleep -Milliseconds 250
         }
     }
     if (-not $healthy) {
+        $waitedSeconds = [math]::Round(((Get-Date) - $probeStartedAt).TotalSeconds, 1)
+        # What the next failure needs in the log: how long was spent, what each
+        # probe actually got back, and whether the two processes were even
+        # still alive -- three questions that cost a person a run to answer
+        # when #399 struck.
+        Write-Host "    /healthz on port $port never became healthy: waited ${waitedSeconds}s of a ${healthBudgetSeconds}s budget." -ForegroundColor Red
+        Write-Host "    $($probeResponses.Count) probe attempt(s), in order:" -ForegroundColor Red
+        foreach ($response in $probeResponses) {
+            Write-Host "      $response" -ForegroundColor Red
+        }
+        Write-Host "    Electron process ${parentPid} alive: $(-not $electronProc.HasExited)" -ForegroundColor Red
+        Write-Host "    Sidecar process ${sidecarPid} alive: $([bool](Get-Process -Id $sidecarPid -ErrorAction SilentlyContinue))" -ForegroundColor Red
         throw "Sidecar at port $port did not return healthy status before kill"
     }
     Write-Host '    Sidecar is healthy and serving.'
