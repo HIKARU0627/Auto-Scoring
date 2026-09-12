@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   IntakeTargetKind,
+  applyTargetTest,
   canImport,
   importRequirements,
   unmetRequirements,
@@ -106,5 +107,31 @@ describe("intake review core (INV-120–123)", () => {
     };
     expect(unmetRequirements(review.groups[0]!)).toEqual(["grading_criteria"]);
     expect(canImport(review)).toBe(false);
+  });
+
+  it("Issue #414: applyTargetTest fixes every group's destination to the chosen test", () => {
+    const review = {
+      groups: [
+        group([file("subject-a/01_answers.pdf")], { key: "a" }),
+        group([file("subject-b/01_answers.pdf")], { key: "b" }),
+      ],
+      unitCost: null,
+    };
+
+    const applied = applyTargetTest(review, { id: "test-9", status: "draft" });
+
+    expect(applied.groups.map((entry) => entry.targetKind)).toEqual([
+      IntakeTargetKind.existing,
+      IntakeTargetKind.existing,
+    ]);
+    expect(applied.groups.map((entry) => entry.targetTestId)).toEqual([
+      "test-9",
+      "test-9",
+    ]);
+    // A draft target keeps its real status so the screen can say why it is not ready.
+    expect(applied.groups.map((entry) => entry.targetTestStatus)).toEqual([
+      "draft",
+      "draft",
+    ]);
   });
 });

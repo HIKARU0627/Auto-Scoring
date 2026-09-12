@@ -34,7 +34,7 @@ import {
   intakeFolderPickRequirements,
   intakeImportRequirements,
 } from "../../core/action-requirements.js";
-import { testSettings } from "../../core/app-routes.js";
+import { readIntakeTarget, testSettings } from "../../core/app-routes.js";
 import {
   attributionCandidates,
   dropRoutingOutsideCandidates,
@@ -42,6 +42,7 @@ import {
 } from "../../core/intake-attribution.js";
 import {
   IntakeTargetKind,
+  applyTargetTest,
   buildReviewState,
   canImport,
   classifiableFiles,
@@ -156,8 +157,14 @@ export interface IntakePageProps {
 
 export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const client = useSidecarClient();
-  const { push } = useRouter();
+  const { push, location } = useRouter();
   const fileBridge = bridge ?? intakeBridgeFromWindow();
+  // テスト一覧・答案キュー・テスト設定の「答案を取り込む」が付ける取り込み先
+  // (Issue #414)。画面のルートは /intake のままなので location から読む。
+  const requestedTargetId = useMemo(
+    () => readIntakeTarget(location),
+    [location],
+  );
 
   // 画面を離れると unmount して選択が消えるため、前回のセッションを読む
   // (Issue #384)。復元してよいかは loadSettings でフォルダを読み直して確かめる。
@@ -201,6 +208,20 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     initialSession?.chosenFolderPath ?? null,
   );
   const [restoreNotice, setRestoreNotice] = useState<RestoreNotice>("none");
+  /** フォルダを選び直したときに取り込み先へ固定する既存テスト (Issue #414)。 */
+  const [applyTargetId, setApplyTargetId] = useState<string | null>(null);
+  /**
+   * 復元できるセッションと `targetTestId` が衝突したときの選択待ち
+   * (Issue #414, 司令官裁定 2026-09-12)。どちらかを選ぶまでは進めない。
+   */
+  const [targetChoice, setTargetChoice] = useState<{
+    readonly testId: string;
+    readonly testName: string;
+  } | null>(null);
+  /** 「前回の選択を続ける」を選んだとき、指定テストを見送ったことを示す名前。 */
+  const [ignoredTargetName, setIgnoredTargetName] = useState<string | null>(
+    null,
+  );
   /** 取込成功などで「捨てた」あと、unmount 時に保存し直さないためのフラグ。 */
   const skipSaveRef = useRef(false);
   const restoreCheckedRef = useRef(false);
@@ -253,7 +274,30 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     setChosenFolderPath(null);
     setNarrowedTestIds(new Set());
     setRestoreNotice("none");
+    setTargetChoice(null);
+    setIgnoredTargetName(null);
   }, []);
+
+  /**
+   * 復元を続ける方を選んだとき (Issue #414)。前回の選択はそのまま使い、指定された
+   * テストを見送ったことを画面に残す。
+   */
+  const continueRestoredSession = useCallback(() => {
+    setIgnoredTargetName(targetChoice?.testName ?? null);
+    setTargetChoice(null);
+  }, [targetChoice]);
+
+  /**
+   * 指定テストの取り込みを選んだとき (Issue #414)。前回の選択を捨てて、フォルダを
+   * 選び直した先で指定テストが取り込み先になるようにする。
+   */
+  const discardSessionForTarget = useCallback(
+    (testId: string) => {
+      startOver();
+      setApplyTargetId(testId);
+    },
+    [startOver],
+  );
 
   const loadSettings = useCallback(async () => {
     setLoadFailed(false);
@@ -267,6 +311,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         ]);
       // 復元した選択が実ファイルと合っているかを一度だけ確かめる。合わなければ
       // 復元せず、理由を画面に出して選び直してもらう (Issue #384, 裁定 #5)。
+      let restorableSession = false;
       if (!restoreCheckedRef.current) {
         restoreCheckedRef.current = true;
         const restored = initialSession;
@@ -279,6 +324,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
               restored.review,
             ));
           if (usable) {
+            restorableSession = true;
             setRestoreNotice("restored");
           } else {
             skipSaveRef.current = false;
@@ -290,6 +336,18 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
             setChosenFolderPath(null);
             setNarrowedTestIds(new Set());
             setRestoreNotice("stale");
+          }
+        }
+      }
+      // 明示された取り込み先 (Issue #414)。復元できるセッションがあるときは
+      // 黙ってどちらかを選ばず、利用者に選ばせる（司令官裁定 2026-09-12）。
+      if (requestedTargetId !== null) {
+        const target = tests.find((test) => test.id === requestedTargetId);
+        if (target !== undefined) {
+          if (restorableSession) {
+            setTargetChoice({ testId: target.id, testName: target.name });
+          } else {
+            setApplyTargetId(target.id);
           }
         }
       }
@@ -313,7 +371,13 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
     } finally {
       setSettingsLoaded(true);
     }
-  }, [applyExistingTests, client, fileBridge, initialSession]);
+  }, [
+    applyExistingTests,
+    client,
+    fileBridge,
+    initialSession,
+    requestedTargetId,
+  ]);
 
   useEffect(() => {
     void loadSettings();
@@ -329,6 +393,15 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
   const testStatusById = useMemo(
     () => new Map(existingTests.map((test) => [test.id, test.status])),
     [existingTests],
+  );
+
+  /** 取り込み先として固定する既存テスト (Issue #414)。未読込なら null。 */
+  const fixedTarget = useMemo(
+    () =>
+      applyTargetId === null
+        ? null
+        : (existingTests.find((test) => test.id === applyTargetId) ?? null),
+    [applyTargetId, existingTests],
   );
 
   const candidates = useMemo(
@@ -375,15 +448,32 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
         rootName: folder.name,
         entries: folder.entries,
       });
+      const built = buildReviewState({
+        plan,
+        folder,
+        requiredRoles: requiredRolesOf(templates, templateId),
+        unitCost,
+        existingTests: tests,
+      });
+      const target =
+        applyTargetId === null
+          ? undefined
+          : tests.find((test) => test.id === applyTargetId);
       setReview(
-        buildReviewState({
-          plan,
-          folder,
-          requiredRoles: requiredRolesOf(templates, templateId),
-          unitCost,
-          existingTests: tests,
-        }),
+        target === undefined
+          ? built
+          : applyTargetTest(built, {
+              id: target.id,
+              status: target.status ?? null,
+            }),
       );
+      // 取り込み先が分かっているなら、答案の振り分けもそのテストに絞る。
+      if (
+        target !== undefined &&
+        targetTestAcceptsAnswers(target.status ?? null)
+      ) {
+        setNarrowedTestIds(new Set([target.id]));
+      }
       setStep("review");
     } catch (pickError) {
       setError(
@@ -393,7 +483,15 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       setBusy(false);
       setBusyNote(null);
     }
-  }, [applyExistingTests, client, fileBridge, templateId, templates, unitCost]);
+  }, [
+    applyExistingTests,
+    applyTargetId,
+    client,
+    fileBridge,
+    templateId,
+    templates,
+    unitCost,
+  ]);
 
   const runClassification = useCallback(
     async (cachedOnly = false) => {
@@ -722,7 +820,44 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           </Card>
         ) : null}
 
-        {settingsLoaded && restoreNotice === "restored" ? (
+        {settingsLoaded && targetChoice !== null ? (
+          <Card
+            testId="intake-target-conflict"
+            className="bg-surface-container-high"
+          >
+            <CardHeading
+              title="どちらの答案を取り込みますか"
+              description="前回の取込の選択が残っています。このまま指定のテストを取り込むと、前回の選択は破棄されます。"
+            />
+            <p className="mt-sm text-body-medium text-on-surface">
+              取り込み先に指定されたテスト: {targetChoice.testName}
+            </p>
+            <div className="mt-lg flex flex-wrap gap-md">
+              <button
+                type="button"
+                data-testid="intake-target-continue"
+                className={secondaryButtonClass()}
+                onClick={continueRestoredSession}
+              >
+                前回の選択を続ける
+              </button>
+              <button
+                type="button"
+                data-testid="intake-target-discard"
+                className={primaryButtonClass()}
+                onClick={() => {
+                  discardSessionForTarget(targetChoice.testId);
+                }}
+              >
+                {targetChoice.testName} の答案を取り込む
+              </button>
+            </div>
+          </Card>
+        ) : null}
+
+        {settingsLoaded &&
+        targetChoice === null &&
+        restoreNotice === "restored" ? (
           <Card
             testId="intake-restore-notice"
             className="bg-surface-container-high"
@@ -730,6 +865,27 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
             <p className="text-body-medium text-on-surface">
               前回の選択を復元しました。フォルダ・ファイルの役割・取込先はそのまま続けられます。
             </p>
+            {ignoredTargetName !== null && requestedTargetId !== null ? (
+              <div className="mt-sm">
+                <p
+                  data-testid="intake-restore-target-ignored"
+                  className="text-body-medium text-attention"
+                >
+                  「{ignoredTargetName}
+                  」は取り込み先に選ばれていません。このテストの答案を取り込むには、前回の選択を捨てる必要があります。
+                </p>
+                <button
+                  type="button"
+                  data-testid="intake-restore-switch-target"
+                  className={`mt-md ${primaryButtonClass()}`}
+                  onClick={() => {
+                    discardSessionForTarget(requestedTargetId);
+                  }}
+                >
+                  「{ignoredTargetName}」の答案を取り込む
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
               data-testid="intake-restore-discard"
@@ -741,7 +897,9 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           </Card>
         ) : null}
 
-        {settingsLoaded && restoreNotice === "stale" ? (
+        {settingsLoaded &&
+        targetChoice === null &&
+        restoreNotice === "stale" ? (
           <Card
             testId="intake-restore-stale"
             className="bg-surface-container-high"
@@ -752,8 +910,19 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           </Card>
         ) : null}
 
-        {settingsLoaded && step === "choose" ? (
+        {settingsLoaded && targetChoice === null && step === "choose" ? (
           <div className="flex flex-col gap-lg">
+            {fixedTarget !== null ? (
+              <Card
+                testId="intake-target-summary"
+                className="bg-surface-container-high"
+              >
+                <p className="text-body-medium text-on-surface">
+                  フォルダを選ぶと、取り込み先は「{fixedTarget.name}
+                  」が選ばれた状態になります。
+                </p>
+              </Card>
+            ) : null}
             <Card testId="intake-choose-card">
               <CardHeading
                 title="取込の型"
@@ -808,7 +977,10 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           </div>
         ) : null}
 
-        {settingsLoaded && step === "review" && reviewState !== null ? (
+        {settingsLoaded &&
+        targetChoice === null &&
+        step === "review" &&
+        reviewState !== null ? (
           <div className="flex flex-col gap-lg">
             <Card testId="intake-review-summary">
               <CardHeading
@@ -1034,15 +1206,39 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                     {group.targetKind !== IntakeTargetKind.unassigned &&
                     group.targetKind !== IntakeTargetKind.perAnswer &&
                     !targetTestAcceptsAnswers(group.targetTestStatus) ? (
-                      <p
-                        data-testid={`intake-stage-notice-${group.key}`}
-                        className="text-body-medium text-on-surface-variant"
-                      >
-                        {
-                          ActionRequirements.answersDeferredUntilRegistered
-                            .message
-                        }
-                      </p>
+                      <div className="flex flex-col gap-xs">
+                        <p
+                          data-testid={`intake-stage-notice-${group.key}`}
+                          className="text-body-medium text-on-surface-variant"
+                        >
+                          {
+                            ActionRequirements.answersDeferredUntilRegistered
+                              .message
+                          }
+                        </p>
+                        {group.targetTestId !== null ? (
+                          <>
+                            <p
+                              data-testid={`intake-draft-reason-${group.key}`}
+                              className="text-body-medium text-on-surface"
+                            >
+                              「（登録途中）」のテストは、配点・回答欄・依存関係の確認が済むと答案の取り込み先に選べます。テスト設定で確認を完了してください。
+                            </p>
+                            <div>
+                              <button
+                                type="button"
+                                data-testid={`intake-open-draft-settings-${group.key}`}
+                                className={secondaryButtonClass()}
+                                onClick={() => {
+                                  push(testSettings(group.targetTestId!));
+                                }}
+                              >
+                                テスト設定を開く
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                   <div className="mt-md flex flex-wrap items-center justify-between gap-sm">
@@ -1256,7 +1452,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
           </div>
         ) : null}
 
-        {settingsLoaded && step === "done" ? (
+        {settingsLoaded && targetChoice === null && step === "done" ? (
           <div className="flex flex-col gap-lg">
             <Card testId="intake-done-summary">
               <CardHeading

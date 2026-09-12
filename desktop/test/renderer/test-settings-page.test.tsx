@@ -6,6 +6,8 @@ import { testSettings } from "../../src/renderer/core/app-routes.js";
 import type { SidecarClient } from "../../src/renderer/api/client.js";
 import * as answerAreaData from "../../src/renderer/api/answer-area-data.js";
 import { renderAppAt } from "./support/app-harness.js";
+import { createIntakeMockClient } from "./support/intake-harness.js";
+import { buildTest } from "./support/mock-sidecar-client.js";
 import { createTestSettingsMockClient } from "./support/test-settings-harness.js";
 
 interface Deferred<T> {
@@ -756,6 +758,70 @@ describe("TestSettingsPage registration flow", () => {
 
     gate.resolve();
     await screen.findByTestId("criteria-section");
+  });
+});
+
+describe("TestSettingsPage 答案の取り込み導線 (Issue #414)", () => {
+  const INTAKE_GET_PATHS = new Set([
+    "/intake-templates",
+    "/intake-cost",
+    "/intake/classification-availability",
+    "/test-registrations",
+  ]);
+
+  /**
+   * The test-settings mock does not know the intake endpoints. Route only those
+   * to the intake mock and keep every settings request on the original client,
+   * so the push from テスト設定 to 資料の取込 runs the real IntakePage.
+   */
+  function withIntakeClient(settingsClient: SidecarClient): SidecarClient {
+    const intakeClient = createIntakeMockClient({
+      listTestRegistrations: async () => [
+        buildTest({ id: "t-reg", name: "E2E 理科", status: "ready" }),
+      ],
+    });
+    return {
+      ...settingsClient,
+      GET: vi.fn((path: string, init?: unknown) =>
+        INTAKE_GET_PATHS.has(path)
+          ? (intakeClient.GET as OpenGet)(path, init)
+          : (settingsClient.GET as OpenGet)(path, init),
+      ),
+    } as unknown as SidecarClient;
+  }
+
+  it("登録完了後は、このテストを宛先にした取込を開ける", async () => {
+    const { client } = createTestSettingsMockClient({
+      testId: "t-reg",
+      testStatus: "ready",
+    });
+    renderAppAt(testSettings("t-reg"), { client: withIntakeClient(client) });
+
+    await screen.findByTestId("answers-intake-section");
+    fireEvent.click(screen.getByTestId("open-answers-intake-button"));
+
+    await screen.findByTestId("intake-target-summary");
+    expect(screen.getByTestId("page-title").textContent).toBe("資料の取込");
+    expect(screen.getByTestId("intake-target-summary").textContent).toContain(
+      "E2E 理科",
+    );
+  });
+
+  it("登録が終わるまでは理由を示して押せない", async () => {
+    const { client } = createTestSettingsMockClient({
+      testId: "t-reg",
+      testStatus: "draft",
+    });
+    renderAppAt(testSettings("t-reg"), { client });
+
+    await screen.findByTestId("answers-intake-section");
+    expect(screen.getByTestId("open-answers-intake-button")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("answers-intake-waiting").textContent).toContain(
+      "配点・回答欄・依存関係",
+    );
   });
 });
 

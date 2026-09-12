@@ -7,7 +7,7 @@ import {
   type SubmissionQueueData,
   type SubmissionResponse,
 } from "../../core/submission-queue-data.js";
-import { submissionConfirm } from "../../core/app-routes.js";
+import { submissionConfirm, intakeTarget } from "../../core/app-routes.js";
 import { MaterialSymbolIcon } from "../../core/MaterialSymbolIcon.js";
 import { describeReviewReason } from "../../core/submission-review-reason.js";
 import {
@@ -113,15 +113,27 @@ export function SubmissionQueuePage(): JSX.Element {
           <p className="text-body-medium">
             このテストにはまだ答案が取り込まれていません。
           </p>
-          <button
-            type="button"
-            className="mt-md rounded-md border border-outline px-md py-xs text-ui-label text-on-surface bg-surface"
-            onClick={() => {
-              void reload();
-            }}
-          >
-            再読み込み
-          </button>
+          <div className="mt-md flex flex-wrap items-center justify-center gap-sm">
+            <button
+              type="button"
+              data-testid="queue-add-answers-empty"
+              className="rounded-md bg-primary px-md py-xs text-ui-label text-on-primary"
+              onClick={() => {
+                push(intakeTarget(testId));
+              }}
+            >
+              答案を取り込む
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-outline px-md py-xs text-ui-label text-on-surface bg-surface"
+              onClick={() => {
+                void reload();
+              }}
+            >
+              再読み込み
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -144,7 +156,17 @@ export function SubmissionQueuePage(): JSX.Element {
                 }}
               />
             </div>
-            <div className="mt-md flex justify-end">
+            <div className="mt-md flex flex-wrap justify-end gap-sm">
+              <button
+                type="button"
+                data-testid="queue-add-answers"
+                className="rounded-md bg-primary px-md py-xs text-ui-label text-on-primary"
+                onClick={() => {
+                  push(intakeTarget(testId));
+                }}
+              >
+                答案を取り込む
+              </button>
               <button
                 type="button"
                 data-testid="queue-bulk-export-button"
