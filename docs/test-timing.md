@@ -129,6 +129,37 @@ pnpm run test:desktop:changed
   `docs/linux-desktop-development.md` の env を前置する（Issue #425）。付けないと
   「起動を待って諦めた時間」を測ることになる。
 
+### 内側のループと押し切りで並列度が違う（Issue #453）
+
+backend の**押し切り**（`pnpm run check:pre-push`、`pnpm run check`、CI）は
+`backend/pyproject.toml` の `addopts = "-m 'not live' -n auto --dist loadfile"` で
+並列のまま回す（Issue #433）。`--dist loadfile` はテストモジュールを1ワーカーに固定する。
+
+**内側のループ（`pnpm run test:backend:changed`）は、選ばれたのが 7 ファイル以下なら
+`-n0` を足して直列に戻す。** `scripts/changed-tests.mjs` の backend ランナーが、
+選択数だけを見て切り替える。8 ファイル以上は `addopts` の並列をそのまま使う。
+
+理由は実測。開発機（12 コア）で `uv sync` 後、`uv run pytest <files>` を
+既定（`-n auto --dist loadfile`）と `-n0` で交互に回した（2026-09-13、3〜5 回の最小値）:
+
+| 選んだファイル          | 既定（`-n auto`） | `-n0`  |
+| ----------------------- | ----------------- | ------ |
+| 1（速い単体テスト）     | 1.94s             | 0.56s  |
+| 5（速い単体テスト）     | 2.81s             | 1.27s  |
+| 8（やや重いものを含む） | 8.91s             | 9.79s  |
+| 12（同上）              | 9.41s             | 13.05s |
+
+1〜5 ファイルでは `-n auto` の起動費（約 1.5 秒。`--dist loadfile` のせいで
+残りのワーカーは仕事が無くても起動・終了する）が実行時間を上回る。8 ファイルで
+並列が逆転し、それ以上では並列が勝つ。だから**境目を 7 ファイル**（8 以上は並列）に置く。
+
+ファイル数は「重さ」の完全な代理ではない。`--dist loadfile` なので、重い e2e を1つだけ
+選んだ場合は直列でも並列でもほぼ同じ（並列側に起動費が乗るだけ）で、並列が効くのは
+重いファイルが**複数**選ばれたとき。このリポジトリの実際の選択を数えると、重い
+e2e が複数入る選択は 11 ファイル以上だった（`backend/src/auto_scoring/domain/models.py` で
+43 ファイルなど）ため、7 ファイルの境目で足りる。選択の全体像は
+`scripts/changed-tests.mjs` の `BACKEND_SERIAL_MAX_FILES` のコメントに残す。
+
 ### watch モード
 
 - desktop は `pnpm run test:desktop:watch`（vitest の watch）。
