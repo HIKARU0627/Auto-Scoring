@@ -1,7 +1,21 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { resetIntakeSession } from "../../src/renderer/core/intake-data.js";
 import "../../src/renderer/styles/index.css";
+
+/**
+ * Give RTL's async utilities (`findBy*` / `waitFor`) their own budget (Issue
+ * #426). Vitest's `testTimeout` in vitest.config.mts bounds the whole `it`, but
+ * it does not reach these helpers: RTL defaults them to 1000ms. Under full-suite
+ * load a passing-but-slow wait then turns red for a reason the change did not
+ * cause. Measured 2026-09-12: only 2 of 489 tests need more than 100ms and all
+ * pass by 250ms, so 5000ms leaves ~20x headroom yet still fails a genuinely
+ * broken wait at 5s instead of waiting out the 60s test limit. The three
+ * pdf-review files already pass `{ timeout: 5000 }` per call; this makes that
+ * budget the default. No fixed sleep is added -- the wait is still polled and
+ * resolves as soon as the assertion holds. See docs/test-timing.md.
+ */
+configure({ asyncUtilTimeout: 5000 });
 
 /**
  * React Testing Library unmounts between tests only when a global `afterEach`
