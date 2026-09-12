@@ -2662,6 +2662,11 @@
             "title": "Id",
             "type": "string"
           },
+          "is_scoring_target": {
+            "default": true,
+            "title": "Is Scoring Target",
+            "type": "boolean"
+          },
           "model_answer": {
             "anyOf": [
               {
@@ -3355,6 +3360,38 @@
           "ratio"
         ],
         "title": "ScoreValueResponse",
+        "type": "object"
+      },
+      "ScoringTargetsRequest": {
+        "properties": {
+          "question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Question Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "question_ids"
+        ],
+        "title": "ScoringTargetsRequest",
+        "type": "object"
+      },
+      "ScoringTargetsResponse": {
+        "properties": {
+          "question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Question Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "question_ids"
+        ],
+        "title": "ScoringTargetsResponse",
         "type": "object"
       },
       "SubmissionAiUsageResponse": {
@@ -7889,6 +7926,18 @@
               "title": "Test Id",
               "type": "string"
             }
+          },
+          {
+            "description": "Return every question, not only the grading targets. The review screen leaves this at the default so an excluded question is never shown as work to do (Issue #449); the test-settings screen sets it to list them for re-selection.",
+            "in": "query",
+            "name": "include_excluded_questions",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Return every question, not only the grading targets. The review screen leaves this at the default so an excluded question is never shown as work to do (Issue #449); the test-settings screen sets it to list them for re-selection.",
+              "title": "Include Excluded Questions",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -7977,6 +8026,64 @@
         "summary": "List Review Progress",
         "tags": [
           "review"
+        ]
+      }
+    },
+    "/tests/{test_id}/scoring-targets": {
+      "put": {
+        "description": "Choose which of a test's questions are graded (Issue #449).\n\nThe default is every question; this replaces the selection with\nexactly ``question_ids``. Allowed before *and* after registration\ncompletes (the owner changes their mind), but never to an empty set --\na test with nothing to grade has no meaning, so at least one question\nmust stay selected. Excluding a question deletes nothing: its grade\nand review history are kept, simply not counted or exported, and\nreappear if it is selected again.",
+        "operationId": "set_scoring_targets_tests__test_id__scoring_targets_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoringTargetsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringTargetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Scoring Targets",
+        "tags": [
+          "test-registration"
         ]
       }
     },

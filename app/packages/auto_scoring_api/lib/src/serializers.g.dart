@@ -97,6 +97,8 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
       ..add(ScoreValueResponse.serializer)
+      ..add(ScoringTargetsRequest.serializer)
+      ..add(ScoringTargetsResponse.serializer)
       ..add(SubmissionAiUsageResponse.serializer)
       ..add(SubmissionResponse.serializer)
       ..add(SubmissionReviewProgressResponse.serializer)
@@ -228,6 +230,12 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ScannedFileModel)]),
           () => ListBuilder<ScannedFileModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(String)]),
           () => ListBuilder<String>())

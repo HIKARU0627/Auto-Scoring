@@ -664,6 +664,7 @@ class ReviewApi {
   ///
   /// Parameters:
   /// * [testId]
+  /// * [includeExcludedQuestions] - Return every question, not only the grading targets. The review screen leaves this at the default so an excluded question is never shown as work to do (Issue #449); the test-settings screen sets it to list them for re-selection.
   /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
   /// * [headers] - Can be used to add additional headers to the request
   /// * [extras] - Can be used to add flags to the request
@@ -676,6 +677,7 @@ class ReviewApi {
   Future<Response<BuiltList<QuestionResponse>>>
       listQuestionsTestsTestIdQuestionsGet({
     required String testId,
+    bool? includeExcludedQuestions = false,
     CancelToken? cancelToken,
     Map<String, dynamic>? headers,
     Map<String, dynamic>? extra,
@@ -705,9 +707,16 @@ class ReviewApi {
       validateStatus: validateStatus,
     );
 
+    final _queryParameters = <String, dynamic>{
+      if (includeExcludedQuestions != null)
+        r'include_excluded_questions': encodeQueryParameter(
+            _serializers, includeExcludedQuestions, const FullType(bool)),
+    };
+
     final _response = await _dio.request<Object>(
       _path,
       options: _options,
+      queryParameters: _queryParameters,
       cancelToken: cancelToken,
       onSendProgress: onSendProgress,
       onReceiveProgress: onReceiveProgress,

@@ -11,6 +11,7 @@ Name | Type | Description | Notes
 **answerArea** | [**NormalizedRectResponse**](NormalizedRectResponse.md) |  | [optional] 
 **commentArea** | [**NormalizedRectResponse**](NormalizedRectResponse.md) |  | [optional] 
 **id** | **String** |  | 
+**isScoringTarget** | **bool** |  | [optional] [default to true]
 **modelAnswer** | **String** |  | [optional] 
 **number** | **String** |  | 
 **page** | **int** |  | 
