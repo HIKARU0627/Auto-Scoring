@@ -56,6 +56,17 @@ export function AppShell({
    * frame row has a definite height, so the Sidebar can stretch to it and the
    * body column can size to its content -- `items-start` keeps the latter from
    * being stretched to the window (Issue #375 item 4).
+   *
+   * Issue #427: the body column is the only scroller. A sticky Sidebar inside
+   * this frame could not work while the window scrolled: `position: sticky` is
+   * clamped to its containing block, and the frame's box ends at the viewport
+   * even when its content is taller, so the panel left the screen as soon as the
+   * content did. Bounding the column (`max-h-full` against the frame's definite
+   * height) and giving it `overflow-y-auto` keeps the document at the viewport
+   * and scrolls the routed screen inside the column instead, which leaves the
+   * Sidebar -- and the 採点不可バナー above it -- in place. `max-h-full` also
+   * keeps the column content-height when the screen is short, so the bare band
+   * Issue #375 item 4 removed cannot come back.
    */
   const bannerVisible =
     gradingAvailability !== null && !gradingAvailability.available;
@@ -76,7 +87,7 @@ export function AppShell({
               <Sidebar />
               <div
                 data-testid="app-shell-content"
-                className="flex min-w-0 flex-1 flex-col"
+                className="flex min-h-0 max-h-full min-w-0 flex-1 flex-col overflow-y-auto"
               >
                 <RouteOutlet />
               </div>

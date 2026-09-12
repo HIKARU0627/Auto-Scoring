@@ -22,6 +22,13 @@ export const SIDEBAR_NAV_TEST_ID = "app-sidebar-nav";
  * panel while the window scrolls and shrinks with the 採点不可バナー instead of
  * overflowing it (Issue #422); the nav rows use a ~48px row with a 12px gap to
  * match the mock's ~45px height / ~62px pitch.
+ *
+ * Issue #427: the panel must not scroll with the screen. `sticky` alone never
+ * held here -- the shell row's box ends at the viewport while the screen's
+ * content overflows it, so the panel had nothing to stick to and rode the
+ * window down. `AppShell` now keeps the document at the viewport and scrolls
+ * the routed screen inside the body column, so this panel stays put and the
+ * `self-stretch` above only decides how tall the floating panel is.
  */
 export const SIDEBAR_PRODUCT_NAME = "Auto-Scoring";
 /** Existing wording from `docs/simplified-design-specification.md` §1.1. */
