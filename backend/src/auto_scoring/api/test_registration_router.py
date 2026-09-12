@@ -39,6 +39,9 @@ Registration flow (simplified-design-specification.md §6, docs/test-registratio
   once both the profile *and* the dependency graph (Issue #26) are confirmed
   does the test move from ``draft`` to ``ready`` (`Test.mark_ready`). This is
   the Issue #16 acceptance criterion "全必須項目確認後にだけ登録完了になる".
+* ``PUT /tests/{test_id}/scoring-targets`` -- choose which questions are
+  graded (Issue #449). Default is every question; at least one must remain.
+  Usable before and after registration completes.
 """
 
 from __future__ import annotations
@@ -92,6 +95,7 @@ from auto_scoring.domain.models import (
     MAX_TEST_NAME_LENGTH,
     MAX_TEST_SUBJECT_LENGTH,
     DomainError,
+    Question,
     Test,
     TestStatus,
 )
@@ -406,6 +410,23 @@ class CompleteRegistrationResponse(BaseModel):
     test: TestResponse
     profile_confirmed: bool
     dependency_graph_confirmed: bool
+
+
+class ScoringTargetsRequest(BaseModel):
+    #: Required, no default: an empty list is a deliberate "grade nothing"
+    #: request, which the handler rejects with 422 (Issue #449). A
+    #: `default_factory=list` would let a malformed `{}` body silently clear
+    #: every selection instead of failing validation.
+    question_ids: list[str]
+
+
+class ScoringTargetsResponse(BaseModel):
+    #: The question ids that are graded now, in review order.
+    question_ids: list[str]
+
+    @classmethod
+    def from_domain(cls, questions: list[Question]) -> ScoringTargetsResponse:
+        return cls(question_ids=[q.id for q in questions if q.is_scoring_target])
 
 
 class _AnswerLayoutConfirmedError(Exception):
@@ -825,6 +846,40 @@ def build_test_registration_router(
     def get_test(test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency) -> TestResponse:
         return TestResponse.from_domain(_get_test_or_404(uow, test_id))
 
+    @router.put("/tests/{test_id}/scoring-targets", response_model=ScoringTargetsResponse)
+    def set_scoring_targets(
+        test_id: str,
+        request: ScoringTargetsRequest,
+        uow: SqlAlchemyUnitOfWork = uow_dependency,
+    ) -> ScoringTargetsResponse:
+        """Choose which of a test's questions are graded (Issue #449).
+
+        The default is every question; this replaces the selection with
+        exactly ``question_ids``. Allowed before *and* after registration
+        completes (the owner changes their mind), but never to an empty set --
+        a test with nothing to grade has no meaning, so at least one question
+        must stay selected. Excluding a question deletes nothing: its grade
+        and review history are kept, simply not counted or exported, and
+        reappear if it is selected again.
+        """
+        _get_test_or_404(uow, test_id)
+        known_question_ids = {q.id for q in uow.questions.list_for_test(test_id)}
+        requested = set(request.question_ids)
+        unknown = sorted(requested - known_question_ids)
+        if unknown:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"unknown question_id for test {test_id!r}: {unknown}",
+            )
+        if not requested:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="採点する問題を1つ以上選んでください。",
+            )
+        uow.questions.set_scoring_targets(test_id, requested)
+        uow.commit()
+        return ScoringTargetsResponse.from_domain(uow.questions.list_for_test(test_id))
+
     @router.post("/tests/{test_id}/profile/analyze", response_model=ProfileResponse)
     def analyze_profile(
         test_id: str, uow: SqlAlchemyUnitOfWork = uow_dependency
@@ -1081,8 +1136,20 @@ def build_test_registration_router(
             # safe here: this handler already rejects confirming an
             # already-CONFIRMED profile above, so no downstream submission
             # processing can have started against these rows yet.
+            #
+            # Issue #449: a rebuild replaces every row, which would reset the
+            # grading selection to "all". Carry the flags across by question
+            # number, so a choice made before this confirmation survives.
+            previous_selection = {
+                question.number: question.is_scoring_target
+                for question in uow.questions.list_for_test(test_id)
+            }
             uow.questions.delete_for_test(test_id)
             for question in questions:
+                if question.number in previous_selection:
+                    question = replace(
+                        question, is_scoring_target=previous_selection[question.number]
+                    )
                 uow.questions.add(question)
             for rubric in rubrics:
                 uow.rubrics.add(rubric)
