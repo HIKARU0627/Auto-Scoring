@@ -63,21 +63,29 @@ own their formatting.
 
 ## CI のジョブ構成と、必須チェック `Quality`
 
-CI は 6 ジョブ。`app` / `backend` / `desktop` / `package` が実作業、`quality` は
-**判定を集約するだけ**のジョブ、`package-alarm` は `package` の結果だけを見る。
-`needs` で繋がっているのは `quality`（**4 実作業**。`package` を含む。Issue #331）と
-`package-alarm`（`package`）だけで、`app` / `backend` / `desktop` / `package` は
-同時に走る。**待ち時間は和ではなく最大値。**
-`package-alarm` は `package` が終わり次第 `quality` を待たずに走る。
+CI は 7 ジョブ。`app` / `backend` / `desktop` / `package` / `package-electron` が
+実作業、`quality` は**判定を集約するだけ**のジョブ、`package-alarm` は
+Windows パッケージ 2 ジョブの結果を見る監視ジョブ。
+`needs` で繋がっているのは `quality`（**5 実作業**。`package` / `package-electron` を
+含む。Issue #331・#433）と `package-alarm`（両方。Issue #433）だけで、実作業の
+5 ジョブは同時に走る。**待ち時間は和ではなく最大値。**
+`package-alarm` はパッケージ 2 ジョブが終わり次第 `quality` を待たずに走る。
 
-| ジョブ          | 表示名                  | 中身                                                               | ツールチェーン                    |
-| --------------- | ----------------------- | ------------------------------------------------------------------ | --------------------------------- |
-| `app`           | App                     | skill mirror, format, openapi, `:app` の lint/typecheck/test/build | Flutter SDK + uv + Node           |
-| `backend`       | Backend                 | `:backend` の lint/typecheck/test/build                            | uv + Node（**Flutter SDK なし**） |
-| `desktop`       | Desktop                 | `:desktop` の typecheck/test/build + Playwright (Electron)         | uv + Node（**Flutter SDK なし**） |
-| `quality`       | **Quality**             | 上 4 つの結果を判定するだけ                                        | なし（ubuntu）                    |
-| `package`       | Package (Windows)       | PyInstaller バンドル + インストーラ                                | Flutter SDK + uv + Node           |
-| `package-alarm` | Package (Windows) alarm | 上の赤を追跡 Issue にする（`needs: [package]` / ubuntu）           | Node のみ                         |
+Issue #433 で `Package (Windows)` を 2 ジョブに分けた。どちらも CPU 律速
+（PyInstaller・Flutter/CMake・electron-builder の asar/NSIS 圧縮）で、キャッシュの
+伸びしろは小さい。独立した 2 系統を別ランナーで同時に走らせるのが唯一効く手である。
+sidecar（PyInstaller）は両ジョブが**並列に自前でビルド**する。専用 sidecar ジョブ +
+artifact を両者が `needs` する案は直列化して `sidecar + max(consumer)` になるため採らない。
+
+| ジョブ             | 表示名                  | 中身                                                                                       | ツールチェーン                    |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------------------------ | --------------------------------- |
+| `app`              | App                     | skill mirror, format, openapi, `:app` の lint/typecheck/test/build                         | Flutter SDK + uv + Node           |
+| `backend`          | Backend                 | `:backend` の lint/typecheck/test/build                                                    | uv + Node（**Flutter SDK なし**） |
+| `desktop`          | Desktop                 | `:desktop` の typecheck/test/build + Playwright (Electron)                                 | uv + Node（**Flutter SDK なし**） |
+| `quality`          | **Quality**             | 上 5 つの結果を判定するだけ                                                                | なし（ubuntu）                    |
+| `package`          | Package (Windows)       | PyInstaller バンドル + Flutter/Inno インストーラ                                           | Flutter SDK + uv + Node           |
+| `package-electron` | Package (Electron)      | PyInstaller バンドル + Electron インストーラ                                               | uv + Node（**Flutter SDK なし**） |
+| `package-alarm`    | Package (Windows) alarm | 2 ジョブの合成結果の赤を追跡 Issue にする（`needs: [package, package-electron]` / ubuntu） | Node のみ                         |
 
 ### 置き場所の理由
 
@@ -87,6 +95,12 @@ CI は 6 ジョブ。`app` / `backend` / `desktop` / `package` が実作業、`q
 - **`backend` には Flutter SDK も `pnpm install` も入れない。** どのステップも
   `dart` にも node 依存にも触らないため。SDK 復元を省くだけで約 1.6 分減り、
   このジョブが全体の所要を決めるので、そのまま全体に効く。
+- **`backend` の pytest は `-n auto --dist loadfile` で並列化する（Issue #433）。**
+  `backend/pyproject.toml` の `addopts` が `pytest-xdist` を有効にする。
+  `--dist loadfile` はテストモジュール単位でワーカーを固定するので、実サイドカーを
+  起動し・動的ポートを bind し・app-data のロックを取るテストが別ワーカーと
+  同時に走らない（`data_root` フィクスチャは全ファイルで関数スコープの
+  `tmp_path` 由来なので、そもそも別ファイルと衝突しない）。
 - **`backend` は `windows-latest` のまま。** Linux ランナーなら約 3 倍速いが、
   これは Windows 専用製品で、サイドカーのパス・ファイル I/O の挙動は
   「Linux では通り、先生の実機で落ちる」の典型。速さのために出荷先の検証を
@@ -101,8 +115,11 @@ CI は 6 ジョブ。`app` / `backend` / `desktop` / `package` が実作業、`q
   入れない。
 - **`pnpm install` は `--filter` で絞る。** `desktop/` はワークスペースの別
   パッケージ（`pnpm-workspace.yaml`）なので、素の `pnpm install` は `app` /
-  `backend` / `package` ジョブにも Electron のバイナリ（約 100 MB）を落としてくる。
+  `backend` ジョブにも Electron のバイナリ（約 100 MB）を落としてくる。
   各ジョブは自分が動かすパッケージだけを入れる。
+  `package`（Flutter/Inno）は node 依存を import しないので `pnpm install` 自体を
+  行わない（`pnpm run` は corepack だけで動く）。Electron を梱包する
+  `package-electron` だけがワークスペース全体を install する。
 
 ### `Quality` が必須チェックである以上、外してはいけない 3 点
 
@@ -117,9 +134,9 @@ CI は 6 ジョブ。`app` / `backend` / `desktop` / `package` が実作業、`q
 
 **`needs` に足したら、判定ループにも足す。** `needs` に入れただけでは結果は
 「取得」されるが「検査」されないので、そのジョブが赤でも `Quality` は緑になる。
-`package` は Issue #331 でこの一覧に入った。`pnpm run alarm:selftest` が実
-`ci.yml` を読み、`quality` の `needs` に `package` があることを検査する（外すと
-赤くなる）。判定ループ側は自己検査に含めない -- 含めると、`needs` だけ足して
+`package` は Issue #331 で、`package-electron` は Issue #433 でこの一覧に入った。
+`pnpm run alarm:selftest` が実 `ci.yml` を読み、`quality` の `needs` に `package` が
+あることを検査する（外すと赤くなる）。判定ループ側は自己検査に含めない -- 含めると、`needs` だけ足して
 ループを忘れた状態でも App ジョブが赤くなり、ループの追加自体が効いていることを
 CI の実測で切り分けられなくなるためである。
 
@@ -173,14 +190,18 @@ refs/remotes/origin/main`。`pull_request` 側: run 34472340931 で
 
 ## `main` の `Package (Windows)` の赤に気付く仕組み（Issue #312）
 
-`package` は **Issue #331 で `Quality` の `needs` に入った**（上のとおり）。したがって
-**PR では** `Package (Windows)` が赤なら `Quality` が赤くなり、マージが止まる。
+`package` は **Issue #331 で `Quality` の `needs` に入った**（上のとおり）。
+Issue #433 で `package` と `package-electron` の 2 ジョブに分かれた後も、**両方が
+`Quality` の `needs` と判定ループに入っている**（片方だけでは足りない）。
+したがって**PR では**どちらの Windows パッケージが赤でも `Quality` が赤くなり、
+マージが止まる。
 それでもアラームが要るのは、**PR を経由せず `main` に直接入った変更**（管理者の
 push・ruleset の例外・将来の設定変更）では必須 check が走らないからである。その
-ときは `main` で `Package (Windows)` が赤でもマージは止まらず、**run を開かない限り
-誰も気付かない。** Windows 成果物を作れるのはこのジョブだけ（PyInstaller は
-クロスコンパイル不可、`pnpm run build:app` = `flutter build windows` は Linux 不可）
-なので、この赤は「出荷する Windows ビルドが壊れた」の唯一の signal である。
+ときは `main` で `Package (Windows)` / `Package (Electron)` が赤でもマージは止まらず、
+**run を開かない限り誰も気付かない。** Windows 成果物を作れるのはこの 2 ジョブだけ
+（PyInstaller はクロスコンパイル不可、`pnpm run build:app` = `flutter build windows`
+は Linux 不可）なので、この赤は「出荷する Windows ビルドが壊れた」の唯一の signal
+である。
 
 Issue #312 / PR #327 の時点では **案 C**（cut-over 直前だけ `Package (Windows)` を
 必須 check にする）を採り、この仕組みだけを入れた。その後の **オーナー裁定
@@ -188,16 +209,21 @@ Issue #312 / PR #327 の時点では **案 C**（cut-over 直前だけ `Package 
 する**ことが決まった。代償（`#309` のような Corepack の `ECONNRESET` で、変更と
 無関係の PR も 45 分ジョブに依存して止まる）は承知のうえで選んでいる。必須化の
 実装は**本番構成（ruleset）を触らない**: `Quality` を
-`needs: [app, backend, desktop, package]` にし、判定ループにも
-`needs.package.result` を足すだけで、ruleset が参照する必須 check 名 `Quality` は
-1 文字も変えない。`package` ジョブは `if` も `needs` も持たないので、PR / push の
-両方で必ず走り、`skipped` で `Quality` を巻き込むことはない。
+`needs: [app, backend, desktop, package, package-electron]` にし、判定ループにも
+両方の `result` を足すだけで、ruleset が参照する必須 check 名 `Quality` は
+1 文字も変えない。`package` / `package-electron` は `if` も `needs` も持たないので、
+PR / push の両方で必ず走り、`skipped` で `Quality` を巻き込むことはない。
 
 仕組みは `ci.yml` の `package-alarm` ジョブと `scripts/package-alarm.mjs`:
 
-- `needs: [package]` + `if: always()` で `package` の結果を必ず受け取る。
+- `needs: [package, package-electron]` + `if: always()` で両方の結果を必ず受け取る。
   `if: always()` が無いと失敗時に skip され、GitHub は skip を成功として扱う。
-- `main` への push で `package` が `success` 以外なら、追跡 Issue
+- `PACKAGE_RESULT` には**両ジョブの合成値**を渡す
+  （`(needs.package.result == 'success' && needs.package-electron.result == 'success')
+&& 'success' || 'failure'`）。どちらかが `success` でなければ `failure` で、
+  `skipped` や `cancelled` も `failure` として扱う（`Quality` の「success 以外は赤」と
+  同じ規則）。これが無いと、Electron 側だけが赤い `main` push を見逃す。
+- `main` への push で合成結果が `success` 以外なら、追跡 Issue
   `main: Package (Windows) is failing` を作成する（既に開いていればコメントする）。
   `success` に戻ったらその Issue を閉じる。
 - `main` 以外（PR）では追跡 Issue を作らず、**このジョブ自身を赤くする**。
@@ -220,10 +246,11 @@ Issue #312 / PR #327 の時点では **案 C**（cut-over 直前だけ `Package 
 
 - `ci.yml` の `package` ジョブの `name:` が `Package (Windows)` のままである
   こと（リネームしたら赤くなる）。
-- `package-alarm` が `needs: [package]` と `if: always()` を持つこと
-  （条件式を壊したら赤くなる）。
+- `package-alarm` が `needs` に `package` を含み、`if: always()` を持つこと
+  （条件式を壊したら赤くなる。Issue #433 以降は `package-electron` も `needs` に
+  入り、`PACKAGE_RESULT` が両者の合成値になる）。
 - `quality` が `needs` に `package` を持つこと（Issue #331 の必須化を外したら
-  赤くなる）。
+  赤くなる。Issue #433 以降は `package-electron` も必要）。
 
 さらに、報告分岐すべて（Issue 作成・コメント・回復で close・PR で赤・
 未知の結果で fail-closed・API 拒否で fail-closed）を同じテストが fake fetch で
