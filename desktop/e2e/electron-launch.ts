@@ -13,6 +13,24 @@ export const PACKAGE_ROOT = path.resolve(__dirname, "..");
 /** UG-08: sidecar startup may take up to 60s on first run (Defender, migration). */
 export const SIDECAR_READY_POLL_TIMEOUT_MS = 60_000;
 
+/**
+ * Linux only: point `keyring` at its null backend before the sidecar's lazy
+ * `import keyring` runs. A logged-in desktop session exports
+ * `DBUS_SESSION_BUS_ADDRESS`, so keyring's default backend probes the Secret
+ * Service over D-Bus and never answers -- the sidecar never reaches ready and
+ * the 60s poll fails with "Sidecar did not become ready" (Issue #425). The null
+ * backend answers every read with "nothing stored", which is the same supported
+ * no-credential configuration CI and non-Windows already run in, so no E2E
+ * property is weakened. Scoped to Linux because Windows must keep reading
+ * Credential Manager; `extra` is applied after this, so a spec can still
+ * override it.
+ */
+function linuxKeyringEnv(): Record<string, string> {
+  return process.platform === "linux"
+    ? { PYTHON_KEYRING_BACKEND: "keyring.backends.null.Keyring" }
+    : {};
+}
+
 /** Per-test app-data so serial E2E runs do not fight over the sidecar lock. */
 export function isolatedSidecarLaunchEnv(
   extra: Record<string, string> = {},
@@ -26,6 +44,7 @@ export function isolatedSidecarLaunchEnv(
         (entry): entry is [string, string] => entry[1] !== undefined,
       ),
     ),
+    ...linuxKeyringEnv(),
     AUTO_SCORING_E2E_APP_DATA: appDataDir,
     ...extra,
   };
