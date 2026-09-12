@@ -33,6 +33,20 @@ body:
       required: true
 
   - type: textarea
+    id: scope
+    attributes:
+      label: 触ってよい範囲 / 触らない
+      description: |
+        並列で実装するとき、担当ワーカーが編集してよいファイルと、他の Issue が
+        同時に触っているため触らないファイルを書いてください。不明なら「未定」で構いません。
+        `node scripts/inflight.mjs` で他 worktree / open PR との衝突を確認できます。
+      placeholder: |
+        触ってよい: ...
+        触らない: ...
+    validations:
+      required: true
+
+  - type: textarea
     id: alternatives
     attributes:
       label: 代替案
