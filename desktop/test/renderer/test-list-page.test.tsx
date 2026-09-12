@@ -193,6 +193,9 @@ describe("TestListPage (Issue #379)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("page-title").textContent).toBe("テスト一覧");
     });
-    expect(screen.getByTestId("test-list-row-t1")).toBeDefined();
+    // The page title is set synchronously by the router, but the rows only
+    // appear once the list request resolves; a synchronous `getByTestId` here
+    // raced the load and failed under full-suite load. Await the row instead.
+    await screen.findByTestId("test-list-row-t1");
   });
 });

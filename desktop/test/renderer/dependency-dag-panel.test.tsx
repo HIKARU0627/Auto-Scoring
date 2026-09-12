@@ -263,6 +263,11 @@ describe("DependencyDagPanel height and empty state (Issue #352)", () => {
     await waitFor(() => {
       expect(container.querySelectorAll(".react-flow__node")).toHaveLength(5);
     });
-    expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(3);
+    // Edges are drawn only after React Flow measures the nodes (the test
+    // harness' ResizeObserver re-notifies on a timer), so counting them
+    // synchronously right after the nodes appeared could read zero under load.
+    await waitFor(() => {
+      expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(3);
+    });
   });
 });
