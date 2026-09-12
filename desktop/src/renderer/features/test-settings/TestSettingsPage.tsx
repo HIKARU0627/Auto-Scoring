@@ -46,8 +46,11 @@ import {
   answerProfileUndetectedConfirmRequirements,
   answerRegionAddRequirements,
   completeRegistrationRequirements,
+  dedupeRequirements,
   dependencyGraphConfirmRequirements,
   gradingStartRequirements,
+  metRequirements,
+  unmetRequirements,
 } from "../../core/action-requirements.js";
 import {
   classifyAnswerDetectionOutcome,
@@ -484,6 +487,15 @@ export function TestSettingsPage(): JSX.Element {
     detectionAvailable: ready?.answerLayoutDetectionAvailable ?? false,
     criteriaConfirmed: criteriaConfirmed(ready?.criteria ?? null),
   });
+  // 回答欄カードの無効理由は 1 か所にまとめて描く。確定前の「回答欄がありません」
+  // は検出ボタンの後ろ、確定後の「確定済み」は検証ボタンの後ろ、と別々の
+  // `DisabledActionReason` に分けると、同じ条件が各ボタンぶん並ぶ。理由の同一性は
+  // `id` が持つので、ここで畳んでから 1 回だけ渡す (Issue #424, INV-111)。
+  const answerCardReqs = dedupeRequirements([
+    ...detectReqs,
+    ...addRegionReqs,
+    ...confirmProfileReqs,
+  ]);
   const detectionOutcomeReqs = answerDetectionOutcomeRequirements({
     outcome: ready?.detectionOutcome ?? "none",
     retryAfterSeconds: ready?.detectionRetryAfterSeconds ?? null,
@@ -529,12 +541,16 @@ export function TestSettingsPage(): JSX.Element {
         : [],
     });
 
+  // 「残りの確認」は、まだ済んでいない理由だけを数える。`registrationAlreadyComplete`
+  // のような既達の理由は、ボタンが無効な理由にはなるが残りではないので、`met` を見て
+  // 落とす。id の列挙で除外しないので、新しい理由も既定では残りに数えられる
+  // (Issue #424, INV-112)。同じ id は複数の関数から出るため、数える前に畳む。
   const remainingWork = useMemo(() => {
     if (ready === null) {
       return [];
     }
-    const shown = new Map(
-      [
+    return dedupeRequirements(
+      unmetRequirements([
         ...completeReqs,
         ...gradingStartRequirements({
           criteriaSettled:
@@ -543,9 +559,8 @@ export function TestSettingsPage(): JSX.Element {
           dependencyGraphConfirmed: graphConfirmed(ready.dependencyGraph),
           dependencyGraphStale: graphStale,
         }),
-      ].map((requirement) => [requirement.id, requirement]),
+      ]),
     );
-    return [...shown.values()];
   }, [completeReqs, graphStale, hasFallbackScoreRegions, ready]);
 
   const registrationSteps = [
@@ -1081,7 +1096,6 @@ export function TestSettingsPage(): JSX.Element {
                 領域を手動追加
               </button>
             </div>
-            <DisabledActionReason requirements={detectReqs} />
 
             {ready.answerLayoutPageCount === null ? (
               <p
@@ -1157,8 +1171,7 @@ export function TestSettingsPage(): JSX.Element {
                 プロファイルを確定
               </button>
             </div>
-            <DisabledActionReason requirements={addRegionReqs} />
-            <DisabledActionReason requirements={confirmProfileReqs} />
+            <DisabledActionReason requirements={answerCardReqs} />
           </Card>
 
           <Card testId="dependency-graph-section">
@@ -1330,9 +1343,11 @@ export function TestSettingsPage(): JSX.Element {
                     : `残りの確認 ${remainingWork.length}件`}
                 </p>
                 {remainingWork.length === 0 ? (
-                  <p className="text-body-medium text-on-surface-variant">
-                    「登録完了」を押すと採点を開始できる状態になります。
-                  </p>
+                  ready.test.status === "ready" ? null : (
+                    <p className="text-body-medium text-on-surface-variant">
+                      「登録完了」を押すと採点を開始できる状態になります。
+                    </p>
+                  )
                 ) : (
                   remainingWork.map((item) => (
                     <p
@@ -1345,7 +1360,11 @@ export function TestSettingsPage(): JSX.Element {
                   ))
                 )}
               </div>
-              <DisabledActionReason requirements={completeReqs} />
+              {/* ボタンが無効な理由のうち、まだ残っているものは上の「残りの確認」に
+                  並ぶ。ここには重複を避けて、既に済んでいる理由だけを出す。 */}
+              <DisabledActionReason
+                requirements={metRequirements(completeReqs)}
+              />
             </div>
           </Card>
 
