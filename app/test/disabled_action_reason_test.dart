@@ -118,13 +118,17 @@ void main() {
       (builder) => builder
         ..id = 'openrouter'
         ..label = 'OpenRouter'
+        ..transport = 'openrouter'
         ..configured = configured
         ..keySource = configured
             ? ConfigurationSource.credentialStore
             : ConfigurationSource.none
         ..keyVariable = 'AUTO_SCORING_OPENROUTER_API_KEY'
         ..model = 'google/gemini-2.5-flash'
+        ..modelVariable = 'AUTO_SCORING_OPENROUTER_MODEL'
         ..modelSource = ConfigurationSource.builtinDefault
+        ..textSettings.replace(const [])
+        ..authNote = ''
         ..consoleUrl = 'https://openrouter.ai/settings/keys',
     );
 
@@ -137,6 +141,13 @@ void main() {
           ..storeUnavailableReason = storeUnavailableReason
           ..transportOrder = 'openrouter'
           ..transportSource = ConfigurationSource.builtinDefault
+          ..transportOrderStored = false
+          ..availableTransports.replace(const [
+            'gemini',
+            'codex_app_server',
+            'openrouter',
+            'openai',
+          ])
           ..restartRequired = false
           ..keys.replace([slot(configured: configured)]),
       );
@@ -224,6 +235,13 @@ void main() {
           (builder) => builder
             ..transportOrder = 'openrouter'
             ..transportSource = ConfigurationSource.builtinDefault
+            ..transportOrderStored = false
+            ..availableTransports.replace(const [
+              'gemini',
+              'codex_app_server',
+              'openrouter',
+              'openai',
+            ])
             ..restartRequired = false
             ..keys.replace([slot(configured: true)]),
         ),
