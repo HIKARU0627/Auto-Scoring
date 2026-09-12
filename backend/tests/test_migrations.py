@@ -42,7 +42,7 @@ def test_fresh_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
 
     assert _CORE_TABLES | {"operation_log", "answer_images"} <= _tables(db_url)
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
 
 
 def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
@@ -63,7 +63,7 @@ def test_programmatic_upgrade_ignores_a_stray_auto_scoring_db_url(
 
     upgrade(db_url, "head")
 
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
     assert not decoy_path.exists()
 
 
@@ -75,7 +75,7 @@ def test_one_generation_old_database_upgrades_to_head(db_url: str) -> None:
     upgrade(db_url, "head")
     assert "operation_log" in _tables(db_url)
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
 
 
 def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
@@ -85,7 +85,7 @@ def test_two_generations_old_database_upgrades_to_head(db_url: str) -> None:
 
     upgrade(db_url, "head")
     assert "answer_images" in _tables(db_url)
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
 
 
 def _pdf_bytes(*, pages: int) -> bytes:
@@ -281,7 +281,7 @@ def test_legacy_duplicate_content_is_rejected_before_any_ddl_and_retry_recovers(
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
 
 
 _CHILD_TABLES = (
@@ -543,9 +543,10 @@ def test_check_constraint_rejects_bad_row(db_url: str) -> None:
         )
         conn.commit()
         bad_question = text(
+            # page 0 violates ck_questions_page_positive
             "INSERT INTO questions "
-            "(id, test_id, number, page, points, scoring_method) "
-            "VALUES ('q', 't', '1', 0, 5, 'additive')"  # page 0 violates ck_questions_page_positive
+            "(id, test_id, number, page, points, scoring_method, is_scoring_target) "
+            "VALUES ('q', 't', '1', 0, 5, 'additive', 1)"
         )
         with pytest.raises(IntegrityError):
             conn.execute(bad_question)
@@ -581,8 +582,9 @@ def test_check_constraint_rejects_bad_row(db_url: str) -> None:
 
         conn.execute(
             text(
-                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
-                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+                "INSERT INTO questions "
+                "(id, test_id, number, page, points, scoring_method, is_scoring_target) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive', 1)"
             )
         )
         conn.execute(
@@ -638,8 +640,9 @@ def test_answer_image_check_constraint_rejects_reason_status_mismatch(
         )
         conn.execute(
             text(
-                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
-                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+                "INSERT INTO questions "
+                "(id, test_id, number, page, points, scoring_method, is_scoring_target) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive', 1)"
             )
         )
         conn.execute(
@@ -740,8 +743,9 @@ def test_a_grade_cannot_be_stored_for_an_image_that_is_not_the_answer(db_url: st
         )
         conn.execute(
             text(
-                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
-                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+                "INSERT INTO questions "
+                "(id, test_id, number, page, points, scoring_method, is_scoring_target) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive', 1)"
             )
         )
         conn.execute(
@@ -819,8 +823,9 @@ def test_reviews_check_constraints_track_who_needs_an_ai_grade(db_url: str) -> N
         )
         conn.execute(
             text(
-                "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
-                "VALUES ('q', 't', '1', 1, 5, 'additive')"
+                "INSERT INTO questions "
+                "(id, test_id, number, page, points, scoring_method, is_scoring_target) "
+                "VALUES ('q', 't', '1', 1, 5, 'additive', 1)"
             )
         )
         conn.execute(
@@ -1388,6 +1393,7 @@ def test_migration_file_paths_exist() -> None:
         "0019_two_page_question_areas.py",
         "0020_grade_result_token_usage.py",
         "0021_error_catalog.py",
+        "0022_scoring_target_questions.py",
     } <= names
 
 
@@ -1556,7 +1562,7 @@ def test_0020_grade_result_token_usage_upgrade_and_downgrade(db_url: str) -> Non
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
     engine = create_sqlite_engine(db_url)
     try:
         cols = {col["name"] for col in inspect(engine).get_columns("grade_results")}
@@ -1608,7 +1614,7 @@ def test_0021_error_catalog_upgrade_and_downgrade(db_url: str) -> None:
         engine.dispose()
 
     upgrade(db_url, "head")
-    assert current_revision(db_url) == "0021"
+    assert current_revision(db_url) == "0022"
     engine = create_sqlite_engine(db_url)
     try:
         with engine.begin() as conn:
@@ -1655,3 +1661,72 @@ def test_0021_error_catalog_upgrade_and_downgrade(db_url: str) -> None:
     downgrade(db_url, "0020")
     assert current_revision(db_url) == "0020"
     assert "error_catalogs" not in _tables(db_url)
+
+
+def test_0022_scoring_target_upgrade_backfills_existing_rows_and_downgrade(
+    db_url: str,
+) -> None:
+    """Issue #449: every question that predates the column keeps being graded
+    ("デフォルトはすべて"), and after the transient default is dropped an
+    INSERT that omits the column fails instead of silently becoming a target.
+    """
+    upgrade(db_url, "0021")
+    assert current_revision(db_url) == "0021"
+    engine = create_sqlite_engine(db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO tests (id, name, default_scoring_method, status, created_at) "
+                    "VALUES ('t1', 'Test 1', 'additive', 'ready', '2026-01-01')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                    "VALUES ('q1', 't1', '1', 1, 5, 'additive')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    upgrade(db_url, "head")
+    assert current_revision(db_url) == "0022"
+    engine = create_sqlite_engine(db_url)
+    try:
+        cols = {col["name"] for col in inspect(engine).get_columns("questions")}
+        assert "is_scoring_target" in cols
+
+        with engine.connect() as conn:
+            backfilled = conn.execute(
+                text("SELECT is_scoring_target FROM questions WHERE id = 'q1'")
+            ).scalar_one()
+        assert backfilled in (True, 1)
+
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE questions SET is_scoring_target = 0 WHERE id = 'q1'"))
+        with engine.connect() as conn:
+            assert conn.execute(
+                text("SELECT is_scoring_target FROM questions WHERE id = 'q1'")
+            ).scalar_one() in (False, 0)
+
+        # The transient default is gone: a row that omits the column is a
+        # NOT NULL violation, not an accidental scoring target.
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO questions (id, test_id, number, page, points, scoring_method) "
+                    "VALUES ('q2', 't1', '2', 1, 5, 'additive')"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    downgrade(db_url, "0021")
+    assert current_revision(db_url) == "0021"
+    engine = create_sqlite_engine(db_url)
+    try:
+        cols = {col["name"] for col in inspect(engine).get_columns("questions")}
+        assert "is_scoring_target" not in cols
+    finally:
+        engine.dispose()

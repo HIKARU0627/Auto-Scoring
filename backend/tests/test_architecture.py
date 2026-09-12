@@ -90,6 +90,14 @@ def test_questions_and_rubrics_have_no_in_place_update_path() -> None:
     so it is asserted here: the day an ``update``/``set_points``/``delete``
     method appears, this fails and whoever adds it has to say what happens to
     the completions that point at the old set.
+
+    ``set_scoring_targets`` (Issue #449) is the one sanctioned exception, and
+    it is not that kind of edit: it changes only *whether* a question is
+    graded, never its points/criteria/answers, and it deletes nothing. A
+    question excluded by it keeps its grade and review history, which stop
+    being counted or exported and come back unchanged when it is selected
+    again -- so no completion is silently re-attributed to a different
+    question.
     """
     from auto_scoring.domain import repositories
 
@@ -97,6 +105,7 @@ def test_questions_and_rubrics_have_no_in_place_update_path() -> None:
         "add",
         "get",
         "list_for_test",
+        "set_scoring_targets",
         "delete_for_test",
     }
     assert set(_public_protocol_methods(repositories.RubricRepository)) == {

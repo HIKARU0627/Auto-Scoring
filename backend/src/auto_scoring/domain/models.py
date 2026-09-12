@@ -586,6 +586,13 @@ class Question:
     comment_area: NormalizedRect | None = None
     page_2: int | None = None
     answer_area_2: NormalizedRect | None = None
+    #: Whether this question is graded (Issue #449). ``True`` by default --
+    #: "default is every question", as the owner asked -- and deliberately
+    #: positive so a reader never has to double-negate. An excluded question
+    #: keeps its row (and any grade/review history already recorded for it);
+    #: it is simply not graded, not counted towards confirmation, and not
+    #: drawn on the exported PDF. See `docs/data-model-and-local-storage.md`.
+    is_scoring_target: bool = True
 
     def __post_init__(self) -> None:
         _require_non_empty("Question.id", self.id)

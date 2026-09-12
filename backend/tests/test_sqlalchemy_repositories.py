@@ -67,6 +67,32 @@ def test_rubric_round_trips_with_ordered_criteria(seeded: UowFactory) -> None:
     assert [c.id for c in rubric.criteria] == ["c-1", "c-2"]
 
 
+def test_scoring_targets_round_trip_and_filter(make_uow: UowFactory) -> None:
+    """Issue #449: the graded subset is persisted, defaults to every question,
+    and `list_for_test` can return only it."""
+    with make_uow() as uow:
+        uow.tests.add(make_test())
+        uow.questions.add(make_question(id="q-1", number="問1"))
+        uow.questions.add(make_question(id="q-2", number="問2"))
+        uow.commit()
+
+    with make_uow() as uow:
+        assert [q.id for q in uow.questions.list_for_test("test-1")] == ["q-1", "q-2"]
+        assert [q.is_scoring_target for q in uow.questions.list_for_test("test-1")] == [
+            True,
+            True,
+        ]
+        uow.questions.set_scoring_targets("test-1", ["q-2"])
+        uow.commit()
+
+    with make_uow() as uow:
+        assert [q.id for q in uow.questions.list_for_test("test-1", scoring_targets_only=True)] == [
+            "q-2"
+        ]
+        flags = {q.id: q.is_scoring_target for q in uow.questions.list_for_test("test-1")}
+        assert flags == {"q-1": False, "q-2": True}
+
+
 def test_ai_and_human_grades_coexist_as_separate_rows(seeded: UowFactory) -> None:
     with seeded() as uow:
         uow.submissions.add(make_submission())
