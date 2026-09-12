@@ -567,6 +567,10 @@ class JobQueueService:
                 raise JobNotFoundError(submission_id)
             test_id = submission.test_id
             questions = uow.questions.list_for_test(test_id)
+            # Issue #449: the questions the owner excluded from grading get no
+            # job. Their edges are ignored for the ones that remain, so an
+            # excluded prerequisite does not strand its dependent.
+            excluded_question_ids = {q.id for q in questions if not q.is_scoring_target}
             graph = uow.dependency_graphs.get_latest_confirmed(test_id)
             if not can_start_submission_processing(
                 graph,
@@ -598,7 +602,7 @@ class JobQueueService:
                 if job.dependency_graph_version == graph.version
             }
             now = self._clock.now()
-            for plan in plan_submission_jobs(graph):
+            for plan in plan_submission_jobs(graph, excluded_question_ids=excluded_question_ids):
                 existing_job = existing.get(plan.question_id)
                 if existing_job is not None:
                     # Deliberately not re-enqueued even if it is still
@@ -1339,12 +1343,20 @@ class JobQueueService:
         """
         jobs_by_question = {j.question_id: j for j in jobs if j.question_id is not None}
         statuses = question_statuses(jobs)
+        # Issue #449: a dependent must not stay blocked on an excluded
+        # prerequisite that will never run. Read the same ungraded set
+        # `_plan_and_create_jobs` used, so planning and release agree.
+        excluded_question_ids = {
+            q.id for q in uow.questions.list_for_test(graph.test_id) if not q.is_scoring_target
+        }
         newly_queued: list[str] = []
         for dependent_id in direct_dependents(graph, completed_question_id):
             dependent_job = jobs_by_question.get(dependent_id)
             if dependent_job is None or dependent_job.state is not JobState.BLOCKED:
                 continue
-            readiness = evaluate_readiness(graph, dependent_id, statuses)
+            readiness = evaluate_readiness(
+                graph, dependent_id, statuses, excluded_question_ids=excluded_question_ids
+            )
             if readiness.ready:
                 released = dependent_job.transitioned_to(
                     JobState.QUEUED, updated_at=self._clock.now()

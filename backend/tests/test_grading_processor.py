@@ -294,6 +294,33 @@ async def test_a_normal_grading_call_persists_a_usable_grade_result(
     assert grade.dependency_graph_version == 1
 
 
+async def test_an_excluded_question_short_circuits_before_any_provider_call(
+    session_factory: sessionmaker[Session],
+    store: LocalFileStore,
+    ai_provider: _ScriptedAIProvider,
+    processor: GradingJobProcessor,
+) -> None:
+    """Issue #449: a question excluded after its job was queued must not be
+    graded. The stale job succeeds (so it is terminal, not stuck) but skips
+    the recognition and grading providers entirely and writes no grade."""
+    _seed(session_factory, store)
+    ai_provider.script(_response())
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        uow.questions.set_scoring_targets("test-1", [])
+        uow.commit()
+    job = make_job(kind=JobKind.GRADING, question_id="q-1")
+
+    result = await processor.process(job)
+
+    assert result.outcome is ProcessingOutcome.SUCCEEDED
+    assert result.usable is False
+    assert result.skipped_reason == "not_a_scoring_target"
+    assert ai_provider.calls == []
+    with SqlAlchemyUnitOfWork(session_factory) as uow:
+        assert uow.grades.history("sub-1", "q-1") == []
+        assert uow.recognitions.history("sub-1", "q-1") == []
+
+
 async def test_grading_request_includes_the_ocr_text_and_answer_image(
     session_factory: sessionmaker[Session],
     store: LocalFileStore,

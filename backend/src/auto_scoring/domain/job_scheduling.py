@@ -11,7 +11,7 @@ Design decisions: docs/job-queue.md.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -61,7 +61,11 @@ def direct_dependents(graph: DependencyGraph, question_id: str) -> list[str]:
 
 
 def evaluate_readiness(
-    graph: DependencyGraph, question_id: str, statuses: Mapping[str, QuestionStatus]
+    graph: DependencyGraph,
+    question_id: str,
+    statuses: Mapping[str, QuestionStatus],
+    *,
+    excluded_question_ids: Collection[str] = frozenset(),
 ) -> Readiness:
     """Whether ``question_id`` may run now, given the latest known
     ``statuses`` of every question in ``graph``.
@@ -74,8 +78,19 @@ def evaluate_readiness(
     function answer both "what should this submission's jobs look like when
     first created" (nothing has run yet) and "what changed after one job
     finished".
+
+    ``excluded_question_ids`` are the test's ungraded questions (Issue #449).
+    A prerequisite in that set is treated as if it had no edge at all: an
+    excluded question never runs, so a dependent left waiting on it would
+    wait forever. This is the same "no prerequisite result, grade anyway"
+    rule `test_e2e_ocr_unavailable_chain.py` fixes for a prerequisite whose
+    OCR came back empty.
     """
-    prerequisites = _prerequisites(graph, question_id)
+    prerequisites = [
+        prerequisite
+        for prerequisite in _prerequisites(graph, question_id)
+        if prerequisite not in excluded_question_ids
+    ]
     if not prerequisites:
         return Readiness(ready=True)
     unmet = [
@@ -129,14 +144,23 @@ class InitialPlan:
     blocking_question_id: str | None = None
 
 
-def plan_submission_jobs(graph: DependencyGraph) -> list[InitialPlan]:
-    """One `InitialPlan` per question in ``graph``, in a stable (sorted)
-    order -- nothing has run yet, so this is `evaluate_readiness` against an
-    empty status map for every question.
+def plan_submission_jobs(
+    graph: DependencyGraph, *, excluded_question_ids: Collection[str] = frozenset()
+) -> list[InitialPlan]:
+    """One `InitialPlan` per graded question in ``graph``, in a stable
+    (sorted) order -- nothing has run yet, so this is `evaluate_readiness`
+    against an empty status map for every question.
+
+    ``excluded_question_ids`` (Issue #449) get no plan at all: an excluded
+    question is never graded, so creating a job for it would only waste a
+    provider call and leave a job row for work nobody asked for. Their edges
+    are ignored for the questions that remain, exactly as in
+    `evaluate_readiness`.
     """
     plans: list[InitialPlan] = []
-    for question_id in sorted(graph.question_ids):
-        readiness = evaluate_readiness(graph, question_id, {})
+    excluded = set(excluded_question_ids)
+    for question_id in sorted(graph.question_ids - excluded):
+        readiness = evaluate_readiness(graph, question_id, {}, excluded_question_ids=excluded)
         plans.append(
             InitialPlan(
                 question_id=question_id,

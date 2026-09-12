@@ -145,7 +145,10 @@ class ExportJobProcessor:
                 return self._failed("submission not found")
 
             test = uow.tests.get(submission.test_id)
-            questions = uow.questions.list_for_test(submission.test_id)
+            # Only the selected questions are gated, marked, and snapshotted
+            # (Issue #449); an excluded one is never drawn on the exported
+            # sheet.
+            questions = uow.questions.list_for_test(submission.test_id, scoring_targets_only=True)
             question_ids = [question.id for question in questions]
             reviews_by_question = {
                 question_id: uow.reviews.history(job.submission_id, question_id)
