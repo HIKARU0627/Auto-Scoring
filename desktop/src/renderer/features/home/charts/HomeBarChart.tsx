@@ -10,7 +10,10 @@ import {
   type BarShapeProps,
 } from "recharts";
 
-import type { HomeDailyPoint } from "../../../core/home-analytics.js";
+import {
+  homeBarAxis,
+  type HomeDailyPoint,
+} from "../../../core/home-analytics.js";
 
 /**
  * Daily intake bar chart (Issue #336). Recharts draws SVG, so each bar is a
@@ -81,6 +84,11 @@ export function HomeBarChart({
 }): JSX.Element {
   const total = points.reduce((sum, point) => sum + point.count, 0);
   const doneTotal = points.reduce((sum, point) => sum + point.doneCount, 0);
+  // Issue #382: leave headroom above the tallest bar instead of letting the
+  // axis end on it. The bound and its labels come from the same pure function.
+  const axis = homeBarAxis(
+    points.reduce((max, point) => Math.max(max, point.count), 0),
+  );
   return (
     <figure
       data-testid="home-daily-chart"
@@ -125,7 +133,9 @@ export function HomeBarChart({
               }}
             />
             <YAxis
-              domain={[0, "dataMax"]}
+              domain={[0, axis.upper]}
+              ticks={[...axis.ticks]}
+              interval={0}
               allowDecimals={false}
               width={28}
               tickLine={false}
