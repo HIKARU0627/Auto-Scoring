@@ -9,6 +9,8 @@ import 'package:auto_scoring_app/api/sidecar_api_client.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'sidecar_keyring_env.dart';
+
 /// Boots the real Python sidecar and exercises the boundary against it: an
 /// unauthenticated health check, an authenticated protected call, a rejected
 /// token, and a sidecar that is not running.
@@ -84,12 +86,18 @@ void main() {
     tempDir = await Directory.systemTemp.createTemp('sidecar_it_');
     final handshakeFile = File('${tempDir!.path}/handshake.json');
 
-    final process = await Process.start(sidecarExe, [
-      '--handshake-file',
-      handshakeFile.path,
-      '--app-data-dir',
-      '${tempDir!.path}/app-data',
-    ]);
+    final process = await Process.start(
+      sidecarExe,
+      [
+        '--handshake-file',
+        handshakeFile.path,
+        '--app-data-dir',
+        '${tempDir!.path}/app-data',
+      ],
+      // Linux only, so the sidecar's `import keyring` does not stall on D-Bus
+      // and the startup reaches `/healthz` (Issue #438).
+      environment: Platform.isLinux ? linuxKeyringEnvironment : null,
+    );
     sidecar = process;
 
     final output = StringBuffer();
