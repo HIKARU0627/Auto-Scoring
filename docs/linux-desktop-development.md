@@ -445,7 +445,7 @@ Gdk-Message: Unable to load  from the cursor theme
 `flutter doctor` の `Unable to access driver information using 'eglinfo'` も
 同様で、`mesa-utils` が無いという情報表示にすぎない。ビルドにも実行にも要らない。
 
-### 5.4 e2e が `Sidecar did not become ready` で 60 秒タイムアウトする（Issue #425）
+### 5.4 実サイドカーを起動するテストが keyring で固まる（Issue #425 / #438）
 
 **症状。** デスクトップセッション上で素直に
 
@@ -505,6 +505,47 @@ env -u DBUS_SESSION_BUS_ADDRESS -u DBUS_STARTER_ADDRESS \
 e2e/shell-frame-height.spec.ts` を回すと、2 件とも
 `Sidecar did not become ready within 60000ms` で落ちる。戻すと 2 件とも通る。
 この env が効いていることは、**消すと e2e がタイムアウトする**という形で検査される。
+
+#### 実サイドカーを起動するハーネスは 3 つある（Issue #438）
+
+上の原因は e2e だけのものではない。**実サイドカーを起動するテストハーネスは 3 つあり、
+`desktop/e2e/` 以外の 2 つも同じ穴にはまる。** Issue #438 で残り 2 つを埋めた:
+
+| #   | ハーネス                                                                             | ランナー                      | 対処                                                    |
+| --- | ------------------------------------------------------------------------------------ | ----------------------------- | ------------------------------------------------------- |
+| 1   | `desktop/e2e/electron-launch.ts`                                                     | Playwright                    | Issue #425 / PR #432（§5.4 冒頭）                       |
+| 2   | `desktop/test/*.integration.test.ts`                                                 | vitest（`node` プロジェクト） | Issue #438。`desktop/test/support/linux-keyring-env.ts` |
+| 3   | `app/test/sidecar_supervisor_integration_test.dart` / `sidecar_api_client_test.dart` | `flutter test`                | Issue #438。`app/test/sidecar_keyring_env.dart`         |
+
+2 と 3 はどちらも「自分で `Process.start` / `spawn` する側」で、環境変数を子へ渡す口が
+無い。`desktop/src/` と `app/lib/` は製品コードなので触らず、**テスト側で env を足す**:
+
+- **2（vitest）。** `NodeSidecarPlatform.start` は `spawn` の既定どおり `process.env` を
+  継承する。各テストファイルの `beforeAll` で `applyLinuxKeyringEnvironment()` を呼び、
+  `process.env` に 1 変数を足す。`simulated-parent.cjs` が spawn する孫にもそのまま伝わる。
+- **3（Flutter）。** `SidecarPlatformIo.start` は `Process.start(executable, arguments)`
+  に環境を渡していない。`sidecar_supervisor_integration_test.dart` は
+  `SidecarPlatformIo` を継承したテスト専用の `_KeyringSafePlatform` を持ち、
+  **Linux のときだけ** `environment: linuxKeyringEnvironment` を渡す。Windows は
+  `super.start` にそのまま委譲するので、Job Object（`ChildProcessGroup`）の採用は
+  変わらない（Linux では `ChildProcessGroup` が no-op なので委譲を飛ばしても失うものは無い）。
+  `sidecar_api_client_test.dart` は自分で `Process.start` するので、同じ env を
+  `environment:` に渡すだけでよい。
+
+`desktop/e2e/electron-launch.ts` の `linuxKeyringEnv()` を import していないのは、
+`desktop/test/`（vitest）と `desktop/e2e/`（Playwright）が別のテストランナーで、
+`e2e/` は Playwright 側の資産だからである。3 行の定数のために `node` プロジェクトを
+Playwright 側へ依存させない。`app/` はそもそも TypeScript の資産を import できない。
+
+**変異検査（Issue #438）。** 足した env を外すと、どちらも再びタイムアウトする:
+
+| ハーネス        | 変異                                     | 結果                                                                                                                                                                                                                                                |
+| --------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3（Flutter）    | `linuxKeyringEnvironment` を `{}` にする | **14 件失敗 / 2 件通過**。`sidecar_api_client_test.dart` のサイドカー起動 9 件が `sidecar never became healthy`、`sidecar_supervisor_integration_test.dart` の起動 5 件が `SidecarFailure.startupTimedOut`。通る 2 件はサイドカーを起動しないテスト |
+| 2（vitest）     | `linuxKeyringEnvironment` を `{}` にする | **7 件失敗 / 0 件通過**。`sidecar-supervisor.integration.test.ts` の 5 件が `Test timed out in 60000ms`、`sidecar-parent-watchdog.integration.test.ts` の 2 件がマーカーファイル待ち（30s）で落ちる                                                 |
+| 1（Playwright） | 冒頭の変異検査を参照                     | 2 件が `Sidecar did not become ready within 60000ms`                                                                                                                                                                                                |
+
+戻すと 2 は 7 件全通過（約 20s）、3 は 16 件全通過（約 30s）になる。
 
 ## 6. CI について（提案、未実施）
 

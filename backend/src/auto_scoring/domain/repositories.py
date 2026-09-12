@@ -14,7 +14,7 @@ and the human-confirmed value are always retrievable side by side
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -110,7 +110,32 @@ class ErrorCatalogRepository(Protocol):
 class QuestionRepository(Protocol):
     def add(self, question: Question) -> None: ...
     def get(self, question_id: str) -> Question | None: ...
-    def list_for_test(self, test_id: str) -> list[Question]: ...
+
+    def list_for_test(self, test_id: str, *, scoring_targets_only: bool = False) -> list[Question]:
+        """Every question of ``test_id``, in review order.
+
+        ``scoring_targets_only`` filters to the questions selected for grading
+        (Issue #449). The default is every question, so a caller that needs
+        the test's full layout (page coverage, the answer-area editor, the
+        dependency graph) is unaffected; the callers that build the grading
+        set, the confirmation denominator, or the export deliberately opt in
+        (see the audit in the Issue #449 PR).
+        """
+        ...
+
+    def set_scoring_targets(self, test_id: str, scoring_target_ids: Iterable[str]) -> None:
+        """Make exactly ``scoring_target_ids`` (a subset of ``test_id``'s
+        questions) the graded ones; every other question of the test becomes
+        excluded (Issue #449).
+
+        This is the one sanctioned in-place edit of a `Question` row: it
+        changes only *whether* the question is graded, never its points,
+        criteria, or answers, and it deletes nothing -- so grade/review
+        history already recorded for a newly excluded question stays valid
+        and visible if the question is selected again. An id not belonging to
+        ``test_id`` is ignored (the API validates membership first).
+        """
+        ...
 
     def delete_for_test(self, test_id: str) -> None:
         """Remove every question for ``test_id`` (and, via ``ON DELETE

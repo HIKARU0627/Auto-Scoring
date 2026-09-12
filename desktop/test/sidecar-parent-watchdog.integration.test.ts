@@ -2,12 +2,13 @@ import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   resolveSidecarExecutable,
   sidecarExecutableCandidates,
 } from "../src/main/sidecar-paths";
 import { SidecarSupervisor } from "../src/main/sidecar-supervisor";
+import { applyLinuxKeyringEnvironment } from "./support/linux-keyring-env";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -35,6 +36,13 @@ async function waitUntil(
 }
 
 describe("Linux CI Parent Process Watchdog Integration (Acceptance 4, UG-01)", () => {
+  // Both the `simulated-parent.cjs` helper and the sidecar it starts inherit
+  // this process's environment; Linux needs the null keyring backend or startup
+  // stalls on D-Bus before `/healthz` (Issue #438).
+  beforeAll(() => {
+    applyLinuxKeyringEnvironment();
+  });
+
   const isWindows = process.platform === "win32";
   const candidates = sidecarExecutableCandidates({
     resolvedExecutable: process.execPath,

@@ -1548,6 +1548,34 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tests/{test_id}/scoring-targets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set Scoring Targets
+     * @description Choose which of a test's questions are graded (Issue #449).
+     *
+     *     The default is every question; this replaces the selection with
+     *     exactly ``question_ids``. Allowed before *and* after registration
+     *     completes (the owner changes their mind), but never to an empty set --
+     *     a test with nothing to grade has no meaning, so at least one question
+     *     must stay selected. Excluding a question deletes nothing: its grade
+     *     and review history are kept, simply not counted or exported, and
+     *     reappear if it is selected again.
+     */
+    put: operations["set_scoring_targets_tests__test_id__scoring_targets_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tests/{test_id}/submissions": {
     parameters: {
       query?: never;
@@ -2685,6 +2713,11 @@ export interface components {
       comment_area?: components["schemas"]["NormalizedRectResponse"] | null;
       /** Id */
       id: string;
+      /**
+       * Is Scoring Target
+       * @default true
+       */
+      is_scoring_target: boolean;
       /** Model Answer */
       model_answer?: string | null;
       /** Number */
@@ -2985,6 +3018,16 @@ export interface components {
       maximum: number;
       /** Ratio */
       ratio: number;
+    };
+    /** ScoringTargetsRequest */
+    ScoringTargetsRequest: {
+      /** Question Ids */
+      question_ids: string[];
+    };
+    /** ScoringTargetsResponse */
+    ScoringTargetsResponse: {
+      /** Question Ids */
+      question_ids: string[];
     };
     /** SubmissionAiUsageResponse */
     SubmissionAiUsageResponse: {
@@ -5712,7 +5755,10 @@ export interface operations {
   };
   list_questions_tests__test_id__questions_get: {
     parameters: {
-      query?: never;
+      query?: {
+        /** @description Return every question, not only the grading targets. The review screen leaves this at the default so an excluded question is never shown as work to do (Issue #449); the test-settings screen sets it to list them for re-selection. */
+        include_excluded_questions?: boolean;
+      };
       header?: never;
       path: {
         test_id: string;
@@ -5759,6 +5805,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SubmissionReviewProgressResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  set_scoring_targets_tests__test_id__scoring_targets_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        test_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ScoringTargetsRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ScoringTargetsResponse"];
         };
       };
       /** @description Validation Error */

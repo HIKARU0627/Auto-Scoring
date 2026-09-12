@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from asyncio import to_thread
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -161,6 +162,22 @@ class GradingJobProcessor:
         self._clock = clock or SystemClock()
 
     async def process(self, job: Job) -> ProcessingResult:
+        # Issue #449: a question excluded from grading is never sent to the
+        # provider. New submissions create no job for one, but a question can
+        # be excluded after a job was already queued; short-circuiting here
+        # covers that stale job too. ``usable=False`` because this run produced
+        # no result -- and none is needed: DAG readiness ignores edges from
+        # excluded questions entirely (``domain.job_scheduling``), so no
+        # dependent is left waiting on this job.
+        if job.question_id is not None:
+            with SqlAlchemyUnitOfWork(self._session_factory) as uow:
+                stale_question = uow.questions.get(job.question_id)
+            if stale_question is not None and not stale_question.is_scoring_target:
+                return ProcessingResult(
+                    outcome=ProcessingOutcome.SUCCEEDED,
+                    skipped_reason="not_a_scoring_target",
+                )
+
         recognition_outcome = await self._recognition.process(job)
         if recognition_outcome.outcome is ProcessingOutcome.FAILED:
             return recognition_outcome
@@ -278,6 +295,27 @@ class GradingJobProcessor:
                     if edge.to_question_id == question_id
                 }
             )
+            # Issue #449: an excluded prerequisite hands nothing to this
+            # question. Treat its edge as absent -- both for the provider
+            # context and for the traceability rows -- so the dependent is
+            # graded without the prerequisite's result instead of failing
+            # `MissingPrerequisiteContextError`. This is the same shape as
+            # `test_e2e_ocr_unavailable_chain.py`: no prerequisite data, grade
+            # anyway.
+            scoring_target_ids = {
+                q.id for q in uow.questions.list_for_test(submission.test_id) if q.is_scoring_target
+            }
+            prerequisite_ids = [
+                prerequisite_id
+                for prerequisite_id in prerequisite_ids
+                if prerequisite_id in scoring_target_ids
+            ]
+            context_graph = replace(
+                graph,
+                edges=tuple(
+                    edge for edge in graph.edges if edge.from_question_id in scoring_target_ids
+                ),
+            )
             sources: dict[str, PrerequisiteSource] = {}
             for prerequisite_id in prerequisite_ids:
                 # Resolved through the prerequisite's own review history (Issue
@@ -301,7 +339,7 @@ class GradingJobProcessor:
 
             try:
                 prerequisite_context = build_prerequisite_context(
-                    graph, question_id, sources=sources
+                    context_graph, question_id, sources=sources
                 )
             except MissingPrerequisiteContextError:
                 # A confirmed edge calls for prerequisite data this call
@@ -310,7 +348,7 @@ class GradingJobProcessor:
                 # usable first, but treated as a setup failure rather than
                 # ever fabricating the missing context.
                 return self._failed(ErrorCategory.PERMANENT, "prerequisite context unavailable")
-            context_entries = build_context_entries(graph, question_id, sources=sources)
+            context_entries = build_context_entries(context_graph, question_id, sources=sources)
 
             image_bytes = self._store.read_bytes(Path(image.image_path))
             rubric_text, criterion_ids = build_rubric_prompt(

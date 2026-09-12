@@ -3,7 +3,7 @@ import * as http from "node:http";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   SIDECAR_ALREADY_RUNNING_EXIT_CODE,
   SidecarSupervisor,
@@ -16,6 +16,7 @@ import {
   resolveSidecarLogPath,
   sidecarLogPath,
 } from "../src/main/sidecar-log-path";
+import { applyLinuxKeyringEnvironment } from "./support/linux-keyring-env";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -107,6 +108,13 @@ function httpRequest(
 }
 
 describe("SidecarSupervisor integration tests", () => {
+  // The real sidecar is spawned with this process's environment by
+  // `NodeSidecarPlatform`; Linux needs the null keyring backend or startup
+  // stalls on D-Bus before `/healthz` (Issue #438).
+  beforeAll(() => {
+    applyLinuxKeyringEnvironment();
+  });
+
   const isWindows = process.platform === "win32";
   const candidates = sidecarExecutableCandidates({
     resolvedExecutable: process.execPath,

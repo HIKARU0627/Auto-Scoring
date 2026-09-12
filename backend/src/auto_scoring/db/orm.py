@@ -207,6 +207,7 @@ class QuestionRow(Base):
     comment_area: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
     page_2: Mapped[int | None] = mapped_column(Integer, nullable=True)
     answer_area_2: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    is_scoring_target: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class RubricRow(Base):

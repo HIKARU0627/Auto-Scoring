@@ -578,9 +578,20 @@ def build_dependency_graph_router(
             # left BLOCKED on that stale placeholder (review round 3, P1).
             fresh_jobs = uow.jobs.list_for_submission(submission_id)
             statuses = question_statuses(fresh_jobs)
+            # Issue #449: reissued jobs are gated on the same ungraded set the
+            # queue used, so a dependent whose prerequisite is excluded is not
+            # left BLOCKED on a job that will never run.
+            excluded_question_ids = {
+                q.id for q in uow.questions.list_for_test(test_id) if not q.is_scoring_target
+            }
             for replacement in accepted_replacements:
                 if replacement.question_id is not None:
-                    readiness = evaluate_readiness(confirmed, replacement.question_id, statuses)
+                    readiness = evaluate_readiness(
+                        confirmed,
+                        replacement.question_id,
+                        statuses,
+                        excluded_question_ids=excluded_question_ids,
+                    )
                     if not readiness.ready:
                         replacement = replace(
                             replacement,

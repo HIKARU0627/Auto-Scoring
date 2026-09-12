@@ -17,6 +17,7 @@ function question(number: string, page = 1): QuestionResponse {
     points: 5,
     scoring_method: "additive",
     rubric: [],
+    is_scoring_target: true,
   };
 }
 

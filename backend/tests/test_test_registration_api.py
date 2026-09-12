@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
-from auto_scoring.api import test_registration_router
+from auto_scoring.api import test_artifact_lock, test_registration_router
 from auto_scoring.api.app import create_app
 from auto_scoring.db.engine import build_session_factory, create_sqlite_engine, sqlite_url
 from auto_scoring.domain.models import Question, Rubric, SubmissionState
@@ -37,6 +37,14 @@ from auto_scoring.domain.test_registration import (
 from tests.support import make_grade, make_review, make_submission, make_test
 
 _TOKEN = "test-registration-token"
+
+#: Liveness guard for a wait on an *observable state transition* inside the
+#: system under test (a request reaching a particular point), not a budget
+#: the state is expected to reach on an idle machine. It expires only if the
+#: transition never happens at all -- a genuine failure, not runner slowness
+#: -- so it is deliberately far above any observed time. See Issue #439 and
+#: `docs/test-timing.md`.
+_STATE_CHANGE_TIMEOUT_SECONDS = 30.0
 
 
 def _pdf_bytes(*, pages: int = 1) -> bytes:
@@ -156,6 +164,41 @@ def _minimal_regions(*, label: str = "1", score_text: str = "5点") -> list[dict
             bbox=(0.6, 0.1, 0.7, 0.2),
         ),
     ]
+
+
+class _ContentionSignallingLock:
+    """A ``threading.Lock`` stand-in that sets an event when a second
+    acquirer finds the lock already held.
+
+    `test_confirm_and_analyze_are_serialized_for_the_same_test` needs to show
+    that `/analyze` is *parked* behind `/confirm`, not merely that no answer
+    happened to arrive within a fixed window. A fixed `join(timeout=0.5)` +
+    "the response list is still empty" is a measurement of the runner's
+    speed: on a busy machine `/analyze` may simply not have been dispatched
+    yet, which is not the property under test (Issue #439). Waiting for this
+    event instead waits on a state the system under test reaches -- the
+    analyze request contending for the per-test lock -- and if the lock is
+    removed (the mutation this guards against) it is never set.
+    """
+
+    def __init__(self, inner: threading.Lock, contended: threading.Event) -> None:
+        self._inner = inner
+        self._contended = contended
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        if self._inner.locked():
+            self._contended.set()
+        return self._inner.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._inner.release()
+
+    def __enter__(self) -> _ContentionSignallingLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
 
 
 class TestCreateTest:
@@ -789,15 +832,37 @@ class TestProfileReviewAndConfirm:
             json={"regions": _minimal_regions()},
         )
 
-        confirm_started = threading.Event()
+        confirm_in_build = threading.Event()
         release_confirm = threading.Event()
 
         def slow_build(*args: Any, **kwargs: Any) -> tuple[list[Question], list[Rubric]]:
-            confirm_started.set()
-            assert release_confirm.wait(timeout=5)
+            # Runs while `/confirm` holds the per-test lock. Park here until
+            # the test has observed `/analyze` contend for that lock, so the
+            # overlap is real rather than hoped for.
+            confirm_in_build.set()
+            release_confirm.wait()
             return _real_build_questions_and_rubrics(*args, **kwargs)
 
         monkeypatch.setattr(test_registration_router, "build_questions_and_rubrics", slow_build)
+
+        # Observe `/analyze` reaching the per-test lock and finding it taken
+        # -- a state, not a 0.5s window (Issue #439).
+        analyze_reached_the_lock = threading.Event()
+        real_for_test = test_artifact_lock.TestArtifactLocks.for_test
+
+        def for_test_with_contention(
+            locks: test_artifact_lock.TestArtifactLocks, target: str
+        ) -> Any:
+            lock = real_for_test(locks, target)
+            if target != test_id:
+                return lock
+            return _ContentionSignallingLock(lock, analyze_reached_the_lock)
+
+        monkeypatch.setattr(
+            test_artifact_lock.TestArtifactLocks,
+            "for_test",
+            for_test_with_contention,
+        )
 
         confirm_responses: list[int] = []
 
@@ -805,27 +870,38 @@ class TestProfileReviewAndConfirm:
             response = _confirm(client, test_id)
             confirm_responses.append(response.status_code)
 
-        confirm_thread = threading.Thread(target=_run_confirm)
-        confirm_thread.start()
-        assert confirm_started.wait(timeout=5)
-
         analyze_responses: list[int] = []
 
         def _run_analyze() -> None:
             response = client.post(f"/tests/{test_id}/profile/analyze", headers=_auth())
             analyze_responses.append(response.status_code)
 
+        confirm_thread = threading.Thread(target=_run_confirm)
         analyze_thread = threading.Thread(target=_run_analyze)
-        analyze_thread.start()
-        # `/analyze` must not be able to observe or act on the profile
-        # while `/confirm` is still mid-flight -- give it every chance to
-        # race ahead before proving it didn't.
-        analyze_thread.join(timeout=0.5)
-        assert analyze_responses == []
+        try:
+            confirm_thread.start()
+            # Start `/analyze` only once `/confirm` is demonstrably inside the
+            # build (and so holds the lock), otherwise the two could simply
+            # run in the opposite order and prove nothing.
+            assert confirm_in_build.wait(timeout=_STATE_CHANGE_TIMEOUT_SECONDS), (
+                "/confirm never reached the build while holding the lock"
+            )
+            analyze_thread.start()
+            assert analyze_reached_the_lock.wait(timeout=_STATE_CHANGE_TIMEOUT_SECONDS), (
+                "/analyze never contended for the per-test lock"
+            )
+            # Guaranteed by the contention signal: `/analyze` is parked on
+            # the lock `/confirm` holds, so it cannot have answered yet.
+            assert analyze_responses == []
+        finally:
+            # Always release, even if the wait above timed out, so a failed
+            # test cannot leave `/confirm` parked forever.
+            release_confirm.set()
 
-        release_confirm.set()
-        confirm_thread.join(timeout=5)
-        analyze_thread.join(timeout=5)
+        # Cleanup only: a deadline on either join would measure the runner,
+        # not the serialization this test exists to prove (Issue #439).
+        confirm_thread.join()
+        analyze_thread.join()
 
         assert confirm_responses == [200]
         # Serialized behind the now-confirmed profile, not a stale 200 that

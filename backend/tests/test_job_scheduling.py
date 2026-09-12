@@ -99,6 +99,19 @@ def test_direct_dependents_of_a_is_just_b() -> None:
     assert direct_dependents(graph, "qc") == []
 
 
+def test_an_excluded_prerequisite_does_not_block_its_dependent() -> None:
+    """Issue #449: an ungraded prerequisite never runs, so its edge is ignored
+    -- the dependent is planned ready and can later be released against that
+    same rule."""
+    graph = _confirmed_graph(["qa", "qb"], [_edge("qa", "qb")])
+    plans = {
+        plan.question_id: plan for plan in plan_submission_jobs(graph, excluded_question_ids={"qa"})
+    }
+    assert "qa" not in plans
+    assert plans["qb"].ready is True
+    assert evaluate_readiness(graph, "qb", {}, excluded_question_ids={"qa"}).ready is True
+
+
 # --------------------------------------------------------------------------- #
 # Merge point: A, C -> B
 # --------------------------------------------------------------------------- #

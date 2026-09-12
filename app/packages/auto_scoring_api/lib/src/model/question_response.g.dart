@@ -14,6 +14,8 @@ class _$QuestionResponse extends QuestionResponse {
   @override
   final String id;
   @override
+  final bool? isScoringTarget;
+  @override
   final String? modelAnswer;
   @override
   final String number;
@@ -38,6 +40,7 @@ class _$QuestionResponse extends QuestionResponse {
       {this.answerArea,
       this.commentArea,
       required this.id,
+      this.isScoringTarget,
       this.modelAnswer,
       required this.number,
       required this.page,
@@ -62,6 +65,7 @@ class _$QuestionResponse extends QuestionResponse {
         answerArea == other.answerArea &&
         commentArea == other.commentArea &&
         id == other.id &&
+        isScoringTarget == other.isScoringTarget &&
         modelAnswer == other.modelAnswer &&
         number == other.number &&
         page == other.page &&
@@ -78,6 +82,7 @@ class _$QuestionResponse extends QuestionResponse {
     _$hash = $jc(_$hash, answerArea.hashCode);
     _$hash = $jc(_$hash, commentArea.hashCode);
     _$hash = $jc(_$hash, id.hashCode);
+    _$hash = $jc(_$hash, isScoringTarget.hashCode);
     _$hash = $jc(_$hash, modelAnswer.hashCode);
     _$hash = $jc(_$hash, number.hashCode);
     _$hash = $jc(_$hash, page.hashCode);
@@ -96,6 +101,7 @@ class _$QuestionResponse extends QuestionResponse {
           ..add('answerArea', answerArea)
           ..add('commentArea', commentArea)
           ..add('id', id)
+          ..add('isScoringTarget', isScoringTarget)
           ..add('modelAnswer', modelAnswer)
           ..add('number', number)
           ..add('page', page)
@@ -127,6 +133,11 @@ class QuestionResponseBuilder
   String? _id;
   String? get id => _$this._id;
   set id(String? id) => _$this._id = id;
+
+  bool? _isScoringTarget;
+  bool? get isScoringTarget => _$this._isScoringTarget;
+  set isScoringTarget(bool? isScoringTarget) =>
+      _$this._isScoringTarget = isScoringTarget;
 
   String? _modelAnswer;
   String? get modelAnswer => _$this._modelAnswer;
@@ -175,6 +186,7 @@ class QuestionResponseBuilder
       _answerArea = $v.answerArea?.toBuilder();
       _commentArea = $v.commentArea?.toBuilder();
       _id = $v.id;
+      _isScoringTarget = $v.isScoringTarget;
       _modelAnswer = $v.modelAnswer;
       _number = $v.number;
       _page = $v.page;
@@ -210,6 +222,7 @@ class QuestionResponseBuilder
             commentArea: _commentArea?.build(),
             id: BuiltValueNullFieldError.checkNotNull(
                 id, r'QuestionResponse', 'id'),
+            isScoringTarget: isScoringTarget,
             modelAnswer: modelAnswer,
             number: BuiltValueNullFieldError.checkNotNull(
                 number, r'QuestionResponse', 'number'),

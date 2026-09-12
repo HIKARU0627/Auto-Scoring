@@ -290,7 +290,7 @@ Name | Type | Description  | Notes
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **listQuestionsTestsTestIdQuestionsGet**
-> BuiltList<QuestionResponse> listQuestionsTestsTestIdQuestionsGet(testId)
+> BuiltList<QuestionResponse> listQuestionsTestsTestIdQuestionsGet(testId, includeExcludedQuestions)
 
 List Questions
 
@@ -300,9 +300,10 @@ import 'package:auto_scoring_api/api.dart';
 
 final api = AutoScoringApi().getReviewApi();
 final String testId = testId_example; // String | 
+final bool includeExcludedQuestions = true; // bool | Return every question, not only the grading targets. The review screen leaves this at the default so an excluded question is never shown as work to do (Issue #449); the test-settings screen sets it to list them for re-selection.
 
 try {
-    final response = api.listQuestionsTestsTestIdQuestionsGet(testId);
+    final response = api.listQuestionsTestsTestIdQuestionsGet(testId, includeExcludedQuestions);
     print(response);
 } on DioException catch (e) {
     print('Exception when calling ReviewApi->listQuestionsTestsTestIdQuestionsGet: $e\n');
@@ -314,6 +315,7 @@ try {
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **testId** | **String**|  | 
+ **includeExcludedQuestions** | **bool**| Return every question, not only the grading targets. The review screen leaves this at the default so an excluded question is never shown as work to do (Issue #449); the test-settings screen sets it to list them for re-selection. | [optional] [default to false]
 
 ### Return type
 

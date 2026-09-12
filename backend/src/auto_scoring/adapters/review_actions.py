@@ -270,7 +270,9 @@ def _sync_submission_review_state(uow: SqlAlchemyUnitOfWork, submission: Submiss
     """
     if submission.state not in _REVIEWABLE_SUBMISSION_STATES:
         return submission
-    questions = uow.questions.list_for_test(submission.test_id)
+    # Only the graded questions gate 確認済み (Issue #449): an excluded
+    # question must not keep the submission "unconfirmed" forever.
+    questions = uow.questions.list_for_test(submission.test_id, scoring_targets_only=True)
     reviews_by_question = {q.id: uow.reviews.history(submission.id, q.id) for q in questions}
     confirmed = all_questions_confirmed((q.id for q in questions), reviews_by_question)
     target = SubmissionState.REVIEWED if confirmed else _unconfirmed_state(submission)

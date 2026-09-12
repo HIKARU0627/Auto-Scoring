@@ -19,6 +19,8 @@ export type DependencyGraphResponse =
   components["schemas"]["DependencyGraphResponse"];
 export type DependencyEdgeModel = components["schemas"]["DependencyEdgeModel"];
 export type QuestionResponse = components["schemas"]["QuestionResponse"];
+export type ScoringTargetsResponse =
+  components["schemas"]["ScoringTargetsResponse"];
 export type CompleteRegistrationResponse =
   components["schemas"]["CompleteRegistrationResponse"];
 
@@ -83,6 +85,7 @@ export interface TestSettingsSnapshot {
   readonly dependencyGraph: DependencyGraphResponse | null;
   readonly answerLayout: AnswerLayoutResponse | null;
   readonly questionNumbers: readonly string[];
+  readonly questions: readonly QuestionResponse[];
   readonly editor: AnswerAreaEditorData;
 }
 
@@ -156,7 +159,13 @@ export async function loadTestSettingsSnapshot(
   );
 
   const questionsResult = await client.GET("/tests/{test_id}/questions", {
-    params: { path: { test_id: testId } },
+    params: {
+      path: { test_id: testId },
+      // The settings screen is where a question is re-selected, so it needs
+      // the excluded ones too -- unlike the review screen, which leaves the
+      // default and sees only the grading targets (Issue #449).
+      query: { include_excluded_questions: true },
+    },
   });
   if (questionsResult.error !== undefined) {
     throw new TestRegistrationDataError("設問一覧を取得できません");
@@ -169,8 +178,26 @@ export async function loadTestSettingsSnapshot(
     dependencyGraph,
     answerLayout: editor.layout,
     questionNumbers: questionsResult.data.map((question) => question.number),
+    questions: questionsResult.data,
     editor,
   };
+}
+
+export async function setScoringTargets(
+  client: SidecarClient,
+  testId: string,
+  questionIds: readonly string[],
+): Promise<ScoringTargetsResponse> {
+  const result = await client.PUT("/tests/{test_id}/scoring-targets", {
+    params: { path: { test_id: testId } },
+    body: { question_ids: [...questionIds] },
+  });
+  if (result.error !== undefined) {
+    throw new TestRegistrationDataError(
+      readErrorMessage("採点する問題を保存できません", result.error),
+    );
+  }
+  return result.data;
 }
 
 export async function estimateCriteriaExtract(

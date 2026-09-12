@@ -105,6 +105,10 @@ SQLAlchemy/Alembic/FastAPI を import しない。`db` は `adapters`/`api` を 
 > `0019_two_page_question_areas`）は Issue #108 で追加した、1つの設問の解答欄が
 > 2ページにまたがる答案（実測: 11教科中1教科）を表現するための列。
 > 1ページ完結の既存設問は全て `NULL` のまま。詳細は §4.2。
+>
+> `Question` の `is_scoring_target`（マイグレーション
+> `0022_scoring_target_questions`）は Issue #449 で追加した、その設問を採点するか
+> を表す肯定形の真偽値。既存行は全て `true`（デフォルトはすべて）。詳細は §4.3。
 
 「追記のみ」の 3 テーブルは `add` と参照系メソッドしか repository に生やしていない
 （`domain/repositories.py`）。AI の提案値と人間の確定値は別レコードとして残り、
@@ -275,6 +279,40 @@ review 行も消える」を意味する。現行コードに `grade_results` / 
 - `0019_two_page_question_areas`: `questions` テーブルに `page_2` と `answer_area_2` を追加。
 - 既存データは全て `NULL` のためデータ移行・バックフィルは不要。
 - 復旧: `downgrade()` で列と制約を削除（1 ページ完結のデータは無傷で維持）。
+
+### 4.3 採点する設問の選択（Issue #449）
+
+オーナーの依頼「採点する問題を選べるようにする。デフォルトはすべて」を受けた変更。
+`Question` は 1 テストの 1 設問で、`points` / `scoring_method` と同じ寿命を持つため、
+「この設問を採点するか」も同じ粒度の性質として **`Question` に真偽値列を足す**。
+別テーブルにして join を増やす理由が無い（YAGNI）。値は肯定形の
+`is_scoring_target`（採点する = `true`）。
+
+- マイグレーション `0022_scoring_target_questions` は `server_default` で既存行を全て
+  `true` にし、その後 default を落とす（`0011_test_status` と同じ2段階）。
+  既存テストは今までどおり全設問を採点する。
+- **除外は破壊的でない。** 除外した設問の行・採点結果・レビュー履歴・ジョブは消さない。
+  数えない／出力しないだけであり、再び選ぶと以前の結果がそのまま見える。
+  `QuestionRepository.set_scoring_targets` はこの列だけを書き換える唯一の in-place 経路で、
+  `backend/tests/test_architecture.py` の「points と criteria は in-place で変えない」
+  ガードの例外として理由つきで認めている。
+- **分母は採点対象だけ。** `domain.review_workflow.all_questions_confirmed` /
+  `count_confirmed_questions` は `question_ids` を引数で受ける純粋関数のまま変更せず、
+  呼び出し側（`api.review_router` の review-progress、`adapters.review_actions` の
+  `_sync_submission_review_state`、`jobs.export_processor` と `api.export_router` の
+  出力ゲート）が `list_for_test(..., scoring_targets_only=True)` で対象を絞る。
+  除外した設問が分母に残って「いつまでも確認済みにならない」を防ぐ。
+- **採点と依存。** 除外した設問には新しい評価ジョブを作らない
+  （`domain.job_scheduling.plan_submission_jobs` の `excluded_question_ids`）。
+  除外した前提設問は「結果が無い前提」として扱い、依存先は前提の結果を使わずに採点する
+  （OCR が読めなかった前提と同じ規則）。依存先が BLOCKED のまま残ることはない。
+- **PDF。** 除外した設問には点数・コメント・添削記号を描かない。答案の紙面そのものは
+  従来どおり出力する（[`pdf-export.md`](./pdf-export.md)）。
+- **復旧:** `downgrade()` で列を削除する。除外は列の値だけなので、戻すと全設問が
+  採点対象に戻る。採点・レビュー行はどちらの方向でも触らない。
+- テスト: `backend/tests/test_migrations.py::test_0022_...`（バックフィルと
+  default 撤去）、`test_e2e_intake_to_export.py::test_an_excluded_question_...`
+  （採点しない・分母・PDF・依存）、`test_job_scheduling.py::test_an_excluded_prerequisite_...`。
 
 ## 5. `app-data/` のファイル保存規則
 

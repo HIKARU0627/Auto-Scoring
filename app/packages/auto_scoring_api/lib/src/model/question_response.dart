@@ -17,6 +17,7 @@ part 'question_response.g.dart';
 /// * [answerArea]
 /// * [commentArea]
 /// * [id]
+/// * [isScoringTarget]
 /// * [modelAnswer]
 /// * [number]
 /// * [page]
@@ -36,6 +37,9 @@ abstract class QuestionResponse
 
   @BuiltValueField(wireName: r'id')
   String get id;
+
+  @BuiltValueField(wireName: r'is_scoring_target')
+  bool? get isScoringTarget;
 
   @BuiltValueField(wireName: r'model_answer')
   String? get modelAnswer;
@@ -67,7 +71,7 @@ abstract class QuestionResponse
       _$QuestionResponse;
 
   @BuiltValueHook(initializeBuilder: true)
-  static void _defaults(QuestionResponseBuilder b) => b;
+  static void _defaults(QuestionResponseBuilder b) => b..isScoringTarget = true;
 
   @BuiltValueSerializer(custom: true)
   static Serializer<QuestionResponse> get serializer =>
@@ -106,6 +110,13 @@ class _$QuestionResponseSerializer
       object.id,
       specifiedType: const FullType(String),
     );
+    if (object.isScoringTarget != null) {
+      yield r'is_scoring_target';
+      yield serializers.serialize(
+        object.isScoringTarget,
+        specifiedType: const FullType(bool),
+      );
+    }
     if (object.modelAnswer != null) {
       yield r'model_answer';
       yield serializers.serialize(
@@ -198,6 +209,14 @@ class _$QuestionResponseSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.id = valueDes;
+          break;
+        case r'is_scoring_target':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(bool),
+          ) as bool?;
+          if (valueDes == null) continue;
+          result.isScoringTarget = valueDes;
           break;
         case r'model_answer':
           final valueDes = serializers.deserialize(

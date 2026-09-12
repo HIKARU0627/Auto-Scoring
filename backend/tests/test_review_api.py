@@ -586,7 +586,11 @@ def test_concurrent_approve_requests_racing_past_the_precheck_resolve_with_one_c
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=10)
+        # No deadline: this is cleanup, and a timed join here would only
+        # measure whether the runner finished both requests in time, not
+        # whether the version race resolved as promised (Issue #439). The
+        # barrier above already bounds the one wait the race needs.
+        thread.join()
 
     assert sorted(statuses) == [201, 409]
     reviews = client.get("/submissions/sub-1/questions/q-1/reviews", headers=_AUTH).json()
