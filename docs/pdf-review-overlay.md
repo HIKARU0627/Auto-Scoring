@@ -979,6 +979,104 @@ Electron 版の添削レビュー画面は、`reload()` を**マウント時に�
 ことを **有限回**（回数は決め打ちしない）で固定する。ページ送りに戻す・移動量を
 0 にする・「進めなかった」の検出を外す、のいずれでも赤くなることを確認した。
 
+### 2.18 Electron 版: 点数とコメントの出力先を画面に出す（Issue #406）
+
+**Issue #403 は添削記号を種類ごとの形で答案上に描いたが、点数の位置とコメントの
+行き先は出力と一致していなかった。** #403 は `score`/`comment` 種別の `Annotation`
+をその `rect` に文字で描いた。出力はそうしない ——
+点数は**確定 `GradeResult` から組み立てた** `AnnotationMark` を `score_area`（無ければ
+ページの左余白帯）へ描き、コメントは答案の上ではなく**末尾の注釈ページ**へ出す
+（[pdf-export.md](./pdf-export.md) §2.1.1・§2.3.2）。`SCORE` 種別の `Annotation` は
+出力では1つも描かれず（`build_export_marks` が読み飛ばす）、コメント種別も図形を
+持たない。つまり #403 のままでは、画面にだけ点数らしき文字とコメントが答案上に出て、
+紙には別の場所・別の文字列になる。
+
+直したのは4点。**出力側の描画は1行も変えていない**（Issue #406 本文の指定）。
+
+**(1) 点数の位置は sidecar の判定をそのまま受け取る。** 画面側で判定を書き直すと、
+また出力とずれる。`QuestionResponse.score_placement` を足し、`api.review_router` が
+`domain.pdf_export.score_placements` —— `fallback_score_areas` と
+`unplaceable_question_ids` の合成 —— で埋める。値は `own`（`score_area`）／
+`margin`（左余白帯の、その設問に割り当てられたスロット）／`none`（どこにも書けない）
+の3つで、`rect` を伴う。`score_area` と `fallback_score_areas` は元々
+`QuestionResponse` に無かった（`score_area` はあったが、画面が使っていなかった）ので、
+**判定そのものを1か所にした**のが要点である。
+
+画面はこの `rect` に、確定 Grade から `a/m`（`own`）または `a/m 問N`（`margin`）を
+描く。文字列の作り方は `domain.pdf_export.build_export_marks` / `_fallback_score_text`
+と同じで、色は `--color-annotation-mark`（`design-tokens.md` §3.4、出力の焼き込む赤と
+同値）。`grade` が無い設問には何も描かない。
+
+**(2) コメントは答案の上に重ねない。** 「重ねる」か「帯の位置を示す」かを決める
+問いだったが、**正解はどちらでもない。** 出力は #161 以降、コメントを答案の上に
+1行も描かない。検出で登録した設問（事実上すべて）は `comment_area` を持たず、
+コメントは末尾の注釈ページへ出る。人が `ANNOTATION_AREA` を置いた設問だけが帯を持つ。
+したがって画面は、
+
+- 帯を持つ設問: 帯の矩形を点線で描き、「この中に出力される」と述べる。
+- それ以外: **出力される行そのもの**（`第N頁 問M …`）を「設問コメント」欄に並べ、
+  「末尾の注釈ページにこの行のまま出力される」と述べる。
+
+行の組み立ては `core/export-parity.ts` の `annotationNote` が
+`_note_text`/`_note_entry_line` と同じ規則（種別記号・`（位置特定できず）`・
+`score` は行を作らない）で行う。**答案の上に重ねる案は採らない**: #141 が消した
+「生徒の筆跡の上に散文が乗る」失敗そのもので、しかも紙には出ない。
+
+**(3) `score`/`comment` 種別の `Annotation` を答案上に描くのをやめた。** #403 の
+「7種すべて」は、その2つが紙では文字として描かれるという前提だったが、実際には
+点数は確定 Grade から、コメントは注釈ページから出る。`score` の自由文字列を画面に
+出せば、確定点数と食い違う数字が並び得る（`docs/pdf-export.md` §2.1 がまさにその
+ために `Annotation.comment` を使わないと決めている）。図形5種は従来どおり描く。
+`annotation-mark.ts` の形状定義と `PageImageViewer` の形状描画は変えていない。
+
+**(4) `NO_ROOM_FOR_SCORE` を出力前に見せる。** これが Issue の一番の価値である。
+`score_placement.target == "none"` の設問は、
+
+- インスペクタに警告（`review-no-room-for-score`、`role="alert"`）を出す。
+  文面は出力ダイアログの `no_room_for_score` と揃える（`export-conflict.ts`）。
+- 設問レールの該当ボタンに「点数の余白なし」バッジを出し（`review-rail-no-room-*`）、
+  `aria-label` にも足す。全問を開かなくても見えるようにするため。
+
+`rect` が `none` のときはスコアのオーバーレイを描かない（出力が拒むのに「ここに出る」と
+描けば嘘になる）。判定は繰り返すが、**画面側で `unplaceable_question_ids` を
+再実装していない**。`QuestionResponse.score_placement` の値だけを読む。
+
+**Issue #449（採点対象外の設問）は画面側に追加の変更を要さなかった。**
+`list_questions` は既定で `scoring_targets_only=True` で、レビュー画面は
+`include_excluded_questions` を渡さない。採点対象外の設問はそもそも一覧に現れず、
+点数もコメントも描かれない。`score_placement` も返された設問だけで計算されるので、
+画面と出力が見る設問集合は一致している。**合わせる必要は無い、ではなく、
+既に合っている。**
+
+##### 検証
+
+- `backend/tests/test_pdf_export.py::TestScorePlacements`: 自前 `score_area`／余白帯／
+  拒否の3分岐を、出力が使う2関数（`fallback_score_areas`・
+  `unplaceable_question_ids`）と同じ値で固定する。
+- `backend/tests/test_review_api.py`: `GET /tests/{id}/questions` が
+  `score_placement` を返すこと、19問のページで1問が `none` になることを固定する。
+- `desktop/test/renderer/export-parity.test.ts`・`page-image-viewer-export-parity.test.tsx`・
+  `pdf-review-export-parity-page.test.tsx`: 点数オーバーレイの位置・文字列・色、
+  コメントの行、`no_room_for_score` の警告とレールの印。
+- `desktop/e2e/sidecar-review-export-parity.spec.ts`: 実 Electron で点数の
+  オーバーレイが左余白に出ること、コメントが注釈ページ行きと表示されること、
+  スクリーンショットを撮ること。出力側は同じ答案シートfixtureから
+  `domain.pdf_export` + 実エンジンで描いた1ページ目・2ページ目を並べる
+  （`docs/pdf-review/export-parity-1536x1024.png`）。**出力の日本語フォントは
+  Windows 専用（[pdf-export.md](./pdf-export.md) §3.2）なので、Linux では
+  バックエンドのテスト用フォント解決（`backend/tests/font_support.py` と同じ
+  フォールバック）で描いた。製品コードは変えていない。**
+
+##### 変異検査
+
+| 変異                                                                       | 結果                                                                     |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `score_placements` の `score_area` 分岐を無効化（常に余白扱いにする）      | `TestScorePlacements::test_a_question_with_its_own_score_area...` が赤   |
+| `annotationNote` が `comment` 種別の行を返さない（コメントを画面から消す） | `annotation fallback (INV-064)` が赤                                     |
+| `hasNoRoomForScore` を常に false にする（拒否を隠す）                      | `pdf-review-export-parity-page.test.tsx` の警告・レール印が赤            |
+| `PageImageViewer` が形状以外も描く（#403 の文字描画に戻す）                | `page-image-viewer-annotation-marks.test.tsx` が 2 件赤（#403 e2e も赤） |
+| `scoreOverlay` の margin 行から設問番号を落とす（`a/m` だけにする）        | 同ページテストの「`a/m 問N`」が赤                                        |
+
 ## 2.9. 「AIが見た画像」を判断材料の先頭に置く（Issue #122）
 
 添削レビュー画面の 判断材料 の先頭に、**採点 AI に実際に送られた切り出し画像**を

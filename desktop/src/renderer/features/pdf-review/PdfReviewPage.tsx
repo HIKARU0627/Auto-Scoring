@@ -46,6 +46,10 @@ import {
   recognitionsForDisplayedAttempt,
 } from "../../core/question-review-state.js";
 import {
+  hasNoRoomForScore,
+  scoreOverlay as buildScoreOverlay,
+} from "../../core/export-parity.js";
+import {
   unreadableBoxesFromOcr,
   latestOcrRecognition,
 } from "../../core/unreadable-spans.js";
@@ -538,6 +542,13 @@ export function PdfReviewPage(): JSX.Element {
     selectedData?.annotations ?? [],
     selectedGrade,
   );
+  const selectedPlacement = selectedQuestion?.score_placement ?? null;
+  const selectedScoreOverlay = buildScoreOverlay({
+    placement: selectedPlacement,
+    grade: selectedGrade,
+    questionNumber: selectedQuestion?.number ?? "",
+  });
+  const selectedNoRoomForScore = hasNoRoomForScore(selectedPlacement);
   const unreadableBoxes = unreadableBoxesFromOcr(selectedRecognitions);
   const ocrRecognition = latestOcrRecognition(selectedRecognitions);
 
@@ -856,17 +867,24 @@ export function PdfReviewPage(): JSX.Element {
                 });
                 const label = labelWaitingFor(status, wait);
                 const displayNumber = questionNumberValue(question.number);
+                const noRoomForScore = hasNoRoomForScore(
+                  question.score_placement,
+                );
+                const railLabel = noRoomForScore
+                  ? `問${displayNumber} ${label} 点数の余白なし`
+                  : `問${displayNumber} ${label}`;
                 return (
                   <button
                     key={question.id}
                     type="button"
                     data-testid={`review-rail-${question.id}`}
+                    data-no-room-for-score={noRoomForScore ? "true" : undefined}
                     className={`rounded-lg px-sm py-xs text-left text-ui-label ${
                       index === selectedIndex
                         ? "border border-primary bg-surface-container-high text-on-surface"
                         : "bg-surface-container-high text-on-surface-variant hover:bg-surface-container-highest"
                     }`}
-                    aria-label={`問${displayNumber} ${label}`}
+                    aria-label={railLabel}
                     title={label}
                     onClick={() => {
                       setSelectedIndex(index);
@@ -874,6 +892,14 @@ export function PdfReviewPage(): JSX.Element {
                   >
                     <QuestionStatusBadge status={status} />
                     <span> 問{displayNumber}</span>
+                    {noRoomForScore ? (
+                      <span
+                        data-testid={`review-rail-no-room-${question.id}`}
+                        className="mt-xs block rounded-full bg-attention-container px-sm text-xs text-on-attention-container"
+                      >
+                        点数の余白なし
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}
@@ -953,6 +979,10 @@ export function PdfReviewPage(): JSX.Element {
                     annotations={selectedAnnotations}
                     recognitions={selectedRecognitions}
                     questionAnswerArea={selectedQuestion?.answer_area}
+                    scoreOverlay={selectedScoreOverlay}
+                    questionCommentArea={selectedQuestion?.comment_area}
+                    questionPage={selectedQuestion?.page}
+                    questionNumber={selectedQuestion?.number}
                     zoom={zoom}
                   />
                 ) : (
@@ -983,6 +1013,25 @@ export function PdfReviewPage(): JSX.Element {
                   {labelWaitingFor(selectedStatus, selectedWait)}
                 </span>
               </div>
+
+              {selectedNoRoomForScore ? (
+                <div
+                  role="alert"
+                  data-testid="review-no-room-for-score"
+                  className="flex items-start gap-sm rounded-lg bg-attention-container px-md py-sm text-body-medium text-on-attention-container"
+                >
+                  <span
+                    aria-hidden
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary font-semibold text-on-primary"
+                  >
+                    !
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    この設問の点数を書き込める余白がページにありません。
+                    この答案はPDF出力できません（確定しても解消しません）。
+                  </span>
+                </div>
+              ) : null}
 
               {regradeInFlight ? (
                 <p

@@ -889,6 +889,19 @@ FastAPI が dict の `detail` をそのまま通すからである。`HTTPExcept
 `GET /submissions/{submission_id}/jobs`をそのまま再利用する
 （kind=exportのJobもこれらのエンドポイントで等しく扱える）。
 
+### 8.2 レビュー画面は点数の行き先を同じ判定で受け取る（Issue #406）
+
+`GET /tests/{test_id}/questions` の `QuestionResponse` に `score_placement` を足した。
+`target` は `own`（`score_area`）／`margin`（`fallback_score_areas` が割り当てた
+左余白のスロット）／`none`（`unplaceable_question_ids` が挙げる、**出力を拒む設問**）で、
+`rect` を伴う。
+
+**判定を画面側で書き直さないための口である。** 値は
+`domain.pdf_export.score_placements` が両方の既存関数を合成して作り、レビュー画面は
+それを描くだけにする。画面と出力が別々に「どこに出るか」を決めれば、また食い違う
+（それが Issue #406 そのものである）。詳細と画面の見せ方は
+[pdf-review-overlay.md](./pdf-review-overlay.md) §2.18。
+
 ## 9. Flutter側
 
 `app/lib/core/widgets/export_dialog.dart`の`ExportDialog`が（Issue #137で`features/pdf_review/`から移動）

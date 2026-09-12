@@ -10,9 +10,11 @@
  * draws in `adapters/pdf/pdfium_pypdf_engine._draw_mark`: an ellipse, two
  * diagonals, an apex-up triangle, a bottom-edge line, and a rectangle.
  *
- * `SCORE` and `COMMENT` have no shape -- in the PDF they are text, so here they
- * are rendered as text. The caller (`PageImageViewer`) is what turns these
- * definitions into SVG and text elements.
+ * `SCORE` and `COMMENT` have no shape. They are also **not drawn as marks at
+ * all** (Issue #406): the exported PDF takes the score from the confirmed grade
+ * and sends comment prose to the trailing note page, so `PageImageViewer` only
+ * draws shapes here and shows `score`/`comment` through
+ * `core/export-parity.ts`'s output preview instead.
  */
 
 /** The five kinds drawn as a stroked shape. */

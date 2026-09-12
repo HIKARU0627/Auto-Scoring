@@ -93,6 +93,7 @@ export 'package:auto_scoring_api/src/model/planned_file_model.dart';
 export 'package:auto_scoring_api/src/model/planned_group_model.dart';
 export 'package:auto_scoring_api/src/model/profile_response.dart';
 export 'package:auto_scoring_api/src/model/question_response.dart';
+export 'package:auto_scoring_api/src/model/question_score_placement_response.dart';
 export 'package:auto_scoring_api/src/model/question_text_override.dart';
 export 'package:auto_scoring_api/src/model/reasoned_review_request.dart';
 export 'package:auto_scoring_api/src/model/recognition_response.dart';

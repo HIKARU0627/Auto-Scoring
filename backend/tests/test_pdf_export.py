@@ -34,6 +34,7 @@ from auto_scoring.domain.pdf_export import (
     _NOTE_PAGE_MARGIN,
     NoteEntry,
     ReexportDecision,
+    ScorePlacementTarget,
     _wrapped_line_count,
     build_export_marks,
     build_note_pages,
@@ -41,6 +42,7 @@ from auto_scoring.domain.pdf_export import (
     fallback_score_areas,
     note_page_heading,
     review_version_snapshot,
+    score_placements,
     unconfirmed_question_ids,
     unplaceable_question_ids,
 )
@@ -761,6 +763,61 @@ class TestUnplaceableQuestionIds:
 
         assert len(fallback_score_areas(crowded)) == 18
         assert named == ["q-18"]
+
+
+class TestScorePlacements:
+    """Issue #406: the review screen draws the score where the *export* draws
+    it. `score_placements` is the one judgment both consult, so the screen
+    never has to re-derive it (and cannot say "here" when the export refuses).
+
+    The three cases are asserted against the two functions the export itself
+    uses, so a change to either one that this composition does not follow is a
+    red test rather than a screen that disagrees with the paper.
+    """
+
+    def test_a_question_with_its_own_score_area_is_placed_on_it(self) -> None:
+        area = NormalizedRect(x=0.8, y=0.6, width=0.2, height=0.05)
+
+        placements = score_placements([_question(id="q-1", score_area=area)])
+
+        assert placements["q-1"].target is ScorePlacementTarget.OWN
+        assert placements["q-1"].rect == area
+
+    def test_a_question_without_an_area_is_placed_in_the_margin_strip(self) -> None:
+        question = _question(id="q-1")
+
+        placements = score_placements([question])
+
+        assert placements["q-1"].target is ScorePlacementTarget.MARGIN
+        # The very slot the export's own allocation returns, not a copy of it.
+        assert placements["q-1"].rect == fallback_score_areas([question])["q-1"]
+
+    def test_a_question_the_export_refuses_is_placed_nowhere(self) -> None:
+        crowded = [_question(id=f"q-{index}") for index in range(19)]
+
+        placements = score_placements(crowded)
+
+        refused = unplaceable_question_ids(crowded)
+        assert refused == ["q-18"]
+        assert placements["q-18"].target is ScorePlacementTarget.NONE
+        assert placements["q-18"].rect is None
+        # Every question the export *would* draw keeps a destination: the
+        # screen must not lose the other 18 to the one it refuses.
+        assert all(
+            placements[question.id].target is ScorePlacementTarget.MARGIN
+            for question in crowded
+            if question.id != "q-18"
+        )
+
+    def test_two_margin_questions_get_their_own_slots(self) -> None:
+        """The screen draws from the same slots the export does, so the
+        no-two-on-one-rect rule has to survive this composition too."""
+        placements = score_placements([_question(id="q-1"), _question(id="q-2")])
+
+        first = placements["q-1"].rect
+        second = placements["q-2"].rect
+        assert first is not None and second is not None
+        assert first.y + first.height <= second.y
 
 
 class TestTheScoreNeverLandsOnTheAnswer:

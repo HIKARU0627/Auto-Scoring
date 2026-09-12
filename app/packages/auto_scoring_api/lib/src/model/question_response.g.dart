@@ -28,6 +28,8 @@ class _$QuestionResponse extends QuestionResponse {
   @override
   final NormalizedRectResponse? scoreArea;
   @override
+  final QuestionScorePlacementResponse? scorePlacement;
+  @override
   final String scoringMethod;
   @override
   final String testId;
@@ -47,6 +49,7 @@ class _$QuestionResponse extends QuestionResponse {
       required this.points,
       required this.rubric,
       this.scoreArea,
+      this.scorePlacement,
       required this.scoringMethod,
       required this.testId})
       : super._();
@@ -72,6 +75,7 @@ class _$QuestionResponse extends QuestionResponse {
         points == other.points &&
         rubric == other.rubric &&
         scoreArea == other.scoreArea &&
+        scorePlacement == other.scorePlacement &&
         scoringMethod == other.scoringMethod &&
         testId == other.testId;
   }
@@ -89,6 +93,7 @@ class _$QuestionResponse extends QuestionResponse {
     _$hash = $jc(_$hash, points.hashCode);
     _$hash = $jc(_$hash, rubric.hashCode);
     _$hash = $jc(_$hash, scoreArea.hashCode);
+    _$hash = $jc(_$hash, scorePlacement.hashCode);
     _$hash = $jc(_$hash, scoringMethod.hashCode);
     _$hash = $jc(_$hash, testId.hashCode);
     _$hash = $jf(_$hash);
@@ -108,6 +113,7 @@ class _$QuestionResponse extends QuestionResponse {
           ..add('points', points)
           ..add('rubric', rubric)
           ..add('scoreArea', scoreArea)
+          ..add('scorePlacement', scorePlacement)
           ..add('scoringMethod', scoringMethod)
           ..add('testId', testId))
         .toString();
@@ -167,6 +173,12 @@ class QuestionResponseBuilder
   set scoreArea(NormalizedRectResponseBuilder? scoreArea) =>
       _$this._scoreArea = scoreArea;
 
+  QuestionScorePlacementResponseBuilder? _scorePlacement;
+  QuestionScorePlacementResponseBuilder get scorePlacement =>
+      _$this._scorePlacement ??= QuestionScorePlacementResponseBuilder();
+  set scorePlacement(QuestionScorePlacementResponseBuilder? scorePlacement) =>
+      _$this._scorePlacement = scorePlacement;
+
   String? _scoringMethod;
   String? get scoringMethod => _$this._scoringMethod;
   set scoringMethod(String? scoringMethod) =>
@@ -193,6 +205,7 @@ class QuestionResponseBuilder
       _points = $v.points;
       _rubric = $v.rubric.toBuilder();
       _scoreArea = $v.scoreArea?.toBuilder();
+      _scorePlacement = $v.scorePlacement?.toBuilder();
       _scoringMethod = $v.scoringMethod;
       _testId = $v.testId;
       _$v = null;
@@ -232,6 +245,7 @@ class QuestionResponseBuilder
                 points, r'QuestionResponse', 'points'),
             rubric: rubric.build(),
             scoreArea: _scoreArea?.build(),
+            scorePlacement: _scorePlacement?.build(),
             scoringMethod: BuiltValueNullFieldError.checkNotNull(
                 scoringMethod, r'QuestionResponse', 'scoringMethod'),
             testId: BuiltValueNullFieldError.checkNotNull(
@@ -249,6 +263,8 @@ class QuestionResponseBuilder
         rubric.build();
         _$failedField = 'scoreArea';
         _scoreArea?.build();
+        _$failedField = 'scorePlacement';
+        _scorePlacement?.build();
       } catch (e) {
         throw BuiltValueNestedFieldError(
             r'QuestionResponse', _$failedField, e.toString());

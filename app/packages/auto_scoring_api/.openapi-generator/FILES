@@ -79,6 +79,7 @@ doc/PlannedFileModel.md
 doc/PlannedGroupModel.md
 doc/ProfileResponse.md
 doc/QuestionResponse.md
+doc/QuestionScorePlacementResponse.md
 doc/QuestionTextOverride.md
 doc/ReasonedReviewRequest.md
 doc/RecognitionResponse.md
@@ -212,6 +213,7 @@ lib/src/model/planned_file_model.dart
 lib/src/model/planned_group_model.dart
 lib/src/model/profile_response.dart
 lib/src/model/question_response.dart
+lib/src/model/question_score_placement_response.dart
 lib/src/model/question_text_override.dart
 lib/src/model/reasoned_review_request.dart
 lib/src/model/recognition_response.dart

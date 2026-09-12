@@ -6,6 +6,7 @@
 import 'package:auto_scoring_api/src/model/rubric_criterion_response.dart';
 import 'package:built_collection/built_collection.dart';
 import 'package:auto_scoring_api/src/model/normalized_rect_response.dart';
+import 'package:auto_scoring_api/src/model/question_score_placement_response.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
@@ -24,6 +25,7 @@ part 'question_response.g.dart';
 /// * [points]
 /// * [rubric]
 /// * [scoreArea]
+/// * [scorePlacement]
 /// * [scoringMethod]
 /// * [testId]
 @BuiltValue()
@@ -58,6 +60,9 @@ abstract class QuestionResponse
 
   @BuiltValueField(wireName: r'score_area')
   NormalizedRectResponse? get scoreArea;
+
+  @BuiltValueField(wireName: r'score_placement')
+  QuestionScorePlacementResponse? get scorePlacement;
 
   @BuiltValueField(wireName: r'scoring_method')
   String get scoringMethod;
@@ -150,6 +155,13 @@ class _$QuestionResponseSerializer
       yield serializers.serialize(
         object.scoreArea,
         specifiedType: const FullType.nullable(NormalizedRectResponse),
+      );
+    }
+    if (object.scorePlacement != null) {
+      yield r'score_placement';
+      yield serializers.serialize(
+        object.scorePlacement,
+        specifiedType: const FullType.nullable(QuestionScorePlacementResponse),
       );
     }
     yield r'scoring_method';
@@ -262,6 +274,15 @@ class _$QuestionResponseSerializer
           ) as NormalizedRectResponse?;
           if (valueDes == null) continue;
           result.scoreArea.replace(valueDes);
+          break;
+        case r'score_placement':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType:
+                const FullType.nullable(QuestionScorePlacementResponse),
+          ) as QuestionScorePlacementResponse?;
+          if (valueDes == null) continue;
+          result.scorePlacement.replace(valueDes);
           break;
         case r'scoring_method':
           final valueDes = serializers.deserialize(

@@ -14,62 +14,44 @@ import {
 } from "./registration-helpers";
 
 /**
- * Issue #403 acceptance: the review overlay draws each **shape** `AnnotationKind`
- * as its own mark -- `○`/`×`/`△`/underline/box as real strokes -- in
- * `--color-annotation-mark`, instead of one red rectangle for all of them.
+ * Issue #406 acceptance: the review screen draws the confirmed score where the
+ * exported PDF draws it, and says where the comments go -- so a reviewer
+ * approves the paper the export will actually produce.
  *
- * Issue #406 corrected `score`/`comment`: those are not marks on the answer.
- * The exported PDF draws the confirmed score from the grade and sends comments
- * to the trailing note page (Issue #161), so drawing them at their rects made
- * the screen disagree with the paper. This spec now fixes that they are *not*
- * drawn as marks, and that the comment text appears in the 設問コメント output
- * preview instead.
+ * Only the real Electron window can show this (jsdom has no layout). A question
+ * registered by detection has no `score_area` (Issue #103/#159), so this is the
+ * *margin* case: the score is drawn in the page's left strip as `a/m 問N`, the
+ * same line `domain.pdf_export._fallback_score_text` writes, and the comments
+ * are declared to go to the trailing note page (Issue #161).
  *
- * This is only measurable against the real Electron window: jsdom has no
- * layout, so the unit tests pin the SVG the component produces while this spec
- * fixes that the marks are actually visible on screen at the acceptance size
- * and captures the screenshot from the real app.
- *
- * The annotations are seeded through the review API with synthetic text and
- * fixed rects (no real answer content), as the acceptance requires.
+ * The screenshot pairs the screen with the exported page rendered from the
+ * same answer sheet; see docs/pdf-review-overlay.md §2.18.
  */
 
 const SCREENSHOT_PATH = path.join(
   "..",
   "docs",
   "pdf-review",
-  "annotation-marks-1536x1024.png",
+  "export-parity-screen-1536x1024.png",
 );
 
-/** Seven synthetic marks, one per kind, spread over the page. */
 const SEEDED_ANNOTATIONS = [
   { kind: "circle", x: 0.1, y: 0.1, width: 0.1, height: 0.05, comment: null },
-  { kind: "cross", x: 0.3, y: 0.1, width: 0.1, height: 0.05, comment: null },
   {
-    kind: "triangle",
-    x: 0.5,
+    kind: "cross",
+    x: 0.3,
     y: 0.1,
     width: 0.1,
     height: 0.05,
-    comment: null,
+    comment: "時制に注意",
   },
-  {
-    kind: "underline",
-    x: 0.1,
-    y: 0.25,
-    width: 0.25,
-    height: 0.03,
-    comment: null,
-  },
-  { kind: "box", x: 0.45, y: 0.25, width: 0.18, height: 0.07, comment: null },
-  { kind: "score", x: 0.1, y: 0.4, width: 0.1, height: 0.05, comment: "3/5" },
   {
     kind: "comment",
     x: 0.3,
     y: 0.4,
     width: 0.3,
     height: 0.05,
-    comment: "時制に注意",
+    comment: "記述が不完全です",
   },
 ] as const;
 
@@ -98,11 +80,6 @@ async function firstTestId(page: Page): Promise<string> {
   return first.id;
 }
 
-/**
- * Records a human grade carrying all seven annotation kinds for the first
- * question, so the overlay has every kind to draw without a real AI call. The
- * rects are explicit, so placement does not depend on OCR anchor matching.
- */
 async function seedAnnotatedGrade(page: Page, testId: string): Promise<void> {
   const submissions = (await fetchJson(
     page,
@@ -145,7 +122,7 @@ async function seedAnnotatedGrade(page: Page, testId: string): Promise<void> {
   expect(status).toBe(201);
 }
 
-test("添削記号が種類ごとの形と赤文字で答案上に描かれる (Issue #403)", async () => {
+test("点数とコメントの出力先が、レビュー画面で出力紙面と一致する (Issue #406)", async () => {
   test.setTimeout(300_000);
 
   const app = await launchElectronApp({
@@ -202,25 +179,20 @@ test("添削記号が種類ごとの形と赤文字で答案上に描かれる (
       mobile: false,
     });
 
-    // Every *shape* kind has its own mark on screen -- not one rectangle for all.
-    for (const { kind } of SEEDED_ANNOTATIONS) {
-      if (kind === "score" || kind === "comment") {
-        continue;
-      }
-      const mark = page.locator(`[data-kind="${kind}"]`).first();
-      await expect(mark).toBeVisible({ timeout: 30_000 });
-    }
-    // Issue #406: score/comment are output-only, never drawn on the answer.
-    await expect(page.locator('[data-kind="score"]')).toHaveCount(0);
-    await expect(page.locator('[data-kind="comment"]')).toHaveCount(0);
-    // They are described by the output preview instead.
-    await expect(page.getByTestId("review-question-comments")).toContainText(
-      "時制に注意",
+    // The confirmed score is drawn on the page, in the margin strip the export
+    // uses because the question has no score_area of its own.
+    const overlay = page.getByTestId("review-score-overlay");
+    await expect(overlay).toBeVisible({ timeout: 30_000 });
+    await expect(overlay).toHaveAttribute("data-placement", "margin");
+    await expect(overlay).toContainText("/");
+    // Same red pen as the export (design-tokens §3.4).
+    await expect(overlay).toHaveClass(/text-annotation-mark/);
+
+    // And the comments are declared to leave the answer for the note page,
+    // not overlaid on it (Issue #161).
+    await expect(page.getByTestId("review-comment-destination")).toContainText(
+      "末尾の注釈ページ",
     );
-    // The teacher's red pen, not the UI's error colour.
-    await expect(
-      page.locator('[data-kind="circle"] svg path').first(),
-    ).toHaveAttribute("stroke", "currentColor");
 
     const parent = path.dirname(SCREENSHOT_PATH);
     fs.mkdirSync(parent, { recursive: true });

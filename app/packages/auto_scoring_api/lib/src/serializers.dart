@@ -83,6 +83,7 @@ import 'package:auto_scoring_api/src/model/planned_file_model.dart';
 import 'package:auto_scoring_api/src/model/planned_group_model.dart';
 import 'package:auto_scoring_api/src/model/profile_response.dart';
 import 'package:auto_scoring_api/src/model/question_response.dart';
+import 'package:auto_scoring_api/src/model/question_score_placement_response.dart';
 import 'package:auto_scoring_api/src/model/question_text_override.dart';
 import 'package:auto_scoring_api/src/model/reasoned_review_request.dart';
 import 'package:auto_scoring_api/src/model/recognition_response.dart';
@@ -193,6 +194,7 @@ part 'serializers.g.dart';
   PlannedGroupModel,
   ProfileResponse,
   QuestionResponse,
+  QuestionScorePlacementResponse,
   QuestionTextOverride,
   ReasonedReviewRequest,
   RecognitionResponse,

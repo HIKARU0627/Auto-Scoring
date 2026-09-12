@@ -18,6 +18,7 @@ Name | Type | Description | Notes
 **points** | **int** |  | 
 **rubric** | [**BuiltList&lt;RubricCriterionResponse&gt;**](RubricCriterionResponse.md) |  | 
 **scoreArea** | [**NormalizedRectResponse**](NormalizedRectResponse.md) |  | [optional] 
+**scorePlacement** | [**QuestionScorePlacementResponse**](QuestionScorePlacementResponse.md) |  | [optional] 
 **scoringMethod** | **String** |  | 
 **testId** | **String** |  | 
 

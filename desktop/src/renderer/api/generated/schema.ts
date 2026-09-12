@@ -2729,10 +2729,32 @@ export interface components {
       /** Rubric */
       rubric: components["schemas"]["RubricCriterionResponse"][];
       score_area?: components["schemas"]["NormalizedRectResponse"] | null;
+      score_placement?:
+        components["schemas"]["QuestionScorePlacementResponse"] | null;
       /** Scoring Method */
       scoring_method: string;
       /** Test Id */
       test_id: string;
+    };
+    /**
+     * QuestionScorePlacementResponse
+     * @description Where this question's confirmed score is written on the exported sheet
+     *     (Issue #406), so the review screen can draw the same score in the same
+     *     place -- and can say *before* an export is attempted that this question has
+     *     nowhere to put it.
+     *
+     *     ``target`` is `domain.pdf_export.ScorePlacementTarget`'s value:
+     *     ``"own"`` (at `score_area`), ``"margin"`` (the page's fallback strip), or
+     *     ``"none"`` (the export will refuse with ``no_room_for_score``). ``rect`` is
+     *     the page-normalized destination for the first two and ``None`` for
+     *     ``"none"``. It is produced by `domain.pdf_export.score_placements`, i.e.
+     *     the same judgment the export gate and renderer use, never re-derived here
+     *     or on the client.
+     */
+    QuestionScorePlacementResponse: {
+      rect?: components["schemas"]["NormalizedRectResponse"] | null;
+      /** Target */
+      target: string;
     };
     /**
      * QuestionTextOverride
