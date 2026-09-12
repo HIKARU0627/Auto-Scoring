@@ -32,7 +32,7 @@ export function GradingUnavailableBanner({
     return <>{children}</>;
   }
   return (
-    <div className="flex flex-col">
+    <div className="flex h-dvh flex-col">
       <div
         data-testid="grading-unavailable-banner"
         role="status"

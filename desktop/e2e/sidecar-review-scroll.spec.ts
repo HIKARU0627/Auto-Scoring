@@ -143,124 +143,167 @@ async function zoomIn(page: Page, times: number): Promise<void> {
   }
 }
 
+const E2E_APP_ENV = {
+  AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
+  AUTO_SCORING_E2E_FOLDER: FIXTURE_ROOT,
+  AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT: "1",
+  AUTO_SCORING_E2E_STUB_GRADING_JOBS: "1",
+} as const;
+
 /**
- * Issue #401 acceptance: zooming the answer PDF must not grow the document or
- * move the 設問レール / 採点パネル; only the PDF region scrolls, on both axes.
- *
- * jsdom has no layout, so `desktop/test/renderer/pdf-review-scroll.test.tsx`
- * fixes the height arithmetic and the scroll-container contract. This spec
- * fixes the behaviour those pieces are for, against the real Electron window.
+ * Issue #422: all e2e launches set no credentials, so the 採点不可バナー is
+ * always up. The banner changes the shell's available height, and Issue #401's
+ * properties must hold with and without it, so every scenario runs both ways.
  */
-test("拡大しても両サイドは固定で、PDF領域だけが縦横にスクロールする (Issue #401)", async () => {
-  test.setTimeout(300_000);
-
-  const app = await launchElectronApp({
+const BANNER_STATES = [
+  { name: "バナーあり", bannerVisible: true, env: {} },
+  {
+    name: "バナーなし",
+    bannerVisible: false,
     env: {
-      AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
-      AUTO_SCORING_E2E_FOLDER: FIXTURE_ROOT,
-      AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT: "1",
-      AUTO_SCORING_E2E_STUB_GRADING_JOBS: "1",
+      AUTO_SCORING_AI_GRADING_TRANSPORT: "openrouter",
+      AUTO_SCORING_OPENROUTER_API_KEY: "dummy",
+      AUTO_SCORING_OPENROUTER_MODEL: "google/gemini-2.5-flash",
     },
-  });
+  },
+] as const;
 
-  try {
-    const page = await app.firstWindow();
-    await openFirstReview(page);
-    await setViewport(page, 1536, 1024);
+async function expectBannerState(
+  page: Page,
+  state: (typeof BANNER_STATES)[number],
+): Promise<void> {
+  const banner = page.locator('[data-testid="grading-unavailable-banner"]');
+  if (state.bannerVisible) {
+    await expect(banner).toBeVisible({ timeout: 15_000 });
+  } else {
+    await expect(banner).toHaveCount(0);
+  }
+}
 
-    const before = await readGeometry(page);
-    expect(before.innerWidth).toBe(1536);
-    expect(before.innerHeight).toBe(1024);
+for (const state of BANNER_STATES) {
+  /**
+   * Issue #401 acceptance: zooming the answer PDF must not grow the document or
+   * move the 設問レール / 採点パネル; only the PDF region scrolls, on both axes.
+   * Issue #422 runs it in both banner states: the banner changes the shell
+   * height, and the viewport-relative measurement used to grow the document by
+   * exactly the band's height.
+   *
+   * jsdom has no layout, so `desktop/test/renderer/pdf-review-scroll.test.tsx`
+   * fixes the height arithmetic and the scroll-container contract. This spec
+   * fixes the behaviour those pieces are for, against the real Electron window.
+   */
+  test(`拡大しても両サイドは固定で、PDF領域だけが縦横にスクロールする (Issue #401, ${state.name})`, async () => {
+    test.setTimeout(300_000);
 
-    await zoomIn(page, 2);
-    // Wait for the zoomed surface to land inside the region's scroll area.
-    await expect
-      .poll(() => readGeometry(page).then((g) => g.region.scrollHeight), {
-        timeout: 10_000,
-      })
-      .toBeGreaterThan(before.region.clientHeight);
+    const app = await launchElectronApp({
+      env: { ...E2E_APP_ENV, ...state.env },
+    });
 
-    const after = await readGeometry(page);
+    try {
+      const page = await app.firstWindow();
+      await openFirstReview(page);
+      await setViewport(page, 1536, 1024);
+      await expectBannerState(page, state);
 
-    // Only the PDF region scrolls: the document itself does not grow.
-    expect(after.docScrollHeight).toBeLessThanOrEqual(after.innerHeight + 1);
+      const before = await readGeometry(page);
+      expect(before.innerWidth).toBe(1536);
+      expect(before.innerHeight).toBe(1024);
 
-    // Both bars stay exactly where they were and stay on screen.
-    for (const key of ["rail", "inspector"] as const) {
-      expect(
-        Math.abs(after[key].top - before[key].top),
-        key,
-      ).toBeLessThanOrEqual(1);
-      expect(after[key].top, key).toBeGreaterThanOrEqual(0);
-      expect(after[key].bottom, key).toBeLessThanOrEqual(after.innerHeight + 1);
+      await zoomIn(page, 2);
+      // Wait for the zoomed surface to land inside the region's scroll area.
+      await expect
+        .poll(() => readGeometry(page).then((g) => g.region.scrollHeight), {
+          timeout: 10_000,
+        })
+        .toBeGreaterThan(before.region.clientHeight);
+
+      const after = await readGeometry(page);
+
+      // Only the PDF region scrolls: the document itself does not grow.
+      expect(after.docScrollHeight).toBeLessThanOrEqual(after.innerHeight + 1);
+
+      // Both bars stay exactly where they were and stay on screen.
+      for (const key of ["rail", "inspector"] as const) {
+        expect(
+          Math.abs(after[key].top - before[key].top),
+          key,
+        ).toBeLessThanOrEqual(1);
+        expect(after[key].top, key).toBeGreaterThanOrEqual(0);
+        expect(after[key].bottom, key).toBeLessThanOrEqual(
+          after.innerHeight + 1,
+        );
+      }
+
+      // The page region owns both scrollbars after the zoom.
+      expect(after.region.scrollHeight).toBeGreaterThan(
+        after.region.clientHeight,
+      );
+      expect(after.region.scrollWidth).toBeGreaterThan(
+        after.region.clientWidth,
+      );
+
+      // Acceptance screenshot at the exact 1536x1024 renderer size. CDP capture
+      // honours the device-metrics override; `page.screenshot` would return the
+      // smaller physical window on this host.
+      const shotSession = await page.context().newCDPSession(page);
+      await shotSession.send("Emulation.setDeviceMetricsOverride", {
+        width: 1536,
+        height: 1024,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+      await page.waitForTimeout(300);
+      const shot = await shotSession.send("Page.captureScreenshot", {
+        format: "png",
+      });
+      const dir = "/tmp/opencode/401-shots";
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(
+          dir,
+          `review-zoom-1536x1024-${state.bannerVisible ? "banner" : "no-banner"}.png`,
+        ),
+        Buffer.from(shot.data, "base64"),
+      );
+    } finally {
+      await closeElectronApp(app);
     }
-
-    // The page region owns both scrollbars after the zoom.
-    expect(after.region.scrollHeight).toBeGreaterThan(
-      after.region.clientHeight,
-    );
-    expect(after.region.scrollWidth).toBeGreaterThan(after.region.clientWidth);
-
-    // Acceptance screenshot at the exact 1536x1024 renderer size. CDP capture
-    // honours the device-metrics override; `page.screenshot` would return the
-    // smaller physical window on this host.
-    const shotSession = await page.context().newCDPSession(page);
-    await shotSession.send("Emulation.setDeviceMetricsOverride", {
-      width: 1536,
-      height: 1024,
-      deviceScaleFactor: 1,
-      mobile: false,
-    });
-    await page.waitForTimeout(300);
-    const shot = await shotSession.send("Page.captureScreenshot", {
-      format: "png",
-    });
-    const dir = "/tmp/opencode/401-shots";
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "review-zoom-1536x1024.png"),
-      Buffer.from(shot.data, "base64"),
-    );
-  } finally {
-    await closeElectronApp(app);
-  }
-});
-
-/**
- * The narrow acceptance: the panes stack, but the page region still owns the
- * zoom scroll (the document may still scroll around the stacked panes).
- */
-test("狭い画面でもPDF領域が自前で縦横にスクロールする (Issue #401)", async () => {
-  test.setTimeout(300_000);
-
-  const app = await launchElectronApp({
-    env: {
-      AUTO_SCORING_E2E_PDF: ANSWER_SHEET_PDF,
-      AUTO_SCORING_E2E_FOLDER: FIXTURE_ROOT,
-      AUTO_SCORING_E2E_STUB_CRITERIA_EXTRACT: "1",
-      AUTO_SCORING_E2E_STUB_GRADING_JOBS: "1",
-    },
   });
 
-  try {
-    const page = await app.firstWindow();
-    await openFirstReview(page);
-    await setViewport(page, 700, 900);
+  /**
+   * The narrow acceptance: the panes stack, but the page region still owns the
+   * zoom scroll (the document may still scroll around the stacked panes).
+   */
+  test(`狭い画面でもPDF領域が自前で縦横にスクロールする (Issue #401, ${state.name})`, async () => {
+    test.setTimeout(300_000);
 
-    const before = await readGeometry(page);
-    await zoomIn(page, 2);
-    await expect
-      .poll(() => readGeometry(page).then((g) => g.region.scrollHeight), {
-        timeout: 10_000,
-      })
-      .toBeGreaterThan(before.region.clientHeight);
+    const app = await launchElectronApp({
+      env: { ...E2E_APP_ENV, ...state.env },
+    });
 
-    const after = await readGeometry(page);
-    expect(after.region.scrollHeight).toBeGreaterThan(
-      after.region.clientHeight,
-    );
-    expect(after.region.scrollWidth).toBeGreaterThan(after.region.clientWidth);
-  } finally {
-    await closeElectronApp(app);
-  }
-});
+    try {
+      const page = await app.firstWindow();
+      await openFirstReview(page);
+      await setViewport(page, 700, 900);
+      await expectBannerState(page, state);
+
+      const before = await readGeometry(page);
+      await zoomIn(page, 2);
+      await expect
+        .poll(() => readGeometry(page).then((g) => g.region.scrollHeight), {
+          timeout: 10_000,
+        })
+        .toBeGreaterThan(before.region.clientHeight);
+
+      const after = await readGeometry(page);
+      expect(after.region.scrollHeight).toBeGreaterThan(
+        after.region.clientHeight,
+      );
+      expect(after.region.scrollWidth).toBeGreaterThan(
+        after.region.clientWidth,
+      );
+    } finally {
+      await closeElectronApp(app);
+    }
+  });
+}

@@ -49,6 +49,16 @@ export function AppShell({
   initialStack?: readonly string[] | undefined;
 }): JSX.Element {
   const gradingAvailability = useGradingAvailability(client);
+  /**
+   * Issue #422: the frame's height must account for the banner, not the other
+   * way around. With the band mounted, the frame takes what the `h-dvh` banner
+   * wrapper leaves; without it, the frame itself is the viewport. Either way the
+   * frame row has a definite height, so the Sidebar can stretch to it and the
+   * body column can size to its content -- `items-start` keeps the latter from
+   * being stretched to the window (Issue #375 item 4).
+   */
+  const bannerVisible =
+    gradingAvailability !== null && !gradingAvailability.available;
 
   return (
     <SidecarApiProvider client={client}>
@@ -57,9 +67,17 @@ export function AppShell({
           <SidecarConnectionPlaceholder />
         ) : (
           <GradingUnavailableBanner availability={gradingAvailability}>
-            <div className="flex gap-xl bg-surface p-xl text-on-surface">
+            <div
+              data-testid="app-shell-frame"
+              className={`flex items-start gap-xl bg-surface p-xl text-on-surface ${
+                bannerVisible ? "min-h-0 flex-1" : "h-dvh"
+              }`}
+            >
               <Sidebar />
-              <div className="flex min-w-0 flex-1 flex-col">
+              <div
+                data-testid="app-shell-content"
+                className="flex min-w-0 flex-1 flex-col"
+              >
                 <RouteOutlet />
               </div>
             </div>
