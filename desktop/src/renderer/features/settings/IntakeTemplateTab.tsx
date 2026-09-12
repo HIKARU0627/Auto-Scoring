@@ -262,7 +262,7 @@ export function IntakeTemplateTab(): JSX.Element {
               data-testid="settings-template-picker"
               value={selected}
               onChange={(e) => setSelected(Number(e.target.value))}
-              className={SETTINGS_SELECT_CLASS}
+              className={`${SETTINGS_SELECT_CLASS} select-themed`}
             >
               {templates.map((template, index) => (
                 <option key={template.id} value={index}>
@@ -376,7 +376,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     scope: e.target.value as RuleScope,
                   })
                 }
-                className={RULE_SELECT_CLASS}
+                className={`${RULE_SELECT_CLASS} select-themed`}
                 aria-label={`規則${index + 1} の対象`}
               >
                 <option value="file">ファイル名</option>
@@ -408,7 +408,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     role: e.target.value as MaterialRole,
                   })
                 }
-                className={RULE_SELECT_CLASS}
+                className={`${RULE_SELECT_CLASS} select-themed`}
                 aria-label={`規則${index + 1} の役割`}
               >
                 {ALL_ROLES.map((role) => (
@@ -428,7 +428,7 @@ export function IntakeTemplateTab(): JSX.Element {
                     requirement: e.target.value as Requirement,
                   })
                 }
-                className={RULE_SELECT_CLASS}
+                className={`${RULE_SELECT_CLASS} select-themed`}
                 aria-label={`規則${index + 1} の必須度`}
               >
                 <option value="required">必須</option>

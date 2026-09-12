@@ -424,7 +424,7 @@ function DrawToolbar({
       <span>次に引く回答欄の設問:</span>
       <select
         data-testid="answer-area-draw-target"
-        className="rounded-md border border-outline px-sm py-xs"
+        className="select-themed rounded-md border border-outline px-sm py-xs"
         value={drawTarget}
         onChange={(event) => {
           onDrawTargetChange(event.target.value);
@@ -821,7 +821,7 @@ function RegionList({
               {region.kind === "answer_area" ? (
                 <select
                   data-testid={`answer-area-question-${index}`}
-                  className="rounded-md border border-outline px-sm py-xs"
+                  className="select-themed rounded-md border border-outline px-sm py-xs"
                   disabled={readOnly}
                   value={dropdownValue}
                   onChange={(event) => {

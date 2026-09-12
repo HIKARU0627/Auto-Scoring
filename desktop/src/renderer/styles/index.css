@@ -159,6 +159,90 @@
   }
 }
 
+@layer components {
+  /**
+   * Issue #381: the app's `<select>` look, including the opened list.
+   *
+   * `appearance: base-select` (Chromium 135+; the Electron 44 shell ships
+   * Chromium 152) makes the popup a page-drawn `::picker(select)` instead of
+   * the OS-drawn list, so the dark theme no longer opens a white menu. The
+   * native element keeps its keyboard, IME, type-ahead, and screen-reader
+   * behaviour; features only add the `select-themed` class.
+   */
+  .select-themed {
+    appearance: base-select;
+    color: var(--color-on-surface);
+    background-color: var(--color-surface-container-high);
+    border: var(--layout-hairline) solid var(--color-outline-variant);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+  }
+
+  .select-themed:hover:not(:disabled) {
+    background-color: var(--color-surface-container-highest);
+  }
+
+  .select-themed:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  .select-themed:disabled {
+    color: var(--color-disabled-button-label);
+    background-color: var(--color-disabled-button-container);
+    border-color: var(--color-disabled-button-outline);
+    cursor: not-allowed;
+  }
+
+  /* The picker arrow is a UA-drawn `::picker-icon` once `base-select` is on. */
+  .select-themed::picker-icon {
+    color: var(--color-on-surface-variant);
+    transition: rotate var(--motion-duration-state-change)
+      var(--motion-easing-standard);
+  }
+
+  .select-themed:open::picker-icon {
+    rotate: 180deg;
+  }
+
+  .select-themed::picker(select) {
+    appearance: base-select;
+    color: var(--color-on-surface);
+    background-color: var(--color-surface-container-high);
+    border: var(--layout-hairline) solid var(--color-outline-variant);
+    border-radius: var(--radius-md);
+    box-shadow: var(--elevation-modal);
+    padding: var(--spacing-xs);
+  }
+
+  .select-themed option {
+    color: var(--color-on-surface);
+    background-color: var(--color-surface-container-high);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-radius: var(--radius-sm);
+  }
+
+  .select-themed option:hover,
+  .select-themed option:focus-visible {
+    background-color: var(--color-surface-container-highest);
+  }
+
+  /* Selected state carries weight and a checkmark, not colour alone. */
+  .select-themed option:checked {
+    color: var(--color-on-primary-container);
+    background-color: var(--color-primary-container);
+    font-weight: 600;
+  }
+
+  .select-themed option:checked::checkmark {
+    color: var(--color-primary-text);
+  }
+
+  .select-themed option:disabled {
+    color: var(--color-disabled-button-label);
+  }
+}
+
 @layer base {
   html {
     font-family: var(--font-family-sans);
