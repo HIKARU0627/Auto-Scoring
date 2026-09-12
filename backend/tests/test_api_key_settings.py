@@ -21,7 +21,7 @@ answers every 疎通 request (``AGENTS.md``: a real provider costs money).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -31,6 +31,7 @@ from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvide
 from auto_scoring.adapters.credentials.api_keys import (
     API_KEY_SLOTS,
     NO_API_KEY_REASON,
+    TRANSPORT_VARIABLE,
     ApiKeySettings,
     ApiKeySlot,
 )
@@ -49,11 +50,14 @@ from auto_scoring.api.sidecar import LOG_FILENAME, install_log_redaction
 _TOKEN = "test-token"
 _FAKE_KEY = "fake-openrouter-key-DO-NOT-USE-4c1f9a"
 _OPENROUTER = API_KEY_SLOTS[0]
+_OPENROUTER_KEY_VARIABLE = "AUTO_SCORING_OPENROUTER_API_KEY"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
 
 
-def _always(outcome: VerificationOutcome) -> Callable[[ApiKeySlot, str], VerificationOutcome]:
-    def verify(slot: ApiKeySlot, api_key: str) -> VerificationOutcome:
+def _always(
+    outcome: VerificationOutcome,
+) -> Callable[[ApiKeySlot, Mapping[str, str]], VerificationOutcome]:
+    def verify(slot: ApiKeySlot, values: Mapping[str, str]) -> VerificationOutcome:
         return outcome
 
     return verify
@@ -79,7 +83,7 @@ def _client(
 
 def _stored(**environment: str) -> ApiKeySettings:
     return ApiKeySettings(
-        InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY}), environment
+        InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}), environment
     )
 
 
@@ -87,18 +91,25 @@ def test_the_screen_learns_that_a_key_is_held_and_where_it_came_from() -> None:
     with _client(_stored()) as client:
         body = client.get("/settings/api-keys", headers=_AUTH).json()
 
-    (slot,) = body["keys"]
+    slot = next(item for item in body["keys"] if item["id"] == "openrouter")
     assert slot["id"] == "openrouter"
     assert slot["configured"] is True
     assert slot["key_source"] == "credential_store"
     assert body["store_unavailable_reason"] is None
+    # Every provider the owner asked for is on the screen (Issue #386).
+    assert {item["id"] for item in body["keys"]} == {
+        "openrouter",
+        "openai",
+        "gemini",
+        "codex_app_server",
+    }
 
 
 def test_an_environment_key_is_reported_as_coming_from_the_environment() -> None:
     """A developer machine with both must be able to tell which one is in
     use -- "there is a key" would not answer that (Issue #96)."""
     settings = ApiKeySettings(
-        InMemoryCredentialStore(), {_OPENROUTER.key_variable: "from-the-environment"}
+        InMemoryCredentialStore(), {_OPENROUTER_KEY_VARIABLE: "from-the-environment"}
     )
 
     with _client(settings) as client:
@@ -132,7 +143,7 @@ def test_saving_a_key_keeps_it_and_never_reads_it_back() -> None:
         listed = client.get("/settings/api-keys", headers=_AUTH)
 
     assert response.status_code == 200
-    assert store.get(_OPENROUTER.key_variable) == _FAKE_KEY
+    assert store.get(_OPENROUTER_KEY_VARIABLE) == _FAKE_KEY
     assert response.json()["keys"][0]["configured"] is True
     # The response body is the entire channel back to the screen. If the key
     # is not in it, the screen cannot display it however it is written.
@@ -155,14 +166,14 @@ def test_saving_a_key_marks_the_running_sidecar_as_out_of_date() -> None:
 
 
 def test_deleting_a_key_removes_it() -> None:
-    store = InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY})
+    store = InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY})
 
     with _client(ApiKeySettings(store, {})) as client:
         response = client.delete(f"/settings/api-keys/{_OPENROUTER.id}", headers=_AUTH)
 
     assert response.status_code == 200
     assert response.json()["keys"][0]["configured"] is False
-    assert store.get(_OPENROUTER.key_variable) is None
+    assert store.get(_OPENROUTER_KEY_VARIABLE) is None
 
 
 def test_a_host_with_no_credential_store_says_so_and_refuses_to_pretend() -> None:
@@ -229,7 +240,7 @@ def test_verify_renders_each_outcome_distinctly(
 
 
 def test_verify_without_a_key_says_so_instead_of_calling_anything() -> None:
-    def never(slot: ApiKeySlot, api_key: str) -> VerificationOutcome:
+    def never(slot: ApiKeySlot, values: Mapping[str, str]) -> VerificationOutcome:
         raise AssertionError("nothing to verify, so nothing may be called")
 
     app = create_app(
@@ -310,7 +321,7 @@ def test_an_environment_key_is_scrubbed_from_the_log_too(
     registry = SecretRegistry()
     install_log_redaction("session-token", tmp_path, registry=registry)
     logger = logging.getLogger("auto_scoring.test_api_key_settings")
-    settings = ApiKeySettings(InMemoryCredentialStore(), {_OPENROUTER.key_variable: _FAKE_KEY})
+    settings = ApiKeySettings(InMemoryCredentialStore(), {_OPENROUTER_KEY_VARIABLE: _FAKE_KEY})
 
     with _client(
         settings, registry=registry, outcome=VerificationOutcome(VerificationResult.OK, "ok", 200)
@@ -338,3 +349,148 @@ def test_an_unconfigured_host_still_serves_everything_except_grading() -> None:
 
     assert availability["available"] is False
     assert availability["reason"] == NO_API_KEY_REASON
+
+
+# --- Issue #386: the other providers, readable settings, and the use order ---
+
+_GEMINI = next(slot for slot in API_KEY_SLOTS if slot.id == "gemini")
+_OPENAI = next(slot for slot in API_KEY_SLOTS if slot.id == "openai")
+
+
+def test_a_keyless_provider_lists_its_readable_settings_without_a_key() -> None:
+    with _client(ApiKeySettings(InMemoryCredentialStore(), {})) as client:
+        body = client.get("/settings/api-keys", headers=_AUTH).json()
+
+    gemini = next(item for item in body["keys"] if item["id"] == "gemini")
+    assert gemini["key_variable"] is None
+    assert gemini["key_source"] == "none"
+    variables = {item["variable"] for item in gemini["text_settings"]}
+    assert variables == {"AUTO_SCORING_VERTEX_PROJECT", "AUTO_SCORING_VERTEX_LOCATION"}
+    assert gemini["model"] == "gemini-2.5-flash"
+    assert "ADC" in gemini["auth_note"]
+
+
+def test_saving_a_readable_setting_reads_it_back() -> None:
+    store = InMemoryCredentialStore()
+    settings = ApiKeySettings(store, {})
+
+    with _client(settings) as client:
+        response = client.put(
+            f"/settings/api-keys/{_OPENAI.id}",
+            json={"values": {"AUTO_SCORING_OPENAI_MODEL": "gpt-4.1"}},
+            headers=_AUTH,
+        )
+        body = response.json()
+
+    assert response.status_code == 200
+    assert store.get("AUTO_SCORING_OPENAI_MODEL") == "gpt-4.1"
+    openai = next(item for item in body["keys"] if item["id"] == "openai")
+    assert openai["model"] == "gpt-4.1"
+    assert openai["model_source"] == "credential_store"
+    assert body["restart_required"] is True
+
+
+def test_saving_a_key_and_a_model_together_never_returns_the_key() -> None:
+    store = InMemoryCredentialStore()
+
+    with _client(ApiKeySettings(store, {})) as client:
+        response = client.put(
+            f"/settings/api-keys/{_OPENAI.id}",
+            json={
+                "values": {
+                    "AUTO_SCORING_OPENAI_API_KEY": "fake-openai-key-DO-NOT-USE-7b2e",
+                    "AUTO_SCORING_OPENAI_MODEL": "gpt-4.1",
+                }
+            },
+            headers=_AUTH,
+        )
+
+    assert response.status_code == 200
+    assert store.get("AUTO_SCORING_OPENAI_API_KEY") == "fake-openai-key-DO-NOT-USE-7b2e"
+    assert "fake-openai-key-DO-NOT-USE-7b2e" not in response.text
+
+
+def test_host_availability_is_reported_for_keyless_providers() -> None:
+    settings = ApiKeySettings(
+        InMemoryCredentialStore(),
+        {},
+        vertex_auth_available=lambda project_id: False,
+        codex_available=lambda: True,
+    )
+
+    with _client(settings) as client:
+        body = client.get("/settings/api-keys", headers=_AUTH).json()
+
+    gemini = next(item for item in body["keys"] if item["id"] == "gemini")
+    codex = next(item for item in body["keys"] if item["id"] == "codex_app_server")
+    assert gemini["host_available"] is False
+    assert codex["host_available"] is True
+
+
+def test_verify_on_a_keyless_provider_uses_the_host_probe() -> None:
+    seen: list[str] = []
+
+    def verify(slot: ApiKeySlot, values: Mapping[str, str]) -> VerificationOutcome:
+        seen.append(slot.id)
+        return VerificationOutcome(VerificationResult.OK, "ADC を確認できました。")
+
+    app = create_app(
+        api_token=_TOKEN,
+        credential_settings=ApiKeySettings(InMemoryCredentialStore(), {}),
+        secret_registry=SecretRegistry(),
+        credential_verifier=verify,
+    )
+    with TestClient(app) as http:
+        body = http.post(f"/settings/api-keys/{_GEMINI.id}/verify", headers=_AUTH).json()
+
+    assert seen == ["gemini"]
+    assert body["result"] == "ok"
+    assert body["key_source"] == "none"
+
+
+def test_saving_the_transport_order_is_reported_and_persisted() -> None:
+    store = InMemoryCredentialStore()
+
+    with _client(ApiKeySettings(store, {TRANSPORT_VARIABLE: "gemini,openrouter"})) as client:
+        response = client.put(
+            "/settings/transport-order",
+            json={"order": ["openai", "codex_app_server", "openrouter"]},
+            headers=_AUTH,
+        )
+        body = response.json()
+
+    assert response.status_code == 200
+    assert store.get(TRANSPORT_VARIABLE) == "openai,codex_app_server,openrouter"
+    assert body["transport_order"] == "openai,codex_app_server,openrouter"
+    assert body["transport_source"] == "credential_store"
+    assert body["transport_order_stored"] is True
+    assert body["available_transports"] == [
+        "gemini",
+        "codex_app_server",
+        "openrouter",
+        "openai",
+    ]
+
+
+def test_reverting_the_transport_order_returns_to_the_environment() -> None:
+    store = InMemoryCredentialStore()
+
+    with _client(ApiKeySettings(store, {TRANSPORT_VARIABLE: "gemini,openrouter"})) as client:
+        client.put("/settings/transport-order", json={"order": ["openai"]}, headers=_AUTH)
+        body = client.delete("/settings/transport-order", headers=_AUTH).json()
+
+    assert store.get(TRANSPORT_VARIABLE) is None
+    assert body["transport_order"] == "gemini,openrouter"
+    assert body["transport_source"] == "environment"
+    assert body["transport_order_stored"] is False
+
+
+@pytest.mark.parametrize(
+    "order",
+    [[], ["bogus"], ["openrouter", "openrouter"]],
+)
+def test_an_invalid_transport_order_is_refused(order: list[str]) -> None:
+    with _client(ApiKeySettings(InMemoryCredentialStore(), {})) as client:
+        response = client.put("/settings/transport-order", json={"order": order}, headers=_AUTH)
+
+    assert response.status_code == 422

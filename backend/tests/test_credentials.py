@@ -27,7 +27,11 @@ from auto_scoring.adapters.credentials.api_keys import (
     ApiKeySettings,
     ConfigurationSource,
     InvalidApiKeyError,
+    InvalidSettingError,
+    InvalidTransportOrderError,
     validate_api_key,
+    validate_setting_value,
+    validate_transport_order,
 )
 from auto_scoring.adapters.credentials.store import (
     CredentialStoreUnavailableError,
@@ -41,6 +45,10 @@ from auto_scoring.adapters.credentials.store import (
 _FAKE_KEY = "fake-openrouter-key-DO-NOT-USE-4c1f9a"
 
 _OPENROUTER = API_KEY_SLOTS[0]
+#: The slot's key variable as a `str` -- `ApiKeySlot.key_variable` is optional
+#: because Vertex AI and Codex hold no key, and the tests below are all about
+#: the OpenRouter one.
+_OPENROUTER_KEY_VARIABLE = "AUTO_SCORING_OPENROUTER_API_KEY"
 
 
 class _FakeKeyring:
@@ -173,20 +181,20 @@ def test_a_stored_key_beats_the_environment() -> None:
     back to environment variables. A key typed into the screen is the one
     that gets used, even on a machine that also has a ``.env.local``."""
     settings = ApiKeySettings(
-        InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY}),
-        {_OPENROUTER.key_variable: "from-the-environment"},
+        InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}),
+        {_OPENROUTER_KEY_VARIABLE: "from-the-environment"},
     )
 
     resolved = settings.key(_OPENROUTER)
 
     assert resolved == (_FAKE_KEY, ConfigurationSource.CREDENTIAL_STORE)
-    assert settings.effective_environment()[_OPENROUTER.key_variable] == _FAKE_KEY
+    assert settings.effective_environment()[_OPENROUTER_KEY_VARIABLE] == _FAKE_KEY
 
 
 def test_the_environment_is_the_fallback_when_nothing_is_stored() -> None:
     settings = ApiKeySettings(
         InMemoryCredentialStore(),
-        {_OPENROUTER.key_variable: "from-the-environment"},
+        {_OPENROUTER_KEY_VARIABLE: "from-the-environment"},
     )
 
     assert settings.key(_OPENROUTER) == (
@@ -213,7 +221,7 @@ def test_a_stored_key_survives_a_restart() -> None:
 
 
 def test_deleting_a_key_leaves_the_slot_unconfigured() -> None:
-    settings = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY}), {})
+    settings = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}), {})
 
     settings.delete(_OPENROUTER)
 
@@ -224,7 +232,7 @@ def test_deleting_a_key_leaves_the_slot_unconfigured() -> None:
 def test_a_stored_key_supplies_the_transport_order_only_when_the_environment_does_not() -> None:
     """Issue #96's decision: the distributed default is OpenRouter, and the
     development machines' Vertex-first order does not move."""
-    stored = InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY})
+    stored = InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY})
 
     distributed = ApiKeySettings(stored, {}).effective_environment()
     assert distributed[TRANSPORT_VARIABLE] == "openrouter"
@@ -252,13 +260,13 @@ def test_the_layered_environment_is_a_copy() -> None:
     all (`adapters.ai_grading.codex_app_server_provider`)."""
     source = {"AUTO_SCORING_EXISTING": "kept"}
     settings = ApiKeySettings(
-        InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY}), source
+        InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}), source
     )
 
     layered = settings.effective_environment()
 
     assert layered["AUTO_SCORING_EXISTING"] == "kept"
-    assert _OPENROUTER.key_variable not in source
+    assert _OPENROUTER_KEY_VARIABLE not in source
 
 
 def test_no_configuration_at_all_gets_a_reason_a_person_can_act_on() -> None:
@@ -272,7 +280,7 @@ def test_no_configuration_at_all_gets_a_reason_a_person_can_act_on() -> None:
     "environment, store",
     [
         ({TRANSPORT_VARIABLE: "gemini"}, InMemoryCredentialStore()),
-        ({}, InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY})),
+        ({}, InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY})),
     ],
 )
 def test_a_host_with_some_configuration_keeps_the_specific_message(
@@ -285,7 +293,7 @@ def test_a_host_with_some_configuration_keeps_the_specific_message(
 
 
 def test_source_description_carries_no_value() -> None:
-    settings = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY}), {})
+    settings = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}), {})
 
     described = settings.describe_sources()
 
@@ -294,7 +302,7 @@ def test_source_description_carries_no_value() -> None:
 
 
 def test_the_status_of_a_configured_slot_never_carries_the_key() -> None:
-    settings = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER.key_variable: _FAKE_KEY}), {})
+    settings = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}), {})
 
     status = settings.status(_OPENROUTER)
 
@@ -316,3 +324,195 @@ def test_the_distributed_defaults_match_env_example() -> None:
 
     assert values[PROMPT_VERSION_VARIABLE] == DEFAULT_PROMPT_VERSION
     assert values[_OPENROUTER.model_variable] == _OPENROUTER.default_model
+
+
+# --- Issue #386: the other providers, their readable settings, and the order ---
+
+_OPENAI = next(slot for slot in API_KEY_SLOTS if slot.id == "openai")
+_GEMINI = next(slot for slot in API_KEY_SLOTS if slot.id == "gemini")
+_CODEX = next(slot for slot in API_KEY_SLOTS if slot.id == "codex_app_server")
+
+
+def test_every_provider_the_owner_asked_for_has_a_slot() -> None:
+    assert [slot.transport for slot in API_KEY_SLOTS] == [
+        "openrouter",
+        "openai",
+        "gemini",
+        "codex_app_server",
+    ]
+    # Vertex and Codex hold no key on this screen at all: the first is ADC,
+    # the second the operator's own `codex login`.
+    assert _GEMINI.key_variable is None
+    assert _CODEX.key_variable is None
+
+
+def test_a_keyless_provider_refuses_to_store_a_key() -> None:
+    settings = ApiKeySettings(InMemoryCredentialStore(), {})
+
+    assert settings.key(_GEMINI) is None
+    with pytest.raises(InvalidSettingError):
+        settings.save(_GEMINI, _FAKE_KEY)
+
+
+def test_a_text_setting_is_read_back_with_its_source() -> None:
+    """The whole difference from a key: model / project / region are not
+    secrets, so the screen *must* show the current value to be usable."""
+    settings = ApiKeySettings(
+        InMemoryCredentialStore({_GEMINI.model_variable: "gemini-2.5-pro"}), {}
+    )
+
+    status = settings.status(_GEMINI)
+
+    assert status.model == "gemini-2.5-pro"
+    assert status.model_source is ConfigurationSource.CREDENTIAL_STORE
+    project = next(
+        item
+        for item in status.text_settings
+        if item.setting.variable == "AUTO_SCORING_VERTEX_PROJECT"
+    )
+    assert project.source is ConfigurationSource.NONE
+    location = next(
+        item
+        for item in status.text_settings
+        if item.setting.variable == "AUTO_SCORING_VERTEX_LOCATION"
+    )
+    assert location.value == "global"
+    assert location.source is ConfigurationSource.DEFAULT
+
+
+def test_a_stored_text_setting_beats_the_environment() -> None:
+    settings = ApiKeySettings(
+        InMemoryCredentialStore({_OPENAI.model_variable: "gpt-4.1"}),
+        {_OPENAI.model_variable: "from-env"},
+    )
+
+    assert settings.status(_OPENAI).model == "gpt-4.1"
+    assert settings.effective_environment()[_OPENAI.model_variable] == "gpt-4.1"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["with a\nnewline", "全角", "x" * 257],
+)
+def test_validate_setting_value_refuses_what_must_not_be_stored(value: str) -> None:
+    with pytest.raises(InvalidSettingError):
+        validate_setting_value(value)
+
+
+def test_validate_setting_value_trims_a_pasted_value() -> None:
+    assert validate_setting_value("  gemini-2.5-flash\n") == "gemini-2.5-flash"
+
+
+def test_save_settings_clears_a_blank_value() -> None:
+    store = InMemoryCredentialStore(
+        {_GEMINI.model_variable: "gemini-2.5-pro", "AUTO_SCORING_VERTEX_PROJECT": "old"}
+    )
+    settings = ApiKeySettings(store, {})
+
+    settings.save_settings(
+        _GEMINI, {_GEMINI.model_variable: "  ", "AUTO_SCORING_VERTEX_PROJECT": None}
+    )
+
+    assert store.get(_GEMINI.model_variable) is None
+    assert store.get("AUTO_SCORING_VERTEX_PROJECT") is None
+    assert settings.status(_GEMINI).model == _GEMINI.default_model
+
+
+def test_save_settings_refuses_a_variable_that_is_not_on_the_slot() -> None:
+    settings = ApiKeySettings(InMemoryCredentialStore(), {})
+
+    with pytest.raises(InvalidSettingError):
+        settings.save_settings(_OPENAI, {"AUTO_SCORING_VERTEX_PROJECT": "x"})
+
+
+def test_saving_settings_returns_the_secret_for_log_redaction() -> None:
+    settings = ApiKeySettings(InMemoryCredentialStore(), {})
+
+    stored_secrets = settings.save_settings(
+        _OPENROUTER, {_OPENROUTER_KEY_VARIABLE: _FAKE_KEY, _OPENROUTER.model_variable: "m"}
+    )
+
+    assert stored_secrets == (_FAKE_KEY,)
+
+
+def test_a_saved_order_beats_the_environment() -> None:
+    """Issue #386 reverses Issue #96's "the environment always wins" for the
+    order only, because the owner asked to reorder from the screen and an
+    order the chain ignores is worse than no control at all."""
+    settings = ApiKeySettings(
+        InMemoryCredentialStore(),
+        {TRANSPORT_VARIABLE: "gemini,openrouter"},
+    )
+
+    settings.save_transport_order(["openai", "openrouter"])
+
+    assert settings.transport_order() == (
+        "openai,openrouter",
+        ConfigurationSource.CREDENTIAL_STORE,
+    )
+    assert settings.transport_order_stored() is True
+    assert settings.effective_environment()[TRANSPORT_VARIABLE] == "openai,openrouter"
+
+
+def test_clearing_the_saved_order_reverts_to_the_environment() -> None:
+    settings = ApiKeySettings(
+        InMemoryCredentialStore(),
+        {TRANSPORT_VARIABLE: "gemini,openrouter"},
+    )
+    settings.save_transport_order(["openai"])
+
+    settings.clear_transport_order()
+
+    assert settings.transport_order() == (
+        "gemini,openrouter",
+        ConfigurationSource.ENVIRONMENT,
+    )
+    assert settings.transport_order_stored() is False
+    assert settings.effective_environment()[TRANSPORT_VARIABLE] == "gemini,openrouter"
+
+
+def test_a_derived_order_never_claims_a_provider_the_host_did_not_confirm() -> None:
+    """With no host probe, Vertex and Codex are "unknown", not "usable": a
+    derived default that named them would claim a check nobody made."""
+    settings = ApiKeySettings(InMemoryCredentialStore(), {})
+
+    assert settings.transport_order() == ("", ConfigurationSource.NONE)
+
+    with_key = ApiKeySettings(InMemoryCredentialStore({_OPENROUTER_KEY_VARIABLE: _FAKE_KEY}), {})
+    assert with_key.transport_order() == ("openrouter", ConfigurationSource.DEFAULT)
+
+
+@pytest.mark.parametrize(
+    "order",
+    [(), ("bogus",), ("openrouter", "openrouter"), ("openrouter", "codex_app_server", "bogus")],
+)
+def test_validate_transport_order_rejects_a_bad_list(order: tuple[str, ...]) -> None:
+    with pytest.raises(InvalidTransportOrderError):
+        validate_transport_order(order)
+
+
+def test_validate_transport_order_keeps_a_valid_list_in_order() -> None:
+    assert validate_transport_order(["openai", "gemini"]) == ("openai", "gemini")
+
+
+def test_the_host_probe_decides_a_keyless_providers_status() -> None:
+    settings = ApiKeySettings(
+        InMemoryCredentialStore(),
+        {},
+        vertex_auth_available=lambda project_id: False,
+        codex_available=lambda: True,
+    )
+
+    assert settings.status(_GEMINI).host_available is False
+    assert settings.status(_CODEX).host_available is True
+    # But a host probe does *not* put a keyless provider into a derived order:
+    # that would auto-select a subscription-backed CLI nobody chose.
+    assert settings.transport_order() == ("", ConfigurationSource.NONE)
+
+
+def test_saving_settings_marks_the_chain_as_out_of_date() -> None:
+    settings = ApiKeySettings(InMemoryCredentialStore(), {})
+
+    settings.save_settings(_OPENAI, {_OPENAI.model_variable: "gpt-4.1"})
+
+    assert settings.changed_since_start
