@@ -76,3 +76,38 @@ describe("AppShell grading-unavailable banner (INV-168, Issue #398)", () => {
     expect(screen.queryByTestId("grading-unavailable-banner")).toBeNull();
   });
 });
+
+/**
+ * Issue #422 / Issue #375 item 4: the shell row has a definite height so the
+ * Sidebar can stretch to it, but the body column must stay content-height
+ * (`items-start` + no `self-stretch`). A frame that grows the body column
+ * revives the band Issue #375 removed. jsdom has no layout, so this fixes the
+ * class contract and `desktop/e2e/shell-frame-height.spec.ts` fixes the pixels;
+ * both banner states are covered because the banner changes the row's height.
+ */
+describe("shell row height and content-height body (Issue #422, #375 item 4)", () => {
+  for (const available of [false, true]) {
+    const label = available ? "without the banner" : "with the banner";
+
+    it(`keeps the body column off the row height ${label}`, async () => {
+      renderAppAt(AppRoutes.home, {
+        handlers: {
+          getGradingAvailability: async () => ({ available }),
+        },
+      });
+      await screen.findByTestId("home-open-intake");
+
+      const sidebar = screen.getByTestId("app-sidebar");
+      const frame = sidebar.parentElement as HTMLElement;
+      expect(frame.className).toContain("items-start");
+      expect(frame.className).not.toContain("min-h-screen");
+      // The Sidebar opts into the row height; the body column does not.
+      expect(sidebar.className).toContain("self-stretch");
+      expect(sidebar.className).not.toContain("h-screen");
+      expect(sidebar.className).not.toContain("100vh");
+      const content = sidebar.nextElementSibling as HTMLElement;
+      expect(content.className).toContain("flex-1");
+      expect(content.className).not.toContain("self-stretch");
+    });
+  }
+});
