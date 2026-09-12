@@ -40,12 +40,14 @@ export interface MockSidecarHandlers {
   ) => Promise<BulkExportResponse>;
   getExportFile?: (exportId: string) => Promise<Uint8Array>;
   getApiKeySettings?: () => Promise<ApiKeySettingsResponse>;
-  saveApiKey?: (
+  saveProviderSettings?: (
     slotId: string,
-    value: string,
+    values: Record<string, string | null>,
   ) => Promise<ApiKeySettingsResponse>;
   deleteApiKey?: (slotId: string) => Promise<ApiKeySettingsResponse>;
   verifyApiKey?: (slotId: string) => Promise<VerifyApiKeyResponse>;
+  saveTransportOrder?: (order: string[]) => Promise<ApiKeySettingsResponse>;
+  clearTransportOrder?: () => Promise<ApiKeySettingsResponse>;
   listIntakeTemplates?: () => Promise<IntakeTemplateModel[]>;
   saveIntakeTemplates?: (
     templates: IntakeTemplateModel[],
@@ -113,11 +115,20 @@ export function buildApiKeyStatus(
   return {
     id: input.id ?? "openrouter",
     label: input.label ?? "OpenRouter",
+    transport: input.transport ?? "openrouter",
     configured: input.configured ?? false,
     key_source: input.key_source ?? "none",
-    key_variable: input.key_variable ?? "AUTO_SCORING_OPENROUTER_API_KEY",
+    key_variable:
+      input.key_variable === undefined
+        ? "AUTO_SCORING_OPENROUTER_API_KEY"
+        : input.key_variable,
     model: input.model ?? "google/gemini-2.5-flash",
     model_source: input.model_source ?? "builtin_default",
+    model_variable: input.model_variable ?? "AUTO_SCORING_OPENROUTER_MODEL",
+    text_settings: input.text_settings ?? [],
+    host_available:
+      input.host_available === undefined ? null : input.host_available,
+    auth_note: input.auth_note ?? "",
     console_url: input.console_url ?? "https://openrouter.ai/settings/keys",
   };
 }
@@ -131,6 +142,13 @@ export function buildApiKeySettings(
     store_unavailable_reason: input.store_unavailable_reason ?? null,
     transport_order: input.transport_order ?? "openrouter",
     transport_source: input.transport_source ?? "builtin_default",
+    transport_order_stored: input.transport_order_stored ?? false,
+    available_transports: input.available_transports ?? [
+      "gemini",
+      "codex_app_server",
+      "openrouter",
+      "openai",
+    ],
   };
 }
 
@@ -705,11 +723,15 @@ export function createMockSidecarClient(
     PUT: vi.fn(async (path, init) => {
       if (path === "/settings/api-keys/{slot_id}") {
         const slotId = init?.params?.path?.slot_id;
-        const value =
-          (init?.body as { value?: string } | undefined)?.value ?? "";
+        const body = init?.body as
+          | { value?: string; values?: Record<string, string | null> }
+          | undefined;
+        const values: Record<string, string | null> = {
+          ...(body?.values ?? {}),
+        };
         try {
-          const data = handlers.saveApiKey
-            ? await handlers.saveApiKey(slotId ?? "", value)
+          const data = handlers.saveProviderSettings
+            ? await handlers.saveProviderSettings(slotId ?? "", values)
             : buildApiKeySettings({
                 keys: [
                   buildApiKeyStatus({
@@ -719,6 +741,28 @@ export function createMockSidecarClient(
                   }),
                 ],
                 restart_required: true,
+              });
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/settings/transport-order") {
+        const order =
+          (init?.body as { order?: string[] } | undefined)?.order ?? [];
+        try {
+          const data = handlers.saveTransportOrder
+            ? await handlers.saveTransportOrder(order)
+            : buildApiKeySettings({
+                transport_order: order.join(","),
+                transport_source: "credential_store",
+                transport_order_stored: true,
               });
           return { data, response: new Response(), error: undefined };
         } catch (err) {
@@ -793,6 +837,22 @@ export function createMockSidecarClient(
                   }),
                 ],
               });
+          return { data, response: new Response(), error: undefined };
+        } catch (err) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: {
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      if (path === "/settings/transport-order") {
+        try {
+          const data = handlers.clearTransportOrder
+            ? await handlers.clearTransportOrder()
+            : buildApiKeySettings();
           return { data, response: new Response(), error: undefined };
         } catch (err) {
           return {

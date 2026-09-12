@@ -136,9 +136,9 @@ describe("SettingsPage & ApiKeyTab invariants (INV-107 / Issue #249)", () => {
           buildApiKeySettings({
             keys: [buildApiKeyStatus({ configured: false })],
           }),
-        saveApiKey: async (slotId, value) => {
+        saveProviderSettings: async (slotId, values) => {
           savedSlot = slotId;
-          savedValue = value;
+          savedValue = values["AUTO_SCORING_OPENROUTER_API_KEY"] ?? null;
           return buildApiKeySettings({
             keys: [
               buildApiKeyStatus({
@@ -186,7 +186,7 @@ describe("SettingsPage & ApiKeyTab invariants (INV-107 / Issue #249)", () => {
           buildApiKeySettings({
             keys: [buildApiKeyStatus({ configured: false })],
           }),
-        saveApiKey: async () => {
+        saveProviderSettings: async () => {
           throw new Error("資格情報ストアへの書き込みに失敗しました。");
         },
       },

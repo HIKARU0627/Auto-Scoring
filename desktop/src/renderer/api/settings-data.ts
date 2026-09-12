@@ -4,6 +4,7 @@ import type { components } from "./generated/schema.js";
 export type ApiKeySettingsResponse =
   components["schemas"]["ApiKeySettingsResponse"];
 export type ApiKeyStatusModel = components["schemas"]["ApiKeyStatusModel"];
+export type TextSettingModel = components["schemas"]["TextSettingModel"];
 export type VerifyApiKeyResponse =
   components["schemas"]["VerifyApiKeyResponse"];
 export type IntakeTemplateModel = components["schemas"]["IntakeTemplateModel"];
@@ -68,6 +69,64 @@ export async function saveApiKey(
       extractErrorMessage(
         (response as { error?: unknown }).error,
         "キーを保存できませんでした。",
+      ),
+    );
+  }
+  return response.data;
+}
+
+/**
+ * Save a slot's non-secret settings (model, GCP project, region) and,
+ * optionally, a new key. Values are keyed by environment-variable name; a
+ * blank value clears that setting. The key is never returned.
+ */
+export async function saveProviderSettings(
+  client: SidecarClient,
+  slotId: string,
+  values: Record<string, string | null>,
+): Promise<ApiKeySettingsResponse> {
+  const response = await client.PUT("/settings/api-keys/{slot_id}", {
+    params: { path: { slot_id: slotId } },
+    body: { values },
+  });
+  if (response.data === undefined) {
+    throw new SettingsDataError(
+      extractErrorMessage(
+        (response as { error?: unknown }).error,
+        "設定を保存できませんでした。",
+      ),
+    );
+  }
+  return response.data;
+}
+
+export async function saveTransportOrder(
+  client: SidecarClient,
+  order: readonly string[],
+): Promise<ApiKeySettingsResponse> {
+  const response = await client.PUT("/settings/transport-order", {
+    body: { order: [...order] },
+  });
+  if (response.data === undefined) {
+    throw new SettingsDataError(
+      extractErrorMessage(
+        (response as { error?: unknown }).error,
+        "使用順序を保存できませんでした。",
+      ),
+    );
+  }
+  return response.data;
+}
+
+export async function clearTransportOrder(
+  client: SidecarClient,
+): Promise<ApiKeySettingsResponse> {
+  const response = await client.DELETE("/settings/transport-order");
+  if (response.data === undefined) {
+    throw new SettingsDataError(
+      extractErrorMessage(
+        (response as { error?: unknown }).error,
+        "使用順序を戻せませんでした。",
       ),
     );
   }
