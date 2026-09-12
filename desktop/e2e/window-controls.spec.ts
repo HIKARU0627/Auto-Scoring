@@ -253,28 +253,33 @@ test("the title bar reflects window focus over the bridge (Issue #446)", async (
     const bar = page.getByTestId("window-title-bar");
     await expect(bar).toBeVisible({ timeout: 60_000 });
 
-    // The focused direction first, driven through the channel `main.ts` sends
-    // on (`onWindowFocusChange` in preload subscribes to it). This puts the bar
-    // in a known state so the native event below has something to change.
-    await app.evaluate(({ BrowserWindow }, channel) => {
-      BrowserWindow.getAllWindows()[0]?.webContents.send(channel, true);
-    }, "auto-scoring:window-focus-changed");
-    await expect(bar).toHaveAttribute("data-window-focus", "focused", {
-      timeout: 15_000,
-    });
-    await expect(bar).toHaveClass(/text-on-surface-variant/);
+    // Both directions are driven through the exact channel `main.ts` sends on
+    // (`onWindowFocusChange` in preload subscribes to it). A synthetic native
+    // `blur`/`focus` is deliberately not used: `notifyFocus` reports
+    // `window.isFocused()`, the OS's answer, which differs by environment
+    // (Issue #417 / #439: measuring the environment, not the property). What
+    // the renderer does with the channel is what this spec owns; that `main.ts`
+    // registers `blur` as well as `focus` is pinned by
+    // `desktop/test/window-controls-main.test.ts`.
+    const sendFocus = (focused: boolean): Promise<void> =>
+      app.evaluate(
+        ({ BrowserWindow }, [channel, value]) => {
+          BrowserWindow.getAllWindows()[0]?.webContents.send(channel, value);
+        },
+        ["auto-scoring:window-focus-changed", focused] as const,
+      );
 
-    // The main process pushes a boolean on the window's `focus`/`blur`. A
-    // synthetic `blur` goes through the real listener `main.ts` registers; this
-    // environment never gives an Electron window OS focus, so the native event
-    // here reports the unfocused state.
-    await app.evaluate(({ BrowserWindow }) => {
-      BrowserWindow.getAllWindows()[0]?.emit("blur");
-    });
+    await sendFocus(false);
     await expect(bar).toHaveAttribute("data-window-focus", "unfocused", {
       timeout: 15_000,
     });
     await expect(bar).toHaveClass(/text-on-surface-muted/);
+
+    await sendFocus(true);
+    await expect(bar).toHaveAttribute("data-window-focus", "focused", {
+      timeout: 15_000,
+    });
+    await expect(bar).toHaveClass(/text-on-surface-variant/);
   } finally {
     await closeElectronApp(app);
   }
