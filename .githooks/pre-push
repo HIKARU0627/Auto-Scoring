@@ -8,4 +8,8 @@ set -eu
 # "Hooks inherit git's environment".
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE GIT_PREFIX
 
+# Git hands the hook one line per pushed ref on stdin; `pnpm run` inherits that
+# stdin, so scripts/pre-push.mjs can scope the gates to the pushed diff instead
+# of running every stack on every push (Issue #409). The classification and its
+# unit test live in scripts/, not here, so they stay reviewable and testable.
 exec pnpm run check:pre-push
