@@ -86,6 +86,10 @@ def test_verify_tells_an_unreachable_network_apart() -> None:
 
     assert outcome.result is VerificationResult.UNREACHABLE
     assert outcome.status_code is None
+    # This branch assembles a free-text message, so it is exactly the kind of
+    # place a configuration value can be interpolated into. No key may reach
+    # it, whatever the transport does to the request.
+    assert _FAKE_KEY not in outcome.detail
 
 
 def test_verify_tells_a_provider_side_failure_apart() -> None:
@@ -97,6 +101,32 @@ def test_verify_tells_a_provider_side_failure_apart() -> None:
 
     assert outcome.result is VerificationResult.PROVIDER_ERROR
     assert outcome.status_code == 500
+    # Same reason as the unreachable branch above: PROVIDER_ERROR is the one
+    # place `_http_error_outcome` interpolates a label into the message (the
+    # 401/403 branch returns a fixed sentence), so it must be leak-checked too.
+    assert _FAKE_KEY not in outcome.detail
+
+
+def test_openai_verify_tells_a_provider_side_failure_apart() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="upstream on fire")
+
+    with _verification_client(handler, "https://openai.test/v1") as client:
+        outcome = verify_api_key(_OPENAI, {_OPENAI_KEY: _FAKE_KEY}, openai_client=client)
+
+    assert outcome.result is VerificationResult.PROVIDER_ERROR
+    assert _FAKE_KEY not in outcome.detail
+
+
+def test_openai_verify_tells_an_unreachable_network_apart() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("nope")
+
+    with _verification_client(handler, "https://openai.test/v1") as client:
+        outcome = verify_api_key(_OPENAI, {_OPENAI_KEY: _FAKE_KEY}, openai_client=client)
+
+    assert outcome.result is VerificationResult.UNREACHABLE
+    assert _FAKE_KEY not in outcome.detail
 
 
 def test_verify_reports_a_spent_key_rather_than_a_clean_success() -> None:

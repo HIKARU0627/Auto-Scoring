@@ -155,6 +155,13 @@ def _api_key(slot: ApiKeySlot, values: Mapping[str, str]) -> str | None:
 
 
 def _http_error_outcome(label: str, error: httpx.HTTPStatusError) -> VerificationOutcome:
+    """``label`` must be a literal written by this module, never a value.
+
+    It is the one thing this function interpolates into a message (the 401/403
+    branch returns a fixed sentence and does not use it), so a caller that
+    passed configuration into it would publish that value. The tests assert
+    no key reaches the message on these branches; keep every call a literal.
+    """
     status = error.response.status_code
     if status in _UNAUTHORIZED_STATUSES:
         return VerificationOutcome(
@@ -173,6 +180,8 @@ def _unreachable(label: str, error: BaseException) -> VerificationOutcome:
     # The same root-class catch `adapters.ai_grading._http` argues for:
     # enumerating the interesting subclasses let `httpx.DecodingError`
     # through once already. Only the type name crosses into the message.
+    # Like `_http_error_outcome`, `label` is a literal from this module, never
+    # a configuration value; the tests assert no key reaches this message.
     return VerificationOutcome(
         VerificationResult.UNREACHABLE,
         f"{label} に接続できませんでした（{type(error).__name__}）。"
