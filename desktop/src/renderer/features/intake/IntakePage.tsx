@@ -34,12 +34,21 @@ import {
   intakeFolderPickRequirements,
   intakeImportRequirements,
 } from "../../core/action-requirements.js";
-import { readIntakeTarget, testSettings } from "../../core/app-routes.js";
+import {
+  readIntakeTarget,
+  submissionQueue,
+  testSettings,
+} from "../../core/app-routes.js";
 import {
   attributionCandidates,
   dropRoutingOutsideCandidates,
   reviewerChoseOneTest,
 } from "../../core/intake-attribution.js";
+import {
+  IntakeJourneyStage,
+  journeyRoute,
+  journeySteps,
+} from "../../core/intake-journey.js";
 import {
   IntakeTargetKind,
   applyTargetTest,
@@ -750,6 +759,53 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
       ? "取込が完了しました"
       : "取込に失敗した項目があります";
 
+  // Issue #450: the import screen used to end at 「取込が完了しました」 with the
+  // only forward button a small per-group 「テスト設定を開く」, so a ready test
+  // whose answers had just been accepted (and grading started) had no path to
+  // the review queue. Name the single next step and route straight there.
+  const firstDeferredOutcome = outcomes.find(
+    (outcome) => outcome.testId !== null && outcome.answersDeferred > 0,
+  );
+  const firstImportedOutcome = outcomes.find(
+    (outcome) => outcome.testId !== null && outcome.submissionCount > 0,
+  );
+  const nextStep =
+    firstDeferredOutcome !== undefined && firstDeferredOutcome.testId !== null
+      ? {
+          id: "settings",
+          heading: "次は、テスト設定で登録を完了します",
+          detail:
+            "配点・回答欄・設問依存関係を確定すると登録が完了し、答案を取り込めるようになります。",
+          label: "テスト設定を開く",
+          route: journeyRoute(
+            IntakeJourneyStage.settings,
+            firstDeferredOutcome.testId,
+          ),
+        }
+      : firstImportedOutcome !== undefined &&
+          firstImportedOutcome.testId !== null
+        ? {
+            id: "review",
+            heading: "次は、答案キューで採点を確認します",
+            detail:
+              "AI採点の結果を1問ずつ確認し、必要なら修正してからPDF出力します。",
+            label: "答案キューを開く",
+            route: journeyRoute(
+              IntakeJourneyStage.review,
+              firstImportedOutcome.testId,
+            ),
+          }
+        : null;
+
+  const journeyStage: IntakeJourneyStage | null =
+    step !== "done"
+      ? null
+      : firstDeferredOutcome !== undefined
+        ? IntakeJourneyStage.settings
+        : firstImportedOutcome !== undefined
+          ? IntakeJourneyStage.review
+          : null;
+
   const importReqs = intakeImportRequirements({
     busy,
     classifying,
@@ -960,7 +1016,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
             <Card testId="intake-folder-card">
               <CardHeading
                 title="フォルダを選ぶ"
-                description="取り込むフォルダを1つ選んでください。選んだあと、ファイルごとの振り分けを確認できます。"
+                description="初めての教科はここでテストを作り、登録済みのテストに答案を足すときも同じフォルダを選びます。選んだあと、ファイルごとの振り分けを確認できます。"
               />
               <div className="mt-lg">
                 <FilePickerRow
@@ -1454,6 +1510,37 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
 
         {settingsLoaded && targetChoice === null && step === "done" ? (
           <div className="flex flex-col gap-lg">
+            {journeyStage !== null ? (
+              <StepProgress
+                testId="intake-journey"
+                steps={journeySteps(journeyStage)}
+                currentId={journeyStage}
+              />
+            ) : null}
+
+            {nextStep !== null ? (
+              <Card
+                testId="intake-next-step"
+                className="bg-surface-container-high"
+              >
+                <CardHeading
+                  title={nextStep.heading}
+                  titleTestId="intake-next-step-heading"
+                  description={nextStep.detail}
+                />
+                <button
+                  type="button"
+                  data-testid="intake-next-step-action"
+                  className={`mt-lg ${primaryButtonClass()}`}
+                  onClick={() => {
+                    push(nextStep.route);
+                  }}
+                >
+                  {nextStep.label}
+                </button>
+              </Card>
+            ) : null}
+
             <Card testId="intake-done-summary">
               <CardHeading
                 title={doneHeading}
@@ -1599,16 +1686,30 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                   ) : null}
 
                   {outcome.testId !== null ? (
-                    <button
-                      type="button"
-                      data-testid={`intake-open-test-settings-${outcome.groupKey}`}
-                      className={`mt-md ${secondaryButtonClass()}`}
-                      onClick={() => {
-                        push(testSettings(outcome.testId!));
-                      }}
-                    >
-                      テスト設定を開く
-                    </button>
+                    <div className="mt-md flex flex-wrap items-center gap-sm">
+                      {outcome.submissionCount > 0 ? (
+                        <button
+                          type="button"
+                          data-testid={`intake-open-queue-${outcome.groupKey}`}
+                          className={primaryButtonClass()}
+                          onClick={() => {
+                            push(submissionQueue(outcome.testId!));
+                          }}
+                        >
+                          答案キューを開く
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        data-testid={`intake-open-test-settings-${outcome.groupKey}`}
+                        className={secondaryButtonClass()}
+                        onClick={() => {
+                          push(testSettings(outcome.testId!));
+                        }}
+                      >
+                        テスト設定を開く
+                      </button>
+                    </div>
                   ) : null}
                 </Card>
               );

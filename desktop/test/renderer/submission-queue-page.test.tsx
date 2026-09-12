@@ -39,6 +39,28 @@ describe("SubmissionQueuePage (Issue #113 / Issue #242 / INV-021, 140..146, 158,
     expect(screen.getByText("国語 第1回")).toBeDefined();
   });
 
+  it("答案キューが順路の「採点の確認」だと分かる (Issue #450)", async () => {
+    renderAppAt(submissionQueue("t1"), {
+      handlers: {
+        getTest: async () => buildTest({ id: "t1" }),
+        listSubmissions: async () => [
+          buildSubmission({ id: "s1", testId: "t1", state: "ai_processed" }),
+        ],
+      },
+    });
+
+    await screen.findByTestId("queue-journey");
+    expect(
+      screen.getByTestId("queue-journey-materials").getAttribute("data-state"),
+    ).toBe("done");
+    expect(
+      screen.getByTestId("queue-journey-review").getAttribute("data-state"),
+    ).toBe("current");
+    expect(
+      screen.getByTestId("queue-journey-export").getAttribute("data-state"),
+    ).toBe("upcoming");
+  });
+
   it("行から状態と要約理由が読める (INV-158)", async () => {
     renderAppAt(submissionQueue("t1"), {
       handlers: {

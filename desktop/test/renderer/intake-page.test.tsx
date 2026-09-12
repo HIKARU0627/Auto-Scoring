@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 
 import { AppRoutes } from "../../src/renderer/core/app-routes.js";
 import {
@@ -327,6 +327,41 @@ describe("IntakePage invariants", () => {
     const list = screen.getByTestId("intake-failed-files-subject-a");
     expect(list.querySelectorAll("li")).toHaveLength(1);
     expect(list.textContent).toContain("01_answers.pdf");
+  });
+
+  it("Issue #450: a draft import names テスト設定 as the next step and opens it", async () => {
+    await openReview();
+    fireEvent.click(screen.getByTestId("intake-import"));
+    await screen.findByTestId("intake-next-step-heading");
+    expect(screen.getByTestId("intake-next-step-heading").textContent).toBe(
+      "次は、テスト設定で登録を完了します",
+    );
+
+    fireEvent.click(screen.getByTestId("intake-next-step-action"));
+    await waitFor(() => {
+      expect(screen.getByTestId("page-title").textContent).toBe("テスト設定");
+    });
+  });
+
+  it("Issue #450: a ready-test import names 答案キュー as the next step and opens it", async () => {
+    await openReview({
+      handlers: {
+        listTestRegistrations: async () => READY_TEST(),
+        startGrading: async () => undefined,
+      },
+    });
+    fireEvent.click(screen.getByTestId("intake-import"));
+    await screen.findByTestId("intake-next-step-heading");
+    expect(screen.getByTestId("intake-next-step-heading").textContent).toBe(
+      "次は、答案キューで採点を確認します",
+    );
+    // The per-group card offers the same destination for the imported group.
+    expect(screen.getByTestId("intake-open-queue-subject-a")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("intake-next-step-action"));
+    await waitFor(() => {
+      expect(screen.getByTestId("page-title").textContent).toBe("答案キュー");
+    });
   });
 
   it("Issue #346: the folder step shows a skeleton before data arrives", async () => {
