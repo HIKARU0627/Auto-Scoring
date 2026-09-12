@@ -445,6 +445,67 @@ Gdk-Message: Unable to load  from the cursor theme
 `flutter doctor` の `Unable to access driver information using 'eglinfo'` も
 同様で、`mesa-utils` が無いという情報表示にすぎない。ビルドにも実行にも要らない。
 
+### 5.4 e2e が `Sidecar did not become ready` で 60 秒タイムアウトする（Issue #425）
+
+**症状。** デスクトップセッション上で素直に
+
+```bash
+pnpm run test:desktop:e2e
+```
+
+を叩くと、サイドカーが ready にならず、各テストが 60 秒待たされた末にこう落ちる。
+
+```text
+Sidecar did not become ready within 60000ms; last status: {"kind":"starting"}
+```
+
+`last status` が `starting` のままなので、サイドカーのプロセスが即死したわけではない。
+**起動処理の途中で固まっている**。ログを見ても資格情報ストアの話は出てこない。
+
+**原因。** サイドカーの `create_credential_store()`
+（`backend/src/auto_scoring/adapters/credentials/store.py`）は `import keyring` を
+遅延して行う。ログイン中の Linux デスクトップでは `DBUS_SESSION_BUS_ADDRESS` が
+生きているため、`keyring` の既定バックエンドが D-Bus 越しに
+Secret Service を探しに行き、**応答が返らないまま起動が止まる**。
+アプリ／サイドカー自身は資格情報が無いことを想定済み（「この環境では OS の資格情報
+ストアを利用できません」と出るのが正常）だが、**その `keyring` の呼び出し自体が
+返ってこない**ので ready へ到達できない。
+
+`backend/` の遅延 import は正しい設計であり、変える対象ではない。直すのは e2e の
+起動環境のほうである。
+
+**対処。** `desktop/e2e/electron-launch.ts` の `isolatedSidecarLaunchEnv()` が、
+**Linux のときだけ** `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` を
+サイドカーへ渡す。null backend は「何も保存されていない」と即答するので、
+D-Bus を引かずに起動が進む。
+
+- **`process.platform === "linux"` に限定してある。** Windows は配布対象で、
+  本物の Credential Manager を引く必要がある。ここを外すと製品が壊れる。
+- **D-Bus のアドレスは落とさない。** 落とすとサイドカーだけでなく Electron 側の
+  Linux 連携まで巻き込む。`keyring` にだけ効く 1 変数で足りる（実測: この 1 変数だけで
+  タイムアウトが消え、テストは 6〜8 秒で通る）。
+- **e2e は資格情報を読まない・保存しない。** `desktop/e2e/` を
+  `credential` / `keyring` / `api key` で grep しても、資格情報の値や保存 API を
+  触るテストは 1 本も無い。設定画面を開く `sidecar-settings-providers.spec.ts` も
+  キーを打ち込まず、画面に表示される状態だけを検査する。したがって null backend に
+  しても e2e が確かめている性質は減らない。
+- 明示的に上書きしたいスペックのために、`extra` はこの Linux 既定より**後**に
+  適用される。
+
+**手動で同じ状況を再現・回避するには**（サイドカーを e2e 以外から直接起動する場合）:
+
+```bash
+env -u DBUS_SESSION_BUS_ADDRESS -u DBUS_STARTER_ADDRESS \
+    PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
+    pnpm run test:desktop:e2e
+```
+
+**変異検査。** `isolatedSidecarLaunchEnv()` から
+`...linuxKeyringEnv()` の 1 行を消して `pnpm --dir desktop exec playwright test
+e2e/shell-frame-height.spec.ts` を回すと、2 件とも
+`Sidecar did not become ready within 60000ms` で落ちる。戻すと 2 件とも通る。
+この env が効いていることは、**消すと e2e がタイムアウトする**という形で検査される。
+
 ## 6. CI について（提案、未実施）
 
 Linux ビルドの検証は CI に**入れていない**。判断材料だけ残す。
