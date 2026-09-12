@@ -1,7 +1,11 @@
 import { test, expect } from "@playwright/test";
 import type { ElectronApplication, JSHandle, Page } from "@playwright/test";
 
-import { closeElectronApp, launchElectronApp } from "./electron-launch";
+import {
+  clickClosingPage,
+  closeElectronApp,
+  launchElectronApp,
+} from "./electron-launch";
 import {
   ANSWER_SHEET_PDF,
   createDraftTest,
@@ -237,8 +241,11 @@ test("the close control closes the window (Issue #428)", async () => {
       timeout: 60_000,
     });
 
-    await page.getByTestId("window-close").click();
-    await expect.poll(() => page.isClosed(), { timeout: 30_000 }).toBe(true);
+    // Issue #466: the control closes the page it lives on, so Playwright's own
+    // click finalisation races the teardown. `clickClosingPage` drops that one
+    // reject and leaves the verdict here, on `page.isClosed()`. A no-op
+    // `closeWindow` handler never closes the page, so this poll still fails.
+    await clickClosingPage(page.getByTestId("window-close"), page);
   } finally {
     await closeElectronApp(app).catch(() => undefined);
   }

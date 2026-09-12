@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { _electron as electron } from "@playwright/test";
-import type { ElectronApplication, Page } from "@playwright/test";
+import { _electron as electron, expect } from "@playwright/test";
+import type { ElectronApplication, Locator, Page } from "@playwright/test";
 
 type ElectronLaunchOptions = NonNullable<Parameters<typeof electron.launch>[0]>;
 
@@ -128,6 +128,40 @@ export async function pollSidecarReady(page: Page): Promise<void> {
   throw new Error(
     `Sidecar did not become ready within ${SIDECAR_READY_POLL_TIMEOUT_MS}ms; last status: ${JSON.stringify(lastStatus)}`,
   );
+}
+
+/**
+ * Clicks a control whose own click closes the page it lives on -- the window
+ * close control and the material window's 閉じる are the two.
+ *
+ * Playwright finalises a click *after* it dispatches it. When the handler tears
+ * the page down first, that finalisation lands on a page that no longer exists
+ * and the click rejects with "Target page, context or browser has been closed"
+ * (Issue #466). The app behaves identically on every run -- only the race order
+ * differs -- so the reject says nothing about the button. The verdict stays on
+ * `page.isClosed()`, which is the property these tests own.
+ *
+ * The reject is dropped only when the page is already gone at the moment the
+ * click rejected. A no-op handler never closes the page, the click resolves
+ * normally, and the poll below fails -- swallowing is not "anything that
+ * throws", so a broken button cannot turn the test green. A missing, disabled
+ * or detached control rejects while the page is still open and is rethrown.
+ */
+export async function clickClosingPage(
+  target: Locator,
+  page: Page,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const rejection = await target.click({ timeout: timeoutMs }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  if (rejection !== undefined && !page.isClosed()) {
+    throw rejection;
+  }
+
+  await expect.poll(() => page.isClosed(), { timeout: timeoutMs }).toBe(true);
 }
 
 /** Waits for the Electron process to exit so app-data locks and ports are released. */

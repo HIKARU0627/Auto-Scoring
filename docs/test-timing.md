@@ -66,6 +66,36 @@ Issue #393（PR #400）は、負荷で赤くなる箇所を `findBy*` へ直し�
 `vi.advanceTimersByTime(...)` で仮想時刻を進めるもの。実時間を消費せず、debounce の
 境界を固定するためのものなので固定スリープではない。
 
+## 操作した対象が、その操作で消えるとき（e2e）
+
+「閉じる」ボタンや資料ウィンドウの「閉じる」のように、**click した対象がその click で
+自分の page を消す**コントロールがある。Playwright の `click()` は
+「actionability の確認 → dispatch → **後処理**」の順に進むため、dispatch で page が
+先に消えると、後処理が**もう無い page** に当たって
+`Target page, context or browser has been closed` で reject する。成功時も失敗時も
+アプリの振る舞いは同じで、違うのは「閉じるのが後処理より速いかどうか」だけ
+（Issue #466。Issue #417 / #439 / #446 と同じく**性質ではなくランナーの速さを測っている**）。
+この reject を放置すると、同じ click が負荷次第で赤くなる。
+
+対処は **reject を握りつぶすのではなく、責務を分ける**:
+
+- 判定は `page.isClosed()`（操作した page が閉じたか）だけに任せる。
+- click の reject は、**その時点で `page.isClosed()` が真のときだけ**捨てる。
+  page がまだ開いているのに reject したなら、それは対象の不在・無効・detach などの
+  本物の失敗なので rethrow する。
+- 共通実装は `desktop/e2e/electron-launch.ts` の `clickClosingPage(target, page)`。
+  window-controls の「閉じる」と material-window の「閉じる」が使う。
+
+**「全部 `catch` で飲む」は禁止。** 飲むと**ボタンが壊れていても緑になる**。この形を
+直したら、`desktop/src/` の閉じるハンドラ（`closeWindow` の IPC、資料ウィンドウの
+`window.close()`）を一時的に no-op にする変異を入れ、**直したテストが確かに赤くなる**
+ことを確かめる（`page.isClosed()` の poll がタイムアウトする）。これを示せない修正は
+「落ちなくなっただけ」で検査を失っている。
+
+`mainWindow.close()` のような **`page.close()` 自体はこの形ではない**。Playwright が
+閉じる側なので後処理の競合が無く、そのまま `await` してよい（material-window の
+「main window を閉じると material window も閉じる」がこれ）。
+
 ## 実時間の `wait` / `join` にアサーションを掛けない
 
 実時間（`Date.now()` の差、`join` の所要時間など）をそのまま期待値にしない。
@@ -171,5 +201,6 @@ e2e が複数入る選択は 11 ファイル以上だった（`backend/src/auto_
 ## 関連
 
 - Issue #426（本 Issue）、#393（フレーク調査）、#417（backend の実時間待ち）、
-  #435（内側のループの入口）
-- `desktop/test/renderer/setup.ts`、`desktop/vitest.config.mts`、`desktop/playwright.config.ts`
+  #435（内側のループの入口）、#466（操作が対象を消す e2e の待ち方）
+- `desktop/test/renderer/setup.ts`、`desktop/vitest.config.mts`、`desktop/playwright.config.ts`、
+  `desktop/e2e/electron-launch.ts`
