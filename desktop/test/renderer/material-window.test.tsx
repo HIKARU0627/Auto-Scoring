@@ -79,7 +79,7 @@ function createMaterialClient(options: MaterialClientOptions): SidecarClient {
         };
       }
       if (path === "/tests/{test_id}/materials/{material_id}/pages") {
-        const materialId = path_params.material_id ?? "";
+        const materialId = path_params["material_id"] ?? "";
         if ((options.unsupportedIds ?? []).includes(materialId)) {
           return {
             data: undefined,
