@@ -1414,6 +1414,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/tests/{test_id}/materials/{material_id}/pages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Material Pages
+     * @description Page count, displayed size and rotation of one registered material, for paging through it in the material window. Only PDF materials have pages; a Word/Excel material answers 415. The geometry is not a basis for coordinates here -- the material viewer has no annotations -- but it is carried for layout.
+     */
+    get: operations["list_material_pages_tests__test_id__materials__material_id__pages_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/tests/{test_id}/materials/{material_id}/pages/{page_index}/image": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Material Page Image
+     * @description One page of a registered material, rasterized by the same pdfium as the answer pages. Only PDF materials can be rasterized; a Word/Excel material answers 415 instead of being served as raw bytes (`docs/sidecar-api.md` §7.5).
+     */
+    get: operations["get_material_page_image_tests__test_id__materials__material_id__pages__page_index__image_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/tests/{test_id}/profile": {
     parameters: {
       query?: never;
@@ -5446,6 +5486,84 @@ export interface operations {
         content: {
           "application/json": components["schemas"]["TestMaterialResponse"][];
         };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_material_pages_tests__test_id__materials__material_id__pages_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        test_id: string;
+        material_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DocumentPagesResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_material_page_image_tests__test_id__materials__material_id__pages__page_index__image_get: {
+    parameters: {
+      query?: {
+        /** @description Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one. */
+        scale?: 1 | 2 | 3.5;
+      };
+      header?: never;
+      path: {
+        test_id: string;
+        material_id: string;
+        /** @description 0-based page index. */
+        page_index: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The page, rasterized at the requested scale. */
+      200: {
+        headers: {
+          /** @description Identifies (document contents, page, scale). Send it back as If-None-Match to get a 304 instead of a re-render. */
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "image/png": string;
+        };
+      };
+      /** @description The client's If-None-Match matches; the image is unchanged. */
+      304: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
       };
       /** @description Validation Error */
       422: {

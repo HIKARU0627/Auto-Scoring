@@ -99,8 +99,12 @@ test("答案画像はレビューの列からはみ出さない (Issue #354)", a
         const surface = document.querySelector(
           '[data-testid="review-page-surface"]',
         );
+        // Issue #401 made the page region scroll on both axes, so it is
+        // located by its test id rather than the old `overflow-x-auto` class.
         const scroller =
-          surface === null ? null : surface.closest(".overflow-x-auto");
+          surface === null
+            ? null
+            : surface.closest('[data-testid="review-page-region"]');
         if (surface === null || scroller === null) {
           return null;
         }

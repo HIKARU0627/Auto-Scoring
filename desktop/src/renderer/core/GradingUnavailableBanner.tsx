@@ -1,10 +1,9 @@
 import type { JSX, ReactNode } from "react";
 
-import type { components } from "../api/generated/schema.js";
+import type { GradingAvailability } from "./grading-availability.js";
 import { MaterialSymbolIcon } from "./MaterialSymbolIcon.js";
 
-export type GradingAvailability =
-  components["schemas"]["GradingAvailabilityResponse"];
+export type { GradingAvailability };
 
 /**
  * 「この端末では AI 採点が使えない」を全画面の上に出しっぱなしにする帯
@@ -16,6 +15,11 @@ export type GradingAvailability =
  * child unchanged. Turning "no answer" into "this machine cannot grade" is the
  * mistake this control exists to prevent: one failed request would otherwise
  * become a configuration accusation.
+ *
+ * Issue #398 mounts it at the router top (`AppShell`), above every screen. The
+ * band stacks over its child rather than forcing the window height: the shell
+ * frame is deliberately content-height (#375 item 4), so a `min-h-screen` root
+ * would reintroduce the stretching that change removed.
  */
 export function GradingUnavailableBanner({
   availability,
@@ -28,7 +32,7 @@ export function GradingUnavailableBanner({
     return <>{children}</>;
   }
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex h-dvh flex-col">
       <div
         data-testid="grading-unavailable-banner"
         role="status"
@@ -59,7 +63,7 @@ export function GradingUnavailableBanner({
           ) : null}
         </div>
       </div>
-      <div className="min-h-0 flex-1">{children}</div>
+      {children}
     </div>
   );
 }

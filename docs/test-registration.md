@@ -71,6 +71,23 @@ draft/confirmedパターン）、[#26](https://github.com/HIKARU0627/Auto-Scorin
 - 名前は再利用の唯一の手掛かりであり、フォルダ側にそれ以外の永続的な識別子は無い。
   テスト名を変更すると次回は別テストとして作られる。
 
+### 取り込んだ資料を別ウィンドウで見る（Issue #415）
+
+登録済みテストの資料は `GET /tests/{id}/materials` が役割つき
+（`student_answer` / `grading_criteria` / `annotation_resource` / `annotation_sample` /
+`reference`）で返す。画面はこれを一覧し、選んだ資料の中身を**別ウィンドウ**で表示する。
+
+- 入口は**テスト設定と添削レビューの両方**（各画面の「資料を開く」）。
+- ウィンドウは**メインプロセスが IPC で開く**。renderer の `window.open` は使わず、
+  `desktop/src/main/main.ts` の `setWindowOpenHandler` の拒否はそのまま残す。
+- **1 枚を使い回す。** 別のテスト・別の資料を開くと中身を差し替え、枚数は増やさない。
+- 中身は `page_image_router` と同じページ画像（PDF のみ）。Word/Excel はサーバが 415 を
+  返し、画面は役割とファイル名を示して「アプリ内でプレビューできない」と説明する
+  （黙って空にしない）。生ファイルは返さない（`docs/sidecar-api.md` §7.6）。
+- 別ウィンドウを閉じても採点操作は続く。主ウィンドウを閉じると別ウィンドウも閉じる。
+- ウィンドウは主ウィンドウと同じ preload・同じ CSP で、`contextIsolation` /
+  `nodeIntegration` / `sandbox` の 3 点を満たす（`desktop/test/architecture.test.ts`）。
+
 ### 失敗理由を捨てない（Issue #306）
 
 `createSubmission` は HTTP `status` と `detail` を保持した `SubmissionIntakeError` を

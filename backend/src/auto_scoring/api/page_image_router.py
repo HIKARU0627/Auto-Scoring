@@ -16,6 +16,13 @@ Endpoints:
 * ``GET /submissions/{submission_id}/pages``
 * ``GET /tests/{test_id}/answer-layout/pages``
   -- ``page_count`` plus each page's displayed size and rotation.
+* ``GET /tests/{test_id}/materials/{material_id}/pages``
+* ``GET /tests/{test_id}/materials/{material_id}/pages/{page_index}/image``
+  -- the same for a registered material (Issue #415). Only PDF materials can
+  be rasterized; a Word/Excel material is refused with 415 rather than served
+  as bytes, for the reason §7.5 gives: the renderer never receives a raw
+  document. The material list itself is `GET /tests/{test_id}/materials`
+  (`api.test_registration_router`), which returns metadata only.
 
 ## The image's own pixel size is the only basis for a normalized coordinate
 
@@ -71,6 +78,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
+from auto_scoring.domain.material_intake import MaterialIntakeError, material_extension
 from auto_scoring.domain.pdf_engine import PdfEngine
 from auto_scoring.domain.pdf_geometry import PageGeometry
 
@@ -203,6 +211,17 @@ _ANSWER_LAYOUT_PAGE_IMAGE_DESCRIPTION = (
     "One page of the test's answer sheet, rasterized by the same pdfium that performs the "
     "coordinate transform (PoC 6, approach B)." + _COORDINATE_RULE
 )
+_MATERIAL_PAGES_DESCRIPTION = (
+    "Page count, displayed size and rotation of one registered material, for paging "
+    "through it in the material window. Only PDF materials have pages; a Word/Excel "
+    "material answers 415. The geometry is not a basis for coordinates here -- the "
+    "material viewer has no annotations -- but it is carried for layout."
+)
+_MATERIAL_PAGE_IMAGE_DESCRIPTION = (
+    "One page of a registered material, rasterized by the same pdfium as the answer "
+    "pages. Only PDF materials can be rasterized; a Word/Excel material answers 415 "
+    "instead of being served as raw bytes (`docs/sidecar-api.md` §7.5)."
+)
 
 _IMAGE_RESPONSES: dict[int | str, dict[str, Any]] = {
     200: {
@@ -291,6 +310,53 @@ def build_page_image_router(
                 status.HTTP_404_NOT_FOUND,
                 detail=f"test {test_id!r} has no answer sheet uploaded yet",
             )
+        return path
+
+    def _material_pdf_or_404(uow: SqlAlchemyUnitOfWork, test_id: str, material_id: str) -> Path:
+        """The stored file of one registered material, or a 4xx naming why not.
+
+        The row is looked up under its test, so a material id borrowed from
+        another test cannot be opened through this one. The path comes from
+        `TestMaterial.stored_path` through `LocalFileStore.resolve_stored_path`,
+        the same root-escape-checked resolution every other stored path uses.
+
+        A material that is **not a PDF** is refused with 415 before its bytes
+        are touched: the viewer can only show rasterized pages, and Issue #207
+        removed raw document bytes from the renderer's reach -- so serving the
+        file would be a second, undesigned way for a document to leave the
+        sidecar. The refusal is explicit rather than an empty page, so the
+        window can say the format has no in-app preview.
+        """
+        if uow.tests.get(test_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"test {test_id!r} not found")
+        material = next(
+            (
+                candidate
+                for candidate in uow.test_materials.list_for_test(test_id)
+                if candidate.id == material_id
+            ),
+            None,
+        )
+        if material is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                detail=f"material {material_id!r} not found for test {test_id!r}",
+            )
+        try:
+            extension = material_extension(material.stored_path.rsplit("/", 1)[-1])
+        except MaterialIntakeError as exc:
+            raise HTTPException(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="この資料は形式を判別できないためプレビューできません",
+            ) from exc
+        if extension != "pdf":
+            raise HTTPException(
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="この形式の資料はアプリ内でプレビューできません",
+            )
+        path = store.resolve_stored_path(material.stored_path)
+        if not path.exists():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="material file not found on disk")
         return path
 
     def _pages(source: Path) -> DocumentPagesResponse:
@@ -384,5 +450,35 @@ def build_page_image_router(
         uow: SqlAlchemyUnitOfWork = uow_dependency,
     ) -> Response:
         return _page_image(request, _answer_layout_pdf_or_404(uow, test_id), page_index, scale)
+
+    @router.get(
+        "/tests/{test_id}/materials/{material_id}/pages",
+        response_model=DocumentPagesResponse,
+        description=_MATERIAL_PAGES_DESCRIPTION,
+    )
+    def list_material_pages(
+        test_id: str,
+        material_id: str,
+        uow: SqlAlchemyUnitOfWork = uow_dependency,
+    ) -> DocumentPagesResponse:
+        return _pages(_material_pdf_or_404(uow, test_id, material_id))
+
+    @router.get(
+        "/tests/{test_id}/materials/{material_id}/pages/{page_index}/image",
+        response_class=Response,
+        responses=_IMAGE_RESPONSES,
+        description=_MATERIAL_PAGE_IMAGE_DESCRIPTION,
+    )
+    def get_material_page_image(
+        request: Request,
+        test_id: str,
+        material_id: str,
+        page_index: int = PathParam(ge=0, description="0-based page index."),
+        scale: PageImageScale = DEFAULT_SCALE,
+        uow: SqlAlchemyUnitOfWork = uow_dependency,
+    ) -> Response:
+        return _page_image(
+            request, _material_pdf_or_404(uow, test_id, material_id), page_index, scale
+        )
 
     return router
