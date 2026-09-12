@@ -1,6 +1,8 @@
+import { ArrowLeft, Home } from "lucide-react";
 import type { JSX } from "react";
 
 import { AppRoutes } from "../core/app-routes.js";
+import { secondaryButtonClass } from "../features/ui/screen-ui.js";
 import { useRouter } from "./router.js";
 
 export const BACK_OR_HOME_BUTTON_TEST_ID = "app-back-or-home";
@@ -10,6 +12,17 @@ export const BACK_OR_HOME_BUTTON_TEST_ID = "app-back-or-home";
  *
  * Pops one frame when the stack allows it; otherwise replaces to home so an
  * empty stack never leaves the user stranded.
+ *
+ * Issue #447: the glyphs were raw characters (`←` / `⌂`). This app ships no
+ * icon font and CSP `default-src 'none'` blocks loading one (Issue #392), so a
+ * character's weight, size, and baseline came from whatever font fell through
+ * -- different on every machine, and visibly off against the secondary
+ * controls around it. The control now draws a bundled `lucide-react` SVG like
+ * the rest of the app and borrows the shared secondary button treatment
+ * (`secondaryButtonClass`), so hover / active / focus / disabled match.
+ *
+ * The accessible name stays on the button (`aria-label` + `title`), not the
+ * icon: colour or shape alone never carries the state.
  */
 export function BackOrHomeButton(): JSX.Element {
   const { canPop, pop, replace } = useRouter();
@@ -21,7 +34,7 @@ export function BackOrHomeButton(): JSX.Element {
       data-testid={BACK_OR_HOME_BUTTON_TEST_ID}
       aria-label={label}
       title={label}
-      className="rounded-md border border-outline px-sm py-xs text-ui-label text-on-surface"
+      className={secondaryButtonClass()}
       onClick={() => {
         if (canPop) {
           pop();
@@ -30,7 +43,11 @@ export function BackOrHomeButton(): JSX.Element {
         replace(AppRoutes.home);
       }}
     >
-      {canPop ? "←" : "⌂"}
+      {canPop ? (
+        <ArrowLeft aria-hidden className="size-4" />
+      ) : (
+        <Home aria-hidden className="size-4" />
+      )}
     </button>
   );
 }

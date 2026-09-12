@@ -1540,6 +1540,7 @@ Electron / 新スタックの採用およびアーキテクチャ設計により
 | INV-E030 | ドロップダウン | `<select>` は 1 箇所の `select-themed` で開いたリストまでテーマ描画する              | `desktop/test/select-theme.test.ts`                     | draws the opened list as a page picker, not the OS list                   | PR #394        |
 | INV-E031 | アイコン       | アイコンは同梱 SVG で描き、合字名を可視テキストにしない                              | `desktop/test/renderer/material-symbol-icon.test.tsx`   | never renders a ligature name as visible text in any of the four usages   | PR #396        |
 | INV-E032 | アプリシェル   | 本文列だけがスクロールし、サイドバーは固定されて一緒に流れない                       | `desktop/test/renderer/sidebar-fixed.test.tsx`          | keeps the sidebar fixed while the body column scrolls                     | Issue #427     |
+| INV-E033 | ナビゲーション | 見た目を生の文字に頼らず、戻る/ホーム出口は同梱 SVG で描く（#392 と地続き）          | `desktop/test/renderer/back-or-home-button.test.tsx`    | draws the escape control with a lucide SVG, never a raw glyph             | Issue #447     |
 
 ### 19.2 区分別の集計
 
@@ -1553,4 +1554,25 @@ Electron / 新スタックの採用およびアーキテクチャ設計により
 | ドロップダウン |      1 |
 | アイコン       |      1 |
 | アプリシェル   |      1 |
-| **合計**       | **32** |
+| ナビゲーション |      1 |
+| **合計**       | **33** |
+
+### 19.3 戻る/ホーム出口の見た目（Issue #447）
+
+`INV-E033` の実機スクリーンショット。1536x1024、空のテストデータ。変更前は生の `←` / `⌂` が
+アウトライン枠の中にあり、周りの二次ボタンと太さ・大きさが揃っていなかった。変更後は
+`lucide-react` の `ArrowLeft` / `Home` を、共有二次ボタン `secondaryButtonClass` の上に描く。
+
+| canPop                | 変更前                                                     | 変更後                                                    |
+| --------------------- | ---------------------------------------------------------- | --------------------------------------------------------- |
+| 真（`←`、push 済み）  | ![変更前](./back-button/escape-arrow-before-1536x1024.png) | ![変更後](./back-button/escape-arrow-after-1536x1024.png) |
+| 偽（`⌂`、空スタック） | ![変更前](./back-button/escape-home-before-1536x1024.png)  | ![変更後](./back-button/escape-home-after-1536x1024.png)  |
+
+テスト一覧（`canPop` 真）は
+[`escape-arrow-test-list-after-1536x1024.png`](./back-button/escape-arrow-test-list-after-1536x1024.png)。
+
+**撮影方法と限界:** `canPop` が真の画面は実機の導線（サイドバー）でそのまま撮れる。
+`canPop` が偽（空スタックで開いた covered ルート）は実機では到達できない（ルータのスタックは
+常にホーム始まりで、covered ルートを空スタックで開く導線が無い）。その 1 枚だけは Issue #392 と
+同じく一時ハーネス（実 `ShellScreen` を実 CSS で Electron に描画。非コミット）で撮った。
+恒久的な固定は `desktop/test/renderer/back-or-home-button.test.tsx` が両状態に対して行う。
