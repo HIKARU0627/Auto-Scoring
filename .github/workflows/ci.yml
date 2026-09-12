@@ -375,6 +375,10 @@ jobs:
   # dart, and `desktop/` is TypeScript + electron-builder.
   package-electron:
     name: Package (Electron)
+    # Issue #433 mutation check 2: force this job to `skipped`, so a PR run
+    # must still turn `Package (Windows) alarm` red. `skipped` must not be
+    # treated as success. Removed before merge.
+    if: ${{ false }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
