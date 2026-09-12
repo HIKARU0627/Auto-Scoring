@@ -251,5 +251,3 @@ lib/src/model/validation_error.dart
 lib/src/model/verify_api_key_response.dart
 lib/src/serializers.dart
 pubspec.yaml
-test/scoring_targets_request_test.dart
-test/scoring_targets_response_test.dart
