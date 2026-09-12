@@ -43,16 +43,19 @@ export function HomeDonutChart({
     <div
       data-testid="home-phase-chart"
       data-padding-angle={paddingAngle}
-      className="flex min-w-0 flex-col gap-md max-lg:flex-row max-lg:items-center"
+      className="flex min-w-0 flex-row items-center gap-lg"
     >
-      {/* Issue 371 item 10: in the 700px single column the card is ~548px and
-          the 150px donut left ~200px dead on each side. Below `lg` the legend
-          moves beside the ring and takes the spare width; the ring geometry
-          itself is the mock's 150/23 (radii 75/52) at every width. */}
+      {/* Issue 371 item 10 put the legend beside the ring below `lg`. Issue 375
+          items 11/14: at `lg` the card is half the body width, so stacking the
+          legend under the ring left ~164px bare on each side and stretched the
+          card to 367px. The ring and legend now share the row at every width,
+          and the ring box drops from 192px to 160px, which also caps the
+          progress card (and its plot) beside it. The ring geometry stays the
+          mock's 150/23 (radii 75/52). */}
       <div
         role="img"
         aria-label={`テストの進捗。${summary}。合計${total}テスト。`}
-        className="relative h-48 w-full max-lg:w-44 max-lg:shrink-0"
+        className="relative h-40 w-44 shrink-0"
       >
         <ResponsiveContainer width="100%" height="100%">
           <PieChart accessibilityLayer={false}>
@@ -86,7 +89,7 @@ export function HomeDonutChart({
       </div>
       <ul
         data-testid="home-phase-legend"
-        className="flex min-w-0 flex-col gap-sm max-lg:flex-1"
+        className="flex min-w-0 flex-1 flex-col gap-sm"
       >
         {slices.map((slice) => (
           <li

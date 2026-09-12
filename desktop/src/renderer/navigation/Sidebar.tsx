@@ -35,10 +35,13 @@ export function Sidebar(): JSX.Element {
       className="sticky top-xl flex h-[calc(100vh_-_var(--spacing-xl)*2)] w-52 shrink-0 flex-col rounded-xl bg-surface-dim max-[900px]:w-16"
     >
       <div className="px-md pt-xl pb-xl max-[900px]:px-xs max-[900px]:pt-md max-[900px]:pb-sm">
-        {/* Issue #371 item 6: the mock's brand is a 15px wordmark; the 22px
-            title-large competed with the 28px ホーム page heading. 16px
-            (title-medium) lands in the measured 15-17px. */}
-        <p className="text-[length:var(--font-size-title-medium)] font-semibold leading-ui text-on-surface max-[900px]:hidden">
+        {/* Issue #371 item 6 dropped the 22px wordmark to 16px to stop it
+            competing with the 28px ホーム heading. Issue #375 item 9: the mock's
+            brand glyph is 15px (ascender-to-baseline) and the 16px font rendered
+            only 12px, 20% under the mock. With the page heading back up to 48px
+            (Issue #375 item 8) the wordmark can return to title-large (22px),
+            whose glyph sits in the measured 15-17px band. */}
+        <p className="text-[length:var(--font-size-title-large)] font-semibold leading-ui text-on-surface max-[900px]:hidden">
           {SIDEBAR_PRODUCT_NAME}
         </p>
         <p className="mt-xs text-[length:var(--font-size-label-medium)] leading-ui text-sidebar-subtitle max-[900px]:hidden">

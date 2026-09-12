@@ -52,6 +52,8 @@
   --color-chart-grid: var(--color-chart-grid);
   --color-chart-axis: var(--color-chart-axis);
   --color-chart-divider: var(--color-chart-divider);
+  --color-chart-label-secondary: var(--color-chart-label-secondary);
+  --color-phase-preparing: var(--color-phase-preparing);
   --color-annotation-mark: var(--color-annotation-mark);
   --color-disabled-button-outline: var(--color-disabled-button-outline);
   --color-disabled-button-label: var(--color-disabled-button-label);
@@ -149,6 +151,11 @@
      the full cell height a border would take. */
   .h-kpi-rule {
     height: var(--layout-kpi-rule-height);
+  }
+
+  /* Issue #375 item 14: the mock's 95px daily-intake plot. */
+  .min-h-bar-plot {
+    min-height: var(--layout-bar-plot-height);
   }
 }
 

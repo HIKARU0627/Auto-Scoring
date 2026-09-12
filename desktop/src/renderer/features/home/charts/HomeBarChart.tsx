@@ -36,6 +36,9 @@ function DailyBarShape({
   // confirmed answers at the bottom, the still-open ones above. Both come from
   // `submission.state`, so the split is measured, not invented.
   const openHeight = count > 0 ? (height * openCount) / count : 0;
+  // Issue 375 item 13: the mock's bar tops are a flat, constant-width line. The
+  // 4px corner radius was laid out at fractional x positions, so the top edge
+  // spread asymmetrically over six rows. Draw the bars square instead.
   return (
     <g>
       <rect
@@ -46,7 +49,7 @@ function DailyBarShape({
         y={y}
         width={width}
         height={height}
-        rx={4}
+        rx={0}
         fill="var(--color-primary)"
       />
       {openCount > 0 ? (
@@ -56,7 +59,7 @@ function DailyBarShape({
           y={y}
           width={width}
           height={openHeight}
-          rx={4}
+          rx={0}
           fill="var(--color-outline-variant)"
         />
       ) : null}
@@ -83,15 +86,15 @@ export function HomeBarChart({
       data-testid="home-daily-chart"
       role="img"
       aria-label={`直近${points.length}日の答案取込数。合計${total}件、うち確認済み${doneTotal}件。`}
-      className="flex h-full min-h-36 min-w-0 flex-col"
+      className="flex h-full min-w-0 flex-col"
       style={{ margin: 0 }}
     >
       {/* Issue 366 item 5: the card stretches to the donut card beside it, so
-          the plot takes the leftover height instead of leaving it as dead
-          space under the axis. `min-h-36` keeps the plot (Issue 360's ~110px
-          plot plus its labels) even before a stretch and in jsdom, where
-          nothing is measured. */}
-      <div data-testid="home-daily-plot" className="min-h-0 flex-1">
+          the plot takes the leftover height instead of leaving it as dead space
+          under the axis. Issue 375 items 14: the plot is floored at the mock's
+          95px, so it no longer balloons to 136px when stretched and still draws
+          when the single-column layout leaves the card at its content height. */}
+      <div data-testid="home-daily-plot" className="min-h-bar-plot flex-1">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={[...points]}
@@ -128,7 +131,7 @@ export function HomeBarChart({
               tickLine={false}
               axisLine={false}
               tick={{
-                fill: "var(--color-on-surface-muted)",
+                fill: "var(--color-chart-label-secondary)",
                 fontSize: 12,
               }}
             />

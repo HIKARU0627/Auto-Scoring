@@ -92,9 +92,9 @@ describe("home layout (Issue #360)", () => {
     expect(progressCell).not.toBe(donutCell);
     expect(progressCell?.parentElement).toBe(donutCell?.parentElement);
     const grid = progressCell?.parentElement;
-    expect(grid?.className).toContain("lg:grid-cols-5");
-    expect(progressCell?.className).toContain("lg:col-span-3");
-    expect(donutCell?.className).toContain("lg:col-span-2");
+    // Issue 375 item 12: an even split narrows the progress card enough that
+    // its four KPI columns approach the mock's 128px pitch (was 3:2).
+    expect(grid?.className).toContain("lg:grid-cols-2");
   });
 
   it("keeps the 進捗 cell on one row: link, bar and % share a parent", async () => {

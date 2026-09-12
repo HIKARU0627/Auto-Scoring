@@ -100,6 +100,13 @@
   --color-chart-grid: #202537;
   --color-chart-axis: #31384e;
   --color-chart-divider: #2a3247;
+  /* Issue #375 item 16: the mock draws the y-axis label a step darker than the
+     x-axis (132,149,184 vs the x-axis's 158,178,211 = --color-on-surface-muted).
+     Issue #375 item 15: the 準備中 donut sector / legend dot measured (95,104,128)
+     and was sharing --color-outline with the active states, so it read as
+     enabled; this sinks it. */
+  --color-chart-label-secondary: #8495b8;
+  --color-phase-preparing: #5f6880;
 
   /* Annotation ink is not a UI colour: it writes on the (always white) PDF. */
   --color-annotation-mark: #c62828;
@@ -176,6 +183,10 @@
   /* Issue #371 item 8: the mock's KPI column rule is 50px, the number block's
      height, not the 82px full cell the border used to fill. */
   --layout-kpi-rule-height: 50px;
+  /* Issue #375 item 14: the mock's daily-intake plot is 95px tall; the build
+     drew it at 136px. This floors the plot so the chart still draws when the
+     progress card is not stretched by a sibling (the single-column widths). */
+  --layout-bar-plot-height: 95px;
   /* React Flow viewport for the question dependency graph. */
   --layout-dag-flow-height: 272px;
   --layout-activity-bar-height: 2px;
@@ -244,6 +255,11 @@
   --color-chart-grid: #d3d8e6;
   --color-chart-axis: #aab3c6;
   --color-chart-divider: #d9dce7;
+
+  /* Issue #375: same roles re-lit. Both step back from the x-axis's
+     --color-on-surface-muted so the hierarchy keeps the dark theme's order. */
+  --color-chart-label-secondary: #6b7488;
+  --color-phase-preparing: #6b7488;
 
   --color-annotation-mark: #c62828;
 

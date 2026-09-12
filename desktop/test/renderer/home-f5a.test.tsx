@@ -79,7 +79,19 @@ describe("home F5A: secondary text and headings (Issue #371 items 2-3)", () => {
       container.querySelectorAll(".recharts-cartesian-axis-tick-value"),
     );
     expect(ticks.length).toBeGreaterThan(0);
-    for (const tick of ticks) {
+    // Issue 375 item 16: the y-axis label is a step darker than the x-axis.
+    // The x-axis keeps --color-on-surface-muted; the y-axis gets its own
+    // measured token so the two axes stop reading at the same weight.
+    const yTicks = ticks.filter((tick) => tick.closest('[class*="yAxis"]'));
+    const xTicks = ticks.filter((tick) => tick.closest('[class*="xAxis"]'));
+    expect(yTicks.length).toBeGreaterThan(0);
+    expect(xTicks.length).toBeGreaterThan(0);
+    for (const tick of yTicks) {
+      expect(tick.getAttribute("fill")).toBe(
+        "var(--color-chart-label-secondary)",
+      );
+    }
+    for (const tick of xTicks) {
       expect(tick.getAttribute("fill")).toBe("var(--color-on-surface-muted)");
     }
   });
@@ -131,17 +143,19 @@ describe("home F5A: one glyph per destination (Issue #371 item 5)", () => {
   });
 });
 
-describe("home F5A: brand size (Issue #371 item 6)", () => {
-  it("drops the wordmark to the mock's 15-17px band", async () => {
+describe("home F5A: brand size (Issue #371 item 6, corrected by #375 item 9)", () => {
+  it("keeps the wordmark in the mock's 15-17px glyph band via title-large", async () => {
     await renderHome();
     const brand = within(screen.getByTestId(SIDEBAR_TEST_ID)).getByText(
       SIDEBAR_PRODUCT_NAME,
     );
+    // Issue 375 item 9: 16px rendered a 12px glyph, 20% under the mock's 15px.
+    // title-large (22px) lands back in the measured 15-17px band.
     expect(brand.className).toContain(
-      "text-[length:var(--font-size-title-medium)]",
+      "text-[length:var(--font-size-title-large)]",
     );
     expect(brand.className).not.toContain(
-      "text-[length:var(--font-size-title-large)]",
+      "text-[length:var(--font-size-title-medium)]",
     );
   });
 });
@@ -194,21 +208,36 @@ describe("home F5A: donut card header parity (Issue #371 item 9)", () => {
   });
 });
 
-describe("home F5A: narrow-width donut and quick actions (Issue #371 items 10-11)", () => {
-  it("moves the donut legend beside the ring below lg", async () => {
+describe("home F5A: donut and quick actions (Issue #371 items 10-11, #375 items 11/14/18)", () => {
+  it("keeps the donut legend beside the ring at every width", async () => {
     await renderHome();
     const chart = screen.getByTestId("home-phase-chart");
-    expect(chart.className).toContain("max-lg:flex-row");
-    expect(chart.className).toContain("max-lg:items-center");
+    // Issue 375 item 11: at `lg` the card is half the body width, so the
+    // legend moves beside the ring there too instead of stacking and leaving
+    // bare space on both sides.
+    expect(chart.className).toContain("flex-row");
+    expect(chart.className).toContain("items-center");
+    expect(chart.className).not.toContain("flex-col");
     expect(screen.getByTestId("home-phase-legend").className).toContain(
-      "max-lg:flex-1",
+      "flex-1",
     );
   });
 
-  it("folds the quick-action rows into two columns while the card is wide", async () => {
+  it("caps the ring box at the 160px that bounds the daily plot", async () => {
+    await renderHome();
+    // Issue 375 item 14: the 192px ring box stretched the shared row and the
+    // bar plot to 136px; `h-40` restores the mock's ~95px plot.
+    const ring = screen.getByTestId("home-phase-chart").firstElementChild;
+    expect(ring?.className).toContain("h-40");
+    expect(ring?.className).not.toContain("h-48");
+  });
+
+  it("keeps the quick-action rows in one column at every width", async () => {
     await renderHome();
     const list = screen.getByTestId("home-quick-actions").querySelector("div");
-    expect(list?.className).toContain("sm:grid-cols-2");
-    expect(list?.className).toContain("lg:grid-cols-1");
+    // Issue 375 items 3/18: the single-column rail makes the 700px layout
+    // leave no empty cell and ellipsize no row unevenly.
+    expect(list?.className).toContain("grid-cols-1");
+    expect(list?.className).not.toContain("sm:grid-cols-2");
   });
 });

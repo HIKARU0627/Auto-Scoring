@@ -25,6 +25,9 @@ const CHART_TOKENS = [
   "--color-chart-grid",
   "--color-chart-axis",
   "--color-chart-divider",
+  // Issue #375 items 15-16: the y-axis label step and the sunk 準備中 mark.
+  "--color-chart-label-secondary",
+  "--color-phase-preparing",
 ] as const;
 
 describe("home chart tokens (Issue #366)", () => {

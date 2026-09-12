@@ -7,6 +7,7 @@ import {
 } from "../../core/submission-work-bucket.js";
 import { HomeBarChart } from "./charts/HomeBarChart.js";
 import {
+  KPI_NUMBER_INDENT_STYLE,
   KPI_VALUE_STYLE,
   NUMERIC_STYLE,
   PANEL_TITLE_STYLE,
@@ -71,7 +72,11 @@ export function HomeProgressPanel({
             <dd
               data-testid={`home-bucket-${bucket}`}
               className="font-semibold text-on-surface"
-              style={{ ...NUMERIC_STYLE, ...KPI_VALUE_STYLE }}
+              style={{
+                ...NUMERIC_STYLE,
+                ...KPI_VALUE_STYLE,
+                ...KPI_NUMBER_INDENT_STYLE,
+              }}
             >
               {dashboard.count(bucket)}
             </dd>

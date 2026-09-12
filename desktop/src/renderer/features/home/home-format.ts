@@ -41,19 +41,16 @@ export const STATUS_PILL_STYLE: CSSProperties = {
 };
 
 /**
- * Recent-tests column widths (Issue 372, parent Issue 333). The mock's five
- * content columns are near-even; before this the full-width table kept the old
- * content-column split (`w-1/6` / `w-16` / `w-1/3` / `w-20` / `w-10`) and left
- * ~380px of empty 進捗 cell between the progress content and 最終更新. The
- * percentages below add to 100 and give 状態 / 進捗 / 最終更新 comparable
- * shares, while 答案数 stays narrow because its values are short. `open` holds
- * only the row chevron.
+ * Recent-tests column widths (Issue #372, parent Issue 333; Issue #375 items
+ * 2/17). The widths are percentages because Tailwind has no such fraction. The
+ * mock's measured split is 21/23/11/22/16/7, and the old build kept that shape
+ * while the table spanned the full page: that left 状態 as the second
+ * widest column (272px) for a badge plus one "取込済み N件" line, and pushed the
+ * 答案数↔進捗 gap to ~2.5x the 進捗↔最終更新 gap.
  *
- * The widths are percentages (not the `w-1/3`-style utilities) because the
- * mock's measured split is 21/23/11/22/16/7 and Tailwind has no such fraction.
- * `TEST_NAME_STYLE` is gone: the name cell ellipsizes against the column width
- * instead of a fixed 9rem, which is what left 380px unused while the name was
- * still cut (Issue 372 §2).
+ * Issue #375 widens テスト名 (the column that should absorb long names), narrows
+ * 状態 to a badge-sized share, and brings 答案数 / 進捗 within a 1.5:1 gap ratio
+ * (item 2). `updated` keeps the mock's weight next to the date column.
  */
 export const TABLE_COLUMN_WIDTH_STYLE: {
   readonly name: CSSProperties;
@@ -63,11 +60,11 @@ export const TABLE_COLUMN_WIDTH_STYLE: {
   readonly updated: CSSProperties;
   readonly open: CSSProperties;
 } = {
-  name: { width: "21%" },
-  status: { width: "23%" },
-  answer: { width: "11%" },
-  progress: { width: "22%" },
-  updated: { width: "16%" },
+  name: { width: "23%" },
+  status: { width: "15%" },
+  answer: { width: "15%" },
+  progress: { width: "19%" },
+  updated: { width: "21%" },
   open: { width: "7%" },
 };
 
@@ -78,6 +75,17 @@ export const TABLE_COLUMN_WIDTH_STYLE: {
  */
 export const KPI_VALUE_STYLE: CSSProperties = {
   fontSize: "calc(var(--font-size-title-large) * 1.4)",
+};
+
+/**
+ * 全体の進捗 KPI number indent (Issue #375 item 12). The mock left-aligns the
+ * big number with the *label text* (both at x=301), not with the tone dot; the
+ * build aligned it to the dot, so the number hung 24px to the left of its
+ * label. The dot is `size-4` (16px) plus the `gap-sm` (8px) before the label,
+ * which is the 24px here.
+ */
+export const KPI_NUMBER_INDENT_STYLE: CSSProperties = {
+  paddingLeft: "var(--spacing-xl)",
 };
 
 /**
@@ -162,7 +170,7 @@ export function donutPaddingAngle(
   return slices.filter((slice) => slice.count > 0).length > 1 ? 2 : 0;
 }
 
-/** Fill token per donut phase; `preparing` is grey like the mock. */
+/** Fill token per donut phase; `preparing` is the sunk grey (Issue #375 item 15). */
 export function phaseFill(phase: string): string {
   switch (phase) {
     case "inProgress":
@@ -170,6 +178,6 @@ export function phaseFill(phase: string): string {
     case "done":
       return "var(--color-success)";
     default:
-      return "var(--color-outline)";
+      return "var(--color-phase-preparing)";
   }
 }
