@@ -645,6 +645,39 @@ Electron 版配布物の導入に伴い、CI の `Package (Windows)` ジョブ�
 **変異検査 (Mutation Testing)**:
 同梱された `sidecar/` ディレクトリを一時的に改名または削除すると、Part 1 ではサイドカーが `executableMissing` で起動失敗して `ready` に達せず Playwright が失敗し、Part 2 でもサイドカー子プロセスが見つからず失敗する。これによりテストが実際に機能していることを確認できる。
 
+#### 7.4.1 `/healthz` 待ち budget と失敗時の証拠（Issue #399）
+
+`Package (Windows)` が必須 check になって以降、Part 2 だけが同じコミットで
+失敗→再実行で成功するフレークが 1 回観測された（2026-09-12、run 34673131546）。
+`scripts/smoke-test-electron-package.ps1` は次のように直した。
+
+**調べた結果。** 失敗ログでは sidecar の pid が起動 0.5 秒後に、待受ポートが約 3 秒後に
+特定できていた。これは**成功した再実行とほぼ同じタイミング**である。`Get-NetTCPConnection
+-State Listen` が一致するのは socket が `Listen` になってからで、それは uvicorn が
+`listen()` を呼んだ後、すなわち ASGI startup（マイグレーション・repair sweep・
+`queue_service.start()`）が済んだ後である。したがって「ポート特定が早すぎて、まだ
+応答できないポートを probe した」のではなく、**2 個目の sidecar は serving に到達済みで、
+`/healthz` の HTTP 応答そのものが停滞していた**。これは Windows 上でこの製品について
+既に記録されている未確定の loopback 停滞と同じ形である
+（[`answer-intake-and-preprocessing.md`](./answer-intake-and-preprocessing.md) §22、
+本書 §7.3）。ポートを handshake から得る決定的な待ち合図はこの script からは使えない
+（handshake ファイルは Electron supervisor が所有し、ready 直後に削除する）ため、
+**実時間 budget を延ばす方針**を採った。
+
+**変更。**
+
+- health 待ちの deadline を裸の 30 秒から **60 秒** に変更した。値はこのサイドカーに
+  対して製品本体が与えているのと同じ budget
+  （`SIDECAR_STARTUP_TIMEOUT_MS`、`desktop/src/main/sidecar-supervisor.ts`）を
+  そのまま使う。固定 sleep は足していない（従来どおり 250ms 間隔の poll）。
+- Part 2 の health 待ちが失敗したとき、**待った秒数・全 probe 応答（拒否か timeout かを
+  区別できる生のメッセージ）・その時点の Electron/sidecar の生死**をログに出す。
+- probe 中に Electron または sidecar が終了したら、deadline を待たずにその場で失敗する。
+
+この修正の検証（実際に Part 2 が通るか、次に落ちたとき証拠が残るか）は
+`Package (Windows)` 上でしかできない。Linux ではパッケージ版 Electron アプリを
+起動できないため、この環境ではスクリプトの構文検査までしか行っていない。
+
 ---
 
 ## 8. コード署名（人間だけが行う手順）
