@@ -18,9 +18,10 @@ import {
  * テスト row. The PR's mutation table breaks each literal and names the test
  * that goes red.
  *
- * Issue 372 §6 folded the 360px quick-action rail into the body flow, so the
- * old `lg:w-90` rail assertion is replaced by the folded layout it must now
- * produce (one column, quick actions in the main flow).
+ * Issue 372 §6 folded the 360px quick-action rail into the body flow; Issue
+ * 375 reverted that placement (it pushed 最近のテスト below the fold at
+ * 1536x1024) by putting the quick actions beside the hero instead. The
+ * placement tests below pin the Issue 375 structure.
  *
  * The horizontal-overflow check cannot measure `scrollWidth` in jsdom, so it
  * pins the property that caused the 700px page scroll instead: an absolutely
@@ -86,16 +87,27 @@ describe("home F4C layout: page gutter (Issue #367)", () => {
     }
   });
 
-  it("folds the 360px rail away so the quick actions sit in the main flow (Issue #372)", async () => {
+  it("puts the quick actions beside the hero, not stacked in the body flow (Issue #375)", async () => {
     renderDashboard();
     await screen.findByTestId("home-test-card-t1");
 
+    const hero = screen.getByTestId("home-next-up");
     const quickActions = screen.getByTestId("home-quick-actions");
-    const mainColumn = screen.getByTestId("home-next-up").parentElement;
-    // The rail wrapper (and its `lg:w-90`) is gone: the card is a sibling of
-    // the hero inside the main column, so the empty rail half cannot reappear.
-    expect(quickActions.parentElement?.parentElement).toBe(mainColumn);
-    expect(quickActions.parentElement?.className).not.toContain("lg:w-90");
+    const heroCell = hero.parentElement;
+    const quickCell = quickActions.parentElement;
+    // The two cards share one grid row (the mock's rail top), rather than the
+    // quick actions sitting below the graphs and pushing the table down.
+    expect(heroCell).not.toBeNull();
+    expect(quickCell).not.toBeNull();
+    expect(heroCell).not.toBe(quickCell);
+    expect(heroCell?.parentElement).toBe(quickCell?.parentElement);
+    const row = heroCell?.parentElement;
+    expect(row?.className).toContain("lg:grid-cols-3");
+    expect(heroCell?.className).toContain("lg:col-span-2");
+    // The row does not also contain the graph cards: they are the next row.
+    expect(row?.contains(screen.getByTestId("home-progress-panel"))).toBe(
+      false,
+    );
   });
 });
 
@@ -105,28 +117,35 @@ describe("home F4C layout: full-width recent tests (Issue #367)", () => {
     await screen.findByTestId("home-test-card-t1");
 
     const table = screen.getByTestId("home-recent-tests");
-    const leftColumn = screen.getByTestId("home-next-up").parentElement;
-    const row = leftColumn?.parentElement;
-    expect(leftColumn).not.toBeNull();
-    expect(row).not.toBeNull();
+    const heroCell = screen.getByTestId("home-next-up").parentElement;
+    const heroRow = heroCell?.parentElement;
+    const content = heroRow?.parentElement;
+    expect(heroRow).not.toBeNull();
+    expect(content).not.toBeNull();
 
-    // It is no longer stacked in the main column...
-    expect(leftColumn?.contains(table)).toBe(false);
-    // ...and not in the quick-action rail either...
+    // It is not inside the hero + quick-actions row...
+    expect(heroRow?.contains(table)).toBe(false);
+    // ...nor the graph row...
     expect(
-      screen.getByTestId("home-quick-actions").parentElement?.contains(table),
+      screen
+        .getByTestId("home-progress-panel")
+        .parentElement?.parentElement?.contains(table),
     ).toBe(false);
-    // ...it is the full-width row immediately under the hero + graph row.
-    expect(row?.nextElementSibling).toBe(table);
+    // ...it is the full-width row immediately under both grid rows.
+    expect(content?.nextElementSibling).toBe(table);
   });
 
   it("tightens the main-column card pitch to the mock's 21px", async () => {
     renderDashboard();
     await screen.findByTestId("home-test-card-t1");
 
-    const leftColumn = screen.getByTestId("home-next-up").parentElement;
-    const dashboardBody = leftColumn?.parentElement?.parentElement;
-    expect(leftColumn?.style.gap).toBe("21px");
+    const heroCell = screen.getByTestId("home-next-up").parentElement;
+    const heroRow = heroCell?.parentElement;
+    const content = heroRow?.parentElement;
+    const dashboardBody = content?.parentElement;
+    // The hero row and the graph row are 21px apart, and so are the content
+    // block and the table below it.
+    expect(content?.style.gap).toBe("21px");
     expect(dashboardBody?.style.gap).toBe("21px");
   });
 });

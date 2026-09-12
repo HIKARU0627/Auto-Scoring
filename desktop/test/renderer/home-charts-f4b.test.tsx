@@ -201,7 +201,9 @@ describe("home charts: no dead space under the plot (Issue #366 item 5)", () => 
 
     const plot = screen.getByTestId("home-daily-plot");
     expect(plot.classList.contains("flex-1")).toBe(true);
-    expect(plot.classList.contains("min-h-0")).toBe(true);
+    // Issue 375 item 14 changed the floor from `min-h-0` to the mock's 95px
+    // token, so the plot takes the leftover height without ballooning to 136px.
+    expect(plot.classList.contains("min-h-bar-plot")).toBe(true);
 
     const figure = screen.getByTestId("home-daily-chart");
     expect(figure.classList.contains("h-full")).toBe(true);

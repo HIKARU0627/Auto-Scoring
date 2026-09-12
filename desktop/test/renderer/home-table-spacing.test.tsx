@@ -15,12 +15,13 @@ import {
  * The measured values come from the mock `UI_Home.png` and the 1536x1024 /
  * 700x1900 screenshots. jsdom lays out no pixels, so each test pins the value
  * the implementation must produce rather than a rendered size:
- *   1. the column widths and the answer column's left alignment
+ *   1. the column widths, the 1.5:1 answer/progress gap ratio, and the
+ *      narrowed 状態 column (Issue #375 items 2/17)
  *   2. the name has no fixed cap (covered in `home-table-row.test.tsx`)
  *   3. the 700px layout is one block per test, not a clipped table
  *   4. the status pill's `px-lg` horizontal padding, 25px height
  *   5. the header rule uses the lighter `border-chart-axis` token
- *   6. the quick actions are folded into the body flow as `lg` tiles
+ *   6. the quick actions own a single-column grid (Issue #375 items 3/18)
  *   7. no `overflow-x-auto` (the bright native scrollbar) anywhere in the card
  *   8. there is no fixed-width right rail left behind
  *
@@ -76,13 +77,24 @@ describe("home recent-tests columns (Issue #372 §1)", () => {
         .querySelectorAll<HTMLTableCellElement>("thead th"),
     );
     expect(headers.map((th) => th.style.width)).toEqual([
-      "21%",
       "23%",
-      "11%",
-      "22%",
-      "16%",
+      "15%",
+      "15%",
+      "19%",
+      "21%",
       "7%",
     ]);
+    // Issue 375 items 2/17: 状態 is narrowed to a badge-sized share and
+    // テスト名 widened to absorb long names; 答案数 / 進捗 are close enough that
+    // their gap ratio stays within 1.5:1.
+    const answer = headers[2]?.style.width ?? "";
+    const progress = headers[3]?.style.width ?? "";
+    expect(
+      Number(progress.replace("%", "")) / Number(answer.replace("%", "")),
+    ).toBeLessThanOrEqual(1.5);
+    expect(Number(headers[1]?.style.width.replace("%", ""))).toBeLessThan(
+      Number(headers[0]?.style.width.replace("%", "")),
+    );
     // The old content-column classes are gone (`w-1/6` / `w-16` / `w-1/3` /
     // `w-20` / `w-10`), which were the source of the 380px 進捗 gap.
     const headerClasses = headers.map((th) => th.className).join(" ");
@@ -183,24 +195,30 @@ describe("home recent-tests narrow layout (Issue #372 §3/§7)", () => {
   });
 });
 
-describe("home dashboard quick actions (Issue #372 §6/§8)", () => {
-  it("folds the quick actions into the main flow as lg tiles", async () => {
+describe("home dashboard quick actions (Issue #375 items 3/18)", () => {
+  it("owns a single-column grid instead of a parent descendant selector", async () => {
     renderAppAt(AppRoutes.home, { handlers: tableHandlers() });
     await screen.findByTestId("home-test-card-t1");
 
     const quickActions = screen.getByTestId("home-quick-actions");
-    const wrapper = quickActions.parentElement;
-    expect(wrapper?.className).toContain("[&>section>div]:grid");
-    expect(wrapper?.className).toContain("lg:[&>section>div]:grid-cols-3");
+    const list = quickActions.querySelector("div");
+    // One column at every width: the 700px layout no longer leaves the third
+    // row alone above an empty cell, and no row gets an uneven ellipsis.
+    expect(list?.className).toContain("grid-cols-1");
+    expect(list?.className).not.toContain("sm:grid-cols-2");
+    expect(list?.className).not.toContain("lg:grid-cols-3");
+    // The old `[&>section>div]` parent selector is gone.
+    expect(quickActions.parentElement?.className ?? "").not.toContain(
+      "[&>section>div]",
+    );
   });
 
-  it("leaves no fixed-width right rail behind", async () => {
+  it("leaves no fixed-width right rail behind and sits beside the hero", async () => {
     renderAppAt(AppRoutes.home, { handlers: tableHandlers() });
     await screen.findByTestId("home-test-card-t1");
 
     const quickActions = screen.getByTestId("home-quick-actions");
-    // The old rail wrapper carried `lg:w-90`; folding it is what removes the
-    // 360x279px bare-surface hole under a stranded quick-action card.
+    // The old rail wrapper carried `lg:w-90`; it must not come back.
     for (
       let node: HTMLElement | null = quickActions.parentElement;
       node !== null;
@@ -208,9 +226,9 @@ describe("home dashboard quick actions (Issue #372 §6/§8)", () => {
     ) {
       expect(node.className).not.toContain("lg:w-90");
     }
-    // It sits in the same column as the hero, above the table in the flow.
+    // It shares one grid row with the hero.
     expect(quickActions.parentElement?.parentElement).toBe(
-      screen.getByTestId("home-next-up").parentElement,
+      screen.getByTestId("home-next-up").parentElement?.parentElement,
     );
   });
 });

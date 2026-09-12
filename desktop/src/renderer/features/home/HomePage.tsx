@@ -53,10 +53,13 @@ function errorText(error: unknown): string {
  * Home repeats the shell's page heading treatment here instead of calling
  * `ShellScreen`: `ShellScreen` always renders the escape control, and home must
  * not show one (INV-018). The subtitle still comes from `page-header.ts` so it
- * is not copied. The heading's size comes from `--font-size-headline-large`
- * (the mock's page title is ~14% larger than the shared headline-medium) through
- * an inline style because the token layer has no `text-headline-*` utility and
- * `features/` may not add one; see the PR body.
+ * is not copied.
+ *
+ * Issue 375 items 7-8: the page heading is the top of the type hierarchy, so it
+ * takes `--color-heading` (the mock's #FFFFFF, like the card headings) and a
+ * measured ~1.5x of the card heading. 32px * 1.5 = 48px lands on the mock's
+ * 43px glyph height. The size is an inline style because `features/` may not
+ * add a `text-headline-*` utility; see the PR body.
  */
 export function HomePage(): JSX.Element {
   const client = useSidecarClient();
@@ -96,14 +99,16 @@ export function HomePage(): JSX.Element {
   return (
     <div
       data-testid="home-page"
-      className="flex min-h-full min-w-0 flex-col text-on-surface"
+      className="flex min-w-0 flex-col text-on-surface"
     >
       <header className="flex items-start justify-between gap-md px-sm pt-lg pb-md">
         <div className="min-w-0 flex-1">
           <h1
             data-testid="page-title"
-            className="font-medium leading-ui text-on-surface"
-            style={{ fontSize: "var(--font-size-headline-large)" }}
+            className="font-medium leading-ui text-heading"
+            style={{
+              fontSize: "calc(var(--font-size-headline-large) * 1.5)",
+            }}
           >
             ホーム
           </h1>
@@ -141,8 +146,12 @@ export function HomePage(): JSX.Element {
           positioned `.sr-only` in its last column was laid out against the
           viewport and widened the document to x≈760 at 700px. Making this
           content region a positioned clip box contains that visually hidden
-          node without touching the table (Issue 365's territory). */}
-      <main className="relative min-w-0 flex-1 overflow-x-clip px-sm pb-xl">
+          node without touching the table (Issue 365's territory).
+          Issue 375 item 4: the bottom `pb-xl` is gone too; the shell frame's
+          own `p-xl` already insets the panel, and the doubled 24px left a band
+          of bare surface under 最近のテスト in a window taller than the
+          content. */}
+      <main className="relative min-w-0 flex-1 overflow-x-clip px-sm">
         {loadState.status === "loading" ? (
           <div className="flex flex-col gap-lg">
             <HomeDashboardSkeleton />
@@ -217,36 +226,43 @@ function DashboardBody({
       {dashboard.degradedTests.length > 0 ? (
         <DegradedNotice dashboard={dashboard} />
       ) : null}
-      {/* Issue 367 (F4C): the 最近のテスト table spans the full page width in a
-          row below the hero + graph row. The mock has no お知らせ / 最近の作業 /
-          ユーザー行 and this product has no source for them (parent Issue 333
-          §4), so the right rail is not padded out with invented cards.
-          Issue 372 (§6): the rail is folded away instead of leaving one
-          クイックアクション card stranded above ~360x279px of bare surface. The
-          quick actions move into the main column, and at `lg` their three rows
-          become three horizontal tiles across the body width (the wrapper's
-          child selector; `HomeQuickActions.tsx` itself is untouched). */}
-      <div className="flex flex-col">
-        <div className="flex min-w-0 flex-col" style={MAIN_COLUMN_GAP_STYLE}>
-          <HomeHeroCard
-            action={dashboard.nextAction}
-            onAction={() => {
-              handleAction(dashboard.nextAction);
-            }}
-          />
-          {/* Issue 360: the mock splits the main column into 全体の進捗 (wider)
-              and テストの進捗 (narrower) side by side, instead of stacking the
-              donut under the quick-action rail. Roughly 543 : 317 = 3 : 2. */}
-          <div className="grid min-w-0 gap-xl lg:grid-cols-5">
-            <div className="min-w-0 lg:col-span-3">
-              <HomeProgressPanel dashboard={dashboard} />
-            </div>
-            <div className="min-w-0 lg:col-span-2">
-              <HomeTestDonutPanel dashboard={dashboard} />
-            </div>
+      {/* Issue 375 (F6): the quick actions move back beside the hero -- the
+          position the mock gives the top of its right rail. Folding them into
+          the body flow (Issue 372) removed the empty rail but added a full-width
+          block above the table, and at 1536x1024 pushed 最近のテスト's only data
+          row below the fold. The hero and the quick actions share one grid row,
+          the two graph cards share the next, and the table spans the full width
+          below both. Every row fills the width, so a rail-shaped bare-surface
+          hole cannot reappear. The mock's お知らせ / 最近の作業 cards are not
+          reproduced: this product has no source for them (parent Issue 333 §4). */}
+      <div className="flex min-w-0 flex-col" style={MAIN_COLUMN_GAP_STYLE}>
+        <div className="grid min-w-0 items-stretch gap-xl lg:grid-cols-3">
+          <div className="min-w-0 lg:col-span-2">
+            <HomeHeroCard
+              action={dashboard.nextAction}
+              onAction={() => {
+                handleAction(dashboard.nextAction);
+              }}
+            />
           </div>
-          <div className="[&>section>div]:grid [&>section>div]:gap-md lg:[&>section>div]:grid-cols-3">
+          {/* Issue 375 item 3: the row layout belongs to HomeQuickActions now.
+              The old `[&>section>div]:grid` parent/descendant selector reached
+              into its DOM; moving the card must not depend on that. */}
+          <div className="min-w-0">
             <HomeQuickActions onOpen={onOpen} />
+          </div>
+        </div>
+        {/* Issue 360: the mock splits the main column into 全体の進捗 (wider)
+            and テストの進捗 (narrower) side by side, instead of stacking the
+            donut under the quick-action rail. Issue 375 item 12: an even split
+            narrows 全体の進捗 enough that its four KPI columns land near the
+            mock's 128px pitch. */}
+        <div className="grid min-w-0 items-stretch gap-xl lg:grid-cols-2">
+          <div className="min-w-0">
+            <HomeProgressPanel dashboard={dashboard} />
+          </div>
+          <div className="min-w-0">
+            <HomeTestDonutPanel dashboard={dashboard} />
           </div>
         </div>
       </div>

@@ -87,7 +87,7 @@ export function HomeRecentTestsTable({
       className="min-w-0 rounded-xl bg-surface-container p-xl"
     >
       <div className="flex items-center justify-between gap-md">
-        <h2 className="font-semibold text-on-surface" style={PANEL_TITLE_STYLE}>
+        <h2 className="font-semibold text-heading" style={PANEL_TITLE_STYLE}>
           最近のテスト
         </h2>
         <div className="flex shrink-0 items-center gap-lg">
@@ -111,7 +111,7 @@ export function HomeRecentTestsTable({
             onClick={() => {
               onOpen(AppRoutes.testList);
             }}
-            className="rounded-sm text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            className="rounded-sm text-ui-label text-primary-text hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
           >
             すべて見る
           </button>
@@ -387,7 +387,7 @@ function ProgressCell({
           onOpen(submissionQueue(test.id));
         }}
         aria-label={queueLabel}
-        className="flex min-w-0 flex-1 items-center gap-sm rounded-sm text-left text-ui-label text-primary hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+        className="flex min-w-0 flex-1 items-center gap-sm rounded-sm text-left text-ui-label text-primary-text hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
       >
         {summary !== null && percent !== null ? (
           <>

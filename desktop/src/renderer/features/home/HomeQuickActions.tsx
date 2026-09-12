@@ -82,11 +82,12 @@ export function HomeQuickActions({
       {/* Each row is its own raised surface (page → card → row), so it reads
           as a pressable item rather than a line of text (Issue 353).
 
-          Issue 371 item 11: at the 700px single column the card is ~548px and
-          a 191px text block left ~245px of dead space before the chevron. The
-          rows fold to two columns while the card is wide (sm..lg) and stay one
-          column in the mock's 360px rail. */}
-      <div className="mt-md grid grid-cols-1 gap-sm sm:grid-cols-2 lg:grid-cols-1">
+          Issue 375 items 3/18: this is the mock's single-column rail, and it
+          owns its own layout now (the parent's brittle `[&>section>div]:grid`
+          selector is gone). A single column at every width keeps the 700px
+          layout from leaving the third row alone above an empty cell and from
+          ellipsizing only the first two rows' subtitles. */}
+      <div className="mt-md grid grid-cols-1 gap-sm">
         <QuickAction
           testId="home-open-intake"
           icon={<NavGlyph route={AppRoutes.intake} size={24} />}

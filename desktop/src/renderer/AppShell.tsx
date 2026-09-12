@@ -26,6 +26,13 @@ function SidecarConnectionPlaceholder(): JSX.Element {
  * Issue #348: `p-xl` around the frame is what makes the sidebar read as a
  * floating panel (mock: left edge x ~24, bottom edge clear of the window) and
  * `gap-xl` is the ~24px gutter between panel and content.
+ *
+ * Issue #375 item 4: `min-h-screen` forced the frame -- and with it the home
+ * page's `flex-1` body -- to the window height, so a window taller than the
+ * content left a band of bare surface under 最近のテスト. The frame is
+ * content-height now; the window's own background (`html`/`body` are
+ * `bg-surface`) covers any remainder instead of the layout being stretched to
+ * fill it.
  */
 export function AppShell({
   client,
@@ -40,7 +47,7 @@ export function AppShell({
         {client === null ? (
           <SidecarConnectionPlaceholder />
         ) : (
-          <div className="flex min-h-screen gap-xl bg-surface p-xl text-on-surface">
+          <div className="flex gap-xl bg-surface p-xl text-on-surface">
             <Sidebar />
             <div className="flex min-w-0 flex-1 flex-col">
               <RouteOutlet />
