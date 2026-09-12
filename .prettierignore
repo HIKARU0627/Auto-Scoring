@@ -16,6 +16,11 @@ desktop-poc/**/samples/
 app/
 backend/
 
+# Third-party licence texts are reproduced verbatim: reflowing them with a
+# formatter would change the legal text. Keep the newline/indentation as the
+# licence ships (Issue #392).
+THIRD_PARTY_NOTICES.md
+
 # Scratch state left by a Codex-based code-review run against this worktree
 # (its CODEX_HOME and log, and any protocol-schema dump it generates while
 # investigating a finding) -- tooling output, not project content.

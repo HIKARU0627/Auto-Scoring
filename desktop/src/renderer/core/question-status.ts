@@ -1,4 +1,5 @@
 import type { components } from "../api/generated/schema.js";
+import type { MaterialSymbolName } from "./material-symbols.js";
 
 export type JobResponse = components["schemas"]["JobResponse"];
 export type ReviewResponse = components["schemas"]["ReviewResponse"];
@@ -7,7 +8,7 @@ export type QuestionStatusTone = "neutral" | "attention" | "danger" | "success";
 
 export interface QuestionStatusMeta {
   readonly label: string;
-  readonly icon: string;
+  readonly icon: MaterialSymbolName;
   readonly tone: QuestionStatusTone;
 }
 
@@ -15,13 +16,13 @@ export const QuestionStatus = {
   pending: { label: "未処理", icon: "radio_button_unchecked", tone: "neutral" },
   blocked: { label: "前提待ち", icon: "lock_clock", tone: "neutral" },
   queued: { label: "実行待ち", icon: "schedule", tone: "neutral" },
-  running: { label: "AI処理中", icon: "play_circle_outline", tone: "neutral" },
+  running: { label: "AI処理中", icon: "play_circle", tone: "neutral" },
   needsCheck: { label: "要確認", icon: "help_outline", tone: "attention" },
   failed: { label: "失敗", icon: "error_outline", tone: "danger" },
   cancelled: { label: "中止", icon: "block", tone: "neutral" },
   graded: {
     label: "レビュー待ち",
-    icon: "rate_review_outlined",
+    icon: "rate_review",
     tone: "neutral",
   },
   regradeRequested: {
@@ -29,7 +30,7 @@ export const QuestionStatus = {
     icon: "autorenew",
     tone: "neutral",
   },
-  rejected: { label: "却下", icon: "cancel_outlined", tone: "neutral" },
+  rejected: { label: "却下", icon: "cancel", tone: "neutral" },
   approved: { label: "承認済み", icon: "check_circle", tone: "success" },
 } as const satisfies Record<string, QuestionStatusMeta>;
 
