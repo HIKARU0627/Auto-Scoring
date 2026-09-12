@@ -9,13 +9,14 @@ import type { AnnotationResponse } from "../../src/renderer/core/pdf-review-geom
 import { PageImageViewer } from "../../src/renderer/features/pdf-review/PageImageViewer.js";
 
 /**
- * Issue #403: every `AnnotationKind` gets its own mark on the answer page.
- * Before this, `PageImageViewer` drew one `border-error` rectangle for all of
- * them, so the screen never showed the ○×△ or the red text the exported PDF
- * does.
+ * Issue #403: every shape `AnnotationKind` gets its own mark on the answer
+ * page, instead of one `border-error` rectangle for all of them.
  *
- * These tests render the real viewer (not a mock) and read the SVG/text it
- * produces, because that is what "the screen draws a circle for circle" means.
+ * Issue #406 corrected the other half: `score`/`comment` are **not** marks on
+ * the answer. The exported PDF draws the confirmed score from the grade (never
+ * from a `SCORE` annotation) and sends comment prose to the trailing note page
+ * (Issue #161), so drawing those two at their rects was a screen that disagreed
+ * with the paper. Their text now appears in the 設問コメント output preview.
  */
 
 const RECT = { x: 0.1, y: 0.1, width: 0.2, height: 0.06 };
@@ -67,14 +68,16 @@ function renderViewer(
       annotations={annotations}
       recognitions={[]}
       questionAnswerArea={null}
+      questionPage={1}
+      questionNumber="問1"
       zoom={zoom}
     />,
   );
 }
 
 describe("PageImageViewer annotation marks (Issue #403)", () => {
-  it("draws each of the seven kinds with its own shape or text, never one shared rectangle", () => {
-    const { getByTestId } = renderViewer(SEVEN_KINDS);
+  it("draws each of the five shape kinds with its own path, never one shared rectangle", () => {
+    const { getByTestId, queryByTestId } = renderViewer(SEVEN_KINDS);
 
     for (const kind of ANNOTATION_SHAPE_KINDS) {
       const mark = getByTestId(`annotation-${kind}-0`);
@@ -84,24 +87,16 @@ describe("PageImageViewer annotation marks (Issue #403)", () => {
       expect(path!.getAttribute("d")).toBe(annotationShapePath(kind));
     }
 
-    for (const [kind, text] of [
-      ["score", "3/5"],
-      ["comment", COMMENT_TEXT],
-    ] as const) {
-      const mark = getByTestId(`annotation-${kind}-0`);
-      expect(mark.getAttribute("data-kind")).toBe(kind);
-      expect(
-        mark.querySelector("path"),
-        `${kind} is a text kind, not a shape`,
-      ).toBeNull();
-      expect(mark.textContent).toContain(text);
-    }
+    // Issue #406: score/comment are not drawn on the answer, so their rects
+    // do not produce a mark here.
+    expect(queryByTestId("annotation-score-0")).toBeNull();
+    expect(queryByTestId("annotation-comment-0")).toBeNull();
   });
 
-  it("paints every mark with the annotation-mark token, not the error border", () => {
+  it("paints every shape with the annotation-mark token, not the error border", () => {
     const { getByTestId, container } = renderViewer(SEVEN_KINDS);
 
-    for (const kind of [...ANNOTATION_SHAPE_KINDS, "score", "comment"]) {
+    for (const kind of ANNOTATION_SHAPE_KINDS) {
       const mark = getByTestId(`annotation-${kind}-0`);
       expect(mark.className).toContain("text-annotation-mark");
     }
@@ -141,7 +136,7 @@ describe("PageImageViewer annotation marks (Issue #403)", () => {
     expect(Number(biggerStroke)).toBeGreaterThan(Number(smallerStroke));
   });
 
-  it("names each mark by its kind label and comment so colour is not the only cue", () => {
+  it("names each shape mark by its kind label so colour is not the only cue", () => {
     const { getByTestId } = renderViewer(SEVEN_KINDS);
 
     expect(
@@ -150,15 +145,15 @@ describe("PageImageViewer annotation marks (Issue #403)", () => {
     expect(
       getByTestId("annotation-triangle-0").getAttribute("aria-label"),
     ).toContain("△");
-    const comment = getByTestId("annotation-comment-0");
-    expect(comment.getAttribute("aria-label")).toContain("コメント");
-    expect(comment.getAttribute("aria-label")).toContain(COMMENT_TEXT);
   });
 
-  it("shows the kind label for a text mark that carries no comment", () => {
-    const { getByTestId } = renderViewer([
-      buildAnnotation({ id: "score", kind: "score", comment: null }),
-    ]);
-    expect(getByTestId("annotation-score-0").textContent).toContain("点数");
+  it("shows a comment-kind annotation as a note, not as text on the answer", () => {
+    const { getByTestId, queryByTestId } = renderViewer(SEVEN_KINDS);
+
+    expect(queryByTestId("annotation-comment-0")).toBeNull();
+    const notes = getByTestId("review-question-comments");
+    expect(notes.textContent).toContain(COMMENT_TEXT);
+    // The note names the output line's page and question.
+    expect(notes.textContent).toContain("第1頁 問1");
   });
 });

@@ -13,6 +13,12 @@ import {
   type NormalizedRect,
 } from "../../core/pdf-review-geometry.js";
 import type { RecognitionResponse } from "../../core/pdf-review-data.js";
+import {
+  annotationNote,
+  commentDestination,
+  type AnnotationNote,
+  type ScoreOverlay,
+} from "../../core/export-parity.js";
 import type { PageImageState } from "../answer-area-editor/answer-area-types.js";
 
 /** Natural render width of the page at zoom 1, before the column clamps it. */
@@ -67,6 +73,24 @@ export interface PageImageViewerProps {
   readonly annotations: readonly AnnotationResponse[];
   readonly recognitions: readonly RecognitionResponse[];
   readonly questionAnswerArea: NormalizedRect | null | undefined;
+  /**
+   * The confirmed grade's score, at the rect the export will draw it on
+   * (Issue #406). `null` when there is no grade yet or the export refuses the
+   * question (`no_room_for_score`) -- in the latter case the page is called out
+   * by `PdfReviewPage`, not here.
+   */
+  readonly scoreOverlay?: ScoreOverlay | null;
+  /**
+   * `Question.comment_area`, when a human placed an `ANNOTATION_AREA` region.
+   * The export writes the question's comments into this band; the viewer draws
+   * its outline so the reviewer can see where they will land. When `null`,
+   * they go to an appended note page instead (Issue #161).
+   */
+  readonly questionCommentArea?: NormalizedRect | null | undefined;
+  /** The question's own `page`, used in the note reference `第N頁 問M`. */
+  readonly questionPage?: number | undefined;
+  /** The question's stored `number`, verbatim, for the same reference. */
+  readonly questionNumber?: string | undefined;
   readonly zoom: number;
 }
 
@@ -77,6 +101,10 @@ export function PageImageViewer({
   annotations,
   recognitions,
   questionAnswerArea,
+  scoreOverlay,
+  questionCommentArea,
+  questionPage,
+  questionNumber,
   zoom,
 }: PageImageViewerProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -115,23 +143,49 @@ export function PageImageViewer({
     height: pageImage.pixelHeight ?? Math.ceil(displayedHeight * 2),
   };
 
+  const destination = commentDestination(questionCommentArea);
   const resolved = useMemo(() => {
     const placed: ResolvedAnnotation[] = [];
-    const unresolved: AnnotationResponse[] = [];
+    const notes: AnnotationNote[] = [];
     for (const annotation of annotations) {
       const rects = resolveAnnotationRects({
         annotation,
         questionAnswerArea,
         recognitions,
       });
-      if (rects == null || rects.length === 0) {
-        unresolved.push(annotation);
-      } else {
+      const isShape = annotationShapePath(annotation.kind) != null;
+      if (isShape && rects != null && rects.length > 0) {
         placed.push({ annotation, rects });
       }
+      const note = annotationNote({
+        kind: annotation.kind,
+        comment: annotation.comment,
+        placed: rects != null && rects.length > 0,
+        page: questionPage ?? 1,
+        questionNumber: questionNumber ?? "",
+        destination,
+      });
+      if (note != null) {
+        notes.push(note);
+      }
     }
-    return { placed, unresolved };
-  }, [annotations, questionAnswerArea, recognitions]);
+    return { placed, notes };
+  }, [
+    annotations,
+    destination,
+    questionAnswerArea,
+    questionPage,
+    questionNumber,
+    recognitions,
+  ]);
+  const scoreLayout =
+    scoreOverlay == null
+      ? null
+      : normalizedRectToLayout(scoreOverlay.rect, renderSize, imagePixelSize);
+  const commentBandLayout =
+    questionCommentArea == null
+      ? null
+      : normalizedRectToLayout(questionCommentArea, renderSize, imagePixelSize);
 
   return (
     <div
@@ -156,6 +210,19 @@ export function PageImageViewer({
             ページ画像を読み込めませんでした
           </div>
         )}
+        {commentBandLayout != null ? (
+          <div
+            data-testid="review-comment-band"
+            aria-label="コメント帯（出力先）"
+            className="pointer-events-none absolute border border-dashed border-annotation-mark"
+            style={{
+              left: commentBandLayout.left,
+              top: commentBandLayout.top,
+              width: commentBandLayout.width,
+              height: commentBandLayout.height,
+            }}
+          />
+        ) : null}
         {resolved.placed.flatMap(({ annotation, rects }) =>
           rects.map((rect, index) => {
             const layout = normalizedRectToLayout(
@@ -174,18 +241,59 @@ export function PageImageViewer({
             );
           }),
         )}
+        {scoreLayout != null && scoreOverlay != null ? (
+          <div
+            data-testid="review-score-overlay"
+            data-placement={scoreOverlay.placement}
+            role="img"
+            aria-label={`出力される点数 ${scoreOverlay.text}`}
+            className="pointer-events-none absolute overflow-hidden text-annotation-mark"
+            style={{
+              left: scoreLayout.left,
+              top: scoreLayout.top,
+              width: scoreLayout.width,
+              height: scoreLayout.height,
+              fontSize: Math.min(
+                Math.max(
+                  scoreLayout.height,
+                  MARK_MIN_FONT_PT *
+                    (renderSize.width / Math.max(1, displayedWidth)),
+                ),
+                MARK_MAX_FONT_PT *
+                  (renderSize.width / Math.max(1, displayedWidth)),
+              ),
+            }}
+          >
+            <span className="block leading-tight break-words whitespace-pre-wrap">
+              {scoreOverlay.text}
+            </span>
+          </div>
+        ) : null}
       </div>
-      {resolved.unresolved.length > 0 ? (
+      {resolved.notes.length > 0 ? (
         <section data-testid="review-question-comments">
           <h3 className="text-ui-label font-semibold text-on-surface">
             設問コメント
           </h3>
+          <p
+            data-testid="review-comment-destination"
+            className="text-body-small text-on-surface-variant"
+          >
+            {destination === "band"
+              ? "答案の上ではなく、上図の点線の枠（コメント帯）にこのままの順で出力されます。"
+              : "答案の上ではなく、末尾の注釈ページにこの行のまま出力されます。"}
+          </p>
           <ul className="list-disc pl-lg">
-            {resolved.unresolved.map((annotation) => (
-              <li key={annotation.id} className="text-body-medium">
-                {annotation.comment ??
-                  annotation.anchor_text ??
-                  annotation.kind}
+            {resolved.notes.map((note, index) => (
+              <li key={`note-${index}`} className="text-body-medium">
+                {note.reference != null ? (
+                  <span className="text-on-surface-variant">
+                    {note.reference}{" "}
+                  </span>
+                ) : null}
+                {note.symbol != null ? <span>{note.symbol} </span> : null}
+                {note.text.length > 0 ? <span>{note.text}</span> : null}
+                {note.suffix.length > 0 ? <span>{note.suffix}</span> : null}
               </li>
             ))}
           </ul>

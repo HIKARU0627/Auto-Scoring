@@ -77,6 +77,9 @@ export function buildQuestion(
     points: input.points ?? 5,
     scoring_method: input.scoring_method ?? "additive",
     answer_area: input.answer_area ?? null,
+    comment_area: input.comment_area ?? null,
+    score_area: input.score_area ?? null,
+    score_placement: input.score_placement ?? null,
     rubric: input.rubric ?? [],
     is_scoring_target: input.is_scoring_target ?? true,
   };
