@@ -13,6 +13,7 @@ it stays under test on a machine that does have one.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -34,10 +35,13 @@ from auto_scoring.adapters.credentials.api_keys import (
     validate_transport_order,
 )
 from auto_scoring.adapters.credentials.store import (
+    CredentialStore,
     CredentialStoreUnavailableError,
     InMemoryCredentialStore,
     KeyringCredentialStore,
     UnavailableCredentialStore,
+    acquire_credential_store,
+    unavailable_store_reason,
 )
 
 #: Obviously fake, and the exact string every "no secret escaped" assertion
@@ -516,3 +520,89 @@ def test_saving_settings_marks_the_chain_as_out_of_date() -> None:
     settings.save_settings(_OPENAI, {_OPENAI.model_variable: "gpt-4.1"})
 
     assert settings.changed_since_start
+
+
+# --- Issue #429: acquiring the store must not wait forever ---
+
+
+class _ProbeRecordingStore(InMemoryCredentialStore):
+    """A working store that counts how often its availability was probed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.probes = 0
+
+    def unavailable_reason(self) -> str | None:
+        self.probes += 1
+        return None
+
+
+class _NeverAnsweringStore:
+    """A store whose probe never returns until the test releases it.
+
+    The stand-in for this Issue's measured failure: on a Linux host with a
+    D-Bus session, ``import keyring`` itself never returns, so no method of
+    the real store is ever reached.
+    """
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.probes = 0
+
+    def unavailable_reason(self) -> str | None:
+        self.probes += 1
+        self.release.wait()
+        return None
+
+    def get(self, name: str) -> str | None:
+        return None
+
+    def set(self, name: str, value: str) -> None:
+        raise CredentialStoreUnavailableError("this store never answers")
+
+    def delete(self, name: str) -> None:
+        return None
+
+
+def test_acquire_credential_store_returns_a_store_that_answers() -> None:
+    store = _ProbeRecordingStore()
+
+    acquired = acquire_credential_store(lambda: store, timeout_seconds=1.0)
+
+    assert acquired is store
+    # The probe is forced *inside* the bound, so the caller is handed a store
+    # already known to answer rather than one that may hang on first read.
+    assert store.probes == 1
+
+
+def test_acquire_credential_store_keeps_a_store_that_reports_no_backend() -> None:
+    """The already-available case must pass through unchanged: it is the
+    configuration every Linux development machine and CI runs in."""
+    store = UnavailableCredentialStore("no backend here")
+
+    assert acquire_credential_store(lambda: store, timeout_seconds=1.0) is store
+
+
+def test_acquire_credential_store_degrades_when_the_backend_never_answers() -> None:
+    stuck = _NeverAnsweringStore()
+    try:
+        acquired = acquire_credential_store(lambda: stuck, timeout_seconds=0.1)
+    finally:
+        stuck.release.set()
+
+    assert isinstance(acquired, UnavailableCredentialStore)
+    assert acquired.unavailable_reason() == unavailable_store_reason(0.1)
+    # The probe was entered and abandoned -- proving the bound, not a store
+    # that happened to be slow to construct.
+    assert stuck.probes == 1
+
+
+def test_acquire_credential_store_re_raises_a_broken_build() -> None:
+    """A missing ``keyring`` is a packaging fault, not a slow host: it must
+    still fail startup loudly rather than hide behind the timeout."""
+
+    def _broken() -> CredentialStore:
+        raise ImportError("keyring is not installed")
+
+    with pytest.raises(ImportError):
+        acquire_credential_store(_broken, timeout_seconds=1.0)
