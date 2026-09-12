@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 
 import { AppRoutes } from "../../src/renderer/core/app-routes.js";
 import { renderAppAt } from "./support/app-harness.js";
+import { createIntakeMockClient } from "./support/intake-harness.js";
 import {
   buildProgress,
   buildSubmission,
@@ -116,6 +117,25 @@ describe("TestListPage (Issue #379)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("page-title").textContent).toBe("答案キュー");
     });
+  });
+
+  it("opens the intake screen with this test already chosen as the destination (Issue #414)", async () => {
+    renderAppAt(AppRoutes.testList, {
+      client: createIntakeMockClient({
+        listTestRegistrations: async () => [
+          buildTest({ id: "t1", name: "国語 第1回" }),
+        ],
+      }),
+    });
+
+    await screen.findByTestId("test-list-row-t1");
+    fireEvent.click(screen.getByTestId("test-list-add-answers-t1"));
+
+    await screen.findByTestId("intake-target-summary");
+    expect(screen.getByTestId("page-title").textContent).toBe("資料の取込");
+    expect(screen.getByTestId("intake-target-summary").textContent).toContain(
+      "国語 第1回",
+    );
   });
 
   it("shows the empty state and routes to intake when no test is registered", async () => {

@@ -3,6 +3,7 @@ import { fireEvent, screen } from "@testing-library/react";
 
 import { submissionQueue } from "../../src/renderer/core/app-routes.js";
 import { renderAppAt } from "./support/app-harness.js";
+import { createIntakeMockClient } from "./support/intake-harness.js";
 import {
   buildProgress,
   buildSubmission,
@@ -177,6 +178,54 @@ describe("SubmissionQueuePage (Issue #113 / Issue #242 / INV-021, 140..146, 158,
     expect(
       screen.getByText("このテストにはまだ答案が取り込まれていません。"),
     ).toBeDefined();
+  });
+
+  it("答案が0件でも、このテストを宛先にした取込を開ける (Issue #414)", async () => {
+    renderAppAt(submissionQueue("t1"), {
+      client: createIntakeMockClient({
+        getTest: async () => buildTest({ id: "t1", name: "国語 第1回" }),
+        listTestRegistrations: async () => [
+          buildTest({ id: "t1", name: "国語 第1回" }),
+        ],
+        listSubmissions: async () => [],
+      }),
+    });
+
+    await screen.findByTestId("queue-empty");
+    fireEvent.click(screen.getByTestId("queue-add-answers-empty"));
+
+    await screen.findByTestId("intake-target-summary");
+    expect(screen.getByTestId("page-title").textContent).toBe("資料の取込");
+    expect(screen.getByTestId("intake-target-summary").textContent).toContain(
+      "国語 第1回",
+    );
+  });
+
+  it("答案があるときも、このテストを宛先にした取込を開ける (Issue #414)", async () => {
+    renderAppAt(submissionQueue("t1"), {
+      client: createIntakeMockClient({
+        getTest: async () => buildTest({ id: "t1", name: "国語 第1回" }),
+        listTestRegistrations: async () => [
+          buildTest({ id: "t1", name: "国語 第1回" }),
+        ],
+        listSubmissions: async () => [
+          buildSubmission({
+            id: "s1",
+            testId: "t1",
+            state: "ai_processed",
+            studentLabel: "答案A",
+          }),
+        ],
+      }),
+    });
+
+    await screen.findByTestId("queue-row-s1");
+    fireEvent.click(screen.getByTestId("queue-add-answers"));
+
+    await screen.findByTestId("intake-target-summary");
+    expect(screen.getByTestId("intake-target-summary").textContent).toContain(
+      "国語 第1回",
+    );
   });
 
   it("進捗が引けなくても一覧は出る (INV-144 / INV-146)", async () => {

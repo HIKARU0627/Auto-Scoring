@@ -9,6 +9,7 @@ import {
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import {
   AppRoutes,
+  intakeTarget,
   submissionQueue,
   testSettings,
 } from "../../core/app-routes.js";
@@ -74,12 +75,12 @@ const COLUMN_WIDTH_STYLE: {
   readonly updated: CSSProperties;
   readonly actions: CSSProperties;
 } = {
-  name: { width: "25%" },
-  status: { width: "15%" },
-  answer: { width: "9%" },
-  progress: { width: "18%" },
-  updated: { width: "14%" },
-  actions: { width: "19%" },
+  name: { width: "22%" },
+  status: { width: "13%" },
+  answer: { width: "8%" },
+  progress: { width: "15%" },
+  updated: { width: "12%" },
+  actions: { width: "30%" },
 };
 
 type LoadState =
@@ -468,6 +469,16 @@ function RowActions({
         className={secondaryButtonClass()}
       >
         答案キュー
+      </button>
+      <button
+        type="button"
+        data-testid={`test-list-add-answers-${testId}`}
+        onClick={() => {
+          onOpen(intakeTarget(testId));
+        }}
+        className={secondaryButtonClass()}
+      >
+        答案を取り込む
       </button>
     </div>
   );

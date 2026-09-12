@@ -74,6 +74,7 @@ import { freeRegionId } from "../answer-area-editor/region-helpers.js";
 import type { components } from "../../api/generated/schema.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
+import { intakeTarget } from "../../core/app-routes.js";
 import { AppErrorBanner } from "../../core/AppErrorBanner.js";
 import { DisabledActionReason } from "../intake/DisabledActionReason.js";
 import {
@@ -288,7 +289,7 @@ function useModalDialogBehavior(
 
 export function TestSettingsPage(): JSX.Element {
   const client = useSidecarClient();
-  const { params } = useRouter();
+  const { params, push } = useRouter();
   const testId = params.testId ?? "";
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = useState(false);
@@ -1333,6 +1334,41 @@ export function TestSettingsPage(): JSX.Element {
                 )}
               </div>
               <DisabledActionReason requirements={completeReqs} />
+            </div>
+          </Card>
+
+          <Card testId="answers-intake-section">
+            <CardHeading
+              title="答案の取り込み"
+              description="答案を取り込むとAI採点が始まります。取り込み先にはこのテストが選ばれた状態で開きます。"
+              aside={
+                <StatusPill
+                  tone={ready.test.status === "ready" ? "success" : "attention"}
+                >
+                  {ready.test.status === "ready" ? "取り込めます" : "登録待ち"}
+                </StatusPill>
+              }
+            />
+            <div className="mt-lg">
+              <button
+                type="button"
+                data-testid="open-answers-intake-button"
+                className={primaryButtonClass()}
+                disabled={busy || ready.test.status !== "ready"}
+                onClick={() => {
+                  push(intakeTarget(testId));
+                }}
+              >
+                答案を取り込む
+              </button>
+              {ready.test.status === "ready" ? null : (
+                <p
+                  data-testid="answers-intake-waiting"
+                  className="mt-md text-body-medium text-on-surface-variant"
+                >
+                  配点・回答欄・依存関係の確認が済むと、答案を取り込めます。上の各セクションで確認を完了してください。
+                </p>
+              )}
             </div>
           </Card>
         </div>
