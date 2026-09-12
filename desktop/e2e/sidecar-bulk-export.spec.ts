@@ -157,12 +157,22 @@ test("一括PDF出力が保存先を選び、実ファイルを書き出す", as
       timeout: 15_000,
     });
 
+    // Issue #380: `max-w-lg` used to resolve to `--spacing-lg` (16px) and
+    // collapse the panel, so assert the real rendered width before starting.
+    const bulkPanel = await page
+      .locator('[role="dialog"] > div')
+      .first()
+      .boundingBox();
+    expect(bulkPanel, "bulk export panel box").not.toBeNull();
+    expect(bulkPanel!.width, "bulk export panel width").toBeGreaterThanOrEqual(
+      360,
+    );
+
     const before = exportedPdfCount(exportFolder);
     await page.getByTestId("bulk-export-start-button").click();
-    // The result is asserted as text, not visibility: the shared `max-w-*`
-    // tokens currently collapse dialog content to zero width (Issue #334,
-    // outside this change), so a visibility check would be about that bug
-    // rather than about whether the export finished.
+    await expect(page.getByTestId("bulk-export-result")).toBeVisible({
+      timeout: 120_000,
+    });
     await expect(page.getByTestId("bulk-export-result")).toContainText(
       "1 / 1 件を出力しました。",
       { timeout: 120_000 },
