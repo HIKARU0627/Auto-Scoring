@@ -273,6 +273,7 @@ compare-and-setが必要だった。
 | `PUT /tests/{test_id}/profile`                   | regions全体を人間の修正結果で置換（confirm後は409）            |
 | `POST /tests/{test_id}/profile/confirm`          | 全regionを一括確認し、Question/Rubricを確定                    |
 | `POST /tests/{test_id}/complete-registration`    | profile・依存グラフ双方confirmed後にreadyへ                    |
+| `PUT /tests/{test_id}/scoring-targets`           | 採点する設問を選ぶ（Issue #449、既定はすべて）                 |
 | `POST /tests/{test_id}/dependency-graph/analyze` | Issue #26既存API。そのまま利用                                 |
 | `POST /tests/{test_id}/dependency-graph/confirm` | Issue #26既存API。そのまま利用                                 |
 
@@ -298,6 +299,24 @@ Issue #16のテスト設定画面はこの方式を採用せず、**region一覧
 - 同様に、`Rubric` の複数criteriaへの分割編集UIも今回は実装しない（1criterion固定、
   上記「Regionから Question/Rubric への変換」参照）。分割が必要になった場合は
   `RubricCriterion` のCRUD APIを別途追加する。
+
+### 採点する設問の選択（Issue #449）
+
+テスト設定画面に「採点する問題」カードを出し、設問ごとのチェックボックスで採点対象を
+選ぶ。**既定は全選択**（`Question.is_scoring_target` は `true`）。登録完了の前でも後でも
+保存でき、答案を取り込んで採点が始まった後でも変更できる（オーナーは途中で気が変わる）。
+
+- 保存は `PUT /tests/{test_id}/scoring-targets` に `question_ids` を渡し、その集合へ
+  置き換える。**0件は 422 で拒否**し、画面側も保存ボタンを無効にして
+  `core/action-requirements.ts` の理由を出す（採点対象が無いテストは意味を持たない）。
+- 設問一覧は `GET /tests/{test_id}/questions` で取得する。この API は既定で
+  **採点対象だけ**を返し（レビュー画面が除外設問を「やること」として出さないため）、
+  テスト設定画面は `include_excluded_questions=true` で除外済みも含めて取得する
+  （`is_scoring_target` で各設問の現在値を示す）。
+- 除外した前提設問を持つ採点対象は、その依存先の設問名をカード内に表示する。
+  依存先は前提の結果を使わずに採点される（OCR が読めなかった前提と同じ規則）。
+- データの持ち方・分母・PDF・ロールバックは
+  [`data-model-and-local-storage.md`](./data-model-and-local-storage.md) §4.3 を参照。
 
 ## 検証
 
