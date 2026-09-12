@@ -49,6 +49,13 @@ export function createTestSettingsMockClient(
       estimated_cost: number | null;
       unit_cost: number | null;
     };
+    /**
+     * Start the snapshot from an already-signed-off state instead of a draft.
+     * `confirmed-profile` confirms only the profile; `confirmed-registration`
+     * also confirms criteria and the dependency graph, which is the state a
+     * "登録完了" test is in (Issue #424).
+     */
+    seed?: "confirmed-profile" | "confirmed-registration";
   } = {},
 ): { client: SidecarClient; applyLayoutUpload: () => AnswerLayoutResponse } {
   const testId = input.testId ?? "t-reg";
@@ -98,6 +105,48 @@ export function createTestSettingsMockClient(
     });
     return layout;
   };
+
+  if (input.seed !== undefined) {
+    profileRevision += 1;
+    profile = buildProfile({
+      status: "confirmed",
+      revision: profileRevision,
+      regions: [],
+    });
+    if (input.seed === "confirmed-registration") {
+      criteriaRevision += 1;
+      criteria = {
+        test_id: testId,
+        status: "confirmed",
+        revision: criteriaRevision,
+        extracted: false,
+        questions: [],
+        declared_total_points: null,
+        unreadable_pages: [],
+        note: null,
+        totals: {
+          known_points: 0,
+          unknown_count: 0,
+          declared_total_points: null,
+          declared_difference: null,
+          is_complete: true,
+        },
+      };
+      graphVersion += 1;
+      graph = {
+        id: `graph-${graphVersion}`,
+        test_id: testId,
+        status: "confirmed",
+        version: graphVersion,
+        question_ids: [],
+        edges: [],
+        layers: [],
+        unresolved: [],
+        confirmed_at: "2026-01-01T00:00:00Z",
+        created_at: "2026-01-01T00:00:00Z",
+      };
+    }
+  }
 
   const base = createMockSidecarClient({
     ...input.handlers,
