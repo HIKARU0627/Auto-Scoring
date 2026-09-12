@@ -109,6 +109,7 @@ export 'package:auto_scoring_api/src/model/rule_scope.dart';
 export 'package:auto_scoring_api/src/model/save_api_key_request.dart';
 export 'package:auto_scoring_api/src/model/save_error_catalog_request.dart';
 export 'package:auto_scoring_api/src/model/save_templates_request.dart';
+export 'package:auto_scoring_api/src/model/save_transport_order_request.dart';
 export 'package:auto_scoring_api/src/model/scanned_file_model.dart';
 export 'package:auto_scoring_api/src/model/score_request.dart';
 export 'package:auto_scoring_api/src/model/score_response.dart';
@@ -119,6 +120,7 @@ export 'package:auto_scoring_api/src/model/submission_review_progress_response.d
 export 'package:auto_scoring_api/src/model/test_material_response.dart';
 export 'package:auto_scoring_api/src/model/test_response.dart';
 export 'package:auto_scoring_api/src/model/test_summary.dart';
+export 'package:auto_scoring_api/src/model/text_setting_model.dart';
 export 'package:auto_scoring_api/src/model/undo_review_request.dart';
 export 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 export 'package:auto_scoring_api/src/model/update_criteria_request.dart';

@@ -226,6 +226,13 @@
       "ApiKeySettingsResponse": {
         "description": "The whole screen's state, so one round trip refreshes all of it.",
         "properties": {
+          "available_transports": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Transports",
+            "type": "array"
+          },
           "keys": {
             "items": {
               "$ref": "#/components/schemas/ApiKeyStatusModel"
@@ -252,6 +259,10 @@
             "title": "Transport Order",
             "type": "string"
           },
+          "transport_order_stored": {
+            "title": "Transport Order Stored",
+            "type": "boolean"
+          },
           "transport_source": {
             "$ref": "#/components/schemas/ConfigurationSource"
           }
@@ -259,6 +270,8 @@
         "required": [
           "transport_order",
           "transport_source",
+          "transport_order_stored",
+          "available_transports",
           "restart_required",
           "keys"
         ],
@@ -266,8 +279,12 @@
         "type": "object"
       },
       "ApiKeyStatusModel": {
-        "description": "One provider's key, described without disclosing it.",
+        "description": "One provider, described without disclosing its key.",
         "properties": {
+          "auth_note": {
+            "title": "Auth Note",
+            "type": "string"
+          },
           "configured": {
             "title": "Configured",
             "type": "boolean"
@@ -275,6 +292,17 @@
           "console_url": {
             "title": "Console Url",
             "type": "string"
+          },
+          "host_available": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Available"
           },
           "id": {
             "title": "Id",
@@ -284,8 +312,15 @@
             "$ref": "#/components/schemas/ConfigurationSource"
           },
           "key_variable": {
-            "title": "Key Variable",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Variable"
           },
           "label": {
             "title": "Label",
@@ -297,16 +332,36 @@
           },
           "model_source": {
             "$ref": "#/components/schemas/ConfigurationSource"
+          },
+          "model_variable": {
+            "title": "Model Variable",
+            "type": "string"
+          },
+          "text_settings": {
+            "items": {
+              "$ref": "#/components/schemas/TextSettingModel"
+            },
+            "title": "Text Settings",
+            "type": "array"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "label",
+          "transport",
+          "key_variable",
           "configured",
           "key_source",
-          "key_variable",
           "model",
           "model_source",
+          "model_variable",
+          "text_settings",
+          "host_available",
+          "auth_note",
           "console_url"
         ],
         "title": "ApiKeyStatusModel",
@@ -3116,17 +3171,35 @@
         "type": "string"
       },
       "SaveApiKeyRequest": {
+        "description": "Values submitted for one slot; a blank value clears that setting.\n\nNamed for the screen it comes from rather than \"slot\", so the generated\nDart/TS clients stay legible. ``value`` is kept as a key-only shorthand\nfor backward compatibility with the Issue #96 clients.",
         "properties": {
           "value": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Value",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "object"
           }
         },
-        "required": [
-          "value"
-        ],
         "title": "SaveApiKeyRequest",
         "type": "object"
       },
@@ -3166,6 +3239,24 @@
           "templates"
         ],
         "title": "SaveTemplatesRequest",
+        "type": "object"
+      },
+      "SaveTransportOrderRequest": {
+        "description": "The submitted use order, highest priority first.",
+        "properties": {
+          "order": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Order",
+            "type": "array"
+          }
+        },
+        "required": [
+          "order"
+        ],
+        "title": "SaveTransportOrderRequest",
         "type": "object"
       },
       "ScannedFileModel": {
@@ -3540,6 +3631,49 @@
           "name"
         ],
         "title": "TestSummary",
+        "type": "object"
+      },
+      "TextSettingModel": {
+        "description": "One readable (non-secret) setting: its effective value and source.",
+        "properties": {
+          "default_value": {
+            "title": "Default Value",
+            "type": "string"
+          },
+          "help_text": {
+            "title": "Help Text",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "placeholder": {
+            "title": "Placeholder",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ConfigurationSource"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          },
+          "variable": {
+            "title": "Variable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "variable",
+          "label",
+          "value",
+          "source",
+          "default_value",
+          "placeholder",
+          "help_text"
+        ],
+        "title": "TextSettingModel",
         "type": "object"
       },
       "UndoReviewRequest": {
@@ -4633,6 +4767,76 @@
           }
         ],
         "summary": "Verify",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/settings/transport-order": {
+      "delete": {
+        "operationId": "clear_transport_order_settings_transport_order_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clear Transport Order",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "save_transport_order_settings_transport_order_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveTransportOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeySettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Transport Order",
         "tags": [
           "settings"
         ]

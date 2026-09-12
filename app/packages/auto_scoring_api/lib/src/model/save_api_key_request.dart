@@ -3,20 +3,25 @@
 //
 
 // ignore_for_file: unused_element
+import 'package:built_collection/built_collection.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
 part 'save_api_key_request.g.dart';
 
-/// SaveApiKeyRequest
+/// Values submitted for one slot; a blank value clears that setting.  Named for the screen it comes from rather than \"slot\", so the generated Dart/TS clients stay legible. ``value`` is kept as a key-only shorthand for backward compatibility with the Issue #96 clients.
 ///
 /// Properties:
 /// * [value]
+/// * [values]
 @BuiltValue()
 abstract class SaveApiKeyRequest
     implements Built<SaveApiKeyRequest, SaveApiKeyRequestBuilder> {
   @BuiltValueField(wireName: r'value')
-  String get value;
+  String? get value;
+
+  @BuiltValueField(wireName: r'values')
+  BuiltMap<String, String?>? get values;
 
   SaveApiKeyRequest._();
 
@@ -44,11 +49,21 @@ class _$SaveApiKeyRequestSerializer
     SaveApiKeyRequest object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
-    yield r'value';
-    yield serializers.serialize(
-      object.value,
-      specifiedType: const FullType(String),
-    );
+    if (object.value != null) {
+      yield r'value';
+      yield serializers.serialize(
+        object.value,
+        specifiedType: const FullType.nullable(String),
+      );
+    }
+    if (object.values != null) {
+      yield r'values';
+      yield serializers.serialize(
+        object.values,
+        specifiedType: const FullType(
+            BuiltMap, [FullType(String), FullType.nullable(String)]),
+      );
+    }
   }
 
   @override
@@ -77,9 +92,19 @@ class _$SaveApiKeyRequestSerializer
         case r'value':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType(String),
-          ) as String;
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
           result.value = valueDes;
+          break;
+        case r'values':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(
+                BuiltMap, [FullType(String), FullType.nullable(String)]),
+          ) as BuiltMap<String, String?>?;
+          if (valueDes == null) continue;
+          result.values.replace(valueDes);
           break;
         default:
           unhandled.add(key);

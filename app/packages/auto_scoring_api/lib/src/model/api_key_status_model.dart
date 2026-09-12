@@ -3,31 +3,44 @@
 //
 
 // ignore_for_file: unused_element
+import 'package:auto_scoring_api/src/model/text_setting_model.dart';
 import 'package:auto_scoring_api/src/model/configuration_source.dart';
+import 'package:built_collection/built_collection.dart';
 import 'package:built_value/built_value.dart';
 import 'package:built_value/serializer.dart';
 
 part 'api_key_status_model.g.dart';
 
-/// One provider's key, described without disclosing it.
+/// One provider, described without disclosing its key.
 ///
 /// Properties:
+/// * [authNote]
 /// * [configured]
 /// * [consoleUrl]
+/// * [hostAvailable]
 /// * [id]
 /// * [keySource]
 /// * [keyVariable]
 /// * [label]
 /// * [model]
 /// * [modelSource]
+/// * [modelVariable]
+/// * [textSettings]
+/// * [transport]
 @BuiltValue()
 abstract class ApiKeyStatusModel
     implements Built<ApiKeyStatusModel, ApiKeyStatusModelBuilder> {
+  @BuiltValueField(wireName: r'auth_note')
+  String get authNote;
+
   @BuiltValueField(wireName: r'configured')
   bool get configured;
 
   @BuiltValueField(wireName: r'console_url')
   String get consoleUrl;
+
+  @BuiltValueField(wireName: r'host_available')
+  bool? get hostAvailable;
 
   @BuiltValueField(wireName: r'id')
   String get id;
@@ -37,7 +50,7 @@ abstract class ApiKeyStatusModel
   // enum keySourceEnum {  credential_store,  environment,  builtin_default,  none,  };
 
   @BuiltValueField(wireName: r'key_variable')
-  String get keyVariable;
+  String? get keyVariable;
 
   @BuiltValueField(wireName: r'label')
   String get label;
@@ -48,6 +61,15 @@ abstract class ApiKeyStatusModel
   @BuiltValueField(wireName: r'model_source')
   ConfigurationSource get modelSource;
   // enum modelSourceEnum {  credential_store,  environment,  builtin_default,  none,  };
+
+  @BuiltValueField(wireName: r'model_variable')
+  String get modelVariable;
+
+  @BuiltValueField(wireName: r'text_settings')
+  BuiltList<TextSettingModel> get textSettings;
+
+  @BuiltValueField(wireName: r'transport')
+  String get transport;
 
   ApiKeyStatusModel._();
 
@@ -75,6 +97,11 @@ class _$ApiKeyStatusModelSerializer
     ApiKeyStatusModel object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
+    yield r'auth_note';
+    yield serializers.serialize(
+      object.authNote,
+      specifiedType: const FullType(String),
+    );
     yield r'configured';
     yield serializers.serialize(
       object.configured,
@@ -85,6 +112,13 @@ class _$ApiKeyStatusModelSerializer
       object.consoleUrl,
       specifiedType: const FullType(String),
     );
+    yield r'host_available';
+    yield object.hostAvailable == null
+        ? null
+        : serializers.serialize(
+            object.hostAvailable,
+            specifiedType: const FullType.nullable(bool),
+          );
     yield r'id';
     yield serializers.serialize(
       object.id,
@@ -96,10 +130,12 @@ class _$ApiKeyStatusModelSerializer
       specifiedType: const FullType(ConfigurationSource),
     );
     yield r'key_variable';
-    yield serializers.serialize(
-      object.keyVariable,
-      specifiedType: const FullType(String),
-    );
+    yield object.keyVariable == null
+        ? null
+        : serializers.serialize(
+            object.keyVariable,
+            specifiedType: const FullType.nullable(String),
+          );
     yield r'label';
     yield serializers.serialize(
       object.label,
@@ -114,6 +150,21 @@ class _$ApiKeyStatusModelSerializer
     yield serializers.serialize(
       object.modelSource,
       specifiedType: const FullType(ConfigurationSource),
+    );
+    yield r'model_variable';
+    yield serializers.serialize(
+      object.modelVariable,
+      specifiedType: const FullType(String),
+    );
+    yield r'text_settings';
+    yield serializers.serialize(
+      object.textSettings,
+      specifiedType: const FullType(BuiltList, [FullType(TextSettingModel)]),
+    );
+    yield r'transport';
+    yield serializers.serialize(
+      object.transport,
+      specifiedType: const FullType(String),
     );
   }
 
@@ -140,6 +191,13 @@ class _$ApiKeyStatusModelSerializer
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
+        case r'auth_note':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(String),
+          ) as String;
+          result.authNote = valueDes;
+          break;
         case r'configured':
           final valueDes = serializers.deserialize(
             value,
@@ -153,6 +211,14 @@ class _$ApiKeyStatusModelSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.consoleUrl = valueDes;
+          break;
+        case r'host_available':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType.nullable(bool),
+          ) as bool?;
+          if (valueDes == null) continue;
+          result.hostAvailable = valueDes;
           break;
         case r'id':
           final valueDes = serializers.deserialize(
@@ -171,8 +237,9 @@ class _$ApiKeyStatusModelSerializer
         case r'key_variable':
           final valueDes = serializers.deserialize(
             value,
-            specifiedType: const FullType(String),
-          ) as String;
+            specifiedType: const FullType.nullable(String),
+          ) as String?;
+          if (valueDes == null) continue;
           result.keyVariable = valueDes;
           break;
         case r'label':
@@ -195,6 +262,28 @@ class _$ApiKeyStatusModelSerializer
             specifiedType: const FullType(ConfigurationSource),
           ) as ConfigurationSource;
           result.modelSource = valueDes;
+          break;
+        case r'model_variable':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(String),
+          ) as String;
+          result.modelVariable = valueDes;
+          break;
+        case r'text_settings':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType:
+                const FullType(BuiltList, [FullType(TextSettingModel)]),
+          ) as BuiltList<TextSettingModel>;
+          result.textSettings.replace(valueDes);
+          break;
+        case r'transport':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(String),
+          ) as String;
+          result.transport = valueDes;
           break;
         default:
           unhandled.add(key);

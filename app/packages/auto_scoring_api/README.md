@@ -125,9 +125,11 @@ Class | Method | HTTP request | Description
 [*ReviewApi*](doc/ReviewApi.md) | [**regradeSubmissionsSubmissionIdQuestionsQuestionIdReviewRegradePost**](doc/ReviewApi.md#regradesubmissionssubmissionidquestionsquestionidreviewregradepost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/regrade | Regrade
 [*ReviewApi*](doc/ReviewApi.md) | [**rejectSubmissionsSubmissionIdQuestionsQuestionIdReviewRejectPost**](doc/ReviewApi.md#rejectsubmissionssubmissionidquestionsquestionidreviewrejectpost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/reject | Reject
 [*ReviewApi*](doc/ReviewApi.md) | [**undoSubmissionsSubmissionIdQuestionsQuestionIdReviewUndoPost**](doc/ReviewApi.md#undosubmissionssubmissionidquestionsquestionidreviewundopost) | **POST** /submissions/{submission_id}/questions/{question_id}/review/undo | Undo
+[*SettingsApi*](doc/SettingsApi.md) | [**clearTransportOrderSettingsTransportOrderDelete**](doc/SettingsApi.md#cleartransportordersettingstransportorderdelete) | **DELETE** /settings/transport-order | Clear Transport Order
 [*SettingsApi*](doc/SettingsApi.md) | [**deleteApiKeySettingsApiKeysSlotIdDelete**](doc/SettingsApi.md#deleteapikeysettingsapikeysslotiddelete) | **DELETE** /settings/api-keys/{slot_id} | Delete Api Key
 [*SettingsApi*](doc/SettingsApi.md) | [**readApiKeysSettingsApiKeysGet**](doc/SettingsApi.md#readapikeyssettingsapikeysget) | **GET** /settings/api-keys | Read Api Keys
 [*SettingsApi*](doc/SettingsApi.md) | [**saveApiKeySettingsApiKeysSlotIdPut**](doc/SettingsApi.md#saveapikeysettingsapikeysslotidput) | **PUT** /settings/api-keys/{slot_id} | Save Api Key
+[*SettingsApi*](doc/SettingsApi.md) | [**saveTransportOrderSettingsTransportOrderPut**](doc/SettingsApi.md#savetransportordersettingstransportorderput) | **PUT** /settings/transport-order | Save Transport Order
 [*SettingsApi*](doc/SettingsApi.md) | [**verifySettingsApiKeysSlotIdVerifyPost**](doc/SettingsApi.md#verifysettingsapikeysslotidverifypost) | **POST** /settings/api-keys/{slot_id}/verify | Verify
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**addMaterialsTestsTestIdMaterialsPost**](doc/TestRegistrationApi.md#addmaterialsteststestidmaterialspost) | **POST** /tests/{test_id}/materials | Add Materials
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**analyzeProfileTestsTestIdProfileAnalyzePost**](doc/TestRegistrationApi.md#analyzeprofileteststestidprofileanalyzepost) | **POST** /tests/{test_id}/profile/analyze | Analyze Profile
@@ -233,6 +235,7 @@ Class | Method | HTTP request | Description
  - [SaveApiKeyRequest](doc/SaveApiKeyRequest.md)
  - [SaveErrorCatalogRequest](doc/SaveErrorCatalogRequest.md)
  - [SaveTemplatesRequest](doc/SaveTemplatesRequest.md)
+ - [SaveTransportOrderRequest](doc/SaveTransportOrderRequest.md)
  - [ScannedFileModel](doc/ScannedFileModel.md)
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
@@ -243,6 +246,7 @@ Class | Method | HTTP request | Description
  - [TestMaterialResponse](doc/TestMaterialResponse.md)
  - [TestResponse](doc/TestResponse.md)
  - [TestSummary](doc/TestSummary.md)
+ - [TextSettingModel](doc/TextSettingModel.md)
  - [UndoReviewRequest](doc/UndoReviewRequest.md)
  - [UnresolvedQuestionModel](doc/UnresolvedQuestionModel.md)
  - [UpdateCriteriaRequest](doc/UpdateCriteriaRequest.md)

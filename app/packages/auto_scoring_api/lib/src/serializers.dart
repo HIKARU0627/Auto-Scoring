@@ -99,6 +99,7 @@ import 'package:auto_scoring_api/src/model/rule_scope.dart';
 import 'package:auto_scoring_api/src/model/save_api_key_request.dart';
 import 'package:auto_scoring_api/src/model/save_error_catalog_request.dart';
 import 'package:auto_scoring_api/src/model/save_templates_request.dart';
+import 'package:auto_scoring_api/src/model/save_transport_order_request.dart';
 import 'package:auto_scoring_api/src/model/scanned_file_model.dart';
 import 'package:auto_scoring_api/src/model/score_request.dart';
 import 'package:auto_scoring_api/src/model/score_response.dart';
@@ -109,6 +110,7 @@ import 'package:auto_scoring_api/src/model/submission_review_progress_response.d
 import 'package:auto_scoring_api/src/model/test_material_response.dart';
 import 'package:auto_scoring_api/src/model/test_response.dart';
 import 'package:auto_scoring_api/src/model/test_summary.dart';
+import 'package:auto_scoring_api/src/model/text_setting_model.dart';
 import 'package:auto_scoring_api/src/model/undo_review_request.dart';
 import 'package:auto_scoring_api/src/model/unresolved_question_model.dart';
 import 'package:auto_scoring_api/src/model/update_criteria_request.dart';
@@ -205,6 +207,7 @@ part 'serializers.g.dart';
   SaveApiKeyRequest,
   SaveErrorCatalogRequest,
   SaveTemplatesRequest,
+  SaveTransportOrderRequest,
   ScannedFileModel,
   ScoreRequest,
   ScoreResponse,
@@ -215,6 +218,7 @@ part 'serializers.g.dart';
   TestMaterialResponse,
   TestResponse,
   TestSummary,
+  TextSettingModel,
   UndoReviewRequest,
   UnresolvedQuestionModel,
   UpdateCriteriaRequest,
@@ -303,6 +307,10 @@ Serializers serializers = (_$serializers.toBuilder()
         () => ListBuilder<RegionModel>(),
       )
       ..addBuilderFactory(
+        const FullType(BuiltMap, [FullType(String), FullType.nullable(String)]),
+        () => MapBuilder<String, String?>(),
+      )
+      ..addBuilderFactory(
         const FullType(BuiltList, [FullType(ErrorCatalogEntryModel)]),
         () => ListBuilder<ErrorCatalogEntryModel>(),
       )
@@ -337,6 +345,10 @@ Serializers serializers = (_$serializers.toBuilder()
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(QuestionResponse)]),
         () => ListBuilder<QuestionResponse>(),
+      )
+      ..addBuilderFactory(
+        const FullType(BuiltList, [FullType(TextSettingModel)]),
+        () => ListBuilder<TextSettingModel>(),
       )
       ..addBuilderFactory(
         const FullType(BuiltList, [FullType(TestSummary)]),
