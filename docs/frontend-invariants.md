@@ -195,19 +195,21 @@ Issue #201 の「守るべき不変条件」10 項目は **INV-201-01〜10** と
 
 ## 7. 無効操作の理由（action_requirements）
 
-| ID      | 不変条件                                          | 出どころ       | 根拠のテスト                           | 壊れると                        |
-| ------- | ------------------------------------------------- | -------------- | -------------------------------------- | ------------------------------- |
-| INV-100 | 無効操作には理由 id が 1 件以上、有効時 0 件      | #88            | `action_requirements_test.dart:38`     | INV-201-04 再発                 |
-| INV-101 | 理由文は「。」終わり・Exception/HTTP/数字なし     | #88 / Security | `action_requirements_test.dart:20`     | 診断文が講師に見える            |
-| INV-102 | busy は単独でも理由になる                         | #88            | `action_requirements_test.dart:54`     | 処理中に理由なし無効            |
-| INV-103 | intake: template 未選択→`intake-template`         | #88            | `action_requirements_test.dart:38`     | フォルダ選択不可理由なし        |
-| INV-104 | 条件充足で理由消去＋高さ 0（余白残さない）        | #88            | `disabled_action_reason_test.dart:71`  | 理由欄の空白                    |
-| INV-105 | 理由は Tooltip ではなく visible Text              | #88            | `disabled_action_reason_test.dart:59`  | ホバー必須→キーボード利用者排除 |
-| INV-106 | 狭幅 700×720 で理由が画面内                       | #88            | `disabled_action_reason_test.dart:96`  | 理由が clip                     |
-| INV-107 | API キー: 未設定→verify 無効+理由                 | #88 / #96      | `action_requirements_test.dart:320`    | 設定画面で操作不能理由不明      |
-| INV-108 | helperText と disabled reason の二重表示禁止      | #88            | `disabled_action_reason_test.dart:210` | 文言の片方だけ古くなる          |
-| INV-109 | Tab 順: 理由 Text は focus 取らず隣ボタン到達可能 | #88            | `disabled_action_reason_test.dart:215` | 理由追加で Tab 順破壊           |
-| INV-110 | profile confirm 理由 ⊇ save 理由（部分集合）      | #88            | `action_requirements_test.dart:175`    | 1 理由欄で save だけ塞がる      |
+| ID      | 不変条件                                             | 出どころ       | 根拠のテスト                               | 壊れると                         |
+| ------- | ---------------------------------------------------- | -------------- | ------------------------------------------ | -------------------------------- |
+| INV-100 | 無効操作には理由 id が 1 件以上、有効時 0 件         | #88            | `action_requirements_test.dart:38`         | INV-201-04 再発                  |
+| INV-101 | 理由文は「。」終わり・Exception/HTTP/数字なし        | #88 / Security | `action_requirements_test.dart:20`         | 診断文が講師に見える             |
+| INV-102 | busy は単独でも理由になる                            | #88            | `action_requirements_test.dart:54`         | 処理中に理由なし無効             |
+| INV-103 | intake: template 未選択→`intake-template`            | #88            | `action_requirements_test.dart:38`         | フォルダ選択不可理由なし         |
+| INV-104 | 条件充足で理由消去＋高さ 0（余白残さない）           | #88            | `disabled_action_reason_test.dart:71`      | 理由欄の空白                     |
+| INV-105 | 理由は Tooltip ではなく visible Text                 | #88            | `disabled_action_reason_test.dart:59`      | ホバー必須→キーボード利用者排除  |
+| INV-106 | 狭幅 700×720 で理由が画面内                          | #88            | `disabled_action_reason_test.dart:96`      | 理由が clip                      |
+| INV-107 | API キー: 未設定→verify 無効+理由                    | #88 / #96      | `action_requirements_test.dart:320`        | 設定画面で操作不能理由不明       |
+| INV-108 | helperText と disabled reason の二重表示禁止         | #88            | `disabled_action_reason_test.dart:210`     | 文言の片方だけ古くなる           |
+| INV-109 | Tab 順: 理由 Text は focus 取らず隣ボタン到達可能    | #88            | `disabled_action_reason_test.dart:215`     | 理由追加で Tab 順破壊            |
+| INV-110 | profile confirm 理由 ⊇ save 理由（部分集合）         | #88            | `action_requirements_test.dart:175`        | 1 理由欄で save だけ塞がる       |
+| INV-111 | 同じ理由は 2 度出さない（同一性は `id`）             | #424           | `test-settings-duplicate-reasons.test.tsx` | 同じ文言が並ぶ・片方だけ古くなる |
+| INV-112 | 「残りの確認」は未達の理由だけを数える（既達は外す） | #424           | `test-settings-duplicate-reasons.test.tsx` | 「登録完了」と「残り1件」が矛盾  |
 
 ### 7.1 INV-004 / INV-101 の検査範囲（Issue #271）
 
@@ -239,6 +241,22 @@ Issue #201 の「守るべき不変条件」10 項目は **INV-201-01〜10** と
 許容する。件数ではなく文面の同一性で持つので、既に違反があるファイルに新しい違反を
 足しても赤くなる。許容リストの件数は固定値で検査しており、エントリを増やすと赤くなる。
 撤去先は Issue #278 である。
+
+### 7.2 無効理由の重複と「残り」の数え方（Issue #424）
+
+- **同じ理由を 2 度出さない（INV-111）。** 無効理由の同一性は `ActionRequirement.id` が持つ。
+  複数の操作の理由集合を 1 つの表示へまとめるときは `dedupeRequirements` で畳んでから描く。
+  兄弟の `DisabledActionReason` に同じ id を分けて渡しても component 側では消せない
+  （別 mount で配列が共有されない）ため、畳むのは呼び出し側である。
+- **「残りの確認」は未達だけを数える（INV-112）。** `ActionRequirement.met` が true の理由
+  （`registrationAlreadyComplete` など「もう済んだ」条件）はボタンが無効な理由にはなるが、
+  `remainingWork` には数えない。除外は id の列挙ではなく `met` を見るので、新しい要件も
+  既定（未達）のままであれば残りに乗る。「残りの確認」とボタンの無効理由が同じ id を
+  二重に描かないよう、後者には既達ぶんだけ（`metRequirements`）を渡す。
+
+検査は `desktop/test/renderer/test-settings-duplicate-reasons.test.tsx` である。未達の理由が
+「残りの確認」と無効理由に二重に出ないこと、確定済みの理由がボタンごとに繰り返されないこと、
+登録完了済みの理由を「残りの確認」に数えないことを、描画された `data-testid` から読む。
 
 ---
 

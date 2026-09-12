@@ -16,12 +16,14 @@ import {
 const REASON: ActionRequirement = {
   id: "test-reason",
   message: "上の欄を埋めてから、この操作を実行してください。",
+  met: false,
 };
 
 const LONG_REASON: ActionRequirement = {
   id: "wrap-test",
   message:
     "回答欄が見つからなかった設問があります。このまま確定することもできますが、その設問は答案のページ全体を採点に送り、要確認として人の目に回りますので、設問名を押して枠を引いてください。",
+  met: false,
 };
 
 const FOCUSABLE_SELECTOR = [

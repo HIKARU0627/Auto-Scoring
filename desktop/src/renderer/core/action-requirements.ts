@@ -7,10 +7,63 @@
 export interface ActionRequirement {
   readonly id: string;
   readonly message: string;
+  /**
+   * この理由があげている条件が既に満たされているか (Issue #424).
+   *
+   * `false`（既定）は「まだ済んでいない」条件で、無効理由であると同時に
+   * 「残りの確認」に数える対象でもある。`true` は「もう済んでいる」状態を説明する
+   * 理由で、ボタンが無効な理由にはなるが「残りの確認」には数えない。
+   *
+   * どちら側かを理由自身が持つので、`remainingWork` 側で「もう済んだ理由」を
+   * id の列挙で除外する必要がない。新しい理由を足すときも、既定のままなら
+   * 未達として数えられ、既達の理由だけが `satisfiedRequirement` を選ぶ。
+   */
+  readonly met: boolean;
 }
 
 function requirement(id: string, message: string): ActionRequirement {
-  return { id, message };
+  return { id, message, met: false };
+}
+
+/** 既に満たされた条件を説明する理由。無効理由ではあるが「残り」ではない。 */
+function satisfiedRequirement(id: string, message: string): ActionRequirement {
+  return { id, message, met: true };
+}
+
+/**
+ * 同じ理由 id を 1 回だけに畳む (INV-111, Issue #424).
+ *
+ * 複数の操作の理由集合を 1 つの表示へまとめるとき、同じ条件（例: プロファイル
+ * 確定済み）が複数の関数から push されて二重に並ぶ。同一性は `id` が持つので、
+ * 文言ではなく id で畳む。後に続く未達の理由を消さないよう先勝ちで残す。
+ */
+export function dedupeRequirements(
+  requirements: readonly ActionRequirement[],
+): readonly ActionRequirement[] {
+  const seen = new Set<string>();
+  const unique: ActionRequirement[] = [];
+  for (const requirement of requirements) {
+    if (seen.has(requirement.id)) {
+      continue;
+    }
+    seen.add(requirement.id);
+    unique.push(requirement);
+  }
+  return unique;
+}
+
+/** まだ済んでいない理由だけを残す (INV-112, Issue #424). */
+export function unmetRequirements(
+  requirements: readonly ActionRequirement[],
+): readonly ActionRequirement[] {
+  return requirements.filter((requirement) => !requirement.met);
+}
+
+/** 既に済んだ理由だけを残す。未達の一覧と重ならない補足表示に使う。 */
+export function metRequirements(
+  requirements: readonly ActionRequirement[],
+): readonly ActionRequirement[] {
+  return requirements.filter((requirement) => requirement.met);
 }
 
 export const ActionRequirements = {
@@ -106,7 +159,7 @@ export const ActionRequirements = {
     "answer-sheet-unrendered",
     "答案を表示できていません。上の「再試行」を押して、実際の答案を出してください。",
   ),
-  profileAlreadyConfirmed: requirement(
+  profileAlreadyConfirmed: satisfiedRequirement(
     "profile-already-confirmed",
     "テストプロファイルは確定済みです。確定した回答欄は変更できません。",
   ),
@@ -114,7 +167,7 @@ export const ActionRequirements = {
     "dependency-graph-missing",
     "設問依存関係グラフがまだありません。「依存関係を分析」を押してください。",
   ),
-  dependencyGraphAlreadyConfirmed: requirement(
+  dependencyGraphAlreadyConfirmed: satisfiedRequirement(
     "dependency-graph-already-confirmed",
     "設問依存関係グラフは確定済みです。",
   ),
@@ -134,7 +187,7 @@ export const ActionRequirements = {
     "dependency-graph-stale",
     "設問が変わったため、設問依存関係グラフを分析し直して確定してください。このまま「登録完了」を押すと断られます。",
   ),
-  registrationAlreadyComplete: requirement(
+  registrationAlreadyComplete: satisfiedRequirement(
     "registration-already-complete",
     "登録は完了しています。答案を取り込むと採点が始まります。",
   ),
@@ -146,7 +199,7 @@ export const ActionRequirements = {
     "submission-test-not-ready",
     "このテストはまだ登録が済んでいないため、答案を取り込めません。先に登録を完了してから、同じフォルダをもう一度取り込んでください。",
   ),
-  submissionDuplicate: requirement(
+  submissionDuplicate: satisfiedRequirement(
     "submission-duplicate",
     "同じ答案がすでに取り込まれています。取り込み直す必要はありません。",
   ),
@@ -193,7 +246,7 @@ export const ActionRequirements = {
       "submission-confirm-unreached",
       `まだ表示していない設問があります（${numbers}）。${unreadIsAbove ? "上" : "下"}方向へスクロールすると確定できます。`,
     ),
-  submissionConfirmNothingToConfirm: requirement(
+  submissionConfirmNothingToConfirm: satisfiedRequirement(
     "submission-confirm-nothing-to-confirm",
     "この答案は全設問を確定済みです。",
   ),
@@ -234,7 +287,7 @@ export const ActionRequirements = {
       `採点基準の設問は${expected}件、登録済み答案で回答欄が覆えているのは${covered}件です。覆えていない設問が${uncovered}件あります。`,
     ),
   answerCoverageComplete: (covered: number): ActionRequirement =>
-    requirement(
+    satisfiedRequirement(
       "answer-coverage-complete",
       `採点基準の設問${covered}件すべてに回答欄があります。`,
     ),
