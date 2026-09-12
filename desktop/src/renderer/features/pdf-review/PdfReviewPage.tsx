@@ -149,6 +149,7 @@ export function PdfReviewPage(): JSX.Element {
   const [answerImageUrl, setAnswerImageUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [pageIndex, setPageIndex] = useState(0);
   const [jobsRefreshStalled, setJobsRefreshStalled] = useState(false);
 
   const selectedQuestion = questions[selectedIndex] ?? null;
@@ -307,6 +308,22 @@ export function PdfReviewPage(): JSX.Element {
   useEffect(() => {
     void loadSelectedQuestion();
   }, [loadSelectedQuestion]);
+
+  /**
+   * Jump the page viewer to the selected question's page (Issue #385).
+   *
+   * The viewer no longer *belongs* to the question: `pageIndex` is its own
+   * state so the reviewer can flip pages directly, and the viewer stays on
+   * screen when no question is selected. This effect only moves it when the
+   * selected question changes, so a manual flip is never reverted by an
+   * unrelated re-render.
+   */
+  useEffect(() => {
+    if (selectedQuestion == null) {
+      return;
+    }
+    setPageIndex(Math.max(0, (selectedQuestion.page ?? 1) - 1));
+  }, [selectedQuestion?.id, selectedQuestion?.page]);
 
   const hasJobsInProgress = jobs.some(jobIsInProgress);
 
@@ -555,9 +572,13 @@ export function PdfReviewPage(): JSX.Element {
     questions.length,
   ]);
 
-  const pageIndex = Math.max(0, (selectedQuestion?.page ?? 1) - 1);
+  const pageCount = loadState.status === "ready" ? loadState.pages.length : 0;
+  const currentPageIndex =
+    pageCount === 0 ? 0 : Math.min(pageIndex, pageCount - 1);
   const pageState =
-    loadState.status === "ready" ? loadState.pages[pageIndex] : null;
+    loadState.status === "ready"
+      ? (loadState.pages[currentPageIndex] ?? null)
+      : null;
 
   return (
     <ShellScreen title="添削レビュー">
@@ -709,20 +730,46 @@ export function PdfReviewPage(): JSX.Element {
             </nav>
 
             <div className="min-w-0 flex-1">
-              <div className="min-w-0 overflow-x-auto rounded-xl bg-surface-container-low p-sm">
-                {pageState != null ? (
-                  <PageImageViewer
-                    pageImage={pageState.image}
-                    displayedWidth={pageState.geometry.displayed_width}
-                    displayedHeight={pageState.geometry.displayed_height}
-                    annotations={selectedAnnotations}
-                    recognitions={selectedRecognitions}
-                    questionAnswerArea={selectedQuestion?.answer_area}
-                    zoom={zoom}
-                  />
-                ) : null}
-              </div>
-              <div className="mt-sm flex gap-sm">
+              <div className="mb-sm flex flex-wrap items-center gap-sm">
+                <button
+                  type="button"
+                  data-testid="review-page-prev"
+                  aria-label="前のページ"
+                  className={BUTTON_SECONDARY_CLASS}
+                  disabled={pageCount === 0 || currentPageIndex <= 0}
+                  onClick={() => {
+                    setPageIndex((value) => Math.max(0, value - 1));
+                  }}
+                >
+                  前のページ
+                </button>
+                <span
+                  data-testid="review-page-indicator"
+                  aria-live="polite"
+                  className="text-ui-label text-on-surface-variant"
+                >
+                  {pageCount === 0
+                    ? "0 / 0"
+                    : `${currentPageIndex + 1} / ${pageCount}`}
+                </span>
+                <button
+                  type="button"
+                  data-testid="review-page-next"
+                  aria-label="次のページ"
+                  className={BUTTON_SECONDARY_CLASS}
+                  disabled={
+                    pageCount === 0 || currentPageIndex >= pageCount - 1
+                  }
+                  onClick={() => {
+                    setPageIndex((value) => Math.min(pageCount - 1, value + 1));
+                  }}
+                >
+                  次のページ
+                </button>
+                <span
+                  className="mx-xs h-6 w-px bg-outline-variant"
+                  aria-hidden
+                />
                 <button
                   type="button"
                   className={BUTTON_SECONDARY_CLASS}
@@ -741,6 +788,32 @@ export function PdfReviewPage(): JSX.Element {
                 >
                   拡大
                 </button>
+              </div>
+              <div
+                data-testid="review-page-region"
+                className="min-w-0 overflow-x-auto rounded-xl bg-surface-container-low p-sm"
+              >
+                {pageState != null ? (
+                  <PageImageViewer
+                    pageImage={pageState.image}
+                    displayedWidth={pageState.geometry.displayed_width}
+                    displayedHeight={pageState.geometry.displayed_height}
+                    annotations={selectedAnnotations}
+                    recognitions={selectedRecognitions}
+                    questionAnswerArea={selectedQuestion?.answer_area}
+                    zoom={zoom}
+                  />
+                ) : (
+                  <div
+                    data-testid="review-page-unavailable"
+                    role="status"
+                    className="flex min-h-40 items-center justify-center px-md py-lg text-center text-body-medium text-on-surface-variant"
+                  >
+                    {pageCount === 0
+                      ? "答案ページがありません。答案の取り込みが完了しているか確認してください。"
+                      : "このページを表示できませんでした。前後のページへ移動してください。"}
+                  </div>
+                )}
               </div>
             </div>
 

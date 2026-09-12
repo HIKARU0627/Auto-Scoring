@@ -35,6 +35,14 @@ export interface PdfReviewHarnessOptions {
   annotations?: AnnotationResponse[];
   reviews?: ReviewResponse[];
   criterionCount?: number;
+  /**
+   * Page geometries the submission reports (Issue #385). The default is one
+   * page, so existing specs keep their single-page submission. An empty array
+   * models a submission whose page images could not be produced at all.
+   */
+  pages?: Array<{ displayed_width: number; displayed_height: number }>;
+  /** Return an error for every page-image request. */
+  pageImageFails?: boolean;
   /** Keep the page in loading until `releaseInitialLoad` is called. */
   holdInitialLoad?: boolean;
   /** Keep question review data unloaded until `releaseQuestionData` is called. */
@@ -170,6 +178,9 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
   ];
   const annotations = options.annotations ?? [];
   const reviews = options.reviews ?? [];
+  const pages = options.pages ?? [
+    { displayed_width: 595, displayed_height: 842 },
+  ];
   let jobsRead = 0;
 
   const client = {
@@ -236,21 +247,26 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
       if (path === "/submissions/{submission_id}/pages") {
         return {
           data: {
-            page_count: 1,
-            pages: [
-              {
-                page_index: 0,
-                displayed_width: 595,
-                displayed_height: 842,
-                rotation: 0,
-              },
-            ],
+            page_count: pages.length,
+            pages: pages.map((page, index) => ({
+              page_index: index,
+              displayed_width: page.displayed_width,
+              displayed_height: page.displayed_height,
+              rotation: 0,
+            })),
           },
           response: new Response(),
           error: undefined,
         };
       }
       if (path === "/submissions/{submission_id}/pages/{page_index}/image") {
+        if (options.pageImageFails === true) {
+          return {
+            data: undefined,
+            response: new Response(null, { status: 500 }),
+            error: { message: "image unavailable" },
+          };
+        }
         const blob = new Blob([new Uint8Array([137, 80, 78, 71])], {
           type: "image/png",
         });
