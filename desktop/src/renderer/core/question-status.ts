@@ -76,6 +76,40 @@ export function jobIsInProgress(job: JobResponse | null | undefined): boolean {
   );
 }
 
+/**
+ * The most recently created job for one question, or `null` when none exists
+ * (Issue #402).
+ *
+ * A question can carry several jobs: a re-submission under a newer confirmed
+ * graph version, or a 再判定 request, creates a fresh `Job` while the older
+ * attempt stays in the append-only list. The job that describes the question's
+ * *current* attempt is the newest one; `Array.prototype.find` returns the
+ * oldest instead, which left the review screen deriving status from a
+ * superseded `succeeded` job while the replacement ran (or had already
+ * finished) -- the 再判定待ち that never cleared.
+ *
+ * Ties keep the first row encountered, matching the API's `created_at`
+ * ascending order and the Flutter reference's `_latestJobFor`.
+ */
+export function latestJobFor(
+  jobs: readonly JobResponse[],
+  questionId: string,
+): JobResponse | null {
+  let latest: JobResponse | null = null;
+  for (const job of jobs) {
+    if (job.question_id !== questionId) {
+      continue;
+    }
+    if (
+      latest == null ||
+      new Date(job.created_at).getTime() > new Date(latest.created_at).getTime()
+    ) {
+      latest = job;
+    }
+  }
+  return latest;
+}
+
 export function resolveQuestionWait(
   questionId: string,
   lookups: {
