@@ -1,14 +1,37 @@
+import type { MaterialSymbolName } from "./material-symbols.js";
+
 /**
  * Visual presentation for a submission's state (`SubmissionResponse.state`).
  *
  * Keeps label, icon, and tone in one place so intake, review queue, and review
- * screens do not drift in terminology (Issue #84 / INV-097).
+ * screens do not drift in terminology (Issue #84 / INV-097). The three travel
+ * together: the icon is typed as {@link MaterialSymbolName} so a state cannot
+ * name a glyph the SVG table does not draw (Issue #397).
  */
+
+export type SubmissionStatusTone =
+  "attention" | "neutral" | "danger" | "success";
 
 export interface SubmissionStatusVisual {
   readonly label: string;
-  readonly tone: "attention" | "neutral" | "danger" | "success";
-  readonly icon: string;
+  readonly tone: SubmissionStatusTone;
+  readonly icon: MaterialSymbolName;
+}
+
+/** Tailwind text colour for a tone, shared by the queue row and confirm chip. */
+export function submissionStatusToneTextClass(
+  tone: SubmissionStatusTone,
+): string {
+  switch (tone) {
+    case "attention":
+      return "text-attention";
+    case "danger":
+      return "text-error";
+    case "success":
+      return "text-success";
+    default:
+      return "text-on-surface-variant";
+  }
 }
 
 export function submissionStatusVisualOf(
@@ -33,7 +56,7 @@ export function submissionStatusVisualOf(
       return {
         label: "AI処理済み",
         tone: "success",
-        icon: "check_circle_outline",
+        icon: "check_circle",
       };
     case "needs_review":
       return {
@@ -45,7 +68,7 @@ export function submissionStatusVisualOf(
       return {
         label: "確認済み",
         tone: "success",
-        icon: "verified_outlined",
+        icon: "verified",
       };
     case "exported":
       return {
