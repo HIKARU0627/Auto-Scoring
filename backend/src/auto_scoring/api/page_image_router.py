@@ -312,9 +312,7 @@ def build_page_image_router(
             )
         return path
 
-    def _material_pdf_or_404(
-        uow: SqlAlchemyUnitOfWork, test_id: str, material_id: str
-    ) -> Path:
+    def _material_pdf_or_404(uow: SqlAlchemyUnitOfWork, test_id: str, material_id: str) -> Path:
         """The stored file of one registered material, or a 4xx naming why not.
 
         The row is looked up under its test, so a material id borrowed from
@@ -358,9 +356,7 @@ def build_page_image_router(
             )
         path = store.resolve_stored_path(material.stored_path)
         if not path.exists():
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, detail="material file not found on disk"
-            )
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="material file not found on disk")
         return path
 
     def _pages(source: Path) -> DocumentPagesResponse:
