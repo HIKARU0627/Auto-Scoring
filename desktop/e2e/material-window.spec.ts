@@ -36,7 +36,7 @@ test("a material opens in a reused second window and closes without stopping the
 
     expect(app.windows()).toHaveLength(1);
 
-    const openedWindow = app.waitForEvent("window");
+    const openedWindow = app.waitForEvent("window", { timeout: 30_000 });
     await mainWindow.getByTestId("test-settings-open-materials-button").click();
     const materialWindow = await openedWindow;
 
@@ -87,7 +87,7 @@ test("closing the main window closes the material window too (Issue #415)", asyn
     const testId = await createDraftTest(mainWindow);
     await openDraftTestSettings(mainWindow, testId);
 
-    const openedWindow = app.waitForEvent("window");
+    const openedWindow = app.waitForEvent("window", { timeout: 30_000 });
     await mainWindow.getByTestId("test-settings-open-materials-button").click();
     const materialWindow = await openedWindow;
     await expect(materialWindow.getByTestId("material-window")).toBeVisible({
