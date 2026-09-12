@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, within } from "@testing-library/react";
 
 import {
@@ -341,5 +341,142 @@ describe("editing", () => {
 
     const button = screen.getByTestId("answer-area-swap-問一-問二");
     expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("a detected answer area can be corrected by hand (Issue #404)", () => {
+  const oneRegion = (): ReturnType<typeof buildRegion> =>
+    buildRegion({ regionId: "a0", x0: 0.1, y0: 0.1, x1: 0.4, y1: 0.3 });
+
+  const select = (index: number): void => {
+    const box = screen.getByTestId(`answer-area-box-${index}`);
+    fireEvent.pointerDown(box, { pointerId: 1 });
+    fireEvent.pointerUp(box, { pointerId: 1 });
+  };
+
+  it("captures the pointer when a resize starts", () => {
+    renderAnswerAreaEditor({ regions: [oneRegion()] });
+    select(0);
+    const capture = vi.spyOn(Element.prototype, "setPointerCapture");
+    fireEvent.pointerDown(screen.getByTestId("answer-area-resize-0"), {
+      pointerId: 7,
+      clientX: 10,
+      clientY: 10,
+    });
+    expect(capture).toHaveBeenCalledWith(7);
+    capture.mockRestore();
+  });
+
+  it("resizing follows the pointer after it has left the handle", async () => {
+    const view = renderAnswerAreaEditor({ regions: [oneRegion()] });
+    select(0);
+
+    await dragOnElement(
+      screen.getByTestId("answer-area-resize-0"),
+      { x: 0, y: 0 },
+      { x: 60, y: 40 },
+    );
+
+    const region = view.getRegions()[0];
+    expect(region?.bbox.x1).toBeCloseTo(0.4 + 60 / 600, 2);
+    expect(region?.bbox.y1).toBeCloseTo(0.3 + 40 / 848, 2);
+  });
+
+  it("resizing does not also move the region", async () => {
+    const view = renderAnswerAreaEditor({ regions: [oneRegion()] });
+    select(0);
+    const handle = screen.getByTestId("answer-area-resize-0");
+    const box = screen.getByTestId("answer-area-box-0");
+
+    await dragOnElement(handle, { x: 0, y: 0 }, { x: 60, y: 40 });
+    // The old bug: once the pointer left the 14px handle, the move landed on
+    // the box and dragged it. A move on the box must not add to the resize.
+    fireEvent.pointerMove(box, { pointerId: 1, clientX: 80, clientY: 60 });
+
+    const region = view.getRegions()[0];
+    expect(region?.bbox.x0).toBeCloseTo(0.1, 5);
+    expect(region?.bbox.y0).toBeCloseTo(0.1, 5);
+  });
+
+  it("arrow keys move the region", () => {
+    const view = renderAnswerAreaEditor({ regions: [oneRegion()] });
+    const box = screen.getByTestId("answer-area-box-0");
+
+    fireEvent.keyDown(box, { key: "ArrowRight" });
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+
+    const region = view.getRegions()[0];
+    expect(region?.bbox.x0).toBeCloseTo(0.1 + 2 / 600, 5);
+    expect(region?.bbox.y0).toBeCloseTo(0.1 + 2 / 848, 5);
+  });
+
+  it("shift+arrow resizes the region", () => {
+    const view = renderAnswerAreaEditor({ regions: [oneRegion()] });
+    const box = screen.getByTestId("answer-area-box-0");
+
+    fireEvent.keyDown(box, { key: "ArrowRight", shiftKey: true });
+
+    const region = view.getRegions()[0];
+    expect(region?.bbox.x1).toBeCloseTo(0.4 + 2 / 600, 5);
+    expect(region?.bbox.x0).toBeCloseTo(0.1, 5);
+  });
+
+  it("the resize handle can be reached and driven by the keyboard", () => {
+    const view = renderAnswerAreaEditor({ regions: [oneRegion()] });
+    select(0);
+    const handle = screen.getByTestId("answer-area-resize-0");
+
+    expect((handle as HTMLElement).tabIndex).toBe(0);
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+
+    expect(view.getRegions()[0]?.bbox.x1).toBeCloseTo(0.4 + 2 / 600, 5);
+  });
+
+  it("undo restores the region after a resize drag", async () => {
+    const view = renderAnswerAreaEditor({ regions: [oneRegion()] });
+    select(0);
+
+    await dragOnElement(
+      screen.getByTestId("answer-area-resize-0"),
+      { x: 0, y: 0 },
+      { x: 60, y: 40 },
+    );
+    expect(view.getRegions()[0]?.bbox.x1).not.toBeCloseTo(0.4, 2);
+
+    fireEvent.click(screen.getByTestId("answer-area-undo"));
+
+    expect(view.getRegions()[0]?.bbox.x1).toBeCloseTo(0.4, 5);
+    expect(view.getRegions()[0]?.bbox.y1).toBeCloseTo(0.3, 5);
+  });
+
+  it("undo restores a region that was deleted by mistake", () => {
+    const view = renderAnswerAreaEditor({
+      regions: [oneRegion(), buildRegion({ regionId: "a1", label: "問2" })],
+    });
+
+    fireEvent.click(screen.getByTestId("answer-area-delete-0"));
+    expect(view.getRegions()).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId("answer-area-undo"));
+
+    expect(view.getRegions().map((region) => region.region_id)).toEqual([
+      "a0",
+      "a1",
+    ]);
+  });
+
+  it("offers no undo before anything was changed", () => {
+    renderAnswerAreaEditor({ regions: [oneRegion()] });
+    const undo = screen.getByTestId("answer-area-undo") as HTMLButtonElement;
+    expect(undo.disabled).toBe(true);
+  });
+
+  it("a read-only editor does not offer manual correction", () => {
+    renderAnswerAreaEditor({ regions: [oneRegion()], readOnly: true });
+    expect(screen.queryByTestId("answer-area-undo")).toBeNull();
+    fireEvent.pointerDown(screen.getByTestId("answer-area-box-0"), {
+      pointerId: 1,
+    });
+    expect(screen.queryByTestId("answer-area-resize-0")).toBeNull();
   });
 });

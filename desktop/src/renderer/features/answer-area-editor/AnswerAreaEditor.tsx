@@ -46,6 +46,12 @@ interface DraftState {
   end: { x: number; y: number };
 }
 
+/** How far one arrow keypress moves or resizes a region, in rendered pixels. */
+const KEYBOARD_NUDGE_PX = 2;
+
+/** Upper bound on the undo history, so a long editing session stays bounded. */
+const UNDO_HISTORY_LIMIT = 100;
+
 export function AnswerAreaEditor({
   pages,
   pageImages,
@@ -61,12 +67,26 @@ export function AnswerAreaEditor({
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [drawTarget, setDrawTarget] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
+  const [undoDepth, setUndoDepth] = useState(0);
+  const undoStackRef = useRef<RegionModel[][]>([]);
+  const gestureStartRef = useRef<RegionModel[] | null>(null);
+  const gesturePushedRef = useRef(false);
+  const lastEmittedRef = useRef<readonly RegionModel[] | null>(null);
 
   useEffect(() => {
     if (selectedIndex !== null && selectedIndex >= regions.length) {
       setSelectedIndex(null);
     }
   }, [regions.length, selectedIndex]);
+
+  useEffect(() => {
+    if (lastEmittedRef.current === regions) {
+      return;
+    }
+    undoStackRef.current = [];
+    setUndoDepth(0);
+    lastEmittedRef.current = regions;
+  }, [regions]);
 
   const effectiveDrawTarget = useMemo(() => {
     if (
@@ -90,12 +110,55 @@ export function AnswerAreaEditor({
     undetectedQuestionNumbers,
   ]);
 
+  const pushUndo = useCallback((snapshot: RegionModel[]) => {
+    const stack = undoStackRef.current;
+    stack.push(snapshot);
+    if (stack.length > UNDO_HISTORY_LIMIT) {
+      stack.shift();
+    }
+    setUndoDepth(stack.length);
+  }, []);
+
+  /**
+   * Emits a new region set and records an undo entry. A pointer drag emits on
+   * every move, so `onEditStart`/`onEditEnd` bracket a gesture: the snapshot is
+   * taken once at press time, not once per pixel.
+   */
   const emit = useCallback(
     (next: RegionModel[]) => {
+      if (gestureStartRef.current !== null) {
+        if (!gesturePushedRef.current) {
+          pushUndo(gestureStartRef.current);
+          gesturePushedRef.current = true;
+        }
+      } else {
+        pushUndo([...regions]);
+      }
+      lastEmittedRef.current = next;
       onRegionsChanged(next);
     },
-    [onRegionsChanged],
+    [onRegionsChanged, pushUndo, regions],
   );
+
+  const onEditStart = useCallback(() => {
+    gestureStartRef.current = [...regions];
+    gesturePushedRef.current = false;
+  }, [regions]);
+
+  const onEditEnd = useCallback(() => {
+    gestureStartRef.current = null;
+    gesturePushedRef.current = false;
+  }, []);
+
+  const undo = useCallback(() => {
+    const previous = undoStackRef.current.pop();
+    if (previous === undefined) {
+      return;
+    }
+    setUndoDepth(undoStackRef.current.length);
+    lastEmittedRef.current = previous;
+    onRegionsChanged(previous);
+  }, [onRegionsChanged]);
 
   const replaceRegion = useCallback(
     (index: number, region: RegionModel) => {
@@ -185,7 +248,18 @@ export function AnswerAreaEditor({
   }, [questionNumbers, regions]);
 
   return (
-    <div className="flex flex-col gap-md">
+    <div
+      className="flex flex-col gap-md"
+      onKeyDown={(event) => {
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          event.key.toLowerCase() === "z"
+        ) {
+          event.preventDefault();
+          undo();
+        }
+      }}
+    >
       <UndetectedBanner
         questionNumbers={questionNumbers}
         undetected={undetectedQuestionNumbers}
@@ -207,6 +281,8 @@ export function AnswerAreaEditor({
           questionNumbers={questionNumbers}
           drawTarget={effectiveDrawTarget}
           onDrawTargetChange={setDrawTarget}
+          canUndo={undoDepth > 0}
+          onUndo={undo}
         />
       ) : null}
 
@@ -240,6 +316,8 @@ export function AnswerAreaEditor({
           onClearSelection={() => {
             setSelectedIndex(null);
           }}
+          onEditStart={onEditStart}
+          onEditEnd={onEditEnd}
           normalizePointer={normalizePointer}
         />
       ))}
@@ -414,33 +492,49 @@ function DrawToolbar({
   questionNumbers,
   drawTarget,
   onDrawTargetChange,
+  canUndo,
+  onUndo,
 }: {
   questionNumbers: readonly string[];
   drawTarget: string;
   onDrawTargetChange: (target: string) => void;
+  canUndo: boolean;
+  onUndo: () => void;
 }): JSX.Element {
   return (
-    <div className="flex flex-wrap items-center gap-sm text-body-medium">
-      <span>次に引く回答欄の設問:</span>
-      <select
-        data-testid="answer-area-draw-target"
-        className="select-themed rounded-md border border-outline px-sm py-xs"
-        value={drawTarget}
-        onChange={(event) => {
-          onDrawTargetChange(event.target.value);
-        }}
-      >
-        {questionNumbers.map((number) => (
-          <option key={number} value={number}>
-            {number}
+    <div className="flex flex-col gap-xs">
+      <div className="flex flex-wrap items-center gap-sm text-body-medium">
+        <span>次に引く回答欄の設問:</span>
+        <select
+          data-testid="answer-area-draw-target"
+          className="select-themed rounded-md border border-outline px-sm py-xs"
+          value={drawTarget}
+          onChange={(event) => {
+            onDrawTargetChange(event.target.value);
+          }}
+        >
+          {questionNumbers.map((number) => (
+            <option key={number} value={number}>
+              {number}
+            </option>
+          ))}
+          <option value={UNASSIGNED_QUESTION_LABEL}>
+            {UNASSIGNED_QUESTION_DISPLAY_LABEL}
           </option>
-        ))}
-        <option value={UNASSIGNED_QUESTION_LABEL}>
-          {UNASSIGNED_QUESTION_DISPLAY_LABEL}
-        </option>
-      </select>
+        </select>
+        <button
+          type="button"
+          data-testid="answer-area-undo"
+          className="rounded-md border border-outline px-sm py-xs text-ui-label"
+          disabled={!canUndo}
+          onClick={onUndo}
+        >
+          元に戻す
+        </button>
+      </div>
       <span className="text-body-small text-on-surface-variant">
-        答案の上をドラッグすると回答欄を引けます。枠を選ぶと動かせます。
+        答案の上をドラッグすると回答欄を引けます。枠を選ぶと動かせ、右下のつまみで大きさを変えられます。枠を選んで矢印キーでも動かせ、Shift+矢印で大きさを変えられます（Ctrl+Z
+        で元に戻す）。
       </span>
     </div>
   );
@@ -460,6 +554,8 @@ function PageCanvas({
   onDraftUpdate,
   onDraftCommit,
   onClearSelection,
+  onEditStart,
+  onEditEnd,
   normalizePointer,
 }: {
   pageIndex: number;
@@ -475,6 +571,8 @@ function PageCanvas({
   onDraftUpdate: (point: { x: number; y: number }) => void;
   onDraftCommit: () => void;
   onClearSelection: () => void;
+  onEditStart: () => void;
+  onEditEnd: () => void;
   normalizePointer: (
     event: ReactPointerEvent,
     renderSize: PixelSize,
@@ -610,6 +708,8 @@ function PageCanvas({
                   onResize={(delta) => {
                     onReplace(index, nudgeRegion(region, delta, true));
                   }}
+                  onEditStart={onEditStart}
+                  onEditEnd={onEditEnd}
                 />
               ))
             : null}
@@ -667,6 +767,8 @@ function RegionOverlay({
   onSelect,
   onMove,
   onResize,
+  onEditStart,
+  onEditEnd,
 }: {
   index: number;
   region: RegionModel;
@@ -678,6 +780,8 @@ function RegionOverlay({
   onSelect: () => void;
   onMove: (delta: { x: number; y: number }) => void;
   onResize: (delta: { x: number; y: number }) => void;
+  onEditStart: () => void;
+  onEditEnd: () => void;
 }): JSX.Element {
   const topLeft = normalizedToLayoutPoint(
     region.bbox.x0,
@@ -700,11 +804,47 @@ function RegionOverlay({
       : regionKindLabel(region.kind);
 
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const resizePointer = useRef<{ x: number; y: number } | null>(null);
+
+  const nudgeWithKeyboard = (
+    event: React.KeyboardEvent,
+    resize: boolean,
+  ): void => {
+    const stepX = KEYBOARD_NUDGE_PX / renderSize.width;
+    const stepY = KEYBOARD_NUDGE_PX / renderSize.height;
+    let dx = 0;
+    let dy = 0;
+    switch (event.key) {
+      case "ArrowLeft":
+        dx = -stepX;
+        break;
+      case "ArrowRight":
+        dx = stepX;
+        break;
+      case "ArrowUp":
+        dy = -stepY;
+        break;
+      case "ArrowDown":
+        dy = stepY;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    if (resize) {
+      onResize({ x: dx, y: dy });
+    } else {
+      onMove({ x: dx, y: dy });
+    }
+  };
 
   return (
     <div
       data-testid={`answer-area-box-${index}`}
-      className={`absolute ${borderClass} ${selected ? "border-region-selected" : "border-region"} ${unassigned ? "bg-attention/10" : "bg-primary/10"}`}
+      role="button"
+      tabIndex={readOnly ? -1 : 0}
+      aria-label={`回答欄 ${label}。矢印キーで移動、Shift+矢印で大きさ変更`}
+      className={`absolute ${borderClass} ${selected ? "border-region-selected" : "border-region"} ${unassigned ? "bg-attention/10" : "bg-primary/10"} ${readOnly ? "" : "cursor-move"}`}
       style={{
         left: topLeft.x,
         top: topLeft.y,
@@ -712,10 +852,17 @@ function RegionOverlay({
         height: bottomRight.y - topLeft.y,
       }}
       onPointerDown={(event) => {
+        // Only start a move when the press lands on the box itself. A press on
+        // the resize handle (or any other child) must not also capture the
+        // pointer, or the box moves while the handle resizes.
+        if (event.target !== event.currentTarget) {
+          return;
+        }
         event.stopPropagation();
         onSelect();
         event.currentTarget.setPointerCapture(event.pointerId);
         lastPointer.current = { x: event.clientX, y: event.clientY };
+        onEditStart();
       }}
       onPointerMove={(event) => {
         if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -735,25 +882,73 @@ function RegionOverlay({
           event.currentTarget.releasePointerCapture(event.pointerId);
         }
         lastPointer.current = null;
+        onEditEnd();
+      }}
+      onPointerCancel={() => {
+        lastPointer.current = null;
+        onEditEnd();
+      }}
+      onFocus={onSelect}
+      onKeyDown={(event) => {
+        if (readOnly || event.target !== event.currentTarget) {
+          return;
+        }
+        nudgeWithKeyboard(event, event.shiftKey);
       }}
     >
-      <span className="absolute left-1 top-1 rounded-sm bg-surface/85 px-xs text-label-small">
+      <span className="pointer-events-none absolute left-1 top-1 rounded-sm bg-surface/85 px-xs text-label-small">
         {label}
       </span>
       {selected && !readOnly ? (
         <div
           data-testid={`answer-area-resize-${index}`}
-          className={`absolute bottom-0 right-0 h-3.5 w-3.5 ${unassigned ? "bg-attention" : "bg-primary"}`}
+          role="button"
+          tabIndex={0}
+          aria-label="回答欄の大きさを変える。矢印キーで大きさ変更"
+          className={`absolute bottom-0 right-0 h-3.5 w-3.5 cursor-nwse-resize ${unassigned ? "bg-attention" : "bg-primary"}`}
           onPointerDown={(event) => {
             event.stopPropagation();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resizePointer.current = {
+              x: event.clientX,
+              y: event.clientY,
+            };
+            onEditStart();
           }}
           onPointerMove={(event) => {
-            if (!readOnly) {
-              onResize({
-                x: event.movementX / renderSize.width,
-                y: event.movementY / renderSize.height,
-              });
+            event.stopPropagation();
+            if (
+              !event.currentTarget.hasPointerCapture(event.pointerId) ||
+              readOnly
+            ) {
+              return;
             }
+            const previous = resizePointer.current;
+            if (previous === null) {
+              return;
+            }
+            const deltaX = (event.clientX - previous.x) / renderSize.width;
+            const deltaY = (event.clientY - previous.y) / renderSize.height;
+            resizePointer.current = { x: event.clientX, y: event.clientY };
+            onResize({ x: deltaX, y: deltaY });
+          }}
+          onPointerUp={(event) => {
+            event.stopPropagation();
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            resizePointer.current = null;
+            onEditEnd();
+          }}
+          onPointerCancel={() => {
+            resizePointer.current = null;
+            onEditEnd();
+          }}
+          onKeyDown={(event) => {
+            if (readOnly || event.target !== event.currentTarget) {
+              return;
+            }
+            nudgeWithKeyboard(event, true);
           }}
         />
       ) : null}
