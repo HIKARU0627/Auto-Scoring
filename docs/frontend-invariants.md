@@ -15,6 +15,9 @@ GitHub Issue [#204](https://github.com/HIKARU0627/Auto-Scoring/issues/204) / [#2
 `app/test` に無い保証は §1〜§13 の読み方では定義上こぼれる。§14 はそれを `app/lib` の側から掃いた結果で、
 **移行の完了条件を満たしたまま黙って消えうるもの**を数えてある。
 
+§16〜§18 は移行期の **185 件（INV 170 + UG 15）** を固定した照合表である。移行の完了後に `desktop/` へ
+入った PR が新たに固定した不変条件は、その集計に混ぜず **§19** に別枠（`INV-E<3桁>`）で積む。
+
 ## 0. §1〜§13（`app/test` 由来）の棚卸しの範囲と件数
 
 | 指標                   |         値 | 備考                                                                                                                                                                                                                                                         |
@@ -1469,3 +1472,65 @@ Electron / 新スタックの採用およびアーキテクチャ設計により
   新規テスト実装が必要なものは **35 件** に絞り込まれ、内訳として「共通 UI コンポーネント（8 件）」「デザイントークン（7 件）」「API クライアント層（6 件）」が主要なボリュームを占めていた。その後、各領域の独立した Issue でテストが整備され、35 件すべてが引き取り済みとなった。
 - **Issue #273 / PR #280 による引き取り**: 分類 C のうち API クライアント層 6 件（`INV-200`〜`INV-205`）は PR #280 で引き取り済み。
 - **PR #324（Issue #322）による残余の引き取り**: 分類 A 7 件（`INV-010`・`INV-011`・`INV-092`・`INV-095`・`UG-02`〜`UG-04`）と分類 B 7 件（`INV-020`・`INV-091`・`INV-201-04`・`INV-100`・`INV-102`・`INV-201-07`・`UG-13`）が引き取られ、52 件すべてが引き取り済みとなった。
+
+---
+
+## 19. 移行後に追加された不変条件（§16〜§18 の 185 件とは別枠）
+
+`INV-001`〜`INV-205` と `UG-01`〜`UG-15` は移行期（`app/test`）の棚卸しであり、§16〜§18 はその **185 件（INV 170 + UG 15）** を固定した照合表である。本節は、**移行が終わった後に `desktop/` へ入った PR が新たに固定した不変条件**を、185 件の集計に混ぜずに別枠で記録する。
+
+### 19.0 この節の読み方と検査
+
+- **§16〜§18 の 185 件には一切影響しない。** 番号は `INV-E<3桁>` とし、既存の `INV-\d+` を拾う正規表現（`desktop/test/frontend-invariants-tally.test.ts` の §17.4 走査を含む）に一致しない。
+- **行 → 集計の突き合わせは機械が行う:** `desktop/test/frontend-invariants-section19.test.ts` が §19.1 の行をパースし、§19.2 の区分別件数と合計を数え直して突き合わせる。**行だけを直して集計を放置した場合も、集計だけを直した場合も赤くなる。**
+- **各行は、それを固定しているテストのファイルと test 名を持つ。テストが無い主張は行にしない。** たとえば Issue #375 の「1536x1024 で表ヘッダが y<900」は実機プローブだけで自動テストが無いため、行にせず、テストが固定している構造（表がヒーロー行とグラフ行の下に置かれる）だけを `INV-E015` に載せている。
+- 追加元 PR の本文は `gh` CLI ではなく `./scripts/invoke-github-app-api.ps1` 経由で取得した。
+
+### 19.1 移行後に追加された不変条件の一覧
+
+| ID       | 区分           | 不変条件                                                                             | テストファイル                                          | test 名                                                                   | 追加元         |
+| -------- | -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------- | -------------- |
+| INV-E001 | ホーム         | アクセント文字は塗りの `--color-primary` ではなく `--color-primary-text` を使う      | `desktop/test/renderer/home-f5a.test.tsx`               | paints 次の一手 with the accent-text token, not the fill                  | PR #373 / #376 |
+| INV-E002 | ホーム         | 二次テキストは strong / variant / muted の複数段に分かれ、y 軸は x 軸より一段暗い    | `desktop/test/renderer/home-f5a.test.tsx`               | uses the strong tier for the hero body and the muted tier for axis labels | PR #373 / #376 |
+| INV-E003 | ホーム         | カード見出しは本文と区別できる `--color-heading` を使う                              | `desktop/test/renderer/home-f5a.test.tsx`               | paints every card heading with the heading token                          | PR #373 / #376 |
+| INV-E004 | ホーム         | ページ見出しは `--color-heading` かつカード見出しの約 1.5 倍                         | `desktop/test/renderer/home-f6.test.tsx`                | paints the page heading with the heading token at 1.5x the headline scale | PR #376        |
+| INV-E005 | ホーム         | 状態色はモックへ寄せても使用面上の AA を割らない                                     | `desktop/test/theme-contrast-f5a.test.ts`               | dark: attention keeps AA while moving off the old pale pink               | PR #373        |
+| INV-E006 | ホーム         | 準備中マークは専用の沈めたトークン `--color-phase-preparing` を使う                  | `desktop/test/renderer/home-f6.test.tsx`                | paints the preparing sector and legend dot with the sunk token            | PR #376        |
+| INV-E007 | ホーム         | 同じ導線は同じアイコン字形（サイドバーのシルエット）を使う                           | `desktop/test/renderer/home-f5a.test.tsx`               | renders the quick actions and hero with the sidebar silhouettes           | PR #373        |
+| INV-E008 | ホーム         | ブランド名は title-large で 15-17px の字面高帯に収まる                               | `desktop/test/renderer/home-f5a.test.tsx`               | keeps the wordmark in the mock's 15-17px glyph band via title-large       | PR #373 / #376 |
+| INV-E009 | ホーム         | 図表の罫線と基線は整数ピクセルの 1px（crispEdges）で描く                             | `desktop/test/renderer/home-f5a.test.tsx`               | snaps the grid and baseline strokes to integer pixels                     | PR #373        |
+| INV-E010 | ホーム         | KPI の区切り罫は 50px（`--layout-kpi-rule-height`）で数値ブロックの高さに収まる      | `desktop/test/theme-contrast-f5a.test.ts`               | defines 50px and exposes the h-kpi-rule utility                           | PR #373        |
+| INV-E011 | ホーム         | 並ぶ 2 枚のカードは同じ静的ラベル体裁のヘッダを持つ                                  | `desktop/test/renderer/home-f5a.test.tsx`               | gives the donut the same static label treatment as the progress card      | PR #373        |
+| INV-E012 | ホーム         | ドーナツの凡例は幅によらずリングの横に並ぶ                                           | `desktop/test/renderer/home-f5a.test.tsx`               | keeps the donut legend beside the ring at every width                     | PR #373 / #376 |
+| INV-E013 | ホーム         | ドーナツのリング枠は 160px に収まる                                                  | `desktop/test/renderer/home-f5a.test.tsx`               | caps the ring box at the 160px that bounds the daily plot                 | PR #376        |
+| INV-E014 | ホーム         | 日別プロットの下限は 95px トークン `--layout-bar-plot-height` で床を作る             | `desktop/test/renderer/home-f6.test.tsx`                | uses the min-h-bar-plot utility backed by a 95px token                    | PR #376        |
+| INV-E015 | ホーム         | クイックアクションはヒーローと同じ grid 行に置き、全幅ブロックとして表の上へ積まない | `desktop/test/renderer/home-f6.test.tsx`                | shares one grid row with the hero and leaves the table under both rows    | PR #376        |
+| INV-E016 | ホーム         | クイックアクションは全幅で 1 列のまま（空きマスも不揃いな省略も作らない）            | `desktop/test/renderer/home-table-spacing.test.tsx`     | owns a single-column grid instead of a parent descendant selector         | PR #373 / #376 |
+| INV-E017 | ホーム         | 最近のテストの列配分は合計 100% で、答案数↔進捗の比は 1.5:1 以内                     | `desktop/test/renderer/home-table-spacing.test.tsx`     | stays within a 100% split and no longer uses the content-column widths    | PR #376        |
+| INV-E018 | ホーム         | 日別の棒は rx=0 で天面を水平に保つ                                                   | `desktop/test/renderer/home-f6.test.tsx`                | draws every bar rect with rx=0 so the top edge stays flat                 | PR #376        |
+| INV-E019 | ホーム         | アプリ外枠は content を窓高へ引き伸ばさない（min-h-screen を使わない）               | `desktop/test/renderer/home-f6.test.tsx`                | keeps bg-surface but drops min-h-screen from the shell frame              | PR #376        |
+| INV-E020 | モーダル       | 開いているモーダルは Esc で閉じる                                                    | `desktop/test/renderer/test-settings-page.test.tsx`     | closes the extract cost dialog on Escape                                  | PR #388        |
+| INV-E021 | モーダル       | 開いたモーダルはフォーカスを内側へ移し、Tab を内側で循環させる                       | `desktop/test/renderer/test-settings-page.test.tsx`     | focuses the extract dialog and keeps Tab inside it                        | PR #388        |
+| INV-E022 | モーダル       | ダイアログ幅に `max-w-{xs,sm,md,lg,xl}` を使わず、潰れない数値スケールにする         | `desktop/e2e/sidecar-extract-confirm-dialog.spec.ts`    | extract dialog keeps a readable width at                                  | PR #388        |
+| INV-E023 | 添削レビュー   | 答案 PDF 表示領域は設問に従属せず常に描画し、無いときは理由を示す                    | `desktop/test/renderer/pdf-review-page-always.test.tsx` | keeps the page region on screen when no question is selected              | PR #389        |
+| INV-E024 | 添削レビュー   | 手動のページ送りは設問選択と独立に保たれる                                           | `desktop/test/renderer/pdf-review-page-always.test.tsx` | flips pages directly, independent of the selected question                | PR #389        |
+| INV-E025 | 添削レビュー   | 採点操作と PDF が同じ viewport に同時に収まる                                        | `desktop/test/renderer/pdf-review-page-always.test.tsx` | keeps the grading controls visible next to the page region                | PR #389        |
+| INV-E026 | 再読み込み     | 再読み込みの busy は 150ms 遅延で出し、出したら最低 400ms 保つ                       | `desktop/test/renderer/use-refresh-state.test.ts`       | holds the loading treatment for the minimum visible time once shown       | PR #390        |
+| INV-E027 | 再読み込み     | 最終更新は成功のたびに更新して常時表示し、失敗時は保持する                           | `desktop/test/renderer/home-refresh.test.tsx`           | shows the last-updated time and changes it on each successful reload      | PR #390        |
+| INV-E028 | グラフ         | グラフ上端は max より大きく、headroom を 10%〜30% に収める                           | `desktop/test/home-chart-axis.test.ts`                  | always leaves at least 10% headroom, and at most 30% once max >= 10       | PR #391        |
+| INV-E029 | グラフ         | 一番高い棒は描画領域の天井に接しない                                                 | `desktop/test/renderer/home-chart-headroom.test.tsx`    | draws the tallest bar at 90% of the plot, below the axis ceiling          | PR #391        |
+| INV-E030 | ドロップダウン | `<select>` は 1 箇所の `select-themed` で開いたリストまでテーマ描画する              | `desktop/test/select-theme.test.ts`                     | draws the opened list as a page picker, not the OS list                   | PR #394        |
+| INV-E031 | アイコン       | アイコンは同梱 SVG で描き、合字名を可視テキストにしない                              | `desktop/test/renderer/material-symbol-icon.test.tsx`   | never renders a ligature name as visible text in any of the four usages   | PR #396        |
+
+### 19.2 区分別の集計
+
+| 区分           |   件数 |
+| -------------- | -----: |
+| ホーム         |     19 |
+| モーダル       |      3 |
+| 添削レビュー   |      3 |
+| 再読み込み     |      2 |
+| グラフ         |      2 |
+| ドロップダウン |      1 |
+| アイコン       |      1 |
+| **合計**       | **31** |
