@@ -30,6 +30,8 @@ class _$ApiKeyStatusModel extends ApiKeyStatusModel {
   @override
   final String modelVariable;
   @override
+  final BuiltList<String> suggestedModels;
+  @override
   final BuiltList<TextSettingModel> textSettings;
   @override
   final String transport;
@@ -50,6 +52,7 @@ class _$ApiKeyStatusModel extends ApiKeyStatusModel {
       required this.model,
       required this.modelSource,
       required this.modelVariable,
+      required this.suggestedModels,
       required this.textSettings,
       required this.transport})
       : super._();
@@ -76,6 +79,7 @@ class _$ApiKeyStatusModel extends ApiKeyStatusModel {
         model == other.model &&
         modelSource == other.modelSource &&
         modelVariable == other.modelVariable &&
+        suggestedModels == other.suggestedModels &&
         textSettings == other.textSettings &&
         transport == other.transport;
   }
@@ -94,6 +98,7 @@ class _$ApiKeyStatusModel extends ApiKeyStatusModel {
     _$hash = $jc(_$hash, model.hashCode);
     _$hash = $jc(_$hash, modelSource.hashCode);
     _$hash = $jc(_$hash, modelVariable.hashCode);
+    _$hash = $jc(_$hash, suggestedModels.hashCode);
     _$hash = $jc(_$hash, textSettings.hashCode);
     _$hash = $jc(_$hash, transport.hashCode);
     _$hash = $jf(_$hash);
@@ -114,6 +119,7 @@ class _$ApiKeyStatusModel extends ApiKeyStatusModel {
           ..add('model', model)
           ..add('modelSource', modelSource)
           ..add('modelVariable', modelVariable)
+          ..add('suggestedModels', suggestedModels)
           ..add('textSettings', textSettings)
           ..add('transport', transport))
         .toString();
@@ -172,6 +178,12 @@ class ApiKeyStatusModelBuilder
   set modelVariable(String? modelVariable) =>
       _$this._modelVariable = modelVariable;
 
+  ListBuilder<String>? _suggestedModels;
+  ListBuilder<String> get suggestedModels =>
+      _$this._suggestedModels ??= ListBuilder<String>();
+  set suggestedModels(ListBuilder<String>? suggestedModels) =>
+      _$this._suggestedModels = suggestedModels;
+
   ListBuilder<TextSettingModel>? _textSettings;
   ListBuilder<TextSettingModel> get textSettings =>
       _$this._textSettings ??= ListBuilder<TextSettingModel>();
@@ -200,6 +212,7 @@ class ApiKeyStatusModelBuilder
       _model = $v.model;
       _modelSource = $v.modelSource;
       _modelVariable = $v.modelVariable;
+      _suggestedModels = $v.suggestedModels.toBuilder();
       _textSettings = $v.textSettings.toBuilder();
       _transport = $v.transport;
       _$v = null;
@@ -245,6 +258,7 @@ class ApiKeyStatusModelBuilder
                 modelSource, r'ApiKeyStatusModel', 'modelSource'),
             modelVariable: BuiltValueNullFieldError.checkNotNull(
                 modelVariable, r'ApiKeyStatusModel', 'modelVariable'),
+            suggestedModels: suggestedModels.build(),
             textSettings: textSettings.build(),
             transport: BuiltValueNullFieldError.checkNotNull(
                 transport, r'ApiKeyStatusModel', 'transport'),
@@ -252,6 +266,8 @@ class ApiKeyStatusModelBuilder
     } catch (_) {
       late String _$failedField;
       try {
+        _$failedField = 'suggestedModels';
+        suggestedModels.build();
         _$failedField = 'textSettings';
         textSettings.build();
       } catch (e) {

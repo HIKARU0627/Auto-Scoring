@@ -49,6 +49,18 @@ only make the screen useless. This is why the old one-slot table became a
 table of slots: Issue #96 shipped OpenRouter alone so a distributed user had
 exactly one account to create, and the owner asked on 2026-09-12 for the other
 providers and for the use order (Issue #386).
+
+**Model suggestions, not a closed catalog (Issue #448).** The owner asked for
+the model to be pickable rather than typed. Every provider *can* list its
+models, but only on different terms: OpenRouter's ``GET /models`` is public and
+keyless, OpenAI's needs the key, Vertex's needs ADC plus a project, and Codex
+app-server's set is whatever the installed CLI accepts. Fetching them while the
+screen loads would make the settings screen depend on the network and on
+credentials that may not be entered yet, and would still have to answer for
+Codex. So the screen offers a short, curated ``suggested_models`` list next to
+the free text box (an HTML ``<datalist>``): the value is always editable, and a
+model this list has never heard of can still be saved. This module stays the
+single place a provider's configuration is described.
 """
 
 from __future__ import annotations
@@ -177,6 +189,15 @@ class ApiKeySlot:
     #: Where the user goes to create the key. Shown on the settings screen;
     #: an empty string when there is no key to create (Vertex, Codex).
     console_url: str
+    #: Model ids the settings screen offers as *suggestions* next to the free
+    #: text box (Issue #448). Not a closed list and not an exhaustive catalog:
+    #: a new model always appears after this list was written, which is why the
+    #: screen keeps the free input. Curated from the ids already documented in
+    #: this repository (``.env.example``, ``docs/poc-2-ai-grading.md``) plus the
+    #: provider's own default, so this file stays the one place a provider's
+    #: configuration is described. Deliberately not fetched from the provider
+    #: at screen-load time: see the module docstring.
+    suggested_models: tuple[str, ...] = ()
     #: Non-secret settings beyond the model (a GCP project id, a region),
     #: each readable back.
     text_settings: tuple[TextSetting, ...] = ()
@@ -200,6 +221,12 @@ API_KEY_SLOTS: Final[tuple[ApiKeySlot, ...]] = (
         transport="openrouter",
         model_variable="AUTO_SCORING_OPENROUTER_MODEL",
         default_model="google/gemini-2.5-flash",
+        suggested_models=(
+            "google/gemini-2.5-flash",
+            "anthropic/claude-sonnet-4.5",
+            "qwen/qwen2.5-vl-72b-instruct",
+            "openai/gpt-4o-mini",
+        ),
         console_url="https://openrouter.ai/settings/keys",
     ),
     ApiKeySlot(
@@ -209,6 +236,7 @@ API_KEY_SLOTS: Final[tuple[ApiKeySlot, ...]] = (
         transport="openai",
         model_variable="AUTO_SCORING_OPENAI_MODEL",
         default_model="gpt-4o-mini",
+        suggested_models=("gpt-4o-mini", "gpt-4o", "gpt-4.1", "gpt-4.1-mini"),
         console_url="https://platform.openai.com/api-keys",
     ),
     ApiKeySlot(
@@ -218,6 +246,7 @@ API_KEY_SLOTS: Final[tuple[ApiKeySlot, ...]] = (
         transport="gemini",
         model_variable="AUTO_SCORING_GEMINI_MODEL",
         default_model="gemini-2.5-flash",
+        suggested_models=("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"),
         console_url="https://console.cloud.google.com/vertex-ai",
         text_settings=(
             TextSetting(
@@ -248,6 +277,9 @@ API_KEY_SLOTS: Final[tuple[ApiKeySlot, ...]] = (
         #: Empty: Codex falls back to its own default model, and the factory
         #: treats a blank value as "not set".
         default_model="",
+        #: Only what this repository recorded (`docs/poc-2-ai-grading.md`); the
+        #: set of models the CLI accepts is wider and lives outside this app.
+        suggested_models=("gpt-5-codex",),
         console_url="",
         auth_note=("この PC の Codex CLI のログインセッションを使います。API キーは保存しません。"),
     ),

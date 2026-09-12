@@ -127,6 +127,7 @@ export function buildApiKeyStatus(
     model: input.model ?? "google/gemini-2.5-flash",
     model_source: input.model_source ?? "builtin_default",
     model_variable: input.model_variable ?? "AUTO_SCORING_OPENROUTER_MODEL",
+    suggested_models: input.suggested_models ?? [],
     text_settings: input.text_settings ?? [],
     host_available:
       input.host_available === undefined ? null : input.host_available,

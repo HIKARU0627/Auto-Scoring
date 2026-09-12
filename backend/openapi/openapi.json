@@ -337,6 +337,13 @@
             "title": "Model Variable",
             "type": "string"
           },
+          "suggested_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggested Models",
+            "type": "array"
+          },
           "text_settings": {
             "items": {
               "$ref": "#/components/schemas/TextSettingModel"
@@ -359,6 +366,7 @@
           "model",
           "model_source",
           "model_variable",
+          "suggested_models",
           "text_settings",
           "host_available",
           "auth_note",

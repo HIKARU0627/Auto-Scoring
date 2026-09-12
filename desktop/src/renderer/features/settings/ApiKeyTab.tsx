@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type DragEvent,
+  type JSX,
+} from "react";
+import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
 
 import {
   clearTransportOrder,
@@ -43,6 +50,7 @@ import {
   SETTINGS_LABEL_CLASS,
   apiKeyStatePillClass,
   apiKeyVerificationCardClass,
+  TRANSPORT_ORDER_HANDLE_CLASS,
   transportOrderItemClass,
 } from "./settings-presentation.js";
 
@@ -108,6 +116,10 @@ export function ApiKeyTab(): JSX.Element {
     {},
   );
   const [order, setOrder] = useState<string[]>([]);
+  const [draggingTransport, setDraggingTransport] = useState<string | null>(
+    null,
+  );
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [restarting, setRestarting] = useState<boolean>(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [monthlyUsage, setMonthlyUsage] = useState<AiUsageNumbers | null>(null);
@@ -253,20 +265,72 @@ export function ApiKeyTab(): JSX.Element {
     }
   };
 
-  const moveTransport = (index: number, delta: number) => {
+  const moveTransportTo = (fromIndex: number, toIndex: number) => {
     setOrder((prev) => {
-      const target = index + delta;
-      if (target < 0 || target >= prev.length) {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= prev.length ||
+        toIndex >= prev.length
+      ) {
         return prev;
       }
       const next = [...prev];
-      const [moved] = next.splice(index, 1);
+      const [moved] = next.splice(fromIndex, 1);
       if (moved === undefined) {
         return prev;
       }
-      next.splice(target, 0, moved);
+      next.splice(toIndex, 0, moved);
       return next;
     });
+  };
+
+  const moveTransport = (index: number, delta: number) => {
+    moveTransportTo(index, index + delta);
+  };
+
+  // Issue #448: drag-and-drop is the pointer path to the same reorder the
+  // 「上へ」「下へ」 buttons already give the keyboard. The row being dragged
+  // keeps its state here rather than in `dataTransfer`, because `dataTransfer`
+  // is unreadable during `dragover` in every browser that matters and the drop
+  // target has to know what is in flight.
+  const onOrderDragStart = (
+    event: DragEvent<HTMLSpanElement>,
+    transport: string,
+  ) => {
+    setDraggingTransport(transport);
+    setDragOverIndex(order.indexOf(transport));
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", transport);
+    }
+  };
+
+  const onOrderDragOver = (event: DragEvent<HTMLLIElement>, index: number) => {
+    if (draggingTransport === null) {
+      return;
+    }
+    // Without this the row is not a drop target at all and the browser shows
+    // the "no-drop" cursor.
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    setDragOverIndex(index);
+  };
+
+  const onOrderDrop = (event: DragEvent<HTMLLIElement>, index: number) => {
+    event.preventDefault();
+    if (draggingTransport !== null) {
+      moveTransportTo(order.indexOf(draggingTransport), index);
+    }
+    onOrderDragEnd();
+  };
+
+  const onOrderDragEnd = () => {
+    setDraggingTransport(null);
+    setDragOverIndex(null);
   };
 
   const onSaveOrder = async () => {
@@ -478,6 +542,16 @@ export function ApiKeyTab(): JSX.Element {
                 configured: slot.key_variable == null ? true : slot.configured,
               });
               const verification = verified[slot.id];
+              // Issue #448: the suggestions are a convenience, not a catalog.
+              // The effective model is folded in so the box the user sees is
+              // also the one the list can complete back to.
+              const modelOptions = Array.from(
+                new Set(
+                  [slot.model, ...slot.suggested_models].filter(
+                    (option) => option.length > 0,
+                  ),
+                ),
+              );
 
               const statusText =
                 slot.key_variable == null
@@ -559,6 +633,7 @@ export function ApiKeyTab(): JSX.Element {
                       id={`api-key-model-${slot.id}`}
                       data-testid={`settings-api-key-model-${slot.id}`}
                       type="text"
+                      list={`api-key-model-options-${slot.id}`}
                       value={
                         settingInputs[
                           settingKey(slot.id, slot.model_variable)
@@ -574,12 +649,21 @@ export function ApiKeyTab(): JSX.Element {
                       }
                       className={SETTINGS_INPUT_CLASS}
                     />
+                    <datalist
+                      id={`api-key-model-options-${slot.id}`}
+                      data-testid={`settings-api-key-model-options-${slot.id}`}
+                    >
+                      {modelOptions.map((option) => (
+                        <option key={option} value={option} />
+                      ))}
+                    </datalist>
                     <p className="mt-xs text-xs text-on-surface-variant">
                       {slot.model_source === "environment"
                         ? "環境変数で設定されています。"
                         : slot.model_source === "credential_store"
                           ? "画面で保存した値です。"
                           : "既定のモデルを使います。"}
+                      {" 候補から選ぶことも、直接入力することもできます。"}
                     </p>
                   </div>
 
@@ -808,13 +892,63 @@ export function ApiKeyTab(): JSX.Element {
             >
               {order.length > 0 ? order.join(" → ") : "（まだありません）"}
             </p>
+            {/* The numbered rows below already spell the order out, but a
+                reorder triggered by a drag announces nothing to a screen
+                reader, so the change is voiced here. */}
+            <p
+              role="status"
+              data-testid="settings-transport-order-announcement"
+              className="sr-only"
+            >
+              {order.length > 0
+                ? `現在の順番: ${order
+                    .map(
+                      (transport, index) =>
+                        `${index + 1}. ${
+                          labelByTransport.get(transport) ?? transport
+                        }`,
+                    )
+                    .join("、")}`
+                : "使う順番はまだありません。"}
+            </p>
+            <p className="mt-xs text-xs text-on-surface-variant">
+              つまみをドラッグするか、「上へ」「下へ」で並べ替えられます。
+            </p>
             <ul className="mt-sm flex flex-col gap-xs">
               {order.map((transport, index) => (
                 <li
                   key={transport}
                   data-testid={`settings-transport-order-item-${transport}`}
-                  className={transportOrderItemClass()}
+                  data-dragging={
+                    draggingTransport === transport ? "true" : undefined
+                  }
+                  data-drop-target={
+                    draggingTransport !== null &&
+                    draggingTransport !== transport &&
+                    dragOverIndex === index
+                      ? "true"
+                      : undefined
+                  }
+                  onDragOver={(event) => onOrderDragOver(event, index)}
+                  onDrop={(event) => onOrderDrop(event, index)}
+                  className={transportOrderItemClass({
+                    dragging: draggingTransport === transport,
+                    dropTarget:
+                      draggingTransport !== null &&
+                      draggingTransport !== transport &&
+                      dragOverIndex === index,
+                  })}
                 >
+                  <span
+                    draggable={!busyOrder}
+                    aria-hidden
+                    data-testid={`settings-transport-order-handle-${transport}`}
+                    onDragStart={(event) => onOrderDragStart(event, transport)}
+                    onDragEnd={onOrderDragEnd}
+                    className={TRANSPORT_ORDER_HANDLE_CLASS}
+                  >
+                    <GripVertical className="size-4" />
+                  </span>
                   <span className="min-w-0 flex-1 truncate">
                     {index + 1}. {labelByTransport.get(transport) ?? transport}
                   </span>
@@ -826,7 +960,7 @@ export function ApiKeyTab(): JSX.Element {
                     disabled={index === 0 || busyOrder}
                     className={SETTINGS_BUTTON_SECONDARY_CLASS}
                   >
-                    ↑
+                    <ArrowUp aria-hidden className="size-4" />
                   </button>
                   <button
                     type="button"
@@ -836,7 +970,7 @@ export function ApiKeyTab(): JSX.Element {
                     disabled={index === order.length - 1 || busyOrder}
                     className={SETTINGS_BUTTON_SECONDARY_CLASS}
                   >
-                    ↓
+                    <ArrowDown aria-hidden className="size-4" />
                   </button>
                 </li>
               ))}

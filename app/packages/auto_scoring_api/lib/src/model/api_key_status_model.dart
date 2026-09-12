@@ -25,6 +25,7 @@ part 'api_key_status_model.g.dart';
 /// * [model]
 /// * [modelSource]
 /// * [modelVariable]
+/// * [suggestedModels]
 /// * [textSettings]
 /// * [transport]
 @BuiltValue()
@@ -64,6 +65,9 @@ abstract class ApiKeyStatusModel
 
   @BuiltValueField(wireName: r'model_variable')
   String get modelVariable;
+
+  @BuiltValueField(wireName: r'suggested_models')
+  BuiltList<String> get suggestedModels;
 
   @BuiltValueField(wireName: r'text_settings')
   BuiltList<TextSettingModel> get textSettings;
@@ -155,6 +159,11 @@ class _$ApiKeyStatusModelSerializer
     yield serializers.serialize(
       object.modelVariable,
       specifiedType: const FullType(String),
+    );
+    yield r'suggested_models';
+    yield serializers.serialize(
+      object.suggestedModels,
+      specifiedType: const FullType(BuiltList, [FullType(String)]),
     );
     yield r'text_settings';
     yield serializers.serialize(
@@ -269,6 +278,13 @@ class _$ApiKeyStatusModelSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.modelVariable = valueDes;
+          break;
+        case r'suggested_models':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [FullType(String)]),
+          ) as BuiltList<String>;
+          result.suggestedModels.replace(valueDes);
           break;
         case r'text_settings':
           final valueDes = serializers.deserialize(

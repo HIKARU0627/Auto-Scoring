@@ -60,7 +60,32 @@ export function apiKeyVerificationCardClass(ok: boolean): string {
     : "mt-md flex items-start gap-sm rounded-lg bg-error-container/40 p-sm text-on-error-container";
 }
 
-/** One row of the "use order" list (Issue #386). */
-export function transportOrderItemClass(): string {
-  return "flex items-center gap-sm rounded-md bg-surface-container-high px-sm py-xs text-body-medium text-on-surface";
+/** One row of the "use order" list (Issue #386, Issue #448).
+ *
+ * The drag state is carried by *shape* as well as colour: a row being dragged
+ * gets a dashed outline and is faded, and the row it would land on gets a
+ * solid outline and a raised surface. A person who cannot tell the two hues
+ * apart can still follow the gesture by the outline pattern and the fade.
+ */
+export function transportOrderItemClass(
+  state: { dragging?: boolean; dropTarget?: boolean } = {},
+): string {
+  const base =
+    "flex items-center gap-xs rounded-md bg-surface-container-high px-sm py-xs text-body-medium text-on-surface";
+  if (state.dragging) {
+    return `${base} opacity-60 outline outline-2 outline-dashed outline-primary`;
+  }
+  if (state.dropTarget) {
+    return `${base} bg-surface-container-highest outline outline-2 outline-primary`;
+  }
+  return base;
 }
+
+/** The grab handle of one "use order" row: the only draggable part of it.
+ *
+ * `aria-hidden` on purpose: dragging is a pointer-only gesture, and the
+ * screen-reader path to the same reorder is the 「上へ」「下へ」 buttons that
+ * sit next to it (Issue #448 requires the keyboard path to survive).
+ */
+export const TRANSPORT_ORDER_HANDLE_CLASS =
+  "inline-flex size-6 shrink-0 cursor-grab items-center justify-center rounded-sm text-on-surface-variant hover:bg-surface-container-highest focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary active:cursor-grabbing";
