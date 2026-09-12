@@ -97,7 +97,48 @@ backend 側で同じ形を Issue #417 が扱っている。**本 Issue はその
   `timeout` / `expect.timeout` と、各呼び出しの `{ timeout }` で決まる。e2e は実プロセス
   起動を含むため別物で、Vitest 側の値とは揃えない（e2e の変更は Issue #425 の担当）。
 
+## 内側のループの回し方（Issue #435）
+
+`pnpm run check` は全スタックを回すので、コードを書いている最中のフィードバックには
+遅すぎる。手を動かしている間は「変更した分だけ」を回し、押し切り前には必ず
+`pnpm run check:pre-push`（Issue #409）と CI の必須 `Quality` を通す。
+
+### 変更した分だけ回す
+
+```bash
+pnpm run test:app:changed
+pnpm run test:backend:changed
+pnpm run test:desktop:changed
+```
+
+- base は既定で `origin/main`（枝のコミットと未コミットの両方を見る）。
+  `pnpm run test:app:changed -- --base HEAD` のように `--base <ref>` で変えられる。
+- `--dry-run` を付けると、走らせるコマンドを表示して実行しない。
+- `test:app:changed` / `test:backend:changed` は `scripts/changed-tests.mjs` が
+  変更ファイルの module 参照（Dart の `package:auto_scoring_app/...`、Python の
+  `auto_scoring....`）を test ファイルの本文と照合し、同名 stem も拾う。
+  **import を直接辿れないテスト（ツリーを走査する不変条件テストなど）は選ばれない。**
+  対応が取れなかった changed file は必ず標準出力に出す。
+- `test:desktop:changed` は vitest の `--changed` に同じ base を渡す。選ぶのは
+  vitest のモジュールグラフ。
+- スタックのソースツリー外（`pubspec.yaml` など）を変更したときは、取りこぼしを
+  避けるため**そのスタック全体**へ広げる。
+- **これは押し切りの代わりではない。** 内側のループ専用である。push 前の検査は
+  `pnpm run check:pre-push`、必須 check は CI の `Quality`。
+- サイドカーを起動するテスト（app / desktop の一部）は、この開発機では
+  `docs/linux-desktop-development.md` の env を前置する（Issue #425）。付けないと
+  「起動を待って諦めた時間」を測ることになる。
+
+### watch モード
+
+- desktop は `pnpm run test:desktop:watch`（vitest の watch）。
+- app は `flutter test` に watch が無い（1 回限りの runner）ため入れない。IDE の
+  テストランナーか `--plain-name` で絞る。
+- backend は `pytest-watch` を足すことになるが、backend の依存追加は Issue #433 の
+  担当なので、この Issue では入れない。
+
 ## 関連
 
-- Issue #426（本 Issue）、#393（フレーク調査）、#417（backend の実時間待ち）
+- Issue #426（本 Issue）、#393（フレーク調査）、#417（backend の実時間待ち）、
+  #435（内側のループの入口）
 - `desktop/test/renderer/setup.ts`、`desktop/vitest.config.mts`、`desktop/playwright.config.ts`

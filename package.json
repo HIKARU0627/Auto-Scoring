@@ -33,6 +33,7 @@
     "test:backend:changed": "node scripts/changed-tests.mjs backend",
     "test:desktop": "cd desktop && pnpm run test",
     "test:desktop:changed": "node scripts/changed-tests.mjs desktop",
+    "test:desktop:watch": "cd desktop && pnpm exec vitest",
     "test:desktop:e2e": "cd desktop && pnpm run test:e2e",
     "test": "pnpm run test:app && pnpm run test:backend && pnpm run test:desktop",
     "package:sidecar": "cd backend && uv run pyinstaller packaging/auto-scoring-sidecar.spec --noconfirm --clean --distpath dist --workpath build",
