@@ -25,6 +25,14 @@ from tests.support import make_question, make_test, written_on_pdf_bytes
 
 _TOKEN = "submissions-test-token"
 
+#: Liveness guard for a wait on an *observable state transition* inside the
+#: system under test (e.g. a slow render starting), not a budget the state is
+#: expected to reach on an idle machine. It only expires if the transition
+#: never happens at all, which is a genuine failure, not runner slowness --
+#: see `docs/test-timing.md` and Issue #439. Deliberately far above any
+#: observed time so parallel-load jitter cannot turn it red.
+_STATE_CHANGE_TIMEOUT_SECONDS = 30.0
+
 
 def _pdf_bytes(*, pages: int = 1) -> bytes:
     """An answer sheet with writing on it -- see `support.written_on_pdf_bytes`
@@ -480,21 +488,22 @@ def test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body
     immediately -- not queued behind the first, and not accepted and then
     left to read its body before failing.
     """
+    render_started = threading.Event()
     app = create_app(
         api_token=_TOKEN,
         data_root=data_root,
         intake_limits=IntakeLimits(max_size_bytes=5 * 1024 * 1024, max_pages=5),
-        pdf_engine=_SlowPdfEngine(PdfiumPypdfEngine(), delay_seconds=1.0),
+        pdf_engine=_SlowPdfEngine(
+            PdfiumPypdfEngine(), delay_seconds=1.0, render_started=render_started
+        ),
         max_concurrent_uploads=1,
     )
     _seed_test(data_root)
 
     with TestClient(app) as client:
-        first_started = threading.Event()
         first_responses: list[int] = []
 
         def _run_first() -> None:
-            first_started.set()
             response = client.post(
                 "/tests/test-1/submissions",
                 headers=_auth(),
@@ -504,8 +513,16 @@ def test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body
 
         first_thread = threading.Thread(target=_run_first)
         first_thread.start()
-        first_started.wait(timeout=5)
-        time.sleep(0.2)  # let the first request acquire capacity and start rendering
+        # Wait for the slow render to actually begin rather than sleeping a
+        # fixed 0.2s: the render only starts once this request has passed the
+        # upload gate and taken the single capacity slot, so observing it is
+        # a deterministic proof that the slot is held. A fixed sleep only
+        # *hoped* the first request had reached that point in time, which is
+        # exactly the race Issue #439 removes -- on a loaded runner the
+        # second request could otherwise win the slot and answer 201.
+        assert render_started.wait(timeout=_STATE_CHANGE_TIMEOUT_SECONDS), (
+            "the first upload never reached the slow render"
+        )
 
         second = client.post(
             "/tests/test-1/submissions",
@@ -513,7 +530,10 @@ def test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body
             files={"file": ("b.pdf", _pdf_bytes(), "application/pdf")},
         )
 
-        first_thread.join(timeout=5)
+        # Cleanup, not a property check: everything this test proves was
+        # asserted above. A deadline here would only measure how fast the
+        # runner drains the render (Issue #439).
+        first_thread.join()
 
     assert second.status_code == 503
     assert first_responses == [201]
