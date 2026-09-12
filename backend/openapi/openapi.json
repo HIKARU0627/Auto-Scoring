@@ -7516,6 +7516,161 @@
         ]
       }
     },
+    "/tests/{test_id}/materials/{material_id}/pages": {
+      "get": {
+        "description": "Page count, displayed size and rotation of one registered material, for paging through it in the material window. Only PDF materials have pages; a Word/Excel material answers 415. The geometry is not a basis for coordinates here -- the material viewer has no annotations -- but it is carried for layout.",
+        "operationId": "list_material_pages_tests__test_id__materials__material_id__pages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "material_id",
+            "required": true,
+            "schema": {
+              "title": "Material Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentPagesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Material Pages",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
+    "/tests/{test_id}/materials/{material_id}/pages/{page_index}/image": {
+      "get": {
+        "description": "One page of a registered material, rasterized by the same pdfium as the answer pages. Only PDF materials can be rasterized; a Word/Excel material answers 415 instead of being served as raw bytes (`docs/sidecar-api.md` \u00a77.5).",
+        "operationId": "get_material_page_image_tests__test_id__materials__material_id__pages__page_index__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "test_id",
+            "required": true,
+            "schema": {
+              "title": "Test Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "material_id",
+            "required": true,
+            "schema": {
+              "title": "Material Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "0-based page index.",
+            "in": "path",
+            "name": "page_index",
+            "required": true,
+            "schema": {
+              "description": "0-based page index.",
+              "minimum": 0,
+              "title": "Page Index",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.",
+            "in": "query",
+            "name": "scale",
+            "required": false,
+            "schema": {
+              "default": 2.0,
+              "description": "Pixels per PDF point. Only 1.0, 2.0 and 3.5 are accepted; any other value is rejected with 422 rather than snapped to a permitted one.",
+              "enum": [
+                1.0,
+                2.0,
+                3.5
+              ],
+              "title": "Scale",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/png": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The page, rasterized at the requested scale.",
+            "headers": {
+              "ETag": {
+                "description": "Identifies (document contents, page, scale). Send it back as If-None-Match to get a 304 instead of a re-render.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The client's If-None-Match matches; the image is unchanged."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Material Page Image",
+        "tags": [
+          "pages"
+        ]
+      }
+    },
     "/tests/{test_id}/profile": {
       "get": {
         "operationId": "get_profile_tests__test_id__profile_get",
