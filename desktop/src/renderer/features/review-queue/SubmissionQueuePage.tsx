@@ -8,8 +8,12 @@ import {
   type SubmissionResponse,
 } from "../../core/submission-queue-data.js";
 import { submissionConfirm } from "../../core/app-routes.js";
+import { MaterialSymbolIcon } from "../../core/MaterialSymbolIcon.js";
 import { describeReviewReason } from "../../core/submission-review-reason.js";
-import { submissionStatusVisualOf } from "../../core/submission-status.js";
+import {
+  submissionStatusToneTextClass,
+  submissionStatusVisualOf,
+} from "../../core/submission-status.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { BulkExportDialog } from "./BulkExportDialog.js";
@@ -24,21 +28,6 @@ function answerName(submission: SubmissionResponse): string {
   return (
     submission.student_label ?? submission.original_filename ?? submission.id
   );
-}
-
-function toneTextClass(
-  tone: "attention" | "neutral" | "danger" | "success",
-): string {
-  switch (tone) {
-    case "attention":
-      return "text-attention";
-    case "danger":
-      return "text-error";
-    case "success":
-      return "text-success";
-    default:
-      return "text-on-surface-variant";
-  }
 }
 
 export function SubmissionQueuePage(): JSX.Element {
@@ -203,8 +192,16 @@ export function SubmissionQueuePage(): JSX.Element {
                       <span>
                         {index + 1} / {loadState.data.queue.total}
                       </span>
-                      <span className={toneTextClass(visual.tone)}>
-                        {visual.label}
+                      <span
+                        data-testid={`queue-status-${entry.id}`}
+                        className={`inline-flex items-center gap-xs ${submissionStatusToneTextClass(visual.tone)}`}
+                      >
+                        <MaterialSymbolIcon
+                          name={visual.icon}
+                          label={visual.label}
+                          testId={`queue-status-${entry.id}-icon`}
+                        />
+                        <span aria-hidden>{visual.label}</span>
                       </span>
 
                       {/* Question progress chip (INV-144) */}

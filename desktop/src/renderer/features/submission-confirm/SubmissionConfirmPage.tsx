@@ -55,7 +55,11 @@ import {
   type SubmissionConfirmationOutcome,
 } from "../../core/submission-confirmation.js";
 import { hasNearlyBlankCrop } from "../../core/submission-review-reason.js";
-import { submissionStatusVisualOf } from "../../core/submission-status.js";
+import { MaterialSymbolIcon } from "../../core/MaterialSymbolIcon.js";
+import {
+  submissionStatusToneTextClass,
+  submissionStatusVisualOf,
+} from "../../core/submission-status.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
 import { AnswerCropView } from "../pdf-review/AnswerCropView.js";
@@ -182,6 +186,28 @@ function Notice({
       </span>
       <span className="min-w-0 flex-1">{message}</span>
     </div>
+  );
+}
+
+/**
+ * The submission's own state, shown beside its name (Flutter
+ * `_SubmissionStateChip`; Issue #84 / Issue #397). The icon comes from
+ * `SubmissionStatusVisual` so this screen never grows a third mapping.
+ */
+function SubmissionStateChip({ state }: { state: string }): JSX.Element {
+  const visual = submissionStatusVisualOf(state);
+  return (
+    <span
+      data-testid="confirm-submission-state"
+      className={`mt-xs inline-flex items-center gap-xs rounded-full bg-surface-container-high px-sm py-xs text-xs ${submissionStatusToneTextClass(visual.tone)}`}
+    >
+      <MaterialSymbolIcon
+        name={visual.icon}
+        label={visual.label}
+        testId="confirm-submission-state-icon"
+      />
+      <span aria-hidden>{visual.label}</span>
+    </span>
   );
 }
 
@@ -556,9 +582,7 @@ export function SubmissionConfirmPage(): JSX.Element {
                 >
                   {subtitle}
                 </p>
-                <span className="mt-xs inline-flex rounded-full bg-surface-container-high px-sm py-xs text-xs text-on-surface-variant">
-                  {submissionStatusVisualOf(loadState.submission.state).label}
-                </span>
+                <SubmissionStateChip state={loadState.submission.state} />
               </div>
               <button
                 type="button"
