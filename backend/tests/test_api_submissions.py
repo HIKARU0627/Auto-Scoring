@@ -454,8 +454,16 @@ def test_healthz_stays_responsive_while_an_intake_is_running(data_root: Path) ->
         # inside that render. Inline intake would have had to finish the render
         # before this request could be served.
         assert not render_finished.is_set()
-        intake_thread.join(timeout=5)
-        assert intake_done.is_set()
+        # Cleanup only, not a property check: everything this test exists to
+        # prove was asserted above. `join()` takes no deadline on purpose --
+        # `join(timeout=5)` + `assert intake_done.is_set()` turned the tail
+        # into "is the CI runner fast enough to finish the render in five
+        # seconds", the same class of wall-clock assertion Issue #357 removed
+        # from the /healthz probe. The render here is bounded (one page plus
+        # the engine's 1s delay), and a non-daemon thread would be joined at
+        # interpreter exit regardless, so joining without a deadline neither
+        # risks a hang nor weakens the test.
+        intake_thread.join()
 
 
 def test_concurrent_uploads_beyond_capacity_are_rejected_before_reading_the_body(
