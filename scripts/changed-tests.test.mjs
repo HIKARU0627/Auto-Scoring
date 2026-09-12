@@ -173,6 +173,37 @@ test("runnerCommand hands the stack runner paths relative to its cwd", () => {
   ]);
 });
 
+test("backend: a small selection opts out of the parallel addopts with -n0", () => {
+  const backend = runnerCommand(
+    "backend",
+    { selected: ["backend/tests/test_a.py", "backend/tests/test_b.py"] },
+    "origin/main",
+  );
+  assert.equal(backend.command, "uv");
+  assert.deepEqual(backend.args, [
+    "run",
+    "pytest",
+    "-n0",
+    "tests/test_a.py",
+    "tests/test_b.py",
+  ]);
+});
+
+test("backend: only a small selection is serial, not a large one", () => {
+  const selection = (count) => ({
+    selected: Array.from(
+      { length: count },
+      (_, i) => `backend/tests/test_${i}.py`,
+    ),
+  });
+  assert.ok(
+    runnerCommand("backend", selection(7), "origin/main").args.includes("-n0"),
+  );
+  assert.ok(
+    !runnerCommand("backend", selection(8), "origin/main").args.includes("-n0"),
+  );
+});
+
 test("every stack has the same script-facing shape", () => {
   for (const spec of Object.values(STACK_SPECS)) {
     assert.equal(typeof spec.sourceRef, "function");

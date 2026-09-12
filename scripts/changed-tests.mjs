@@ -25,6 +25,18 @@ import { pathToFileURL } from "node:url";
 const APP_LIB_PREFIX = "app/lib/";
 const BACKEND_SRC_PREFIX = "backend/src/";
 
+// The backend `addopts` (Issue #433) parallelises with `-n auto --dist
+// loadfile`. That is right for the full run, but it is pure overhead for the
+// handful of files a diff usually selects: measured on the dev host, one file
+// took ~2.0s under `-n auto` vs ~0.6s with `-n0`, and five fast files ~2.9s vs
+// ~1.3s. `--dist loadfile` pins one file per worker, so `-n auto` also starts
+// CPU-count workers that idle when only a few files are given. From 8 files on
+// the parallel startup stops losing (and large selections such as a
+// whole-stack widen can only be affordable in parallel -- a serial full backend
+// run is ~342s vs ~113s), so a selection of 7 or fewer is forced back to
+// serial. See docs/test-timing.md.
+const BACKEND_SERIAL_MAX_FILES = 7;
+
 /**
  * Per-stack facts. `sourceRef` is the token a test file must contain to count
  * as exercising a changed source file; `null` means the change is outside the
@@ -59,7 +71,17 @@ export const STACK_SPECS = Object.freeze({
     isTest: (path) =>
       path.startsWith("backend/tests/") &&
       (path.endsWith("_test.py") || /(^|\/)test_[^/]*\.py$/.test(path)),
-    runner: (files) => ({ command: "uv", args: ["run", "pytest", ...files] }),
+    runner: (files) => ({
+      command: "uv",
+      args: [
+        "run",
+        "pytest",
+        // Only a small inner-loop selection opts out of the parallel default;
+        // larger selections keep `addopts`'s `-n auto --dist loadfile`.
+        ...(files.length <= BACKEND_SERIAL_MAX_FILES ? ["-n0"] : []),
+        ...files,
+      ],
+    }),
   },
   desktop: {
     name: "desktop",
