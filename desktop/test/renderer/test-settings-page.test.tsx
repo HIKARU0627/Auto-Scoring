@@ -128,7 +128,14 @@ describe("TestSettingsPage registration flow", () => {
     });
 
     fireEvent.click(screen.getByTestId("analyze-dependency-graph-button"));
-    await screen.findByTestId("dependency-graph-empty");
+    // `dependency-graph-empty` is the deterministic "analyze finished" signal
+    // (the mock returns an empty graph), and there is no earlier observable
+    // marker for it. Under full-suite load the analyze round-trip can exceed
+    // RTL's 1000ms default -- real elapsed time, not a logic defect -- so widen
+    // only this call. The global default stays put so other races stay visible.
+    await screen.findByTestId("dependency-graph-empty", undefined, {
+      timeout: 10000,
+    });
     fireEvent.click(screen.getByTestId("confirm-dependency-graph-button"));
     await waitFor(() => {
       expect(
@@ -483,6 +490,17 @@ describe("TestSettingsPage registration flow", () => {
     fireEvent.click(screen.getByTestId("extract-criteria-button"));
     await screen.findByTestId("extract-confirm-dialog");
 
+    // The Escape handler lives in the dialog's focus-trap effect, which also
+    // moves focus into the panel. Wait for that effect before pressing Escape;
+    // otherwise the keydown can be dispatched before the listener exists and
+    // the dialog never closes.
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("extract-confirm-dialog")
+          .contains(document.activeElement),
+      ).toBe(true);
+    });
     fireEvent.keyDown(window, { key: "Escape" });
 
     await waitFor(() => {
