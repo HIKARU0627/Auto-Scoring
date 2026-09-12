@@ -14,6 +14,10 @@ import {
 } from "../../core/home-dashboard.js";
 import { HomeDataError, loadHomeDashboard } from "../../core/home-data.js";
 import { AppErrorBanner } from "../../core/AppErrorBanner.js";
+import {
+  formatRefreshClockTime,
+  useRefreshState,
+} from "../../core/use-refresh-state.js";
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
 import { pageSubtitleFor } from "../../navigation/page-header.js";
 import { useRouter } from "../../navigation/router.js";
@@ -27,7 +31,7 @@ import { HomeTestDonutPanel } from "./HomeTestDonutPanel.js";
 type LoadState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; dashboard: HomeDashboard; refreshing: boolean };
+  | { status: "ready"; dashboard: HomeDashboard };
 
 /**
  * The mock measures the main-column card pitch at 21/22px, while the space
@@ -65,20 +69,24 @@ export function HomePage(): JSX.Element {
   const client = useSidecarClient();
   const { pathname, push } = useRouter();
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
+  // Issue #383: the reload button's loading feedback and the last-updated
+  // label come from the shared hook, so every screen that adopts it behaves
+  // the same and tests drive the clock with fake timers.
+  const { showLoading, lastUpdatedAt, run } = useRefreshState({
+    now: () => new Date(),
+  });
 
   const reload = useCallback(async () => {
     setLoadState((previous) =>
-      previous.status === "ready"
-        ? { status: "ready", dashboard: previous.dashboard, refreshing: true }
-        : { status: "loading" },
+      previous.status === "ready" ? previous : { status: "loading" },
     );
     try {
-      const dashboard = await loadHomeDashboard(client);
-      setLoadState({ status: "ready", dashboard, refreshing: false });
+      const dashboard = await run(() => loadHomeDashboard(client));
+      setLoadState({ status: "ready", dashboard });
     } catch (error) {
       setLoadState({ status: "error", message: errorText(error) });
     }
-  }, [client]);
+  }, [client, run]);
 
   useEffect(() => {
     void reload();
@@ -91,9 +99,9 @@ export function HomePage(): JSX.Element {
     [push],
   );
 
-  const running =
-    loadState.status === "loading" ||
-    (loadState.status === "ready" && loadState.refreshing);
+  // The skeleton owns the first load; `showLoading` owns the reload, and is
+  // already delayed and held by the hook, so a fast reload shows no busy reason.
+  const running = loadState.status === "loading" || showLoading;
   const busyReasons = whileRunningRequirements({ running });
 
   return (
@@ -129,6 +137,15 @@ export function HomePage(): JSX.Element {
             <RefreshCw aria-hidden size={15} />
             最新の状況に更新
           </button>
+          {/* Issue 383: always-visible proof that a reload happened. The value
+              changes on every successful reload, and stays put on a failure so
+              the error banner is the only thing that moves. */}
+          <p
+            data-testid="home-last-updated"
+            className="mt-xs text-ui-label text-on-surface-variant"
+          >
+            最終更新 {formatRefreshClockTime(lastUpdatedAt)}
+          </p>
           {busyReasons.map((reason) => (
             <p
               key={reason.id}
