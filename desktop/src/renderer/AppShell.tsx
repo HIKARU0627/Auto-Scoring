@@ -51,11 +51,17 @@ export function AppShell({
   const gradingAvailability = useGradingAvailability(client);
   /**
    * Issue #422: the frame's height must account for the banner, not the other
-   * way around. With the band mounted, the frame takes what the `h-dvh` banner
-   * wrapper leaves; without it, the frame itself is the viewport. Either way the
-   * frame row has a definite height, so the Sidebar can stretch to it and the
-   * body column can size to its content -- `items-start` keeps the latter from
-   * being stretched to the window (Issue #375 item 4).
+   * way around. With the band mounted, the frame takes what the banner wrapper
+   * leaves; without it, the frame fills the area the root left after the custom
+   * title bar. Either way the frame row has a definite height, so the Sidebar
+   * can stretch to it and the body column can size to its content --
+   * `items-start` keeps the latter from being stretched to the window (Issue
+   * #375 item 4).
+   *
+   * Issue #428: the no-banner frame is `h-full`, not `h-dvh`. The renderer root
+   * owns the viewport now and hands this component the space below the 36px
+   * title bar; asking for `dvh` here would add that 36px back and reintroduce
+   * the document scroll #427 removed.
    *
    * Issue #427: the body column is the only scroller. A sticky Sidebar inside
    * this frame could not work while the window scrolled: `position: sticky` is
@@ -81,7 +87,7 @@ export function AppShell({
             <div
               data-testid="app-shell-frame"
               className={`flex items-start gap-xl bg-surface p-xl text-on-surface ${
-                bannerVisible ? "min-h-0 flex-1" : "h-dvh"
+                bannerVisible ? "min-h-0 flex-1" : "h-full"
               }`}
             >
               <Sidebar />

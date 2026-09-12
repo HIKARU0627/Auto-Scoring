@@ -148,6 +148,62 @@ describe("preload script bridge", () => {
     expect(result).toEqual({ testId: "t1", materialId: null });
   });
 
+  it("minimizeWindow invokes minimizeWindow IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce(undefined);
+    await exposedBridge!.minimizeWindow();
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:minimize-window",
+    );
+  });
+
+  it("toggleMaximizeWindow invokes toggleMaximizeWindow IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce(undefined);
+    await exposedBridge!.toggleMaximizeWindow();
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:toggle-maximize-window",
+    );
+  });
+
+  it("closeWindow invokes closeWindow IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce(undefined);
+    await exposedBridge!.closeWindow();
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:close-window",
+    );
+  });
+
+  it("isWindowMaximized invokes isWindowMaximized IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce(true);
+    const result = await exposedBridge!.isWindowMaximized();
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:is-window-maximized",
+    );
+    expect(result).toBe(true);
+  });
+
+  it("onWindowMaximizedChange registers and unregisters IPC listener", () => {
+    const callback = vi.fn();
+    const unsubscribe = exposedBridge!.onWindowMaximizedChange(callback);
+
+    expect(mockIpcRenderer.on).toHaveBeenCalledWith(
+      "auto-scoring:window-maximized-changed",
+      expect.any(Function),
+    );
+
+    const registeredListener = mockIpcRenderer.on.mock.calls[0]![1] as (
+      event: unknown,
+      maximized: boolean,
+    ) => void;
+    registeredListener({}, true);
+    expect(callback).toHaveBeenCalledWith(true);
+
+    unsubscribe();
+    expect(mockIpcRenderer.removeListener).toHaveBeenCalledWith(
+      "auto-scoring:window-maximized-changed",
+      registeredListener,
+    );
+  });
+
   it("onMaterialSelectionChange registers and unregisters IPC listener", () => {
     const callback = vi.fn();
     const unsubscribe = exposedBridge!.onMaterialSelectionChange(callback);

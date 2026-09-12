@@ -119,6 +119,28 @@ const bridge: AutoScoringBridge = {
       IpcChannel.sidecarFetch,
       request,
     ) as Promise<SidecarFetchResponse>,
+  minimizeWindow: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannel.minimizeWindow) as Promise<void>,
+  toggleMaximizeWindow: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannel.toggleMaximizeWindow) as Promise<void>,
+  closeWindow: (): Promise<void> =>
+    ipcRenderer.invoke(IpcChannel.closeWindow) as Promise<void>,
+  isWindowMaximized: (): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannel.isWindowMaximized) as Promise<boolean>,
+  onWindowMaximizedChange: (
+    callback: (maximized: boolean) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      maximized: boolean,
+    ) => {
+      callback(maximized);
+    };
+    ipcRenderer.on(IpcChannel.windowMaximizedChanged, listener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannel.windowMaximizedChanged, listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("autoScoring", bridge);

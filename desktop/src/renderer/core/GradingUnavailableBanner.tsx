@@ -20,6 +20,11 @@ export type { GradingAvailability };
  * band stacks over its child rather than forcing the window height: the shell
  * frame is deliberately content-height (#375 item 4), so a `min-h-screen` root
  * would reintroduce the stretching that change removed.
+ *
+ * Issue #428: the root reserves the custom title bar and hands this component a
+ * definite-height area, so the band fills that area (`h-full`) instead of the
+ * whole viewport (`h-dvh`). Reaching for `dvh` here would push the document
+ * 36px past the window and break "only the PDF scrolls" (Issue #401).
  */
 export function GradingUnavailableBanner({
   availability,
@@ -32,7 +37,7 @@ export function GradingUnavailableBanner({
     return <>{children}</>;
   }
   return (
-    <div className="flex h-dvh flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div
         data-testid="grading-unavailable-banner"
         role="status"
