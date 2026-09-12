@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -113,6 +114,44 @@ export const JOB_POLL_INTERVAL_MS = 2000;
 export const JOB_POLL_MAX_ATTEMPTS = 150;
 
 /**
+ * Space below the review workspace: the app shell's `p-xl` plus this screen's
+ * `main` `pb-xl` (2 x `--spacing-xl`, 48px). Subtracting it when fitting the
+ * workspace to the viewport leaves the document with no window scrollbar, so
+ * the 設問レール and 採点パネル stay on screen when the answer is zoomed
+ * (Issue #401).
+ */
+const REVIEW_WORKSPACE_BOTTOM_INSET = 48;
+
+/**
+ * The width at which the three review panes sit side by side. This is
+ * Tailwind's `lg` (64rem at the 16px root), matching the `lg:flex-row` below.
+ * Below it the panes stack and the viewport fit is not applied (Issue #401).
+ */
+const REVIEW_WORKSPACE_SIDE_BY_SIDE = "(min-width: 1024px)";
+
+/**
+ * The height the three-pane workspace should take, or `null` when it must size
+ * to its content instead (Issue #401).
+ *
+ * Side by side, the workspace fills the viewport from its own top down to
+ * {@link REVIEW_WORKSPACE_BOTTOM_INSET}, which is what keeps the 設問レール and
+ * 採点パネル on screen while the page region scrolls. When the panes stack,
+ * there is no single row to fit, so the caller leaves the height unset.
+ */
+export function resolveWorkspaceHeight(input: {
+  readonly viewportHeight: number;
+  readonly workspaceTop: number;
+  readonly sideBySide: boolean;
+}): number | null {
+  if (!input.sideBySide) {
+    return null;
+  }
+  const available =
+    input.viewportHeight - input.workspaceTop - REVIEW_WORKSPACE_BOTTOM_INSET;
+  return available > 0 ? available : null;
+}
+
+/**
  * The bare question number (`1`) whether the stored value is `1` or `問1`.
  *
  * Question numbers are stored with their prefix (`問1`), but some callers and
@@ -136,7 +175,9 @@ export function PdfReviewPage(): JSX.Element {
 
   const mounted = useMountedRef();
   const inspectorRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const pollAttemptsRef = useRef(0);
+  const [workspaceHeight, setWorkspaceHeight] = useState<number | null>(null);
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [questions, setQuestions] = useState<
     ReturnType<typeof sortQuestionsForReview>
@@ -356,6 +397,48 @@ export function PdfReviewPage(): JSX.Element {
     mounted,
     pollJobs,
   ]);
+
+  /**
+   * Fit the three-pane workspace to the rest of the viewport (Issue #401).
+   *
+   * The shell gives this screen no fixed height, so the workspace cannot use
+   * `h-full`: the page title, question card, and DAG panel sit above it and
+   * CSS does not know their combined height. Left unbounded, a zoomed page
+   * grows the document and the 設問レール / 採点パネル scroll away with it.
+   * Measuring the workspace's own top and sizing it to what remains keeps both
+   * bars on screen and makes the page region the only scroller. The height is
+   * applied only when the panes are side by side; when they stack, the page
+   * scrolls as before and only the page region reacts to zoom.
+   */
+  useLayoutEffect(() => {
+    if (loadState.status !== "ready") {
+      setWorkspaceHeight(null);
+      return undefined;
+    }
+    const workspace = workspaceRef.current;
+    if (workspace == null) {
+      return undefined;
+    }
+    const measure = () => {
+      setWorkspaceHeight(
+        resolveWorkspaceHeight({
+          viewportHeight: window.innerHeight,
+          workspaceTop: workspace.getBoundingClientRect().top,
+          sideBySide:
+            typeof window.matchMedia === "function" &&
+            window.matchMedia(REVIEW_WORKSPACE_SIDE_BY_SIDE).matches,
+        }),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(document.body);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [loadState.status]);
 
   const reloadReview = useCallback(async () => {
     pollAttemptsRef.current = 0;
@@ -685,10 +768,16 @@ export function PdfReviewPage(): JSX.Element {
             />
           ) : null}
 
-          <div className="flex min-w-0 flex-col gap-lg lg:flex-row">
+          <div
+            ref={workspaceRef}
+            style={
+              workspaceHeight == null ? undefined : { height: workspaceHeight }
+            }
+            className="flex min-w-0 flex-col gap-lg lg:flex-row"
+          >
             <nav
               data-testid="review-question-rail"
-              className="flex w-full shrink-0 flex-wrap gap-xs rounded-xl bg-surface-container p-sm lg:w-52 lg:flex-col"
+              className="flex max-h-inspector w-full shrink-0 flex-wrap gap-xs overflow-y-auto rounded-xl bg-surface-container p-sm lg:w-52 lg:flex-col"
               aria-label="設問一覧"
             >
               {questions.map((question, index) => {
@@ -745,8 +834,8 @@ export function PdfReviewPage(): JSX.Element {
               })}
             </nav>
 
-            <div className="min-w-0 flex-1">
-              <div className="mb-sm flex flex-wrap items-center gap-sm">
+            <div className="flex min-w-0 flex-1 flex-col lg:min-h-0">
+              <div className="mb-sm flex shrink-0 flex-wrap items-center gap-sm">
                 <button
                   type="button"
                   data-testid="review-page-prev"
@@ -788,6 +877,7 @@ export function PdfReviewPage(): JSX.Element {
                 />
                 <button
                   type="button"
+                  data-testid="review-zoom-out"
                   className={BUTTON_SECONDARY_CLASS}
                   onClick={() => {
                     setZoom((value) => Math.max(1, value - 0.5));
@@ -797,6 +887,7 @@ export function PdfReviewPage(): JSX.Element {
                 </button>
                 <button
                   type="button"
+                  data-testid="review-zoom-in"
                   className={BUTTON_SECONDARY_CLASS}
                   onClick={() => {
                     setZoom((value) => value + 0.5);
@@ -807,7 +898,7 @@ export function PdfReviewPage(): JSX.Element {
               </div>
               <div
                 data-testid="review-page-region"
-                className="min-w-0 overflow-x-auto rounded-xl bg-surface-container-low p-sm"
+                className="max-h-inspector min-w-0 overflow-auto rounded-xl bg-surface-container-low p-sm lg:min-h-0 lg:flex-1"
               >
                 {pageState != null ? (
                   <PageImageViewer
