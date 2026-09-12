@@ -19,6 +19,7 @@ Name | Type | Description | Notes
 **model** | **String** |  | 
 **modelSource** | [**ConfigurationSource**](ConfigurationSource.md) |  | 
 **modelVariable** | **String** |  | 
+**suggestedModels** | **BuiltList&lt;String&gt;** |  | 
 **textSettings** | [**BuiltList&lt;TextSettingModel&gt;**](TextSettingModel.md) |  | 
 **transport** | **String** |  | 
 

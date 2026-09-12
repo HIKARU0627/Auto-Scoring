@@ -98,6 +98,10 @@ class ApiKeyStatusModel(BaseModel):
     #: The environment variable the model setting is stored under, so the
     #: screen can save an edited model without inventing a name.
     model_variable: str
+    #: Model ids the screen may offer as suggestions next to the free text box
+    #: (Issue #448). Public ids only, and never a closed list: the screen keeps
+    #: the free input, because a model this list predates must stay savable.
+    suggested_models: list[str]
     #: The non-model readable settings (GCP project id, region).
     text_settings: list[TextSettingModel]
     #: `None` when this host's availability was not probed (the schema
@@ -196,6 +200,7 @@ def _status_model(status_: ApiKeyStatus) -> ApiKeyStatusModel:
         model=status_.model,
         model_source=status_.model_source,
         model_variable=status_.slot.model_variable,
+        suggested_models=list(status_.slot.suggested_models),
         text_settings=_text_setting_models(status_),
         host_available=status_.host_available,
         auth_note=status_.slot.auth_note,

@@ -448,6 +448,26 @@ def test_verify_on_a_keyless_provider_uses_the_host_probe() -> None:
     assert body["key_source"] == "none"
 
 
+def test_each_slot_offers_its_documented_model_suggestions() -> None:
+    """Issue #448: the screen may offer model ids, but only public ones.
+
+    The rendered form is a free text box with a ``<datalist>`` next to it, so
+    this only has to expose the ids; the screen decides whether a suggestion it
+    does not know about is still savable (it is).
+    """
+    with _client(ApiKeySettings(InMemoryCredentialStore(), {})) as client:
+        body = client.get("/settings/api-keys", headers=_AUTH).json()
+
+    by_id = {item["id"]: item for item in body["keys"]}
+    for slot in API_KEY_SLOTS:
+        assert by_id[slot.id]["suggested_models"] == list(slot.suggested_models)
+    # A user who just opens the picker keeps what the app would have chosen:
+    # every provider with a built-in default offers that default.
+    for slot_id in ("openrouter", "openai", "gemini"):
+        assert by_id[slot_id]["model"] in by_id[slot_id]["suggested_models"]
+    assert _FAKE_KEY not in str(body["keys"])
+
+
 def test_saving_the_transport_order_is_reported_and_persisted() -> None:
     store = InMemoryCredentialStore()
 

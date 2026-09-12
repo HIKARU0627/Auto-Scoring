@@ -1716,6 +1716,8 @@ export interface components {
       model_source: components["schemas"]["ConfigurationSource"];
       /** Model Variable */
       model_variable: string;
+      /** Suggested Models */
+      suggested_models: string[];
       /** Text Settings */
       text_settings: components["schemas"]["TextSettingModel"][];
       /** Transport */
