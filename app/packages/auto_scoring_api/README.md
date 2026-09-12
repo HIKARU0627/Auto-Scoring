@@ -146,6 +146,7 @@ Class | Method | HTTP request | Description
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**getTestTestsTestIdGet**](doc/TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listMaterialsTestsTestIdMaterialsGet**](doc/TestRegistrationApi.md#listmaterialsteststestidmaterialsget) | **GET** /tests/{test_id}/materials | List Materials
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**listTestRegistrationsTestRegistrationsGet**](doc/TestRegistrationApi.md#listtestregistrationstestregistrationsget) | **GET** /test-registrations | List Test Registrations
+[*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**setScoringTargetsTestsTestIdScoringTargetsPut**](doc/TestRegistrationApi.md#setscoringtargetsteststestidscoringtargetsput) | **PUT** /tests/{test_id}/scoring-targets | Set Scoring Targets
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**updateProfileTestsTestIdProfilePut**](doc/TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
 [*TestRegistrationApi*](doc/TestRegistrationApi.md) | [**uploadAnswerLayoutTestsTestIdAnswerLayoutPut**](doc/TestRegistrationApi.md#uploadanswerlayoutteststestidanswerlayoutput) | **PUT** /tests/{test_id}/answer-layout | Upload Answer Layout
 
@@ -242,6 +243,8 @@ Class | Method | HTTP request | Description
  - [ScoreRequest](doc/ScoreRequest.md)
  - [ScoreResponse](doc/ScoreResponse.md)
  - [ScoreValueResponse](doc/ScoreValueResponse.md)
+ - [ScoringTargetsRequest](doc/ScoringTargetsRequest.md)
+ - [ScoringTargetsResponse](doc/ScoringTargetsResponse.md)
  - [SubmissionAiUsageResponse](doc/SubmissionAiUsageResponse.md)
  - [SubmissionResponse](doc/SubmissionResponse.md)
  - [SubmissionReviewProgressResponse](doc/SubmissionReviewProgressResponse.md)

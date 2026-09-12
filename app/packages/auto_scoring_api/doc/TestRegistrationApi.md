@@ -22,6 +22,7 @@ Method | HTTP request | Description
 [**getTestTestsTestIdGet**](TestRegistrationApi.md#gettestteststestidget) | **GET** /tests/{test_id} | Get Test
 [**listMaterialsTestsTestIdMaterialsGet**](TestRegistrationApi.md#listmaterialsteststestidmaterialsget) | **GET** /tests/{test_id}/materials | List Materials
 [**listTestRegistrationsTestRegistrationsGet**](TestRegistrationApi.md#listtestregistrationstestregistrationsget) | **GET** /test-registrations | List Test Registrations
+[**setScoringTargetsTestsTestIdScoringTargetsPut**](TestRegistrationApi.md#setscoringtargetsteststestidscoringtargetsput) | **PUT** /tests/{test_id}/scoring-targets | Set Scoring Targets
 [**updateProfileTestsTestIdProfilePut**](TestRegistrationApi.md#updateprofileteststestidprofileput) | **PUT** /tests/{test_id}/profile | Update Profile
 [**uploadAnswerLayoutTestsTestIdAnswerLayoutPut**](TestRegistrationApi.md#uploadanswerlayoutteststestidanswerlayoutput) | **PUT** /tests/{test_id}/answer-layout | Upload Answer Layout
 
@@ -580,6 +581,51 @@ This endpoint does not need any parameter.
 ### HTTP request headers
 
  - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **setScoringTargetsTestsTestIdScoringTargetsPut**
+> ScoringTargetsResponse setScoringTargetsTestsTestIdScoringTargetsPut(testId, scoringTargetsRequest)
+
+Set Scoring Targets
+
+Choose which of a test's questions are graded (Issue #449).  The default is every question; this replaces the selection with exactly ``question_ids``. Allowed before *and* after registration completes (the owner changes their mind), but never to an empty set -- a test with nothing to grade has no meaning, so at least one question must stay selected. Excluding a question deletes nothing: its grade and review history are kept, simply not counted or exported, and reappear if it is selected again.
+
+### Example
+```dart
+import 'package:auto_scoring_api/api.dart';
+
+final api = AutoScoringApi().getTestRegistrationApi();
+final String testId = testId_example; // String | 
+final ScoringTargetsRequest scoringTargetsRequest = ; // ScoringTargetsRequest | 
+
+try {
+    final response = api.setScoringTargetsTestsTestIdScoringTargetsPut(testId, scoringTargetsRequest);
+    print(response);
+} on DioException catch (e) {
+    print('Exception when calling TestRegistrationApi->setScoringTargetsTestsTestIdScoringTargetsPut: $e\n');
+}
+```
+
+### Parameters
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **testId** | **String**|  | 
+ **scoringTargetsRequest** | [**ScoringTargetsRequest**](ScoringTargetsRequest.md)|  | 
+
+### Return type
+
+[**ScoringTargetsResponse**](ScoringTargetsResponse.md)
+
+### Authorization
+
+[HTTPBearer](../README.md#HTTPBearer)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
  - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)

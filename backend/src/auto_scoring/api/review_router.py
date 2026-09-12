@@ -34,7 +34,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -146,6 +146,8 @@ class QuestionResponse(BaseModel):
     score_area: NormalizedRectResponse | None = None
     comment_area: NormalizedRectResponse | None = None
     rubric: list[RubricCriterionResponse]
+    #: Whether grading includes this question (Issue #449). Defaults true.
+    is_scoring_target: bool = True
 
     @classmethod
     def from_domain(
@@ -163,6 +165,7 @@ class QuestionResponse(BaseModel):
             score_area=_rect(question.score_area),
             comment_area=_rect(question.comment_area),
             rubric=rubric_criteria,
+            is_scoring_target=question.is_scoring_target,
         )
 
 
@@ -489,11 +492,24 @@ def build_review_router(
     router = APIRouter(tags=["review"])
 
     @router.get("/tests/{test_id}/questions", response_model=list[QuestionResponse])
-    def list_questions(test_id: str) -> list[QuestionResponse]:
+    def list_questions(
+        test_id: str,
+        include_excluded_questions: bool = Query(
+            False,
+            description=(
+                "Return every question, not only the grading targets. The "
+                "review screen leaves this at the default so an excluded "
+                "question is never shown as work to do (Issue #449); the "
+                "test-settings screen sets it to list them for re-selection."
+            ),
+        ),
+    ) -> list[QuestionResponse]:
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             if uow.tests.get(test_id) is None:
                 raise HTTPException(404, detail=f"test {test_id!r} not found")
-            questions = uow.questions.list_for_test(test_id)
+            questions = uow.questions.list_for_test(
+                test_id, scoring_targets_only=not include_excluded_questions
+            )
             responses = []
             for question in sorted(questions, key=lambda q: (q.page, q.number)):
                 rubric = uow.rubrics.get_for_question(question.id)
@@ -528,7 +544,10 @@ def build_review_router(
         with SqlAlchemyUnitOfWork(session_factory) as uow:
             if uow.tests.get(test_id) is None:
                 raise HTTPException(404, detail=f"test {test_id!r} not found")
-            question_ids = [question.id for question in uow.questions.list_for_test(test_id)]
+            question_ids = [
+                question.id
+                for question in uow.questions.list_for_test(test_id, scoring_targets_only=True)
+            ]
             progress = []
             for submission in uow.submissions.list_for_test(test_id):
                 reviews_by_question = {

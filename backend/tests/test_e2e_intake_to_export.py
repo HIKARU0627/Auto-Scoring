@@ -80,6 +80,7 @@ from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
+from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
 from auto_scoring.domain.answer_area_detection import (
     AnswerAreaDetectionOutput,
@@ -104,6 +105,7 @@ from tests.pdf_ink import has_red_within
 from tests.test_e2e_acceptance import (
     ScriptedAIProvider,
     ScriptedOCRProvider,
+    _session_factory,
     answer_crops,
     grading_response,
     ocr_result_of_spans,
@@ -1051,3 +1053,182 @@ def test_a_partly_unreadable_prerequisite_no_longer_blocks_its_dependent(
         ocr_rows = [row for row in recognitions if row["stage"] == "ocr"]
         assert len(ocr_rows) == 1
         assert len(ocr_rows[0]["boxes"]) == 4
+
+
+# --------------------------------------------------------------------------- #
+# Issue #449: selecting the questions to grade
+# --------------------------------------------------------------------------- #
+def test_an_excluded_question_is_not_graded_and_does_not_block_its_dependent(
+    data_root: Path,
+    extractor: _ScriptedCriteriaExtractor,
+    ai_provider: ScriptedAIProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole exclusion promise on one real run.
+
+    問1 is a prerequisite of 問2, and 問1 is excluded. 問2 must still be
+    graded (no ``/resume`` anywhere), 問1 must never reach the provider, the
+    confirmation denominator must shrink to 問2, and an export that confirms
+    only 問2 must be accepted.
+    """
+    with _build_client(
+        data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=None
+    ) as client:
+        test_id = _register_via_the_new_path(client, edges=True)
+        first, second = f"{test_id}:問1", f"{test_id}:問2"
+        selected = client.put(
+            f"/tests/{test_id}/scoring-targets",
+            headers=_AUTH,
+            json={"question_ids": [second]},
+        )
+        assert selected.status_code == 200, selected.text
+        assert selected.json()["question_ids"] == [second]
+
+        submission_id = _upload_answer(client, test_id, marker="ans-g")
+        _script_the_grader(ai_provider, answer_crops(data_root, submission_id))
+        _start_and_wait(client, submission_id)
+
+        # ① The excluded question was not graded: no job, no grade, and the
+        # provider was never handed its crop.
+        assert [job["question_id"] for job in _jobs(client, submission_id)] == [second]
+        assert _job_for(client, submission_id, second)["state"] == "succeeded"
+        assert (
+            client.get(
+                f"/submissions/{submission_id}/questions/{first}/grades", headers=_AUTH
+            ).json()
+            == []
+        )
+        assert all(request.question_id != first for request in ai_provider.requests)
+
+        # ② The confirmation denominator counts only the graded question.
+        progress = client.get(f"/tests/{test_id}/review-progress", headers=_AUTH).json()
+        assert len(progress) == 1
+        assert progress[0]["total_questions"] == 1
+        assert progress[0]["confirmed_questions"] == 0
+
+        history = client.get(
+            f"/submissions/{submission_id}/questions/{second}/reviews", headers=_AUTH
+        ).json()
+        approved = client.post(
+            f"/submissions/{submission_id}/questions/{second}/review/approve",
+            headers=_AUTH,
+            json={"expected_version": len(history)},
+        )
+        assert approved.status_code == 201, approved.text
+
+        progress = client.get(f"/tests/{test_id}/review-progress", headers=_AUTH).json()
+        assert progress[0]["confirmed_questions"] == 1
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            submission = uow.submissions.get(submission_id)
+            assert submission is not None
+            assert submission.state.value == "reviewed"
+
+        # ③ The export gate ignores the excluded question: confirming only 問2
+        # is enough, and the export's snapshot names only 問2 -- so nothing of
+        # 問1 was drawn. Its unconfirmed review never enters the artefact.
+        install_font_covering(monkeypatch, "0123456789/")
+        exported = _export(client, submission_id)
+        with SqlAlchemyUnitOfWork(_session_factory(data_root)) as uow:
+            row = uow.exports.get(exported["id"])
+            assert row is not None
+        assert [version.question_id for version in row.review_versions] == [second]
+
+
+def test_scoring_targets_endpoint_validates_and_round_trips(
+    data_root: Path,
+    extractor: _ScriptedCriteriaExtractor,
+    ai_provider: ScriptedAIProvider,
+) -> None:
+    """The selection is replaceable by id, cannot be emptied, and is visible to
+    the settings screen only through ``include_excluded_questions``."""
+    with _build_client(
+        data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=None
+    ) as client:
+        test_id = _register_via_the_new_path(client)
+        all_questions = _question_ids(test_id)
+
+        # Default is every question, and the review listing shows only targets
+        # (all of them until something is excluded).
+        default = client.get(f"/tests/{test_id}/questions", headers=_AUTH).json()
+        assert [q["id"] for q in default] == all_questions
+        assert all(q["is_scoring_target"] for q in default)
+
+        empty = client.put(
+            f"/tests/{test_id}/scoring-targets", headers=_AUTH, json={"question_ids": []}
+        )
+        assert empty.status_code == 422, empty.text
+
+        unknown = client.put(
+            f"/tests/{test_id}/scoring-targets",
+            headers=_AUTH,
+            json={"question_ids": ["nope"]},
+        )
+        assert unknown.status_code == 422, unknown.text
+
+        selected = client.put(
+            f"/tests/{test_id}/scoring-targets",
+            headers=_AUTH,
+            json={"question_ids": [all_questions[0]]},
+        )
+        assert selected.status_code == 200, selected.text
+        assert selected.json()["question_ids"] == [all_questions[0]]
+
+        default_after = client.get(f"/tests/{test_id}/questions", headers=_AUTH).json()
+        assert [q["id"] for q in default_after] == [all_questions[0]]
+
+        with_excluded = client.get(
+            f"/tests/{test_id}/questions",
+            headers=_AUTH,
+            params={"include_excluded_questions": "true"},
+        ).json()
+        assert sorted(q["id"] for q in with_excluded) == all_questions
+        assert {q["id"]: q["is_scoring_target"] for q in with_excluded} == {
+            all_questions[0]: True,
+            all_questions[1]: False,
+        }
+
+        # Re-selecting everything is allowed, including after `ready`.
+        restored = client.put(
+            f"/tests/{test_id}/scoring-targets",
+            headers=_AUTH,
+            json={"question_ids": all_questions},
+        )
+        assert restored.status_code == 200, restored.text
+        assert sorted(restored.json()["question_ids"]) == all_questions
+
+
+def test_the_selection_survives_the_profile_confirm_rebuild(
+    data_root: Path,
+    extractor: _ScriptedCriteriaExtractor,
+    ai_provider: ScriptedAIProvider,
+) -> None:
+    """The profile confirm deletes and rebuilds every `Question` row. A
+    selection made before it (the criteria confirm already wrote the rows, so
+    the settings screen can show them) must not be silently reset to "all"."""
+    with _build_client(
+        data_root, extractor=extractor, ai_provider=ai_provider, ocr_provider=None
+    ) as client:
+        group = _plan_the_folder(client)
+        test_id = _register_from_plan(client, group)
+        _confirm_criteria(client, test_id)
+
+        first, second = f"{test_id}:問1", f"{test_id}:問2"
+        selected = client.put(
+            f"/tests/{test_id}/scoring-targets",
+            headers=_AUTH,
+            json={"question_ids": [second]},
+        )
+        assert selected.status_code == 200, selected.text
+
+        # Rebuilds the rows from the confirmed profile.
+        _confirm_answer_layout(client, test_id)
+
+        listed = client.get(
+            f"/tests/{test_id}/questions",
+            headers=_AUTH,
+            params={"include_excluded_questions": "true"},
+        ).json()
+        assert {question["id"]: question["is_scoring_target"] for question in listed} == {
+            first: False,
+            second: True,
+        }

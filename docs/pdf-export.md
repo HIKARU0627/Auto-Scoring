@@ -36,9 +36,18 @@ ExportJobProcessor.process（jobs/export_processor.py）
   2. build_export_marks でAnnotationを座標解決（annotation_layout.py）
   3. app-data外のtemp fileへ PdfEngine.render_annotations で生成
   4. page数などを検証（失敗すればここで打ち切り、DB/app-dataに一切触れない）
-  5. transactional_operation: Export行のcommit成功後にのみ
-     app-data/exports/ へatomic rename
+   5. transactional_operation: Export行のcommit成功後にのみ
+      app-data/exports/ へatomic rename
 ```
+
+**Issue #449 の「採点する問題」は、このフロー全体が採点対象だけを見る。**
+未確認チェック・書く場所チェック・review-version snapshot・設問ごとの描画は
+`QuestionRepository.list_for_test(..., scoring_targets_only=True)` が返す設問だけで行う。
+除外した設問には点数・コメント・添削記号を**一切描かない**。答案の紙面そのものは
+従来どおり出力する（元PDFをそのまま描画するだけで、除外設問の欄を白く潰したり
+「未採点」と印字したりはしない）。除外は先生が意図して選んだものであり、答案は
+生徒のものなので、紙面に手を入れると記録が変わる。再び採点対象に戻すと、以前の
+点数・コメントがそのまま描かれる。
 
 ## 2. Annotation位置解決（`domain/annotation_layout.py`）
 

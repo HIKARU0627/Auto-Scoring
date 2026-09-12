@@ -114,6 +114,8 @@ export 'package:auto_scoring_api/src/model/scanned_file_model.dart';
 export 'package:auto_scoring_api/src/model/score_request.dart';
 export 'package:auto_scoring_api/src/model/score_response.dart';
 export 'package:auto_scoring_api/src/model/score_value_response.dart';
+export 'package:auto_scoring_api/src/model/scoring_targets_request.dart';
+export 'package:auto_scoring_api/src/model/scoring_targets_response.dart';
 export 'package:auto_scoring_api/src/model/submission_ai_usage_response.dart';
 export 'package:auto_scoring_api/src/model/submission_response.dart';
 export 'package:auto_scoring_api/src/model/submission_review_progress_response.dart';

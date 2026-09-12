@@ -102,6 +102,8 @@ doc/ScannedFileModel.md
 doc/ScoreRequest.md
 doc/ScoreResponse.md
 doc/ScoreValueResponse.md
+doc/ScoringTargetsRequest.md
+doc/ScoringTargetsResponse.md
 doc/SettingsApi.md
 doc/SubmissionAiUsageResponse.md
 doc/SubmissionResponse.md
@@ -231,6 +233,8 @@ lib/src/model/scanned_file_model.dart
 lib/src/model/score_request.dart
 lib/src/model/score_response.dart
 lib/src/model/score_value_response.dart
+lib/src/model/scoring_targets_request.dart
+lib/src/model/scoring_targets_response.dart
 lib/src/model/submission_ai_usage_response.dart
 lib/src/model/submission_response.dart
 lib/src/model/submission_review_progress_response.dart
@@ -247,3 +251,5 @@ lib/src/model/validation_error.dart
 lib/src/model/verify_api_key_response.dart
 lib/src/serializers.dart
 pubspec.yaml
+test/scoring_targets_request_test.dart
+test/scoring_targets_response_test.dart

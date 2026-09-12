@@ -228,7 +228,7 @@ def build_export_router(
             if submission is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, detail="submission not found")
 
-            questions = uow.questions.list_for_test(submission.test_id)
+            questions = uow.questions.list_for_test(submission.test_id, scoring_targets_only=True)
             question_ids = [question.id for question in questions]
             reviews_by_question = _reviews_by_question(uow, submission_id, question_ids)
             refusal = export_refusal(questions, reviews_by_question)
@@ -319,7 +319,7 @@ def build_export_router(
                 wanted = set(requested)
                 submissions = [s for s in submissions if s.id in wanted]
 
-            questions = uow.questions.list_for_test(test_id)
+            questions = uow.questions.list_for_test(test_id, scoring_targets_only=True)
             question_ids = [question.id for question in questions]
 
             for submission in submissions:

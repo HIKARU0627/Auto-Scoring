@@ -50,6 +50,7 @@ function buildQuestion(number: string, testId: string): QuestionResponse {
     scoring_method: "additive",
     answer_area: null,
     rubric: [],
+    is_scoring_target: true,
   };
 }
 

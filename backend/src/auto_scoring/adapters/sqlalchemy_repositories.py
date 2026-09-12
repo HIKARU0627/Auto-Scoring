@@ -14,7 +14,7 @@ constraint violation at the offending call rather than at ``commit``.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any, cast
 
@@ -239,13 +239,19 @@ class SqlAlchemyQuestionRepository:
         row = self._session.get(QuestionRow, question_id)
         return m.question_from_row(row) if row is not None else None
 
-    def list_for_test(self, test_id: str) -> list[Question]:
-        rows = self._session.scalars(
-            select(QuestionRow)
-            .where(QuestionRow.test_id == test_id)
-            .order_by(QuestionRow.page, QuestionRow.number)
-        )
+    def list_for_test(self, test_id: str, *, scoring_targets_only: bool = False) -> list[Question]:
+        query = select(QuestionRow).where(QuestionRow.test_id == test_id)
+        if scoring_targets_only:
+            query = query.where(QuestionRow.is_scoring_target.is_(True))
+        rows = self._session.scalars(query.order_by(QuestionRow.page, QuestionRow.number))
         return [m.question_from_row(row) for row in rows]
+
+    def set_scoring_targets(self, test_id: str, scoring_target_ids: Iterable[str]) -> None:
+        targets = set(scoring_target_ids)
+        rows = self._session.scalars(select(QuestionRow).where(QuestionRow.test_id == test_id))
+        for row in rows:
+            row.is_scoring_target = row.id in targets
+        self._session.flush()
 
     def delete_for_test(self, test_id: str) -> None:
         self._session.execute(delete(QuestionRow).where(QuestionRow.test_id == test_id))
