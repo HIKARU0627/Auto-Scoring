@@ -10,6 +10,7 @@ import 'package:auto_scoring_app/core/sidecar_platform_io.dart';
 import 'package:auto_scoring_app/core/sidecar_supervisor.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'sidecar_keyring_env.dart';
 import 'sidecar_probe.dart';
 
 /// Drives the real supervisor against the real Python sidecar: the pieces the
@@ -39,7 +40,7 @@ void main() {
 
   setUp(() async {
     appData = await Directory.systemTemp.createTemp('supervisor_it_');
-    platform = SidecarPlatformIo();
+    platform = _KeyringSafePlatform();
     supervisor = SidecarSupervisor(
       platform: platform,
       executablePath: sidecarExe,
@@ -257,6 +258,48 @@ void main() {
       expect(supervisor.state.value, isA<SidecarReady>());
     },
   );
+}
+
+/// The real [SidecarPlatformIo], except on Linux it spawns the sidecar with
+/// [linuxKeyringEnvironment] so `import keyring` cannot stall on D-Bus
+/// (Issue #438).
+///
+/// Only `start` differs, and only on Linux. On Windows it delegates straight to
+/// `super.start`, keeping the Job Object adoption (`ChildProcessGroup`) that
+/// matters there. The Linux override skips that adoption deliberately:
+/// `ChildProcessGroup.forCurrentPlatform()` is a no-op off Windows, so there is
+/// nothing to lose.
+class _KeyringSafePlatform extends SidecarPlatformIo {
+  @override
+  Future<SidecarProcessHandle> start(
+    String executable,
+    List<String> arguments,
+  ) {
+    if (!Platform.isLinux) return super.start(executable, arguments);
+    return Process.start(
+      executable,
+      arguments,
+      environment: linuxKeyringEnvironment,
+    ).then(_KeyringSidecarProcess.new);
+  }
+}
+
+/// [SidecarProcessHandle] for the Linux spawn above. Mirrors the private
+/// `_IoSidecarProcess` in `sidecar_platform_io.dart`; the draining is what
+/// keeps a chatty uvicorn from blocking on a full pipe.
+class _KeyringSidecarProcess implements SidecarProcessHandle {
+  _KeyringSidecarProcess(this._process) {
+    _process.stdout.drain<void>().ignore();
+    _process.stderr.drain<void>().ignore();
+  }
+
+  final Process _process;
+
+  @override
+  Future<int> get exitCode => _process.exitCode;
+
+  @override
+  void kill() => _process.kill();
 }
 
 /// Every directory under the system temp root that currently holds a sidecar
