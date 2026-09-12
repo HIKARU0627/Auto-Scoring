@@ -652,4 +652,69 @@ export async function importReview(
   return outcomes;
 }
 
+/** 取込画面の段。セッション保持にも使うので `features` ではなくここに置く。 */
+export type IntakeStep = "choose" | "review" | "done";
+
+/**
+ * 取込画面のセッション（Issue #384）。
+ *
+ * 画面を離れると `IntakePage` が unmount し、フォルダ・ファイル・役割・取込先の
+ * 選択が全部消えていた。**同じ選択を選び直させるのが「答案を後でまた再選択」の
+ * 正体**なので、離れたときの状態をメモリに預けて復元する。
+ *
+ * **ディスクには書かない。** 再起動をまたいで古い選択が生き残ると、フォルダの
+ * 中身が変わっていたときに画面と実ファイルがずれる。この Issue が解くのは
+ * 「画面遷移で消える」ことだけ（司令官裁定 2026-09-12）。
+ */
+export interface IntakeSession {
+  readonly step: IntakeStep;
+  readonly templateId: string | null;
+  readonly chosenFolderName: string | null;
+  /** 復元時に実ファイルと突き合わせるための絶対パス。画面には出さない。 */
+  readonly chosenFolderPath: string | null;
+  readonly review: IntakeReviewState | null;
+  readonly narrowedTestIds: readonly string[];
+  readonly outcomes: readonly ImportOutcome[];
+}
+
+let intakeSession: IntakeSession | null = null;
+
+export function loadIntakeSession(): IntakeSession | null {
+  return intakeSession;
+}
+
+export function saveIntakeSession(session: IntakeSession): void {
+  intakeSession = session;
+}
+
+/** 保持を捨てる。やり直し・取込成功・別フォルダ選択で呼ぶ。 */
+export function resetIntakeSession(): void {
+  intakeSession = null;
+}
+
+/**
+ * 復元してよいかを、選んだフォルダを読み直して確かめる（司令官裁定 #5）。
+ *
+ * 画面に出す選択が現物とずれたまま取込ませないため、**各行が同じ
+ * `sha256` とサイズでまだ存在するときだけ**復元する。新しく増えたファイルは
+ * 選択に関係しないので無視し、消えた・変わったファイルが 1 つでもあれば
+ * 復元しない（false）。
+ */
+export function sessionMatchesScan(
+  review: IntakeReviewState,
+  entries: readonly ScannedEntry[],
+): boolean {
+  const byPath = new Map(entries.map((entry) => [entry.relativePath, entry]));
+  return review.groups
+    .flatMap((group) => group.files)
+    .every((file) => {
+      const entry = byPath.get(file.relativePath);
+      return (
+        entry !== undefined &&
+        entry.sha256 === file.sha256 &&
+        entry.sizeBytes === file.sizeBytes
+      );
+    });
+}
+
 export { importedAnything, materialRoleWireValue, PDF_CONTENT_TYPE };

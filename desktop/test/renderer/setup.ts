@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { resetIntakeSession } from "../../src/renderer/core/intake-data.js";
 import "../../src/renderer/styles/index.css";
 
 /**
@@ -109,6 +110,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // The intake screen keeps its in-progress selection in module memory so it
+  // survives route changes (Issue #384). Every test must start from an empty
+  // session, or one test's restored selection leaks into the next.
+  resetIntakeSession();
   // Renderer tests stub `window.autoScoring`, since a test has no Electron main
   // process to talk to. Leaking one test's stub into the next would let a test
   // pass because of a bridge it never set up.

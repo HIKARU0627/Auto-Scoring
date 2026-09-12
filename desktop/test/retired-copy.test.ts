@@ -30,6 +30,12 @@ const RETIRED_COPY: readonly {
   { label: "模範解答 PDF", pattern: /模範解答\s*PDF/g },
   { label: "採点マニュアル", pattern: /採点マニュアル/g },
   { label: "画面はまだありません", pattern: /画面はまだありません/g },
+  // Issue #384: the owner did not know what a "バッチ" was. The intake screen
+  // now names the folder it is importing, and this exact old heading is barred.
+  {
+    label: "このバッチはどのテストの答案ですか",
+    pattern: /このバッチはどのテストの答案ですか/g,
+  },
 ];
 
 /** Lower bound so a renamed directory cannot make the scan pass on nothing. */
@@ -81,6 +87,9 @@ describe("retired copy never returns (INV-201-07)", () => {
     expect(detectRetiredCopy("採点マニュアル PDF")).toEqual(["採点マニュアル"]);
     expect(detectRetiredCopy("画面はまだありません")).toEqual([
       "画面はまだありません",
+    ]);
+    expect(detectRetiredCopy("このバッチはどのテストの答案ですか")).toEqual([
+      "このバッチはどのテストの答案ですか",
     ]);
     // A legitimate bare region/material label is not a hit.
     expect(detectRetiredCopy('return "模範解答";')).toEqual([]);
