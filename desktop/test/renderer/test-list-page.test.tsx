@@ -218,4 +218,97 @@ describe("TestListPage (Issue #379)", () => {
     // raced the load and failed under full-suite load. Await the row instead.
     await screen.findByTestId("test-list-row-t1");
   });
+
+  it("a draft row says 次はテスト設定 and its next action opens settings (Issue #450)", async () => {
+    renderAppAt(AppRoutes.testList, {
+      handlers: {
+        listTestRegistrations: async () => [
+          buildTest({ id: "t-draft", name: "数学 第1回", status: "draft" }),
+        ],
+        listSubmissions: async () => [],
+      },
+    });
+
+    await screen.findByTestId("test-list-row-t-draft");
+    expect(screen.getByTestId("test-list-next-t-draft").textContent).toBe(
+      "次は「テスト設定」",
+    );
+    // The current stage's destination is raised to the primary button.
+    expect(
+      screen.getByTestId("test-list-open-settings-t-draft").className,
+    ).toContain("bg-primary");
+
+    fireEvent.click(screen.getByTestId("test-list-open-settings-t-draft"));
+    await waitFor(() => {
+      expect(screen.getByTestId("page-title").textContent).toBe("テスト設定");
+    });
+  });
+
+  it("a ready test with no answers says 次は答案の取込 and its next action opens intake for it (Issue #450)", async () => {
+    renderAppAt(AppRoutes.testList, {
+      client: createIntakeMockClient({
+        listTestRegistrations: async () => [
+          buildTest({ id: "t1", name: "国語 第1回" }),
+        ],
+        listSubmissions: async () => [],
+      }),
+    });
+
+    await screen.findByTestId("test-list-row-t1");
+    expect(screen.getByTestId("test-list-next-t1").textContent).toBe(
+      "次は「答案の取込」",
+    );
+    expect(screen.getByTestId("test-list-add-answers-t1").className).toContain(
+      "bg-primary",
+    );
+
+    fireEvent.click(screen.getByTestId("test-list-add-answers-t1"));
+    await screen.findByTestId("intake-target-summary");
+    expect(screen.getByTestId("intake-target-summary").textContent).toContain(
+      "国語 第1回",
+    );
+  });
+
+  it("a fully confirmed test says 次はPDF出力 and its next action opens the queue (Issue #450)", async () => {
+    renderAppAt(AppRoutes.testList, {
+      handlers: {
+        listTestRegistrations: async () => [
+          buildTest({ id: "t1", name: "国語 第1回" }),
+        ],
+        listSubmissions: async () => [
+          buildSubmission({ id: "s1", testId: "t1", state: "reviewed" }),
+        ],
+        listReviewProgress: async () => [
+          buildProgress({ id: "s1", confirmed: 5, total: 5 }),
+        ],
+      },
+    });
+
+    await screen.findByTestId("test-list-row-t1");
+    expect(screen.getByTestId("test-list-next-t1").textContent).toBe(
+      "次は「PDF出力」",
+    );
+    expect(screen.getByTestId("test-list-open-queue-t1").className).toContain(
+      "bg-primary",
+    );
+
+    fireEvent.click(screen.getByTestId("test-list-open-queue-t1"));
+    await waitFor(() => {
+      expect(screen.getByTestId("page-title").textContent).toBe("答案キュー");
+    });
+  });
+
+  it("shows no next action while the answer list could not be read (Issue #450)", async () => {
+    renderAppAt(AppRoutes.testList, {
+      handlers: {
+        listTestRegistrations: async () => [buildTest({ id: "t1" })],
+        listSubmissions: async () => {
+          throw new Error("sidecar is not connected");
+        },
+      },
+    });
+
+    await screen.findByTestId("test-list-row-t1");
+    expect(screen.queryByTestId("test-list-next-t1")).toBeNull();
+  });
 });

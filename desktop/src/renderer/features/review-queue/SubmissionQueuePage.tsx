@@ -8,6 +8,7 @@ import {
   type SubmissionResponse,
 } from "../../core/submission-queue-data.js";
 import { submissionConfirm, intakeTarget } from "../../core/app-routes.js";
+import { IntakeJourneyStage, journeySteps } from "../../core/intake-journey.js";
 import { MaterialSymbolIcon } from "../../core/MaterialSymbolIcon.js";
 import { describeReviewReason } from "../../core/submission-review-reason.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../../core/submission-status.js";
 import { ShellScreen } from "../../navigation/ShellScreen.js";
 import { useRouter } from "../../navigation/router.js";
+import { StepProgress } from "../ui/screen-ui.js";
 import { BulkExportDialog } from "./BulkExportDialog.js";
 import { ExportDialog } from "./ExportDialog.js";
 
@@ -102,6 +104,19 @@ export function SubmissionQueuePage(): JSX.Element {
           >
             再読み込み
           </button>
+        </div>
+      ) : null}
+
+      {loadState.status === "ready" ? (
+        <div className="mx-auto mb-lg max-w-240">
+          {/* Issue 450: while reviewing, the operator can see the whole path
+              -- 資料の取込 → テスト設定 → 答案の取込 → 採点の確認 → PDF出力 --
+              and that this screen is 採点の確認, not a dead end. */}
+          <StepProgress
+            testId="queue-journey"
+            steps={journeySteps(IntakeJourneyStage.review)}
+            currentId={IntakeJourneyStage.review}
+          />
         </div>
       ) : null}
 
