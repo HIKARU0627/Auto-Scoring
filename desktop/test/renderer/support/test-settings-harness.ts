@@ -43,6 +43,12 @@ export function createTestSettingsMockClient(
     testStatus?: string;
     handlers?: MockSidecarHandlers;
     detectAnswerAreas?: () => DetectAnswerAreasResult;
+    estimate?: {
+      page_count: number;
+      max_pages: number;
+      estimated_cost: number | null;
+      unit_cost: number | null;
+    };
   } = {},
 ): { client: SidecarClient; applyLayoutUpload: () => AnswerLayoutResponse } {
   const testId = input.testId ?? "t-reg";
@@ -167,7 +173,7 @@ export function createTestSettingsMockClient(
       }
       if (path === "/tests/{test_id}/criteria/estimate") {
         return {
-          data: {
+          data: input.estimate ?? {
             page_count: 1,
             max_pages: 50,
             estimated_cost: null,

@@ -475,6 +475,68 @@ describe("TestSettingsPage registration flow", () => {
     );
   });
 
+  it("closes the extract cost dialog on Escape", async () => {
+    const { client } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), { client });
+    await screen.findByTestId("criteria-section");
+
+    fireEvent.click(screen.getByTestId("extract-criteria-button"));
+    await screen.findByTestId("extract-confirm-dialog");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("extract-confirm-dialog")).toBeNull();
+    });
+    expect(screen.getByTestId("extract-criteria-button")).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("focuses the extract dialog and keeps Tab inside it", async () => {
+    const { client } = createTestSettingsMockClient();
+    renderAppAt(testSettings("t-reg"), { client });
+    await screen.findByTestId("criteria-section");
+
+    fireEvent.click(screen.getByTestId("extract-criteria-button"));
+    await screen.findByTestId("extract-confirm-dialog");
+
+    const cancel = screen.getByTestId("extract-cancel-button");
+    const confirm = screen.getByTestId("extract-confirm-button");
+
+    expect(document.activeElement).toBe(cancel);
+
+    confirm.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(confirm);
+  });
+
+  it("shows the over-limit warning and disables confirm", async () => {
+    const { client } = createTestSettingsMockClient({
+      estimate: {
+        page_count: 51,
+        max_pages: 50,
+        estimated_cost: null,
+        unit_cost: null,
+      },
+    });
+    renderAppAt(testSettings("t-reg"), { client });
+    await screen.findByTestId("criteria-section");
+
+    fireEvent.click(screen.getByTestId("extract-criteria-button"));
+    await screen.findByTestId("extract-confirm-dialog");
+
+    expect(screen.getByTestId("extract-over-limit")).toBeDefined();
+    expect(screen.getByTestId("extract-confirm-button")).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
   async function confirmTwoQuestionCriteria(): Promise<void> {
     fireEvent.click(screen.getByTestId("add-criteria-question-button"));
     fireEvent.click(screen.getByTestId("add-criteria-question-button"));
