@@ -29,6 +29,12 @@ describe("AppShell grading-unavailable banner (INV-168, Issue #398)", () => {
     );
     // The band stacks over the screen; it does not replace it.
     expect(screen.getByTestId("home-open-intake")).toBeDefined();
+    // Issue #375 item 4: the shell frame is content-height, so the band must
+    // not force the window height back on either.
+    expect(
+      screen.getByTestId("grading-unavailable-banner").parentElement
+        ?.className ?? "",
+    ).not.toContain("min-h-screen");
   });
 
   it("stays above a pushed screen, not only home", async () => {
