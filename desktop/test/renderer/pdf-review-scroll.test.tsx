@@ -50,6 +50,27 @@ describe("review workspace is fitted to the viewport (Issue #401)", () => {
     ).toBeNull();
   });
 
+  it("cancels the page scroll instead of reading the workspace one offset taller (Issue #422)", () => {
+    // A scrolled document sits the workspace higher in the viewport; the same
+    // screen must still size to the document, not to the scrolled viewport.
+    expect(
+      resolveWorkspaceHeight({
+        viewportHeight: 1024,
+        workspaceTop: 322,
+        scrollY: 121,
+        sideBySide: true,
+      }),
+    ).toBe(533);
+    expect(
+      resolveWorkspaceHeight({
+        viewportHeight: 1024,
+        workspaceTop: 443,
+        scrollY: 0,
+        sideBySide: true,
+      }),
+    ).toBe(533);
+  });
+
   it("gives the 設問レール its own bounded scroll container", async () => {
     renderPdfReview({
       questions: Array.from({ length: 8 }, (_, index) =>

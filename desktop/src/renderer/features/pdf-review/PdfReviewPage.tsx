@@ -133,21 +133,31 @@ const REVIEW_WORKSPACE_SIDE_BY_SIDE = "(min-width: 1024px)";
  * The height the three-pane workspace should take, or `null` when it must size
  * to its content instead (Issue #401).
  *
- * Side by side, the workspace fills the viewport from its own top down to
- * {@link REVIEW_WORKSPACE_BOTTOM_INSET}, which is what keeps the 設問レール and
- * 採点パネル on screen while the page region scrolls. When the panes stack,
- * there is no single row to fit, so the caller leaves the height unset.
+ * Side by side, the workspace fills the viewport from its own top (in document
+ * coordinates) down to {@link REVIEW_WORKSPACE_BOTTOM_INSET}, which is what
+ * keeps the 設問レール and 採点パネル on screen while the page region scrolls.
+ * When the panes stack, there is no single row to fit, so the caller leaves the
+ * height unset.
  */
 export function resolveWorkspaceHeight(input: {
   readonly viewportHeight: number;
+  /**
+   * The workspace's top from `getBoundingClientRect()`, i.e. relative to the
+   * viewport. Pass the page scroll as {@link scrollY} too so the two cancel
+   * out: measuring against the viewport alone reads the workspace as one
+   * scroll-offset taller than it is once the document has scrolled (Issue
+   * #422).
+   */
   readonly workspaceTop: number;
+  readonly scrollY?: number;
   readonly sideBySide: boolean;
 }): number | null {
   if (!input.sideBySide) {
     return null;
   }
+  const workspaceTop = input.workspaceTop + (input.scrollY ?? 0);
   const available =
-    input.viewportHeight - input.workspaceTop - REVIEW_WORKSPACE_BOTTOM_INSET;
+    input.viewportHeight - workspaceTop - REVIEW_WORKSPACE_BOTTOM_INSET;
   return available > 0 ? available : null;
 }
 
@@ -401,14 +411,21 @@ export function PdfReviewPage(): JSX.Element {
   /**
    * Fit the three-pane workspace to the rest of the viewport (Issue #401).
    *
-   * The shell gives this screen no fixed height, so the workspace cannot use
-   * `h-full`: the page title, question card, and DAG panel sit above it and
-   * CSS does not know their combined height. Left unbounded, a zoomed page
-   * grows the document and the 設問レール / 採点パネル scroll away with it.
-   * Measuring the workspace's own top and sizing it to what remains keeps both
-   * bars on screen and makes the page region the only scroller. The height is
-   * applied only when the panes are side by side; when they stack, the page
-   * scrolls as before and only the page region reacts to zoom.
+   * The page title, question card, and DAG panel sit above the workspace and
+   * CSS does not know their combined height, so the workspace is sized to the
+   * space left below its own top. This is done in document coordinates: the
+   * old viewport-relative `getBoundingClientRect().top` made the workspace look
+   * one scroll-offset taller whenever the document was scrolled, which kept the
+   * document scrollable and pinned it (Issue #422). `window.scrollY` cancels
+   * out as long as both sides are document-absolute.
+   *
+   * The 採点不可バナー is mounted by an ancestor and changes the frame height
+   * with no change to the `document.body` box, so a `ResizeObserver` on the
+   * body alone would miss it. A `MutationObserver` on the body re-measures when
+   * the band (or anything else) is inserted or removed.
+   *
+   * The height is applied only when the panes are side by side; when they
+   * stack, the page scrolls as before and only the page region reacts to zoom.
    */
   useLayoutEffect(() => {
     if (loadState.status !== "ready") {
@@ -419,23 +436,41 @@ export function PdfReviewPage(): JSX.Element {
     if (workspace == null) {
       return undefined;
     }
+    let frame = 0;
     const measure = () => {
+      const rect = workspace.getBoundingClientRect();
       setWorkspaceHeight(
         resolveWorkspaceHeight({
           viewportHeight: window.innerHeight,
-          workspaceTop: workspace.getBoundingClientRect().top,
+          workspaceTop: rect.top,
+          scrollY: window.scrollY,
           sideBySide:
             typeof window.matchMedia === "function" &&
             window.matchMedia(REVIEW_WORKSPACE_SIDE_BY_SIDE).matches,
         }),
       );
     };
+    const schedule = () => {
+      if (frame !== 0) {
+        return;
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        measure();
+      });
+    };
     measure();
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(schedule);
     observer.observe(document.body);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
+      mutations.disconnect();
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
       window.removeEventListener("resize", measure);
     };
   }, [loadState.status]);

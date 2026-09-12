@@ -17,10 +17,11 @@ export const SIDEBAR_NAV_TEST_ID = "app-sidebar-nav";
  *
  * Issue #348: the mock draws the sidebar as a floating, rounded panel inset
  * from the window edges (left ~24px, width ~208px, ~24px from the bottom), not
- * a full-bleed column. The panel owns the inset height (`100vh` minus the
- * `p-xl` page padding on both sides) so it stays a panel while the window
- * scrolls, and the nav rows use a ~48px row with a 12px gap to match the mock's
- * ~45px height / ~62px pitch.
+ * a full-bleed column. The panel stretches to the shell row (`self-stretch`
+ * against the row's `items-start`) rather than a literal `100vh`, so it stays a
+ * panel while the window scrolls and shrinks with the 採点不可バナー instead of
+ * overflowing it (Issue #422); the nav rows use a ~48px row with a 12px gap to
+ * match the mock's ~45px height / ~62px pitch.
  */
 export const SIDEBAR_PRODUCT_NAME = "Auto-Scoring";
 /** Existing wording from `docs/simplified-design-specification.md` §1.1. */
@@ -32,7 +33,7 @@ export function Sidebar(): JSX.Element {
   return (
     <aside
       data-testid={SIDEBAR_TEST_ID}
-      className="sticky top-xl flex h-[calc(100vh_-_var(--spacing-xl)*2)] w-52 shrink-0 flex-col rounded-xl bg-surface-dim max-[900px]:w-16"
+      className="sticky top-xl flex w-52 shrink-0 self-stretch flex-col rounded-xl bg-surface-dim max-[900px]:w-16"
     >
       <div className="px-md pt-xl pb-xl max-[900px]:px-xs max-[900px]:pt-md max-[900px]:pb-sm">
         {/* Issue #371 item 6 dropped the 22px wordmark to 16px to stop it
