@@ -34,7 +34,7 @@ from auto_scoring.adapters.local_storage import LocalFileStore
 from auto_scoring.adapters.pdf.pdfium_pypdf_engine import PdfiumPypdfEngine
 from auto_scoring.adapters.unit_of_work import SqlAlchemyUnitOfWork
 from auto_scoring.api.app import create_app
-from auto_scoring.api.page_image_router import ALLOWED_SCALES, DEFAULT_SCALE
+from auto_scoring.api.page_image_router import ALLOWED_SCALES
 from auto_scoring.domain.intake_template import MaterialRole
 from auto_scoring.domain.pdf_engine import AnnotationMark, PdfEngine
 from auto_scoring.domain.pdf_geometry import NormalizedPoint, PageGeometry
@@ -272,8 +272,11 @@ def test_material_page_renders_through_the_shared_engine_and_default_scale(
     )
 
     assert response.status_code == 200
+    # The literal 2.0, not the module constant: asserting `DEFAULT_SCALE` would
+    # pass for any value it was changed to, so it could not catch a scale
+    # change at all.
     assert counting_engine.renders == [
-        (store.resolve_stored_path(stored_path), 0, DEFAULT_SCALE)
+        (store.resolve_stored_path(stored_path), 0, 2.0)
     ]
 
 
@@ -338,7 +341,14 @@ def test_a_non_pdf_material_is_415_and_sends_no_document_bytes(
 # --------------------------------------------------------------------------
 
 
-def test_unknown_material_is_404(client: TestClient) -> None:
+def test_unknown_material_is_404(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The test must exist, or this would pass on the test-not-found guard and
+    # never exercise "this test has no such material".
+    _seed(session_factory, materials=[_material(_PDF_MATERIAL_ID, "tests/test-1/materials/x.pdf")])
+
     assert (
         client.get("/tests/test-1/materials/no-such-material/pages", headers=_AUTH).status_code
         == 404
