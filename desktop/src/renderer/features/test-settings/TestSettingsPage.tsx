@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { useSidecarClient } from "../../api/SidecarApiProvider.js";
@@ -220,6 +228,64 @@ function editorPages(
   }));
 }
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function useModalDialogBehavior(
+  open: boolean,
+  onClose: () => void,
+): RefObject<HTMLDivElement | null> {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!open || panel === null) {
+      return;
+    }
+
+    const focusables = (): HTMLElement[] =>
+      Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+
+    (focusables()[0] ?? panel).focus();
+
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const list = focusables();
+      if (list.length === 0) {
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = list[0];
+      const last = list[list.length - 1];
+      const activeElement = document.activeElement;
+      if (event.shiftKey) {
+        if (activeElement === first || !panel.contains(activeElement)) {
+          event.preventDefault();
+          last?.focus();
+        }
+      } else if (activeElement === last || !panel.contains(activeElement)) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, onClose]);
+
+  return panelRef;
+}
+
 export function TestSettingsPage(): JSX.Element {
   const client = useSidecarClient();
   const { params } = useRouter();
@@ -236,6 +302,22 @@ export function TestSettingsPage(): JSX.Element {
     estimatedCost: number | null;
     unitCost: number | null;
   } | null>(null);
+
+  const closeExtractEstimate = useCallback(() => {
+    setExtractEstimateOpen(false);
+    setExtractEstimate(null);
+  }, []);
+  const closeUndetectedConfirm = useCallback(() => {
+    setUndetectedConfirmOpen(false);
+  }, []);
+  const extractDialogRef = useModalDialogBehavior(
+    extractEstimateOpen,
+    closeExtractEstimate,
+  );
+  const undetectedDialogRef = useModalDialogBehavior(
+    undetectedConfirmOpen,
+    closeUndetectedConfirm,
+  );
 
   const reload = useCallback(async () => {
     if (testId.length === 0) {
@@ -1265,7 +1347,10 @@ export function TestSettingsPage(): JSX.Element {
               aria-modal="true"
             >
               <div className="flex min-h-full items-center justify-center p-lg">
-                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-xl bg-surface-container-high shadow-lg">
+                <div
+                  ref={extractDialogRef}
+                  className="grid w-full max-w-112 max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-xl bg-surface-container-high shadow-lg"
+                >
                   <div className="overflow-y-auto p-lg">
                     <h3 className="text-recognized font-medium leading-ui text-on-surface">
                       採点基準PDFから抽出
@@ -1299,10 +1384,7 @@ export function TestSettingsPage(): JSX.Element {
                       className={secondaryButtonClass(
                         "shrink-0 whitespace-nowrap",
                       )}
-                      onClick={() => {
-                        setExtractEstimateOpen(false);
-                        setExtractEstimate(null);
-                      }}
+                      onClick={closeExtractEstimate}
                     >
                       キャンセル
                     </button>
@@ -1316,8 +1398,7 @@ export function TestSettingsPage(): JSX.Element {
                         extractEstimate.pageCount > extractEstimate.maxPages
                       }
                       onClick={() => {
-                        setExtractEstimateOpen(false);
-                        setExtractEstimate(null);
+                        closeExtractEstimate();
                         void runGuarded(WORK.extract, async () => {
                           const criteria = await extractCriteria(
                             client,
@@ -1359,7 +1440,10 @@ export function TestSettingsPage(): JSX.Element {
               aria-modal="true"
             >
               <div className="flex min-h-full items-center justify-center p-lg">
-                <div className="grid w-full max-w-md max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-xl bg-surface-container-high shadow-lg">
+                <div
+                  ref={undetectedDialogRef}
+                  className="grid w-full max-w-112 max-h-dialog-viewport grid-dialog-body-footer overflow-hidden rounded-xl bg-surface-container-high shadow-lg"
+                >
                   <div className="overflow-y-auto p-lg">
                     <h3 className="text-recognized font-medium leading-ui text-on-surface">
                       回答欄が見つかっていない設問があります
@@ -1388,9 +1472,7 @@ export function TestSettingsPage(): JSX.Element {
                       className={secondaryButtonClass(
                         "shrink-0 whitespace-nowrap",
                       )}
-                      onClick={() => {
-                        setUndetectedConfirmOpen(false);
-                      }}
+                      onClick={closeUndetectedConfirm}
                     >
                       戻って直す
                     </button>

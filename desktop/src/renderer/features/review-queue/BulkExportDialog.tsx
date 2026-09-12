@@ -159,7 +159,7 @@ export function BulkExportDialog({
       aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim p-md"
     >
-      <div className="w-full max-w-lg rounded-lg border border-outline bg-surface p-lg shadow-elevation-2 text-on-surface">
+      <div className="w-full max-w-128 rounded-lg border border-outline bg-surface p-lg shadow-elevation-2 text-on-surface">
         <h2 className="text-title-medium font-medium mb-md">まとめてPDF出力</h2>
 
         {queueIsEmpty ? (
