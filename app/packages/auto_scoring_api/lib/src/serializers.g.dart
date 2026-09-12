@@ -92,6 +92,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(SaveApiKeyRequest.serializer)
       ..add(SaveErrorCatalogRequest.serializer)
       ..add(SaveTemplatesRequest.serializer)
+      ..add(SaveTransportOrderRequest.serializer)
       ..add(ScannedFileModel.serializer)
       ..add(ScoreRequest.serializer)
       ..add(ScoreResponse.serializer)
@@ -102,6 +103,7 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(TestMaterialResponse.serializer)
       ..add(TestResponse.serializer)
       ..add(TestSummary.serializer)
+      ..add(TextSettingModel.serializer)
       ..add(UndoReviewRequest.serializer)
       ..add(UnresolvedQuestionModel.serializer)
       ..add(UpdateCriteriaRequest.serializer)
@@ -128,9 +130,6 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(AnnotationResponse)]),
           () => ListBuilder<AnnotationResponse>())
-      ..addBuilderFactory(
-          const FullType(BuiltList, const [const FullType(ApiKeyStatusModel)]),
-          () => ListBuilder<ApiKeyStatusModel>())
       ..addBuilderFactory(
           const FullType(
               BuiltList, const [const FullType(BoundingBoxResponse)]),
@@ -239,6 +238,15 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(BuiltList, const [const FullType(String)]),
           () => ListBuilder<String>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(ApiKeyStatusModel)]),
+          () => ListBuilder<ApiKeyStatusModel>())
+      ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(String)]),
+          () => ListBuilder<String>())
+      ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(PageFormatModel)]),
           () => ListBuilder<PageFormatModel>())
       ..addBuilderFactory(
@@ -259,8 +267,15 @@ Serializers _$serializers = (Serializers().toBuilder()
           const FullType(BuiltList, const [const FullType(String)]),
           () => ListBuilder<String>())
       ..addBuilderFactory(
+          const FullType(BuiltList, const [const FullType(TextSettingModel)]),
+          () => ListBuilder<TextSettingModel>())
+      ..addBuilderFactory(
           const FullType(BuiltList, const [const FullType(ValidationError)]),
-          () => ListBuilder<ValidationError>()))
+          () => ListBuilder<ValidationError>())
+      ..addBuilderFactory(
+          const FullType(BuiltMap,
+              const [const FullType(String), const FullType.nullable(String)]),
+          () => MapBuilder<String, String?>()))
     .build();
 
 // ignore_for_file: deprecated_member_use_from_same_package,type=lint

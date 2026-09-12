@@ -31,6 +31,7 @@ import json
 import logging
 import logging.handlers
 import os
+import shutil
 import socket
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -41,7 +42,7 @@ import uvicorn
 
 from auto_scoring.adapters.ai.unconfigured_provider import UnconfiguredAIProvider
 from auto_scoring.adapters.ai_classification.factory import create_material_classifier
-from auto_scoring.adapters.ai_grading._google_adc import AdcTokenSource
+from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, AdcTokenSource
 from auto_scoring.adapters.ai_grading.factory import create_ai_provider
 from auto_scoring.adapters.answer_area_detection.factory import create_answer_area_detector
 from auto_scoring.adapters.credentials.api_keys import ApiKeySettings
@@ -483,7 +484,36 @@ def run(argv: Sequence[str] | None = None) -> int:
     # A host with no usable credential store -- every Linux development
     # machine here, and CI -- gets an environment identical to the one it
     # would have had, and starts exactly as before.
-    credential_settings = ApiKeySettings(create_credential_store(), os.environ)
+    #
+    # The two host probes (Issue #386) are wired here, in the composition root
+    # that has exactly one real host to read: whether ADC resolves for the
+    # configured project (Vertex AI) and whether the Codex CLI is installed.
+    # Both are cached -- the settings endpoint asks on every screen load, and
+    # resolving ADC is not free. A failure is cached as `False` rather than
+    # re-raised, because the question is "is it available", not "hand me a
+    # token"; the verify button does the live check.
+    adc_available: dict[str | None, bool] = {}
+
+    def vertex_auth_available(project_id: str | None) -> bool:
+        if project_id not in adc_available:
+            try:
+                AdcTokenSource(project_id=project_id)
+                adc_available[project_id] = True
+            except AdcCredentialsError:
+                adc_available[project_id] = False
+        return adc_available[project_id]
+
+    configured_codex = os.environ.get("AUTO_SCORING_CODEX_EXECUTABLE", "").strip() or "codex"
+
+    def codex_available() -> bool:
+        return shutil.which(configured_codex) is not None or Path(configured_codex).is_file()
+
+    credential_settings = ApiKeySettings(
+        create_credential_store(),
+        os.environ,
+        vertex_auth_available=vertex_auth_available,
+        codex_available=codex_available,
+    )
     environment = credential_settings.effective_environment()
 
     # Logging is installed before create_app, so the file log captures the

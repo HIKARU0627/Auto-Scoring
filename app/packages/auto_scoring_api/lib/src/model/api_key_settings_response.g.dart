@@ -8,6 +8,8 @@ part of 'api_key_settings_response.dart';
 
 class _$ApiKeySettingsResponse extends ApiKeySettingsResponse {
   @override
+  final BuiltList<String> availableTransports;
+  @override
   final BuiltList<ApiKeyStatusModel> keys;
   @override
   final bool restartRequired;
@@ -16,6 +18,8 @@ class _$ApiKeySettingsResponse extends ApiKeySettingsResponse {
   @override
   final String transportOrder;
   @override
+  final bool transportOrderStored;
+  @override
   final ConfigurationSource transportSource;
 
   factory _$ApiKeySettingsResponse(
@@ -23,10 +27,12 @@ class _$ApiKeySettingsResponse extends ApiKeySettingsResponse {
       (ApiKeySettingsResponseBuilder()..update(updates))._build();
 
   _$ApiKeySettingsResponse._(
-      {required this.keys,
+      {required this.availableTransports,
+      required this.keys,
       required this.restartRequired,
       this.storeUnavailableReason,
       required this.transportOrder,
+      required this.transportOrderStored,
       required this.transportSource})
       : super._();
   @override
@@ -42,20 +48,24 @@ class _$ApiKeySettingsResponse extends ApiKeySettingsResponse {
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
     return other is ApiKeySettingsResponse &&
+        availableTransports == other.availableTransports &&
         keys == other.keys &&
         restartRequired == other.restartRequired &&
         storeUnavailableReason == other.storeUnavailableReason &&
         transportOrder == other.transportOrder &&
+        transportOrderStored == other.transportOrderStored &&
         transportSource == other.transportSource;
   }
 
   @override
   int get hashCode {
     var _$hash = 0;
+    _$hash = $jc(_$hash, availableTransports.hashCode);
     _$hash = $jc(_$hash, keys.hashCode);
     _$hash = $jc(_$hash, restartRequired.hashCode);
     _$hash = $jc(_$hash, storeUnavailableReason.hashCode);
     _$hash = $jc(_$hash, transportOrder.hashCode);
+    _$hash = $jc(_$hash, transportOrderStored.hashCode);
     _$hash = $jc(_$hash, transportSource.hashCode);
     _$hash = $jf(_$hash);
     return _$hash;
@@ -64,10 +74,12 @@ class _$ApiKeySettingsResponse extends ApiKeySettingsResponse {
   @override
   String toString() {
     return (newBuiltValueToStringHelper(r'ApiKeySettingsResponse')
+          ..add('availableTransports', availableTransports)
           ..add('keys', keys)
           ..add('restartRequired', restartRequired)
           ..add('storeUnavailableReason', storeUnavailableReason)
           ..add('transportOrder', transportOrder)
+          ..add('transportOrderStored', transportOrderStored)
           ..add('transportSource', transportSource))
         .toString();
   }
@@ -76,6 +88,12 @@ class _$ApiKeySettingsResponse extends ApiKeySettingsResponse {
 class ApiKeySettingsResponseBuilder
     implements Builder<ApiKeySettingsResponse, ApiKeySettingsResponseBuilder> {
   _$ApiKeySettingsResponse? _$v;
+
+  ListBuilder<String>? _availableTransports;
+  ListBuilder<String> get availableTransports =>
+      _$this._availableTransports ??= ListBuilder<String>();
+  set availableTransports(ListBuilder<String>? availableTransports) =>
+      _$this._availableTransports = availableTransports;
 
   ListBuilder<ApiKeyStatusModel>? _keys;
   ListBuilder<ApiKeyStatusModel> get keys =>
@@ -97,6 +115,11 @@ class ApiKeySettingsResponseBuilder
   set transportOrder(String? transportOrder) =>
       _$this._transportOrder = transportOrder;
 
+  bool? _transportOrderStored;
+  bool? get transportOrderStored => _$this._transportOrderStored;
+  set transportOrderStored(bool? transportOrderStored) =>
+      _$this._transportOrderStored = transportOrderStored;
+
   ConfigurationSource? _transportSource;
   ConfigurationSource? get transportSource => _$this._transportSource;
   set transportSource(ConfigurationSource? transportSource) =>
@@ -109,10 +132,12 @@ class ApiKeySettingsResponseBuilder
   ApiKeySettingsResponseBuilder get _$this {
     final $v = _$v;
     if ($v != null) {
+      _availableTransports = $v.availableTransports.toBuilder();
       _keys = $v.keys.toBuilder();
       _restartRequired = $v.restartRequired;
       _storeUnavailableReason = $v.storeUnavailableReason;
       _transportOrder = $v.transportOrder;
+      _transportOrderStored = $v.transportOrderStored;
       _transportSource = $v.transportSource;
       _$v = null;
     }
@@ -137,18 +162,25 @@ class ApiKeySettingsResponseBuilder
     try {
       _$result = _$v ??
           _$ApiKeySettingsResponse._(
+            availableTransports: availableTransports.build(),
             keys: keys.build(),
             restartRequired: BuiltValueNullFieldError.checkNotNull(
                 restartRequired, r'ApiKeySettingsResponse', 'restartRequired'),
             storeUnavailableReason: storeUnavailableReason,
             transportOrder: BuiltValueNullFieldError.checkNotNull(
                 transportOrder, r'ApiKeySettingsResponse', 'transportOrder'),
+            transportOrderStored: BuiltValueNullFieldError.checkNotNull(
+                transportOrderStored,
+                r'ApiKeySettingsResponse',
+                'transportOrderStored'),
             transportSource: BuiltValueNullFieldError.checkNotNull(
                 transportSource, r'ApiKeySettingsResponse', 'transportSource'),
           );
     } catch (_) {
       late String _$failedField;
       try {
+        _$failedField = 'availableTransports';
+        availableTransports.build();
         _$failedField = 'keys';
         keys.build();
       } catch (e) {

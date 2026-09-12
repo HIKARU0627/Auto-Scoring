@@ -59,3 +59,8 @@ export function apiKeyVerificationCardClass(ok: boolean): string {
     ? "mt-md flex items-start gap-sm rounded-lg bg-success-container/40 p-sm text-on-success-container"
     : "mt-md flex items-start gap-sm rounded-lg bg-error-container/40 p-sm text-on-error-container";
 }
+
+/** One row of the "use order" list (Issue #386). */
+export function transportOrderItemClass(): string {
+  return "flex items-center gap-sm rounded-md bg-surface-container-high px-sm py-xs text-body-medium text-on-surface";
+}

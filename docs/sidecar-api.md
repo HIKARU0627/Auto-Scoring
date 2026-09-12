@@ -111,15 +111,29 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 
 ## 5. 設定エンドポイントと、資格情報の見える範囲（Issue #96）
 
-`/settings/api-keys` は利用者自身の API キーを扱う。`GET` / `PUT {slot_id}` /
-`DELETE {slot_id}` / `POST {slot_id}/verify` の 4 本で、いずれも他の保護
-エンドポイントと同じく Bearer トークンを要求する。
+`/settings/api-keys` は利用者自身の provider 設定を扱う。`GET` /
+`PUT {slot_id}` / `DELETE {slot_id}` / `POST {slot_id}/verify` に加え、
+利用順を保存・削除する `PUT` / `DELETE /settings/transport-order` がある
+（Issue #386）。いずれも他の保護エンドポイントと同じく Bearer トークンを
+要求する。
+
+`PUT {slot_id}` の body は `{"values": {"<環境変数名>": "値"}}` で、キー
+（OpenRouter / OpenAI）と、秘密でない設定（モデル・GCP プロジェクト・
+リージョン）を同じ形で受ける。空文字または `null` はその設定の保存値を
+消し、環境変数または既定に戻す。`{"value": "..."}` は Issue #96 の旧クライ
+アント互換の省略形として残してある。
 
 **どの応答にもキーは載らない。** 保存済みかどうか・どこから読んだか
 （`credential_store` / `environment` / `none`）・どのモデルを使うか・
 どこでキーを発行するかだけを返す。保存直後の応答にも載らない。画面が
 表示できない値は、スクリーンショットからも問い合わせのやり取りからも
-漏れない。
+漏れない。**秘密でない設定は逆に必ず返す**: 現在のモデルや GCP プロジェ
+クトを見せない画面は使えない。
+
+Vertex AI（Gemini）は API キーを持たない。認証は ADC で、画面が持つのは
+モデル・`AUTO_SCORING_VERTEX_PROJECT`・`AUTO_SCORING_VERTEX_LOCATION` の
+3 つだけである（`AUTO_SCORING_GEMINI_API_KEY` の経路は存在しない）。
+Codex app-server もキーを持たず、`codex` 実行ファイルの有無だけを出す。
 
 **保存したキーは、その場でログ秘匿の対象に入る。** 起動時に組んだ
 `configuration_secrets` はプロセス開始時の設定しか知らないので、あとから
@@ -140,8 +154,13 @@ uvicorn access ログはヘッダを出力しないため、通常経路でト�
 重ねる方式なら、この性質が実装の副作用ではなく設計として保たれる
 （`test_sidecar.py::test_run_layers_a_stored_key_over_the_environment_without_writing_to_it`）。
 
-重ねる規則は環境ごとに優先順位が違う。API キーは資格情報ストアが勝ち、
-`AUTO_SCORING_AI_GRADING_TRANSPORT` は環境変数が勝つ。理由と全体像は
+重ねる規則は変数の種類で違う。API キーと読み書きできる設定（モデル・
+GCP プロジェクト・リージョン）は資格情報ストアが勝ち、
+`AUTO_SCORING_AI_GRADING_TRANSPORT` は画面で保存した順番が勝つ（無ければ
+環境変数、次に保存済みキーから導出）。Issue #96 は開発機の Vertex 優先順を
+守るために環境変数を最優先にしていたが、Issue #386 で画面から並べ替えられる
+ようにしたためこの一段だけ改めた。画面の「保存した順番を削除（環境変数に
+戻す）」で元の挙動に戻せる。理由と全体像は
 [`windows-distribution.md`](./windows-distribution.md) §9.1。
 
 ## 6. テスト

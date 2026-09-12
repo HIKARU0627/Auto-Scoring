@@ -390,6 +390,24 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/settings/transport-order": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Save Transport Order */
+    put: operations["save_transport_order_settings_transport_order_put"];
+    post?: never;
+    /** Clear Transport Order */
+    delete: operations["clear_transport_order_settings_transport_order_delete"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/submissions/{submission_id}": {
     parameters: {
       query?: never;
@@ -1619,6 +1637,8 @@ export interface components {
      * @description The whole screen's state, so one round trip refreshes all of it.
      */
     ApiKeySettingsResponse: {
+      /** Available Transports */
+      available_transports: string[];
       /** Keys */
       keys: components["schemas"]["ApiKeyStatusModel"][];
       /** Restart Required */
@@ -1627,27 +1647,39 @@ export interface components {
       store_unavailable_reason?: string | null;
       /** Transport Order */
       transport_order: string;
+      /** Transport Order Stored */
+      transport_order_stored: boolean;
       transport_source: components["schemas"]["ConfigurationSource"];
     };
     /**
      * ApiKeyStatusModel
-     * @description One provider's key, described without disclosing it.
+     * @description One provider, described without disclosing its key.
      */
     ApiKeyStatusModel: {
+      /** Auth Note */
+      auth_note: string;
       /** Configured */
       configured: boolean;
       /** Console Url */
       console_url: string;
+      /** Host Available */
+      host_available: boolean | null;
       /** Id */
       id: string;
       key_source: components["schemas"]["ConfigurationSource"];
       /** Key Variable */
-      key_variable: string;
+      key_variable: string | null;
       /** Label */
       label: string;
       /** Model */
       model: string;
       model_source: components["schemas"]["ConfigurationSource"];
+      /** Model Variable */
+      model_variable: string;
+      /** Text Settings */
+      text_settings: components["schemas"]["TextSettingModel"][];
+      /** Transport */
+      transport: string;
     };
     /** ApproveReviewRequest */
     ApproveReviewRequest: {
@@ -2835,10 +2867,21 @@ export interface components {
      * @enum {string}
      */
     RuleScope: "file" | "folder";
-    /** SaveApiKeyRequest */
+    /**
+     * SaveApiKeyRequest
+     * @description Values submitted for one slot; a blank value clears that setting.
+     *
+     *     Named for the screen it comes from rather than "slot", so the generated
+     *     Dart/TS clients stay legible. ``value`` is kept as a key-only shorthand
+     *     for backward compatibility with the Issue #96 clients.
+     */
     SaveApiKeyRequest: {
       /** Value */
-      value: string;
+      value?: string | null;
+      /** Values */
+      values?: {
+        [key: string]: string | null;
+      };
     };
     /**
      * SaveErrorCatalogRequest
@@ -2854,6 +2897,14 @@ export interface components {
     SaveTemplatesRequest: {
       /** Templates */
       templates: components["schemas"]["IntakeTemplateModel"][];
+    };
+    /**
+     * SaveTransportOrderRequest
+     * @description The submitted use order, highest priority first.
+     */
+    SaveTransportOrderRequest: {
+      /** Order */
+      order: string[];
     };
     /** ScannedFileModel */
     ScannedFileModel: {
@@ -3006,6 +3057,25 @@ export interface components {
       name: string;
       /** Subject */
       subject?: string | null;
+    };
+    /**
+     * TextSettingModel
+     * @description One readable (non-secret) setting: its effective value and source.
+     */
+    TextSettingModel: {
+      /** Default Value */
+      default_value: string;
+      /** Help Text */
+      help_text: string;
+      /** Label */
+      label: string;
+      /** Placeholder */
+      placeholder: string;
+      source: components["schemas"]["ConfigurationSource"];
+      /** Value */
+      value: string;
+      /** Variable */
+      variable: string;
     };
     /** UndoReviewRequest */
     UndoReviewRequest: {
@@ -3722,6 +3792,59 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  save_transport_order_settings_transport_order_put: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SaveTransportOrderRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiKeySettingsResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  clear_transport_order_settings_transport_order_delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiKeySettingsResponse"];
         };
       };
     };

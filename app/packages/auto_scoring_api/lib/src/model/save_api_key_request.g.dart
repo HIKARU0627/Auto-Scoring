@@ -8,13 +8,15 @@ part of 'save_api_key_request.dart';
 
 class _$SaveApiKeyRequest extends SaveApiKeyRequest {
   @override
-  final String value;
+  final String? value;
+  @override
+  final BuiltMap<String, String?>? values;
 
   factory _$SaveApiKeyRequest(
           [void Function(SaveApiKeyRequestBuilder)? updates]) =>
       (SaveApiKeyRequestBuilder()..update(updates))._build();
 
-  _$SaveApiKeyRequest._({required this.value}) : super._();
+  _$SaveApiKeyRequest._({this.value, this.values}) : super._();
   @override
   SaveApiKeyRequest rebuild(void Function(SaveApiKeyRequestBuilder) updates) =>
       (toBuilder()..update(updates)).build();
@@ -26,13 +28,16 @@ class _$SaveApiKeyRequest extends SaveApiKeyRequest {
   @override
   bool operator ==(Object other) {
     if (identical(other, this)) return true;
-    return other is SaveApiKeyRequest && value == other.value;
+    return other is SaveApiKeyRequest &&
+        value == other.value &&
+        values == other.values;
   }
 
   @override
   int get hashCode {
     var _$hash = 0;
     _$hash = $jc(_$hash, value.hashCode);
+    _$hash = $jc(_$hash, values.hashCode);
     _$hash = $jf(_$hash);
     return _$hash;
   }
@@ -40,7 +45,8 @@ class _$SaveApiKeyRequest extends SaveApiKeyRequest {
   @override
   String toString() {
     return (newBuiltValueToStringHelper(r'SaveApiKeyRequest')
-          ..add('value', value))
+          ..add('value', value)
+          ..add('values', values))
         .toString();
   }
 }
@@ -53,6 +59,11 @@ class SaveApiKeyRequestBuilder
   String? get value => _$this._value;
   set value(String? value) => _$this._value = value;
 
+  MapBuilder<String, String?>? _values;
+  MapBuilder<String, String?> get values =>
+      _$this._values ??= MapBuilder<String, String?>();
+  set values(MapBuilder<String, String?>? values) => _$this._values = values;
+
   SaveApiKeyRequestBuilder() {
     SaveApiKeyRequest._defaults(this);
   }
@@ -61,6 +72,7 @@ class SaveApiKeyRequestBuilder
     final $v = _$v;
     if ($v != null) {
       _value = $v.value;
+      _values = $v.values?.toBuilder();
       _$v = null;
     }
     return this;
@@ -80,11 +92,24 @@ class SaveApiKeyRequestBuilder
   SaveApiKeyRequest build() => _build();
 
   _$SaveApiKeyRequest _build() {
-    final _$result = _$v ??
-        _$SaveApiKeyRequest._(
-          value: BuiltValueNullFieldError.checkNotNull(
-              value, r'SaveApiKeyRequest', 'value'),
-        );
+    _$SaveApiKeyRequest _$result;
+    try {
+      _$result = _$v ??
+          _$SaveApiKeyRequest._(
+            value: value,
+            values: _values?.build(),
+          );
+    } catch (_) {
+      late String _$failedField;
+      try {
+        _$failedField = 'values';
+        _values?.build();
+      } catch (e) {
+        throw BuiltValueNestedFieldError(
+            r'SaveApiKeyRequest', _$failedField, e.toString());
+      }
+      rethrow;
+    }
     replace(_$result);
     return _$result;
   }

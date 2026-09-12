@@ -97,6 +97,7 @@ doc/RuleScope.md
 doc/SaveApiKeyRequest.md
 doc/SaveErrorCatalogRequest.md
 doc/SaveTemplatesRequest.md
+doc/SaveTransportOrderRequest.md
 doc/ScannedFileModel.md
 doc/ScoreRequest.md
 doc/ScoreResponse.md
@@ -109,6 +110,7 @@ doc/TestMaterialResponse.md
 doc/TestRegistrationApi.md
 doc/TestResponse.md
 doc/TestSummary.md
+doc/TextSettingModel.md
 doc/UndoReviewRequest.md
 doc/UnresolvedQuestionModel.md
 doc/UpdateCriteriaRequest.md
@@ -224,6 +226,7 @@ lib/src/model/rule_scope.dart
 lib/src/model/save_api_key_request.dart
 lib/src/model/save_error_catalog_request.dart
 lib/src/model/save_templates_request.dart
+lib/src/model/save_transport_order_request.dart
 lib/src/model/scanned_file_model.dart
 lib/src/model/score_request.dart
 lib/src/model/score_response.dart
@@ -234,6 +237,7 @@ lib/src/model/submission_review_progress_response.dart
 lib/src/model/test_material_response.dart
 lib/src/model/test_response.dart
 lib/src/model/test_summary.dart
+lib/src/model/text_setting_model.dart
 lib/src/model/undo_review_request.dart
 lib/src/model/unresolved_question_model.dart
 lib/src/model/update_criteria_request.dart

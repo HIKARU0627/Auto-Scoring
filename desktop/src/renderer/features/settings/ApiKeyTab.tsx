@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 
 import {
+  clearTransportOrder,
   deleteApiKey,
   loadApiKeySettings,
-  saveApiKey,
+  saveProviderSettings,
+  saveTransportOrder,
   verifyApiKey,
   SettingsDataError,
   type ApiKeySettingsResponse,
@@ -41,6 +43,7 @@ import {
   SETTINGS_LABEL_CLASS,
   apiKeyStatePillClass,
   apiKeyVerificationCardClass,
+  transportOrderItemClass,
 } from "./settings-presentation.js";
 
 function errorText(error: unknown): string {
@@ -49,6 +52,11 @@ function errorText(error: unknown): string {
     : error instanceof Error
       ? error.message
       : String(error);
+}
+
+/** Input key for one editable setting of one provider slot. */
+function settingKey(slotId: string, variable: string): string {
+  return `${slotId}::${variable}`;
 }
 
 /**
@@ -91,15 +99,42 @@ export function ApiKeyTab(): JSX.Element {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [busySlotId, setBusySlotId] = useState<string | null>(null);
+  const [busyOrder, setBusyOrder] = useState<boolean>(false);
   const [verified, setVerified] = useState<
     Record<string, VerifyApiKeyResponse>
   >({});
-  const [inputs, setInputs] = useState<Record<string, string>>({});
+  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  const [settingInputs, setSettingInputs] = useState<Record<string, string>>(
+    {},
+  );
+  const [order, setOrder] = useState<string[]>([]);
   const [restarting, setRestarting] = useState<boolean>(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [monthlyUsage, setMonthlyUsage] = useState<AiUsageNumbers | null>(null);
   const [gradingUnitCostInput, setGradingUnitCostInput] = useState<string>("");
   const [gradingCostBusy, setGradingCostBusy] = useState<boolean>(false);
+
+  const absorb = useCallback((data: ApiKeySettingsResponse) => {
+    setSettings(data);
+    const next: Record<string, string> = {};
+    for (const slot of data.keys) {
+      next[settingKey(slot.id, slot.model_variable)] = slot.model;
+      for (const item of slot.text_settings) {
+        next[settingKey(slot.id, item.variable)] = item.value;
+      }
+    }
+    setSettingInputs(next);
+    setKeyInputs({});
+    const configuredOrder = data.transport_order
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    setOrder(
+      configuredOrder.length > 0
+        ? configuredOrder
+        : [...data.available_transports],
+    );
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,7 +145,7 @@ export function ApiKeyTab(): JSX.Element {
         loadMonthlyAiUsage(client).catch(() => null),
         loadGradingTokenUnitCost(client).catch(() => null),
       ]);
-      setSettings(data);
+      absorb(data);
       setMonthlyUsage(monthly);
       setGradingUnitCostInput(unitCost == null ? "" : String(unitCost));
     } catch (err) {
@@ -118,34 +153,63 @@ export function ApiKeyTab(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [client]);
+  }, [client, absorb]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const onInputChange = (slotId: string, value: string) => {
-    setInputs((prev) => ({ ...prev, [slotId]: value }));
+  const onKeyInputChange = (slotId: string, value: string) => {
+    setKeyInputs((prev) => ({ ...prev, [slotId]: value }));
   };
 
-  const onSave = async (slotId: string) => {
-    const value = (inputs[slotId] ?? "").trim();
-    if (value.length === 0) {
-      setError("API キーを入力してください。");
+  const onSettingInputChange = (
+    slotId: string,
+    variable: string,
+    value: string,
+  ) => {
+    setSettingInputs((prev) => ({
+      ...prev,
+      [settingKey(slotId, variable)]: value,
+    }));
+  };
+
+  const onSave = async (slot: ApiKeyStatusModel) => {
+    const keyValue = (keyInputs[slot.id] ?? "").trim();
+    // Only send what actually changed, so saving a slot does not copy the
+    // built-in defaults into the credential store as if the user chose them.
+    const values: Record<string, string | null> = {};
+    const modelValue =
+      settingInputs[settingKey(slot.id, slot.model_variable)] ?? slot.model;
+    if (modelValue !== slot.model) {
+      values[slot.model_variable] = modelValue;
+    }
+    for (const item of slot.text_settings) {
+      const current =
+        settingInputs[settingKey(slot.id, item.variable)] ?? item.value;
+      if (current !== item.value) {
+        values[item.variable] = current;
+      }
+    }
+    if (slot.key_variable != null && keyValue.length > 0) {
+      values[slot.key_variable] = keyValue;
+    }
+    if (Object.keys(values).length === 0) {
+      setError("変更された設定がありません。");
       return;
     }
-    // Clear field immediately so key never sits in the input or leaks
-    setInputs((prev) => ({ ...prev, [slotId]: "" }));
+    // Clear the key field immediately so it never sits in the input.
+    setKeyInputs((prev) => ({ ...prev, [slot.id]: "" }));
     setVerified((prev) => {
       const next = { ...prev };
-      delete next[slotId];
+      delete next[slot.id];
       return next;
     });
-    setBusySlotId(slotId);
+    setBusySlotId(slot.id);
     setError(null);
     try {
-      const updated = await saveApiKey(client, slotId, value);
-      setSettings(updated);
+      const updated = await saveProviderSettings(client, slot.id, values);
+      absorb(updated);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -163,7 +227,7 @@ export function ApiKeyTab(): JSX.Element {
     setError(null);
     try {
       const updated = await deleteApiKey(client, slotId);
-      setSettings(updated);
+      absorb(updated);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -186,6 +250,48 @@ export function ApiKeyTab(): JSX.Element {
       setError(errorText(err));
     } finally {
       setBusySlotId(null);
+    }
+  };
+
+  const moveTransport = (index: number, delta: number) => {
+    setOrder((prev) => {
+      const target = index + delta;
+      if (target < 0 || target >= prev.length) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      if (moved === undefined) {
+        return prev;
+      }
+      next.splice(target, 0, moved);
+      return next;
+    });
+  };
+
+  const onSaveOrder = async () => {
+    setBusyOrder(true);
+    setError(null);
+    try {
+      const updated = await saveTransportOrder(client, order);
+      absorb(updated);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusyOrder(false);
+    }
+  };
+
+  const onRevertOrder = async () => {
+    setBusyOrder(true);
+    setError(null);
+    try {
+      const updated = await clearTransportOrder(client);
+      absorb(updated);
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusyOrder(false);
     }
   };
 
@@ -228,6 +334,9 @@ export function ApiKeyTab(): JSX.Element {
   const canSave = settings.store_unavailable_reason == null;
   const monthlyDisplay =
     monthlyUsage != null ? formatAiUsageDisplay(monthlyUsage) : null;
+  const labelByTransport = new Map(
+    settings.keys.map((slot) => [slot.transport, slot.label]),
+  );
 
   const onSaveGradingUnitCost = async () => {
     const trimmed = gradingUnitCostInput.trim();
@@ -256,6 +365,15 @@ export function ApiKeyTab(): JSX.Element {
     }
   };
 
+  const orderDescription =
+    settings.transport_source === "credential_store"
+      ? "画面で保存した順番が使われています。上で並べ替えて保存できます。"
+      : settings.transport_source === "environment"
+        ? "この PC の環境変数 AUTO_SCORING_AI_GRADING_TRANSPORT で決まっています。上で並べ替えて保存すると、保存した順番が優先されます。"
+        : settings.transport_source === "builtin_default"
+          ? "保存されているキーから自動で決めています。上で並べ替えて保存できます。"
+          : "キーも環境変数もまだありません。上で並べ替えて保存すると、その順番で使われます。";
+
   return (
     <div className="flex flex-col gap-lg">
       <section className={SETTINGS_CARD_CLASS}>
@@ -265,7 +383,9 @@ export function ApiKeyTab(): JSX.Element {
           採点は外部のサービスに問い合わせます。その利用料は、ここに入れたキーの持ち主に請求されます。
         </p>
         <p className="mt-xs text-body-medium text-on-surface-variant">
-          キーはこの PC の資格情報ストアに保存し、画面には二度と表示しません。
+          キーはこの PC
+          の資格情報ストアに保存し、画面には二度と表示しません。モデルや Vertex
+          AI のプロジェクトなど、秘密でない設定は表示されます。
         </p>
       </section>
 
@@ -352,16 +472,28 @@ export function ApiKeyTab(): JSX.Element {
               });
               const verifyReqs = apiKeyVerifyRequirements({
                 busy: isBusy,
-                configured: slot.configured,
+                // A keyless provider's "credential" is the host, and the
+                // verify button is exactly how the user checks it -- it must
+                // not be disabled for a missing key there is none of.
+                configured: slot.key_variable == null ? true : slot.configured,
               });
               const verification = verified[slot.id];
 
               const statusText =
-                slot.configured && slot.key_source === "credential_store"
-                  ? "保存済み（この PC の資格情報ストア）"
+                slot.key_variable == null
+                  ? slot.auth_note
                   : slot.configured
-                    ? `環境変数 ${slot.key_variable} から読み込み済み`
+                    ? slot.key_source === "credential_store"
+                      ? "保存済み（この PC の資格情報ストア）"
+                      : `環境変数 ${slot.key_variable} から読み込み済み`
                     : "未設定";
+
+              const hostText =
+                slot.host_available === true
+                  ? "この PC で利用できます。"
+                  : slot.host_available === false
+                    ? "この PC では利用できません。"
+                    : "「疎通を確認する」でこの PC での利用可否を確認できます。";
 
               return (
                 <section key={slot.id} className={SETTINGS_CARD_CLASS}>
@@ -369,9 +501,31 @@ export function ApiKeyTab(): JSX.Element {
                     <h3 className={SETTINGS_ITEM_HEADING_CLASS}>
                       {slot.label}
                     </h3>
-                    <span className={apiKeyStatePillClass(slot.configured)}>
-                      <span aria-hidden>{slot.configured ? "✓" : "−"}</span>
-                      {slot.configured ? "設定済み" : "未設定"}
+                    <span
+                      className={apiKeyStatePillClass(
+                        slot.key_variable == null
+                          ? slot.host_available === true
+                          : slot.configured,
+                      )}
+                    >
+                      <span aria-hidden>
+                        {slot.key_variable == null
+                          ? slot.host_available === true
+                            ? "✓"
+                            : "−"
+                          : slot.configured
+                            ? "✓"
+                            : "−"}
+                      </span>
+                      {slot.key_variable == null
+                        ? slot.host_available === true
+                          ? "利用可"
+                          : slot.host_available === false
+                            ? "利用不可"
+                            : "未確認"
+                        : slot.configured
+                          ? "設定済み"
+                          : "未設定"}
                     </span>
                   </div>
                   <p
@@ -380,46 +534,128 @@ export function ApiKeyTab(): JSX.Element {
                   >
                     {statusText}
                   </p>
-                  <p className="mt-xs text-xs text-on-surface-variant">
-                    {`モデル: ${slot.model}${
-                      slot.model_source === "environment"
-                        ? "（環境変数）"
-                        : "（既定）"
-                    }`}
-                  </p>
-                  <p className="mt-xs select-text text-xs text-on-surface-variant">
-                    {`キーの発行: ${slot.console_url}`}
-                  </p>
+                  {slot.key_variable == null ? (
+                    <p
+                      data-testid={`settings-api-key-host-${slot.id}`}
+                      className="mt-xs text-xs text-on-surface-variant"
+                    >
+                      {hostText}
+                    </p>
+                  ) : null}
+                  {slot.console_url.length > 0 ? (
+                    <p className="mt-xs select-text text-xs text-on-surface-variant">
+                      {`キーの発行: ${slot.console_url}`}
+                    </p>
+                  ) : null}
 
                   <div className="mt-md">
                     <label
-                      htmlFor={`api-key-${slot.id}`}
+                      htmlFor={`api-key-model-${slot.id}`}
                       className={SETTINGS_LABEL_CLASS}
                     >
-                      {slot.configured ? "新しいキーに置き換える" : "API キー"}
+                      モデル
                     </label>
                     <input
-                      id={`api-key-${slot.id}`}
-                      data-testid={`settings-api-key-field-${slot.id}`}
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder="•••• •••• ••••"
-                      value={inputs[slot.id] ?? ""}
-                      onChange={(e) => onInputChange(slot.id, e.target.value)}
+                      id={`api-key-model-${slot.id}`}
+                      data-testid={`settings-api-key-model-${slot.id}`}
+                      type="text"
+                      value={
+                        settingInputs[
+                          settingKey(slot.id, slot.model_variable)
+                        ] ?? slot.model
+                      }
+                      placeholder={slot.model}
+                      onChange={(event) =>
+                        onSettingInputChange(
+                          slot.id,
+                          slot.model_variable,
+                          event.target.value,
+                        )
+                      }
                       className={SETTINGS_INPUT_CLASS}
                     />
-                    {canSave ? (
-                      <p className="mt-xs text-xs text-on-surface-variant">
-                        保存すると、この欄は空になります。保存したキーは表示できません。
-                      </p>
-                    ) : null}
+                    <p className="mt-xs text-xs text-on-surface-variant">
+                      {slot.model_source === "environment"
+                        ? "環境変数で設定されています。"
+                        : slot.model_source === "credential_store"
+                          ? "画面で保存した値です。"
+                          : "既定のモデルを使います。"}
+                    </p>
                   </div>
+
+                  {slot.text_settings.map((item) => (
+                    <div key={item.variable} className="mt-md">
+                      <label
+                        htmlFor={`api-key-setting-${slot.id}-${item.variable}`}
+                        className={SETTINGS_LABEL_CLASS}
+                      >
+                        {item.label}
+                      </label>
+                      <input
+                        id={`api-key-setting-${slot.id}-${item.variable}`}
+                        data-testid={`settings-api-key-setting-${slot.id}-${item.variable}`}
+                        type="text"
+                        value={
+                          settingInputs[settingKey(slot.id, item.variable)] ??
+                          item.value
+                        }
+                        placeholder={
+                          item.placeholder.length > 0
+                            ? item.placeholder
+                            : item.default_value
+                        }
+                        onChange={(event) =>
+                          onSettingInputChange(
+                            slot.id,
+                            item.variable,
+                            event.target.value,
+                          )
+                        }
+                        className={SETTINGS_INPUT_CLASS}
+                      />
+                      {item.help_text.length > 0 ? (
+                        <p className="mt-xs text-xs text-on-surface-variant">
+                          {item.help_text}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+
+                  {slot.key_variable != null ? (
+                    <div className="mt-md">
+                      <label
+                        htmlFor={`api-key-${slot.id}`}
+                        className={SETTINGS_LABEL_CLASS}
+                      >
+                        {slot.configured
+                          ? "新しいキーに置き換える"
+                          : "API キー"}
+                      </label>
+                      <input
+                        id={`api-key-${slot.id}`}
+                        data-testid={`settings-api-key-field-${slot.id}`}
+                        type="password"
+                        autoComplete="new-password"
+                        placeholder="•••• •••• ••••"
+                        value={keyInputs[slot.id] ?? ""}
+                        onChange={(e) =>
+                          onKeyInputChange(slot.id, e.target.value)
+                        }
+                        className={SETTINGS_INPUT_CLASS}
+                      />
+                      {canSave ? (
+                        <p className="mt-xs text-xs text-on-surface-variant">
+                          保存すると、この欄は空になります。保存したキーは表示できません。
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div className="mt-md flex flex-wrap items-center gap-sm">
                     <button
                       type="button"
                       data-testid={`settings-api-key-save-${slot.id}`}
-                      onClick={() => void onSave(slot.id)}
+                      onClick={() => void onSave(slot)}
                       disabled={saveReqs.length > 0}
                       className={SETTINGS_BUTTON_PRIMARY_CLASS}
                     >
@@ -434,7 +670,8 @@ export function ApiKeyTab(): JSX.Element {
                     >
                       疎通を確認する
                     </button>
-                    {slot.configured &&
+                    {slot.key_variable != null &&
+                    slot.configured &&
                     slot.key_source === "credential_store" ? (
                       <button
                         type="button"
@@ -569,17 +806,66 @@ export function ApiKeyTab(): JSX.Element {
               data-testid="settings-api-key-transport-order"
               className="mt-xs text-body-medium text-on-surface"
             >
-              {settings.transport_order.length > 0
-                ? settings.transport_order
-                : "（まだありません）"}
+              {order.length > 0 ? order.join(" → ") : "（まだありません）"}
             </p>
+            <ul className="mt-sm flex flex-col gap-xs">
+              {order.map((transport, index) => (
+                <li
+                  key={transport}
+                  data-testid={`settings-transport-order-item-${transport}`}
+                  className={transportOrderItemClass()}
+                >
+                  <span className="min-w-0 flex-1 truncate">
+                    {index + 1}. {labelByTransport.get(transport) ?? transport}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid={`settings-transport-order-up-${transport}`}
+                    aria-label={`${labelByTransport.get(transport) ?? transport} を上へ`}
+                    onClick={() => moveTransport(index, -1)}
+                    disabled={index === 0 || busyOrder}
+                    className={SETTINGS_BUTTON_SECONDARY_CLASS}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    data-testid={`settings-transport-order-down-${transport}`}
+                    aria-label={`${labelByTransport.get(transport) ?? transport} を下へ`}
+                    onClick={() => moveTransport(index, 1)}
+                    disabled={index === order.length - 1 || busyOrder}
+                    className={SETTINGS_BUTTON_SECONDARY_CLASS}
+                  >
+                    ↓
+                  </button>
+                </li>
+              ))}
+            </ul>
             <p className="mt-xs text-xs text-on-surface-variant">
-              {settings.transport_source === "environment"
-                ? "この PC の環境変数 AUTO_SCORING_AI_GRADING_TRANSPORT で決まっています。ここでキーを足しても、この順番は変わりません。"
-                : settings.transport_source === "builtin_default"
-                  ? "保存されているキーから決めています。"
-                  : "キーも環境変数もまだありません。"}
+              {orderDescription}
             </p>
+            <div className="mt-sm flex flex-wrap items-center gap-sm">
+              <button
+                type="button"
+                data-testid="settings-transport-order-save"
+                onClick={() => void onSaveOrder()}
+                disabled={busyOrder}
+                className={SETTINGS_BUTTON_PRIMARY_CLASS}
+              >
+                {busyOrder ? "処理中…" : "この順番で保存"}
+              </button>
+              {settings.transport_order_stored ? (
+                <button
+                  type="button"
+                  data-testid="settings-transport-order-revert"
+                  onClick={() => void onRevertOrder()}
+                  disabled={busyOrder}
+                  className={SETTINGS_BUTTON_SECONDARY_CLASS}
+                >
+                  保存した順番を削除（環境変数に戻す）
+                </button>
+              ) : null}
+            </div>
           </section>
         </div>
       </div>

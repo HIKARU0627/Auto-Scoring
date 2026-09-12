@@ -14,14 +14,19 @@ part 'api_key_settings_response.g.dart';
 /// The whole screen's state, so one round trip refreshes all of it.
 ///
 /// Properties:
+/// * [availableTransports]
 /// * [keys]
 /// * [restartRequired]
 /// * [storeUnavailableReason]
 /// * [transportOrder]
+/// * [transportOrderStored]
 /// * [transportSource]
 @BuiltValue()
 abstract class ApiKeySettingsResponse
     implements Built<ApiKeySettingsResponse, ApiKeySettingsResponseBuilder> {
+  @BuiltValueField(wireName: r'available_transports')
+  BuiltList<String> get availableTransports;
+
   @BuiltValueField(wireName: r'keys')
   BuiltList<ApiKeyStatusModel> get keys;
 
@@ -33,6 +38,9 @@ abstract class ApiKeySettingsResponse
 
   @BuiltValueField(wireName: r'transport_order')
   String get transportOrder;
+
+  @BuiltValueField(wireName: r'transport_order_stored')
+  bool get transportOrderStored;
 
   @BuiltValueField(wireName: r'transport_source')
   ConfigurationSource get transportSource;
@@ -68,6 +76,11 @@ class _$ApiKeySettingsResponseSerializer
     ApiKeySettingsResponse object, {
     FullType specifiedType = FullType.unspecified,
   }) sync* {
+    yield r'available_transports';
+    yield serializers.serialize(
+      object.availableTransports,
+      specifiedType: const FullType(BuiltList, [FullType(String)]),
+    );
     yield r'keys';
     yield serializers.serialize(
       object.keys,
@@ -89,6 +102,11 @@ class _$ApiKeySettingsResponseSerializer
     yield serializers.serialize(
       object.transportOrder,
       specifiedType: const FullType(String),
+    );
+    yield r'transport_order_stored';
+    yield serializers.serialize(
+      object.transportOrderStored,
+      specifiedType: const FullType(bool),
     );
     yield r'transport_source';
     yield serializers.serialize(
@@ -120,6 +138,13 @@ class _$ApiKeySettingsResponseSerializer
       final key = serializedList[i] as String;
       final value = serializedList[i + 1];
       switch (key) {
+        case r'available_transports':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(BuiltList, [FullType(String)]),
+          ) as BuiltList<String>;
+          result.availableTransports.replace(valueDes);
+          break;
         case r'keys':
           final valueDes = serializers.deserialize(
             value,
@@ -149,6 +174,13 @@ class _$ApiKeySettingsResponseSerializer
             specifiedType: const FullType(String),
           ) as String;
           result.transportOrder = valueDes;
+          break;
+        case r'transport_order_stored':
+          final valueDes = serializers.deserialize(
+            value,
+            specifiedType: const FullType(bool),
+          ) as bool;
+          result.transportOrderStored = valueDes;
           break;
         case r'transport_source':
           final valueDes = serializers.deserialize(
