@@ -310,6 +310,33 @@ export function copyIntakeGroup(
   return { ...group, ...patch };
 }
 
+/**
+ * すべてのグループの取り込み先を、指定した既存テストに固定する (Issue #414)。
+ *
+ * テスト一覧・答案キュー・テスト設定の「答案を取り込む」から来た利用者は、
+ * **そのテストの答案をいま取り込みたい**。フォルダを選び直した先で同じテストを
+ * もう一度探させないため、`buildReviewState` が提案した取り込み先 (同名テストの
+ * 再利用など) をこの 1 箇所で上書きする。
+ *
+ * 登録途中 (`draft`) のテストを指定された場合も、その事実はそのまま残す。
+ * 選べない理由と次の手順は画面が `targetTestStatus` から出す。
+ */
+export function applyTargetTest(
+  review: IntakeReviewState,
+  target: { readonly id: string; readonly status: string | null },
+): IntakeReviewState {
+  return {
+    ...review,
+    groups: review.groups.map((group) =>
+      copyIntakeGroup(group, {
+        targetKind: IntakeTargetKind.existing,
+        targetTestId: target.id,
+        targetTestStatus: target.status,
+      }),
+    ),
+  };
+}
+
 export interface IntakeReviewState {
   readonly groups: readonly IntakeGroupState[];
   readonly unitCost: number | null;
