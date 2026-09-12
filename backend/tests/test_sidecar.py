@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 import os
 import socket
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -18,8 +19,12 @@ from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, Ad
 from auto_scoring.adapters.ai_grading.vertex_gemini_provider import VertexGeminiAIProvider
 from auto_scoring.adapters.credentials.api_keys import NO_API_KEY_REASON
 from auto_scoring.adapters.credentials.store import (
+    CredentialStore,
+    CredentialStoreUnavailableError,
     InMemoryCredentialStore,
     UnavailableCredentialStore,
+    acquire_credential_store,
+    unavailable_store_reason,
 )
 from auto_scoring.adapters.data_root_lock import acquire_data_root_lock
 from auto_scoring.adapters.ocr.unconfigured_provider import UnconfiguredOCRProvider
@@ -522,6 +527,95 @@ def test_run_layers_a_stored_key_over_the_environment_without_writing_to_it(
     assert seen["env"]["AUTO_SCORING_OPENROUTER_API_KEY"] == stored
     assert seen["env"]["AUTO_SCORING_AI_GRADING_TRANSPORT"] == "openrouter"
     assert "AUTO_SCORING_OPENROUTER_API_KEY" not in os.environ
+
+
+def test_run_starts_even_when_the_credential_store_never_answers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #429's acceptance criterion, and the reason the bound sits in the
+    composition root rather than inside ``create_credential_store``.
+
+    The measured failure is that ``import keyring`` *itself* never returns on a
+    Linux host with a D-Bus session, so a test cannot express it by returning a
+    store whose methods block: the whole `create_credential_store` call is what
+    hangs. That is why `create_credential_store` is replaced here -- the same
+    injection point ``_no_credential_store`` uses -- and why the assertion is
+    on `run()` finishing, not on the store.
+
+    `run()` runs on its own thread so that a build which *loses* the bound
+    fails this test at `runner.join` instead of hanging the suite, which is the
+    only way the mutation "delete the timeout" can be observed.
+    """
+    release = threading.Event()
+
+    class _NeverAnsweringStore:
+        def unavailable_reason(self) -> str | None:
+            release.wait()
+            return None
+
+        def get(self, name: str) -> str | None:
+            return None
+
+        def set(self, name: str, value: str) -> None:
+            raise CredentialStoreUnavailableError("this store never answers")
+
+        def delete(self, name: str) -> None:
+            return None
+
+    monkeypatch.setattr(sidecar, "create_credential_store", _NeverAnsweringStore)
+    # Shorten the bound for the test's sake; `run()` reads the module-level
+    # constant, so a mutation that stops passing it is caught too.
+    monkeypatch.setattr(sidecar, "CREDENTIAL_STORE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(sidecar, "generate_token", lambda: "generated-test-token")
+    monkeypatch.setattr(sidecar, "install_log_redaction", lambda *_args, **_kwargs: None)
+
+    captured: dict[str, Any] = {}
+    real_acquire = acquire_credential_store
+
+    def _recording_acquire(build: Any, **kwargs: Any) -> CredentialStore:
+        acquired = real_acquire(build, **kwargs)
+        captured["store"] = acquired
+        return acquired
+
+    monkeypatch.setattr(sidecar, "acquire_credential_store", _recording_acquire)
+
+    def fake_server_run(self: uvicorn.Server, sockets: list[socket.socket] | None = None) -> None:
+        captured["config"] = self.config
+        if sockets is not None:
+            for sock in sockets:
+                sock.close()
+
+    monkeypatch.setattr(uvicorn.Server, "run", fake_server_run)
+
+    handshake_file = tmp_path / "handshake.json"
+    outcome: dict[str, Any] = {}
+
+    def _run() -> None:
+        outcome["exit_code"] = run(
+            [
+                "--handshake-file",
+                str(handshake_file),
+                "--app-data-dir",
+                str(tmp_path / "app-data"),
+            ]
+        )
+
+    runner = threading.Thread(target=_run, daemon=True)
+    runner.start()
+    runner.join(20)
+    try:
+        assert not runner.is_alive(), "run() waited on a credential store that never answers"
+        assert outcome["exit_code"] == 0
+        assert handshake_file.is_file()
+        # The fallback is the design's existing "no store" object, so its
+        # reason rides the same `store_unavailable_reason` route the settings
+        # screen already renders -- no new surface, and no value in it.
+        store = captured["store"]
+        assert isinstance(store, UnavailableCredentialStore)
+        assert store.unavailable_reason() == unavailable_store_reason(0.2)
+    finally:
+        release.set()
 
 
 def test_run_injects_the_ocr_provider_it_built(

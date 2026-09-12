@@ -94,6 +94,22 @@
   将来の macOS/Linux はプロセスグループ）。Linux では未実装で、開発起動時は
   強制終了するとサイドカーが残る（[`linux-desktop-development.md`](./linux-desktop-development.md) §5.1）。
 - サイドカーが異常終了したら UI にエラーを出し、再起動ボタンを提供（簡易設計書 §24）。
+- **起動時の資格情報ストア読み出しには上限を設ける（Issue #429）。** サイドカーは
+  起動経路で `create_credential_store()`（`adapters/credentials/store.py`）を呼ぶが、
+  Linux 開発機（D-Bus セッションあり）では `import keyring` **自体**が返らないことを
+  実測した。配布先の Windows でも Credential Manager が遅い・壊れている・ポリシーで
+  制限されている環境では同じ症状になり得て、ユーザーには `startupTimedOut` としか
+  見えず原因が分からない。そこで取得と疎通確認（`unavailable_reason()`）をデーモン
+  スレッドで行い、`CREDENTIAL_STORE_TIMEOUT_SECONDS`（5 秒）で打ち切る。上限を超えたら
+  既存の `UnavailableCredentialStore(理由)` に落として**サーバは起動する**。
+  - 5 秒の根拠: 監督側が `GET /healthz` に与える 60 秒（`sidecarStartupTimeout` /
+    `SIDECAR_STARTUP_TIMEOUT_MS`）のうち、初回起動で最も遅いマイグレーションへ 55 秒を
+    残す。正常なバックエンドはミリ秒で答えるので、これは健康な環境が近づかない上限。
+  - `import keyring` で止まるため関数呼び出しへのタイムアウトでは足りず、`signal` は
+    プロセスを殺すことしかできない。**中断可能なデーモンスレッド**で引く。
+  - 理由は**値ではなく固定文**（`unavailable_store_reason()`）で、`sidecar.log` と
+    `GET /settings/api-keys` の `store_unavailable_reason` の両方に乗る。既存の
+    「ストアが無い」経路と同じ扱いで、新しい surface は作らない。
 
 > 認証・動的ポート・OpenAPI → Dart 生成・接続情報の受け渡し（ハンドシェイク）の
 > 実装決定は [`sidecar-api.md`](./sidecar-api.md)（GitHub Issue #10）にまとめた。

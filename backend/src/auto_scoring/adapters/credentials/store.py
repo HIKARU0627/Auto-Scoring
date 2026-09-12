@@ -31,6 +31,8 @@ worst outcome of the three -- the user would believe their key was kept.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from typing import Final, Protocol
 
 #: The service name every credential this app owns is filed under. One
@@ -44,6 +46,19 @@ SERVICE_NAME: Final = "Auto-Scoring"
 _PROBE_ENTRY: Final = "auto-scoring-availability-probe"
 
 _UNAVAILABLE_PREFIX: Final = "この環境では OS の資格情報ストアを利用できません"
+
+#: How long startup may wait for the credential store to answer (Issue #429).
+#:
+#: The supervisor gives the whole sidecar 60 seconds to reach ``/healthz``
+#: (``app/lib/core/sidecar_supervisor.dart``'s ``sidecarStartupTimeout`` and the
+#: Electron supervisor's ``SIDECAR_STARTUP_TIMEOUT_MS``). A working backend
+#: answers in milliseconds -- a fast local read is the point of Windows
+#: Credential Manager -- so this is not a budget anything healthy approaches.
+#: It exists only to stop a *stuck* backend from eating the whole 60 seconds and
+#: leaving the user with ``startupTimedOut`` and no reason. 5 seconds still
+#: leaves 55 for first-launch migrations, which are the sidecar's genuinely slow
+#: part.
+CREDENTIAL_STORE_TIMEOUT_SECONDS: Final = 5.0
 
 
 class KeyringModule(Protocol):
@@ -217,3 +232,67 @@ def create_credential_store() -> CredentialStore:
     import keyring
 
     return KeyringCredentialStore(keyring)
+
+
+def unavailable_store_reason(timeout_seconds: float) -> str:
+    """The sentence a store that did not answer in time reports.
+
+    Fixed words and the bound only -- never anything the backend said, for the
+    reason the module docstring gives.
+    """
+    return f"{_UNAVAILABLE_PREFIX}（{timeout_seconds:.0f}秒以内に応答がありませんでした）"
+
+
+def acquire_credential_store(
+    build: Callable[[], CredentialStore],
+    *,
+    timeout_seconds: float = CREDENTIAL_STORE_TIMEOUT_SECONDS,
+) -> CredentialStore:
+    """``build()``'s store if it answers within ``timeout_seconds``, else one
+    that says why (Issue #429).
+
+    ``build`` is `create_credential_store` in production; it is a parameter so
+    a test can state which world it is in -- a backend that answers, one that
+    never does -- without importing ``keyring``.
+
+    **Why a thread, not a shorter import or an alarm.** The measured failure
+    is not a slow *call*: on a Linux host with a D-Bus session, ``import
+    keyring`` itself never returns. The module's top-level code opens the
+    session bus and waits for the Secret Service with no bound, so a timeout
+    around a call cannot fire while the interpreter is stuck inside the
+    import, and a ``signal`` alarm could only kill this process -- the whole
+    requirement is that the server keeps starting. A daemon worker can be
+    abandoned instead: ``join(timeout_seconds)`` returns and startup carries
+    on while the stuck thread stays parked, harmless, until exit.
+
+    **The worker probes too.** ``build()`` returning does not prove the store
+    works, and a read that waits on a desktop unlock prompt would hang startup
+    exactly as the import does. ``unavailable_reason()`` is the first call
+    every read path already makes, so forcing it here means the returned store
+    has either answered for real or been replaced by
+    :class:`UnavailableCredentialStore`.
+
+    An exception from ``build()`` is re-raised on the calling thread, so a
+    genuinely broken import (``keyring`` missing from a bundle) still fails
+    startup loudly instead of masquerading as a timeout.
+    """
+    outcome: list[CredentialStore] = []
+    failure: list[BaseException] = []
+
+    def _acquire() -> None:
+        try:
+            store = build()
+            store.unavailable_reason()
+        except Exception as exc:  # re-raised on the calling thread
+            failure.append(exc)
+            return
+        outcome.append(store)
+
+    worker = threading.Thread(target=_acquire, name="credential-store", daemon=True)
+    worker.start()
+    worker.join(timeout_seconds)
+    if outcome:
+        return outcome[0]
+    if failure:
+        raise failure[0]
+    return UnavailableCredentialStore(unavailable_store_reason(timeout_seconds))

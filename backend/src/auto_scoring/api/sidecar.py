@@ -46,7 +46,11 @@ from auto_scoring.adapters.ai_grading._google_adc import AdcCredentialsError, Ad
 from auto_scoring.adapters.ai_grading.factory import create_ai_provider
 from auto_scoring.adapters.answer_area_detection.factory import create_answer_area_detector
 from auto_scoring.adapters.credentials.api_keys import ApiKeySettings
-from auto_scoring.adapters.credentials.store import create_credential_store
+from auto_scoring.adapters.credentials.store import (
+    CREDENTIAL_STORE_TIMEOUT_SECONDS,
+    acquire_credential_store,
+    create_credential_store,
+)
 from auto_scoring.adapters.criteria_extraction.extractor import UnconfiguredCriteriaExtractor
 from auto_scoring.adapters.criteria_extraction.factory import create_criteria_extractor
 from auto_scoring.adapters.data_root_lock import DataRootLockedError
@@ -508,8 +512,20 @@ def run(argv: Sequence[str] | None = None) -> int:
     def codex_available() -> bool:
         return shutil.which(configured_codex) is not None or Path(configured_codex).is_file()
 
+    # Bounded (Issue #429). A backend that never answers -- measured here as
+    # `import keyring` never returning on a Linux host with a D-Bus session --
+    # must not hold startup past CREDENTIAL_STORE_TIMEOUT_SECONDS, or the
+    # server never binds and the supervisor can only report `startupTimedOut`.
+    # The fallback is the same UnavailableCredentialStore the design already
+    # has for "this host has no store": the server starts, reads the
+    # environment as before, and the reason reaches both sidecar.log and the
+    # settings screen (`store_unavailable_reason`).
+    credential_store = acquire_credential_store(
+        create_credential_store,
+        timeout_seconds=CREDENTIAL_STORE_TIMEOUT_SECONDS,
+    )
     credential_settings = ApiKeySettings(
-        create_credential_store(),
+        credential_store,
         os.environ,
         vertex_auth_available=vertex_auth_available,
         codex_available=codex_available,
@@ -547,6 +563,16 @@ def run(argv: Sequence[str] | None = None) -> int:
     # question a support conversation actually starts with -- "is it using
     # the key I typed in, or the one in my .env.local?" (Issue #96).
     logging.getLogger(__name__).info("%s", credential_settings.describe_sources())
+    # Only after logging is installed, so this reaches sidecar.log. The
+    # sentence is the same one `GET /settings/api-keys` carries as
+    # `store_unavailable_reason`, so the log and the screen agree about why
+    # saving a key is not on offer. Not an error: an unusable store is a
+    # supported configuration, and the app starts either way (Issue #429).
+    store_reason = credential_store.unavailable_reason()
+    if store_reason is not None:
+        logging.getLogger(__name__).warning(
+            "OS credential store is unavailable on this host: %s", store_reason
+        )
 
     # Before create_app, so the watchdog also covers the first launch's full
     # migration run -- the slowest part of startup, and a stretch during
