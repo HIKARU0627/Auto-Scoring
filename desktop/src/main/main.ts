@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { IpcChannel, type AppInfo } from "../shared/bridge.js";
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type {
+  MaterialWindowRequest,
+  MaterialWindowSelection,
+} from "../shared/material-window.js";
+import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "../shared/sidecar-upload.js";
@@ -77,6 +81,55 @@ function requireReadyConnection(): NonNullable<
   return connection;
 }
 
+/**
+ * Point a window at the shipped renderer (or Vite's dev server).
+ *
+ * `query` distinguishes the material window from the main one without a second
+ * HTML entry or a second preload: both load the same bundle, and the bundle
+ * reads `window=material` to decide which screen to mount. That is also what
+ * keeps the material window on the same CSP as the main window (Issue #415).
+ */
+function loadRenderer(
+  window: BrowserWindow,
+  query?: Readonly<Record<string, string>>,
+): void {
+  if (devServerUrl !== undefined && devServerUrl !== "") {
+    const url = new URL(devServerUrl);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      url.searchParams.set(key, value);
+    }
+    void window.loadURL(url.toString());
+    return;
+  }
+  void window.loadFile(RENDERER_INDEX, query === undefined ? {} : { query });
+}
+
+function untrustedWebPreferences(): Electron.WebPreferences {
+  return {
+    preload: PRELOAD_SCRIPT,
+    // The three that make the renderer untrusted code. `test/architecture.test.ts`
+    // fails if any of them is changed here, because the import rules it enforces
+    // on `src/renderer` only mean anything while these hold. The material
+    // window gets the same object, not a copy with one of them relaxed.
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+  };
+}
+
+/**
+ * A renderer must never be able to navigate the shell somewhere else or open a
+ * second window of its own; anything the UI wants to open goes to the user's
+ * real browser instead. The material window is opened by the main process over
+ * IPC, so this denial stays exactly as strict there (Issue #415 decision 1).
+ */
+function denyRendererWindows(window: BrowserWindow): void {
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    void shell.openExternal(url);
+    return { action: "deny" };
+  });
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
@@ -85,36 +138,90 @@ function createWindow(): BrowserWindow {
     // white flash on a dark theme, so the window is created hidden and revealed
     // on `ready-to-show`.
     show: false,
-    webPreferences: {
-      preload: PRELOAD_SCRIPT,
-      // The three that make the renderer untrusted code. `test/architecture.test.ts`
-      // fails if any of them is changed here, because the import rules it enforces
-      // on `src/renderer` only mean anything while these hold.
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
+    webPreferences: untrustedWebPreferences(),
   });
 
   window.once("ready-to-show", () => {
     window.show();
   });
 
-  // A renderer must never be able to navigate the shell somewhere else or open a
-  // second window of its own; anything the UI wants to open goes to the user's
-  // real browser instead.
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
-    return { action: "deny" };
+  denyRendererWindows(window);
+
+  // INV: closing the main window closes the material window with it (Issue #415
+  // decision 4). Without this, the material window would keep the process alive
+  // after the main window is gone -- especially on macOS, where
+  // `window-all-closed` does not quit.
+  window.on("closed", () => {
+    if (materialWindow !== null && !materialWindow.isDestroyed()) {
+      materialWindow.close();
+    }
   });
 
-  if (devServerUrl !== undefined && devServerUrl !== "") {
-    void window.loadURL(devServerUrl);
-  } else {
-    void window.loadFile(RENDERER_INDEX);
-  }
+  loadRenderer(window);
 
   return window;
+}
+
+/** The single material window, reused so materials never multiply windows. */
+let materialWindow: BrowserWindow | null = null;
+
+/** What the material window is showing, replayed to a window created later. */
+let materialSelection: MaterialWindowSelection | null = null;
+
+function createMaterialWindow(): BrowserWindow {
+  const window = new BrowserWindow({
+    width: 1100,
+    height: 820,
+    show: false,
+    webPreferences: untrustedWebPreferences(),
+  });
+
+  window.once("ready-to-show", () => {
+    window.show();
+  });
+
+  denyRendererWindows(window);
+
+  window.on("closed", () => {
+    materialWindow = null;
+  });
+
+  // A window created after a request still has to learn what to show. The
+  // renderer also calls `getMaterialSelection` on mount, so an event that
+  // arrives before its listener does cannot lose the selection.
+  window.webContents.on("did-finish-load", () => {
+    if (!window.isDestroyed() && materialSelection !== null) {
+      window.webContents.send(
+        IpcChannel.materialSelectionChanged,
+        materialSelection,
+      );
+    }
+  });
+
+  loadRenderer(window, { window: "material" });
+
+  return window;
+}
+
+function openMaterialWindow(request: MaterialWindowRequest): void {
+  materialSelection = {
+    testId: request.testId,
+    materialId: request.materialId ?? null,
+  };
+
+  if (materialWindow !== null && !materialWindow.isDestroyed()) {
+    if (materialWindow.isMinimized()) {
+      materialWindow.restore();
+    }
+    materialWindow.focus();
+    materialWindow.webContents.send(
+      IpcChannel.materialSelectionChanged,
+      materialSelection,
+    );
+    return;
+  }
+
+  materialWindow = createMaterialWindow();
 }
 
 ipcMain.handle(IpcChannel.getAppInfo, (): AppInfo => {
@@ -197,6 +304,18 @@ ipcMain.handle(
   IpcChannel.scanFolder,
   async (_event, directoryPath: string): Promise<ScannedFolder> =>
     await scanDirectory(directoryPath),
+);
+
+ipcMain.handle(
+  IpcChannel.openMaterialWindow,
+  (_event, request: MaterialWindowRequest): void => {
+    openMaterialWindow(request);
+  },
+);
+
+ipcMain.handle(
+  IpcChannel.getMaterialSelection,
+  (): MaterialWindowSelection | null => materialSelection,
 );
 
 ipcMain.handle(
