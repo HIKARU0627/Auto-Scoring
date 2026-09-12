@@ -51,6 +51,14 @@ dev = [
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
+    # Runs the 2,300-odd tests across the runner's cores (Issue #433). The
+    # default run is a single process on the CI runner's 4 cores, and the
+    # suite is thin (slowest test ~5 s, everything else ~0.1 s), so
+    # parallelising is the only lever that shortens the 650 s `Backend` job.
+    # `--dist loadfile` keeps every test module on one worker, which is what
+    # makes the real-sidecar, dynamic-port and app-data-lock tests safe: they
+    # never run concurrently with another test from the same file.
+    "pytest-xdist>=3.6",
     "ruff>=0.9",
     # PoC 3 evidence measurement and sample generation.
     "pillow>=12.3",
@@ -139,7 +147,14 @@ testpaths = ["tests"]
 # runs by default; this guard is for the paid probe that measures against the
 # real services. `tests/test_live_provider_separation.py` pins the exclusion
 # so a later edit cannot silently start billing on every push.
-addopts = "-m 'not live'"
+#
+# `-n auto --dist loadfile` is the Issue #433 speed-up: `-n auto` uses one
+# worker per CPU (4 on the CI runner), and `--dist loadfile` gives every test
+# module to exactly one worker so tests that bind a real port, take the
+# app-data lock or drive a real sidecar never race a sibling in the same
+# module. `pytest-xdist` is a dev dependency; `-n0` overrides this back to a
+# single process for a serial debug run.
+addopts = "-m 'not live' -n auto --dist loadfile"
 markers = [
     "live: sends one question's material to a real paid OCR/AI provider (Issue #54); excluded from the default run",
 ]
