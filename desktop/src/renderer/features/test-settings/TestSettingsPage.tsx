@@ -25,6 +25,7 @@ import {
   loadTestSettingsSnapshot,
   manualAnswerAreaRegion,
   reloadAnswerAreaEditor,
+  setScoringTargets,
   TestRegistrationDataError,
   updateCriteria,
   updateProfile,
@@ -34,6 +35,7 @@ import {
   type DependencyEdgeModel,
   type DependencyGraphResponse,
   type ProfileResponse,
+  type QuestionResponse,
   type TestResponse,
 } from "../../api/test-registration-data.js";
 import {
@@ -69,6 +71,7 @@ import {
 } from "../../core/criteria-totals.js";
 import { dependencyExecutionLayers } from "../../core/dependency-dag.js";
 import { AnswerAreaEditor } from "../answer-area-editor/AnswerAreaEditor.js";
+import { ScoringTargetsCard } from "./ScoringTargetsCard.js";
 import type {
   PageImageState,
   RegionModel,
@@ -152,6 +155,10 @@ const WORK = {
     title: "登録を完了しています",
     detail: "登録が終わると答案を取り込んで採点を始められます。",
   },
+  saveScoringTargets: {
+    title: "採点する問題を保存しています",
+    detail: "選んだ設問だけが採点されるようになります。",
+  },
 } as const satisfies Record<string, RunningWork>;
 
 type LoadState =
@@ -168,6 +175,7 @@ type LoadState =
       editableRegions: RegionModel[] | null;
       editableEdges: DependencyEdgeModel[] | null;
       questionNumbers: readonly string[];
+      questions: readonly QuestionResponse[];
       pageImages: readonly PageImageState[];
       layoutPages: readonly PageGeometryResponse[];
       answerLayoutPageCount: number | null;
@@ -348,6 +356,7 @@ export function TestSettingsPage(): JSX.Element {
         editableEdges:
           snapshot.dependencyGraph?.edges.map((edge) => ({ ...edge })) ?? null,
         questionNumbers: snapshot.questionNumbers,
+        questions: snapshot.questions,
         pageImages: snapshot.editor.pageImages,
         layoutPages: snapshot.editor.layoutPages,
         answerLayoutPageCount: snapshot.answerLayout?.page_count ?? null,
@@ -636,6 +645,7 @@ export function TestSettingsPage(): JSX.Element {
             bbox: { ...region.bbox },
           })),
           questionNumbers: snapshot.questionNumbers,
+          questions: snapshot.questions,
           pageImages: snapshot.editor.pageImages,
         };
       });
@@ -649,6 +659,16 @@ export function TestSettingsPage(): JSX.Element {
     }
     runConfirmProfile();
   }, [runConfirmProfile, undetectedConfirmReqs.length]);
+
+  const saveScoringTargets = useCallback(
+    async (questionIds: readonly string[]) => {
+      await runGuarded(WORK.saveScoringTargets, async () => {
+        await setScoringTargets(client, testId, questionIds);
+        await reload();
+      });
+    },
+    [client, reload, runGuarded, testId],
+  );
 
   return (
     <ShellScreen title={ready?.test.name ?? "テスト設定"}>
@@ -924,6 +944,7 @@ export function TestSettingsPage(): JSX.Element {
                         declaredTotalPoints:
                           confirmed.declared_total_points ?? null,
                         questionNumbers: snapshot.questionNumbers,
+                        questions: snapshot.questions,
                       };
                     });
                   });
@@ -985,6 +1006,7 @@ export function TestSettingsPage(): JSX.Element {
                           snapshot.answerLayout?.page_count ?? null,
                         ),
                         questionNumbers: snapshot.questionNumbers,
+                        questions: snapshot.questions,
                         pageImages: snapshot.editor.pageImages,
                         layoutPages: snapshot.editor.layoutPages,
                         answerLayoutPageCount:
@@ -1297,6 +1319,13 @@ export function TestSettingsPage(): JSX.Element {
             </button>
             <DisabledActionReason requirements={confirmGraphReqs} />
           </Card>
+
+          <ScoringTargetsCard
+            questions={ready.questions}
+            edges={ready.editableEdges ?? []}
+            busy={busy}
+            onSave={saveScoringTargets}
+          />
 
           <Card testId="complete-registration-section">
             <CardHeading

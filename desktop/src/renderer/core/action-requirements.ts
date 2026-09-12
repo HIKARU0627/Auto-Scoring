@@ -303,6 +303,15 @@ export const ActionRequirements = {
     "grading-status-stale",
     "AI採点の状況を自動で更新できませんでした。「再読み込み」を押して最新の状態を確認してください。",
   ),
+  scoringTargetsEmpty: requirement(
+    "scoring-targets-empty",
+    "採点する問題が1つも選ばれていません。少なくとも1つ選んでください。",
+  ),
+  scoringTargetPrerequisiteExcluded: (numbers: string): ActionRequirement =>
+    requirement(
+      "scoring-target-prerequisite-excluded",
+      `採点する設問のうち、前提となる設問を採点対象外にしたものがあります（${numbers}）。その設問は前提の結果を使わずに採点されます。`,
+    ),
 } as const;
 
 /** 答案の取込が失敗したときの種類。`createSubmission` が返す区分。 */
@@ -643,4 +652,44 @@ export function reviewApproveRequirements(input: {
     requirements.push(ActionRequirements.gradingInProgress);
   }
   return requirements;
+}
+
+/**
+ * テスト設定の「採点する問題を保存」 (Issue #449).
+ *
+ * 全部外すことは許さない: 採点対象が 0 件のテストは意味を持たない。ボタンを
+ * 無効にするのと同時に、理由を `DisabledActionReason` で画面に出す。
+ */
+export function scoringTargetsSaveRequirements(input: {
+  busy: boolean;
+  selectedCount: number;
+}): readonly ActionRequirement[] {
+  const requirements: ActionRequirement[] = [];
+  if (input.busy) {
+    requirements.push(ActionRequirements.busy);
+  }
+  if (input.selectedCount === 0) {
+    requirements.push(ActionRequirements.scoringTargetsEmpty);
+  }
+  return requirements;
+}
+
+/**
+ * 除外した前提設問を持つ採点対象の注意 (Issue #449).
+ *
+ * 依存先は前提の結果なしで採点される (前提を OCR が読めなかったときと同じ
+ * 扱い)。黙って結果が変わらないよう、その設問名を画面に出す。無効理由では
+ * ないので、`met: false` のまま「残りの確認」には渡さない。
+ */
+export function excludedPrerequisiteRequirements(input: {
+  dependentNumbers: readonly string[];
+}): readonly ActionRequirement[] {
+  if (input.dependentNumbers.length === 0) {
+    return [];
+  }
+  return [
+    ActionRequirements.scoringTargetPrerequisiteExcluded(
+      input.dependentNumbers.join(", "),
+    ),
+  ];
 }

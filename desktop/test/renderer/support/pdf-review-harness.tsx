@@ -78,6 +78,7 @@ export function buildQuestion(
     scoring_method: input.scoring_method ?? "additive",
     answer_area: input.answer_area ?? null,
     rubric: input.rubric ?? [],
+    is_scoring_target: input.is_scoring_target ?? true,
   };
 }
 

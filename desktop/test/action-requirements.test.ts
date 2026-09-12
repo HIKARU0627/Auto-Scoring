@@ -13,7 +13,9 @@ import {
   apiKeyVerifyRequirements,
   completeRegistrationRequirements,
   dependencyGraphConfirmRequirements,
+  excludedPrerequisiteRequirements,
   reviewApproveRequirements,
+  scoringTargetsSaveRequirements,
   whileRunningRequirements,
 } from "../src/renderer/core/action-requirements.js";
 
@@ -614,5 +616,42 @@ describe("action requirements: 添削レビューの承認 (Issue #319)", () => 
     expect(ActionRequirements.gradingStatusStale.message).toContain(
       "再読み込み",
     );
+  });
+});
+
+describe("action requirements: 採点する問題の選択 (Issue #449)", () => {
+  it("全部外すと保存できないことを理由つきで言う", () => {
+    const unmet = scoringTargetsSaveRequirements({
+      busy: false,
+      selectedCount: 0,
+    });
+    expect(unmet.map((item) => item.id)).toEqual(["scoring-targets-empty"]);
+    expect(unmet[0]?.message).toContain("1つも選ばれていません");
+    expectActionable(unmet[0]!);
+  });
+
+  it("1件でも選ばれていれば理由は0件、処理中なら busy", () => {
+    expect(
+      scoringTargetsSaveRequirements({ busy: false, selectedCount: 1 }),
+    ).toEqual([]);
+    expect(
+      scoringTargetsSaveRequirements({ busy: true, selectedCount: 2 }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["busy"]);
+  });
+
+  it("除外した前提を持つ採点対象を名前つきで知らせる", () => {
+    expect(excludedPrerequisiteRequirements({ dependentNumbers: [] })).toEqual(
+      [],
+    );
+    const [notice] = excludedPrerequisiteRequirements({
+      dependentNumbers: ["問2", "問4"],
+    });
+    expect(notice?.id).toBe("scoring-target-prerequisite-excluded");
+    expect(notice?.message).toContain("問2");
+    expect(notice?.message).toContain("問4");
+    expect(notice?.message).toContain("前提の結果を使わずに採点");
+    expectActionable(notice!);
   });
 });
