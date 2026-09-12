@@ -202,11 +202,11 @@ def test_material_pages_list_every_page_in_order(
     store: LocalFileStore,
     session_factory: sessionmaker[Session],
 ) -> None:
-    _seed(session_factory, materials=[_material(_PDF_MATERIAL_ID, _put_pdf_material(store, pages=3))])
-
-    response = client.get(
-        f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH
+    _seed(
+        session_factory, materials=[_material(_PDF_MATERIAL_ID, _put_pdf_material(store, pages=3))]
     )
+
+    response = client.get(f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH)
 
     assert response.status_code == 200
     body = response.json()
@@ -223,9 +223,7 @@ def test_material_geometry_is_the_engines_own_page_geometry(
     _seed(session_factory, materials=[_material(_PDF_MATERIAL_ID, stored_path)])
     expected = PdfiumPypdfEngine().page_geometry(store.resolve_stored_path(stored_path), 0)
 
-    body = client.get(
-        f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH
-    ).json()
+    body = client.get(f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH).json()
 
     page = body["pages"][0]
     assert page["displayed_width"] == pytest.approx(expected.displayed_width)
@@ -275,9 +273,7 @@ def test_material_page_renders_through_the_shared_engine_and_default_scale(
     # The literal 2.0, not the module constant: asserting `DEFAULT_SCALE` would
     # pass for any value it was changed to, so it could not catch a scale
     # change at all.
-    assert counting_engine.renders == [
-        (store.resolve_stored_path(stored_path), 0, 2.0)
-    ]
+    assert counting_engine.renders == [(store.resolve_stored_path(stored_path), 0, 2.0)]
 
 
 def test_a_material_from_another_test_is_not_opened_through_this_one(
@@ -293,9 +289,7 @@ def test_a_material_from_another_test_is_not_opened_through_this_one(
         test_ids=("test-1", "test-2"),
     )
 
-    response = client.get(
-        f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH
-    )
+    response = client.get(f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH)
 
     assert response.status_code == 404
 
@@ -322,12 +316,8 @@ def test_a_non_pdf_material_is_415_and_sends_no_document_bytes(
         ],
     )
 
-    pages = client.get(
-        f"/tests/test-1/materials/{_DOCX_MATERIAL_ID}/pages", headers=_AUTH
-    )
-    image = client.get(
-        f"/tests/test-1/materials/{_DOCX_MATERIAL_ID}/pages/0/image", headers=_AUTH
-    )
+    pages = client.get(f"/tests/test-1/materials/{_DOCX_MATERIAL_ID}/pages", headers=_AUTH)
+    image = client.get(f"/tests/test-1/materials/{_DOCX_MATERIAL_ID}/pages/0/image", headers=_AUTH)
 
     assert pages.status_code == 415
     assert image.status_code == 415
@@ -369,9 +359,7 @@ def test_a_material_row_without_a_stored_file_is_404(
     _seed(session_factory, materials=[_material(_PDF_MATERIAL_ID, "tests/test-1/materials/x.pdf")])
 
     assert (
-        client.get(
-            f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH
-        ).status_code
+        client.get(f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages", headers=_AUTH).status_code
         == 404
     )
 
@@ -381,7 +369,9 @@ def test_a_page_past_the_end_is_404(
     store: LocalFileStore,
     session_factory: sessionmaker[Session],
 ) -> None:
-    _seed(session_factory, materials=[_material(_PDF_MATERIAL_ID, _put_pdf_material(store, pages=2))])
+    _seed(
+        session_factory, materials=[_material(_PDF_MATERIAL_ID, _put_pdf_material(store, pages=2))]
+    )
 
     assert (
         client.get(
@@ -418,9 +408,7 @@ def test_a_matching_if_none_match_skips_the_render(
     counting_engine: _CountingEngine,
 ) -> None:
     _seed(session_factory, materials=[_material(_PDF_MATERIAL_ID, _put_pdf_material(store))])
-    first = client.get(
-        f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages/0/image", headers=_AUTH
-    )
+    first = client.get(f"/tests/test-1/materials/{_PDF_MATERIAL_ID}/pages/0/image", headers=_AUTH)
     etag = first.headers["etag"]
     counting_engine.renders.clear()
 
