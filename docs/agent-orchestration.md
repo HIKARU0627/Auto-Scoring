@@ -106,7 +106,7 @@ spec を書くと、Worker は Issue に無い前提を自分で発明する。
 同時に走る Worker が同じ重いgateを一斉に回すと、リソース競合で**本来の欠陥と無関係な赤**
 が出る。並列実行中に落ちたテストは、単独で再実行して切り分けてから原因を判断する。
 
-**「いま実際にどこが衝突しているか」はリポジトリ内の `node scripts/inflight.mjs` が返す**
+**「いま実際にどこが衝突しているか」はリポジトリ内の `pnpm run inflight` が返す**
 （全 worktree の変更ファイル、open PR、`origin/main` からの遅れ、同じファイルを触る
 worktree / PR の衝突）。上の表が「衝突しやすい対象の一覧」なのに対し、これは「いま衝突して
 いる場所の実測」で、Commander も各 Worker も自分で叩ける。dispatch 前に両方を見る。
@@ -259,7 +259,7 @@ settle した Worker には必ず次のどれか1つを、ACK の前に決める
    `git merge-base --is-ancestor origin/main HEAD` が偽なら遅れている。
    `git merge origin/main`（または rebase）で取り込む。**取り込む前に重い gate を回さない。**
    既に直っているフレーキーで赤くなり、自分の変更を疑う時間を失う（PR #440 の実例）。
-2. **`node scripts/inflight.mjs` を実行する。** 全 worktree の変更ファイル・open PR・
+2. **`pnpm run inflight` を実行する。** 全 worktree の変更ファイル・open PR・
    `origin/main` からの遅れ・**自分が触るファイルと他 worktree / open PR の衝突**が出る。
    衝突があれば着手せず、preamble の `ask` で Commander に範囲を確認する。
    この情報は以前 Commander の scratchpad にしか無く、ワーカーは見られなかった。
