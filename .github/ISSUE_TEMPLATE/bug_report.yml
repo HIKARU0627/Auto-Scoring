@@ -45,6 +45,19 @@ body:
       required: true
 
   - type: textarea
+    id: scope
+    attributes:
+      label: 触ってよい範囲 / 触らない
+      description: |
+        AI エージェントが並列で修正する場合の作業範囲です。不明なら「未定」で構いません。
+        `node scripts/inflight.mjs` で他 worktree / open PR との衝突を確認できます。
+      placeholder: |
+        触ってよい: ...
+        触らない: ...
+    validations:
+      required: true
+
+  - type: textarea
     id: environment
     attributes:
       label: 環境
