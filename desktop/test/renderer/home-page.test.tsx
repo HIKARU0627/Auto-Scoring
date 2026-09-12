@@ -72,8 +72,11 @@ describe("HomePage", () => {
 
     await screen.findByText("要確認の答案が2件あります");
     fireEvent.click(screen.getByTestId("home-next-up-action"));
-    await screen.findByText("添削レビュー");
-    expect(screen.getByTestId("review-question-rail")).toBeDefined();
+    // The rail mounts only after the review payload resolves; the router's
+    // "添削レビュー" title is synchronous, so awaiting the title and then
+    // querying the rail synchronously raced the load under full-suite load.
+    await screen.findByTestId("review-question-rail");
+    expect(screen.getByText("添削レビュー")).toBeDefined();
   });
 
   it("does not count ai_processed as done (INV-147)", async () => {

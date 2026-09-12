@@ -208,6 +208,10 @@ describe("home escape meta test (INV-201-05)", () => {
 
       fireEvent.click(await screen.findByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
       await expectPageTitle("テスト一覧");
+      // Wait for the test-list rows: the home empty state is also loaded
+      // asynchronously, so checking its absence synchronously ran before either
+      // page had loaded and could not show where the escape actually landed.
+      await screen.findByTestId("test-list-row-test-1");
       expect(screen.queryByText("まだテストが登録されていません")).toBeNull();
     });
   }
@@ -232,6 +236,9 @@ describe("home escape meta test (INV-201-05)", () => {
     await expectPageTitle("資料の取込");
     fireEvent.click(screen.getByTestId(BACK_OR_HOME_BUTTON_TEST_ID));
     await expectPageTitle("テスト一覧");
+    // Same as the stacked-history case above: await the loaded rows before
+    // proving the home empty state is absent.
+    await screen.findByTestId("test-list-row-test-1");
     expect(screen.queryByText("まだテストが登録されていません")).toBeNull();
   });
 });
