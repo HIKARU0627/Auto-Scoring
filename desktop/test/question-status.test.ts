@@ -6,6 +6,7 @@ import type { components } from "../src/renderer/api/generated/schema.js";
 import {
   deriveQuestionStatus,
   jobIsInProgress,
+  latestJobFor,
 } from "../src/renderer/core/question-status.js";
 
 type JobResponse = components["schemas"]["JobResponse"];
@@ -167,6 +168,90 @@ describe("deriveQuestionStatus", () => {
         }),
       ).toBe("running");
     });
+  });
+});
+
+describe("latestJobFor (Issue #402)", () => {
+  it("returns null when the question has no job at all", () => {
+    expect(latestJobFor([], "q1")).toBeNull();
+    expect(latestJobFor([job({ question_id: "q2" })], "q1")).toBeNull();
+  });
+
+  it("returns the most recently created job, not the first in the list", () => {
+    const oldJob = job({ id: "job-old", createdAtSeconds: 1 });
+    const regradeJob = job({ id: "job-regrade", createdAtSeconds: 2 });
+    // The API returns created_at ascending, so the first row is the oldest.
+    expect(latestJobFor([oldJob, regradeJob], "q1")?.id).toBe("job-regrade");
+    // Order in the list must not change the answer.
+    expect(latestJobFor([regradeJob, oldJob], "q1")?.id).toBe("job-regrade");
+  });
+
+  it("ignores other questions' jobs and keeps the first row on a tie", () => {
+    const first = job({ id: "job-first", question_id: "q1" });
+    const tied = job({ id: "job-tied", question_id: "q1" });
+    // Newer, but about another question: it must not win.
+    const other = job({
+      id: "job-other",
+      question_id: "q2",
+      createdAtSeconds: 5,
+    });
+    expect(latestJobFor([first, other, tied], "q1")?.id).toBe("job-first");
+  });
+});
+
+describe("Issue #402: a regrade is answered by its own job", () => {
+  it("reads 再判定待ち only until the newest job answers the request", () => {
+    const oldJob = job({
+      id: "job-old",
+      state: "succeeded",
+      usable: true,
+      createdAtSeconds: 1,
+    });
+    const regradeJob = job({
+      id: "job-regrade",
+      state: "succeeded",
+      usable: true,
+      createdAtSeconds: 2,
+    });
+    const request = review({
+      action: "regrade_requested",
+      regrade_job_id: "job-regrade",
+      createdAtSeconds: 1,
+    });
+
+    // Passing the superseded attempt is what left the screen stuck.
+    expect(derive({ job: oldJob, review: request })).toBe("regradeRequested");
+    // The newest job answers the request, so the question is reviewable again.
+    expect(derive({ job: regradeJob, review: request })).toBe("graded");
+    expect(
+      derive({
+        job: latestJobFor([oldJob, regradeJob], "q1"),
+        review: request,
+      }),
+    ).toBe("graded");
+  });
+
+  it("shows the replacement attempt while it is still running", () => {
+    const oldJob = job({
+      id: "job-old",
+      state: "succeeded",
+      usable: true,
+      createdAtSeconds: 1,
+    });
+    const running = job({
+      id: "job-regrade",
+      state: "running",
+      usable: null,
+      createdAtSeconds: 2,
+    });
+    const request = review({
+      action: "regrade_requested",
+      regrade_job_id: "job-regrade",
+      createdAtSeconds: 1,
+    });
+    expect(
+      derive({ job: latestJobFor([oldJob, running], "q1"), review: request }),
+    ).toBe("running");
   });
 });
 

@@ -34,6 +34,12 @@ export interface PdfReviewHarnessOptions {
   recognitions?: RecognitionResponse[];
   annotations?: AnnotationResponse[];
   reviews?: ReviewResponse[];
+  /**
+   * Successive answers for the review-history read (Issue #402). The last
+   * entry repeats once the sequence is exhausted, so a test can record a
+   * review (e.g. a 再判定 request) part-way through a scenario.
+   */
+  reviewsSequence?: ReviewResponse[][];
   criterionCount?: number;
   /**
    * Page geometries the submission reports (Issue #385). The default is one
@@ -47,11 +53,14 @@ export interface PdfReviewHarnessOptions {
   holdInitialLoad?: boolean;
   /** Keep question review data unloaded until `releaseQuestionData` is called. */
   holdQuestionData?: boolean;
+  /** Keep a review action POST pending until `releaseReviewAction` is called. */
+  holdReviewAction?: boolean;
 }
 
 export interface PdfReviewHarnessHandle {
   releaseInitialLoad: () => void;
   releaseQuestionData: () => void;
+  releaseReviewAction: () => void;
 }
 
 const DEFAULT_TEST_ID = "test-1";
@@ -114,6 +123,23 @@ export function buildGrade(
   };
 }
 
+export function buildReview(
+  input: Partial<ReviewResponse> & { action: string },
+): ReviewResponse {
+  const { action, ...rest } = input;
+  return {
+    id: rest.id ?? "review-1",
+    submission_id: rest.submission_id ?? DEFAULT_SUBMISSION_ID,
+    question_id: rest.question_id ?? "q-1",
+    action,
+    version: rest.version ?? 1,
+    ai_grade_result_id: rest.ai_grade_result_id ?? "grade-1",
+    regrade_job_id: rest.regrade_job_id ?? null,
+    note: rest.note ?? null,
+    created_at: rest.created_at ?? "2026-01-01T00:00:00Z",
+  };
+}
+
 export function buildReviewableGrade(
   criterionCount: number,
 ): GradeResultResponse {
@@ -145,6 +171,7 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
 } {
   const initialLoadGate = createLoadGate(options.holdInitialLoad === true);
   const questionDataGate = createLoadGate(options.holdQuestionData === true);
+  const reviewActionGate = createLoadGate(options.holdReviewAction === true);
   const questions = options.questions ?? [
     buildQuestion({ id: "q-1", number: "1" }),
   ];
@@ -182,6 +209,7 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
     { displayed_width: 595, displayed_height: 842 },
   ];
   let jobsRead = 0;
+  let reviewsRead = 0;
 
   const client = {
     GET: vi.fn(async (path, _init) => {
@@ -304,6 +332,16 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
         path === "/submissions/{submission_id}/questions/{question_id}/reviews"
       ) {
         await questionDataGate.promise;
+        const sequence = options.reviewsSequence;
+        if (sequence != null && sequence.length > 0) {
+          const index = Math.min(reviewsRead, sequence.length - 1);
+          reviewsRead += 1;
+          return {
+            data: [...(sequence[index] ?? [])],
+            response: new Response(),
+            error: undefined,
+          };
+        }
         return { data: reviews, response: new Response(), error: undefined };
       }
       if (
@@ -322,11 +360,10 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
         error: { message: "not found" },
       };
     }),
-    POST: vi.fn(async () => ({
-      data: {},
-      response: new Response(),
-      error: undefined,
-    })),
+    POST: vi.fn(async () => {
+      await reviewActionGate.promise;
+      return { data: {}, response: new Response(), error: undefined };
+    }),
     PUT: vi.fn(),
     PATCH: vi.fn(),
     DELETE: vi.fn(),
@@ -339,6 +376,7 @@ export function createPdfReviewClient(options: PdfReviewHarnessOptions): {
     handle: {
       releaseInitialLoad: initialLoadGate.release,
       releaseQuestionData: questionDataGate.release,
+      releaseReviewAction: reviewActionGate.release,
     },
   };
 }
