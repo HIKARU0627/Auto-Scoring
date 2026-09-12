@@ -7,6 +7,7 @@ import { PdfReviewPage } from "../features/pdf-review/PdfReviewPage.js";
 import { SubmissionQueuePage } from "../features/review-queue/SubmissionQueuePage.js";
 import { SubmissionConfirmPage } from "../features/submission-confirm/SubmissionConfirmPage.js";
 import { SettingsPage } from "../features/settings/SettingsPage.js";
+import { TestListPage } from "../features/test-list/TestListPage.js";
 import { TestSettingsPage } from "../features/test-settings/TestSettingsPage.js";
 import { ShellScreen } from "./ShellScreen.js";
 import { matchRoutePattern } from "./router.js";
@@ -15,27 +16,6 @@ import { useRouter } from "./router.js";
 export interface RouteDefinition {
   readonly pattern: string;
   readonly render: () => JSX.Element;
-}
-
-function PlaceholderScreen({ title }: { title: string }): JSX.Element {
-  const { params } = useRouter();
-  const details = [
-    params.testId !== undefined ? `testId=${params.testId}` : null,
-    params.submissionId !== undefined
-      ? `submissionId=${params.submissionId}`
-      : null,
-    params.questionId !== undefined ? `question=${params.questionId}` : null,
-  ]
-    .filter((line) => line !== null)
-    .join(", ");
-
-  return (
-    <ShellScreen title={title}>
-      {details.length > 0 ? (
-        <p className="text-body-medium text-on-surface-variant">{details}</p>
-      ) : null}
-    </ShellScreen>
-  );
 }
 
 export const ROUTE_TABLE: readonly RouteDefinition[] = [
@@ -54,7 +34,7 @@ export const ROUTE_TABLE: readonly RouteDefinition[] = [
   },
   {
     pattern: AppRoutes.testList,
-    render: () => <PlaceholderScreen title="テスト一覧" />,
+    render: () => <TestListPage />,
   },
   {
     pattern: AppRoutes.testSettingsPattern,
