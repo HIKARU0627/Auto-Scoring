@@ -439,3 +439,5 @@ OpenAPI の再生成を伴う一方、いまの規模では 1 + N が実測で�
   どこにも出ない**（ホームは他の `ai_processed` と区別できない）。「起票されて
   いない答案」を一覧できるようにするか、状態機械側で表せるようにするかは、
   上の項目と同じ Issue で扱う。
+
+Issue #382: 「全体の進捗」グラフの y 軸上端は [変更前](./home-dashboard/chart-headroom-before.png) / [変更後](./home-dashboard/chart-headroom-after.png) のとおり、`homeBarAxis`（`desktop/src/renderer/core/home-analytics.ts`）が `{1,2,5}×10ⁿ` の刻みで最大値の上に取り、`max/上端 ≤ 0.90` を保証する（`max≥10` では `≥0.70`）。
