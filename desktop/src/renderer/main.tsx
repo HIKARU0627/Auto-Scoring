@@ -22,8 +22,10 @@ const isMaterialWindow =
 /**
  * Frameless windows (Issue #428): the OS caption is gone, so the app root is a
  * full-height column of "custom title bar (fixed) + everything else". Reserving
- * the band here, once, is what keeps the 36px out of `AppShell` and the
- * grading-unavailable banner; those fill the `flex-1` area they are given.
+ * the band here, once, is what keeps its height out of `AppShell` and the
+ * grading-unavailable banner; those fill the `flex-1` area they are given. The
+ * height itself is owned by `WINDOW_TITLE_BAR_HEIGHT` (`WindowTitleBar`), so
+ * there is no second copy of the number to keep in step (Issue #446).
  */
 createRoot(container).render(
   <StrictMode>

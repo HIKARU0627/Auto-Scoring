@@ -165,6 +165,28 @@ function trackMaximizedState(window: BrowserWindow): void {
   });
 }
 
+/**
+ * Tell a window's renderer whether it has keyboard focus (Issue #446).
+ *
+ * `blur`/`focus` fire on the native window, so the title bar can dim without
+ * polling. Like the maximize state, the renderer is told, never asked to
+ * resolve another window.
+ */
+function notifyFocus(window: BrowserWindow): void {
+  if (!window.isDestroyed()) {
+    window.webContents.send(IpcChannel.windowFocusChanged, window.isFocused());
+  }
+}
+
+function trackFocusState(window: BrowserWindow): void {
+  window.on("focus", () => {
+    notifyFocus(window);
+  });
+  window.on("blur", () => {
+    notifyFocus(window);
+  });
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
@@ -195,6 +217,7 @@ function createWindow(): BrowserWindow {
   });
 
   trackMaximizedState(window);
+  trackFocusState(window);
   denyRendererWindows(window);
 
   // INV: closing the main window closes the material window with it (Issue #415
@@ -236,6 +259,7 @@ function createMaterialWindow(): BrowserWindow {
   });
 
   trackMaximizedState(window);
+  trackFocusState(window);
   denyRendererWindows(window);
 
   window.on("closed", () => {
@@ -393,6 +417,10 @@ ipcMain.handle(IpcChannel.closeWindow, (event): void => {
 
 ipcMain.handle(IpcChannel.isWindowMaximized, (event): boolean =>
   windowForIpcEvent(event).isMaximized(),
+);
+
+ipcMain.handle(IpcChannel.isWindowFocused, (event): boolean =>
+  windowForIpcEvent(event).isFocused(),
 );
 
 ipcMain.handle(
