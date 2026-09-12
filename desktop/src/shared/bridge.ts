@@ -137,6 +137,16 @@ export interface AutoScoringBridge {
   isWindowMaximized(): Promise<boolean>;
   /** Fires on maximize/restore of the requesting window. */
   onWindowMaximizedChange(callback: (maximized: boolean) => void): () => void;
+  /**
+   * Whether the requesting window currently has keyboard focus (Issue #446).
+   *
+   * The title bar dims on `blur` so two open windows can be told apart; the
+   * renderer resolves the window from `event.sender` here too, so a renderer
+   * cannot ask about (or be told about) another window's focus.
+   */
+  isWindowFocused(): Promise<boolean>;
+  /** Fires on focus/blur of the requesting window. */
+  onWindowFocusChange(callback: (focused: boolean) => void): () => void;
 }
 
 /** IPC channel names. One place, so main and preload cannot drift apart. */
@@ -162,6 +172,8 @@ export const IpcChannel = {
   closeWindow: "auto-scoring:close-window",
   isWindowMaximized: "auto-scoring:is-window-maximized",
   windowMaximizedChanged: "auto-scoring:window-maximized-changed",
+  isWindowFocused: "auto-scoring:is-window-focused",
+  windowFocusChanged: "auto-scoring:window-focus-changed",
 } as const;
 
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];

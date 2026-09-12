@@ -139,10 +139,26 @@ pnpm run package:electron:smoke   # パッケージ版の実機 smoke test（§7
 最大化する」ことを固定する）。
 
 **高さ**: ルート（`desktop/src/renderer/main.tsx`）を縦 flex にして
-「タイトルバー（固定 36px）＋残り全部」にし、`AppShell` と採点不可バナーは与えられた
-領域を埋める。36px という数字はルートにだけ現れ、各画面の高さ計算には漏れない。
+「タイトルバー（固定 32px）＋残り全部」にし、`AppShell` と採点不可バナーは与えられた
+領域を埋める。数字の出どころは `WindowTitleBar.tsx` の `WINDOW_TITLE_BAR_HEIGHT`
+（`2rem`）1 箇所だけで、ルートはその帯を 1 回置くだけなので各画面の高さ計算には漏れない
+（Issue #446 で 36px から Windows 11 の 100% スケール値 32px へ詰めた）。
 
-スクリーンショットは `docs/frontend-migration/frameless-*.png`（通常・最大化・資料）。
+**見た目（Issue #446）**: 帯の地をページと同じ `bg-surface` にし、本文と地続きにした
+（旧 `bg-surface-container-low` は明るい別色で「貼り付けた帯」に見えた）。タイトルは
+左端ではなく VSCode と同じく**中央**に置き、左端にはアプリのマーク（`ScanText`）を足した。
+最小化・最大化の hover はベタ塗りではなく `on-surface` 10% の控えめなオーバーレイ、
+閉じるの hover だけ Windows の固定赤（`--color-window-close-hover: #c42b1c`）にした
+（テーマの `--color-error` はダークで淡いサーモンになり Windows の赤と違うため。
+`docs/design-tokens.md` §3.10）。**ウィンドウが非アクティブのときは文字とグリフを
+`--color-on-surface-muted` に落とす**。`main.ts` が各 `BrowserWindow` の `focus` /
+`blur` を `windowFocusChanged` でレンダラへ送り、preload の
+`onWindowFocusChange` / `isWindowFocused` が受ける。これで 2 枚開いたときどちらが手前か
+分かる（反転色ではないので色覚に依存しない）。帯の背景自体はアクティブ・非アクティブで
+変えない。
+
+スクリーンショットは `docs/frontend-migration/frameless-*.png`（通常・最大化・資料・
+非アクティブ）。
 
 ---
 

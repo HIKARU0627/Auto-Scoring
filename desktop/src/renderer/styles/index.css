@@ -55,6 +55,9 @@
   --color-chart-label-secondary: var(--color-chart-label-secondary);
   --color-phase-preparing: var(--color-phase-preparing);
   --color-annotation-mark: var(--color-annotation-mark);
+  /* Issue #446: WindowTitleBar's close-button hover. */
+  --color-window-close-hover: var(--color-window-close-hover);
+  --color-on-window-close-hover: var(--color-on-window-close-hover);
   --color-disabled-button-outline: var(--color-disabled-button-outline);
   --color-disabled-button-label: var(--color-disabled-button-label);
   --color-disabled-button-container: var(--color-disabled-button-container);

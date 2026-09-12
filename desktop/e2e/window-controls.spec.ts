@@ -45,9 +45,48 @@ test("the drawn title bar maximizes, restores and minimizes the real window (Iss
   const app = await launchElectronApp();
   try {
     const page = await app.firstWindow();
-    await expect(page.getByTestId("window-title-bar")).toBeVisible({
+    const bar = page.getByTestId("window-title-bar");
+    await expect(bar).toBeVisible({
       timeout: 60_000,
     });
+
+    // Issue #446: the app mark and the centred title were added to the band.
+    // They are decorative, so they must inherit the band's drag region rather
+    // than become dead zones; the controls must still opt out. Computed style
+    // is read here because `-webkit-app-region` is inherited, so a class
+    // assertion on the children would miss a `no-drag` regression.
+    const regions = await page.evaluate(() => {
+      const read = (testId: string): string => {
+        const element = document.querySelector(`[data-testid="${testId}"]`);
+        return element === null
+          ? "missing"
+          : getComputedStyle(element).getPropertyValue("-webkit-app-region");
+      };
+      return {
+        bar: read("window-title-bar"),
+        icon: read("window-title-bar-icon"),
+        title: read("window-title-bar-title"),
+        controls: read("window-title-bar-controls"),
+      };
+    });
+    expect(regions).toEqual({
+      bar: "drag",
+      icon: "drag",
+      title: "drag",
+      controls: "no-drag",
+    });
+
+    // The bar's initial state must come from the main process (`isWindowFocused`
+    // over IPC), not from the component's default. Compared against the native
+    // value so this holds whatever focus the environment can give a window.
+    const initiallyFocused = await app.evaluate(
+      ({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.isFocused() ?? false,
+    );
+    await expect(bar).toHaveAttribute(
+      "data-window-focus",
+      initiallyFocused ? "focused" : "unfocused",
+    );
 
     const nativeWindow = await nativeWindowOf(app, page);
 
@@ -202,5 +241,46 @@ test("the close control closes the window (Issue #428)", async () => {
     await expect.poll(() => page.isClosed(), { timeout: 30_000 }).toBe(true);
   } finally {
     await closeElectronApp(app).catch(() => undefined);
+  }
+});
+
+test("the title bar reflects window focus over the bridge (Issue #446)", async () => {
+  test.setTimeout(180_000);
+
+  const app = await launchElectronApp();
+  try {
+    const page = await app.firstWindow();
+    const bar = page.getByTestId("window-title-bar");
+    await expect(bar).toBeVisible({ timeout: 60_000 });
+
+    // Both directions are driven through the exact channel `main.ts` sends on
+    // (`onWindowFocusChange` in preload subscribes to it). A synthetic native
+    // `blur`/`focus` is deliberately not used: `notifyFocus` reports
+    // `window.isFocused()`, the OS's answer, which differs by environment
+    // (Issue #417 / #439: measuring the environment, not the property). What
+    // the renderer does with the channel is what this spec owns; that `main.ts`
+    // registers `blur` as well as `focus` is pinned by
+    // `desktop/test/window-controls-main.test.ts`.
+    const sendFocus = (focused: boolean): Promise<void> =>
+      app.evaluate(
+        ({ BrowserWindow }, [channel, value]) => {
+          BrowserWindow.getAllWindows()[0]?.webContents.send(channel, value);
+        },
+        ["auto-scoring:window-focus-changed", focused] as const,
+      );
+
+    await sendFocus(false);
+    await expect(bar).toHaveAttribute("data-window-focus", "unfocused", {
+      timeout: 15_000,
+    });
+    await expect(bar).toHaveClass(/text-on-surface-muted/);
+
+    await sendFocus(true);
+    await expect(bar).toHaveAttribute("data-window-focus", "focused", {
+      timeout: 15_000,
+    });
+    await expect(bar).toHaveClass(/text-on-surface-variant/);
+  } finally {
+    await closeElectronApp(app);
   }
 });

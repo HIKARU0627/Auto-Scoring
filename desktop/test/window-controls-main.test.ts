@@ -64,3 +64,30 @@ describe("window-control IPC resolves the window from the sender (Issue #428)", 
     expect(MAIN).not.toMatch(/windowId|window-id/);
   });
 });
+
+describe("window focus is pushed to the window's renderer (Issue #446)", () => {
+  // `notifyFocus` reports `window.isFocused()`, the OS's current answer, so a
+  // synthetic `blur` is not a portable way to drive it (Windows CI reports the
+  // window focused). The runtime half therefore drives only the IPC channel in
+  // `desktop/e2e/window-controls.spec.ts`; this file owns the other half -- that
+  // `main.ts` wires **both** native events -- which is what makes dropping the
+  // `blur` registration fail a test instead of silently dimming nothing.
+  const trackerStart = MAIN.indexOf("function trackFocusState");
+  const TRACKER = MAIN.slice(trackerStart, MAIN.indexOf("\n}", trackerStart));
+
+  it("registers a handler for both focus and blur", () => {
+    expect(trackerStart).toBeGreaterThan(-1);
+    expect(TRACKER).toMatch(/window\.on\(\s*"focus"/);
+    expect(TRACKER).toMatch(/window\.on\(\s*"blur"/);
+  });
+
+  it("notifies the renderer once per native event, for that window", () => {
+    expect(TRACKER.match(/notifyFocus\(window\)/g) ?? []).toHaveLength(2);
+  });
+
+  it("sends the state on the channel the preload subscribes to", () => {
+    const notifyStart = MAIN.indexOf("function notifyFocus");
+    const NOTIFY = MAIN.slice(notifyStart, notifyStart + 300);
+    expect(NOTIFY).toContain("IpcChannel.windowFocusChanged");
+  });
+});

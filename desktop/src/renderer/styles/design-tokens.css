@@ -111,6 +111,15 @@
   /* Annotation ink is not a UI colour: it writes on the (always white) PDF. */
   --color-annotation-mark: #c62828;
 
+  /* Issue #446 — the frameless title bar's close-button hover. Windows paints
+     it a fixed red (`#c42b1c`) in both themes; the Material `--color-error`
+     role is the theme's soft salmon in dark (`#ffb4ab`), which would read as a
+     pink button with a maroon glyph. Like `--color-annotation-mark`, this is a
+     chrome colour the OS fixes, so it does not follow the theme. White on
+     `#c42b1c` is 5.66:1, so the glyph stays readable without `--color-on-error`. */
+  --color-window-close-hover: #c42b1c;
+  --color-on-window-close-hover: #ffffff;
+
   /* Issue #88 — aliases, not separate hues. */
   --color-disabled-button-outline: var(--color-outline);
   --color-disabled-button-label: var(--color-on-surface-variant);
@@ -262,6 +271,10 @@
   --color-phase-preparing: #6b7488;
 
   --color-annotation-mark: #c62828;
+
+  /* Issue #446 — fixed in both themes, like the dark block above. */
+  --color-window-close-hover: #c42b1c;
+  --color-on-window-close-hover: #ffffff;
 
   --color-disabled-button-outline: var(--color-outline);
   --color-disabled-button-label: var(--color-on-surface-variant);
