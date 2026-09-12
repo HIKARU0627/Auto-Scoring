@@ -686,6 +686,18 @@ export function TestSettingsPage(): JSX.Element {
                   : "テスト状態: 下書き"}
               </Caption>
             </div>
+            <div className="mt-lg flex flex-wrap gap-sm">
+              <button
+                type="button"
+                data-testid="test-settings-open-materials-button"
+                className={secondaryButtonClass()}
+                onClick={() => {
+                  void window.autoScoring?.openMaterialWindow({ testId });
+                }}
+              >
+                資料を開く
+              </button>
+            </div>
           </Card>
 
           {actionError !== null ? (

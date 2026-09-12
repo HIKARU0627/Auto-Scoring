@@ -758,3 +758,20 @@ describe("TestSettingsPage registration flow", () => {
     await screen.findByTestId("criteria-section");
   });
 });
+
+describe("TestSettingsPage material entry (Issue #415)", () => {
+  it("asks the main process to open the material window for this test", async () => {
+    const { client } = createTestSettingsMockClient();
+    const openMaterialWindow = vi.fn(async () => {});
+    renderAppAt(testSettings("t-reg"), {
+      client,
+      bridge: { openMaterialWindow },
+    });
+
+    fireEvent.click(
+      await screen.findByTestId("test-settings-open-materials-button"),
+    );
+
+    expect(openMaterialWindow).toHaveBeenCalledWith({ testId: "t-reg" });
+  });
+});

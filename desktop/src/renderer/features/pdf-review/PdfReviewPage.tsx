@@ -743,6 +743,16 @@ export function PdfReviewPage(): JSX.Element {
               ) : null}
               <button
                 type="button"
+                data-testid="review-open-materials-button"
+                className={BUTTON_SECONDARY_CLASS}
+                onClick={() => {
+                  void window.autoScoring?.openMaterialWindow({ testId });
+                }}
+              >
+                資料を開く
+              </button>
+              <button
+                type="button"
                 data-testid="review-refresh-button"
                 className={BUTTON_SECONDARY_CLASS}
                 disabled={busy}
