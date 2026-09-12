@@ -174,6 +174,10 @@ function createWindow(): BrowserWindow {
     // default true, so the OS still owns the resize borders (a frameless
     // window that drops `thickFrame`/resizability loses its edge handles).
     frame: false,
+    // Windows: keep the WS_THICKFRAME resize borders alive for the frameless
+    // window (this is Electron's documented default; it is set explicitly so a
+    // future default change cannot silently remove the edge handles).
+    thickFrame: true,
     // The default application menu is kept (nothing calls `Menu.setAppMenu`),
     // only its strip is hidden: a frameless window has no title bar to hang it
     // under, and on Linux the bar would sit on top of the custom title bar.
@@ -221,6 +225,7 @@ function createMaterialWindow(): BrowserWindow {
     // Frameless like the main window (Issue #428); the same renderer component
     // draws the same title bar and the same IPC path resolves this window.
     frame: false,
+    thickFrame: true,
     autoHideMenuBar: true,
     show: false,
     webPreferences: untrustedWebPreferences(),
