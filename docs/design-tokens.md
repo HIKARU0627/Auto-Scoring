@@ -441,6 +441,30 @@ Tailwind への橋渡しは `desktop/test/home-chart-tokens.test.ts` が検査�
   `--color-attention` は **文字**として `surface-container-highest` 上 4.5:1 が要るため、
   モック値は 4.2:1 で AA を割る。AA を保つ範囲で `#ff7ba8 → #fe74a3`（4.6:1）まで寄せる。
 
+### 3.10 フレームレスウィンドウのタイトルバー（Issue #446）
+
+`desktop/src/renderer/navigation/WindowTitleBar.tsx` が描く帯（Issue #428）を、
+Windows 11 / VSCode / Chrome の慣習へ寄せたときに足したトークン。
+
+| トークン                        | ダーク    | ライト    | 使いどころ                |
+| ------------------------------- | --------- | --------- | ------------------------- |
+| `--color-window-close-hover`    | `#c42b1c` | `#c42b1c` | 閉じるボタンの hover 背景 |
+| `--color-on-window-close-hover` | `#ffffff` | `#ffffff` | その上に載る × グリフ     |
+
+- **`--color-annotation-mark` と同じくテーマに追従しない。** Windows はライト/ダークの
+  どちらでも閉じるの hover を固定の赤で描く。テーマの `--color-error` はダークで
+  `#ffb4ab` の淡いサーモンになり「赤い閉じる」に見えない（ライトの `#b3261e` は近い）。
+- 白 on `#c42b1c` は 5.66:1 で AA。`--color-on-error`（ダークでは濃い `#5c0a0a`）は
+  鮮やかな赤の上で使えないため、専用の on トークンを分けた。
+- 最小化・最大化の hover は新トークンを作らず、`--color-on-surface` の 10% オーバーレイ
+  （`bg-on-surface/10`）にした。Windows の「控えめなオーバーレイ」に合わせるためで、
+  面ランプのベタ塗り（旧 `hover:bg-surface-container-high`）とは別物。
+- タイトル文字・アプリマーク・グリフの色は帯の `currentColor` を継承し、非アクティブ時は
+  `--color-on-surface-muted` へ落とす。帯地（`--color-surface`）比の実測は、アクティブの
+  `--color-on-surface-variant` がダーク 8.11:1 / ライト 7.12:1、非アクティブの
+  `--color-on-surface-muted` がダーク 7.18:1 / ライト 5.93:1（AAA / AA）。
+  色相（紫 `--color-primary-text`）からグレーブルーへ変わるので、明度差だけに頼らない。
+
 ## 4. 余白・角丸・エレベーション・レイアウト寸法
 
 ### 4.1 余白（`AppSpacing`、4px基準）

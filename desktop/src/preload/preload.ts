@@ -141,6 +141,17 @@ const bridge: AutoScoringBridge = {
       ipcRenderer.removeListener(IpcChannel.windowMaximizedChanged, listener);
     };
   },
+  isWindowFocused: (): Promise<boolean> =>
+    ipcRenderer.invoke(IpcChannel.isWindowFocused) as Promise<boolean>,
+  onWindowFocusChange: (callback: (focused: boolean) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, focused: boolean) => {
+      callback(focused);
+    };
+    ipcRenderer.on(IpcChannel.windowFocusChanged, listener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannel.windowFocusChanged, listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("autoScoring", bridge);
