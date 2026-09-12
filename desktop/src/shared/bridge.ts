@@ -19,6 +19,10 @@
 import type { BulkExportWriteRequest } from "./bulk-export-write.js";
 import type { ScannedFolder } from "./folder-scan.js";
 import type {
+  MaterialWindowRequest,
+  MaterialWindowSelection,
+} from "./material-window.js";
+import type {
   SidecarMultipartRequest,
   SidecarMultipartResponse,
 } from "./sidecar-upload.js";
@@ -99,6 +103,18 @@ export interface AutoScoringBridge {
     fileName: string,
   ): Promise<string | null>;
   scanFolder(directoryPath: string): Promise<ScannedFolder>;
+  /**
+   * Ask the main process to open (or re-focus) **the** material window and show
+   * this test's materials (Issue #415). One window is reused; calling it again
+   * replaces what it shows instead of opening another window. A renderer still
+   * cannot open a window itself (`main.ts` keeps `setWindowOpenHandler` denying).
+   */
+  openMaterialWindow(request: MaterialWindowRequest): Promise<void>;
+  /** What the material window is showing now, or `null` before anything asked. */
+  getMaterialSelection(): Promise<MaterialWindowSelection | null>;
+  onMaterialSelectionChange(
+    callback: (selection: MaterialWindowSelection) => void,
+  ): () => void;
   sidecarMultipartUpload(
     request: SidecarMultipartRequest,
   ): Promise<SidecarMultipartResponse>;
@@ -118,6 +134,9 @@ export const IpcChannel = {
   bulkExportFileExists: "auto-scoring:bulk-export-file-exists",
   bulkExportReadFile: "auto-scoring:bulk-export-read-file",
   scanFolder: "auto-scoring:scan-folder",
+  openMaterialWindow: "auto-scoring:open-material-window",
+  getMaterialSelection: "auto-scoring:get-material-selection",
+  materialSelectionChanged: "auto-scoring:material-selection-changed",
   sidecarMultipartUpload: "auto-scoring:sidecar-multipart-upload",
   sidecarFetch: "auto-scoring:sidecar-fetch",
 } as const;

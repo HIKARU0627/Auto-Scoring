@@ -777,3 +777,15 @@ describe("review states (Issue #347, parent #333 §1)", () => {
     ).toBe("attention");
   });
 });
+
+describe("PdfReviewPage material entry (Issue #415)", () => {
+  it("asks the main process to open the material window for this test", async () => {
+    const openMaterialWindow = vi.fn(async () => {});
+    vi.stubGlobal("autoScoring", { openMaterialWindow });
+    renderPdfReview();
+
+    fireEvent.click(await screen.findByTestId("review-open-materials-button"));
+
+    expect(openMaterialWindow).toHaveBeenCalledWith({ testId: "test-1" });
+  });
+});

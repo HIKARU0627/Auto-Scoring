@@ -8,6 +8,10 @@ import {
 import type { ScannedFolder } from "../shared/folder-scan.js";
 import type { BulkExportWriteRequest } from "../shared/bulk-export-write.js";
 import type {
+  MaterialWindowRequest,
+  MaterialWindowSelection,
+} from "../shared/material-window.js";
+import type {
   SidecarFetchRequest,
   SidecarFetchResponse,
 } from "../shared/sidecar-fetch.js";
@@ -83,6 +87,26 @@ const bridge: AutoScoringBridge = {
       IpcChannel.scanFolder,
       directoryPath,
     ) as Promise<ScannedFolder>,
+  openMaterialWindow: (request: MaterialWindowRequest): Promise<void> =>
+    ipcRenderer.invoke(IpcChannel.openMaterialWindow, request) as Promise<void>,
+  getMaterialSelection: (): Promise<MaterialWindowSelection | null> =>
+    ipcRenderer.invoke(
+      IpcChannel.getMaterialSelection,
+    ) as Promise<MaterialWindowSelection | null>,
+  onMaterialSelectionChange: (
+    callback: (selection: MaterialWindowSelection) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      selection: MaterialWindowSelection,
+    ) => {
+      callback(selection);
+    };
+    ipcRenderer.on(IpcChannel.materialSelectionChanged, listener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannel.materialSelectionChanged, listener);
+    };
+  },
   sidecarMultipartUpload: (
     request: SidecarMultipartRequest,
   ): Promise<SidecarMultipartResponse> =>

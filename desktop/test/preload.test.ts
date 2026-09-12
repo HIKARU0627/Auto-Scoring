@@ -122,4 +122,53 @@ describe("preload script bridge", () => {
       registeredListener,
     );
   });
+
+  it("openMaterialWindow invokes openMaterialWindow IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce(undefined);
+
+    await exposedBridge!.openMaterialWindow({ testId: "t1", materialId: "m1" });
+
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:open-material-window",
+      { testId: "t1", materialId: "m1" },
+    );
+  });
+
+  it("getMaterialSelection invokes getMaterialSelection IPC channel", async () => {
+    mockIpcRenderer.invoke.mockResolvedValueOnce({
+      testId: "t1",
+      materialId: null,
+    });
+
+    const result = await exposedBridge!.getMaterialSelection();
+
+    expect(mockIpcRenderer.invoke).toHaveBeenCalledWith(
+      "auto-scoring:get-material-selection",
+    );
+    expect(result).toEqual({ testId: "t1", materialId: null });
+  });
+
+  it("onMaterialSelectionChange registers and unregisters IPC listener", () => {
+    const callback = vi.fn();
+    const unsubscribe = exposedBridge!.onMaterialSelectionChange(callback);
+
+    expect(mockIpcRenderer.on).toHaveBeenCalledWith(
+      "auto-scoring:material-selection-changed",
+      expect.any(Function),
+    );
+
+    const registeredListener = mockIpcRenderer.on.mock.calls[0]![1] as (
+      event: unknown,
+      selection: { testId: string; materialId: string | null },
+    ) => void;
+    const selection = { testId: "t1", materialId: "m1" };
+    registeredListener({}, selection);
+    expect(callback).toHaveBeenCalledWith(selection);
+
+    unsubscribe();
+    expect(mockIpcRenderer.removeListener).toHaveBeenCalledWith(
+      "auto-scoring:material-selection-changed",
+      registeredListener,
+    );
+  });
 });

@@ -189,15 +189,18 @@ PoC 6（[`poc-6-pdf-coordinates.md`](./poc-6-pdf-coordinates.md)）が案 B を�
 **同じ pdfium が raster 化と座標変換の両方を担うので、「表示するページ」の解釈が
 2 つに割れる余地が構造的に無い**ことである。
 
-| メソッド | パス                                        | 返すもの                                             |
-| -------- | ------------------------------------------- | ---------------------------------------------------- |
-| `GET`    | `/submissions/{id}/pages`                   | `page_count` と各ページの `displayed_*` / `rotation` |
-| `GET`    | `/submissions/{id}/pages/{n}/image`         | `image/png`（`scale` 既定 2.0）                      |
-| `GET`    | `/tests/{id}/answer-layout/pages`           | 同上（回答欄エディタが描く答案用紙）                 |
-| `GET`    | `/tests/{id}/answer-layout/pages/{n}/image` | `image/png`（`scale` 既定 2.0）                      |
+| メソッド | パス                                                  | 返すもの                                             |
+| -------- | ----------------------------------------------------- | ---------------------------------------------------- |
+| `GET`    | `/submissions/{id}/pages`                             | `page_count` と各ページの `displayed_*` / `rotation` |
+| `GET`    | `/submissions/{id}/pages/{n}/image`                   | `image/png`（`scale` 既定 2.0）                      |
+| `GET`    | `/tests/{id}/answer-layout/pages`                     | 同上（回答欄エディタが描く答案用紙）                 |
+| `GET`    | `/tests/{id}/answer-layout/pages/{n}/image`           | `image/png`（`scale` 既定 2.0）                      |
+| `GET`    | `/tests/{id}/materials/{material_id}/pages`           | 同上（登録済み資料。PDF のみ。Word/Excel は 415）    |
+| `GET`    | `/tests/{id}/materials/{material_id}/pages/{n}/image` | `image/png`（`scale` 既定 2.0）                      |
 
 実装は `backend/src/auto_scoring/api/page_image_router.py`、
-検査は `backend/tests/test_page_image_api.py`（fixture は合成 PDF 8 種）。
+検査は `backend/tests/test_page_image_api.py`（fixture は合成 PDF 8 種）と
+`backend/tests/test_material_page_api.py`。
 
 ### 7.1 正規化座標の基準は「返ってきた画像の画素寸法」ただ一つ
 
@@ -278,3 +281,24 @@ PoC 6 が測ったキーそのまま。文書は**バイト列の SHA-256** で�
 後者の description には以前「Flutter が pdfrx で描くから PDF を返す」という採用理由が
 書かれていたが、移行でその前提が消えた。**理由が古いまま残るのが、このリポジトリで
 何度も踏んだ形である**（#111 → #138）。
+
+### 7.6 資料の中身はページ画像で返す（Issue #415）
+
+取り込んだ資料を別ウィンドウで見せる（`docs/test-registration.md`）ときも、**案 B の
+ままページ画像を返す。** 追加したのは上の 2 本で、認証（`require_token`）・loopback
+束縛・`LocalFileStore.resolve_stored_path` によるパス解決・ETag のキーは、答案ページと
+**同じ実装を共有する**。新しい認証経路も公開の仕方も発明していない。
+
+生のファイルを返さなかった理由:
+
+- **CSP`default-src 'none'` では renderer が PDF をインライン表示できない。**
+  ページ画像だけが「中身が見える」を満たす。
+- **複数ページの送りが要件**（受入条件）。`PdfEngine` のページ数・ジオメトリをそのまま
+  使えるページ画像が最短。
+- **Word/Excel の資料は raster 化できない。** これはサーバ側で **415** を返し、renderer は
+  「アプリ内でプレビューできない」と役割・ファイル名を添えて表示する（黙って空にしない）。
+  生バイトを返すと、Issue #207 が消した「文書が renderer に渡る経路」を作り直すことになる。
+
+資料の行は `GET /tests/{id}/materials`（メタ情報のみ、`api.test_registration_router`）で
+引く。`{material_id}` は必ず**そのテストの行**として解決し、別テストの id を持ち込んでも
+404 になる。ファイルが非 PDF のときは本文を読む前に 415 で止める。
