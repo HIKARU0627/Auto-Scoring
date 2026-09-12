@@ -17,6 +17,11 @@ import {
   HomeDashboard,
   type HomeTestProgress,
 } from "../../core/home-dashboard.js";
+import {
+  IntakeJourneyStage,
+  journeyLabel,
+  journeyStageForTest,
+} from "../../core/intake-journey.js";
 import { HomeDataError, loadHomeDashboard } from "../../core/home-data.js";
 import { formatHomeDate } from "../../core/home-analytics.js";
 import { AppErrorBanner } from "../../core/AppErrorBanner.js";
@@ -29,7 +34,11 @@ import {
   statusPillClass,
   TABLE_HEAD_STYLE,
 } from "../home/home-format.js";
-import { ScreenSkeleton, secondaryButtonClass } from "../ui/screen-ui.js";
+import {
+  ScreenSkeleton,
+  primaryButtonClass,
+  secondaryButtonClass,
+} from "../ui/screen-ui.js";
 
 /**
  * The full test list (Issue #379). Every registered test -- `draft` and `ready`
@@ -276,6 +285,7 @@ function TestRow({
   onOpen: (route: string) => void;
 }): JSX.Element {
   const test = progress.test;
+  const stage = journeyStageForTest(progress);
   return (
     <tr
       data-testid={`test-list-row-${test.id}`}
@@ -289,6 +299,14 @@ function TestRow({
         >
           {test.name}
         </span>
+        {stage !== null ? (
+          <span
+            data-testid={`test-list-next-${test.id}`}
+            className="mt-xs block min-w-0 truncate text-ui-label text-on-surface-variant"
+          >
+            次は「{journeyLabel(stage)}」
+          </span>
+        ) : null}
       </th>
       <td className="py-md pr-md">
         <StatusPill progress={progress} />
@@ -306,7 +324,7 @@ function TestRow({
         {formatHomeDate(progress.lastUpdatedAt)}
       </td>
       <td className="py-md">
-        <RowActions testId={test.id} onOpen={onOpen} />
+        <RowActions testId={test.id} stage={stage} onOpen={onOpen} />
       </td>
     </tr>
   );
@@ -336,6 +354,7 @@ function TestBlock({
   onOpen: (route: string) => void;
 }): JSX.Element {
   const test = progress.test;
+  const stage = journeyStageForTest(progress);
   return (
     <li
       data-testid={`test-list-row-${test.id}`}
@@ -351,6 +370,14 @@ function TestBlock({
         </span>
         <StatusPill progress={progress} />
       </div>
+      {stage !== null ? (
+        <span
+          data-testid={`test-list-next-${test.id}`}
+          className="min-w-0 truncate text-ui-label text-on-surface-variant"
+        >
+          次は「{journeyLabel(stage)}」
+        </span>
+      ) : null}
       <div className="flex min-w-0 items-center gap-sm">
         <span className="shrink-0 text-ui-label text-on-surface-variant">
           答案数
@@ -366,7 +393,7 @@ function TestBlock({
       >
         最終更新 {formatHomeDate(progress.lastUpdatedAt)}
       </div>
-      <RowActions testId={test.id} onOpen={onOpen} />
+      <RowActions testId={test.id} stage={stage} onOpen={onOpen} />
     </li>
   );
 }
@@ -443,11 +470,21 @@ function ProgressCell({
 
 function RowActions({
   testId,
+  stage,
   onOpen,
 }: {
   testId: string;
+  stage: ReturnType<typeof journeyStageForTest>;
   onOpen: (route: string) => void;
 }): JSX.Element {
+  // Issue #450: the three destinations stay where they were, but the one the
+  // test's current stage works on is raised to the primary button. The row's
+  // 「次は「◯◯」」 line names it, so the operator does not have to guess which
+  // of the three to press.
+  const settingsIsNext = stage === IntakeJourneyStage.settings;
+  const answersIsNext = stage === IntakeJourneyStage.answers;
+  const queueIsNext =
+    stage === IntakeJourneyStage.review || stage === IntakeJourneyStage.export;
   return (
     <div className="flex flex-wrap items-center gap-sm">
       <button
@@ -456,7 +493,9 @@ function RowActions({
         onClick={() => {
           onOpen(testSettings(testId));
         }}
-        className={secondaryButtonClass()}
+        className={
+          settingsIsNext ? primaryButtonClass() : secondaryButtonClass()
+        }
       >
         テスト設定
       </button>
@@ -466,7 +505,7 @@ function RowActions({
         onClick={() => {
           onOpen(submissionQueue(testId));
         }}
-        className={secondaryButtonClass()}
+        className={queueIsNext ? primaryButtonClass() : secondaryButtonClass()}
       >
         答案キュー
       </button>
@@ -476,7 +515,9 @@ function RowActions({
         onClick={() => {
           onOpen(intakeTarget(testId));
         }}
-        className={secondaryButtonClass()}
+        className={
+          answersIsNext ? primaryButtonClass() : secondaryButtonClass()
+        }
       >
         答案を取り込む
       </button>
