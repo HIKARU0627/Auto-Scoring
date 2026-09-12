@@ -573,7 +573,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                 <span className="text-ui-label">取込の型</span>
                 <select
                   data-testid="intake-template-picker"
-                  className="rounded-md bg-surface-container-high px-md py-sm text-on-surface"
+                  className="select-themed rounded-md bg-surface-container-high px-md py-sm text-on-surface"
                   value={templateId ?? ""}
                   disabled={busy}
                   onChange={(event) => {
@@ -753,7 +753,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                     <select
                       data-testid={`intake-target-${group.key}`}
                       aria-label="このフォルダの取り込み先"
-                      className="rounded-md bg-surface-container-high px-md py-sm text-on-surface"
+                      className="select-themed rounded-md bg-surface-container-high px-md py-sm text-on-surface"
                       value={
                         group.targetKind === IntakeTargetKind.create
                           ? "__new__"
@@ -886,7 +886,7 @@ export function IntakePage({ bridge }: IntakePageProps = {}): JSX.Element {
                         <select
                           data-testid={`intake-role-${file.relativePath}`}
                           aria-label={`${intakeFileName(file)} の役割`}
-                          className="rounded-md bg-surface-container px-sm py-xs text-ui-label"
+                          className="select-themed rounded-md bg-surface-container px-sm py-xs text-ui-label"
                           value={effectiveRole(file) ?? ""}
                           onChange={(event) => {
                             const value = event.target.value as MaterialRole;
