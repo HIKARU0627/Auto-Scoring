@@ -1521,6 +1521,7 @@ Electron / 新スタックの採用およびアーキテクチャ設計により
 | INV-E029 | グラフ         | 一番高い棒は描画領域の天井に接しない                                                 | `desktop/test/renderer/home-chart-headroom.test.tsx`    | draws the tallest bar at 90% of the plot, below the axis ceiling          | PR #391        |
 | INV-E030 | ドロップダウン | `<select>` は 1 箇所の `select-themed` で開いたリストまでテーマ描画する              | `desktop/test/select-theme.test.ts`                     | draws the opened list as a page picker, not the OS list                   | PR #394        |
 | INV-E031 | アイコン       | アイコンは同梱 SVG で描き、合字名を可視テキストにしない                              | `desktop/test/renderer/material-symbol-icon.test.tsx`   | never renders a ligature name as visible text in any of the four usages   | PR #396        |
+| INV-E032 | アプリシェル   | 本文列だけがスクロールし、サイドバーは固定されて一緒に流れない                       | `desktop/test/renderer/sidebar-fixed.test.tsx`          | keeps the sidebar fixed while the body column scrolls                     | Issue #427     |
 
 ### 19.2 区分別の集計
 
@@ -1533,4 +1534,5 @@ Electron / 新スタックの採用およびアーキテクチャ設計により
 | グラフ         |      2 |
 | ドロップダウン |      1 |
 | アイコン       |      1 |
-| **合計**       | **31** |
+| アプリシェル   |      1 |
+| **合計**       | **32** |
