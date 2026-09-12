@@ -1,9 +1,15 @@
 import { useLayoutEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import {
+  ANNOTATION_SHAPE_VIEW_BOX,
+  annotationKindLabel,
+  annotationShapePath,
+} from "../../core/annotation-mark.js";
+import {
   normalizedRectToLayout,
   resolveAnnotationRects,
   type AnnotationResponse,
+  type LayoutRect,
   type NormalizedRect,
 } from "../../core/pdf-review-geometry.js";
 import type { RecognitionResponse } from "../../core/pdf-review-data.js";
@@ -158,17 +164,12 @@ export function PageImageViewer({
               imagePixelSize,
             );
             return (
-              <div
+              <AnnotationMarkView
                 key={`${annotation.id}-${index}`}
-                data-testid={`annotation-${annotation.id}-${index}`}
-                className="pointer-events-none absolute border-2 border-error"
-                style={{
-                  left: layout.left,
-                  top: layout.top,
-                  width: layout.width,
-                  height: layout.height,
-                }}
-                aria-hidden
+                annotation={annotation}
+                layout={layout}
+                pixelsPerPoint={renderSize.width / Math.max(1, displayedWidth)}
+                testId={`annotation-${annotation.id}-${index}`}
               />
             );
           }),
@@ -190,6 +191,109 @@ export function PageImageViewer({
           </ul>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A mark's rendered stroke width, as a fraction of its rect's width.
+ *
+ * The exported PDF draws every shape at `max(1.0, width_pt * 0.04)`
+ * (`adapters/pdf/pdfium_pypdf_engine._draw_mark`); matching the fraction keeps
+ * a small `×` from turning into a thick blob and a large `○` from turning into
+ * a hairline. `vector-effect: non-scaling-stroke` keeps the SVG's non-uniform
+ * stretch from distorting it, and the value is in layout pixels so it scales
+ * with zoom.
+ */
+const MARK_STROKE_FRACTION = 0.04;
+
+/** The PDF's own text-size floor and ceiling, in points (`_draw_text`). */
+const MARK_MIN_FONT_PT = 6;
+const MARK_MAX_FONT_PT = 14;
+
+/**
+ * One annotation drawn on the answer page (Issue #403).
+ *
+ * Replaces a single `border-error` rectangle that was used for every kind. The
+ * shape kinds draw the same strokes the exported PDF does (see
+ * `core/annotation-mark.ts`); `score`/`comment` draw text. Colour is always
+ * `--color-annotation-mark` -- the teacher's red pen, not `colorScheme.error`
+ * (`docs/design-tokens.md` §3.4) -- and never the only cue: a mark is a
+ * distinct shape or visible text, with the kind and comment as its accessible
+ * name.
+ */
+function AnnotationMarkView({
+  annotation,
+  layout,
+  pixelsPerPoint,
+  testId,
+}: {
+  annotation: AnnotationResponse;
+  layout: LayoutRect;
+  pixelsPerPoint: number;
+  testId: string;
+}): JSX.Element {
+  const shapePath = annotationShapePath(annotation.kind);
+  const label = annotationKindLabel(annotation.kind);
+  const comment = (annotation.comment ?? "").trim();
+  const accessibleName =
+    comment.length > 0 ? `添削記号 ${label} ${comment}` : `添削記号 ${label}`;
+  const position = {
+    left: layout.left,
+    top: layout.top,
+    width: layout.width,
+    height: layout.height,
+  };
+
+  if (shapePath != null) {
+    return (
+      <div
+        data-testid={testId}
+        data-kind={annotation.kind}
+        role="img"
+        aria-label={accessibleName}
+        className="pointer-events-none absolute text-annotation-mark"
+        style={position}
+      >
+        <svg
+          viewBox={ANNOTATION_SHAPE_VIEW_BOX}
+          preserveAspectRatio="none"
+          className="block h-full w-full"
+          aria-hidden
+        >
+          <path
+            d={shapePath}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={Math.max(1, layout.width * MARK_STROKE_FRACTION)}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-testid={testId}
+      data-kind={annotation.kind}
+      role="img"
+      aria-label={accessibleName}
+      title={comment.length > 0 ? comment : undefined}
+      className="pointer-events-none absolute overflow-hidden text-annotation-mark"
+      style={{
+        ...position,
+        fontSize: Math.min(
+          Math.max(layout.height, MARK_MIN_FONT_PT * pixelsPerPoint),
+          MARK_MAX_FONT_PT * pixelsPerPoint,
+        ),
+      }}
+    >
+      <span className="block leading-tight break-words whitespace-pre-wrap">
+        {comment.length > 0 ? comment : label}
+      </span>
     </div>
   );
 }
