@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { MaterialWindowApp } from "./features/materials/MaterialWindowPage";
+import { WindowTitleBar } from "./navigation/WindowTitleBar";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import "./styles/index.css";
 
@@ -18,10 +19,27 @@ if (container === null) {
 const isMaterialWindow =
   new URLSearchParams(window.location.search).get("window") === "material";
 
+/**
+ * Frameless windows (Issue #428): the OS caption is gone, so the app root is a
+ * full-height column of "custom title bar (fixed) + everything else". Reserving
+ * the band here, once, is what keeps the 36px out of `AppShell` and the
+ * grading-unavailable banner; those fill the `flex-1` area they are given.
+ */
 createRoot(container).render(
   <StrictMode>
     <ThemeProvider>
-      {isMaterialWindow ? <MaterialWindowApp /> : <App />}
+      <div
+        data-testid="window-frame"
+        className="flex h-dvh flex-col overflow-hidden bg-surface"
+      >
+        <WindowTitleBar title={isMaterialWindow ? "資料" : "Auto-Scoring"} />
+        <div
+          data-testid="window-content"
+          className="flex min-h-0 flex-1 flex-col overflow-auto"
+        >
+          {isMaterialWindow ? <MaterialWindowApp /> : <App />}
+        </div>
+      </div>
     </ThemeProvider>
   </StrictMode>,
 );

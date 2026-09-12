@@ -101,6 +101,49 @@ pnpm run package:electron         # desktop/dist/win-unpacked と installer を�
 pnpm run package:electron:smoke   # パッケージ版の実機 smoke test（§7.4）
 ```
 
+### 1.5 フレームレスウィンドウ（Issue #428）
+
+メインウィンドウ（`createWindow()`）と資料ウィンドウ（`createMaterialWindow()`）の
+両方を **`frame: false` の完全自前タイトルバー**にした。`titleBarStyle: "hidden"` +
+`titleBarOverlay`（OS が最小化・最大化・閉じるを描く方式）は採らない。
+
+**理由**: オーナーの依頼は「ドラッグ領域と最小化・最大化・閉じるを自前で持つ」ことで、
+さらに (a) 最大化中はボタンが「元に戻す」になる、(b) 色だけに頼らない、(c) Tab で届き
+フォーカスが見え Enter/Space で作動し `aria-label` を持つ、という受入条件が付いている。
+`titleBarOverlay` のボタンは OS が描くため、`aria-label` を付けられず、アイコンと
+アクセシブル名を最大化状態に追従させられず、アプリのテーマ色にもならない。自前なら
+これらがすべて自分のコードで固定できる。見た目の統一も取れる。
+
+**再現**: 同じ `navigation/WindowTitleBar.tsx` をメイン・資料の両ウィンドウが使う
+（`main.tsx` がルートで1回 mount する）。ウィンドウごとの違いはタイトル文字だけで、
+同じ component を再利用する方が「資料ウィンドウだけ別実装」より差分が小さい。
+
+**再サイズ**: `frame: false` は `resizable` / `thickFrame` を外さない。タイトルバーの
+ドラッグ領域は上端の帯だけで、OS が持つリサイズ境界には重ならない。e2e
+（`desktop/e2e/window-controls.spec.ts`）が `isResizable()` と
+`getBounds() == getContentBounds()`（枠が本当に無いこと）を実行時に確かめる。
+**4 辺 4 隅の物理ドラッグ確認は Windows 実機で行う**（この作業ツリーは Linux で、
+`xdotool` / `wmctrl` が無く OS のヒットテストを合成できない。§10 の受入確認に含める）。
+
+**メニューバー**: 既定のアプリケーションメニューは消さない（`Menu.setApplicationMenu(null)`
+を呼ばない）。`autoHideMenuBar: true` で帯だけ隠す。フレームレスにはメニューを吊るす
+タイトルバーが無く、Linux では帯が自前タイトルバーに重なるため。アクセラレータは
+従来どおり動き、Alt で表示できる。
+
+**セキュリティ**: `desktop/index.html` の CSP、`denyRendererWindows()` の
+`setWindowOpenHandler` 拒否、`untrustedWebPreferences()`（`contextIsolation: true` /
+`nodeIntegration: false` / `sandbox: true`）は変えない。ウィンドウ操作は preload の
+`contextBridge` + IPC で渡し、**IPC ハンドラは対象ウィンドウを `event.sender` から
+解決する**。ブリッジにウィンドウ ID は存在しないので、レンダラが別ウィンドウを
+操作することはできない（e2e が「資料ウィンドウの最大化ボタンは資料ウィンドウだけを
+最大化する」ことを固定する）。
+
+**高さ**: ルート（`desktop/src/renderer/main.tsx`）を縦 flex にして
+「タイトルバー（固定 36px）＋残り全部」にし、`AppShell` と採点不可バナーは与えられた
+領域を埋める。36px という数字はルートにだけ現れ、各画面の高さ計算には漏れない。
+
+スクリーンショットは `docs/frontend-migration/frameless-*.png`（通常・最大化・資料）。
+
 ---
 
 ## 2. インストーラー: MSIX ではなく Inno Setup

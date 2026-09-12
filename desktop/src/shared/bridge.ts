@@ -119,6 +119,24 @@ export interface AutoScoringBridge {
     request: SidecarMultipartRequest,
   ): Promise<SidecarMultipartResponse>;
   sidecarFetch(request: SidecarFetchRequest): Promise<SidecarFetchResponse>;
+  /**
+   * Frameless-window controls (Issue #428). The OS frame is gone, so the
+   * renderer draws its own title bar and asks the main process to act.
+   *
+   * **The target window is resolved from the IPC sender, never from an
+   * argument.** There is no window id in this contract on purpose: a renderer
+   * that could name another window would be able to minimize or close it, and
+   * the renderer is untrusted. Each call acts on the window the requesting
+   * `webContents` belongs to.
+   */
+  minimizeWindow(): Promise<void>;
+  /** Maximize when normal, restore when maximized. */
+  toggleMaximizeWindow(): Promise<void>;
+  closeWindow(): Promise<void>;
+  /** Whether the requesting window is currently maximized. */
+  isWindowMaximized(): Promise<boolean>;
+  /** Fires on maximize/restore of the requesting window. */
+  onWindowMaximizedChange(callback: (maximized: boolean) => void): () => void;
 }
 
 /** IPC channel names. One place, so main and preload cannot drift apart. */
@@ -139,6 +157,11 @@ export const IpcChannel = {
   materialSelectionChanged: "auto-scoring:material-selection-changed",
   sidecarMultipartUpload: "auto-scoring:sidecar-multipart-upload",
   sidecarFetch: "auto-scoring:sidecar-fetch",
+  minimizeWindow: "auto-scoring:minimize-window",
+  toggleMaximizeWindow: "auto-scoring:toggle-maximize-window",
+  closeWindow: "auto-scoring:close-window",
+  isWindowMaximized: "auto-scoring:is-window-maximized",
+  windowMaximizedChanged: "auto-scoring:window-maximized-changed",
 } as const;
 
 export type IpcChannelName = (typeof IpcChannel)[keyof typeof IpcChannel];

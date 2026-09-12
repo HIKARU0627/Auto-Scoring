@@ -130,10 +130,55 @@ function denyRendererWindows(window: BrowserWindow): void {
   });
 }
 
+/**
+ * Resolve the window an IPC request came from (Issue #428).
+ *
+ * The renderer never names a window: `event.sender` is the only input, so a
+ * compromised renderer cannot minimize, maximize, or close another window.
+ * `null` means the sender is not attached to a live `BrowserWindow` (for
+ * example a devtools `webContents`); the call is refused rather than guessed.
+ */
+function windowForIpcEvent(event: Electron.IpcMainInvokeEvent): BrowserWindow {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window === null) {
+    throw new Error("IPC sender is not attached to a window");
+  }
+  return window;
+}
+
+/** Tell a window's renderer that its maximize state changed. */
+function notifyMaximized(window: BrowserWindow): void {
+  if (!window.isDestroyed()) {
+    window.webContents.send(
+      IpcChannel.windowMaximizedChanged,
+      window.isMaximized(),
+    );
+  }
+}
+
+function trackMaximizedState(window: BrowserWindow): void {
+  window.on("maximize", () => {
+    notifyMaximized(window);
+  });
+  window.on("unmaximize", () => {
+    notifyMaximized(window);
+  });
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 800,
+    // Frameless (Issue #428): the renderer draws its own title bar and asks the
+    // main process over IPC to minimize/maximize/close. `resizable` stays at its
+    // default true, so the OS still owns the resize borders (a frameless
+    // window that drops `thickFrame`/resizability loses its edge handles).
+    frame: false,
+    // The default application menu is kept (nothing calls `Menu.setAppMenu`),
+    // only its strip is hidden: a frameless window has no title bar to hang it
+    // under, and on Linux the bar would sit on top of the custom title bar.
+    // Accelerators still work; Alt reveals it.
+    autoHideMenuBar: true,
     // Painting an empty window before the renderer has anything to draw shows a
     // white flash on a dark theme, so the window is created hidden and revealed
     // on `ready-to-show`.
@@ -145,6 +190,7 @@ function createWindow(): BrowserWindow {
     window.show();
   });
 
+  trackMaximizedState(window);
   denyRendererWindows(window);
 
   // INV: closing the main window closes the material window with it (Issue #415
@@ -172,6 +218,10 @@ function createMaterialWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1100,
     height: 820,
+    // Frameless like the main window (Issue #428); the same renderer component
+    // draws the same title bar and the same IPC path resolves this window.
+    frame: false,
+    autoHideMenuBar: true,
     show: false,
     webPreferences: untrustedWebPreferences(),
   });
@@ -180,6 +230,7 @@ function createMaterialWindow(): BrowserWindow {
     window.show();
   });
 
+  trackMaximizedState(window);
   denyRendererWindows(window);
 
   window.on("closed", () => {
@@ -316,6 +367,27 @@ ipcMain.handle(
 ipcMain.handle(
   IpcChannel.getMaterialSelection,
   (): MaterialWindowSelection | null => materialSelection,
+);
+
+ipcMain.handle(IpcChannel.minimizeWindow, (event): void => {
+  windowForIpcEvent(event).minimize();
+});
+
+ipcMain.handle(IpcChannel.toggleMaximizeWindow, (event): void => {
+  const window = windowForIpcEvent(event);
+  if (window.isMaximized()) {
+    window.unmaximize();
+  } else {
+    window.maximize();
+  }
+});
+
+ipcMain.handle(IpcChannel.closeWindow, (event): void => {
+  windowForIpcEvent(event).close();
+});
+
+ipcMain.handle(IpcChannel.isWindowMaximized, (event): boolean =>
+  windowForIpcEvent(event).isMaximized(),
 );
 
 ipcMain.handle(
